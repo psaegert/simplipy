@@ -15,7 +15,6 @@ To set up the development environment, run the following commands:
 
 ```sh
 pip install -e .[dev]
-pip install -e ./nsrops
 pre-commit install
 ```
 

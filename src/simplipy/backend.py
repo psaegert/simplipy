@@ -30,8 +30,7 @@ class ExpressionSpace:
     variables : int
         The number of variables
     """
-    def __init__(self, operators: dict[str, dict[str, Any]], variables: int, simplification: Literal['flash', 'auto_flash', 'sympy'] = 'flash', simplification_kwargs: dict[str, Any] | None = None, special_tokens: list[str] | None = None) -> None:
-        self.simplification = simplification
+    def __init__(self, operators: dict[str, dict[str, Any]], variables: int, simplification_kwargs: dict[str, Any] | None = None, special_tokens: list[str] | None = None) -> None:
         self.simplification_kwargs = simplification_kwargs or {}
 
         self.special_constants = {"pi": np.pi}
@@ -110,15 +109,14 @@ class ExpressionSpace:
 
         self.import_modules()
 
-        if simplification == 'auto_flash':
-            dummy_variables = [f'x{i}' for i in range(100)]  # HACK
-            if not os.path.exists(substitute_root_path(self.simplification_kwargs['rules_file'])):
-                self.simplification_rules: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
-            else:
-                with open(substitute_root_path(self.simplification_kwargs['rules_file']), 'r') as f:
-                    self.simplification_rules = deduplicate_rules(json.load(f), dummy_variables=dummy_variables)
+        dummy_variables = [f'x{i}' for i in range(100)]  # HACK
+        if not os.path.exists(substitute_root_path(self.simplification_kwargs['rules_file'])):
+            self.simplification_rules: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+        else:
+            with open(substitute_root_path(self.simplification_kwargs['rules_file']), 'r') as f:
+                self.simplification_rules = deduplicate_rules(json.load(f), dummy_variables=dummy_variables)
 
-            self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables=dummy_variables)  # HACK
+        self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables=dummy_variables)  # HACK
 
     def import_modules(self) -> None:  # TODO. Still necessary?
         for module in self.modules:
@@ -145,7 +143,7 @@ class ExpressionSpace:
         if "expressions" in config_.keys():
             config_ = config_["expressions"]
 
-        return cls(operators=config_["operators"], variables=config_["variables"], simplification=config_.get("simplification", 'flash'), simplification_kwargs=config_.get("simplification_kwargs"), special_tokens=config_.get("special_tokens", None))
+        return cls(operators=config_["operators"], variables=config_["variables"], simplification_kwargs=config_.get("simplification_kwargs"), special_tokens=config_.get("special_tokens", None))
 
     def is_valid(self, prefix_expression: list[str], verbose: bool = False) -> bool:
         '''
