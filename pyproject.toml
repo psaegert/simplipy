@@ -1,0 +1,73 @@
+[project]
+name = "simplipy"
+description = "Efficient Simplification of Mathematical Expressions"
+authors = [
+    {name = "Paul Saegert"},
+    ]
+readme = "README.md"
+requires-python = ">=3.12"
+dynamic = ["dependencies"]
+version = "0.0.1"
+urls = { Github = "https://github.com/psaegert/simplipy"}
+
+[project.scripts]
+simplipy = "simplipy.__main__:main"
+
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "mypy",
+    "flake8",
+    "pygount",
+    "types-setuptools",
+    "types-tqdm",
+    "types-toml",
+    "types-PyYAML",
+    "radon"
+]
+
+[tool.setuptools]
+include-package-data = true
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
+[build-system]
+requires = [
+    "setuptools>=78",
+    "wheel",
+    "platformdirs==4.3.8",
+]
+build-backend = "setuptools.build_meta"
+
+
+[tool.flake8]
+ignore = ["E501"]
+exclude = [
+    ".git",
+	"__pycache__",
+	"build",
+	"venv",
+	".venv",
+	"env",
+	".env",
+]
+per-file-ignores = "__init__.py:F401"
+
+
+[tool.mypy]
+no_implicit_optional = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+explicit_package_bases = true
+exclude = "(.venv|tests/|experimental/)"
+ignore_missing_imports = true
