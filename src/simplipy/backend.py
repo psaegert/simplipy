@@ -51,14 +51,6 @@ class ExpressionSpace:
 
         self.commutative_operators = [k for k, v in operators.items() if v.get("commutative", False)]
 
-        self.symmetric_operators = [k for k, v in operators.items() if v.get("symmetry", 0) == 1]
-        self.antisymmetric_operators = [k for k, v in operators.items() if v.get("symmetry", 0) == -1]
-
-        self.positive_operators = [k for k, v in operators.items() if v.get("positive", False)]
-
-        self.monotonous_increasing_operators = [k for k, v in operators.items() if v.get("monotonicity", 0) == 1]
-        self.monotonous_decreasing_operators = [k for k, v in operators.items() if v.get("monotonicity", 0) == -1]
-
         self.operator_realizations = {k: v["realization"] for k, v in operators.items()}
         self.realization_to_operator = {v: k for k, v in self.operator_realizations.items()}
 
@@ -907,7 +899,7 @@ class ExpressionSpace:
         operator, operands = tree
         return [operator, [self.apply_mapping(operand, mapping) for operand in operands]]
 
-    def _apply_auto_flash_simplifcation_rules(self, expression: list[str] | tuple[str, ...], rules_trees: dict[tuple, list[tuple[list[str], list[str]]]]) -> list[str]:
+    def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], rules_trees: dict[tuple, list[tuple[list[str], list[str]]]]) -> list[str]:
         if all(t == '<num>' or t in self.operator_arity for t in expression):
             return ['<num>']
 
@@ -1302,7 +1294,7 @@ class ExpressionSpace:
             new_expression = expression
 
         # Apply simplification rules and sort operands to get started
-        new_expression = self._apply_auto_flash_simplifcation_rules(new_expression, self.simplification_rules_trees)
+        new_expression = self._apply_simplifcation_rules(new_expression, self.simplification_rules_trees)
         # print('1', new_expression)
         new_expression = self.sort_operands(new_expression)
         # print('2', new_expression)
@@ -1314,7 +1306,7 @@ class ExpressionSpace:
             # print('3', new_expression)
 
             # Apply simplification rules
-            new_expression = self._apply_auto_flash_simplifcation_rules(new_expression, self.simplification_rules_trees)
+            new_expression = self._apply_simplifcation_rules(new_expression, self.simplification_rules_trees)
             # print('4', new_expression)
 
             # Sort operands
