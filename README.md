@@ -1,4 +1,4 @@
-<h1 align="center" style="margin-top: 0px;">SimpliPy:<br>Efficient Simplification of Mathematical Expressions</h1>
+<h1 align="center" style="margin-top: 0px;">🏗️SimpliPy:<br>Efficient Simplification of Mathematical Expressions🏗️</h1>
 
 <div align="center">
 
@@ -29,7 +29,7 @@ Test the package with `./scripts/pytest.sh`. Run pylint with `./scripts/pylint.s
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.0.1},
+    version = {0.0.2},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
