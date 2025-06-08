@@ -601,3 +601,11 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
             deduplicated_rules[remapped_source_key] = remapped_target_value
 
     return list(deduplicated_rules.items())
+
+
+def is_string_numeric(s: str) -> bool:
+    """
+    by Cecil Curry
+    https://stackoverflow.com/questions/354038/how-do-i-check-if-a-string-represents-a-number-float-or-int
+    """
+    return s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e', '', 1).isdigit()

@@ -32,6 +32,9 @@ dev = [
     "types-PyYAML",
     "radon"
 ]
+torch = [
+    "torch>=1.0.0"
+]
 
 [tool.setuptools]
 include-package-data = true

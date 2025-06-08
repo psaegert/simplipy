@@ -30,10 +30,10 @@ def main(argv: str = None) -> None:
             if args.verbose:
                 print(f'Finding simplifications with expression space {args.expression_space}')
             import os
-            from simplipy import ExpressionSpace
+            from simplipy import SimpliPyEngine
             from simplipy.utils import substitute_root_path
 
-            expression_space = ExpressionSpace.from_config(substitute_root_path(args.expression_space))
+            expression_space = SimpliPyEngine.from_config(substitute_root_path(args.expression_space))
 
             resolved_output_file = substitute_root_path(args.output_file)
 

@@ -16,10 +16,10 @@ import json
 from scipy.optimize import curve_fit, OptimizeWarning
 from tqdm import tqdm
 
-from simplipy.utils import load_config, substitute_root_path, get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants, codify, safe_f, deduplicate_rules
+from simplipy.utils import is_string_numeric, load_config, substitute_root_path, get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants, codify, safe_f, deduplicate_rules
 
 
-class ExpressionSpace:
+class SimpliPyEngine:
     """
     Management and manipulation of expressions / equations with properties and methods for parsing, encoding, decoding, and transforming equations
 
@@ -30,8 +30,7 @@ class ExpressionSpace:
     variables : int
         The number of variables
     """
-    def __init__(self, operators: dict[str, dict[str, Any]], variables: int, simplification_kwargs: dict[str, Any] | None = None, special_tokens: list[str] | None = None) -> None:
-        self.simplification_kwargs = simplification_kwargs or {}
+    def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple[tuple[str, ...], tuple[str, ...]]] | str | None = None) -> None:
 
         self.special_constants = {"pi": np.pi}
 
@@ -58,20 +57,12 @@ class ExpressionSpace:
         self.operator_precedence_compat['**'] = 3  # FIXME: Don't hardcode this
         self.operator_precedence_compat['sqrt'] = 3  # FIXME: Don't hardcode this
 
-        self.operator_weights = {k: v.get("weight", 1.0) for k, v in operators.items()}
-        total_weight = sum(self.operator_weights.values())
-        if total_weight > 0:
-            self.operator_weights = {k: v / total_weight for k, v in self.operator_weights.items()}
-
         self.operator_arity = {k: v["arity"] for k, v in operators.items()}
         self.operator_arity_compat = deepcopy(self.operator_arity)
         self.operator_arity_compat['**'] = 2
 
         self.max_power = max([int(op[3:]) for op in self.operator_tokens if re.match(r'pow\d+(?!\_)', op)] + [0])
         self.max_fractional_power = max([int(op[5:]) for op in self.operator_tokens if re.match(r'pow1_\d+', op)] + [0])
-
-        self.n_variables = variables
-        self.variables = [f'x{i + 1}' for i in range(variables)]
 
         self.modules = get_used_modules(''.join(f"{op}(" for op in self.operator_realizations.values()))  # HACK: This can be done more elegantly for sure
 
@@ -102,21 +93,24 @@ class ExpressionSpace:
         self.import_modules()
 
         dummy_variables = [f'x{i}' for i in range(100)]  # HACK
-        if not os.path.exists(substitute_root_path(self.simplification_kwargs['rules_file'])):
-            self.simplification_rules: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
-        else:
-            with open(substitute_root_path(self.simplification_kwargs['rules_file']), 'r') as f:
-                self.simplification_rules = deduplicate_rules(json.load(f), dummy_variables=dummy_variables)
+        if isinstance(rules, str):
+            if not os.path.exists(substitute_root_path(rules)):
+                raise FileNotFoundError(f"Rules file {rules} does not exist")
+            else:
+                with open(substitute_root_path(rules), 'r') as f:
+                    self.simplification_rules = deduplicate_rules(json.load(f), dummy_variables=dummy_variables)
+        elif isinstance(rules, list):
+            self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
 
         self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables=dummy_variables)  # HACK
 
-    def import_modules(self) -> None:  # TODO. Still necessary?
+    def import_modules(self) -> None:  # TODO: Still necessary?
         for module in self.modules:
             if module not in globals():
                 globals()[module] = importlib.import_module(module)
 
     @classmethod
-    def from_config(cls, config: dict[str, Any] | str) -> "ExpressionSpace":
+    def from_config(cls, config: dict[str, Any] | str) -> "SimpliPyEngine":
         '''
         Load an ExpressionSpace from a configuration file or dictionary.
 
@@ -135,7 +129,7 @@ class ExpressionSpace:
         if "expressions" in config_.keys():
             config_ = config_["expressions"]
 
-        return cls(operators=config_["operators"], variables=config_["variables"], simplification_kwargs=config_.get("simplification_kwargs"), special_tokens=config_.get("special_tokens", None))
+        return cls(operators=config_["operators"], rules=config_.get("rules"))
 
     def is_valid(self, prefix_expression: list[str], verbose: bool = False) -> bool:
         '''
@@ -155,13 +149,14 @@ class ExpressionSpace:
         '''
         stack: list[str] = []
 
-        if len(prefix_expression) > 1 and prefix_expression[0] in self.variables:
+        if len(prefix_expression) > 1 and prefix_expression[0] not in self.operator_arity:
             if verbose:
                 print(f'Invalid expression {prefix_expression}: Variable must be leaf node')
             return False
 
         for token in reversed(prefix_expression):
-            if token not in self.variables and not token == '<num>':
+            # Check if token is not a constant and numeric
+            if token != '<num>' and is_string_numeric(token):
                 try:
                     float(token)
                 except ValueError:
@@ -669,7 +664,7 @@ class ExpressionSpace:
 
         for token in prefix_expr:
             # If the token is numeric, an operator, or an already existing variable, push it onto the stack
-            if token in self.operator_arity_compat or token in self.operator_aliases or token == '<num>' or token in self.variables or re.match(r'-?\d+\.\d+|-?\d+', token) or re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
+            if token in self.operator_arity_compat or token in self.operator_aliases or token == '<num>' or token in self.variables or is_string_numeric(token) or re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
                 operator = self.operator_aliases.get(token, token)
                 converted_prefix_expr.append(operator)
             else:
@@ -1388,7 +1383,7 @@ class ExpressionSpace:
             max_pattern_length: int | None = 7,
             timeout: float | None = None,
             dummy_variables: int | list[str] | None = None,
-            max_simplify_steps: int = 1,
+            extra_internal_terms: list[str] | None = None,
             X: np.ndarray | int | None = None,
             C: np.ndarray | int | None = None,
             constants_fit_retries: int = 5,
@@ -1396,6 +1391,8 @@ class ExpressionSpace:
             save_every: int = 100,
             reset_rules: bool = True,
             verbose: bool = False) -> None:
+
+        extra_internal_terms = extra_internal_terms or []
 
         hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
 
@@ -1418,7 +1415,7 @@ class ExpressionSpace:
         elif isinstance(C, int):
             C = np.random.normal(loc=0, scale=5, size=C)
 
-        leaf_nodes = dummy_variables + self.simplification_kwargs['extra_internal_terms']
+        leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
 
         pbar = tqdm(disable=not verbose)
@@ -1614,7 +1611,7 @@ class ExpressionSpace:
             modified_prefix_expression = prefix_expression.copy()
 
         for i, token in enumerate(prefix_expression):
-            if token not in self.variables and token not in self.operator_arity_compat and token not in self.operator_aliases and token not in self.special_constants:
+            if is_string_numeric(token):
                 modified_prefix_expression[i] = '<num>'
 
         return modified_prefix_expression
@@ -1700,3 +1697,22 @@ class ExpressionSpace:
             The lambda function.
         '''
         return FunctionType(code, globals())()
+
+    @staticmethod
+    def codify(code_string: str, variables: list[str] | None = None) -> CodeType:
+        '''
+        Compile a string into a code object.
+
+        Parameters
+        ----------
+        code_string : str
+            The string to compile.
+        variables : list[str] | None
+            The variables to use in the code.
+
+        Returns
+        -------
+        CodeType
+            The compiled code object.
+        '''
+        return codify(code_string, variables)
