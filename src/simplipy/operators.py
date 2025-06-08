@@ -116,7 +116,7 @@ def pow1_3(x: float) -> float:
     if type(x).__module__ == 'torch' and type(x).__name__ == 'Tensor':
         if not _torch_checked:
             try:
-                import torch
+                import torch  # type:ignore
                 _torch_module = torch
             except ImportError:
                 _torch_module = None
@@ -157,7 +157,7 @@ def pow1_5(x: float) -> float:
     if type(x).__module__ == 'torch' and type(x).__name__ == 'Tensor':
         if not _torch_checked:
             try:
-                import torch
+                import torch  # type:ignore
                 _torch_module = torch
             except ImportError:
                 _torch_module = None

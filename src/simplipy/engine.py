@@ -16,7 +16,7 @@ import json
 from scipy.optimize import curve_fit, OptimizeWarning
 from tqdm import tqdm
 
-from simplipy.utils import is_string_numeric, load_config, substitute_root_path, get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants, codify, safe_f, deduplicate_rules
+from simplipy.utils import factorize_to_at_most, is_numeric_string, load_config, substitute_root_path, get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants, codify, safe_f, deduplicate_rules
 
 
 class SimpliPyEngine:
@@ -31,9 +31,6 @@ class SimpliPyEngine:
         The number of variables
     """
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple[tuple[str, ...], tuple[str, ...]]] | str | None = None) -> None:
-
-        self.special_constants = {"pi": np.pi}
-
         self.operator_tokens = list(operators.keys())
 
         self.operator_aliases = {alias: operator for operator, properties in operators.items() for alias in properties['alias']}
@@ -156,7 +153,7 @@ class SimpliPyEngine:
 
         for token in reversed(prefix_expression):
             # Check if token is not a constant and numeric
-            if token != '<num>' and is_string_numeric(token):
+            if token != '<num>' and is_numeric_string(token):
                 try:
                     float(token)
                 except ValueError:
@@ -198,6 +195,7 @@ class SimpliPyEngine:
         str
             The term without parentheses.
         '''
+        # HACK
         if term.startswith('(') and term.endswith(')'):
             return term[1:-1]
         return term
@@ -341,44 +339,6 @@ class SimpliPyEngine:
 
         return prefix_expr[::-1]
 
-    def factorize_to_at_most(self, p: int, max_factor: int, max_iter: int = 1000) -> list[int]:
-        '''
-        Factorize an integer into factors at most max_factor
-
-        Parameters
-        ----------
-        p : int
-            The integer to factorize
-        max_factor : int
-            The maximum factor
-        max_iter : int, optional
-            The maximum number of iterations, by default 1000
-
-        Returns
-        -------
-        list[int]
-            The factors of the integer
-        '''
-        if is_prime(p):
-            return [p]
-        p_factors = []
-        i = 0
-        while p > 1:
-            for j in range(max_factor, 0, -1):
-                if j == 1:
-                    p_factors.append(p)
-                    p = 1
-                    break
-                if p % j == 0:
-                    p_factors.append(j)
-                    p //= j
-                    break
-            i += 1
-            if i > max_iter:
-                raise ValueError(f'Factorization of {p} into at most {max_factor} factors failed after {max_iter} iterations')
-
-        return p_factors
-
     def convert_expression(self, prefix_expr: list[str]) -> list[str]:
         '''
         Convert an expression to a supported form
@@ -406,9 +366,9 @@ class SimpliPyEngine:
                 if operator == 'neg':
                     # If the operand of neg is a number, combine them
                     if isinstance(stack[-1][0], str):
-                        if re.match(r'\d+\.\d+|\d+', stack[-1][0]):
+                        if is_numeric_string(stack[-1][0]):
                             stack[-1][0] = f'-{stack[-1][0]}'
-                        elif re.match(r'-\d+\.\d+|-\d+', stack[-1][0]):
+                        elif is_numeric_string(stack[-1][0]):
                             stack[-1][0] = stack[-1][0][1:]
                         else:
                             # General case: assemble operator and its operands
@@ -432,7 +392,7 @@ class SimpliPyEngine:
                                 stack.append(['inv', [[pow_operator, [base]]]])
                             else:
                                 stack.append([pow_operator, [base]])
-                        elif re.match(r'-?\d*\.\d+$', exponent[0]):  # Floating-point exponent
+                        elif is_numeric_string(exponent[0]):  # Floating-point exponent
                             exponent_value = float(exponent[0])
 
                             # Try to convert the exponent into a fraction
@@ -453,23 +413,34 @@ class SimpliPyEngine:
                         else:
                             # Replace '** base exponent' with 'exp(log(base) * exponent)'
                             stack.append(['exp', [['*', [['log', [base]], exponent]]]])
-                    elif len(exponent) == 2 and exponent[0][0] == '/' and \
-                            isinstance(exponent[1][0][0], str) and re.match(r'-?\d+$', exponent[1][0][0]) and \
-                            isinstance(exponent[1][1][0], str) and re.match(r'-?\d+$', exponent[1][1][0]):
-                        exponent_value = int(exponent[1][0][0]) / int(exponent[1][1][0])
-                        abs_exponent_fraction = fractions.Fraction(abs(exponent_value)).limit_denominator()
-                        if abs_exponent_fraction.numerator <= 5 and abs_exponent_fraction.denominator <= 5:
-                            # Format the fraction as a combination of power operators, i.e. "x**(2/3)" -> "pow1_3(pow2(x))"
-                            new_expression = [base]
-                            if abs_exponent_fraction.numerator != 1:
-                                new_expression = [f'pow{abs_exponent_fraction.numerator}', new_expression]
-                            if abs_exponent_fraction.denominator != 1:
-                                new_expression = [f'pow1_{abs_exponent_fraction.denominator}', new_expression]
-                            if exponent_value < 0:
-                                new_expression = ['inv', new_expression]
-                            stack.append(new_expression)
+
+                    elif len(exponent) == 2 and exponent[0][0] == '/' and is_numeric_string(exponent[1][0][0]) and is_numeric_string(exponent[1][1][0]):
+                        # Handle fractional exponent, e.g. "x**(2/3)"
+                        if re.match(r'-?\d+$', exponent[1][0][0]) and re.match(r'-?\d+$', exponent[1][1][0]):
+                            # Integer fraction exponent
+                            numerator = int(exponent[1][0][0])
+                            denominator = int(exponent[1][1][0])
+                            numerator_power = f'pow{abs(numerator)}'
+                            denominator_power = f'pow1_{abs(denominator)}'
+                            if numerator * denominator < 0:
+                                stack.append(['inv', [[denominator_power, [[numerator_power, [base]]]]]])
+                            else:
+                                stack.append([denominator_power, [[numerator_power, [base]]]])
                         else:
-                            stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                            exponent_value = int(exponent[1][0][0]) / int(exponent[1][1][0])
+                            abs_exponent_fraction = fractions.Fraction(abs(exponent_value)).limit_denominator()
+                            if abs_exponent_fraction.numerator <= 5 and abs_exponent_fraction.denominator <= 5:
+                                # Format the fraction as a combination of power operators, i.e. "x**(2/3)" -> "pow1_3(pow2(x))"
+                                new_expression = [base]
+                                if abs_exponent_fraction.numerator != 1:
+                                    new_expression = [f'pow{abs_exponent_fraction.numerator}', new_expression]
+                                if abs_exponent_fraction.denominator != 1:
+                                    new_expression = [f'pow1_{abs_exponent_fraction.denominator}', new_expression]
+                                if exponent_value < 0:
+                                    new_expression = ['inv', new_expression]
+                                stack.append(new_expression)
+                            else:
+                                stack.append(['exp', [['*', [['log', [base]], exponent]]]])
                     else:
                         # Replace '** base exponent' with 'exp(log(base) * exponent)'
                         stack.append(['exp', [['*', [['log', [base]], exponent]]]])
@@ -492,55 +463,59 @@ class SimpliPyEngine:
         while i >= 0:
             token = need_to_convert_powers_expression[i]
 
-            if token in self.operator_arity_compat or token in self.operator_aliases or re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
+            if re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
                 operator = self.operator_aliases.get(token, token)
                 arity = self.operator_arity_compat.get(operator, 1)
                 operands = list(reversed(stack[-arity:]))
 
-                if operator.startswith('pow'):
-                    # Identify chains of pow<i> xor pow1_<i> operators
-                    # Mixed chains are ignored
-                    operator_chain = [operator]
-                    current_operand = operands[0]
+                # Identify chains of pow<i> xor pow1_<i> operators
+                # Mixed chains are ignored
+                operator_chain = [operator]
+                current_operand = operands[0]
 
-                    operator_bases = ['pow1_', 'pow']
-                    operator_patterns = [r'pow1_\d+', r'pow\d+']
-                    operator_patterns_grouped = [r'pow1_(\d+)', r'pow(\d+)']
-                    max_powers = [self.max_fractional_power, self.max_power]
-                    for base, pattern, pattern_grouped, p in zip(operator_bases, operator_patterns, operator_patterns_grouped, max_powers):
-                        if re.match(pattern, operator):
-                            operator_base = base
-                            operator_pattern = pattern
-                            operator_pattern_grouped = pattern_grouped
-                            max_power = p
-                            break
+                operator_bases = ['pow1_', 'pow']
+                operator_patterns = [r'pow1_\d+', r'pow\d+']
+                operator_patterns_grouped = [r'pow1_(\d+)', r'pow(\d+)']
+                max_powers = [self.max_fractional_power, self.max_power]
+                for base, pattern, pattern_grouped, p in zip(operator_bases, operator_patterns, operator_patterns_grouped, max_powers):
+                    if re.match(pattern, operator):
+                        operator_base = base
+                        operator_pattern = pattern
+                        operator_pattern_grouped = pattern_grouped
+                        max_power = p
+                        break
 
-                    while len(current_operand) == 2 and re.match(operator_pattern, current_operand[0]):
-                        operator_chain.append(current_operand[0])
-                        current_operand = current_operand[1]
+                while len(current_operand) == 2 and re.match(operator_pattern, current_operand[0]):
+                    operator_chain.append(current_operand[0])
+                    current_operand = current_operand[1]
 
-                    if len(operator_chain) > 0:
-                        p = prod(int(re.match(operator_pattern_grouped, op).group(1)) for op in operator_chain)  # type: ignore
+                if len(operator_chain) > 0:
+                    p = prod(int(re.match(operator_pattern_grouped, op).group(1)) for op in operator_chain)  # type: ignore
 
-                        # Factorize p into at most self.max_power or self.max_fractional_power
-                        p_factors = self.factorize_to_at_most(p, max_power)
+                    # Factorize p into at most self.max_power or self.max_fractional_power
+                    p_factors = factorize_to_at_most(p, max_power)
 
-                        # Construct the new operators
-                        new_operators = []
-                        for p in p_factors:
-                            new_operators.append(f'{operator_base}{p}')
+                    # Construct the new operators
+                    new_operators = []
+                    for p in p_factors:
+                        new_operators.append(f'{operator_base}{p}')
 
-                        if len(new_operators) == 0:
-                            new_chain = current_operand
-                        else:
-                            new_chain = [new_operators[-1], [current_operand]]
-                            for op in new_operators[-2::-1]:
-                                new_chain = [op, [new_chain]]
+                    if len(new_operators) == 0:
+                        new_chain = current_operand
+                    else:
+                        new_chain = [new_operators[-1], [current_operand]]
+                        for op in new_operators[-2::-1]:
+                            new_chain = [op, [new_chain]]
 
-                        _ = [stack.pop() for _ in range(arity)]
-                        stack.append(new_chain)
-                        i -= 1
-                        continue
+                    _ = [stack.pop() for _ in range(arity)]
+                    stack.append(new_chain)
+                    i -= 1
+                    continue
+
+            elif token in self.operator_arity_compat or token in self.operator_aliases:
+                operator = self.operator_aliases.get(token, token)
+                arity = self.operator_arity_compat[operator]
+                operands = list(reversed(stack[-arity:]))
 
                 _ = [stack.pop() for _ in range(arity)]
                 stack.append([operator, operands])
@@ -553,15 +528,26 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
+    def remove_pow1(self, prefix_expression: list[str]) -> list[str]:
+        filtered_expression = []
+        for token in prefix_expression:
+            if token == 'pow1':
+                continue
+
+            if token == 'pow_1':
+                filtered_expression.append('inv')
+                continue
+
+            filtered_expression.append(token)
+
+        return filtered_expression
+
     # PARSING
-    def parse_expression(
+    def parse(
             self,
             infix_expression: str,
-            substitute_special_constants: bool = True,
             convert_expression: bool = True,
-            convert_variable_names: bool = True,
-            mask_numbers: bool = False,
-            too_many_variables: Literal['ignore', 'raise'] = 'ignore') -> list[str]:
+            mask_numbers: bool = False) -> list[str]:
         '''
         Parse an infix expression into a prefix expression
 
@@ -588,10 +574,6 @@ class SimpliPyEngine:
 
         parsed_expression = self.infix_to_prefix(infix_expression)
 
-        if substitute_special_constants:
-            parsed_expression = self.numerify_special_constants(parsed_expression, inplace=True)
-        if convert_variable_names:
-            parsed_expression = self.convert_variable_names(parsed_expression, too_many_variables=too_many_variables)
         if convert_expression:
             parsed_expression = self.convert_expression(parsed_expression)
         if mask_numbers:
@@ -599,164 +581,6 @@ class SimpliPyEngine:
 
         return self.remove_pow1(parsed_expression)  # HACK: Find a better place to put this
 
-    def remove_pow1(self, prefix_expression: list[str]) -> list[str]:
-        filtered_expression = []
-        for token in prefix_expression:
-            if token == 'pow1':
-                continue
-
-            if token == 'pow_1':
-                filtered_expression.append('inv')
-                continue
-
-            filtered_expression.append(token)
-
-        return filtered_expression
-
-    def extract_expression_from_beam(self, beam: list[int] | list[str]) -> tuple[list[int] | list[str], list[int] | list[str], list[int] | list[str]]:
-        '''
-        Extract the expression from a beam. The expression starts with the <bos> token and ends with the <eos> token.
-
-        Parameters
-        ----------
-        beam : list[int] | list[str]
-            The beam to extract the expression from.
-
-        Returns
-        -------
-        list[int] | list[str]
-            The expression
-        list[int] | list[str]
-            The prefix of the expression
-        list[int] | list[str]
-            The suffix of the expression
-        '''
-        if not isinstance(beam, list):
-            beam = list(beam)
-
-        if isinstance(beam[0], str):
-            bos_position = beam.index('<bos>') if '<bos>' in beam else 0  # type: ignore
-            eos_position = beam.index('<eos>') if '<eos>' in beam else len(beam)  # type: ignore
-        else:
-            raise ValueError("The beam must be a list of integers or strings")
-
-        return beam[bos_position + 1:eos_position], beam[:bos_position + 1], beam[eos_position:]
-
-    # Compatibility
-    def convert_variable_names(self, prefix_expr: list[str], too_many_variables: Literal['ignore', 'raise'] = 'ignore') -> list[str]:
-        '''
-        Convert variable names to a supported form
-
-        Parameters
-        ----------
-        prefix_expr : list[str]
-            The prefix expression
-        too_many_variables : Literal['ignore', 'raise'], optional
-            Whether to ignore or raise an error if there are too many variables, by default 'ignore'
-
-        Returns
-        -------
-        list[str]
-            The converted expression
-        '''
-        converted_prefix_expr: list = []
-        variable_translation_dict: dict[str, str] = {}
-
-        for token in prefix_expr:
-            # If the token is numeric, an operator, or an already existing variable, push it onto the stack
-            if token in self.operator_arity_compat or token in self.operator_aliases or token == '<num>' or token in self.variables or is_string_numeric(token) or re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
-                operator = self.operator_aliases.get(token, token)
-                converted_prefix_expr.append(operator)
-            else:
-                if token not in variable_translation_dict:
-                    if len(variable_translation_dict) >= len(self.variables):
-                        if too_many_variables == 'raise':
-                            raise ValueError(f'Too many variables in expression: {prefix_expr}')
-
-                        if too_many_variables == 'ignore':
-                            converted_prefix_expr.append(token)
-                            continue
-
-                    variable_translation_dict[token] = self.variables[len(variable_translation_dict)]
-                converted_prefix_expr.append(variable_translation_dict[token])
-
-        return converted_prefix_expr
-
-    def numerify_special_constants(self, prefix_expression: list[str], inplace: bool = False) -> list[str]:
-        '''
-        Replace special constants with their numerical values
-
-        Parameters
-        ----------
-        prefix_expression : list[str]
-            The prefix expression
-        inplace : bool, optional
-            Whether to modify the expression in place, by default False
-
-        Returns
-        -------
-        list[str]
-            The expression with special constants replaced by their numerical values
-        '''
-        if inplace:
-            modified_prefix_expression = prefix_expression
-        else:
-            modified_prefix_expression = prefix_expression.copy()
-
-        for i, token in enumerate(prefix_expression):
-            if token in self.special_constants:
-                modified_prefix_expression[i] = str(self.special_constants[token])
-
-        return modified_prefix_expression
-
-    def remove_num(self, expression: list[str], verbose: bool = False, debug: bool = False) -> list[str]:
-        stack: list = []
-        i = len(expression) - 1
-
-        if debug:
-            print(f'Input expression: {expression}')
-
-        while i >= 0:
-            token = expression[i]
-
-            if debug:
-                print(f'Stack: {stack}')
-                print(f'Processing token {token}')
-
-            if token in self.operator_arity_compat or token in self.operator_aliases:
-                operator = self.operator_aliases.get(token, token)
-                arity = self.operator_arity_compat[operator]
-                operands = list(reversed(stack[-arity:]))
-
-                if any(operand[0] == '<num>' for operand in operands):
-                    if verbose:
-                        print('Removing constant')
-
-                    non_num_operands = [operand for operand in operands if operand[0] != '<num>']
-
-                    if len(non_num_operands) == 0:
-                        new_term = '<num>'
-                    elif len(non_num_operands) == 1:
-                        new_term = non_num_operands[0]
-                    else:
-                        raise NotImplementedError('Removing a constant from n-operand operator is not implemented')
-
-                    _ = [stack.pop() for _ in range(arity)]
-                    stack.append([new_term])
-                    i -= 1
-                    continue
-
-                _ = [stack.pop() for _ in range(arity)]
-                stack.append([operator, operands])
-
-            else:
-                stack.append([token])
-
-            i -= 1
-
-        return flatten_nested_list(stack)[::-1]
-
-    # AUTO SIMPLIFICATION
     def prefix_to_tree(self, expression: list[str]) -> list:
         def build_tree(index: int) -> tuple[list | None, int]:
             if index >= len(expression):
@@ -903,10 +727,7 @@ class SimpliPyEngine:
 
         # Traverse the expression from right to left
         while i >= 0:
-            # print()
             token = expression[i]
-            # print(f'Stack: {stack}')
-            # print(f'Token: {token}')
 
             # Remember if a rule was applied in this iteration
             applied_rule = False
@@ -918,10 +739,6 @@ class SimpliPyEngine:
                 operands = list(reversed(stack[-arity:]))
                 operands_heads = [operand[0] for operand in operands]
                 rules_key = (operator, *operands_heads)
-
-                # print(f'Operator: {operator}')
-                # print(f'Operands: {operands}')
-                # print(f'Arity: {arity}')
 
                 if all(operand[0] == '<num>' for operand in operands):
                     # All operands are constants
@@ -937,7 +754,6 @@ class SimpliPyEngine:
                 for rule in rules_trees.get(rules_key, rules_trees.get((operator,), [])):
                     does_match, mapping = self.match_pattern(subtree, rule[0], mapping=None)
                     if does_match:
-                        # print(f'Applying rule {rule}')
                         # Replace the placeholders (keys of the mapping) with the actual subtrees (values of the mapping) in the entire subtree at any depth
                         _ = [stack.pop() for _ in range(arity)]
                         stack.append(self.apply_mapping(deepcopy(rule[1]), mapping))
@@ -946,18 +762,14 @@ class SimpliPyEngine:
                         break
 
                 if not applied_rule:
-                    # print(f'No rule applied for {[operator, operands]}')
                     _ = [stack.pop() for _ in range(arity)]
                     stack.append([operator, operands])
                     i -= 1
                     continue
 
             if not applied_rule:
-                # print(f'Nothing applied for {token}')
                 stack.append([token])
                 i -= 1
-
-        # print(f'Final Stack: {stack}')
 
         # Unroll the tree into a flat expression in the correct order
         return flatten_nested_list(stack)[::-1]
@@ -1109,10 +921,10 @@ class SimpliPyEngine:
                                 hyper_operator = self.connection_classes_hyper[argmax_class]
                                 operator = self.connection_classes[argmax_class][0][0]  # Positive multiplicity
                                 if argmax_multiplicity_sum > 5 and is_prime(argmax_multiplicity_sum):
-                                    powers = self.factorize_to_at_most(argmax_multiplicity_sum - 1, self.max_power)
+                                    powers = factorize_to_at_most(argmax_multiplicity_sum - 1, self.max_power)
                                     first_replacement = inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree + argmax_subtree
                                 else:
-                                    powers = self.factorize_to_at_most(argmax_multiplicity_sum, self.max_power)
+                                    powers = factorize_to_at_most(argmax_multiplicity_sum, self.max_power)
                                     first_replacement = inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree
 
                                 other_replacements = (neutral_element,)
@@ -1121,10 +933,10 @@ class SimpliPyEngine:
                                 # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
                                 hyper_operator = self.connection_classes_hyper[argmax_class]
                                 if argmax_multiplicity_sum < -5 and is_prime(-argmax_multiplicity_sum):
-                                    powers = self.factorize_to_at_most(-argmax_multiplicity_sum - 1, self.max_power)
+                                    powers = factorize_to_at_most(-argmax_multiplicity_sum - 1, self.max_power)
                                     first_replacement = double_inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree + argmax_subtree
                                 else:
-                                    powers = self.factorize_to_at_most(-argmax_multiplicity_sum, self.max_power)
+                                    powers = factorize_to_at_most(-argmax_multiplicity_sum, self.max_power)
                                     first_replacement = double_inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree
 
                             other_replacements = (neutral_element,)
@@ -1290,23 +1102,18 @@ class SimpliPyEngine:
 
         # Apply simplification rules and sort operands to get started
         new_expression = self._apply_simplifcation_rules(new_expression, self.simplification_rules_trees)
-        # print('1', new_expression)
         new_expression = self.sort_operands(new_expression)
-        # print('2', new_expression)
 
         for _ in range(max_iter):
             # Cancel any terms
             expression_tree, annotated_expression_tree, stack_labels = self.collect_multiplicities(new_expression)
             new_expression = self.cancel_terms(expression_tree, annotated_expression_tree, stack_labels)
-            # print('3', new_expression)
 
             # Apply simplification rules
             new_expression = self._apply_simplifcation_rules(new_expression, self.simplification_rules_trees)
-            # print('4', new_expression)
 
             # Sort operands
             new_expression = self.sort_operands(new_expression)
-            # print('5', new_expression)
 
             if new_expression == expression:
                 break
@@ -1611,7 +1418,7 @@ class SimpliPyEngine:
             modified_prefix_expression = prefix_expression.copy()
 
         for i, token in enumerate(prefix_expression):
-            if is_string_numeric(token):
+            if is_numeric_string(token):
                 modified_prefix_expression[i] = '<num>'
 
         return modified_prefix_expression
