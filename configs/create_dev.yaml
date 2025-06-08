@@ -1,0 +1,14 @@
+extra_internal_terms: [
+  '<num>',
+  '0',
+  '1',
+  '2',
+  '(-1)',
+  '(-2)',
+  'float("inf")',
+  'float("-inf")',
+  'float("nan")'
+]
+
+
+simplification_rules_config: "{{ROOT}}/data/rules/dev.json"
