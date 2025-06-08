@@ -603,9 +603,48 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
     return list(deduplicated_rules.items())
 
 
-def is_string_numeric(s: str) -> bool:
+def is_numeric_string(s: str) -> bool:
     """
     by Cecil Curry
     https://stackoverflow.com/questions/354038/how-do-i-check-if-a-string-represents-a-number-float-or-int
     """
-    return s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e', '', 1).isdigit()
+    return isinstance(s, str) and s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e', '', 1).isdigit()
+
+
+def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[int]:
+    '''
+    Factorize an integer into factors at most max_factor
+
+    Parameters
+    ----------
+    p : int
+        The integer to factorize
+    max_factor : int
+        The maximum factor
+    max_iter : int, optional
+        The maximum number of iterations, by default 1000
+
+    Returns
+    -------
+    list[int]
+        The factors of the integer
+    '''
+    if is_prime(p):
+        return [p]
+    p_factors = []
+    i = 0
+    while p > 1:
+        for j in range(max_factor, 0, -1):
+            if j == 1:
+                p_factors.append(p)
+                p = 1
+                break
+            if p % j == 0:
+                p_factors.append(j)
+                p //= j
+                break
+        i += 1
+        if i > max_iter:
+            raise ValueError(f'Factorization of {p} into at most {max_factor} factors failed after {max_iter} iterations')
+
+    return p_factors
