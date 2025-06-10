@@ -1243,12 +1243,6 @@ class SimpliPyEngine:
                 new_sizes: set[int] = set()
 
                 while (max_n_rules is None or len(self.simplification_rules) < max_n_rules) and (timeout is None or time.time() - start_time <= timeout):
-                    simplified_hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
-                    for length, hashes_list in hashes_of_size.items():
-                        for h in hashes_list:
-                            simplified_hashes_of_size[len(h)].add(h)  # type: ignore
-                    hashes_of_size = simplified_hashes_of_size
-
                     if max_pattern_length is not None and max(hashes_of_size.keys()) >= max_pattern_length:
                         # If the maximum pattern length is exceeded, stop searching
                         if verbose:
@@ -1258,17 +1252,9 @@ class SimpliPyEngine:
                     # For logging
                     hashes_of_size_lengths = {k: len(v) for k, v in hashes_of_size.items()}
 
-                    if len(hashes_of_size[1]) == 1:
-                        # Should not happen since the leaf nodes cannot disappear
-                        print(hashes_of_size[1])
-                        print(hashes_of_size_lengths)
-                        print(self.simplification_rules)
-                        exit()
-
                     new_hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
 
                     for combination in self.construct_expressions(hashes_of_size, non_leaf_nodes, must_have_sizes=new_sizes):
-                        # debug_file_handle.write(f'{combination}\n')
                         if timeout is not None and time.time() - start_time > timeout:
                             if verbose:
                                 print('Reached timeout')
