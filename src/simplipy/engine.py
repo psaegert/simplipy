@@ -1249,8 +1249,8 @@ class SimpliPyEngine:
                 # Generate expressions level by level
                 new_sizes: set[int] = set()
                 while max(hashes_of_size.keys()) < max_pattern_length:  # This means that every smaller size is already generated
-                    for combination in self.construct_expressions(hashes_of_size, non_leaf_nodes, must_have_sizes=new_sizes):
-                        new_hashes_of_size[len(combination)].add(combination)
+                    for expression in self.construct_expressions(hashes_of_size, non_leaf_nodes, must_have_sizes=new_sizes):
+                        new_hashes_of_size[len(expression)].add(expression)
 
                     new_sizes = set()
                     hashes_of_size_lengths_before = {k: len(v) for k, v in hashes_of_size.items()}
@@ -1273,27 +1273,24 @@ class SimpliPyEngine:
 
                     new_hashes_of_size.clear()
 
+                total_expressions = sum(len(v) for v in hashes_of_size.values())
+
                 if verbose:
-                    print(f"\nFinished generating expressions up to size {max_pattern_length}. Total expressions: {sum(len(v) for v in hashes_of_size.values()):,}")
+                    print(f"\nFinished generating expressions up to size {max_pattern_length}. Total expressions: {total_expressions:,}")
                     for size, expressions in sorted(hashes_of_size.items()):
                         print(f"Size {size}: {len(expressions):,} expressions")
-                
-                exit()
 
                 # Phase 2: Find simplification rules
                 if verbose:
-                    print(f"\nPhase 2: Finding simplification rules")
+                    print("\nPhase 2: Finding simplification rules")
 
                 n_scanned = 0
-                pbar = tqdm(desc="Finding rules", disable=not verbose)
+                pbar = tqdm(desc="Finding rules", disable=not verbose, total=total_expressions)
 
                 # Process each size level
-                for current_size in range(2, max_pattern_length + 1):
-                    if current_size not in hashes_of_size:
-                        continue
-
+                for current_size, current_hashes_of_size in sorted(hashes_of_size.items(), key=lambda x: x[0]):
                     # Process all expressions of current_size
-                    for combination in hashes_of_size[current_size]:
+                    for hash_to_simplify in current_hashes_of_size:
                         if timeout is not None and time.time() - start_time > timeout:
                             if verbose:
                                 print('Reached timeout')
@@ -1310,14 +1307,14 @@ class SimpliPyEngine:
                             with open(output_file, 'w') as file:
                                 json.dump(self.simplification_rules, file, indent=4)
 
-                        pbar.set_postfix_str(f"Rules: {len(self.simplification_rules):,}{max_rules_string}, Time: {(time.time() - start_time) / 60:.1f}{max_time_string} min, Current size: {current_size}, Expression: {combination}")
+                        pbar.set_postfix_str(f"Rules: {len(self.simplification_rules):,}{max_rules_string}, Time: {(time.time() - start_time) / 60:.1f}{max_time_string} min, Current size: {current_size}, Expression: {hash_to_simplify}")
 
                         # Check if all leaf nodes are <num> (purely numerical)
-                        if all([t == '<num>' or t in self.operator_arity for t in combination]) and len(combination) > 1:
-                            new_rule_candidates: list[tuple[tuple[str, ...], tuple[str, ...]]] = [(combination, ('<num>',))]
+                        if all([t == '<num>' or t in self.operator_arity for t in hash_to_simplify]) and len(hash_to_simplify) > 1:
+                            new_rule_candidates: list[tuple[tuple[str, ...], tuple[str, ...]]] = [(hash_to_simplify, ('<num>',))]
                         else:
                             # Evaluate the current expression
-                            executable_prefix_expression = self.operators_to_realizations(combination)
+                            executable_prefix_expression = self.operators_to_realizations(hash_to_simplify)
                             prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
                             code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
                             code = codify(code_string, dummy_variables + constants)
@@ -1329,11 +1326,8 @@ class SimpliPyEngine:
 
                             # Check against all smaller expressions
                             for candidate_size in range(1, current_size):
-                                if candidate_size not in hashes_of_size:
-                                    continue
-
                                 for candidate_hash in hashes_of_size[candidate_size]:
-                                    if candidate_hash == combination:
+                                    if candidate_hash == hash_to_simplify:
                                         continue
 
                                     executable_prefix_candidate_hash = self.operators_to_realizations(candidate_hash)
@@ -1350,10 +1344,10 @@ class SimpliPyEngine:
                                             y_candidate = np.full(X.shape[0], y_candidate)
 
                                         if np.allclose(y, y_candidate, equal_nan=True):
-                                            new_rule_candidates.append((combination, candidate_hash))
+                                            new_rule_candidates.append((hash_to_simplify, candidate_hash))
                                     else:
                                         if any([self.exist_constants_that_fit(candidate_hash, dummy_variables, X, y) for _ in range(constants_fit_retries)]):
-                                            new_rule_candidates.append((combination, candidate_hash))
+                                            new_rule_candidates.append((hash_to_simplify, candidate_hash))
 
                                 # Stop at first size level where we find matches
                                 if len(new_rule_candidates) > 0:
@@ -1401,7 +1395,6 @@ class SimpliPyEngine:
                 if verbose:
                     print('Rules saved.')
             raise
-
 
     def mask_elementary_literals(self, prefix_expression: list[str], inplace: bool = False) -> list[str]:
         '''
