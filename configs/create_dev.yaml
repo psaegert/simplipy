@@ -10,5 +10,4 @@ extra_internal_terms: [
   'float("nan")'
 ]
 
-
-simplification_rules_config: "{{ROOT}}/data/rules/dev.json"
+dummy_variables: 4
