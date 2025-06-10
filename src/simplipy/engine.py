@@ -1139,6 +1139,7 @@ class SimpliPyEngine:
             for child_lengths in sorted(itertools.product(list(hashes_of_size_with_lists.keys()), repeat=arity), key=lambda x: sum(x)):
                 # Check all possible combinations of child trees
                 if filter_sizes and not any(length in must_have_sizes_set for length in child_lengths):
+                    # Skip combinations that do not have any of the required sizes (e.g. duplicates is used correctly)
                     continue
                 for child_combination in itertools.product(*[hashes_of_size_with_lists[child_length] for child_length in child_lengths]):
                     yield (new_root_operator,) + tuple(itertools.chain.from_iterable(child_combination))
@@ -1187,7 +1188,7 @@ class SimpliPyEngine:
     def find_rules(
             self,
             max_n_rules: int | None = None,
-            max_pattern_length: int | None = 7,
+            max_pattern_length: int = 7,
             timeout: float | None = None,
             dummy_variables: int | list[str] | None = None,
             extra_internal_terms: list[str] | None = None,
@@ -1201,10 +1202,11 @@ class SimpliPyEngine:
 
         extra_internal_terms = extra_internal_terms or []
 
-        hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
-
         if dummy_variables is None:
-            dummy_variables = [f"x{i}" for i in range(4)]  # Room for up to 4 different terms in simplification patterns
+            max_leaf_nodes_if_operators_binary = int(max_pattern_length - (max_pattern_length - 1) / 2)
+            dummy_variables = [f"x{i}" for i in range(max_leaf_nodes_if_operators_binary)]
+            if verbose:
+                print(f"Using {len(dummy_variables)} dummy variables: {dummy_variables}")
         elif isinstance(dummy_variables, int):
             dummy_variables = [f"x{i}" for i in range(dummy_variables)]
 
@@ -1225,162 +1227,181 @@ class SimpliPyEngine:
         leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
 
-        pbar = tqdm(disable=not verbose)
-        n_scanned = 0
-
         start_time = time.time()
-
         max_rules_string = f'/{max_n_rules:,}' if max_n_rules is not None else ''
         max_time_string = f'/{timeout / 60:.1f}' if timeout is not None else ''
 
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
-                # Create all leaf nodes
-                for leaf in leaf_nodes[:max_n_rules]:
-                    hashes_of_size[1].add((leaf,))  # type: ignore
 
+                # Phase 1: Generate all expressions up to max_pattern_length
+                if verbose:
+                    print(f"Phase 1: Generating all expressions up to length {max_pattern_length}")
+
+                hashes_of_size: dict[int, set[tuple[str, ...]]] = defaultdict(set)
+                new_hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
+
+                # Initialize with leaf nodes
+                for leaf in leaf_nodes:
+                    hashes_of_size[1].add((leaf,))
+
+                # Generate expressions level by level
                 new_sizes: set[int] = set()
-
-                while (max_n_rules is None or len(self.simplification_rules) < max_n_rules) and (timeout is None or time.time() - start_time <= timeout):
-                    if max_pattern_length is not None and max(hashes_of_size.keys()) >= max_pattern_length:
-                        # If the maximum pattern length is exceeded, stop searching
-                        if verbose:
-                            print(f'Maximum pattern length reached: {max_pattern_length}')
-                        break
-
-                    # For logging
-                    hashes_of_size_lengths = {k: len(v) for k, v in hashes_of_size.items()}
-
-                    new_hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
-
+                while max(hashes_of_size.keys()) < max_pattern_length:  # This means that every smaller size is already generated
                     for combination in self.construct_expressions(hashes_of_size, non_leaf_nodes, must_have_sizes=new_sizes):
-                        if timeout is not None and time.time() - start_time > timeout:
-                            if verbose:
-                                print('Reached timeout')
-                            break
-
-                        # Write the rules to a file to check the progress
-                        if output_file is not None and n_scanned % save_every == 0:
-                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                            with open(output_file, 'w') as file:
-                                json.dump(self.simplification_rules, file, indent=4)
-
-                        if max_n_rules is not None and len(self.simplification_rules) >= max_n_rules:
-                            print(f'Reached maximum number of rules: {len(self.simplification_rules)}')
-                            break
-
-                        simplified_skeleton_hash = combination
-
-                        new_hashes_of_size_lengths = {k: len(v) for k, v in new_hashes_of_size.items()}
-                        pbar.set_postfix_str(f"Rules: {len(self.simplification_rules):,}{max_rules_string}, Time: {(time.time() - start_time) / 60:.1f}{max_time_string} min, Subtrees: {hashes_of_size_lengths} <- {new_hashes_of_size_lengths}, Current: {combination} -> {simplified_skeleton_hash}")
-
-                        # Check if all leaf nodes are <num> (i.e. if the skeleton is purely numerical)
-                        if all([t == '<num>' or t in self.operator_arity for t in simplified_skeleton_hash]) and len(simplified_skeleton_hash) > 1:
-                            # Simplify the skeleton to a single <num>
-                            new_rule_candidates: list[tuple[tuple[str, ...], tuple[str, ...]]] = [(simplified_skeleton_hash, ('<num>',))]
-                        else:
-                            executable_prefix_expression = self.operators_to_realizations(simplified_skeleton_hash)
-                            prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
-                            code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
-                            code = codify(code_string, dummy_variables + constants)
-
-                            f = self.code_to_lambda(code)
-
-                            y = safe_f(f, X, C[:len(constants)])  # type: ignore
-
-                            all_sizes = set(hashes_of_size.keys()) | set(new_hashes_of_size.keys())
-                            new_rule_candidates = []
-                            for length in all_sizes:
-                                for candidate_hashes_of_size in (hashes_of_size, new_hashes_of_size):
-                                    if length not in candidate_hashes_of_size:
-                                        continue
-
-                                    # Ignore simplification candidates that do not shorten the expression
-                                    if length >= len(simplified_skeleton_hash):
-                                        continue
-
-                                    # TODO: If we traverse the candidates from short to long, we can stop early once we found a match
-                                    for candidate_hash in candidate_hashes_of_size[length]:
-                                        if candidate_hash == simplified_skeleton_hash:
-                                            continue
-                                        executable_prefix_candidate_hash = self.operators_to_realizations(candidate_hash)
-                                        prefix_candidate_hash_with_constants, constants_candidate_hash = num_to_constants(executable_prefix_candidate_hash, convert_numbers_to_constant=False)
-                                        code_string_candidate_hash = self.prefix_to_infix(prefix_candidate_hash_with_constants, realization=True)
-                                        code_candidate_hash = codify(code_string_candidate_hash, dummy_variables + constants_candidate_hash)
-
-                                        f_candidate = self.code_to_lambda(code_candidate_hash)
-
-                                        # Record the image
-                                        if len(constants_candidate_hash) == 0:
-                                            y_candidate = safe_f(f_candidate, X)
-                                            if not isinstance(y_candidate, np.ndarray):
-                                                y_candidate = np.full(X.shape[0], y_candidate)  # type: ignore
-
-                                            if np.allclose(y, y_candidate, equal_nan=True):
-                                                new_rule_candidates.append((simplified_skeleton_hash, candidate_hash))
-                                        else:
-                                            if any([self.exist_constants_that_fit(candidate_hash, dummy_variables, X, y) for _ in range(constants_fit_retries)]):
-                                                new_rule_candidates.append((simplified_skeleton_hash, candidate_hash))
-
-                                if len(new_rule_candidates) > 0:
-                                    # Found a match that is shorter than other futher candidates could ever be
-                                    break
-
-                        # Find the shortest rule
-                        if len(new_rule_candidates) > 0:
-                            # If there are rules with and without <num>, prefer the ones without
-                            new_rule_candidates_without_num = [c for c in new_rule_candidates if '<num>' not in c[1]]
-                            if len(new_rule_candidates_without_num) > 0:
-                                new_rule_candidates = new_rule_candidates_without_num
-                            self.simplification_rules.append(new_rule_candidates[0])
-                            new_hashes_of_size[len(simplified_skeleton_hash)].add(new_rule_candidates[0][1])
-                        else:
-                            new_hashes_of_size[len(simplified_skeleton_hash)].add(simplified_skeleton_hash)
-
-                        n_scanned += 1
-                        pbar.update(1)
+                        new_hashes_of_size[len(combination)].add(combination)
 
                     new_sizes = set()
-
                     hashes_of_size_lengths_before = {k: len(v) for k, v in hashes_of_size.items()}
                     for new_length, new_hashes in new_hashes_of_size.items():
                         hashes_of_size[new_length].update(new_hashes)
-                    hashes_of_size_lengths_after = {k: len(v) for k, v in hashes_of_size.items()}
+                    hashes_of_size_lengths_after = {k: len(v) for k, v in new_hashes_of_size.items()}
 
                     for size in hashes_of_size_lengths_after.keys():
                         if size not in hashes_of_size_lengths_before or hashes_of_size_lengths_after[size] > hashes_of_size_lengths_before[size]:
                             new_sizes.add(size)
 
-                else:
                     if verbose:
-                        print('Reached maximum number of rules or timeout')
+                        print(f'Constructed expressions of sizes {sorted(new_sizes)}:')
+                        for size, count in sorted(hashes_of_size_lengths_after.items()):
+                            print(f'  {size:2d}: {count:,} new expressions')
 
+                    # Move the new hashes to the main dictionary
+                    for size, new_hashes in new_hashes_of_size.items():
+                        hashes_of_size[size].update(new_hashes)
+
+                    new_hashes_of_size.clear()
+
+                if verbose:
+                    print(f"\nFinished generating expressions up to size {max_pattern_length}. Total expressions: {sum(len(v) for v in hashes_of_size.values()):,}")
+                    for size, expressions in sorted(hashes_of_size.items()):
+                        print(f"Size {size}: {len(expressions):,} expressions")
+                
+                exit()
+
+                # Phase 2: Find simplification rules
+                if verbose:
+                    print(f"\nPhase 2: Finding simplification rules")
+
+                n_scanned = 0
+                pbar = tqdm(desc="Finding rules", disable=not verbose)
+
+                # Process each size level
+                for current_size in range(2, max_pattern_length + 1):
+                    if current_size not in hashes_of_size:
+                        continue
+
+                    # Process all expressions of current_size
+                    for combination in hashes_of_size[current_size]:
+                        if timeout is not None and time.time() - start_time > timeout:
+                            if verbose:
+                                print('Reached timeout')
+                            break
+
+                        if max_n_rules is not None and len(self.simplification_rules) >= max_n_rules:
+                            if verbose:
+                                print(f'Reached maximum number of rules: {len(self.simplification_rules)}')
+                            break
+
+                        # Save progress periodically
+                        if output_file is not None and n_scanned % save_every == 0 and n_scanned > 0:
+                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
+                            with open(output_file, 'w') as file:
+                                json.dump(self.simplification_rules, file, indent=4)
+
+                        pbar.set_postfix_str(f"Rules: {len(self.simplification_rules):,}{max_rules_string}, Time: {(time.time() - start_time) / 60:.1f}{max_time_string} min, Current size: {current_size}, Expression: {combination}")
+
+                        # Check if all leaf nodes are <num> (purely numerical)
+                        if all([t == '<num>' or t in self.operator_arity for t in combination]) and len(combination) > 1:
+                            new_rule_candidates: list[tuple[tuple[str, ...], tuple[str, ...]]] = [(combination, ('<num>',))]
+                        else:
+                            # Evaluate the current expression
+                            executable_prefix_expression = self.operators_to_realizations(combination)
+                            prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
+                            code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
+                            code = codify(code_string, dummy_variables + constants)
+
+                            f = self.code_to_lambda(code)
+                            y = safe_f(f, X, C[:len(constants)])
+
+                            new_rule_candidates = []
+
+                            # Check against all smaller expressions
+                            for candidate_size in range(1, current_size):
+                                if candidate_size not in hashes_of_size:
+                                    continue
+
+                                for candidate_hash in hashes_of_size[candidate_size]:
+                                    if candidate_hash == combination:
+                                        continue
+
+                                    executable_prefix_candidate_hash = self.operators_to_realizations(candidate_hash)
+                                    prefix_candidate_hash_with_constants, constants_candidate_hash = num_to_constants(executable_prefix_candidate_hash, convert_numbers_to_constant=False)
+                                    code_string_candidate_hash = self.prefix_to_infix(prefix_candidate_hash_with_constants, realization=True)
+                                    code_candidate_hash = codify(code_string_candidate_hash, dummy_variables + constants_candidate_hash)
+
+                                    f_candidate = self.code_to_lambda(code_candidate_hash)
+
+                                    # Check if expressions are equivalent
+                                    if len(constants_candidate_hash) == 0:
+                                        y_candidate = safe_f(f_candidate, X)
+                                        if not isinstance(y_candidate, np.ndarray):
+                                            y_candidate = np.full(X.shape[0], y_candidate)
+
+                                        if np.allclose(y, y_candidate, equal_nan=True):
+                                            new_rule_candidates.append((combination, candidate_hash))
+                                    else:
+                                        if any([self.exist_constants_that_fit(candidate_hash, dummy_variables, X, y) for _ in range(constants_fit_retries)]):
+                                            new_rule_candidates.append((combination, candidate_hash))
+
+                                # Stop at first size level where we find matches
+                                if len(new_rule_candidates) > 0:
+                                    break
+
+                        # Add the best rule if found
+                        if len(new_rule_candidates) > 0:
+                            # Prefer rules without <num>
+                            new_rule_candidates_without_num = [c for c in new_rule_candidates if '<num>' not in c[1]]
+                            if len(new_rule_candidates_without_num) > 0:
+                                new_rule_candidates = new_rule_candidates_without_num
+                            self.simplification_rules.append(new_rule_candidates[0])
+
+                        n_scanned += 1
+                        pbar.update(1)
+
+                    # Break outer loop if conditions met
+                    if (timeout is not None and time.time() - start_time > timeout) or \
+                       (max_n_rules is not None and len(self.simplification_rules) >= max_n_rules):
+                        break
+
+                pbar.close()
+
+                # Final deduplication and tree building
                 self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
                 self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables)
 
-            pbar.close()
-
-            if verbose:
-                print('Finished.')
-
-            if output_file is not None:
                 if verbose:
-                    print('Saving the rules...')
-                with open(output_file, 'w') as file:
-                    json.dump(self.simplification_rules, file, indent=4)
+                    print(f'\nFinished. Found {len(self.simplification_rules)} rules.')
+
+                if output_file is not None:
+                    with open(output_file, 'w') as file:
+                        json.dump(self.simplification_rules, file, indent=4)
 
         except KeyboardInterrupt:
-            pbar.close()
+            if 'pbar' in locals():
+                pbar.close()
+
             if output_file is not None:
                 if verbose:
                     print('Interrupted. Trying to save the rules...')
-                time.sleep(1)  # Allow the user to interrupt the process
+                time.sleep(1)
                 with open(output_file, 'w') as file:
                     json.dump(self.simplification_rules, file, indent=4)
                 if verbose:
                     print('Rules saved.')
             raise
+
 
     def mask_elementary_literals(self, prefix_expression: list[str], inplace: bool = False) -> list[str]:
         '''
