@@ -4,7 +4,11 @@ import fractions
 import os
 import itertools
 import warnings
-import time
+import multiprocessing as mp
+import queue
+import signal
+from multiprocessing import Queue, Process
+from multiprocessing.shared_memory import SharedMemory
 from typing import Any, Callable, Literal, Generator
 from copy import deepcopy
 from types import CodeType, FunctionType
@@ -18,13 +22,6 @@ from tqdm import tqdm
 
 from simplipy.utils import factorize_to_at_most, is_numeric_string, load_config, substitute_root_path, get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants, codify, safe_f, deduplicate_rules
 
-import multiprocessing as mp
-from multiprocessing import Queue, Process
-from multiprocessing.shared_memory import SharedMemory
-import numpy as np
-from typing import Optional, Tuple
-import queue
-import signal
 
 class SimpliPyEngine:
     """
@@ -1133,8 +1130,8 @@ class SimpliPyEngine:
             return tuple(new_expression)
         return new_expression
 
-    def construct_expressions(self, hashes_of_size: dict[int, set[tuple[str, ...]]], non_leaf_nodes: dict[str, int], must_have_sizes: list | set | None = None) -> Generator[tuple[str, ...], None, None]:
-        hashes_of_size_with_lists = {k: list(v) for k, v in hashes_of_size.items()}
+    def construct_expressions(self, expressions_of_length: dict[int, set[tuple[str, ...]]], non_leaf_nodes: dict[str, int], must_have_sizes: list | set | None = None) -> Generator[tuple[str, ...], None, None]:
+        expressions_of_length_with_lists = {k: list(v) for k, v in expressions_of_length.items()}
 
         filter_sizes = must_have_sizes is not None and not len(must_have_sizes) == 0
         if must_have_sizes is not None and filter_sizes:
@@ -1143,12 +1140,12 @@ class SimpliPyEngine:
         # Append existing trees to every operator
         for new_root_operator, arity in non_leaf_nodes.items():
             # Start with the smallest arity-tuples of trees
-            for child_lengths in sorted(itertools.product(list(hashes_of_size_with_lists.keys()), repeat=arity), key=lambda x: sum(x)):
+            for child_lengths in sorted(itertools.product(list(expressions_of_length_with_lists.keys()), repeat=arity), key=lambda x: sum(x)):
                 # Check all possible combinations of child trees
                 if filter_sizes and not any(length in must_have_sizes_set for length in child_lengths):
                     # Skip combinations that do not have any of the required sizes (e.g. duplicates is used correctly)
                     continue
-                for child_combination in itertools.product(*[hashes_of_size_with_lists[child_length] for child_length in child_lengths]):
+                for child_combination in itertools.product(*[expressions_of_length_with_lists[child_length] for child_length in child_lengths]):
                     yield (new_root_operator,) + tuple(itertools.chain.from_iterable(child_combination))
 
     def exist_constants_that_fit(self, expression: list[str] | tuple[str, ...], variables: list[str], X: np.ndarray, y_target: np.ndarray) -> bool:
@@ -1191,7 +1188,7 @@ class SimpliPyEngine:
             y = np.full(X.shape[0], y)  # type: ignore
 
         return np.allclose(y_target, y, equal_nan=True)
-    
+
     def find_rule_worker(
             self,
             worker_id: int,
@@ -1203,105 +1200,100 @@ class SimpliPyEngine:
             C_shape: tuple,
             C_dtype: np.dtype,
             C_shm_name: str,
-            hashes_of_size: dict,
+            expressions_of_length_and_variables: dict,
             dummy_variables: list[str],
             operator_arity: dict,
-            constants_fit_retries: int,
-            # Add other needed attributes from self
-        ) -> None:
-            """Worker process that evaluates expressions and finds simplifications."""
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            constants_fit_retries: int) -> None:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-            try:
-                # Reconstruct arrays from shared memory
-                X_shm = SharedMemory(name=X_shm_name)
-                X: np.ndarray = np.ndarray(X_shape, dtype=X_dtype, buffer=X_shm.buf)
+        try:
+            # Reconstruct arrays from shared memory
+            X_shm = SharedMemory(name=X_shm_name)
+            X: np.ndarray = np.ndarray(X_shape, dtype=X_dtype, buffer=X_shm.buf)
 
-                C_shm = SharedMemory(name=C_shm_name)
-                C: np.ndarray = np.ndarray(C_shape, dtype=C_dtype, buffer=C_shm.buf)
+            C_shm = SharedMemory(name=C_shm_name)
+            C: np.ndarray = np.ndarray(C_shape, dtype=C_dtype, buffer=C_shm.buf)
 
-                # Main work loop
-                while True:
-                    work_item = work_queue.get()
+            # Main work loop
+            while True:
+                work_item = work_queue.get()
 
-                    # Check for sentinel
-                    if work_item is None:
-                        break
+                # Check for sentinel
+                if work_item is None:
+                    break
 
-                    hash_to_simplify, current_size = work_item
+                expression, expression_length = work_item
 
-                    # Check if purely numerical
-                    if all([t == '<num>' or t in operator_arity for t in hash_to_simplify]) and len(hash_to_simplify) > 1:
-                        result_queue.put((hash_to_simplify, ('<num>',)))
-                        continue
+                # Check if purely numerical
+                if all([t == '<num>' or t in operator_arity for t in expression]) and len(expression) > 1:
+                    result_queue.put((expression, ('<num>',)))
+                    continue
 
-                    # Evaluate expression
-                    executable_prefix_expression = self.operators_to_realizations(hash_to_simplify)
-                    prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
-                    code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
-                    code = codify(code_string, dummy_variables + constants)
+                expression_variables = list(set(expression) & set(dummy_variables))
 
-                    f = self.code_to_lambda(code)
+                # Evaluate expression
+                executable_prefix_expression = self.operators_to_realizations(expression)
+                prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
+                code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
+                code = codify(code_string, dummy_variables + constants)
 
-                    # Suppress warnings in worker
-                    with warnings.catch_warnings():
-                        warnings.filterwarnings("ignore", category=RuntimeWarning)
-                        y = safe_f(f, X, C[:len(constants)])
+                f = self.code_to_lambda(code)
 
-                        found_simplification = None
+                # Suppress warnings in worker
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=RuntimeWarning)
+                    y = safe_f(f, X, C[:len(constants)])
 
-                        # Check against all smaller expressions
-                        for candidate_size in range(1, current_size):
-                            for candidate_hash in hashes_of_size[candidate_size]:
-                                if candidate_hash == hash_to_simplify:
-                                    continue
+                    found_simplification = None
 
-                                executable_prefix_candidate_hash = self.operators_to_realizations(candidate_hash)
-                                prefix_candidate_hash_with_constants, constants_candidate_hash = num_to_constants(
-                                    executable_prefix_candidate_hash, convert_numbers_to_constant=False
+                    # Check against all smaller expressions
+                    for candidate_length in range(1, expression_length):
+                        for candidate_variables, candidate_expressions in expressions_of_length_and_variables[candidate_length].items():
+                            if any(var not in expression_variables for var in candidate_variables):
+                                # The candidate expression contains variables not in the original expression. It cannot be a simplification.
+                                continue
+
+                            for candidate_expression in candidate_expressions:
+                                executable_candidate = self.operators_to_realizations(candidate_expression)
+                                prefix_candidate_w_constants, candidate_constants = num_to_constants(
+                                    executable_candidate, convert_numbers_to_constant=False
                                 )
-                                code_string_candidate_hash = self.prefix_to_infix(prefix_candidate_hash_with_constants, realization=True)
-                                code_candidate_hash = codify(code_string_candidate_hash, dummy_variables + constants_candidate_hash)
+                                candidate_code = self.prefix_to_infix(prefix_candidate_w_constants, realization=True)
+                                candidate_compiled = codify(candidate_code, dummy_variables + candidate_constants)
 
-                                f_candidate = self.code_to_lambda(code_candidate_hash)
+                                f_candidate = self.code_to_lambda(candidate_compiled)
 
                                 # Check if expressions are equivalent
                                 expressions_match = False
-                                if len(constants_candidate_hash) == 0:
-                                    with warnings.catch_warnings():
-                                        warnings.filterwarnings("ignore", category=RuntimeWarning)
-                                        y_candidate = safe_f(f_candidate, X)
-                                        if not isinstance(y_candidate, np.ndarray):
-                                            y_candidate = np.full(X.shape[0], y_candidate)
+                                if len(candidate_constants) == 0:
+                                    y_candidate = safe_f(f_candidate, X)
+                                    if not isinstance(y_candidate, np.ndarray):
+                                        y_candidate = np.full(X.shape[0], y_candidate)
 
-                                        if np.allclose(y, y_candidate, equal_nan=True):
-                                            expressions_match = True
+                                    if np.allclose(y, y_candidate, equal_nan=True):
+                                        expressions_match = True
                                 else:
                                     # Need to check if constants can be fitted
                                     for _ in range(constants_fit_retries):
-                                        if self.exist_constants_that_fit(candidate_hash, dummy_variables, X, y):
+                                        if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
                                             expressions_match = True
                                             break
 
                                 if expressions_match:
-                                    found_simplification = (hash_to_simplify, candidate_hash)
+                                    found_simplification = (expression, candidate_expression)
                                     break
 
-                            if found_simplification:
-                                break
+                        if found_simplification:
+                            break
 
-                    # Send result (None if no simplification found)
-                    result_queue.put(found_simplification)
-
-                # Cleanup
-                X_shm.close()
-                C_shm.close()
-            except Exception as e:
-                # Log exceptions to result queue
-                result_queue.put(('ERROR', str(e)))
-            finally:
-                X_shm.close()
-                C_shm.close()
+                # Send result (None if no simplification found)
+                result_queue.put(found_simplification)
+        except Exception as e:
+            # Log exceptions to result queue
+            result_queue.put(('ERROR', str(e)))
+        finally:
+            X_shm.close()
+            C_shm.close()
 
     def find_rules(
             self,
@@ -1316,9 +1308,10 @@ class SimpliPyEngine:
             reset_rules: bool = True,
             verbose: bool = False,
             n_workers: int | None = None) -> None:
-        """Parallel version of find_rules."""
+
         # Signal handler for main process
         interrupted = False
+
         def signal_handler(signum: Any, frame: Any) -> None:
             nonlocal interrupted
             interrupted = True
@@ -1343,77 +1336,82 @@ class SimpliPyEngine:
             self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables)
 
         if X is None:
-            X = np.random.normal(loc=0, scale=5, size=(1024, len(dummy_variables)))
+            X_data = np.random.normal(loc=0, scale=5, size=(1024, len(dummy_variables)))
         elif isinstance(X, int):
-            X = np.random.normal(loc=0, scale=5, size=(X, len(dummy_variables)))
+            X_data = np.random.normal(loc=0, scale=5, size=(X, len(dummy_variables)))
 
         if C is None:
-            C = np.random.normal(loc=0, scale=5, size=128)
+            C_data = np.random.normal(loc=0, scale=5, size=128)
         elif isinstance(C, int):
-            C = np.random.normal(loc=0, scale=5, size=C)
+            C_data = np.random.normal(loc=0, scale=5, size=C)
 
         leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
 
-        start_time = time.time()
-
-        # Phase 1: Generate expressions (same as before)
+        # --- Phase 1: Generate expressions ---
         if verbose:
             print(f"Phase 1: Generating all expressions up to length {max_pattern_length}")
 
-        hashes_of_size: dict[int, set[tuple[str, ...]]] = defaultdict(set)
-        new_hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
+        expressions_of_length: dict[int, set[tuple[str, ...]]] = defaultdict(set)
+        new_expressions_of_length: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
 
         # Initialize with leaf nodes
         for leaf in leaf_nodes:
-            hashes_of_size[1].add((leaf,))
+            expressions_of_length[1].add((leaf,))
 
         # Generate expressions level by level
         new_sizes: set[int] = set()
-        while max(hashes_of_size.keys()) < max_pattern_length:  # This means that every smaller size is already generated
-            for expression in self.construct_expressions(hashes_of_size, non_leaf_nodes, must_have_sizes=new_sizes):
-                new_hashes_of_size[len(expression)].add(expression)
+        while max(expressions_of_length.keys()) < max_pattern_length:  # This means that every smaller size is already generated
+            for expression in self.construct_expressions(expressions_of_length, non_leaf_nodes, must_have_sizes=new_sizes):
+                new_expressions_of_length[len(expression)].add(expression)
 
             new_sizes = set()
-            hashes_of_size_lengths_before = {k: len(v) for k, v in hashes_of_size.items()}
-            for new_length, new_hashes in new_hashes_of_size.items():
-                hashes_of_size[new_length].update(new_hashes)
-            hashes_of_size_lengths_after = {k: len(v) for k, v in new_hashes_of_size.items()}
+            lengths_before = {k: len(v) for k, v in expressions_of_length.items()}
+            for new_length, new_hashes in new_expressions_of_length.items():
+                expressions_of_length[new_length].update(new_hashes)
+            lengths_after = {k: len(v) for k, v in new_expressions_of_length.items()}
 
-            for size in hashes_of_size_lengths_after.keys():
-                if size not in hashes_of_size_lengths_before or hashes_of_size_lengths_after[size] > hashes_of_size_lengths_before[size]:
+            for size in lengths_after.keys():
+                if size not in lengths_before or lengths_after[size] > lengths_before[size]:
                     new_sizes.add(size)
 
             if verbose:
                 print(f'Constructed expressions of sizes {sorted(new_sizes)}:')
-                for size, count in sorted(hashes_of_size_lengths_after.items()):
+                for size, count in sorted(lengths_after.items()):
                     print(f'  {size:2d}: {count:,} new expressions')
 
             # Move the new hashes to the main dictionary
-            for size, new_hashes in new_hashes_of_size.items():
-                hashes_of_size[size].update(new_hashes)
+            for size, new_hashes in new_expressions_of_length.items():
+                expressions_of_length[size].update(new_hashes)
 
-            new_hashes_of_size.clear()
+            new_expressions_of_length.clear()
 
-        total_expressions = sum(len(v) for v in hashes_of_size.values())
+        total_expressions = sum(len(v) for v in expressions_of_length.values())
 
         if verbose:
             print(f"\nFinished generating expressions up to size {max_pattern_length}. Total expressions: {total_expressions:,}")
-            for size, expressions in sorted(hashes_of_size.items()):
+            for size, expressions in sorted(expressions_of_length.items()):
                 print(f"Size {size}: {len(expressions):,} expressions")
 
-        # Phase 2: Parallel rule finding
+        expressions_of_length_and_variables: dict[int, dict[tuple[str, ...], set[tuple[str, ...]]]] = {}
+        for size, expressions in expressions_of_length.items():
+            expressions_of_length_and_variables[size] = defaultdict(set)
+            for expression in expressions:
+                expression_variables = list(set(expression) & set(dummy_variables))  # This gets the dummy variables used in the expression
+                expressions_of_length_and_variables[size][tuple(sorted(expression_variables))].add(expression)
+
+        # --- Phase 2: Parallel rule finding ---
         if n_workers is None:
             n_workers = mp.cpu_count()
 
         # Create shared memory for arrays
-        X_shm = SharedMemory(create=True, size=X.nbytes)
-        X_shared: np.ndarray = np.ndarray(X.shape, dtype=X.dtype, buffer=X_shm.buf)
-        X_shared[:] = X[:]
+        X_shm = SharedMemory(create=True, size=X_data.nbytes)
+        X_shared: np.ndarray = np.ndarray(X_data.shape, dtype=X_data.dtype, buffer=X_shm.buf)
+        X_shared[:] = X_data[:]
 
-        C_shm = SharedMemory(create=True, size=C.nbytes)
-        C_shared: np.ndarray = np.ndarray(C.shape, dtype=C.dtype, buffer=C_shm.buf)
-        C_shared[:] = C[:]
+        C_shm = SharedMemory(create=True, size=C_data.nbytes)
+        C_shared: np.ndarray = np.ndarray(C_data.shape, dtype=C_data.dtype, buffer=C_shm.buf)
+        C_shared[:] = C_data[:]
 
         # Create queues
         work_queue: mp.Queue = mp.Queue()
@@ -1426,9 +1424,9 @@ class SimpliPyEngine:
                 target=self.find_rule_worker,
                 args=(
                     i, work_queue, result_queue,
-                    X.shape, X.dtype, X_shm.name,
-                    C.shape, C.dtype, C_shm.name,
-                    dict(hashes_of_size),  # Make a copy for each worker
+                    X_data.shape, X_data.dtype, X_shm.name,
+                    C_data.shape, C_data.dtype, C_shm.name,
+                    dict(expressions_of_length_and_variables),  # Make a copy for each worker
                     dummy_variables,
                     self.operator_arity,
                     constants_fit_retries,
@@ -1445,13 +1443,13 @@ class SimpliPyEngine:
         # Create iterator over all work items
         work_items = [
             (hash_expr, size)
-            for size, expressions in sorted(hashes_of_size.items())
+            for size, expressions in sorted(expressions_of_length.items())  # We don't care about the variables here
             for hash_expr in expressions
         ]
         work_iter = iter(work_items)
 
         pbar = tqdm(total=len(work_items), desc="Finding rules", disable=not verbose)
-        
+
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -1481,6 +1479,9 @@ class SimpliPyEngine:
 
                         # Process result
                         if result is not None:
+                            if result[0] == 'ERROR':
+                                print(f"Worker error: {result[1]}")
+                                continue
                             self.simplification_rules.append(result)
 
                         # Send new work if available (but not if interrupted)
@@ -1533,7 +1534,8 @@ class SimpliPyEngine:
                     for _ in workers:
                         try:
                             work_queue.put(None, timeout=0.1)
-                        except:
+                        except Exception as e:
+                            print(e)
                             pass
 
                     for p in workers:
@@ -1546,7 +1548,8 @@ class SimpliPyEngine:
                     try:
                         resource.close()
                         resource.unlink()
-                    except:
+                    except Exception as e:
+                        print(e)
                         pass
 
                 # Close queues
@@ -1558,8 +1561,6 @@ class SimpliPyEngine:
                     self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
-
-
 
     def mask_elementary_literals(self, prefix_expression: list[str], inplace: bool = False) -> list[str]:
         '''
