@@ -9,10 +9,7 @@ def main(argv: str = None) -> None:
     find_simplifications_parser = subparsers.add_parser("find-rules")
     find_simplifications_parser.add_argument('-e', '--engine', type=str, required=True, help='Path to the engine configuration file')
     find_simplifications_parser.add_argument('-g', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
-    find_simplifications_parser.add_argument('-n', '--max_n_rules', type=int, default=None, help='Maximum number of rules to find')
     find_simplifications_parser.add_argument('-l', '--max_pattern_length', type=int, default=7, help='Maximum length of the patterns to find')
-    find_simplifications_parser.add_argument('-t', '--timeout', type=int, default=None, help='Timeout for the search of simplifications in seconds')
-    find_simplifications_parser.add_argument('-m', '--max-simplify-steps', type=int, default=5, help='Maximum number of simplification steps')
     find_simplifications_parser.add_argument('-x', '--X', type=int, default=1024, help='Number of samples to use for comparison of images')
     find_simplifications_parser.add_argument('-c', '--C', type=int, default=1024, help='Number of samples of constants to put in to placeholders')
     find_simplifications_parser.add_argument('-r', '--constants-fit-retries', type=int, default=5, help='Number of retries for fitting the constants')
@@ -43,9 +40,7 @@ def main(argv: str = None) -> None:
             rule_finding_config = load_config(substitute_root_path(args.config), resolve_paths=True)
 
             engine.find_rules(
-                max_n_rules=args.max_n_rules,
                 max_pattern_length=args.max_pattern_length,
-                timeout=args.timeout,
                 dummy_variables=rule_finding_config.get('dummy_variables', None),
                 extra_internal_terms=rule_finding_config.get('extra_internal_terms', None),
                 X=args.X,

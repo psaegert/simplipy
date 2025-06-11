@@ -18,6 +18,13 @@ from tqdm import tqdm
 
 from simplipy.utils import factorize_to_at_most, is_numeric_string, load_config, substitute_root_path, get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants, codify, safe_f, deduplicate_rules
 
+import multiprocessing as mp
+from multiprocessing import Queue, Process
+from multiprocessing.shared_memory import SharedMemory
+import numpy as np
+from typing import Optional, Tuple
+import queue
+import signal
 
 class SimpliPyEngine:
     """
@@ -647,7 +654,7 @@ class SimpliPyEngine:
                     rules_key = (operator, *operands_heads)
                     rules_trees_organized[rules_key].append((pattern, replacement))
 
-        return rules_trees_organized
+        return rules_trees_organized  # TODO: Add length of the pattern to the key for more specific matching
 
     def match_pattern(self, tree: list, pattern: list, mapping: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
         if mapping is None:
@@ -1184,12 +1191,121 @@ class SimpliPyEngine:
             y = np.full(X.shape[0], y)  # type: ignore
 
         return np.allclose(y_target, y, equal_nan=True)
+    
+    def find_rule_worker(
+            self,
+            worker_id: int,
+            work_queue: Queue,
+            result_queue: Queue,
+            X_shape: tuple,
+            X_dtype: np.dtype,
+            X_shm_name: str,
+            C_shape: tuple,
+            C_dtype: np.dtype,
+            C_shm_name: str,
+            hashes_of_size: dict,
+            dummy_variables: list[str],
+            operator_arity: dict,
+            constants_fit_retries: int,
+            # Add other needed attributes from self
+        ) -> None:
+            """Worker process that evaluates expressions and finds simplifications."""
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+            try:
+                # Reconstruct arrays from shared memory
+                X_shm = SharedMemory(name=X_shm_name)
+                X: np.ndarray = np.ndarray(X_shape, dtype=X_dtype, buffer=X_shm.buf)
+
+                C_shm = SharedMemory(name=C_shm_name)
+                C: np.ndarray = np.ndarray(C_shape, dtype=C_dtype, buffer=C_shm.buf)
+
+                # Main work loop
+                while True:
+                    work_item = work_queue.get()
+
+                    # Check for sentinel
+                    if work_item is None:
+                        break
+
+                    hash_to_simplify, current_size = work_item
+
+                    # Check if purely numerical
+                    if all([t == '<num>' or t in operator_arity for t in hash_to_simplify]) and len(hash_to_simplify) > 1:
+                        result_queue.put((hash_to_simplify, ('<num>',)))
+                        continue
+
+                    # Evaluate expression
+                    executable_prefix_expression = self.operators_to_realizations(hash_to_simplify)
+                    prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
+                    code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
+                    code = codify(code_string, dummy_variables + constants)
+
+                    f = self.code_to_lambda(code)
+
+                    # Suppress warnings in worker
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=RuntimeWarning)
+                        y = safe_f(f, X, C[:len(constants)])
+
+                        found_simplification = None
+
+                        # Check against all smaller expressions
+                        for candidate_size in range(1, current_size):
+                            for candidate_hash in hashes_of_size[candidate_size]:
+                                if candidate_hash == hash_to_simplify:
+                                    continue
+
+                                executable_prefix_candidate_hash = self.operators_to_realizations(candidate_hash)
+                                prefix_candidate_hash_with_constants, constants_candidate_hash = num_to_constants(
+                                    executable_prefix_candidate_hash, convert_numbers_to_constant=False
+                                )
+                                code_string_candidate_hash = self.prefix_to_infix(prefix_candidate_hash_with_constants, realization=True)
+                                code_candidate_hash = codify(code_string_candidate_hash, dummy_variables + constants_candidate_hash)
+
+                                f_candidate = self.code_to_lambda(code_candidate_hash)
+
+                                # Check if expressions are equivalent
+                                expressions_match = False
+                                if len(constants_candidate_hash) == 0:
+                                    with warnings.catch_warnings():
+                                        warnings.filterwarnings("ignore", category=RuntimeWarning)
+                                        y_candidate = safe_f(f_candidate, X)
+                                        if not isinstance(y_candidate, np.ndarray):
+                                            y_candidate = np.full(X.shape[0], y_candidate)
+
+                                        if np.allclose(y, y_candidate, equal_nan=True):
+                                            expressions_match = True
+                                else:
+                                    # Need to check if constants can be fitted
+                                    for _ in range(constants_fit_retries):
+                                        if self.exist_constants_that_fit(candidate_hash, dummy_variables, X, y):
+                                            expressions_match = True
+                                            break
+
+                                if expressions_match:
+                                    found_simplification = (hash_to_simplify, candidate_hash)
+                                    break
+
+                            if found_simplification:
+                                break
+
+                    # Send result (None if no simplification found)
+                    result_queue.put(found_simplification)
+
+                # Cleanup
+                X_shm.close()
+                C_shm.close()
+            except Exception as e:
+                # Log exceptions to result queue
+                result_queue.put(('ERROR', str(e)))
+            finally:
+                X_shm.close()
+                C_shm.close()
 
     def find_rules(
             self,
-            max_n_rules: int | None = None,
             max_pattern_length: int = 7,
-            timeout: float | None = None,
             dummy_variables: int | list[str] | None = None,
             extra_internal_terms: list[str] | None = None,
             X: np.ndarray | int | None = None,
@@ -1198,8 +1314,20 @@ class SimpliPyEngine:
             output_file: str | None = None,
             save_every: int = 100,
             reset_rules: bool = True,
-            verbose: bool = False) -> None:
+            verbose: bool = False,
+            n_workers: int | None = None) -> None:
+        """Parallel version of find_rules."""
+        # Signal handler for main process
+        interrupted = False
+        def signal_handler(signum: Any, frame: Any) -> None:
+            nonlocal interrupted
+            interrupted = True
+            print("\nInterrupt received, cleaning up...")
 
+        # Set up signal handler in main process
+        old_handler = signal.signal(signal.SIGINT, signal_handler)
+
+        # All the initialization from the sequential version
         extra_internal_terms = extra_internal_terms or []
 
         if dummy_variables is None:
@@ -1228,173 +1356,210 @@ class SimpliPyEngine:
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
 
         start_time = time.time()
-        max_rules_string = f'/{max_n_rules:,}' if max_n_rules is not None else ''
-        max_time_string = f'/{timeout / 60:.1f}' if timeout is not None else ''
 
-        try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=RuntimeWarning)
+        # Phase 1: Generate expressions (same as before)
+        if verbose:
+            print(f"Phase 1: Generating all expressions up to length {max_pattern_length}")
 
-                # Phase 1: Generate all expressions up to max_pattern_length
-                if verbose:
-                    print(f"Phase 1: Generating all expressions up to length {max_pattern_length}")
+        hashes_of_size: dict[int, set[tuple[str, ...]]] = defaultdict(set)
+        new_hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
 
-                hashes_of_size: dict[int, set[tuple[str, ...]]] = defaultdict(set)
-                new_hashes_of_size: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
+        # Initialize with leaf nodes
+        for leaf in leaf_nodes:
+            hashes_of_size[1].add((leaf,))
 
-                # Initialize with leaf nodes
-                for leaf in leaf_nodes:
-                    hashes_of_size[1].add((leaf,))
+        # Generate expressions level by level
+        new_sizes: set[int] = set()
+        while max(hashes_of_size.keys()) < max_pattern_length:  # This means that every smaller size is already generated
+            for expression in self.construct_expressions(hashes_of_size, non_leaf_nodes, must_have_sizes=new_sizes):
+                new_hashes_of_size[len(expression)].add(expression)
 
-                # Generate expressions level by level
-                new_sizes: set[int] = set()
-                while max(hashes_of_size.keys()) < max_pattern_length:  # This means that every smaller size is already generated
-                    for expression in self.construct_expressions(hashes_of_size, non_leaf_nodes, must_have_sizes=new_sizes):
-                        new_hashes_of_size[len(expression)].add(expression)
+            new_sizes = set()
+            hashes_of_size_lengths_before = {k: len(v) for k, v in hashes_of_size.items()}
+            for new_length, new_hashes in new_hashes_of_size.items():
+                hashes_of_size[new_length].update(new_hashes)
+            hashes_of_size_lengths_after = {k: len(v) for k, v in new_hashes_of_size.items()}
 
-                    new_sizes = set()
-                    hashes_of_size_lengths_before = {k: len(v) for k, v in hashes_of_size.items()}
-                    for new_length, new_hashes in new_hashes_of_size.items():
-                        hashes_of_size[new_length].update(new_hashes)
-                    hashes_of_size_lengths_after = {k: len(v) for k, v in new_hashes_of_size.items()}
+            for size in hashes_of_size_lengths_after.keys():
+                if size not in hashes_of_size_lengths_before or hashes_of_size_lengths_after[size] > hashes_of_size_lengths_before[size]:
+                    new_sizes.add(size)
 
-                    for size in hashes_of_size_lengths_after.keys():
-                        if size not in hashes_of_size_lengths_before or hashes_of_size_lengths_after[size] > hashes_of_size_lengths_before[size]:
-                            new_sizes.add(size)
+            if verbose:
+                print(f'Constructed expressions of sizes {sorted(new_sizes)}:')
+                for size, count in sorted(hashes_of_size_lengths_after.items()):
+                    print(f'  {size:2d}: {count:,} new expressions')
 
-                    if verbose:
-                        print(f'Constructed expressions of sizes {sorted(new_sizes)}:')
-                        for size, count in sorted(hashes_of_size_lengths_after.items()):
-                            print(f'  {size:2d}: {count:,} new expressions')
+            # Move the new hashes to the main dictionary
+            for size, new_hashes in new_hashes_of_size.items():
+                hashes_of_size[size].update(new_hashes)
 
-                    # Move the new hashes to the main dictionary
-                    for size, new_hashes in new_hashes_of_size.items():
-                        hashes_of_size[size].update(new_hashes)
+            new_hashes_of_size.clear()
 
-                    new_hashes_of_size.clear()
+        total_expressions = sum(len(v) for v in hashes_of_size.values())
 
-                total_expressions = sum(len(v) for v in hashes_of_size.values())
+        if verbose:
+            print(f"\nFinished generating expressions up to size {max_pattern_length}. Total expressions: {total_expressions:,}")
+            for size, expressions in sorted(hashes_of_size.items()):
+                print(f"Size {size}: {len(expressions):,} expressions")
 
-                if verbose:
-                    print(f"\nFinished generating expressions up to size {max_pattern_length}. Total expressions: {total_expressions:,}")
-                    for size, expressions in sorted(hashes_of_size.items()):
-                        print(f"Size {size}: {len(expressions):,} expressions")
+        # Phase 2: Parallel rule finding
+        if n_workers is None:
+            n_workers = mp.cpu_count()
 
-                # Phase 2: Find simplification rules
-                if verbose:
-                    print("\nPhase 2: Finding simplification rules")
+        # Create shared memory for arrays
+        X_shm = SharedMemory(create=True, size=X.nbytes)
+        X_shared: np.ndarray = np.ndarray(X.shape, dtype=X.dtype, buffer=X_shm.buf)
+        X_shared[:] = X[:]
 
-                n_scanned = 0
-                pbar = tqdm(desc="Finding rules", disable=not verbose, total=total_expressions)
+        C_shm = SharedMemory(create=True, size=C.nbytes)
+        C_shared: np.ndarray = np.ndarray(C.shape, dtype=C.dtype, buffer=C_shm.buf)
+        C_shared[:] = C[:]
 
-                # Process each size level
-                for current_size, current_hashes_of_size in sorted(hashes_of_size.items(), key=lambda x: x[0]):
-                    # Process all expressions of current_size
-                    for hash_to_simplify in current_hashes_of_size:
-                        if timeout is not None and time.time() - start_time > timeout:
-                            if verbose:
-                                print('Reached timeout')
-                            break
+        # Create queues
+        work_queue: mp.Queue = mp.Queue()
+        result_queue: mp.Queue = mp.Queue()
 
-                        if max_n_rules is not None and len(self.simplification_rules) >= max_n_rules:
-                            if verbose:
-                                print(f'Reached maximum number of rules: {len(self.simplification_rules)}')
-                            break
+        # Start workers
+        workers = []
+        for i in range(n_workers):
+            p = Process(
+                target=self.find_rule_worker,
+                args=(
+                    i, work_queue, result_queue,
+                    X.shape, X.dtype, X_shm.name,
+                    C.shape, C.dtype, C_shm.name,
+                    dict(hashes_of_size),  # Make a copy for each worker
+                    dummy_variables,
+                    self.operator_arity,
+                    constants_fit_retries,
+                )
+            )
+            p.daemon = True  # Make workers daemon processes
+            p.start()
+            workers.append(p)
 
-                        # Save progress periodically
-                        if output_file is not None and n_scanned % save_every == 0 and n_scanned > 0:
-                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                            with open(output_file, 'w') as file:
-                                json.dump(self.simplification_rules, file, indent=4)
+        # Main processing loop
+        n_scanned = 0
+        active_tasks = 0
 
-                        pbar.set_postfix_str(f"Rules: {len(self.simplification_rules):,}{max_rules_string}, Time: {(time.time() - start_time) / 60:.1f}{max_time_string} min, Current size: {current_size}, Expression: {hash_to_simplify}")
+        # Create iterator over all work items
+        work_items = [
+            (hash_expr, size)
+            for size, expressions in sorted(hashes_of_size.items())
+            for hash_expr in expressions
+        ]
+        work_iter = iter(work_items)
 
-                        # Check if all leaf nodes are <num> (purely numerical)
-                        if all([t == '<num>' or t in self.operator_arity for t in hash_to_simplify]) and len(hash_to_simplify) > 1:
-                            new_rule_candidates: list[tuple[tuple[str, ...], tuple[str, ...]]] = [(hash_to_simplify, ('<num>',))]
-                        else:
-                            # Evaluate the current expression
-                            executable_prefix_expression = self.operators_to_realizations(hash_to_simplify)
-                            prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
-                            code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
-                            code = codify(code_string, dummy_variables + constants)
+        pbar = tqdm(total=len(work_items), desc="Finding rules", disable=not verbose)
+        
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-                            f = self.code_to_lambda(code)
-                            y = safe_f(f, X, C[:len(constants)])
+            try:
+                # Initial work distribution
+                for _ in range(min(n_workers * 2, len(work_items))):  # Queue 2x workers for efficiency
+                    try:
+                        work_item = next(work_iter)
+                        work_queue.put(work_item)
+                        active_tasks += 1
+                    except StopIteration:
+                        break
 
-                            new_rule_candidates = []
+                # Process results and distribute new work
+                try:
+                    while active_tasks > 0 and not interrupted:
+                        # Get result with timeout to allow checking stop conditions
+                        try:
+                            result = result_queue.get(timeout=0.1)
+                        except queue.Empty:
+                            # Check if interrupted during wait
+                            if interrupted:
+                                break
+                            continue
 
-                            # Check against all smaller expressions
-                            for candidate_size in range(1, current_size):
-                                for candidate_hash in hashes_of_size[candidate_size]:
-                                    if candidate_hash == hash_to_simplify:
-                                        continue
+                        active_tasks -= 1
 
-                                    executable_prefix_candidate_hash = self.operators_to_realizations(candidate_hash)
-                                    prefix_candidate_hash_with_constants, constants_candidate_hash = num_to_constants(executable_prefix_candidate_hash, convert_numbers_to_constant=False)
-                                    code_string_candidate_hash = self.prefix_to_infix(prefix_candidate_hash_with_constants, realization=True)
-                                    code_candidate_hash = codify(code_string_candidate_hash, dummy_variables + constants_candidate_hash)
+                        # Process result
+                        if result is not None:
+                            self.simplification_rules.append(result)
 
-                                    f_candidate = self.code_to_lambda(code_candidate_hash)
-
-                                    # Check if expressions are equivalent
-                                    if len(constants_candidate_hash) == 0:
-                                        y_candidate = safe_f(f_candidate, X)
-                                        if not isinstance(y_candidate, np.ndarray):
-                                            y_candidate = np.full(X.shape[0], y_candidate)
-
-                                        if np.allclose(y, y_candidate, equal_nan=True):
-                                            new_rule_candidates.append((hash_to_simplify, candidate_hash))
-                                    else:
-                                        if any([self.exist_constants_that_fit(candidate_hash, dummy_variables, X, y) for _ in range(constants_fit_retries)]):
-                                            new_rule_candidates.append((hash_to_simplify, candidate_hash))
-
-                                # Stop at first size level where we find matches
-                                if len(new_rule_candidates) > 0:
-                                    break
-
-                        # Add the best rule if found
-                        if len(new_rule_candidates) > 0:
-                            # Prefer rules without <num>
-                            new_rule_candidates_without_num = [c for c in new_rule_candidates if '<num>' not in c[1]]
-                            if len(new_rule_candidates_without_num) > 0:
-                                new_rule_candidates = new_rule_candidates_without_num
-                            self.simplification_rules.append(new_rule_candidates[0])
+                        # Send new work if available (but not if interrupted)
+                        if not interrupted:
+                            try:
+                                work_item = next(work_iter)
+                                work_queue.put(work_item)
+                                active_tasks += 1
+                            except StopIteration:
+                                pass
 
                         n_scanned += 1
                         pbar.update(1)
+                        # Calculate the display string for the last rule with truncation
+                        last_rule = self.simplification_rules[-1] if self.simplification_rules else 'None'
+                        last_rule_str = str(last_rule)[:64].ljust(64)  # Truncate and pad
 
-                    # Break outer loop if conditions met
-                    if (timeout is not None and time.time() - start_time > timeout) or \
-                       (max_n_rules is not None and len(self.simplification_rules) >= max_n_rules):
-                        break
+                        # Format with fixed widths
+                        pbar.set_postfix_str(
+                            f"Rules: {len(self.simplification_rules):>6,}, "  # 6 chars, right-aligned
+                            f"Active tasks: {active_tasks:>3}, "              # 3 chars, right-aligned
+                            f"Last rule: {last_rule_str}"                     # Fixed 30 chars
+                        )
 
-                pbar.close()
+                        # Periodic saving
+                        if output_file is not None and n_scanned % save_every == 0:
+                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
+                            with open(output_file, 'w') as file:
+                                json.dump(self.simplification_rules, file, indent=4)
+                except Exception as e:
+                    print(f"Error during processing: {e}")
+                    interrupted = True
 
-                # Final deduplication and tree building
-                self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables)
+            finally:
+                # Restore original signal handler
+                signal.signal(signal.SIGINT, old_handler)
 
-                if verbose:
-                    print(f'\nFinished. Found {len(self.simplification_rules)} rules.')
+                # Clean shutdown or force termination
+                if interrupted:
+                    print("Force terminating workers...")
+                    for p in workers:
+                        if p.is_alive():
+                            p.terminate()
+                            p.join(timeout=0.5)
+                            if p.is_alive():
+                                p.kill()
+                else:
+                    # Normal shutdown
+                    print("Shutting down workers...")
+                    for _ in workers:
+                        try:
+                            work_queue.put(None, timeout=0.1)
+                        except:
+                            pass
 
-                if output_file is not None:
+                    for p in workers:
+                        p.join(timeout=2)
+                        if p.is_alive():
+                            p.terminate()
+
+                # Cleanup resources
+                for resource in [X_shm, C_shm]:
+                    try:
+                        resource.close()
+                        resource.unlink()
+                    except:
+                        pass
+
+                # Close queues
+                work_queue.close()
+                result_queue.close()
+
+                if interrupted and output_file is not None:
+                    print("Saving partial results...")
+                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
 
-        except KeyboardInterrupt:
-            if 'pbar' in locals():
-                pbar.close()
 
-            if output_file is not None:
-                if verbose:
-                    print('Interrupted. Trying to save the rules...')
-                time.sleep(1)
-                with open(output_file, 'w') as file:
-                    json.dump(self.simplification_rules, file, indent=4)
-                if verbose:
-                    print('Rules saved.')
-            raise
 
     def mask_elementary_literals(self, prefix_expression: list[str], inplace: bool = False) -> list[str]:
         '''
