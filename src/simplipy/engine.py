@@ -1222,7 +1222,7 @@ class SimpliPyEngine:
                 if work_item is None:
                     break
 
-                expression, expression_length = work_item
+                expression, expression_length, already_simplified_expression_length = work_item
 
                 # Check if purely numerical
                 if all([t == '<num>' or t in operator_arity for t in expression]) and len(expression) > 1:
@@ -1247,7 +1247,7 @@ class SimpliPyEngine:
                     found_simplification = None
 
                     # Check against all smaller expressions
-                    for candidate_length in range(1, expression_length):
+                    for candidate_length in range(1, already_simplified_expression_length):
                         for candidate_variables, candidate_expressions in expressions_of_length_and_variables[candidate_length].items():
                             if any(var not in expression_variables for var in candidate_variables):
                                 # The candidate expression contains variables not in the original expression. It cannot be a simplification.
@@ -1371,18 +1371,18 @@ class SimpliPyEngine:
                 expressions_of_length[new_length].update(new_hashes)
             lengths_after = {k: len(v) for k, v in new_expressions_of_length.items()}
 
-            for size in lengths_after.keys():
-                if size not in lengths_before or lengths_after[size] > lengths_before[size]:
-                    new_sizes.add(size)
+            for length in lengths_after.keys():
+                if length not in lengths_before or lengths_after[length] > lengths_before[length]:
+                    new_sizes.add(length)
 
             if verbose:
                 print(f'Constructed expressions of sizes {sorted(new_sizes)}:')
-                for size, count in sorted(lengths_after.items()):
-                    print(f'  {size:2d}: {count:,} new expressions')
+                for length, count in sorted(lengths_after.items()):
+                    print(f'  {length:2d}: {count:,} new expressions')
 
             # Move the new hashes to the main dictionary
-            for size, new_hashes in new_expressions_of_length.items():
-                expressions_of_length[size].update(new_hashes)
+            for length, new_hashes in new_expressions_of_length.items():
+                expressions_of_length[length].update(new_hashes)
 
             new_expressions_of_length.clear()
 
@@ -1390,15 +1390,15 @@ class SimpliPyEngine:
 
         if verbose:
             print(f"\nFinished generating expressions up to size {max_pattern_length}. Total expressions: {total_expressions:,}")
-            for size, expressions in sorted(expressions_of_length.items()):
-                print(f"Size {size}: {len(expressions):,} expressions")
+            for length, expressions in sorted(expressions_of_length.items()):
+                print(f"Size {length}: {len(expressions):,} expressions")
 
         expressions_of_length_and_variables: dict[int, dict[tuple[str, ...], set[tuple[str, ...]]]] = {}
-        for size, expressions in expressions_of_length.items():
-            expressions_of_length_and_variables[size] = defaultdict(set)
+        for length, expressions in expressions_of_length.items():
+            expressions_of_length_and_variables[length] = defaultdict(set)
             for expression in expressions:
                 expression_variables = list(set(expression) & set(dummy_variables))  # This gets the dummy variables used in the expression
-                expressions_of_length_and_variables[size][tuple(sorted(expression_variables))].add(expression)
+                expressions_of_length_and_variables[length][tuple(sorted(expression_variables))].add(expression)
 
         # --- Phase 2: Parallel rule finding ---
         if n_workers is None:
@@ -1442,9 +1442,9 @@ class SimpliPyEngine:
 
         # Create iterator over all work items
         work_items = [
-            (hash_expr, size)
-            for size, expressions in sorted(expressions_of_length.items())  # We don't care about the variables here
-            for hash_expr in expressions
+            (expression_to_simplify, length)
+            for length, expressions in sorted(expressions_of_length.items())  # We don't care about the variables here
+            for expression_to_simplify in expressions
         ]
         work_iter = iter(work_items)
 
@@ -1457,8 +1457,9 @@ class SimpliPyEngine:
                 # Initial work distribution
                 for _ in range(min(n_workers * 2, len(work_items))):  # Queue 2x workers for efficiency
                     try:
-                        work_item = next(work_iter)
-                        work_queue.put(work_item)
+                        expression_to_simplify, length = next(work_iter)
+                        already_simplified_expression_length = len(self.simplify(expression_to_simplify, max_iter=5))
+                        work_queue.put((expression_to_simplify, length, already_simplified_expression_length))
                         active_tasks += 1
                     except StopIteration:
                         break
@@ -1487,8 +1488,9 @@ class SimpliPyEngine:
                         # Send new work if available (but not if interrupted)
                         if not interrupted:
                             try:
-                                work_item = next(work_iter)
-                                work_queue.put(work_item)
+                                expression_to_simplify, length = next(work_iter)
+                                already_simplified_expression_length = len(self.simplify(expression_to_simplify, max_iter=5))
+                                work_queue.put((expression_to_simplify, length, already_simplified_expression_length))
                                 active_tasks += 1
                             except StopIteration:
                                 pass
@@ -1509,6 +1511,7 @@ class SimpliPyEngine:
                         # Periodic saving
                         if output_file is not None and n_scanned % save_every == 0:
                             self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
+                            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables)
                             with open(output_file, 'w') as file:
                                 json.dump(self.simplification_rules, file, indent=4)
                 except Exception as e:
@@ -1559,6 +1562,7 @@ class SimpliPyEngine:
                 if interrupted and output_file is not None:
                     print("Saving partial results...")
                     self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
+                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables)
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
 
