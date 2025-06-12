@@ -9,7 +9,8 @@ def main(argv: str = None) -> None:
     find_simplifications_parser = subparsers.add_parser("find-rules")
     find_simplifications_parser.add_argument('-e', '--engine', type=str, required=True, help='Path to the engine configuration file')
     find_simplifications_parser.add_argument('-g', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
-    find_simplifications_parser.add_argument('-l', '--max_pattern_length', type=int, default=7, help='Maximum length of the patterns to find')
+    find_simplifications_parser.add_argument('-l', '--max-source-pattern-length', type=int, default=7, help='Maximum length of the patterns to find')
+    find_simplifications_parser.add_argument('-t', '--max-target-pattern-length', type=int, default=None, help='Length of the simplified patterns to find')
     find_simplifications_parser.add_argument('-x', '--X', type=int, default=1024, help='Number of samples to use for comparison of images')
     find_simplifications_parser.add_argument('-c', '--C', type=int, default=1024, help='Number of samples of constants to put in to placeholders')
     find_simplifications_parser.add_argument('-r', '--constants-fit-retries', type=int, default=5, help='Number of retries for fitting the constants')
@@ -40,7 +41,8 @@ def main(argv: str = None) -> None:
             rule_finding_config = load_config(substitute_root_path(args.config), resolve_paths=True)
 
             engine.find_rules(
-                max_pattern_length=args.max_pattern_length,
+                max_source_pattern_length=args.max_source_pattern_length,
+                max_target_pattern_length=args.max_target_pattern_length,
                 dummy_variables=rule_finding_config.get('dummy_variables', None),
                 extra_internal_terms=rule_finding_config.get('extra_internal_terms', None),
                 X=args.X,
