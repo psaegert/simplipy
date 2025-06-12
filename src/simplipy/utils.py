@@ -9,6 +9,7 @@ from typing import Any, Generator, Callable, Literal, Iterator, Mapping
 from copy import deepcopy
 
 import numpy as np
+from tqdm import tqdm
 
 
 def get_path(*args: str, filename: str | None = None, create: bool = False) -> str:
@@ -587,7 +588,7 @@ def remap_expression(source_expression: list[str], dummy_variables: list[str], v
 
 def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str]) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     deduplicated_rules: dict[tuple[str, ...], tuple[str, ...]] = {}
-    for rule in rules_list:
+    for rule in tqdm(rules_list, desc='Deduplicating rules'):
         # Rename variables in the source expression
         remapped_source, variable_mapping = remap_expression(list(rule[0]), dummy_variables=dummy_variables)
         remapped_target, _ = remap_expression(list(rule[1]), dummy_variables, variable_mapping)

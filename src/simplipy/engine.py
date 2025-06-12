@@ -6,6 +6,7 @@ import itertools
 import warnings
 import multiprocessing as mp
 import queue
+import time
 import signal
 from multiprocessing import Queue, Process
 from multiprocessing.shared_memory import SharedMemory
@@ -103,7 +104,7 @@ class SimpliPyEngine:
         elif isinstance(rules, list):
             self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
 
-        self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables=dummy_variables)  # HACK
+        self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules)  # HACK
 
     def import_modules(self) -> None:  # TODO: Still necessary?
         for module in self.modules:
@@ -618,19 +619,16 @@ class SimpliPyEngine:
 
         return result
 
-    def rules_trees_from_rules_list(self, rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str]) -> dict[tuple, list[tuple[list, list]]]:
-        # Deduplicate the rules (remove patterns that are represented by other patterns, e.g. with other variables)
-        deduplicated_rules = deduplicate_rules(rules_list, dummy_variables)
-
+    def rules_trees_from_rules_list(self, rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]]) -> dict[tuple, list[tuple[list, list]]]:
         # Group the rules by arity
-        deduplicated_rules_of_operator: defaultdict[str, list] = defaultdict(list)
-        for rule in deduplicated_rules:
-            deduplicated_rules_of_operator[rule[0][0]].append(rule)
-        deduplicated_rules_of_operator = dict(deduplicated_rules_of_operator)  # type: ignore
+        rules_list_of_operator: defaultdict[str, list] = defaultdict(list)
+        for rule in rules_list:
+            rules_list_of_operator[rule[0][0]].append(rule)
+        rules_list_of_operator = dict(rules_list_of_operator)  # type: ignore
 
         # Sort the rules by length of the left-hand side to make matching more efficient
-        for operator, deduplicated_rules_of_operator_list in deduplicated_rules_of_operator.items():
-            deduplicated_rules_of_operator[operator] = sorted(deduplicated_rules_of_operator_list, key=lambda x: len(x[0]))
+        for operator, rules_list_of_operator_list in rules_list_of_operator.items():
+            rules_list_of_operator[operator] = sorted(rules_list_of_operator_list, key=lambda x: len(x[0]))
 
         # Construct the trees for pattern matching
         rules_trees = {operator: [
@@ -638,17 +636,19 @@ class SimpliPyEngine:
                 self.prefix_to_tree(list(rule[0])),
                 self.prefix_to_tree(list(rule[1]))
             )
-            for rule in deduplicated_rules_of_operator_a] for operator, deduplicated_rules_of_operator_a in deduplicated_rules_of_operator.items()}
+            for rule in rules_list_of_operator_a] for operator, rules_list_of_operator_a in tqdm(rules_list_of_operator.items(), desc='Constructing patterns')}
 
         rules_trees_organized: defaultdict[tuple, list] = defaultdict(list)
         for operator, rules in rules_trees.items():
             for (pattern, replacement) in rules:
+                pattern_length = len(flatten_nested_list(pattern))
                 operands_heads: list[str] = [operand[0] for operand in pattern[1]]
                 if any(head.startswith('_') for head in operands_heads):
-                    rules_trees_organized[(operator,)].append((pattern, replacement))
+                    rules_trees_organized[(pattern_length, operator,)].append((pattern, replacement))
                 else:
                     # More specific structure possible
-                    rules_key = (operator, *operands_heads)
+                    rules_key = (pattern_length, operator,)
+                    # rules_key = (operator, *operands_heads)
                     rules_trees_organized[rules_key].append((pattern, replacement))
 
         return rules_trees_organized  # TODO: Add length of the pattern to the key for more specific matching
@@ -741,8 +741,6 @@ class SimpliPyEngine:
                 operator = self.operator_aliases.get(token, token)
                 arity = self.operator_arity_compat[operator]
                 operands = list(reversed(stack[-arity:]))
-                operands_heads = [operand[0] for operand in operands]
-                rules_key = (operator, *operands_heads)
 
                 if all(operand[0] == '<num>' for operand in operands):
                     # All operands are constants
@@ -754,15 +752,23 @@ class SimpliPyEngine:
                 # TODO: Optimize by hashing operands. e.g. rules_trees[(operator, operand1_type, operand2_type, ...)]
 
                 subtree = [operator, operands]
+                # operands_heads = [operand[0] for operand in operands]
+                subtree_length = len(flatten_nested_list(subtree))
+                # rules_key = (operator, *operands_heads)
+                rules_key = (operator,)
+
                 # Check if a pattern matches the current subtree
-                for rule in rules_trees.get(rules_key, rules_trees.get((operator,), [])):
-                    does_match, mapping = self.match_pattern(subtree, rule[0], mapping=None)
-                    if does_match:
-                        # Replace the placeholders (keys of the mapping) with the actual subtrees (values of the mapping) in the entire subtree at any depth
-                        _ = [stack.pop() for _ in range(arity)]
-                        stack.append(self.apply_mapping(deepcopy(rule[1]), mapping))
-                        i -= 1
-                        applied_rule = True
+                for pattern_length in range(1, subtree_length + 1):
+                    for rule in rules_trees.get(rules_key, rules_trees.get((pattern_length, operator,), [])):
+                        does_match, mapping = self.match_pattern(subtree, rule[0], mapping=None)
+                        if does_match:
+                            # Replace the placeholders (keys of the mapping) with the actual subtrees (values of the mapping) in the entire subtree at any depth
+                            _ = [stack.pop() for _ in range(arity)]
+                            stack.append(self.apply_mapping(deepcopy(rule[1]), mapping))
+                            i -= 1
+                            applied_rule = True
+                            break
+                    if applied_rule:
                         break
 
                 if not applied_rule:
@@ -1096,6 +1102,9 @@ class SimpliPyEngine:
         return flatten_nested_list(stack)[::-1]
 
     def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, mask_elementary_literals: bool = True, inplace: bool = False) -> list[str] | tuple[str, ...]:
+        length_before = len(expression)
+        original_expression = list(expression).copy()
+
         if isinstance(expression, tuple):
             was_tuple = True
             expression = list(expression)
@@ -1126,8 +1135,15 @@ class SimpliPyEngine:
         if mask_elementary_literals:
             new_expression = self.mask_elementary_literals(new_expression, inplace=inplace)
 
+        if len(new_expression) > length_before:
+            # The expression has grown, which is not a simplification
+            if was_tuple:
+                return tuple(original_expression)
+            return original_expression
+
         if was_tuple:
             return tuple(new_expression)
+
         return new_expression
 
     def construct_expressions(self, expressions_of_length: dict[int, set[tuple[str, ...]]], non_leaf_nodes: dict[str, int], must_have_sizes: list | set | None = None) -> Generator[tuple[str, ...], None, None]:
@@ -1222,7 +1238,12 @@ class SimpliPyEngine:
                 if work_item is None:
                     break
 
-                expression, expression_length, already_simplified_expression_length = work_item
+                expression, simplified_length, allowed_candidate_lengths = work_item
+
+                if len(allowed_candidate_lengths) == 0 or max(allowed_candidate_lengths) <= 0 or simplified_length <= min(allowed_candidate_lengths):  # Request unrealistic simplification or already have better simplification than requested
+                    # No candidates allowed, skip this expression
+                    result_queue.put(None)
+                    continue
 
                 # Check if purely numerical
                 if all([t == '<num>' or t in operator_arity for t in expression]) and len(expression) > 1:
@@ -1247,8 +1268,8 @@ class SimpliPyEngine:
                     found_simplification = None
 
                     # Check against all smaller expressions
-                    for candidate_length in range(1, already_simplified_expression_length):
-                        for candidate_variables, candidate_expressions in expressions_of_length_and_variables[candidate_length].items():
+                    for candidate_length in allowed_candidate_lengths:
+                        for candidate_variables, candidate_expressions in expressions_of_length_and_variables.get(candidate_length, {}).items():
                             if any(var not in expression_variables for var in candidate_variables):
                                 # The candidate expression contains variables not in the original expression. It cannot be a simplification.
                                 continue
@@ -1290,14 +1311,15 @@ class SimpliPyEngine:
                 result_queue.put(found_simplification)
         except Exception as e:
             # Log exceptions to result queue
-            result_queue.put(('ERROR', str(e)))
+            result_queue.put(('ERROR', e, (expression, simplified_length, allowed_candidate_lengths)))
         finally:
             X_shm.close()
             C_shm.close()
 
     def find_rules(
             self,
-            max_pattern_length: int = 7,
+            max_source_pattern_length: int = 7,
+            max_target_pattern_length: int | None = None,
             dummy_variables: int | list[str] | None = None,
             extra_internal_terms: list[str] | None = None,
             X: np.ndarray | int | None = None,
@@ -1324,7 +1346,7 @@ class SimpliPyEngine:
         extra_internal_terms = extra_internal_terms or []
 
         if dummy_variables is None:
-            max_leaf_nodes_if_operators_binary = int(max_pattern_length - (max_pattern_length - 1) / 2)
+            max_leaf_nodes_if_operators_binary = int(max_source_pattern_length - (max_source_pattern_length - 1) / 2)
             dummy_variables = [f"x{i}" for i in range(max_leaf_nodes_if_operators_binary)]
             if verbose:
                 print(f"Using {len(dummy_variables)} dummy variables: {dummy_variables}")
@@ -1333,7 +1355,7 @@ class SimpliPyEngine:
 
         if reset_rules:
             self.simplification_rules = []
-            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables)
+            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules)
 
         if X is None:
             X_data = np.random.normal(loc=0, scale=5, size=(1024, len(dummy_variables)))
@@ -1350,7 +1372,7 @@ class SimpliPyEngine:
 
         # --- Phase 1: Generate expressions ---
         if verbose:
-            print(f"Phase 1: Generating all expressions up to length {max_pattern_length}")
+            print(f"Phase 1: Generating all expressions up to length {max_source_pattern_length}")
 
         expressions_of_length: dict[int, set[tuple[str, ...]]] = defaultdict(set)
         new_expressions_of_length: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
@@ -1361,7 +1383,7 @@ class SimpliPyEngine:
 
         # Generate expressions level by level
         new_sizes: set[int] = set()
-        while max(expressions_of_length.keys()) < max_pattern_length:  # This means that every smaller size is already generated
+        while max(expressions_of_length.keys()) < max_source_pattern_length:  # This means that every smaller size is already generated
             for expression in self.construct_expressions(expressions_of_length, non_leaf_nodes, must_have_sizes=new_sizes):
                 new_expressions_of_length[len(expression)].add(expression)
 
@@ -1389,7 +1411,7 @@ class SimpliPyEngine:
         total_expressions = sum(len(v) for v in expressions_of_length.values())
 
         if verbose:
-            print(f"\nFinished generating expressions up to size {max_pattern_length}. Total expressions: {total_expressions:,}")
+            print(f"\nFinished generating expressions up to size {max_source_pattern_length}. Total expressions: {total_expressions:,}")
             for length, expressions in sorted(expressions_of_length.items()):
                 print(f"Size {length}: {len(expressions):,} expressions")
 
@@ -1442,8 +1464,8 @@ class SimpliPyEngine:
 
         # Create iterator over all work items
         work_items = [
-            (expression_to_simplify, length)
-            for length, expressions in sorted(expressions_of_length.items())  # We don't care about the variables here
+            expression_to_simplify
+            for _, expressions in sorted(expressions_of_length.items())  # We don't care about the variables here
             for expression_to_simplify in expressions
         ]
         work_iter = iter(work_items)
@@ -1457,9 +1479,13 @@ class SimpliPyEngine:
                 # Initial work distribution
                 for _ in range(min(n_workers * 2, len(work_items))):  # Queue 2x workers for efficiency
                     try:
-                        expression_to_simplify, length = next(work_iter)
-                        already_simplified_expression_length = len(self.simplify(expression_to_simplify, max_iter=5))
-                        work_queue.put((expression_to_simplify, length, already_simplified_expression_length))
+                        expression_to_simplify = next(work_iter)
+                        simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
+                        if max_target_pattern_length is None:
+                            allowed_candidate_lengths = tuple(range(simplified_length))
+                        else:
+                            allowed_candidate_lengths = tuple(range(min(simplified_length, max_target_pattern_length + 1)))
+                        work_queue.put((expression_to_simplify, simplified_length, allowed_candidate_lengths))
                         active_tasks += 1
                     except StopIteration:
                         break
@@ -1481,16 +1507,21 @@ class SimpliPyEngine:
                         # Process result
                         if result is not None:
                             if result[0] == 'ERROR':
-                                print(f"Worker error: {result[1]}")
-                                continue
+                                print(f"Error in worker {result[1]}: {result[2]}")
+                                print(result[2])
+                                raise result[1]
                             self.simplification_rules.append(result)
 
                         # Send new work if available (but not if interrupted)
                         if not interrupted:
                             try:
-                                expression_to_simplify, length = next(work_iter)
-                                already_simplified_expression_length = len(self.simplify(expression_to_simplify, max_iter=5))
-                                work_queue.put((expression_to_simplify, length, already_simplified_expression_length))
+                                expression_to_simplify = next(work_iter)
+                                simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
+                                if max_target_pattern_length is None:
+                                    allowed_candidate_lengths = tuple(range(simplified_length))
+                                else:
+                                    allowed_candidate_lengths = tuple(range(min(simplified_length, max_target_pattern_length + 1)))
+                                work_queue.put((expression_to_simplify, simplified_length, allowed_candidate_lengths))
                                 active_tasks += 1
                             except StopIteration:
                                 pass
@@ -1511,7 +1542,7 @@ class SimpliPyEngine:
                         # Periodic saving
                         if output_file is not None and n_scanned % save_every == 0:
                             self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables)
+                            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules)
                             with open(output_file, 'w') as file:
                                 json.dump(self.simplification_rules, file, indent=4)
                 except Exception as e:
@@ -1521,6 +1552,8 @@ class SimpliPyEngine:
             finally:
                 # Restore original signal handler
                 signal.signal(signal.SIGINT, old_handler)
+
+                pbar.close()
 
                 # Clean shutdown or force termination
                 if interrupted:
@@ -1559,10 +1592,11 @@ class SimpliPyEngine:
                 work_queue.close()
                 result_queue.close()
 
-                if interrupted and output_file is not None:
-                    print("Saving partial results...")
+                if output_file is not None:
+                    print("Saving results...")
+                    time.sleep(1)  # Give time for the user to interrupt the process
                     self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, dummy_variables)
+                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules)
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
 

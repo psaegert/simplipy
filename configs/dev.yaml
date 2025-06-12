@@ -217,4 +217,4 @@ operators:
     precedence: 3
     commutative: false
 
-rules: "{{ROOT}}/data/rules/dev.json"
+rules: "{{ROOT}}/data/rules/temp.json"
