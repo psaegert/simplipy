@@ -1267,7 +1267,7 @@ class SimpliPyEngine:
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-                    found_simplification = None
+                    found_simplifications = []
 
                     # Check against all smaller expressions
                     for candidate_length in allowed_candidate_lengths:
@@ -1312,14 +1312,26 @@ class SimpliPyEngine:
                                             break
 
                                 if expressions_match:
-                                    found_simplification = (expression, candidate_expression)
-                                    break
+                                    found_simplifications.append(candidate_expression)
+                                    break  # TODO: Do not break here. Wait for other candidates of the same size to be checked (it would sometimes choose <num> over 0 although 0 is better)
 
-                        if found_simplification:
+                        if found_simplifications:
+                            # Found at least one simplification for the current length
+                            # Every further candidate will be longer, so we can stop checking
                             break
 
-                # Send result (None if no simplification found)
-                result_queue.put(found_simplification)
+                if not found_simplifications:
+                    # No simplification found
+                    result_queue.put(None)
+                else:
+                    found_simplifications_without_num = [simplification for simplification in found_simplifications if '<num>' not in simplification]
+                    if found_simplifications_without_num:
+                        # Prefer simplifications without <num>
+                        result_queue.put((expression, found_simplifications_without_num[0]))
+                    else:
+                        # No simplification without <num> found, return the first found simplification
+                        result_queue.put((expression, found_simplifications[0]))
+
         except Exception as e:
             # Log exceptions to result queue
             result_queue.put(('ERROR', e, (expression, simplified_length, allowed_candidate_lengths)))
