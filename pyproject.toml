@@ -7,7 +7,7 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.12"
 dynamic = ["dependencies"]
-version = "0.0.2"
+version = "0.0.3"
 urls = { Github = "https://github.com/psaegert/simplipy"}
 
 [project.scripts]
