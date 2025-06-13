@@ -1,4 +1,4 @@
-<h1 align="center" style="margin-top: 0px;">🏗️SimpliPy:<br>Efficient Simplification of Mathematical Expressions🏗️</h1>
+<h1 align="center" style="margin-top: 0px;">SimpliPy:<br>Efficient Simplification of Mathematical Expressions</h1>
 
 <div align="center">
 
@@ -7,6 +7,79 @@
 [![CodeQL Advanced](https://github.com/psaegert/simplipy/actions/workflows/codeql.yaml/badge.svg)](https://github.com/psaegert/simplipy/actions/workflows/codeql.yaml)
 
 </div>
+
+# Usage
+
+
+```python
+import simplipy as sp
+
+engine = sp.SimpliPyEngine.from_config(sp.utils.get_path('configs', 'dev.yaml'))
+
+# Simplify prefix expressions
+engine.simplify(('/', '<num>', '*', '/', '*', 'x3',' <num>', 'x3', 'log', 'x3'))
+# > ('/', '<num>', 'log', 'x3')
+```
+
+# Performance
+
+<div align="center">
+    <img src="./assets/images/simplification_length_histogram.png" alt="Original vs Simplified Length" width="48%" style="vertical-align: middle;" />
+    <img src="./assets/images/simplification_time_cdf.png" alt="CDF of Simplification Times" width="48%" style="vertical-align: middle;" />
+</div>
+
+# Collecting Rules
+
+```sh
+simplipy find-rules -e "{{ROOT}}/configs/my_config.yaml" -c "{{ROOT}}/configs/create_my_config.yaml" -o "{{ROOT}}/data/rules/my_config.json" -v  --reset-rules
+```
+
+- `-e` is the path to the engine configuration file to use as a backend
+- `-c` is the path to the configuration file containing parameters for finding rules
+- `-o` is the output path for the collected rules
+- `-v` enables verbose output
+- `--reset-rules` will start with an empty rule set, otherwise it will append to the existing rules loaded with the engine
+
+A configuration file for collecting rules could look like this:
+
+```yaml
+# This includes special symbols for intermediate simplification steps
+extra_internal_terms: [
+  '<num>',
+  '0',
+  '1',
+  '(-1)',
+  'np.pi',
+  'np.e',
+  'float("inf")',
+  'float("-inf")',
+  'float("nan")'
+]
+
+# Number of dummy variables used to create equations
+# null means the number of dummy variables is determined automatically based on max source pattern length
+dummy_variables: null  
+
+# Maximum number of tokens in the source equation
+max_source_pattern_length: 3
+
+# Maximum number of tokens in the target equation
+max_target_pattern_length: 2
+
+# Number of data points to compute the image of the equation
+n_samples: 1024
+
+# Number of constants (just set it to something big, a subset will be sampled in each iteration)
+n_constants: 1024
+
+# Number of combinations of constants to sample for each equation
+# This prevents false positives due to unlucky constant combinations
+constants_fit_challenges: 16
+
+# Number of retries for each challenge to find a valid constant combination
+# This accounts for optimization problems that may not converge
+constants_fit_retries: 16
+```
 
 # Development
 
