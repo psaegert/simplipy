@@ -1313,7 +1313,6 @@ class SimpliPyEngine:
 
                                 if expressions_match:
                                     found_simplifications.append(candidate_expression)
-                                    break  # TODO: Do not break here. Wait for other candidates of the same size to be checked (it would sometimes choose <num> over 0 although 0 is better)
 
                         if found_simplifications:
                             # Found at least one simplification for the current length
