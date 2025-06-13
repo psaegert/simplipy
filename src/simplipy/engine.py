@@ -97,7 +97,9 @@ class SimpliPyEngine:
         dummy_variables = [f'x{i}' for i in range(100)]  # HACK
         if isinstance(rules, str):
             if not os.path.exists(substitute_root_path(rules)):
-                raise FileNotFoundError(f"Rules file {rules} does not exist")
+                # raise FileNotFoundError(f"Rules file {rules} does not exist")
+                warnings.warn(f"Rules file {rules} does not exist. Engine will not use simplification rules.", UserWarning)
+                self.simplification_rules = []
             else:
                 with open(substitute_root_path(rules), 'r') as f:
                     self.simplification_rules = deduplicate_rules(json.load(f), dummy_variables=dummy_variables)
@@ -1219,6 +1221,7 @@ class SimpliPyEngine:
             expressions_of_length_and_variables: dict,
             dummy_variables: list[str],
             operator_arity: dict,
+            constants_fit_challenges: int,
             constants_fit_retries: int) -> None:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
 
@@ -1263,7 +1266,6 @@ class SimpliPyEngine:
                 # Suppress warnings in worker
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=RuntimeWarning)
-                    y = safe_f(f, X, C[:len(constants)])
 
                     found_simplification = None
 
@@ -1285,19 +1287,28 @@ class SimpliPyEngine:
                                 f_candidate = self.code_to_lambda(candidate_compiled)
 
                                 # Check if expressions are equivalent
-                                expressions_match = False
                                 if len(candidate_constants) == 0:
+                                    y = safe_f(f, X, C[:len(constants)])
                                     y_candidate = safe_f(f_candidate, X)
                                     if not isinstance(y_candidate, np.ndarray):
                                         y_candidate = np.full(X.shape[0], y_candidate)
 
-                                    if np.allclose(y, y_candidate, equal_nan=True):
-                                        expressions_match = True
+                                    expressions_match = np.allclose(y, y_candidate, equal_nan=True)
                                 else:
-                                    # Need to check if constants can be fitted
-                                    for _ in range(constants_fit_retries):
-                                        if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
-                                            expressions_match = True
+                                    # Resample constants to avoid false positives
+                                    expressions_match = True
+
+                                    # The expression is considered a match unless one of the challenges fails
+                                    for challenge_id in range(constants_fit_challenges):
+                                        # Need to check if constants can be fitted
+                                        y = safe_f(f, X, np.random.choice(C, size=len(constants), replace=False))
+                                        for _ in range(constants_fit_retries):
+                                            if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
+                                                # Found a candidate that fits, next challenge please
+                                                break
+                                        else:
+                                            # No candidate found that fits, not all challenges could be solved, abort this candidate
+                                            expressions_match = False
                                             break
 
                                 if expressions_match:
@@ -1324,6 +1335,7 @@ class SimpliPyEngine:
             extra_internal_terms: list[str] | None = None,
             X: np.ndarray | int | None = None,
             C: np.ndarray | int | None = None,
+            constants_fit_challenges: int = 5,
             constants_fit_retries: int = 5,
             output_file: str | None = None,
             save_every: int = 100,
@@ -1451,6 +1463,7 @@ class SimpliPyEngine:
                     dict(expressions_of_length_and_variables),  # Make a copy for each worker
                     dummy_variables,
                     self.operator_arity,
+                    constants_fit_challenges,
                     constants_fit_retries,
                 )
             )
