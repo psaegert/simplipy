@@ -621,7 +621,7 @@ class SimpliPyEngine:
 
         return result
 
-    def rules_trees_from_rules_list(self, rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]]) -> dict[tuple, list[tuple[list, list]]]:
+    def rules_trees_from_rules_list(self, rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], verbose: bool = False) -> dict[tuple, list[tuple[list, list]]]:
         # Group the rules by arity
         rules_list_of_operator: defaultdict[str, list] = defaultdict(list)
         for rule in rules_list:
@@ -638,7 +638,7 @@ class SimpliPyEngine:
                 self.prefix_to_tree(list(rule[0])),
                 self.prefix_to_tree(list(rule[1]))
             )
-            for rule in rules_list_of_operator_a] for operator, rules_list_of_operator_a in tqdm(rules_list_of_operator.items(), desc='Constructing patterns')}
+            for rule in rules_list_of_operator_a] for operator, rules_list_of_operator_a in tqdm(rules_list_of_operator.items(), desc='Constructing patterns', disable=not verbose)}
 
         rules_trees_organized: defaultdict[tuple, list] = defaultdict(list)
         for operator, rules in rules_trees.items():
@@ -1423,7 +1423,7 @@ class SimpliPyEngine:
         total_expressions = sum(len(v) for v in expressions_of_length.values())
 
         if verbose:
-            print(f"\nFinished generating expressions up to size {max_source_pattern_length}. Total expressions: {total_expressions:,}")
+            print(f"Finished generating expressions up to size {max_source_pattern_length}. Total expressions: {total_expressions:,}")
             for length, expressions in sorted(expressions_of_length.items()):
                 print(f"Size {length}: {len(expressions):,} expressions")
 
@@ -1485,6 +1485,8 @@ class SimpliPyEngine:
 
         pbar = tqdm(total=len(work_items), desc="Finding rules", disable=not verbose)
 
+        current_length = 0
+
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -1502,6 +1504,8 @@ class SimpliPyEngine:
                         active_tasks += 1
                     except StopIteration:
                         break
+
+                current_length = len(expression_to_simplify)
 
                 # Process results and distribute new work
                 try:
@@ -1529,6 +1533,16 @@ class SimpliPyEngine:
                         if not interrupted:
                             try:
                                 expression_to_simplify = next(work_iter)
+
+                                if len(expression_to_simplify) > current_length:
+                                    # This means that the collected rules can be applied to coming expressions
+                                    # To avoid redundant rules, we incorporate the rules into the simplification to raise the requirements for rules
+                                    if verbose:
+                                        print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
+                                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
+                                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, verbose=verbose)
+                                    current_length = len(expression_to_simplify)
+
                                 simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
                                 if max_target_pattern_length is None:
                                     allowed_candidate_lengths = tuple(range(simplified_length))
@@ -1554,8 +1568,10 @@ class SimpliPyEngine:
 
                         # Periodic saving
                         if output_file is not None and n_scanned % save_every == 0:
-                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules)
+                            if verbose:
+                                print(f"Saving rules after processing {n_scanned} expressions...")
+                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
+                            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, verbose=verbose)
                             with open(output_file, 'w') as file:
                                 json.dump(self.simplification_rules, file, indent=4)
                 except Exception as e:
@@ -1606,10 +1622,11 @@ class SimpliPyEngine:
                 result_queue.close()
 
                 if output_file is not None:
-                    print("Saving results...")
+                    if verbose:
+                        print("Saving results...")
                     time.sleep(1)  # Give time for the user to interrupt the process
-                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules)
+                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
+                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, verbose=verbose)
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
 
