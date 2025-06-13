@@ -28,6 +28,15 @@ engine.simplify(('/', '<num>', '*', '/', '*', 'x3',' <num>', 'x3', 'log', 'x3'))
     <img src="./assets/images/simplification_time_cdf.png" alt="CDF of Simplification Times" width="48%" style="vertical-align: middle;" />
 </div>
 
+Original expressions sampled with the [Lample-Charton Algorithm](https://arxiv.org/abs/1912.01412) using the following parameters:
+- 0 to 3 variables
+- 0 to 20 operators (corresponding to lengths of 0 to 41)
+- Operators:
+  - with relative weight 10: `+`, `-`, `*`, `/`
+  - with relative weight 1: `abs`, `inv`, `neg`, `pow2`, `pow3`, `pow4`, `pow5`, `pow1_2`, `pow1_3`, `pow1_4`, `pow1_5`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`, `mult2`, `mult3`, `mult4`, `mult5`, `div2`, `div3`, `div4`, `div5`
+
+Points show bootstrapped mean and 95% confidence interval (N = 10,000)
+
 # Collecting Rules
 
 ```sh
@@ -93,7 +102,11 @@ pre-commit install
 
 ## Tests
 
-Test the package with `./scripts/pytest.sh`. Run pylint with `./scripts/pylint.sh`.
+Test the package with `pytest`:
+
+```sh
+pytest -v
+```
 
 # Citation
 ```bibtex
@@ -102,7 +115,7 @@ Test the package with `./scripts/pytest.sh`. Run pylint with `./scripts/pylint.s
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.0.2},
+    version = {0.0.3},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
