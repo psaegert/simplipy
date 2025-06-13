@@ -9,6 +9,7 @@ from typing import Any, Generator, Callable, Literal, Iterator, Mapping
 from copy import deepcopy
 
 import numpy as np
+from tqdm import tqdm
 
 
 def get_path(*args: str, filename: str | None = None, create: bool = False) -> str:
@@ -587,7 +588,7 @@ def remap_expression(source_expression: list[str], dummy_variables: list[str], v
 
 def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str]) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     deduplicated_rules: dict[tuple[str, ...], tuple[str, ...]] = {}
-    for rule in rules_list:
+    for rule in tqdm(rules_list, desc='Deduplicating rules'):
         # Rename variables in the source expression
         remapped_source, variable_mapping = remap_expression(list(rule[0]), dummy_variables=dummy_variables)
         remapped_target, _ = remap_expression(list(rule[1]), dummy_variables, variable_mapping)
@@ -601,3 +602,50 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
             deduplicated_rules[remapped_source_key] = remapped_target_value
 
     return list(deduplicated_rules.items())
+
+
+def is_numeric_string(s: str) -> bool:
+    """
+    by Cecil Curry
+    https://stackoverflow.com/questions/354038/how-do-i-check-if-a-string-represents-a-number-float-or-int
+    """
+    return isinstance(s, str) and s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e', '', 1).isdigit()
+
+
+def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[int]:
+    '''
+    Factorize an integer into factors at most max_factor
+
+    Parameters
+    ----------
+    p : int
+        The integer to factorize
+    max_factor : int
+        The maximum factor
+    max_iter : int, optional
+        The maximum number of iterations, by default 1000
+
+    Returns
+    -------
+    list[int]
+        The factors of the integer
+    '''
+    if is_prime(p):
+        return [p]
+    p_factors = []
+    i = 0
+    while p > 1:
+        for j in range(max_factor, 0, -1):
+            if j == 1:
+                p_factors.append(p)
+                p = 1
+                break
+            if p % j == 0:
+                p_factors.append(j)
+                p //= j
+                break
+        i += 1
+        if i > max_iter:
+            raise ValueError(f'Factorization of {p} into at most {max_factor} factors failed after {max_iter} iterations')
+
+    return p_factors
