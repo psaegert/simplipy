@@ -586,9 +586,9 @@ def remap_expression(source_expression: list[str], dummy_variables: list[str], v
     return source_expression, variable_mapping
 
 
-def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str]) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     deduplicated_rules: dict[tuple[str, ...], tuple[str, ...]] = {}
-    for rule in tqdm(rules_list, desc='Deduplicating rules'):
+    for rule in tqdm(rules_list, desc='Deduplicating rules', disable=not verbose):
         # Rename variables in the source expression
         remapped_source, variable_mapping = remap_expression(list(rule[0]), dummy_variables=dummy_variables)
         remapped_target, _ = remap_expression(list(rule[1]), dummy_variables, variable_mapping)
