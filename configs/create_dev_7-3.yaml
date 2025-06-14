@@ -13,7 +13,7 @@ extra_internal_terms: [
 dummy_variables: null  # Determine automatically based on max source pattern length
 
 max_source_pattern_length: 7
-max_target_pattern_length: 2
+max_target_pattern_length: 3
 
 n_samples: 1024
 n_constants: 1024
