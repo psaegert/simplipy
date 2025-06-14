@@ -108,7 +108,9 @@ class SimpliPyEngine:
         elif isinstance(rules, list):
             self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
 
-        self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules)  # HACK
+        self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules)
+
+        self.rule_application_statistics: defaultdict[tuple, int] = defaultdict(int)
 
     def import_modules(self) -> None:  # TODO: Still necessary?
         for module in self.modules:
@@ -722,7 +724,7 @@ class SimpliPyEngine:
         operator, operands = tree
         return [operator, [self.apply_mapping(operand, mapping) for operand in operands]]
 
-    def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None) -> list[str]:
+    def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_rule_statistics: bool = False) -> list[str]:
         if all(t == '<num>' or t in self.operator_arity for t in expression):
             return ['<num>']
 
@@ -767,6 +769,10 @@ class SimpliPyEngine:
                             stack.append(self.apply_mapping(deepcopy(rule[1]), mapping))
                             i -= 1
                             applied_rule = True
+                            if collect_rule_statistics:
+                                self.rule_application_statistics[(
+                                    tuple(flatten_nested_list(rule[0])[::-1]),
+                                    tuple(flatten_nested_list(rule[1])[::-1]))] += 1
                             break
                     if applied_rule:
                         break
@@ -1101,7 +1107,7 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
-    def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False) -> list[str] | tuple[str, ...]:
+    def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False) -> list[str] | tuple[str, ...]:
         length_before = len(expression)
         original_expression = list(expression).copy()
 
@@ -1114,8 +1120,7 @@ class SimpliPyEngine:
             new_expression = expression
 
         # Apply simplification rules and sort operands to get started
-        new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length)
-        new_expression = self.sort_operands(new_expression)
+        new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics)
 
         for _ in range(max_iter):
             # Cancel any terms
@@ -1123,14 +1128,14 @@ class SimpliPyEngine:
             new_expression = self.cancel_terms(expression_tree, annotated_expression_tree, stack_labels)
 
             # Apply simplification rules
-            new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length)
-
-            # Sort operands
-            new_expression = self.sort_operands(new_expression)
+            new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics)
 
             if new_expression == expression:
                 break
             expression = new_expression
+
+        # Sort operands
+        new_expression = self.sort_operands(new_expression)
 
         if mask_elementary_literals:
             new_expression = self.mask_elementary_literals(new_expression, inplace=inplace)
