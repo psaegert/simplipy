@@ -1189,7 +1189,7 @@ class SimpliPyEngine:
 
         is_valid = np.isfinite(X).all(axis=1) & np.isfinite(y_target)
 
-        if not np.any(is_valid):
+        if not np.any(is_valid) or len(constants) > is_valid.sum():  # https://github.com/scipy/scipy/issues/13969
             return False
 
         try:
