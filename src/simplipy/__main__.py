@@ -10,7 +10,7 @@ def main(argv: str = None) -> None:
     find_simplifications_parser.add_argument('-e', '--engine', type=str, required=True, help='Path to the engine configuration file')
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
     find_simplifications_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to the output json file')
-    find_simplifications_parser.add_argument('-s', '--save-every', type=int, default=10000, help='Save the simplifications every n rules')
+    find_simplifications_parser.add_argument('-s', '--save-every', type=int, default=100_000, help='Save the simplifications every n rules')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
 

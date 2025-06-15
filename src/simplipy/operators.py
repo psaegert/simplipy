@@ -550,4 +550,8 @@ def pow(x: float, y: float) -> float:
         return _torch_module.pow(x, y)
     # Handle scalar case
     with np.errstate(invalid='ignore'):
-        return np.power(float(x), float(y))  # Use numpy for scalar power calculation
+        if isinstance(x, int):
+            x = float(x)
+        if isinstance(y, int):
+            y = float(y)
+        return np.power(x, y)  # Use numpy for scalar power calculation
