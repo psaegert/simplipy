@@ -4,8 +4,9 @@ import time
 import re
 import math
 import yaml
+import itertools
 from types import CodeType
-from typing import Any, Generator, Callable, Literal, Iterator, Mapping
+from typing import Any, Generator, Callable
 from copy import deepcopy
 
 import numpy as np
@@ -221,86 +222,6 @@ def traverse_dict(dict_: dict[str, Any]) -> Generator[tuple[str, Any], None, Non
             yield key, value
 
 
-class GenerationConfig(Mapping[str, Any]):
-    '''
-    A class to store generation configuration.
-
-    Parameters
-    ----------
-    method : str, optional, one of 'beam_search' or 'softmax_sampling'
-        The generation method to use, by default 'beam_search'.
-    **kwargs : Any
-        Additional configuration parameters.
-
-    Attributes
-    ----------
-    method : str
-        The generation method to use.
-    config : dict
-        The configuration dictionary.
-    '''
-    def __init__(self, method: Literal['beam_search', 'softmax_sampling'] = 'beam_search', **kwargs: Any) -> None:
-        self.defaults = {
-            'beam_search': {
-                'beam_width': 32,
-                'max_len': 32,
-                'mini_batch_size': 128,
-                'equivalence_pruning': True
-            },
-            'softmax_sampling': {
-                'choices': 32,
-                'top_k': 0,
-                'top_p': 1,
-                'max_len': 32,
-                'mini_batch_size': 128,
-                'temperature': 1,
-                'valid_only': True,
-                'simplify': True,
-                'unique': True
-            }
-        }
-
-        if method not in self.defaults:
-            raise ValueError(f'Invalid generation method: {method}')
-
-        self.method = method
-
-        self.config = dict(**kwargs)
-
-        # Set defaults if not provided
-        if method in self.defaults:
-            for key, value in self.defaults[method].items():
-                if key not in self.config:
-                    self.config[key] = value
-
-        for key, value in self.config.items():
-            setattr(self, key, value)
-
-    def __getitem__(self, key: str) -> Any:
-        return self.config[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.config[key] = value
-        setattr(self, key, value)
-
-    def __delitem__(self, key: str) -> None:
-        del self.config[key]
-        delattr(self, key)
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.config)
-
-    def __len__(self) -> int:
-        return len(self.config)
-
-    # When printed, show the config as a dictionary
-    def __repr__(self) -> str:
-        return str(self.config)
-
-    def __str__(self) -> str:
-        return str(self.config)
-
-
 def codify(code_string: str, variables: list[str] | None = None) -> CodeType:
     '''
     Compile a string into a code object.
@@ -508,39 +429,6 @@ def flatten_nested_list(nested_list: list) -> list[str]:
     return flat_list
 
 
-def generate_ubi_dist(max_n_operators: int, n_leaves: int, n_unary_operators: int, n_binary_operators: int) -> list[list[int]]:
-    '''
-    Precompute the number of possible trees for a given number of operators and leaves.
-
-    Parameters
-    ----------
-    max_n_operators : int
-        The maximum number of operators.
-    n_leaves : int
-        The number of leaves.
-    n_unary_operators : int
-        The number of unary operators.
-    n_binary_operators : int
-        The number of binary operators.
-
-    Notes
-    -----
-    See https://github.com/SymposiumOrganization/NeuralSymbolicRegressionThatScales/blob/main/src/nesymres/dataset/generator.py
-    '''
-    # enumerate possible trees
-    # first generate the tranposed version of D, then transpose it
-    D: list[list[int]] = []
-    D.append([0] + ([n_leaves ** i for i in range(1, 2 * max_n_operators + 1)]))
-    for n in range(1, 2 * max_n_operators + 1):  # number of operators
-        s = [0]
-        for e in range(1, 2 * max_n_operators - n + 1):  # number of empty nodes
-            s.append(n_leaves * s[e - 1] + n_unary_operators * D[n - 1][e] + n_binary_operators * D[n - 1][e + 1])
-        D.append(s)
-    assert all(len(D[i]) >= len(D[i + 1]) for i in range(len(D) - 1))
-    D = [[D[j][i] for j in range(len(D)) if i < len(D[j])] for i in range(max(len(x) for x in D))]
-    return D
-
-
 def is_prime(n: int) -> bool:
     '''
     Check if a number is prime.
@@ -649,3 +537,156 @@ def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[
             raise ValueError(f'Factorization of {p} into at most {max_factor} factors failed after {max_iter} iterations')
 
     return p_factors
+
+
+def mask_elementary_literals(prefix_expression: list[str], inplace: bool = False) -> list[str]:
+    '''
+    Mask elementary literals such as <0> and <1> with <num>
+
+    Parameters
+    ----------
+    prefix_expression : list[str]
+        The prefix expression
+    inplace : bool, optional
+        Whether to modify the expression in place, by default False
+
+    Returns
+    -------
+    list[str]
+        The expression with elementary literals masked
+    '''
+    if inplace:
+        modified_prefix_expression = prefix_expression
+    else:
+        modified_prefix_expression = prefix_expression.copy()
+
+    for i, token in enumerate(prefix_expression):
+        if is_numeric_string(token):
+            modified_prefix_expression[i] = '<num>'
+
+    return modified_prefix_expression
+
+
+def construct_expressions(expressions_of_length: dict[int, set[tuple[str, ...]]], non_leaf_nodes: dict[str, int], must_have_sizes: list | set | None = None) -> Generator[tuple[str, ...], None, None]:
+    expressions_of_length_with_lists = {k: list(v) for k, v in expressions_of_length.items()}
+
+    filter_sizes = must_have_sizes is not None and not len(must_have_sizes) == 0
+    if must_have_sizes is not None and filter_sizes:
+        must_have_sizes_set = set(must_have_sizes)
+
+    # Append existing trees to every operator
+    for new_root_operator, arity in non_leaf_nodes.items():
+        # Start with the smallest arity-tuples of trees
+        for child_lengths in sorted(itertools.product(list(expressions_of_length_with_lists.keys()), repeat=arity), key=lambda x: sum(x)):
+            # Check all possible combinations of child trees
+            if filter_sizes and not any(length in must_have_sizes_set for length in child_lengths):
+                # Skip combinations that do not have any of the required sizes (e.g. duplicates is used correctly)
+                continue
+            for child_combination in itertools.product(*[expressions_of_length_with_lists[child_length] for child_length in child_lengths]):
+                yield (new_root_operator,) + tuple(itertools.chain.from_iterable(child_combination))
+
+
+def apply_mapping(tree: list, mapping: dict[str, Any]) -> list:
+    # If the tree is a leaf node, replace the placeholder with the actual subtree defined in the mapping
+    if len(tree) == 1 and isinstance(tree[0], str):
+        if tree[0].startswith('_'):
+            return mapping[tree[0]]  # TODO: I put a bracket here. Find out why this is necessary
+        return tree
+
+    operator, operands = tree
+    return [operator, [apply_mapping(operand, mapping) for operand in operands]]
+
+
+def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
+    if mapping is None:
+        mapping = {}
+
+    pattern_length = len(pattern)
+
+    # The leaf node is a variable but the pattern is not
+    if len(tree) == 1 and isinstance(tree[0], str) and pattern_length != 1:
+        return False, mapping
+
+    # Elementary pattern
+    pattern_key = pattern[0]
+    if pattern_length == 1 and isinstance(pattern_key, str):
+        # Check if the pattern is a placeholder to be filled with the tree
+        if pattern_key.startswith('_'):
+            # Try to match the tree with the placeholder pattern
+            existing_value = mapping.get(pattern_key)
+            if existing_value is None:
+                # Placeholder is not yet filled, can be filled with the tree
+                mapping[pattern_key] = tree
+                return True, mapping
+            else:
+                # Placeholder is occupied by another tree, the tree does not match the pattern
+                return (existing_value == tree), mapping
+        # The literal pattern must match the tree
+        return (tree == pattern), mapping
+
+    # The pattern is tree-structured
+    tree_operator, tree_operands = tree
+    pattern_operator, pattern_operands = pattern
+
+    # If the operators do not match, the tree does not match the pattern
+    if tree_operator != pattern_operator:
+        return False, mapping
+
+    # Try to recursively match the operands
+    for tree_operand, pattern_operand in zip(tree_operands, pattern_operands):
+        # If the pattern operand is a leaf node
+        if isinstance(pattern_operand, str):
+            # Check if the pattern operand is a placeholder to be filled with the tree operand
+            existing_value = mapping.get(pattern_operand)
+            if existing_value is None:
+                # Placeholder is not yet filled, can be filled with the tree operand
+                mapping[pattern_operand] = tree_operand
+                return True, mapping
+            elif existing_value != tree_operand:
+                # Placeholder is occupied by another tree, the tree does not match the pattern
+                return False, mapping
+        else:
+            # Recursively match the tree operand with the pattern operand
+            does_match, mapping = match_pattern(tree_operand, pattern_operand, mapping)
+
+            # If the tree operand does not match the pattern operand, the tree does not match the pattern
+            if not does_match:
+                return False, mapping
+
+    # The tree matches the pattern
+    return True, mapping
+
+
+def remove_pow1(prefix_expression: list[str]) -> list[str]:
+    filtered_expression = []
+    for token in prefix_expression:
+        if token == 'pow1':
+            continue
+
+        if token == 'pow_1':
+            filtered_expression.append('inv')
+            continue
+
+        filtered_expression.append(token)
+
+    return filtered_expression
+
+
+def deparenthesize(term: str) -> str:
+    '''
+    Removes outer parentheses from a term.
+
+    Parameters
+    ----------
+    term : str
+        The term.
+
+    Returns
+    -------
+    str
+        The term without parentheses.
+    '''
+    # HACK
+    if term.startswith('(') and term.endswith(')'):
+        return term[1:-1]
+    return term
