@@ -2,17 +2,17 @@ import re
 import importlib
 import fractions
 import os
-import itertools
 import warnings
 import multiprocessing as mp
 import queue
 import time
 import signal
+from types import CodeType, FunctionType
+from typing import Callable
 from multiprocessing import Queue, Process
 from multiprocessing.shared_memory import SharedMemory
-from typing import Any, Callable, Literal, Generator
+from typing import Any, Literal
 from copy import deepcopy
-from types import CodeType, FunctionType
 from math import prod
 from collections import defaultdict
 
@@ -21,7 +21,11 @@ import json
 from scipy.optimize import curve_fit, OptimizeWarning
 from tqdm import tqdm
 
-from simplipy.utils import factorize_to_at_most, is_numeric_string, load_config, substitute_root_path, get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants, codify, safe_f, deduplicate_rules
+from simplipy.utils import (
+    factorize_to_at_most, is_numeric_string, load_config, substitute_root_path,
+    get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants,
+    codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
+    construct_expressions, apply_mapping, match_pattern, remove_pow1, deparenthesize)
 
 
 class SimpliPyEngine:
@@ -192,25 +196,6 @@ class SimpliPyEngine:
 
         return True
 
-    def _deparenthesize(self, term: str) -> str:
-        '''
-        Removes outer parentheses from a term.
-
-        Parameters
-        ----------
-        term : str
-            The term.
-
-        Returns
-        -------
-        str
-            The term without parentheses.
-        '''
-        # HACK
-        if term.startswith('(') and term.endswith(')'):
-            return term[1:-1]
-        return term
-
     def prefix_to_infix(self, tokens: list[str], power: Literal['func', '**'] = 'func', realization: bool = False) -> str:
         '''
         Convert a list of tokens in prefix notation to infix notation
@@ -257,7 +242,7 @@ class SimpliPyEngine:
                 # "module.function(operand1, operand2, ...)"
                 elif '.' in write_operator or self.operator_arity_compat[operator] > 2:
                     # No need for parentheses here
-                    stack.append(f'{write_operator}({", ".join([self._deparenthesize(operand) for operand in write_operands])})')
+                    stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
 
                 # ** stays **
                 elif self.operator_aliases.get(operator, operator) == '**':
@@ -275,14 +260,14 @@ class SimpliPyEngine:
                     stack.append(f'(1/{write_operands[0]})')
 
                 else:
-                    stack.append(f'{write_operator}({", ".join([self._deparenthesize(operand) for operand in write_operands])})')
+                    stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
 
             else:
                 stack.append(token)
 
         infix_expression = stack.pop()
 
-        return self._deparenthesize(infix_expression)  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
+        return deparenthesize(infix_expression)  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
         '''
@@ -419,11 +404,9 @@ class SimpliPyEngine:
                                     new_expression = ['inv', new_expression]
                                 stack.append(new_expression)
                             else:
-                                # Replace '** base exponent' with 'exp(log(base) * exponent)'
-                                stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                                stack.append(['pow', [base, exponent]])
                         else:
-                            # Replace '** base exponent' with 'exp(log(base) * exponent)'
-                            stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                            stack.append(['pow', [base, exponent]])
 
                     elif len(exponent) == 2 and exponent[0][0] == '/' and is_numeric_string(exponent[1][0][0]) and is_numeric_string(exponent[1][1][0]):
                         # Handle fractional exponent, e.g. "x**(2/3)"
@@ -451,10 +434,9 @@ class SimpliPyEngine:
                                     new_expression = ['inv', new_expression]
                                 stack.append(new_expression)
                             else:
-                                stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                                stack.append(['pow', [base, exponent]])
                     else:
-                        # Replace '** base exponent' with 'exp(log(base) * exponent)'
-                        stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                        stack.append(['pow', [base, exponent]])
 
                 else:
                     # General case: assemble operator and its operands
@@ -539,20 +521,6 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
-    def remove_pow1(self, prefix_expression: list[str]) -> list[str]:
-        filtered_expression = []
-        for token in prefix_expression:
-            if token == 'pow1':
-                continue
-
-            if token == 'pow_1':
-                filtered_expression.append('inv')
-                continue
-
-            filtered_expression.append(token)
-
-        return filtered_expression
-
     # PARSING
     def parse(
             self,
@@ -590,7 +558,7 @@ class SimpliPyEngine:
         if mask_numbers:
             parsed_expression = numbers_to_num(parsed_expression, inplace=True)
 
-        return self.remove_pow1(parsed_expression)  # HACK: Find a better place to put this
+        return remove_pow1(parsed_expression)  # HACK: Find a better place to put this
 
     def prefix_to_tree(self, expression: list[str]) -> list:
         def build_tree(index: int) -> tuple[list | None, int]:
@@ -655,75 +623,6 @@ class SimpliPyEngine:
 
         return rules_trees_organized
 
-    def match_pattern(self, tree: list, pattern: list, mapping: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
-        if mapping is None:
-            mapping = {}
-
-        pattern_length = len(pattern)
-
-        # The leaf node is a variable but the pattern is not
-        if len(tree) == 1 and isinstance(tree[0], str) and pattern_length != 1:
-            return False, mapping
-
-        # Elementary pattern
-        pattern_key = pattern[0]
-        if pattern_length == 1 and isinstance(pattern_key, str):
-            # Check if the pattern is a placeholder to be filled with the tree
-            if pattern_key.startswith('_'):
-                # Try to match the tree with the placeholder pattern
-                existing_value = mapping.get(pattern_key)
-                if existing_value is None:
-                    # Placeholder is not yet filled, can be filled with the tree
-                    mapping[pattern_key] = tree
-                    return True, mapping
-                else:
-                    # Placeholder is occupied by another tree, the tree does not match the pattern
-                    return (existing_value == tree), mapping
-            # The literal pattern must match the tree
-            return (tree == pattern), mapping
-
-        # The pattern is tree-structured
-        tree_operator, tree_operands = tree
-        pattern_operator, pattern_operands = pattern
-
-        # If the operators do not match, the tree does not match the pattern
-        if tree_operator != pattern_operator:
-            return False, mapping
-
-        # Try to recursively match the operands
-        for tree_operand, pattern_operand in zip(tree_operands, pattern_operands):
-            # If the pattern operand is a leaf node
-            if isinstance(pattern_operand, str):
-                # Check if the pattern operand is a placeholder to be filled with the tree operand
-                existing_value = mapping.get(pattern_operand)
-                if existing_value is None:
-                    # Placeholder is not yet filled, can be filled with the tree operand
-                    mapping[pattern_operand] = tree_operand
-                    return True, mapping
-                elif existing_value != tree_operand:
-                    # Placeholder is occupied by another tree, the tree does not match the pattern
-                    return False, mapping
-            else:
-                # Recursively match the tree operand with the pattern operand
-                does_match, mapping = self.match_pattern(tree_operand, pattern_operand, mapping)
-
-                # If the tree operand does not match the pattern operand, the tree does not match the pattern
-                if not does_match:
-                    return False, mapping
-
-        # The tree matches the pattern
-        return True, mapping
-
-    def apply_mapping(self, tree: list, mapping: dict[str, Any]) -> list:
-        # If the tree is a leaf node, replace the placeholder with the actual subtree defined in the mapping
-        if len(tree) == 1 and isinstance(tree[0], str):
-            if tree[0].startswith('_'):
-                return mapping[tree[0]]  # TODO: I put a bracket here. Find out why this is necessary
-            return tree
-
-        operator, operands = tree
-        return [operator, [self.apply_mapping(operand, mapping) for operand in operands]]
-
     def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_rule_statistics: bool = False) -> list[str]:
         if all(t == '<num>' or t in self.operator_arity for t in expression):
             return ['<num>']
@@ -762,11 +661,11 @@ class SimpliPyEngine:
 
                 for pattern_length in range(1, subtree_max_pattern_length + 1):
                     for rule in self.simplification_rules_trees.get((pattern_length, operator,), []):
-                        does_match, mapping = self.match_pattern(subtree, rule[0], mapping=None)
+                        does_match, mapping = match_pattern(subtree, rule[0], mapping=None)
                         if does_match:
                             # Replace the placeholders (keys of the mapping) with the actual subtrees (values of the mapping) in the entire subtree at any depth
                             _ = [stack.pop() for _ in range(arity)]
-                            stack.append(self.apply_mapping(deepcopy(rule[1]), mapping))
+                            stack.append(apply_mapping(deepcopy(rule[1]), mapping))
                             i -= 1
                             applied_rule = True
                             if collect_rule_statistics:
@@ -1138,7 +1037,7 @@ class SimpliPyEngine:
         new_expression = self.sort_operands(new_expression)
 
         if mask_elementary_literals:
-            new_expression = self.mask_elementary_literals(new_expression, inplace=inplace)
+            new_expression = mask_elementary_literals_fn(new_expression, inplace=inplace)
 
         if len(new_expression) > length_before:
             # The expression has grown, which is not a simplification
@@ -1150,24 +1049,6 @@ class SimpliPyEngine:
             return tuple(new_expression)
 
         return new_expression
-
-    def construct_expressions(self, expressions_of_length: dict[int, set[tuple[str, ...]]], non_leaf_nodes: dict[str, int], must_have_sizes: list | set | None = None) -> Generator[tuple[str, ...], None, None]:
-        expressions_of_length_with_lists = {k: list(v) for k, v in expressions_of_length.items()}
-
-        filter_sizes = must_have_sizes is not None and not len(must_have_sizes) == 0
-        if must_have_sizes is not None and filter_sizes:
-            must_have_sizes_set = set(must_have_sizes)
-
-        # Append existing trees to every operator
-        for new_root_operator, arity in non_leaf_nodes.items():
-            # Start with the smallest arity-tuples of trees
-            for child_lengths in sorted(itertools.product(list(expressions_of_length_with_lists.keys()), repeat=arity), key=lambda x: sum(x)):
-                # Check all possible combinations of child trees
-                if filter_sizes and not any(length in must_have_sizes_set for length in child_lengths):
-                    # Skip combinations that do not have any of the required sizes (e.g. duplicates is used correctly)
-                    continue
-                for child_combination in itertools.product(*[expressions_of_length_with_lists[child_length] for child_length in child_lengths]):
-                    yield (new_root_operator,) + tuple(itertools.chain.from_iterable(child_combination))
 
     def exist_constants_that_fit(self, expression: list[str] | tuple[str, ...], variables: list[str], X: np.ndarray, y_target: np.ndarray) -> bool:
         if isinstance(expression, tuple):
@@ -1410,7 +1291,7 @@ class SimpliPyEngine:
         # Generate expressions level by level
         new_sizes: set[int] = set()
         while max(expressions_of_length.keys()) < max_source_pattern_length:  # This means that every smaller size is already generated
-            for expression in self.construct_expressions(expressions_of_length, non_leaf_nodes, must_have_sizes=new_sizes):
+            for expression in construct_expressions(expressions_of_length, non_leaf_nodes, must_have_sizes=new_sizes):
                 new_expressions_of_length[len(expression)].add(expression)
 
             new_sizes = set()
@@ -1644,33 +1525,6 @@ class SimpliPyEngine:
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
 
-    def mask_elementary_literals(self, prefix_expression: list[str], inplace: bool = False) -> list[str]:
-        '''
-        Mask elementary literals such as <0> and <1> with <num>
-
-        Parameters
-        ----------
-        prefix_expression : list[str]
-            The prefix expression
-        inplace : bool, optional
-            Whether to modify the expression in place, by default False
-
-        Returns
-        -------
-        list[str]
-            The expression with elementary literals masked
-        '''
-        if inplace:
-            modified_prefix_expression = prefix_expression
-        else:
-            modified_prefix_expression = prefix_expression.copy()
-
-        for i, token in enumerate(prefix_expression):
-            if is_numeric_string(token):
-                modified_prefix_expression[i] = '<num>'
-
-        return modified_prefix_expression
-
     def operand_key(self, operands: list) -> tuple:
         '''
         Returns a key for sorting the operands of a commutative operator.
@@ -1703,7 +1557,6 @@ class SimpliPyEngine:
 
         raise ValueError(f'None of the criteria matched for operands {operands}:\n1. ({len(operands) > 1}, {isinstance(operands[0], str)}, {operands[0] in self.operator_arity_compat or operands[0] in self.operator_aliases})\n2. ({len(operands) == 1}, {isinstance(operands[0], str)})\n3. ({isinstance(operands, str)})')
 
-    # CODIFYING
     def operators_to_realizations(self, prefix_expression: list[str] | tuple[str, ...]) -> list[str] | tuple[str, ...]:
         '''
         Converts a prefix expression from operators to realizations.
@@ -1752,22 +1605,3 @@ class SimpliPyEngine:
             The lambda function.
         '''
         return FunctionType(code, globals())()
-
-    @staticmethod
-    def codify(code_string: str, variables: list[str] | None = None) -> CodeType:
-        '''
-        Compile a string into a code object.
-
-        Parameters
-        ----------
-        code_string : str
-            The string to compile.
-        variables : list[str] | None
-            The variables to use in the code.
-
-        Returns
-        -------
-        CodeType
-            The compiled code object.
-        '''
-        return codify(code_string, variables)
