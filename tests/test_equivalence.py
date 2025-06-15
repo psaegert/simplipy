@@ -20,7 +20,7 @@ def test_equivalence_10k():
     X = np.random.normal(0, 5, size=(10_000, len(dummy_variables)))
     C = np.random.normal(0, 5, size=100)
 
-    for expression in expressions:
+    for i, expression in enumerate(expressions):
         # Source Expression
         executable_prefix_expression = engine.operators_to_realizations(expression)
         prefix_expression_with_constants, constants = sp.num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
@@ -75,6 +75,7 @@ def test_equivalence_10k():
                 #         break
 
         if not expressions_match:
+            print(f'Error in expression {i}')
             print(expression)
             print(simplified_expression)
 

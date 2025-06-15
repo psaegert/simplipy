@@ -15,6 +15,7 @@ from typing import Any, Literal
 from copy import deepcopy
 from math import prod
 from collections import defaultdict
+import pprint
 
 import numpy as np
 import json
@@ -623,7 +624,7 @@ class SimpliPyEngine:
 
         return rules_trees_organized
 
-    def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_rule_statistics: bool = False) -> list[str]:
+    def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str]:
         if all(t == '<num>' or t in self.operator_arity for t in expression):
             return ['<num>']
 
@@ -672,6 +673,8 @@ class SimpliPyEngine:
                                 self.rule_application_statistics[(
                                     tuple(flatten_nested_list(rule[0])[::-1]),
                                     tuple(flatten_nested_list(rule[1])[::-1]))] += 1
+                            if verbose:
+                                print(f'Applied rule\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{subtree}\nwith mapping\t{mapping}\n')
                             break
                     if applied_rule:
                         break
@@ -689,7 +692,7 @@ class SimpliPyEngine:
         # Unroll the tree into a flat expression in the correct order
         return flatten_nested_list(stack)[::-1]
 
-    def collect_multiplicities(self, expression: list[str] | tuple[str, ...]) -> tuple[list, list, list]:
+    def collect_multiplicities(self, expression: list[str] | tuple[str, ...], verbose: bool = False) -> tuple[list, list, list]:
         stack: list = []
         stack_annotations: list = []
         stack_labels: list = []
@@ -712,31 +715,66 @@ class SimpliPyEngine:
                 cc = self.operator_to_class[operator]
 
                 # Carry over annotations from operand nodes
-                for operand_annotations_dict in operands_annotations_dicts:
-                    for subtree_hash in operand_annotations_dict[0][cc]:
+                if verbose:
+                    print(f'---- {token} ----')
+
+                # Distinguish between operator and operand dicts!
+
+                for branch, operand_annotations_dict in enumerate(operands_annotations_dicts):  # One dict for left and right branch
+                    if verbose:
+                        print(branch)
+                        pprint.pprint(operand_annotations_dict)
+                    for subtree_hash in operand_annotations_dict[0][cc]:  # All subtrees appearing in either branch (0 gets root node of the branch)
+                        # Add to operator dict if not already present
                         if subtree_hash not in operator_annotation_dict[cc]:
+                            if verbose:
+                                print(f'Initializing {subtree_hash} for {cc}')
                             operator_annotation_dict[cc][subtree_hash] = [0, 0]
 
-                        for p in range(2):
-                            operator_annotation_dict[cc][subtree_hash][p] += operand_annotations_dict[0][cc][subtree_hash][p]
+                        if operator in {'-', '/'} and branch == 1:
+                            # if verbose:
+                            #     print(f'Flipping {subtree_hash}: {operator_annotation_dict[cc][subtree_hash]}')
+                            # # FIXME: Not all subtrees? Only the ones right from operator?
+                            # operator_annotation_dict[cc][subtree_hash][0], operator_annotation_dict[cc][subtree_hash][1] = operator_annotation_dict[cc][subtree_hash][1], operator_annotation_dict[cc][subtree_hash][0]
 
-                        if operator in {'-', '/'}:
-                            operator_annotation_dict[cc][subtree_hash][0], operator_annotation_dict[cc][subtree_hash][1] = operator_annotation_dict[cc][subtree_hash][1], operator_annotation_dict[cc][subtree_hash][0]
+                            for p in range(2):
+                                if verbose:
+                                    print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][1 - p]} at {1 - p} of {subtree_hash} (reversed)')
+                                operator_annotation_dict[cc][subtree_hash][1 - p] += operand_annotations_dict[0][cc][subtree_hash][p]
 
-                # Add subtree hashes for both operand subtrees
+                            # Don't flip the operator tuple
+                            # Flip the operand tuple and then add it to the operator tuple
+
+                        else:
+                            for p in range(2):
+                                if verbose:
+                                    print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][p]} at {p} of {subtree_hash}')
+                                operator_annotation_dict[cc][subtree_hash][p] += operand_annotations_dict[0][cc][subtree_hash][p]
+
+                # Add or increment multiplicities for subtree hashes for both operands
                 operand_tuple_0 = tuple(flatten_nested_list(operands[0])[::-1])
                 operand_tuple_1 = tuple(flatten_nested_list(operands[1])[::-1])
 
+                # Left operand
                 if operand_tuple_0 not in operator_annotation_dict[cc]:
-                    operator_annotation_dict[cc][operand_tuple_0] = [1, 0]
+                    operator_annotation_dict[cc][operand_tuple_0] = [1, 0]  # Create new entry with multiplicity 1
                 else:
-                    operator_annotation_dict[cc][operand_tuple_0][0] += 1
+                    if verbose:
+                        print(f'Incrementing multiplicity of {operand_tuple_0} (0) for {cc}')
+                    operator_annotation_dict[cc][operand_tuple_0][0] += 1  # Increment multiplicity of left operand
 
+                # Right operand
                 index = int(operator in {'+', '*'})
                 if operand_tuple_1 not in operator_annotation_dict[cc]:
-                    operator_annotation_dict[cc][operand_tuple_1] = [index, index - 1]
+                    operator_annotation_dict[cc][operand_tuple_1] = [index, index - 1]  # [1, 0] if index == 1 (i.e. + or *) else [0, 1]
                 else:
-                    operator_annotation_dict[cc][operand_tuple_1][index - 1] += 1
+                    if verbose:
+                        print(f'Incrementing multiplicity of {operand_tuple_1} (index - 1 = {index - 1}) for {cc}')
+                    operator_annotation_dict[cc][operand_tuple_1][index - 1] += 1  # Increment multiplicity of right operand
+
+                if verbose:
+                    print(f'/---- {token} ----')
+                    print()
 
                 # Label each subtree with its own hash to know which to prune later
                 _ = [stack.pop() for _ in range(arity)]
@@ -772,9 +810,12 @@ class SimpliPyEngine:
             stack_labels.append([tuple([token])])
             i -= 1
 
+        if verbose:
+            pprint.pprint(stack_annotations)
+
         return stack, stack_annotations, stack_labels
 
-    def cancel_terms(self, expression_tree: list, expression_annotations_tree: list, stack_labels: list) -> list[str]:
+    def cancel_terms(self, expression_tree: list, expression_annotations_tree: list, stack_labels: list, verbose: bool = False) -> list[str]:
         stack = expression_tree
         stack_annotations = expression_annotations_tree
         stack_parity = [{cc: 1 for cc in self.connection_classes} for _ in range(len(stack_labels))]
@@ -809,27 +850,40 @@ class SimpliPyEngine:
                             current_parity = subtree_parities[argmax_class]
                             inverse_operator = self.connection_classes_inverse[argmax_class]
 
+                            if verbose:
+                                print()
+                                print(f'Processing subtree {subtree_labels[0]} with current parity {current_parity} and total multiplicity sum {argmax_multiplicity_sum}')
+
                             if current_parity * argmax_multiplicity_sum < 0:
-                                inverse_operator_prefix: tuple[str, ...] = (inverse_operator,)
+                                inverse_operator_prefix: tuple[str, ...] = (inverse_operator,)  # Inverse operator needed
                                 double_inverse_operator_prefix: tuple[str, ...] = ()
                             else:
-                                inverse_operator_prefix = ()
+                                inverse_operator_prefix = ()  # No inverse operator needed
                                 double_inverse_operator_prefix = (inverse_operator,)
+
+                            if verbose:
+                                print(f'Inverse operator prefix: {inverse_operator_prefix}, double inverse operator prefix: {double_inverse_operator_prefix}')
 
                             if argmax_multiplicity_sum == 0:
                                 # Term is cancelled entirely. Replace all occurences with the neutral element
                                 first_replacement = (neutral_element,)
                                 other_replacements = neutral_element
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} entirely: first replacement {first_replacement}, other replacements {other_replacements}')
 
                             if argmax_multiplicity_sum == 1:
                                 # Term occurs once. Replace every occurence after the first one with the neutral element
                                 first_replacement = inverse_operator_prefix + argmax_subtree
                                 other_replacements = (neutral_element,)
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} once: first replacement {first_replacement}, other replacements {other_replacements}')
 
                             if argmax_multiplicity_sum == -1:
                                 # Term occurs once but inverted. Replace the first occurence with the inverse of the term. Replace every occurence after the first one with the neutral element
                                 first_replacement = double_inverse_operator_prefix + argmax_subtree
                                 other_replacements = (neutral_element,)
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} once inverted: first replacement {first_replacement}, other replacements {other_replacements}')
 
                             if argmax_multiplicity_sum > 1:
                                 # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
@@ -844,6 +898,9 @@ class SimpliPyEngine:
 
                                 other_replacements = (neutral_element,)
 
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} multiple times: first replacement {first_replacement}, other replacements {other_replacements}')
+
                             if argmax_multiplicity_sum < -1:
                                 # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
                                 hyper_operator = self.connection_classes_hyper[argmax_class]
@@ -854,12 +911,19 @@ class SimpliPyEngine:
                                     powers = factorize_to_at_most(-argmax_multiplicity_sum, self.max_power)
                                     first_replacement = double_inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree
 
-                            other_replacements = (neutral_element,)
+                                other_replacements = (neutral_element,)
+
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} multiple times inverted: first replacement {first_replacement}, other replacements {other_replacements}')
 
                         if n_replaced == 0:
                             expression.extend(first_replacement)
+                            if verbose:
+                                print(f'{n_replaced}: Added first replacement {first_replacement} to expression')
                         else:
                             expression.extend(other_replacements)
+                            if verbose:
+                                print(f'{n_replaced}: Added other replacements {other_replacements} to expression')
                         n_replaced += 1
                         continue
 
@@ -1006,7 +1070,7 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
-    def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False) -> list[str] | tuple[str, ...]:
+    def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str] | tuple[str, ...]:
         length_before = len(expression)
         original_expression = list(expression).copy()
 
@@ -1018,16 +1082,28 @@ class SimpliPyEngine:
             was_tuple = False
             new_expression = expression
 
-        # Apply simplification rules and sort operands to get started
-        new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics)
+        if verbose:
+            print(f'Initial expression: {new_expression}')
 
-        for _ in range(max_iter):
+        # Apply simplification rules and sort operands to get started
+        new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
+
+        if verbose:
+            print(f'_apply_simplifcation_rules: {new_expression}')
+
+        for i in range(max_iter):
             # Cancel any terms
-            expression_tree, annotated_expression_tree, stack_labels = self.collect_multiplicities(new_expression)
-            new_expression = self.cancel_terms(expression_tree, annotated_expression_tree, stack_labels)
+            expression_tree, annotated_expression_tree, stack_labels = self.collect_multiplicities(new_expression, verbose=verbose)
+            new_expression = self.cancel_terms(expression_tree, annotated_expression_tree, stack_labels, verbose=verbose)
+
+            if verbose:
+                print(f'{i}: cancel_terms: {new_expression}')
 
             # Apply simplification rules
-            new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics)
+            new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
+
+            if verbose:
+                print(f'{i}: _apply_simplifcation_rules: {new_expression}')
 
             if new_expression == expression:
                 break
@@ -1036,8 +1112,14 @@ class SimpliPyEngine:
         # Sort operands
         new_expression = self.sort_operands(new_expression)
 
+        if verbose:
+            print(f'{i}: sort_operands: {new_expression}')
+
         if mask_elementary_literals:
             new_expression = mask_elementary_literals_fn(new_expression, inplace=inplace)
+
+            if verbose:
+                print(f'{i}: mask_elementary_literals: {new_expression}')
 
         if len(new_expression) > length_before:
             # The expression has grown, which is not a simplification
