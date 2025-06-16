@@ -78,9 +78,6 @@ max_target_pattern_length: 2
 # Number of data points to compute the image of the equation
 n_samples: 1024
 
-# Number of constants (just set it to something big, a subset will be sampled in each iteration)
-n_constants: 1024
-
 # Number of combinations of constants to sample for each equation
 # This prevents false positives due to unlucky constant combinations
 constants_fit_challenges: 16
