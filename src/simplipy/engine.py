@@ -1246,17 +1246,31 @@ class SimpliPyEngine:
 
                                 # Check if expressions are equivalent
                                 if len(candidate_constants) == 0:
-                                    y = safe_f(f, X, C[:len(constants)])
                                     y_candidate = safe_f(f_candidate, X)
                                     if not isinstance(y_candidate, np.ndarray):
                                         y_candidate = np.full(X.shape[0], y_candidate)
 
-                                    expressions_match = np.allclose(y, y_candidate, equal_nan=True)
+                                    if len(constants) == 0:
+                                        # No constants to fit, just check if the candidate expression matches the original expression
+                                        y = safe_f(f, X)
+                                        expressions_match = np.allclose(y, y_candidate, equal_nan=True)
+                                    else:
+                                        # Resample constants to avoid false positives
+                                        # The expression is considered a match unless one of the challenges fails
+                                        expressions_match = True
+                                        for challenge_id in range(constants_fit_challenges * 10):
+                                            y = safe_f(f, X, np.random.choice(C, size=len(constants), replace=False))
+
+                                            if np.allclose(y, y_candidate, equal_nan=True):
+                                                break
+                                        else:
+                                            # No candidate found that fits, not all challenges could be solved, abort this candidate
+                                            expressions_match = False
+
                                 else:
                                     # Resample constants to avoid false positives
-                                    expressions_match = True
-
                                     # The expression is considered a match unless one of the challenges fails
+                                    expressions_match = True
                                     for challenge_id in range(constants_fit_challenges):
                                         # Need to check if constants can be fitted
                                         y = safe_f(f, X, np.random.choice(C, size=len(constants), replace=False))
@@ -1271,6 +1285,7 @@ class SimpliPyEngine:
 
                                 if expressions_match:
                                     found_simplifications.append(candidate_expression)
+                                    # Still check for further candidates of the same length
 
                         if found_simplifications:
                             # Found at least one simplification for the current length
