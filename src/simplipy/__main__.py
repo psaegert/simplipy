@@ -41,7 +41,6 @@ def main(argv: str = None) -> None:
                 dummy_variables=rule_finding_config.get('dummy_variables', None),
                 extra_internal_terms=rule_finding_config.get('extra_internal_terms', None),
                 X=rule_finding_config['n_samples'],
-                C=rule_finding_config['n_constants'],
                 constants_fit_retries=rule_finding_config['constants_fit_retries'],
                 output_file=resolved_output_file,
                 save_every=args.save_every,

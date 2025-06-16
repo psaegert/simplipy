@@ -7,6 +7,7 @@ import multiprocessing as mp
 import queue
 import time
 import signal
+import pprint
 from types import CodeType, FunctionType
 from typing import Callable
 from multiprocessing import Queue, Process
@@ -15,7 +16,7 @@ from typing import Any, Literal
 from copy import deepcopy
 from math import prod
 from collections import defaultdict
-import pprint
+from itertools import product
 
 import numpy as np
 import json
@@ -1173,9 +1174,6 @@ class SimpliPyEngine:
             X_shape: tuple,
             X_dtype: np.dtype,
             X_shm_name: str,
-            C_shape: tuple,
-            C_dtype: np.dtype,
-            C_shm_name: str,
             expressions_of_length_and_variables: dict,
             dummy_variables: list[str],
             operator_arity: dict,
@@ -1187,9 +1185,6 @@ class SimpliPyEngine:
             # Reconstruct arrays from shared memory
             X_shm = SharedMemory(name=X_shm_name)
             X: np.ndarray = np.ndarray(X_shape, dtype=X_dtype, buffer=X_shm.buf)
-
-            C_shm = SharedMemory(name=C_shm_name)
-            C: np.ndarray = np.ndarray(C_shape, dtype=C_dtype, buffer=C_shm.buf)
 
             # Main work loop
             while True:
@@ -1236,12 +1231,9 @@ class SimpliPyEngine:
 
                             for candidate_expression in candidate_expressions:
                                 executable_candidate = self.operators_to_realizations(candidate_expression)
-                                prefix_candidate_w_constants, candidate_constants = num_to_constants(
-                                    executable_candidate, convert_numbers_to_constant=False
-                                )
+                                prefix_candidate_w_constants, candidate_constants = num_to_constants(executable_candidate, convert_numbers_to_constant=False)
                                 candidate_code = self.prefix_to_infix(prefix_candidate_w_constants, realization=True)
                                 candidate_compiled = codify(candidate_code, dummy_variables + candidate_constants)
-
                                 f_candidate = self.code_to_lambda(candidate_compiled)
 
                                 # Check if expressions are equivalent
@@ -1250,22 +1242,21 @@ class SimpliPyEngine:
                                     if not isinstance(y_candidate, np.ndarray):
                                         y_candidate = np.full(X.shape[0], y_candidate)
 
-                                    if len(constants) == 0:
-                                        # No constants to fit, just check if the candidate expression matches the original expression
-                                        y = safe_f(f, X)
-                                        expressions_match = np.allclose(y, y_candidate, equal_nan=True)
-                                    else:
-                                        # Resample constants to avoid false positives
-                                        # The expression is considered a match unless one of the challenges fails
-                                        expressions_match = True
-                                        for challenge_id in range(constants_fit_challenges):
-                                            y = safe_f(f, X, np.random.choice(C, size=len(constants), replace=False))
-
-                                            if np.allclose(y, y_candidate, equal_nan=True):
+                                    # Resample constants to avoid false positives
+                                    # The expression is considered a match unless one of the challenges fails
+                                    expressions_match = True
+                                    for challenge_id in range(constants_fit_challenges):
+                                        random_constants = np.random.normal(loc=0, scale=5, size=len(constants))
+                                        # Try all combinations of positive and negative constants
+                                        for positive_negative_constant_combination in product((0, 1), repeat=len(constants)):
+                                            y = safe_f(f, X, np.abs(random_constants) * positive_negative_constant_combination)  # abs may be redundant here
+                                            if not np.allclose(y, y_candidate, equal_nan=True):
+                                                expressions_match = False
                                                 break
-                                        else:
-                                            # No candidate found that fits, not all challenges could be solved, abort this candidate
-                                            expressions_match = False
+
+                                        if not expressions_match:
+                                            # A combination produced a different result, abort this candidate
+                                            break
 
                                 else:
                                     # Resample constants to avoid false positives
@@ -1273,14 +1264,21 @@ class SimpliPyEngine:
                                     expressions_match = True
                                     for challenge_id in range(constants_fit_challenges):
                                         # Need to check if constants can be fitted
-                                        y = safe_f(f, X, np.random.choice(C, size=len(constants), replace=False))
-                                        for _ in range(constants_fit_retries):
-                                            if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
-                                                # Found a candidate that fits, next challenge please
+                                        random_constants = np.random.normal(loc=0, scale=5, size=len(constants))
+                                        # Try all combinations of positive and negative constants
+                                        for positive_negative_constant_combination in product((0, 1), repeat=len(constants)):
+                                            y = safe_f(f, X, np.abs(random_constants) * positive_negative_constant_combination)  # abs may be redundant here
+                                            for _ in range(constants_fit_retries):
+                                                if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
+                                                    # Found a candidate that fits, next challenge please
+                                                    break
+                                            else:
+                                                # No candidate found that fits, not all challenges could be solved, abort this candidate
+                                                expressions_match = False
                                                 break
-                                        else:
-                                            # No candidate found that fits, not all challenges could be solved, abort this candidate
-                                            expressions_match = False
+
+                                        if not expressions_match:
+                                            # A combination produced a different result, abort this candidate
                                             break
 
                                 if expressions_match:
@@ -1309,7 +1307,6 @@ class SimpliPyEngine:
             result_queue.put(('ERROR', e, (expression, simplified_length, allowed_candidate_lengths)))
         finally:
             X_shm.close()
-            C_shm.close()
 
     def find_rules(
             self,
@@ -1318,7 +1315,6 @@ class SimpliPyEngine:
             dummy_variables: int | list[str] | None = None,
             extra_internal_terms: list[str] | None = None,
             X: np.ndarray | int | None = None,
-            C: np.ndarray | int | None = None,
             constants_fit_challenges: int = 5,
             constants_fit_retries: int = 5,
             output_file: str | None = None,
@@ -1357,11 +1353,6 @@ class SimpliPyEngine:
             X_data = np.random.normal(loc=0, scale=5, size=(1024, len(dummy_variables)))
         elif isinstance(X, int):
             X_data = np.random.normal(loc=0, scale=5, size=(X, len(dummy_variables)))
-
-        if C is None:
-            C_data = np.random.normal(loc=0, scale=5, size=128)
-        elif isinstance(C, int):
-            C_data = np.random.normal(loc=0, scale=5, size=C)
 
         leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
@@ -1427,10 +1418,6 @@ class SimpliPyEngine:
         X_shared: np.ndarray = np.ndarray(X_data.shape, dtype=X_data.dtype, buffer=X_shm.buf)
         X_shared[:] = X_data[:]
 
-        C_shm = SharedMemory(create=True, size=C_data.nbytes)
-        C_shared: np.ndarray = np.ndarray(C_data.shape, dtype=C_data.dtype, buffer=C_shm.buf)
-        C_shared[:] = C_data[:]
-
         # Create queues
         work_queue: mp.Queue = mp.Queue()
         result_queue: mp.Queue = mp.Queue()
@@ -1443,7 +1430,6 @@ class SimpliPyEngine:
                 args=(
                     i, work_queue, result_queue,
                     X_data.shape, X_data.dtype, X_shm.name,
-                    C_data.shape, C_data.dtype, C_shm.name,
                     dict(expressions_of_length_and_variables),  # Make a copy for each worker
                     dummy_variables,
                     self.operator_arity,
@@ -1593,13 +1579,12 @@ class SimpliPyEngine:
                             p.terminate()
 
                 # Cleanup resources
-                for resource in [X_shm, C_shm]:
-                    try:
-                        resource.close()
-                        resource.unlink()
-                    except Exception as e:
-                        print(e)
-                        pass
+                try:
+                    X_shm.close()
+                    X_shm.unlink()
+                except Exception as e:
+                    print(e)
+                    pass
 
                 # Close queues
                 work_queue.close()

@@ -16,7 +16,6 @@ max_source_pattern_length: 7
 max_target_pattern_length: 2
 
 n_samples: 1024
-n_constants: 1024
 
 constants_fit_challenges: 16
 constants_fit_retries: 16  # per challenge
