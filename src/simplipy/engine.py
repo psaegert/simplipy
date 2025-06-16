@@ -1258,7 +1258,7 @@ class SimpliPyEngine:
                                         # Resample constants to avoid false positives
                                         # The expression is considered a match unless one of the challenges fails
                                         expressions_match = True
-                                        for challenge_id in range(constants_fit_challenges * 10):
+                                        for challenge_id in range(constants_fit_challenges):
                                             y = safe_f(f, X, np.random.choice(C, size=len(constants), replace=False))
 
                                             if np.allclose(y, y_candidate, equal_nan=True):
