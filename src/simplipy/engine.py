@@ -812,6 +812,7 @@ class SimpliPyEngine:
 
         if verbose:
             pprint.pprint(stack_annotations)
+            print()
 
         return stack, stack_annotations, stack_labels
 
@@ -854,12 +855,13 @@ class SimpliPyEngine:
                                 print()
                                 print(f'Processing subtree {subtree_labels[0]} with current parity {current_parity} and total multiplicity sum {argmax_multiplicity_sum}')
 
-                            if current_parity * argmax_multiplicity_sum < 0:
-                                inverse_operator_prefix: tuple[str, ...] = (inverse_operator,)  # Inverse operator needed
-                                double_inverse_operator_prefix: tuple[str, ...] = ()
+                            # FIXME
+                            if current_parity * argmax_multiplicity_sum >= 0:  # Negative parity and negative multiplicity cancel out
+                                inverse_operator_prefix: tuple[str, ...] = ()
+                                double_inverse_operator_prefix: tuple[str, ...] = (inverse_operator,)
                             else:
-                                inverse_operator_prefix = ()  # No inverse operator needed
-                                double_inverse_operator_prefix = (inverse_operator,)
+                                inverse_operator_prefix = (inverse_operator,)
+                                double_inverse_operator_prefix = ()
 
                             if verbose:
                                 print(f'Inverse operator prefix: {inverse_operator_prefix}, double inverse operator prefix: {double_inverse_operator_prefix}')
@@ -871,47 +873,28 @@ class SimpliPyEngine:
                                 if verbose:
                                     print(f'Cancelled term {argmax_subtree} entirely: first replacement {first_replacement}, other replacements {other_replacements}')
 
-                            if argmax_multiplicity_sum == 1:
+                            if abs(argmax_multiplicity_sum) == 1:
                                 # Term occurs once. Replace every occurence after the first one with the neutral element
                                 first_replacement = inverse_operator_prefix + argmax_subtree
                                 other_replacements = (neutral_element,)
                                 if verbose:
                                     print(f'Cancelled term {argmax_subtree} once: first replacement {first_replacement}, other replacements {other_replacements}')
 
-                            if argmax_multiplicity_sum == -1:
-                                # Term occurs once but inverted. Replace the first occurence with the inverse of the term. Replace every occurence after the first one with the neutral element
-                                first_replacement = double_inverse_operator_prefix + argmax_subtree
-                                other_replacements = (neutral_element,)
-                                if verbose:
-                                    print(f'Cancelled term {argmax_subtree} once inverted: first replacement {first_replacement}, other replacements {other_replacements}')
-
-                            if argmax_multiplicity_sum > 1:
+                            if abs(argmax_multiplicity_sum) > 1:
                                 # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
                                 hyper_operator = self.connection_classes_hyper[argmax_class]
                                 operator = self.connection_classes[argmax_class][0][0]  # Positive multiplicity
-                                if argmax_multiplicity_sum > 5 and is_prime(argmax_multiplicity_sum):
-                                    powers = factorize_to_at_most(argmax_multiplicity_sum - 1, self.max_power)
+                                if argmax_multiplicity_sum > 5 and is_prime(abs(argmax_multiplicity_sum)):
+                                    powers = factorize_to_at_most(abs(argmax_multiplicity_sum) - 1, self.max_power)
                                     first_replacement = inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree + argmax_subtree
                                 else:
-                                    powers = factorize_to_at_most(argmax_multiplicity_sum, self.max_power)
+                                    powers = factorize_to_at_most(abs(argmax_multiplicity_sum), self.max_power)
                                     first_replacement = inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree
 
                                 other_replacements = (neutral_element,)
 
                                 if verbose:
                                     print(f'Cancelled term {argmax_subtree} multiple times: first replacement {first_replacement}, other replacements {other_replacements}')
-
-                            if argmax_multiplicity_sum < -1:
-                                # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
-                                hyper_operator = self.connection_classes_hyper[argmax_class]
-                                if argmax_multiplicity_sum < -5 and is_prime(-argmax_multiplicity_sum):
-                                    powers = factorize_to_at_most(-argmax_multiplicity_sum - 1, self.max_power)
-                                    first_replacement = double_inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree + argmax_subtree
-                                else:
-                                    powers = factorize_to_at_most(-argmax_multiplicity_sum, self.max_power)
-                                    first_replacement = double_inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree
-
-                                other_replacements = (neutral_element,)
 
                                 if verbose:
                                     print(f'Cancelled term {argmax_subtree} multiple times inverted: first replacement {first_replacement}, other replacements {other_replacements}')
@@ -940,18 +923,24 @@ class SimpliPyEngine:
 
             # TODO: Propagate parities of unary inverse operators
 
+            if verbose:
+                print(f'Operator {operator} with operands {operands} is still connected: {still_connected}')
+                print(f'Operator parities: {operator_parity}')
+
             if operator in self.connectable_operators:
                 propagated_operand_parities: list[dict[str, int]] = [{}, {}]
                 if still_connected:
                     for cc, (operator_set, _) in self.connection_classes.items():
                         propagated_operand_parities[0][cc] = operator_parity[cc]
                         propagated_operand_parities[1][cc] = operator_parity[cc] * (-1 if operator == self.operator_inverses[operator_set[0]] else 1)
-
-                    print(f'Propagated operand parities: {propagated_operand_parities} to operator {operator}')
+                    if verbose:
+                        print(f'Propagated operand parities: {propagated_operand_parities}')
                 else:
                     for cc, (operator_set, _) in self.connection_classes.items():
                         propagated_operand_parities[0][cc] = 1
-                        propagated_operand_parities[1][cc] = 1
+                        propagated_operand_parities[1][cc] = (-1 if operator == self.operator_inverses[operator_set[0]] else 1)
+                    if verbose:
+                        print(f'Reset parities to {propagated_operand_parities}')
 
                 # If no cancellation candidate has been identified yet, try to find one in the current subtree
                 if argmax_candidate is None:
