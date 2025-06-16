@@ -942,13 +942,16 @@ class SimpliPyEngine:
 
             if operator in self.connectable_operators:
                 propagated_operand_parities: list[dict[str, int]] = [{}, {}]
-                for cc, (operator_set, _) in self.connection_classes.items():
-                    if operator in operator_set:
+                if still_connected:
+                    for cc, (operator_set, _) in self.connection_classes.items():
                         propagated_operand_parities[0][cc] = operator_parity[cc]
-                        propagated_operand_parities[1][cc] = operator_parity[cc] * (-1 if operator in {'-', '/'} else 1)
-                    else:
-                        propagated_operand_parities[0][cc] = operator_parity[cc]
-                        propagated_operand_parities[1][cc] = operator_parity[cc]
+                        propagated_operand_parities[1][cc] = operator_parity[cc] * (-1 if operator == self.operator_inverses[operator_set[0]] else 1)
+
+                    print(f'Propagated operand parities: {propagated_operand_parities} to operator {operator}')
+                else:
+                    for cc, (operator_set, _) in self.connection_classes.items():
+                        propagated_operand_parities[0][cc] = 1
+                        propagated_operand_parities[1][cc] = 1
 
                 # If no cancellation candidate has been identified yet, try to find one in the current subtree
                 if argmax_candidate is None:
