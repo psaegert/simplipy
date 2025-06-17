@@ -826,7 +826,6 @@ class SimpliPyEngine:
         expression: list[str] = []
 
         argmax_candidate = None
-        max_subtree_length = 0
         n_replaced = 0
         still_connected = False
 
@@ -947,7 +946,12 @@ class SimpliPyEngine:
                 if argmax_candidate is None:
                     for cc in self.connection_classes:
                         for subtree_hash, multiplicity in subtree_annotation[0][cc].items():
-                            if len(subtree_hash) > max_subtree_length and sum(abs(m) for m in multiplicity) > 1:
+                            # Consider candidates where
+                            # 1. there is something to cancel (i.e. the sum of the absolute multiplicities is greater than 1)
+                            # 2. constants are allowed to be cancelled:
+                            #   a. single constants <num> can be cancelled
+                            #   b. composite terms with constants cannot be cancelled with the current method (one <num> needs to survive)
+                            if sum(abs(m) for m in multiplicity) > 1 and ('<num>' not in subtree_hash or len(subtree_hash) == 1):  # Cannot cancel terms with arbitrary constants
                                 argmax_candidate = (cc, subtree_hash, multiplicity[0] - multiplicity[1])
                                 still_connected = True
 

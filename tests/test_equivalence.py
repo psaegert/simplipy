@@ -58,11 +58,8 @@ def test_equivalence_10k():
                 y_filtered = y[~mask_original_nan]
                 y_candidate_filtered = y_candidate[~mask_original_nan]
 
-                # expressions_match = np.allclose(y, y_candidate, equal_nan=True)
-                # expressions_match = np.allclose(y_filtered, y_candidate_filtered, equal_nan=True, atol=1e-6, rtol=1e-6)
                 abs_diff = np.abs(y_filtered - y_candidate_filtered)
 
-                absolute_tolerance = 1e-8
                 relative_tolerance = 1e-5
 
                 is_both_nan_mask = (np.isnan(y_filtered) & np.isnan(y_candidate_filtered))
@@ -70,13 +67,13 @@ def test_equivalence_10k():
                 is_both_negative_inf_mask = (np.isneginf(y_filtered) & np.isneginf(y_candidate_filtered))
                 is_both_invalid_mask = is_both_nan_mask | is_both_inf_mask | is_both_negative_inf_mask
 
-                absolute_equivalence_mask = abs_diff <= absolute_tolerance
+                # absolute_equivalence_mask = abs_diff <= absolute_tolerance
                 relative_equivalence_mask = np.abs(abs_diff / np.where(y_filtered != 0, y_filtered, 1)) <= relative_tolerance
 
                 # Require 99% of values to be equivalent
                 # The following is a correct simplification but creates <1% values that are not equivalent (perhaps due to numerical issues):
                 # ['tan', '+', 'atan', 'x2', '*', 'exp', '-', '+', 'x2', '+', 'x3', '/', 'x2', 'x3', 'x2', 'x2'] -> ['tan', '+', 'atan', 'x2', '*', 'exp', '-', '+', 'x2', '+', 'x3', '/', 'x2', 'x3', 'x2', 'x2']
-                expressions_match = np.mean(absolute_equivalence_mask | is_both_invalid_mask) >= 0.90 and np.mean(relative_equivalence_mask | is_both_invalid_mask) >= 0.99
+                expressions_match = np.mean(relative_equivalence_mask | is_both_invalid_mask) >= 0.99
             else:
                 # FIXME: Cannot check reliably because optimizer sometimes cannot reliably fit constants
                 expressions_match = True

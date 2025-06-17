@@ -614,13 +614,22 @@ def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = No
         if pattern_key.startswith('_'):
             # Try to match the tree with the placeholder pattern
             existing_value = mapping.get(pattern_key)
+            print(pattern_key, existing_value)
             if existing_value is None:
                 # Placeholder is not yet filled, can be filled with the tree
                 mapping[pattern_key] = tree
                 return True, mapping
             else:
-                # Placeholder is occupied by another tree, the tree does not match the pattern
+                # The placeholder has a mapped value already
+
+                # If the existing value is a constant, it is not a match
+                # We cannot map multiple (independent) constants to the same placeholder
+                if "<num>" in flatten_nested_list(existing_value):
+                    return False, mapping
+
+                # Placeholder is occupied by another tree, check if the existing value matches the tree
                 return (existing_value == tree), mapping
+
         # The literal pattern must match the tree
         return (tree == pattern), mapping
 
