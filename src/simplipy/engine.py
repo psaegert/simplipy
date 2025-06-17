@@ -661,7 +661,7 @@ class SimpliPyEngine:
                 else:
                     subtree_max_pattern_length = min(max_pattern_length, subtree_length, self.max_pattern_length)
 
-                for pattern_length in range(1, subtree_max_pattern_length + 1):
+                for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):  # Try to fit larger, more specific patterns first
                     for rule in self.simplification_rules_trees.get((pattern_length, operator,), []):
                         does_match, mapping = match_pattern(subtree, rule[0], mapping=None)
                         if does_match:
