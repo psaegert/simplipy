@@ -614,7 +614,6 @@ def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = No
         if pattern_key.startswith('_'):
             # Try to match the tree with the placeholder pattern
             existing_value = mapping.get(pattern_key)
-            print(pattern_key, existing_value)
             if existing_value is None:
                 # Placeholder is not yet filled, can be filled with the tree
                 mapping[pattern_key] = tree
