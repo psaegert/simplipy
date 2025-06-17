@@ -2,26 +2,32 @@ import re
 import importlib
 import fractions
 import os
-import itertools
 import warnings
 import multiprocessing as mp
 import queue
 import time
 import signal
+import pprint
+from types import CodeType, FunctionType
+from typing import Callable
 from multiprocessing import Queue, Process
 from multiprocessing.shared_memory import SharedMemory
-from typing import Any, Callable, Literal, Generator
+from typing import Any, Literal
 from copy import deepcopy
-from types import CodeType, FunctionType
 from math import prod
 from collections import defaultdict
+from itertools import product
 
 import numpy as np
 import json
 from scipy.optimize import curve_fit, OptimizeWarning
 from tqdm import tqdm
 
-from simplipy.utils import factorize_to_at_most, is_numeric_string, load_config, substitute_root_path, get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants, codify, safe_f, deduplicate_rules
+from simplipy.utils import (
+    factorize_to_at_most, is_numeric_string, load_config, substitute_root_path,
+    get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants,
+    codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
+    construct_expressions, apply_mapping, match_pattern, remove_pow1, deparenthesize)
 
 
 class SimpliPyEngine:
@@ -94,6 +100,8 @@ class SimpliPyEngine:
 
         self.import_modules()
 
+        self.max_pattern_length = 0
+
         dummy_variables = [f'x{i}' for i in range(100)]  # HACK
         if isinstance(rules, str):
             if not os.path.exists(substitute_root_path(rules)):
@@ -106,7 +114,9 @@ class SimpliPyEngine:
         elif isinstance(rules, list):
             self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
 
-        self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules)  # HACK
+        self.simplification_rules_trees: dict[tuple, list[tuple[list, list]]] = self.rules_trees_from_rules_list(self.simplification_rules)
+
+        self.rule_application_statistics: defaultdict[tuple, int] = defaultdict(int)
 
     def import_modules(self) -> None:  # TODO: Still necessary?
         for module in self.modules:
@@ -188,25 +198,6 @@ class SimpliPyEngine:
 
         return True
 
-    def _deparenthesize(self, term: str) -> str:
-        '''
-        Removes outer parentheses from a term.
-
-        Parameters
-        ----------
-        term : str
-            The term.
-
-        Returns
-        -------
-        str
-            The term without parentheses.
-        '''
-        # HACK
-        if term.startswith('(') and term.endswith(')'):
-            return term[1:-1]
-        return term
-
     def prefix_to_infix(self, tokens: list[str], power: Literal['func', '**'] = 'func', realization: bool = False) -> str:
         '''
         Convert a list of tokens in prefix notation to infix notation
@@ -253,7 +244,7 @@ class SimpliPyEngine:
                 # "module.function(operand1, operand2, ...)"
                 elif '.' in write_operator or self.operator_arity_compat[operator] > 2:
                     # No need for parentheses here
-                    stack.append(f'{write_operator}({", ".join([self._deparenthesize(operand) for operand in write_operands])})')
+                    stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
 
                 # ** stays **
                 elif self.operator_aliases.get(operator, operator) == '**':
@@ -271,14 +262,14 @@ class SimpliPyEngine:
                     stack.append(f'(1/{write_operands[0]})')
 
                 else:
-                    stack.append(f'{write_operator}({", ".join([self._deparenthesize(operand) for operand in write_operands])})')
+                    stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
 
             else:
                 stack.append(token)
 
         infix_expression = stack.pop()
 
-        return self._deparenthesize(infix_expression)  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
+        return deparenthesize(infix_expression)  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
         '''
@@ -415,11 +406,9 @@ class SimpliPyEngine:
                                     new_expression = ['inv', new_expression]
                                 stack.append(new_expression)
                             else:
-                                # Replace '** base exponent' with 'exp(log(base) * exponent)'
-                                stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                                stack.append(['pow', [base, exponent]])
                         else:
-                            # Replace '** base exponent' with 'exp(log(base) * exponent)'
-                            stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                            stack.append(['pow', [base, exponent]])
 
                     elif len(exponent) == 2 and exponent[0][0] == '/' and is_numeric_string(exponent[1][0][0]) and is_numeric_string(exponent[1][1][0]):
                         # Handle fractional exponent, e.g. "x**(2/3)"
@@ -447,10 +436,9 @@ class SimpliPyEngine:
                                     new_expression = ['inv', new_expression]
                                 stack.append(new_expression)
                             else:
-                                stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                                stack.append(['pow', [base, exponent]])
                     else:
-                        # Replace '** base exponent' with 'exp(log(base) * exponent)'
-                        stack.append(['exp', [['*', [['log', [base]], exponent]]]])
+                        stack.append(['pow', [base, exponent]])
 
                 else:
                     # General case: assemble operator and its operands
@@ -535,20 +523,6 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
-    def remove_pow1(self, prefix_expression: list[str]) -> list[str]:
-        filtered_expression = []
-        for token in prefix_expression:
-            if token == 'pow1':
-                continue
-
-            if token == 'pow_1':
-                filtered_expression.append('inv')
-                continue
-
-            filtered_expression.append(token)
-
-        return filtered_expression
-
     # PARSING
     def parse(
             self,
@@ -586,7 +560,7 @@ class SimpliPyEngine:
         if mask_numbers:
             parsed_expression = numbers_to_num(parsed_expression, inplace=True)
 
-        return self.remove_pow1(parsed_expression)  # HACK: Find a better place to put this
+        return remove_pow1(parsed_expression)  # HACK: Find a better place to put this
 
     def prefix_to_tree(self, expression: list[str]) -> list:
         def build_tree(index: int) -> tuple[list | None, int]:
@@ -621,7 +595,7 @@ class SimpliPyEngine:
 
         return result
 
-    def rules_trees_from_rules_list(self, rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]]) -> dict[tuple, list[tuple[list, list]]]:
+    def rules_trees_from_rules_list(self, rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], verbose: bool = False) -> dict[tuple, list[tuple[list, list]]]:
         # Group the rules by arity
         rules_list_of_operator: defaultdict[str, list] = defaultdict(list)
         for rule in rules_list:
@@ -638,93 +612,20 @@ class SimpliPyEngine:
                 self.prefix_to_tree(list(rule[0])),
                 self.prefix_to_tree(list(rule[1]))
             )
-            for rule in rules_list_of_operator_a] for operator, rules_list_of_operator_a in tqdm(rules_list_of_operator.items(), desc='Constructing patterns')}
+            for rule in rules_list_of_operator_a] for operator, rules_list_of_operator_a in tqdm(rules_list_of_operator.items(), desc='Constructing patterns', disable=not verbose)}
 
         rules_trees_organized: defaultdict[tuple, list] = defaultdict(list)
         for operator, rules in rules_trees.items():
             for (pattern, replacement) in rules:
                 pattern_length = len(flatten_nested_list(pattern))
-                operands_heads: list[str] = [operand[0] for operand in pattern[1]]
-                if any(head.startswith('_') for head in operands_heads):
-                    rules_trees_organized[(pattern_length, operator,)].append((pattern, replacement))
-                else:
-                    # More specific structure possible
-                    rules_key = (pattern_length, operator,)
-                    # rules_key = (operator, *operands_heads)
-                    rules_trees_organized[rules_key].append((pattern, replacement))
+                rules_trees_organized[(pattern_length, operator,)].append((pattern, replacement))
 
-        return rules_trees_organized  # TODO: Add length of the pattern to the key for more specific matching
+                if pattern_length > self.max_pattern_length:
+                    self.max_pattern_length = pattern_length
 
-    def match_pattern(self, tree: list, pattern: list, mapping: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
-        if mapping is None:
-            mapping = {}
+        return rules_trees_organized
 
-        pattern_length = len(pattern)
-
-        # The leaf node is a variable but the pattern is not
-        if len(tree) == 1 and isinstance(tree[0], str) and pattern_length != 1:
-            return False, mapping
-
-        # Elementary pattern
-        pattern_key = pattern[0]
-        if pattern_length == 1 and isinstance(pattern_key, str):
-            # Check if the pattern is a placeholder to be filled with the tree
-            if pattern_key.startswith('_'):
-                # Try to match the tree with the placeholder pattern
-                existing_value = mapping.get(pattern_key)
-                if existing_value is None:
-                    # Placeholder is not yet filled, can be filled with the tree
-                    mapping[pattern_key] = tree
-                    return True, mapping
-                else:
-                    # Placeholder is occupied by another tree, the tree does not match the pattern
-                    return (existing_value == tree), mapping
-            # The literal pattern must match the tree
-            return (tree == pattern), mapping
-
-        # The pattern is tree-structured
-        tree_operator, tree_operands = tree
-        pattern_operator, pattern_operands = pattern
-
-        # If the operators do not match, the tree does not match the pattern
-        if tree_operator != pattern_operator:
-            return False, mapping
-
-        # Try to recursively match the operands
-        for tree_operand, pattern_operand in zip(tree_operands, pattern_operands):
-            # If the pattern operand is a leaf node
-            if isinstance(pattern_operand, str):
-                # Check if the pattern operand is a placeholder to be filled with the tree operand
-                existing_value = mapping.get(pattern_operand)
-                if existing_value is None:
-                    # Placeholder is not yet filled, can be filled with the tree operand
-                    mapping[pattern_operand] = tree_operand
-                    return True, mapping
-                elif existing_value != tree_operand:
-                    # Placeholder is occupied by another tree, the tree does not match the pattern
-                    return False, mapping
-            else:
-                # Recursively match the tree operand with the pattern operand
-                does_match, mapping = self.match_pattern(tree_operand, pattern_operand, mapping)
-
-                # If the tree operand does not match the pattern operand, the tree does not match the pattern
-                if not does_match:
-                    return False, mapping
-
-        # The tree matches the pattern
-        return True, mapping
-
-    def apply_mapping(self, tree: list, mapping: dict[str, Any]) -> list:
-        # If the tree is a leaf node, replace the placeholder with the actual subtree defined in the mapping
-        if len(tree) == 1 and isinstance(tree[0], str):
-            if tree[0].startswith('_'):
-                return mapping[tree[0]]  # TODO: I put a bracket here. Find out why this is necessary
-            return tree
-
-        operator, operands = tree
-        return [operator, [self.apply_mapping(operand, mapping) for operand in operands]]
-
-    def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], rules_trees: dict[tuple, list[tuple[list[str], list[str]]]]) -> list[str]:
+    def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str]:
         if all(t == '<num>' or t in self.operator_arity for t in expression):
             return ['<num>']
 
@@ -751,24 +652,30 @@ class SimpliPyEngine:
                     i -= 1
                     continue
 
-                # TODO: Optimize by hashing operands. e.g. rules_trees[(operator, operand1_type, operand2_type, ...)]
-
                 subtree = [operator, operands]
-                # operands_heads = [operand[0] for operand in operands]
                 subtree_length = len(flatten_nested_list(subtree))
-                # rules_key = (operator, *operands_heads)
-                rules_key = (operator,)
 
                 # Check if a pattern matches the current subtree
-                for pattern_length in range(1, subtree_length + 1):
-                    for rule in rules_trees.get(rules_key, rules_trees.get((pattern_length, operator,), [])):
-                        does_match, mapping = self.match_pattern(subtree, rule[0], mapping=None)
+                if max_pattern_length is None:
+                    subtree_max_pattern_length = min(subtree_length, self.max_pattern_length)
+                else:
+                    subtree_max_pattern_length = min(max_pattern_length, subtree_length, self.max_pattern_length)
+
+                for pattern_length in range(1, subtree_max_pattern_length + 1):
+                    for rule in self.simplification_rules_trees.get((pattern_length, operator,), []):
+                        does_match, mapping = match_pattern(subtree, rule[0], mapping=None)
                         if does_match:
                             # Replace the placeholders (keys of the mapping) with the actual subtrees (values of the mapping) in the entire subtree at any depth
                             _ = [stack.pop() for _ in range(arity)]
-                            stack.append(self.apply_mapping(deepcopy(rule[1]), mapping))
+                            stack.append(apply_mapping(deepcopy(rule[1]), mapping))
                             i -= 1
                             applied_rule = True
+                            if collect_rule_statistics:
+                                self.rule_application_statistics[(
+                                    tuple(flatten_nested_list(rule[0])[::-1]),
+                                    tuple(flatten_nested_list(rule[1])[::-1]))] += 1
+                            if verbose:
+                                print(f'Applied rule\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{subtree}\nwith mapping\t{mapping}\n')
                             break
                     if applied_rule:
                         break
@@ -786,7 +693,7 @@ class SimpliPyEngine:
         # Unroll the tree into a flat expression in the correct order
         return flatten_nested_list(stack)[::-1]
 
-    def collect_multiplicities(self, expression: list[str] | tuple[str, ...]) -> tuple[list, list, list]:
+    def collect_multiplicities(self, expression: list[str] | tuple[str, ...], verbose: bool = False) -> tuple[list, list, list]:
         stack: list = []
         stack_annotations: list = []
         stack_labels: list = []
@@ -809,31 +716,66 @@ class SimpliPyEngine:
                 cc = self.operator_to_class[operator]
 
                 # Carry over annotations from operand nodes
-                for operand_annotations_dict in operands_annotations_dicts:
-                    for subtree_hash in operand_annotations_dict[0][cc]:
+                if verbose:
+                    print(f'---- {token} ----')
+
+                # Distinguish between operator and operand dicts!
+
+                for branch, operand_annotations_dict in enumerate(operands_annotations_dicts):  # One dict for left and right branch
+                    if verbose:
+                        print(branch)
+                        pprint.pprint(operand_annotations_dict)
+                    for subtree_hash in operand_annotations_dict[0][cc]:  # All subtrees appearing in either branch (0 gets root node of the branch)
+                        # Add to operator dict if not already present
                         if subtree_hash not in operator_annotation_dict[cc]:
+                            if verbose:
+                                print(f'Initializing {subtree_hash} for {cc}')
                             operator_annotation_dict[cc][subtree_hash] = [0, 0]
 
-                        for p in range(2):
-                            operator_annotation_dict[cc][subtree_hash][p] += operand_annotations_dict[0][cc][subtree_hash][p]
+                        if operator in {'-', '/'} and branch == 1:
+                            # if verbose:
+                            #     print(f'Flipping {subtree_hash}: {operator_annotation_dict[cc][subtree_hash]}')
+                            # # FIXME: Not all subtrees? Only the ones right from operator?
+                            # operator_annotation_dict[cc][subtree_hash][0], operator_annotation_dict[cc][subtree_hash][1] = operator_annotation_dict[cc][subtree_hash][1], operator_annotation_dict[cc][subtree_hash][0]
 
-                        if operator in {'-', '/'}:
-                            operator_annotation_dict[cc][subtree_hash][0], operator_annotation_dict[cc][subtree_hash][1] = operator_annotation_dict[cc][subtree_hash][1], operator_annotation_dict[cc][subtree_hash][0]
+                            for p in range(2):
+                                if verbose:
+                                    print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][1 - p]} at {1 - p} of {subtree_hash} (reversed)')
+                                operator_annotation_dict[cc][subtree_hash][1 - p] += operand_annotations_dict[0][cc][subtree_hash][p]
 
-                # Add subtree hashes for both operand subtrees
+                            # Don't flip the operator tuple
+                            # Flip the operand tuple and then add it to the operator tuple
+
+                        else:
+                            for p in range(2):
+                                if verbose:
+                                    print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][p]} at {p} of {subtree_hash}')
+                                operator_annotation_dict[cc][subtree_hash][p] += operand_annotations_dict[0][cc][subtree_hash][p]
+
+                # Add or increment multiplicities for subtree hashes for both operands
                 operand_tuple_0 = tuple(flatten_nested_list(operands[0])[::-1])
                 operand_tuple_1 = tuple(flatten_nested_list(operands[1])[::-1])
 
+                # Left operand
                 if operand_tuple_0 not in operator_annotation_dict[cc]:
-                    operator_annotation_dict[cc][operand_tuple_0] = [1, 0]
+                    operator_annotation_dict[cc][operand_tuple_0] = [1, 0]  # Create new entry with multiplicity 1
                 else:
-                    operator_annotation_dict[cc][operand_tuple_0][0] += 1
+                    if verbose:
+                        print(f'Incrementing multiplicity of {operand_tuple_0} (0) for {cc}')
+                    operator_annotation_dict[cc][operand_tuple_0][0] += 1  # Increment multiplicity of left operand
 
+                # Right operand
                 index = int(operator in {'+', '*'})
                 if operand_tuple_1 not in operator_annotation_dict[cc]:
-                    operator_annotation_dict[cc][operand_tuple_1] = [index, index - 1]
+                    operator_annotation_dict[cc][operand_tuple_1] = [index, index - 1]  # [1, 0] if index == 1 (i.e. + or *) else [0, 1]
                 else:
-                    operator_annotation_dict[cc][operand_tuple_1][index - 1] += 1
+                    if verbose:
+                        print(f'Incrementing multiplicity of {operand_tuple_1} (index - 1 = {index - 1}) for {cc}')
+                    operator_annotation_dict[cc][operand_tuple_1][index - 1] += 1  # Increment multiplicity of right operand
+
+                if verbose:
+                    print(f'/---- {token} ----')
+                    print()
 
                 # Label each subtree with its own hash to know which to prune later
                 _ = [stack.pop() for _ in range(arity)]
@@ -869,9 +811,13 @@ class SimpliPyEngine:
             stack_labels.append([tuple([token])])
             i -= 1
 
+        if verbose:
+            pprint.pprint(stack_annotations)
+            print()
+
         return stack, stack_annotations, stack_labels
 
-    def cancel_terms(self, expression_tree: list, expression_annotations_tree: list, stack_labels: list) -> list[str]:
+    def cancel_terms(self, expression_tree: list, expression_annotations_tree: list, stack_labels: list, verbose: bool = False) -> list[str]:
         stack = expression_tree
         stack_annotations = expression_annotations_tree
         stack_parity = [{cc: 1 for cc in self.connection_classes} for _ in range(len(stack_labels))]
@@ -880,7 +826,6 @@ class SimpliPyEngine:
         expression: list[str] = []
 
         argmax_candidate = None
-        max_subtree_length = 0
         n_replaced = 0
         still_connected = False
 
@@ -906,57 +851,62 @@ class SimpliPyEngine:
                             current_parity = subtree_parities[argmax_class]
                             inverse_operator = self.connection_classes_inverse[argmax_class]
 
-                            if current_parity * argmax_multiplicity_sum < 0:
-                                inverse_operator_prefix: tuple[str, ...] = (inverse_operator,)
-                                double_inverse_operator_prefix: tuple[str, ...] = ()
+                            if verbose:
+                                print()
+                                print(f'Processing subtree {subtree_labels[0]} with current parity {current_parity} and total multiplicity sum {argmax_multiplicity_sum}')
+
+                            # FIXME
+                            if current_parity * argmax_multiplicity_sum >= 0:  # Negative parity and negative multiplicity cancel out
+                                inverse_operator_prefix: tuple[str, ...] = ()
+                                double_inverse_operator_prefix: tuple[str, ...] = (inverse_operator,)
                             else:
-                                inverse_operator_prefix = ()
-                                double_inverse_operator_prefix = (inverse_operator,)
+                                inverse_operator_prefix = (inverse_operator,)
+                                double_inverse_operator_prefix = ()
+
+                            if verbose:
+                                print(f'Inverse operator prefix: {inverse_operator_prefix}, double inverse operator prefix: {double_inverse_operator_prefix}')
 
                             if argmax_multiplicity_sum == 0:
                                 # Term is cancelled entirely. Replace all occurences with the neutral element
                                 first_replacement = (neutral_element,)
                                 other_replacements = neutral_element
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} entirely: first replacement {first_replacement}, other replacements {other_replacements}')
 
-                            if argmax_multiplicity_sum == 1:
+                            if abs(argmax_multiplicity_sum) == 1:
                                 # Term occurs once. Replace every occurence after the first one with the neutral element
                                 first_replacement = inverse_operator_prefix + argmax_subtree
                                 other_replacements = (neutral_element,)
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} once: first replacement {first_replacement}, other replacements {other_replacements}')
 
-                            if argmax_multiplicity_sum == -1:
-                                # Term occurs once but inverted. Replace the first occurence with the inverse of the term. Replace every occurence after the first one with the neutral element
-                                first_replacement = double_inverse_operator_prefix + argmax_subtree
-                                other_replacements = (neutral_element,)
-
-                            if argmax_multiplicity_sum > 1:
+                            if abs(argmax_multiplicity_sum) > 1:
                                 # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
                                 hyper_operator = self.connection_classes_hyper[argmax_class]
                                 operator = self.connection_classes[argmax_class][0][0]  # Positive multiplicity
-                                if argmax_multiplicity_sum > 5 and is_prime(argmax_multiplicity_sum):
-                                    powers = factorize_to_at_most(argmax_multiplicity_sum - 1, self.max_power)
+                                if argmax_multiplicity_sum > 5 and is_prime(abs(argmax_multiplicity_sum)):
+                                    powers = factorize_to_at_most(abs(argmax_multiplicity_sum) - 1, self.max_power)
                                     first_replacement = inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree + argmax_subtree
                                 else:
-                                    powers = factorize_to_at_most(argmax_multiplicity_sum, self.max_power)
+                                    powers = factorize_to_at_most(abs(argmax_multiplicity_sum), self.max_power)
                                     first_replacement = inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree
 
                                 other_replacements = (neutral_element,)
 
-                            if argmax_multiplicity_sum < -1:
-                                # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
-                                hyper_operator = self.connection_classes_hyper[argmax_class]
-                                if argmax_multiplicity_sum < -5 and is_prime(-argmax_multiplicity_sum):
-                                    powers = factorize_to_at_most(-argmax_multiplicity_sum - 1, self.max_power)
-                                    first_replacement = double_inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree + argmax_subtree
-                                else:
-                                    powers = factorize_to_at_most(-argmax_multiplicity_sum, self.max_power)
-                                    first_replacement = double_inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} multiple times: first replacement {first_replacement}, other replacements {other_replacements}')
 
-                            other_replacements = (neutral_element,)
+                                if verbose:
+                                    print(f'Cancelled term {argmax_subtree} multiple times inverted: first replacement {first_replacement}, other replacements {other_replacements}')
 
                         if n_replaced == 0:
                             expression.extend(first_replacement)
+                            if verbose:
+                                print(f'{n_replaced}: Added first replacement {first_replacement} to expression')
                         else:
                             expression.extend(other_replacements)
+                            if verbose:
+                                print(f'{n_replaced}: Added other replacements {other_replacements} to expression')
                         n_replaced += 1
                         continue
 
@@ -973,21 +923,35 @@ class SimpliPyEngine:
 
             # TODO: Propagate parities of unary inverse operators
 
+            if verbose:
+                print(f'Operator {operator} with operands {operands} is still connected: {still_connected}')
+                print(f'Operator parities: {operator_parity}')
+
             if operator in self.connectable_operators:
                 propagated_operand_parities: list[dict[str, int]] = [{}, {}]
-                for cc, (operator_set, _) in self.connection_classes.items():
-                    if operator in operator_set:
+                if still_connected:
+                    for cc, (operator_set, _) in self.connection_classes.items():
                         propagated_operand_parities[0][cc] = operator_parity[cc]
-                        propagated_operand_parities[1][cc] = operator_parity[cc] * (-1 if operator in {'-', '/'} else 1)
-                    else:
-                        propagated_operand_parities[0][cc] = operator_parity[cc]
-                        propagated_operand_parities[1][cc] = operator_parity[cc]
+                        propagated_operand_parities[1][cc] = operator_parity[cc] * (-1 if operator == self.operator_inverses[operator_set[0]] else 1)
+                    if verbose:
+                        print(f'Propagated operand parities: {propagated_operand_parities}')
+                else:
+                    for cc, (operator_set, _) in self.connection_classes.items():
+                        propagated_operand_parities[0][cc] = 1
+                        propagated_operand_parities[1][cc] = (-1 if operator == self.operator_inverses[operator_set[0]] else 1)
+                    if verbose:
+                        print(f'Reset parities to {propagated_operand_parities}')
 
                 # If no cancellation candidate has been identified yet, try to find one in the current subtree
                 if argmax_candidate is None:
                     for cc in self.connection_classes:
                         for subtree_hash, multiplicity in subtree_annotation[0][cc].items():
-                            if len(subtree_hash) > max_subtree_length and sum(abs(m) for m in multiplicity) > 1:
+                            # Consider candidates where
+                            # 1. there is something to cancel (i.e. the sum of the absolute multiplicities is greater than 1)
+                            # 2. constants are allowed to be cancelled:
+                            #   a. single constants <num> can be cancelled
+                            #   b. composite terms with constants cannot be cancelled with the current method (one <num> needs to survive)
+                            if sum(abs(m) for m in multiplicity) > 1 and ('<num>' not in subtree_hash or len(subtree_hash) == 1):  # Cannot cancel terms with arbitrary constants
                                 argmax_candidate = (cc, subtree_hash, multiplicity[0] - multiplicity[1])
                                 still_connected = True
 
@@ -1103,7 +1067,7 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
-    def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, mask_elementary_literals: bool = True, inplace: bool = False) -> list[str] | tuple[str, ...]:
+    def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str] | tuple[str, ...]:
         length_before = len(expression)
         original_expression = list(expression).copy()
 
@@ -1115,27 +1079,44 @@ class SimpliPyEngine:
             was_tuple = False
             new_expression = expression
 
-        # Apply simplification rules and sort operands to get started
-        new_expression = self._apply_simplifcation_rules(new_expression, self.simplification_rules_trees)
-        new_expression = self.sort_operands(new_expression)
+        if verbose:
+            print(f'Initial expression: {new_expression}')
 
-        for _ in range(max_iter):
+        # Apply simplification rules and sort operands to get started
+        new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
+
+        if verbose:
+            print(f'_apply_simplifcation_rules: {new_expression}')
+
+        for i in range(max_iter):
             # Cancel any terms
-            expression_tree, annotated_expression_tree, stack_labels = self.collect_multiplicities(new_expression)
-            new_expression = self.cancel_terms(expression_tree, annotated_expression_tree, stack_labels)
+            expression_tree, annotated_expression_tree, stack_labels = self.collect_multiplicities(new_expression, verbose=verbose)
+            new_expression = self.cancel_terms(expression_tree, annotated_expression_tree, stack_labels, verbose=verbose)
+
+            if verbose:
+                print(f'{i}: cancel_terms: {new_expression}')
 
             # Apply simplification rules
-            new_expression = self._apply_simplifcation_rules(new_expression, self.simplification_rules_trees)
+            new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
 
-            # Sort operands
-            new_expression = self.sort_operands(new_expression)
+            if verbose:
+                print(f'{i}: _apply_simplifcation_rules: {new_expression}')
 
             if new_expression == expression:
                 break
             expression = new_expression
 
+        # Sort operands
+        new_expression = self.sort_operands(new_expression)
+
+        if verbose:
+            print(f'{i}: sort_operands: {new_expression}')
+
         if mask_elementary_literals:
-            new_expression = self.mask_elementary_literals(new_expression, inplace=inplace)
+            new_expression = mask_elementary_literals_fn(new_expression, inplace=inplace)
+
+            if verbose:
+                print(f'{i}: mask_elementary_literals: {new_expression}')
 
         if len(new_expression) > length_before:
             # The expression has grown, which is not a simplification
@@ -1147,24 +1128,6 @@ class SimpliPyEngine:
             return tuple(new_expression)
 
         return new_expression
-
-    def construct_expressions(self, expressions_of_length: dict[int, set[tuple[str, ...]]], non_leaf_nodes: dict[str, int], must_have_sizes: list | set | None = None) -> Generator[tuple[str, ...], None, None]:
-        expressions_of_length_with_lists = {k: list(v) for k, v in expressions_of_length.items()}
-
-        filter_sizes = must_have_sizes is not None and not len(must_have_sizes) == 0
-        if must_have_sizes is not None and filter_sizes:
-            must_have_sizes_set = set(must_have_sizes)
-
-        # Append existing trees to every operator
-        for new_root_operator, arity in non_leaf_nodes.items():
-            # Start with the smallest arity-tuples of trees
-            for child_lengths in sorted(itertools.product(list(expressions_of_length_with_lists.keys()), repeat=arity), key=lambda x: sum(x)):
-                # Check all possible combinations of child trees
-                if filter_sizes and not any(length in must_have_sizes_set for length in child_lengths):
-                    # Skip combinations that do not have any of the required sizes (e.g. duplicates is used correctly)
-                    continue
-                for child_combination in itertools.product(*[expressions_of_length_with_lists[child_length] for child_length in child_lengths]):
-                    yield (new_root_operator,) + tuple(itertools.chain.from_iterable(child_combination))
 
     def exist_constants_that_fit(self, expression: list[str] | tuple[str, ...], variables: list[str], X: np.ndarray, y_target: np.ndarray) -> bool:
         if isinstance(expression, tuple):
@@ -1191,7 +1154,7 @@ class SimpliPyEngine:
 
         is_valid = np.isfinite(X).all(axis=1) & np.isfinite(y_target)
 
-        if not np.any(is_valid):
+        if not np.any(is_valid) or len(constants) > is_valid.sum():  # https://github.com/scipy/scipy/issues/13969
             return False
 
         try:
@@ -1215,9 +1178,6 @@ class SimpliPyEngine:
             X_shape: tuple,
             X_dtype: np.dtype,
             X_shm_name: str,
-            C_shape: tuple,
-            C_dtype: np.dtype,
-            C_shm_name: str,
             expressions_of_length_and_variables: dict,
             dummy_variables: list[str],
             operator_arity: dict,
@@ -1229,9 +1189,6 @@ class SimpliPyEngine:
             # Reconstruct arrays from shared memory
             X_shm = SharedMemory(name=X_shm_name)
             X: np.ndarray = np.ndarray(X_shape, dtype=X_dtype, buffer=X_shm.buf)
-
-            C_shm = SharedMemory(name=C_shm_name)
-            C: np.ndarray = np.ndarray(C_shape, dtype=C_dtype, buffer=C_shm.buf)
 
             # Main work loop
             while True:
@@ -1267,7 +1224,7 @@ class SimpliPyEngine:
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-                    found_simplification = None
+                    found_simplifications = []
 
                     # Check against all smaller expressions
                     for candidate_length in allowed_candidate_lengths:
@@ -1278,54 +1235,82 @@ class SimpliPyEngine:
 
                             for candidate_expression in candidate_expressions:
                                 executable_candidate = self.operators_to_realizations(candidate_expression)
-                                prefix_candidate_w_constants, candidate_constants = num_to_constants(
-                                    executable_candidate, convert_numbers_to_constant=False
-                                )
+                                prefix_candidate_w_constants, candidate_constants = num_to_constants(executable_candidate, convert_numbers_to_constant=False)
                                 candidate_code = self.prefix_to_infix(prefix_candidate_w_constants, realization=True)
                                 candidate_compiled = codify(candidate_code, dummy_variables + candidate_constants)
-
                                 f_candidate = self.code_to_lambda(candidate_compiled)
 
                                 # Check if expressions are equivalent
                                 if len(candidate_constants) == 0:
-                                    y = safe_f(f, X, C[:len(constants)])
                                     y_candidate = safe_f(f_candidate, X)
                                     if not isinstance(y_candidate, np.ndarray):
                                         y_candidate = np.full(X.shape[0], y_candidate)
 
-                                    expressions_match = np.allclose(y, y_candidate, equal_nan=True)
+                                    # Resample constants to avoid false positives
+                                    # The expression is considered a match unless one of the challenges fails
+                                    expressions_match = True
+                                    for challenge_id in range(constants_fit_challenges):
+                                        random_constants = np.random.normal(loc=0, scale=5, size=len(constants))
+                                        # Try all combinations of positive and negative constants
+                                        for positive_negative_constant_combination in product((0, 1), repeat=len(constants)):
+                                            y = safe_f(f, X, np.abs(random_constants) * positive_negative_constant_combination)  # abs may be redundant here
+                                            if not np.allclose(y, y_candidate, equal_nan=True):
+                                                expressions_match = False
+                                                break
+
+                                        if not expressions_match:
+                                            # A combination produced a different result, abort this candidate
+                                            break
+
                                 else:
                                     # Resample constants to avoid false positives
-                                    expressions_match = True
-
                                     # The expression is considered a match unless one of the challenges fails
+                                    expressions_match = True
                                     for challenge_id in range(constants_fit_challenges):
                                         # Need to check if constants can be fitted
-                                        y = safe_f(f, X, np.random.choice(C, size=len(constants), replace=False))
-                                        for _ in range(constants_fit_retries):
-                                            if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
-                                                # Found a candidate that fits, next challenge please
+                                        random_constants = np.random.normal(loc=0, scale=5, size=len(constants))
+                                        # Try all combinations of positive and negative constants
+                                        for positive_negative_constant_combination in product((0, 1), repeat=len(constants)):
+                                            y = safe_f(f, X, np.abs(random_constants) * positive_negative_constant_combination)  # abs may be redundant here
+                                            for _ in range(constants_fit_retries):
+                                                if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
+                                                    # Found a candidate that fits, next challenge please
+                                                    break
+                                            else:
+                                                # No candidate found that fits, not all challenges could be solved, abort this candidate
+                                                expressions_match = False
                                                 break
-                                        else:
-                                            # No candidate found that fits, not all challenges could be solved, abort this candidate
-                                            expressions_match = False
+
+                                        if not expressions_match:
+                                            # A combination produced a different result, abort this candidate
                                             break
 
                                 if expressions_match:
-                                    found_simplification = (expression, candidate_expression)
-                                    break
+                                    found_simplifications.append(candidate_expression)
+                                    # Still check for further candidates of the same length
 
-                        if found_simplification:
+                        if found_simplifications:
+                            # Found at least one simplification for the current length
+                            # Every further candidate will be longer, so we can stop checking
                             break
 
-                # Send result (None if no simplification found)
-                result_queue.put(found_simplification)
+                if not found_simplifications:
+                    # No simplification found
+                    result_queue.put(None)
+                else:
+                    found_simplifications_without_num = [simplification for simplification in found_simplifications if '<num>' not in simplification]
+                    if found_simplifications_without_num:
+                        # Prefer simplifications without <num>
+                        result_queue.put((expression, found_simplifications_without_num[0]))
+                    else:
+                        # No simplification without <num> found, return the first found simplification
+                        result_queue.put((expression, found_simplifications[0]))
+
         except Exception as e:
             # Log exceptions to result queue
             result_queue.put(('ERROR', e, (expression, simplified_length, allowed_candidate_lengths)))
         finally:
             X_shm.close()
-            C_shm.close()
 
     def find_rules(
             self,
@@ -1334,7 +1319,6 @@ class SimpliPyEngine:
             dummy_variables: int | list[str] | None = None,
             extra_internal_terms: list[str] | None = None,
             X: np.ndarray | int | None = None,
-            C: np.ndarray | int | None = None,
             constants_fit_challenges: int = 5,
             constants_fit_retries: int = 5,
             output_file: str | None = None,
@@ -1374,11 +1358,6 @@ class SimpliPyEngine:
         elif isinstance(X, int):
             X_data = np.random.normal(loc=0, scale=5, size=(X, len(dummy_variables)))
 
-        if C is None:
-            C_data = np.random.normal(loc=0, scale=5, size=128)
-        elif isinstance(C, int):
-            C_data = np.random.normal(loc=0, scale=5, size=C)
-
         leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
 
@@ -1396,7 +1375,7 @@ class SimpliPyEngine:
         # Generate expressions level by level
         new_sizes: set[int] = set()
         while max(expressions_of_length.keys()) < max_source_pattern_length:  # This means that every smaller size is already generated
-            for expression in self.construct_expressions(expressions_of_length, non_leaf_nodes, must_have_sizes=new_sizes):
+            for expression in construct_expressions(expressions_of_length, non_leaf_nodes, must_have_sizes=new_sizes):
                 new_expressions_of_length[len(expression)].add(expression)
 
             new_sizes = set()
@@ -1423,7 +1402,7 @@ class SimpliPyEngine:
         total_expressions = sum(len(v) for v in expressions_of_length.values())
 
         if verbose:
-            print(f"\nFinished generating expressions up to size {max_source_pattern_length}. Total expressions: {total_expressions:,}")
+            print(f"Finished generating expressions up to size {max_source_pattern_length}. Total expressions: {total_expressions:,}")
             for length, expressions in sorted(expressions_of_length.items()):
                 print(f"Size {length}: {len(expressions):,} expressions")
 
@@ -1443,10 +1422,6 @@ class SimpliPyEngine:
         X_shared: np.ndarray = np.ndarray(X_data.shape, dtype=X_data.dtype, buffer=X_shm.buf)
         X_shared[:] = X_data[:]
 
-        C_shm = SharedMemory(create=True, size=C_data.nbytes)
-        C_shared: np.ndarray = np.ndarray(C_data.shape, dtype=C_data.dtype, buffer=C_shm.buf)
-        C_shared[:] = C_data[:]
-
         # Create queues
         work_queue: mp.Queue = mp.Queue()
         result_queue: mp.Queue = mp.Queue()
@@ -1459,7 +1434,6 @@ class SimpliPyEngine:
                 args=(
                     i, work_queue, result_queue,
                     X_data.shape, X_data.dtype, X_shm.name,
-                    C_data.shape, C_data.dtype, C_shm.name,
                     dict(expressions_of_length_and_variables),  # Make a copy for each worker
                     dummy_variables,
                     self.operator_arity,
@@ -1485,6 +1459,8 @@ class SimpliPyEngine:
 
         pbar = tqdm(total=len(work_items), desc="Finding rules", disable=not verbose)
 
+        current_length = 0
+
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -1502,6 +1478,8 @@ class SimpliPyEngine:
                         active_tasks += 1
                     except StopIteration:
                         break
+
+                current_length = len(expression_to_simplify)
 
                 # Process results and distribute new work
                 try:
@@ -1529,6 +1507,16 @@ class SimpliPyEngine:
                         if not interrupted:
                             try:
                                 expression_to_simplify = next(work_iter)
+
+                                if len(expression_to_simplify) > current_length:
+                                    # This means that the collected rules can be applied to coming expressions
+                                    # To avoid redundant rules, we incorporate the rules into the simplification to raise the requirements for rules
+                                    if verbose:
+                                        print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
+                                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
+                                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, verbose=verbose)
+                                    current_length = len(expression_to_simplify)
+
                                 simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
                                 if max_target_pattern_length is None:
                                     allowed_candidate_lengths = tuple(range(simplified_length))
@@ -1554,8 +1542,10 @@ class SimpliPyEngine:
 
                         # Periodic saving
                         if output_file is not None and n_scanned % save_every == 0:
-                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules)
+                            if verbose:
+                                print(f"Saving rules after processing {n_scanned} expressions...")
+                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
+                            self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, verbose=verbose)
                             with open(output_file, 'w') as file:
                                 json.dump(self.simplification_rules, file, indent=4)
                 except Exception as e:
@@ -1593,52 +1583,25 @@ class SimpliPyEngine:
                             p.terminate()
 
                 # Cleanup resources
-                for resource in [X_shm, C_shm]:
-                    try:
-                        resource.close()
-                        resource.unlink()
-                    except Exception as e:
-                        print(e)
-                        pass
+                try:
+                    X_shm.close()
+                    X_shm.unlink()
+                except Exception as e:
+                    print(e)
+                    pass
 
                 # Close queues
                 work_queue.close()
                 result_queue.close()
 
                 if output_file is not None:
-                    print("Saving results...")
+                    if verbose:
+                        print("Saving results...")
                     time.sleep(1)  # Give time for the user to interrupt the process
-                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables)
-                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules)
+                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
+                    self.simplification_rules_trees = self.rules_trees_from_rules_list(self.simplification_rules, verbose=verbose)
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
-
-    def mask_elementary_literals(self, prefix_expression: list[str], inplace: bool = False) -> list[str]:
-        '''
-        Mask elementary literals such as <0> and <1> with <num>
-
-        Parameters
-        ----------
-        prefix_expression : list[str]
-            The prefix expression
-        inplace : bool, optional
-            Whether to modify the expression in place, by default False
-
-        Returns
-        -------
-        list[str]
-            The expression with elementary literals masked
-        '''
-        if inplace:
-            modified_prefix_expression = prefix_expression
-        else:
-            modified_prefix_expression = prefix_expression.copy()
-
-        for i, token in enumerate(prefix_expression):
-            if is_numeric_string(token):
-                modified_prefix_expression[i] = '<num>'
-
-        return modified_prefix_expression
 
     def operand_key(self, operands: list) -> tuple:
         '''
@@ -1672,7 +1635,6 @@ class SimpliPyEngine:
 
         raise ValueError(f'None of the criteria matched for operands {operands}:\n1. ({len(operands) > 1}, {isinstance(operands[0], str)}, {operands[0] in self.operator_arity_compat or operands[0] in self.operator_aliases})\n2. ({len(operands) == 1}, {isinstance(operands[0], str)})\n3. ({isinstance(operands, str)})')
 
-    # CODIFYING
     def operators_to_realizations(self, prefix_expression: list[str] | tuple[str, ...]) -> list[str] | tuple[str, ...]:
         '''
         Converts a prefix expression from operators to realizations.
@@ -1721,22 +1683,3 @@ class SimpliPyEngine:
             The lambda function.
         '''
         return FunctionType(code, globals())()
-
-    @staticmethod
-    def codify(code_string: str, variables: list[str] | None = None) -> CodeType:
-        '''
-        Compile a string into a code object.
-
-        Parameters
-        ----------
-        code_string : str
-            The string to compile.
-        variables : list[str] | None
-            The variables to use in the code.
-
-        Returns
-        -------
-        CodeType
-            The compiled code object.
-        '''
-        return codify(code_string, variables)
