@@ -1252,7 +1252,7 @@ class SimpliPyEngine:
                                     for challenge_id in range(constants_fit_challenges):
                                         random_constants = np.random.normal(loc=0, scale=5, size=len(constants))
                                         # Try all combinations of positive and negative constants
-                                        for positive_negative_constant_combination in product((0, 1), repeat=len(constants)):
+                                        for positive_negative_constant_combination in product((-1, 0, 1), repeat=len(constants)):
                                             y = safe_f(f, X, np.abs(random_constants) * positive_negative_constant_combination)  # abs may be redundant here
                                             if not np.allclose(y, y_candidate, equal_nan=True):
                                                 expressions_match = False
@@ -1270,7 +1270,7 @@ class SimpliPyEngine:
                                         # Need to check if constants can be fitted
                                         random_constants = np.random.normal(loc=0, scale=5, size=len(constants))
                                         # Try all combinations of positive and negative constants
-                                        for positive_negative_constant_combination in product((0, 1), repeat=len(constants)):
+                                        for positive_negative_constant_combination in product((-1, 0, 1), repeat=len(constants)):
                                             y = safe_f(f, X, np.abs(random_constants) * positive_negative_constant_combination)  # abs may be redundant here
                                             for _ in range(constants_fit_retries):
                                                 if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
