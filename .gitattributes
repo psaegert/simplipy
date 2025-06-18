@@ -1,1 +1,13 @@
 *.ipynb linguist-documentation
+
+# Mark as binary and exclude from diffs
+data/**/*.json -diff
+
+# Also exclude from git grep searches
+data/**/*.json -diff -text
+
+# Or use binary shorthand (combines -diff -merge -text)
+data/**/*.json binary
+
+# Exclude from archive exports (git archive)
+data/**/*.json export-ignore
