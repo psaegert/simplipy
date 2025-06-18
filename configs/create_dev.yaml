@@ -1,5 +1,5 @@
 extra_internal_terms: [
-  '<num>',
+  '<constant>',
   '0',
   '1',
   '(-1)',
