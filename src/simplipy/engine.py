@@ -1597,7 +1597,7 @@ class SimpliPyEngine:
                                     self.compile_rules()
                                     if output_file is not None:
                                         if verbose:
-                                            print(f"Saving rules to {output_file} after increasing expression length...")
+                                            print("Saving rules after increasing expression length...")
                                         with open(output_file, 'w') as file:
                                             json.dump(self.simplification_rules, file, indent=4)
                                     current_length = len(expression_to_simplify)
