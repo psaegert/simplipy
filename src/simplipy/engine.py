@@ -111,6 +111,16 @@ class SimpliPyEngine:
         elif isinstance(rules, list):
             self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
 
+        self.compile_rules()
+
+        # Initialize statistics for rule applications
+        self.rule_application_statistics: defaultdict[tuple, int] = defaultdict(int)
+
+    def compile_rules(self) -> None:
+        '''
+        Compile the simplification rules into a more efficient form for pattern matching.
+        This is done by converting the rules into trees and organizing them by operator and arity.
+        '''
         # Organize rules into two categories: with patterns and without patterns
         simplification_rules_patterns = []
         simplification_rules_no_patterns = []
@@ -128,9 +138,6 @@ class SimpliPyEngine:
 
         # Rules without patterns are stored as tuples of prefix expressions
         self.simplification_rules_no_patterns: dict[tuple, tuple] = {tuple(r[0]): tuple(r[1]) for r in simplification_rules_no_patterns}
-
-        # Initialize statistics for rule applications
-        self.rule_application_statistics: defaultdict[tuple, int] = defaultdict(int)
 
     def import_modules(self) -> None:  # TODO: Still necessary?
         for module in self.modules:
@@ -1424,7 +1431,7 @@ class SimpliPyEngine:
 
         if reset_rules:
             self.simplification_rules = []
-            self.simplification_rules_patterns = self.construct_rule_patterns(self.simplification_rules)
+            self.compile_rules()
 
         if X is None:
             X_data = np.random.normal(loc=0, scale=5, size=(1024, len(dummy_variables)))
@@ -1587,7 +1594,7 @@ class SimpliPyEngine:
                                     if verbose:
                                         print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
                                     self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
-                                    self.simplification_rules_patterns = self.construct_rule_patterns(self.simplification_rules, verbose=verbose)
+                                    self.compile_rules()
                                     current_length = len(expression_to_simplify)
 
                                 simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
@@ -1618,7 +1625,7 @@ class SimpliPyEngine:
                             if verbose:
                                 print(f"Saving rules after processing {n_scanned} expressions...")
                             self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
-                            self.simplification_rules_patterns = self.construct_rule_patterns(self.simplification_rules, verbose=verbose)
+                            self.compile_rules()
                             with open(output_file, 'w') as file:
                                 json.dump(self.simplification_rules, file, indent=4)
                 except Exception as e:
@@ -1672,7 +1679,7 @@ class SimpliPyEngine:
                         print("Saving results...")
                     time.sleep(1)  # Give time for the user to interrupt the process
                     self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
-                    self.simplification_rules_patterns = self.construct_rule_patterns(self.simplification_rules, verbose=verbose)
+                    self.compile_rules()
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
 
