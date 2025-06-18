@@ -17,30 +17,31 @@ import simplipy as sp
 engine = sp.SimpliPyEngine.from_config(sp.utils.get_path('configs', 'dev.yaml'))
 
 # Simplify prefix expressions
-engine.simplify(('/', '<num>', '*', '/', '*', 'x3',' <num>', 'x3', 'log', 'x3'))
-# > ('/', '<num>', 'log', 'x3')
+engine.simplify(('/', '<constant>', '*', '/', '*', 'x3',' <constant>', 'x3', 'log', 'x3'))
+# > ('/', '<constant>', 'log', 'x3')
 ```
 
 # Performance
 
-<div align="center">
-    <img src="./assets/images/simplification_length_histogram.png" alt="Original vs Simplified Length" width="48%" style="vertical-align: middle;" />
-    <img src="./assets/images/simplification_time_cdf.png" alt="CDF of Simplification Times" width="48%" style="vertical-align: middle;" />
-</div>
+<img src="./assets/images/dev_7-2_multi_simplification_length_histogram.png" alt="Original vs Simplified Length and Simplification Time"/>
 
-Original expressions sampled with the [Lample-Charton Algorithm](https://arxiv.org/abs/1912.01412) using the following parameters:
-- 0 to 3 variables
-- 0 to 20 operators (corresponding to lengths of 0 to 41)
-- Operators:
-  - with relative weight 10: `+`, `-`, `*`, `/`
-  - with relative weight 1: `abs`, `inv`, `neg`, `pow2`, `pow3`, `pow4`, `pow5`, `pow1_2`, `pow1_3`, `pow1_4`, `pow1_5`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`, `mult2`, `mult3`, `mult4`, `mult5`, `div2`, `div3`, `div4`, `div5`
+> Simplification efficacy and efficiency for different maximum pattern lengths (Engine: `dev_7-2`).
+> Original expressions sampled with the [Lample-Charton Algorithm](https://arxiv.org/abs/1912.01412) using the following parameters:
+> - 0 to 3 variables
+> - 0 to 20 operators (corresponding to lengths of 0 to 41)
+> - Operators:
+>   - with relative weight 10: `+`, `-`, `*`, `/`
+>   - with relative weight 1: `abs`, `inv`, `neg`, `pow2`, `pow3`, `pow4`, `pow5`, `pow1_2`, `pow1_3`, `pow1_4`, `pow1_5`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `log`, `mult2`, `mult3`, `mult4`, `mult5`, `div2`, `div3`, `div4`, `div5`
+>
+> Points show bootstrapped mean and 95% confidence interval (N = 10,000).
+> Orange points are within the 95% confidence interval of the shortest simplified length for the respective original length.
+> Using patterns beyond a length of 4 tokens does not yield significant improvements and comes at a cost of increased simplification time.
 
-Points show bootstrapped mean and 95% confidence interval (N = 10,000)
 
 # Collecting Rules
 
 ```sh
-simplipy find-rules -e "{{ROOT}}/configs/my_config.yaml" -c "{{ROOT}}/configs/create_my_config.yaml" -o "{{ROOT}}/data/rules/my_config.json" -v  --reset-rules
+simplipy find-rules -e "{{ROOT}}/configs/my_config.yaml" -c "{{ROOT}}/configs/create_my_config.yaml" -o "{{ROOT}}/data/rules/my_config.json" -v --reset-rules
 ```
 
 - `-e` is the path to the engine configuration file to use as a backend
@@ -54,7 +55,7 @@ A configuration file for collecting rules could look like this:
 ```yaml
 # This includes special symbols for intermediate simplification steps
 extra_internal_terms: [
-  '<num>',
+  '<constant>',
   '0',
   '1',
   '(-1)',
