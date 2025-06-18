@@ -639,88 +639,132 @@ class SimpliPyEngine:
 
         return rules_trees_organized
 
-    def _apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str]:
+    def parse_subtree(self, tokens: list[str] | tuple[str, ...], start_idx: int) -> tuple[list, int]:
+        """Parse a subtree from tokens starting at start_idx, return (subtree, next_idx)"""
+        if start_idx >= len(tokens):
+            raise ValueError(f"Start index {start_idx} is out of bounds for tokens {tokens}")
+
+        token = tokens[start_idx]
+
+        if token in self.operator_arity_compat or token in self.operator_aliases:
+            operator = self.operator_aliases.get(token, token)
+            arity = self.operator_arity_compat[operator]
+            operands = []
+            idx = start_idx + 1
+
+            for _ in range(arity):
+                operand, idx = self.parse_subtree(tokens, idx)
+                operands.append(operand)
+
+            return [operator, operands], idx
+        else:
+            # It's a terminal (constant or variable)
+            return [token], start_idx + 1
+
+    def apply_rules_top_down(self, subtree: list, max_pattern_length: int | None = None, collect_rule_statistics: bool = False, verbose: bool = False) -> list:
+        """Apply simplification rules to a subtree in a top-down manner"""
+        if len(subtree) == 1:
+            # Terminal node, no rules to apply
+            return subtree
+
+        operator = subtree[0]
+        operands = subtree[1]
+
+        # First, check if all operands are constants
+        if all(len(operand) == 1 and operand[0] == '<constant>' for operand in operands):
+            return ['<constant>']
+
+        # Convert subtree to flat form for rule matching
+        flat_subtree = tuple(flatten_nested_list(subtree)[::-1])
+        subtree_length = len(flat_subtree)
+
+        if verbose:
+            print(f'Checking if explicit rule applies to subtree: {flat_subtree} with length {subtree_length}')
+
+        # Check explicit rules first
+        replacement = self.simplification_rules_no_patterns.get(flat_subtree, None)
+        if verbose:
+            print(f'Explicit rule found: {flat_subtree} -> {replacement}' if replacement else 'No explicit rule found')
+        if replacement is not None:
+            if collect_rule_statistics:
+                self.rule_application_statistics[(flat_subtree, replacement)] += 1
+            if verbose:
+                print(f'Applied explicit rule\t{flat_subtree} ->\n\t\t{replacement}\nto subtree\t{subtree}\n')
+            # Parse and recursively simplify the replacement
+            parsed_replacement, _ = self.parse_subtree(list(replacement), 0)
+            return self.apply_rules_top_down(parsed_replacement)
+
+        # Check pattern rules, starting with the largest patterns
+        if verbose:
+            print(f'Checking pattern rules for operator {operator} with subtree length {subtree_length}')
+        if max_pattern_length is None:
+            subtree_max_pattern_length = min(subtree_length, self.max_pattern_length)
+        else:
+            subtree_max_pattern_length = min(max_pattern_length, subtree_length, self.max_pattern_length)
+
+        for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):
+            for rule in self.simplification_rules_patterns.get((pattern_length, operator,), []):
+                does_match, mapping = match_pattern(subtree, rule[0], mapping=None)
+                if does_match:
+                    # Apply the mapping to get the replacement
+                    replacement_tree = apply_mapping(deepcopy(rule[1]), mapping)
+                    if collect_rule_statistics:
+                        self.rule_application_statistics[(
+                            tuple(flatten_nested_list(rule[0])[::-1]),
+                            tuple(flatten_nested_list(rule[1])[::-1]))] += 1
+                    if verbose:
+                        print(f'Applied pattern rule\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{subtree}\nwith mapping\t{mapping}\n')
+                    # Recursively simplify the replacement
+                    return self.apply_rules_top_down(replacement_tree, max_pattern_length)
+
+        # No rule applied at this level, recursively simplify operands
+        simplified_operands = [self.apply_rules_top_down(operand, max_pattern_length) for operand in operands]
+        simplified_subtree = [operator, simplified_operands]
+
+        # After simplifying operands, check again if a rule now applies
+        # (This handles cases where simplification of operands enables a rule)
+        flat_simplified = tuple(flatten_nested_list(simplified_subtree)[::-1])
+
+        # Check explicit rules again
+        replacement = self.simplification_rules_no_patterns.get(flat_simplified, None)
+        if replacement is not None:
+            if collect_rule_statistics:
+                self.rule_application_statistics[(flat_simplified, replacement)] += 1
+            if verbose:
+                print(f'Applied explicit rule (after operand simplification)\t{flat_simplified} ->\n\t\t{replacement}\nto subtree\t{simplified_subtree}\n')
+            parsed_replacement, _ = self.parse_subtree(list(replacement), 0)
+            return self.apply_rules_top_down(parsed_replacement, max_pattern_length)
+
+        # Check pattern rules again
+        for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):
+            for rule in self.simplification_rules_patterns.get((pattern_length, operator,), []):
+                does_match, mapping = match_pattern(simplified_subtree, rule[0], mapping=None)
+                if does_match:
+                    replacement_tree = apply_mapping(deepcopy(rule[1]), mapping)
+                    if collect_rule_statistics:
+                        self.rule_application_statistics[(
+                            tuple(flatten_nested_list(rule[0])[::-1]),
+                            tuple(flatten_nested_list(rule[1])[::-1]))] += 1
+                    if verbose:
+                        print(f'Applied pattern rule (after operand simplification)\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{simplified_subtree}\nwith mapping\t{mapping}\n')
+                    return self.apply_rules_top_down(replacement_tree, max_pattern_length)
+
+        return simplified_subtree
+
+    def apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str]:
         if all(t == '<constant>' or t in self.operator_arity for t in expression):
             return ['<constant>']
 
-        stack: list = []
-        i = len(expression) - 1
+        # Parse the entire expression into a tree
+        tree, _ = self.parse_subtree(expression, 0)
+        if tree is None:
+            return list(expression)
 
-        # Traverse the expression from right to left
-        while i >= 0:
-            token = expression[i]
+        # Apply rules top-down
+        simplified_tree = self.apply_rules_top_down(tree, max_pattern_length, collect_rule_statistics, verbose)
 
-            # Remember if a rule was applied in this iteration
-            applied_rule = False
-
-            # If the token is an operator, check for rules that can be applied
-            if token in self.operator_arity_compat or token in self.operator_aliases:
-                operator = self.operator_aliases.get(token, token)
-                arity = self.operator_arity_compat[operator]
-                operands = list(reversed(stack[-arity:]))
-
-                if all(operand[0] == '<constant>' for operand in operands):
-                    # All operands are constants
-                    _ = [stack.pop() for _ in range(arity)]
-                    stack.append(['<constant>'])
-                    i -= 1
-                    continue
-
-                subtree = [operator, operands]
-                flat_subtree = tuple(flatten_nested_list(subtree)[::-1])
-                subtree_length = len(flat_subtree)
-
-                # Check if a rule explicitly matches the current subtree
-                replacement = self.simplification_rules_no_patterns.get(flat_subtree, None)
-                if replacement is not None:
-                    # Replace the subtree with the replacement
-                    _ = [stack.pop() for _ in range(arity)]
-                    stack.append(self.prefix_to_tree(list(replacement)))
-                    i -= 1
-                    applied_rule = True
-                    if collect_rule_statistics:
-                        self.rule_application_statistics[(flat_subtree, replacement)] += 1
-                    if verbose:
-                        print(f'Applied explicit rule\t{flat_subtree} ->\n\t\t{replacement}\nto subtree\t{subtree}\n')
-                    continue
-
-                # Check if a pattern matches the current subtree
-                if max_pattern_length is None:
-                    subtree_max_pattern_length = min(subtree_length, self.max_pattern_length)
-                else:
-                    subtree_max_pattern_length = min(max_pattern_length, subtree_length, self.max_pattern_length)
-
-                for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):  # Try to fit larger, more specific patterns first
-                    for rule in self.simplification_rules_patterns.get((pattern_length, operator,), []):
-                        does_match, mapping = match_pattern(subtree, rule[0], mapping=None)
-                        if does_match:
-                            # Replace the placeholders (keys of the mapping) with the actual subtrees (values of the mapping) in the entire subtree at any depth
-                            _ = [stack.pop() for _ in range(arity)]
-                            stack.append(apply_mapping(deepcopy(rule[1]), mapping))
-                            i -= 1
-                            applied_rule = True
-                            if collect_rule_statistics:
-                                self.rule_application_statistics[(
-                                    tuple(flatten_nested_list(rule[0])[::-1]),
-                                    tuple(flatten_nested_list(rule[1])[::-1]))] += 1
-                            if verbose:
-                                print(f'Applied pattern rule\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{subtree}\nwith mapping\t{mapping}\n')
-                            break
-                    if applied_rule:
-                        break
-
-                if not applied_rule:
-                    _ = [stack.pop() for _ in range(arity)]
-                    stack.append([operator, operands])
-                    i -= 1
-                    continue
-
-            if not applied_rule:
-                stack.append([token])
-                i -= 1
-
-        # Unroll the tree into a flat expression in the correct order
-        return flatten_nested_list(stack)[::-1]
+        # Flatten back to prefix notation
+        return flatten_nested_list(simplified_tree)[::-1]
 
     def collect_multiplicities(self, expression: list[str] | tuple[str, ...], verbose: bool = False) -> tuple[list, list, list]:
         stack: list = []
@@ -1112,7 +1156,7 @@ class SimpliPyEngine:
             print(f'Initial expression: {new_expression}')
 
         # Apply simplification rules and sort operands to get started
-        new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
+        new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
 
         if verbose:
             print(f'_apply_simplifcation_rules: {new_expression}')
@@ -1126,7 +1170,7 @@ class SimpliPyEngine:
                 print(f'{i}: cancel_terms: {new_expression}')
 
             # Apply simplification rules
-            new_expression = self._apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
+            new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
 
             if verbose:
                 print(f'{i}: _apply_simplifcation_rules: {new_expression}')
