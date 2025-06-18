@@ -1595,6 +1595,11 @@ class SimpliPyEngine:
                                         print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
                                     self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
                                     self.compile_rules()
+                                    if output_file is not None:
+                                        if verbose:
+                                            print(f"Saving rules to {output_file} after increasing expression length...")
+                                        with open(output_file, 'w') as file:
+                                            json.dump(self.simplification_rules, file, indent=4)
                                     current_length = len(expression_to_simplify)
 
                                 simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
