@@ -17,8 +17,8 @@ import simplipy as sp
 engine = sp.SimpliPyEngine.from_config(sp.utils.get_path('configs', 'dev.yaml'))
 
 # Simplify prefix expressions
-engine.simplify(('/', '<num>', '*', '/', '*', 'x3',' <num>', 'x3', 'log', 'x3'))
-# > ('/', '<num>', 'log', 'x3')
+engine.simplify(('/', '<constant>', '*', '/', '*', 'x3',' <constant>', 'x3', 'log', 'x3'))
+# > ('/', '<constant>', 'log', 'x3')
 ```
 
 # Performance
@@ -54,7 +54,7 @@ A configuration file for collecting rules could look like this:
 ```yaml
 # This includes special symbols for intermediate simplification steps
 extra_internal_terms: [
-  '<num>',
+  '<constant>',
   '0',
   '1',
   '(-1)',

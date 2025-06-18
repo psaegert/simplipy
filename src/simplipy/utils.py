@@ -305,7 +305,7 @@ def substitude_constants(prefix_expression: list[str], values: list | np.ndarray
         constants = list(constants)
 
     for i, token in enumerate(prefix_expression):
-        if token == "<num>" or re.match(r"C_\d+", token) or token in constants:
+        if token == "<constant>" or re.match(r"C_\d+", token) or token in constants:
             modified_prefix_expression[i] = str(values[constant_index])
             constant_index += 1
 
@@ -333,7 +333,7 @@ def apply_variable_mapping(prefix_expression: list[str], variable_mapping: dict[
 
 def numbers_to_num(prefix_expression: list[str], inplace: bool = False) -> list[str]:
     '''
-    Replace all numbers in a prefix expression with the string '<num>'.
+    Replace all numbers in a prefix expression with the string '<constant>'.
 
     Parameters
     ----------
@@ -355,7 +355,7 @@ def numbers_to_num(prefix_expression: list[str], inplace: bool = False) -> list[
     for i, token in enumerate(prefix_expression):
         try:
             float(token)
-            modified_prefix_expression[i] = '<num>'
+            modified_prefix_expression[i] = '<constant>'
         except ValueError:
             modified_prefix_expression[i] = token
 
@@ -364,13 +364,13 @@ def numbers_to_num(prefix_expression: list[str], inplace: bool = False) -> list[
 
 def num_to_constants(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False, convert_numbers_to_constant: bool = True) -> tuple[list[str], list[str]]:
     '''
-    Replace all '<num>' tokens in a prefix expression with constants named 'C_i'.
+    Replace all '<constant>' tokens in a prefix expression with constants named 'C_i'.
     This allows the expression to be compiled into a function.
 
     Parameters
     ----------
     prefix_expression : list[str]
-        The prefix expression to replace the '<num>' tokens in.
+        The prefix expression to replace the '<constant>' tokens in.
     constants : list[str] | None
         The constants to use in the expression.
     inplace : bool
@@ -393,7 +393,7 @@ def num_to_constants(prefix_expression: list[str], constants: list[str] | None =
         constants = list(constants)
 
     for i, token in enumerate(prefix_expression):
-        if token == "<num>" or (convert_numbers_to_constant and (re.match(r"C_\d+", token) or token.isnumeric())):
+        if token == "<constant>" or (convert_numbers_to_constant and (re.match(r"C_\d+", token) or token.isnumeric())):
             if constants is not None and len(constants) > constant_index:
                 modified_prefix_expression[i] = constants[constant_index]
             else:
@@ -541,7 +541,7 @@ def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[
 
 def mask_elementary_literals(prefix_expression: list[str], inplace: bool = False) -> list[str]:
     '''
-    Mask elementary literals such as <0> and <1> with <num>
+    Mask elementary literals such as <0> and <1> with <constant>
 
     Parameters
     ----------
@@ -562,7 +562,7 @@ def mask_elementary_literals(prefix_expression: list[str], inplace: bool = False
 
     for i, token in enumerate(prefix_expression):
         if is_numeric_string(token):
-            modified_prefix_expression[i] = '<num>'
+            modified_prefix_expression[i] = '<constant>'
 
     return modified_prefix_expression
 
@@ -623,7 +623,7 @@ def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = No
 
                 # If the existing value is a constant, it is not a match
                 # We cannot map multiple (independent) constants to the same placeholder
-                if "<num>" in flatten_nested_list(existing_value):
+                if "<constant>" in flatten_nested_list(existing_value):
                     return False, mapping
 
                 # Placeholder is occupied by another tree, check if the existing value matches the tree
