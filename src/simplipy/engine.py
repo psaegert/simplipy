@@ -1147,17 +1147,22 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
-    def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str] | tuple[str, ...]:
-        length_before = len(expression)
-        original_expression = list(expression).copy()
-
-        if isinstance(expression, tuple):
-            was_tuple = True
+    def simplify(self, expression: str | list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False, verbose: bool = False) -> str | list[str] | tuple[str, ...]:
+        if isinstance(expression, str):
+            return_type = 'str'
+            original_expression: str | list[str] | tuple[str, ...] = "" + expression  # Create a copy
+            expression = self.parse(expression, convert_expression=True, mask_numbers=False)
+        elif isinstance(expression, tuple):
+            return_type = 'tuple'
+            original_expression = expression  # No need to copy immutable tuple
             expression = list(expression)
-            new_expression = expression.copy()
         else:
-            was_tuple = False
-            new_expression = expression
+            return_type = 'list'
+            original_expression = expression.copy()
+
+        new_expression = expression.copy()
+
+        length_before = len(expression)
 
         if verbose:
             print(f'Initial expression: {new_expression}')
@@ -1200,12 +1205,28 @@ class SimpliPyEngine:
 
         if len(new_expression) > length_before:
             # The expression has grown, which is not a simplification
-            if was_tuple:
-                return tuple(original_expression)
-            return original_expression
+            match return_type:
+                case 'str':
+                    return original_expression
+                case 'tuple':
+                    return tuple(original_expression)
+                case 'list':
+                    if inplace:
+                        expression[:] = original_expression
+                    else:
+                        expression = original_expression
+            return expression
 
-        if was_tuple:
-            return tuple(new_expression)
+        match return_type:
+            case 'str':
+                return self.prefix_to_infix(new_expression, realization=False, power='**')
+            case 'tuple':
+                return tuple(new_expression)
+            case 'list':
+                if inplace:
+                    expression[:] = new_expression
+                else:
+                    expression = new_expression
 
         return new_expression
 
