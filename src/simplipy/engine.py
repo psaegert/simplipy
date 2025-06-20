@@ -237,6 +237,7 @@ class SimpliPyEngine:
         str
             The infix notation of the expression
         '''
+        # FIXME: Avoid unnecessary patentheses but keep necessary ones
         stack: list[str] = []
 
         for token in reversed(tokens):
@@ -252,14 +253,20 @@ class SimpliPyEngine:
                 # This regex must not match pow1_2 or pow1_3
                 if re.match(r'pow\d+(?!\_)', operator) and power == '**':
                     exponent = int(operator[3:])
-                    stack.append(f'(({write_operands[0]})**{exponent})')
+                    if write_operands[0].startswith('-'):
+                        stack.append(f'({write_operands[0]})**{exponent}')
+                    else:
+                        stack.append(f'{write_operands[0]}**{exponent}')
 
                 # If the operator is a fractional power operator such as pow1_2, format it as
                 # "pow(operand1, 0.5)" if power is 'func'
                 # "operand1**0.5" if power is '**'
                 elif re.match(r'pow1_\d+', operator) and power == '**':
                     exponent = int(operator[5:])
-                    stack.append(f'(({write_operands[0]})**(1/{exponent}))')
+                    if write_operands[0].startswith('-'):
+                        stack.append(f'({write_operands[0]})**(1/{exponent})')
+                    else:
+                        stack.append(f'{write_operands[0]}**(1/{exponent})')
 
                 # If the operator is a function from a module, format it as
                 # "module.function(operand1, operand2, ...)"
@@ -269,18 +276,18 @@ class SimpliPyEngine:
 
                 # ** stays **
                 elif self.operator_aliases.get(operator, operator) == '**':
-                    stack.append(f'({write_operands[0]} {write_operator} {write_operands[1]})')
+                    stack.append(f'{write_operands[0]} {write_operator} {write_operands[1]}')
 
                 # If the operator is a binary operator, format it as
                 # "(operand1 operator operand2)"
                 elif self.operator_arity_compat[operator] == 2:
-                    stack.append(f'({write_operands[0]} {write_operator} {write_operands[1]})')
+                    stack.append(f'{write_operands[0]} {write_operator} {write_operands[1]}')
 
                 elif operator == 'neg':
                     stack.append(f'-{write_operands[0]}')
 
                 elif operator == 'inv':
-                    stack.append(f'(1/{write_operands[0]})')
+                    stack.append(f'1/{write_operands[0]}')
 
                 else:
                     stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
@@ -307,7 +314,7 @@ class SimpliPyEngine:
             The prefix expression
         '''
         # Regex to tokenize expression properly (handles floating-point numbers)
-        token_pattern = re.compile(r'\d+\.\d+|\d+|[A-Za-z_][\w.]*|\*\*|[-+*/()]')
+        token_pattern = re.compile(r'<constant>|\d+\.\d+|\d+|[A-Za-z_][\w.]*|\*\*|[-+*/()]')
 
         # Tokenize the infix expression
         tokens = token_pattern.findall(infix_expression.replace(' ', ''))
@@ -325,7 +332,7 @@ class SimpliPyEngine:
             # Handle numbers (integers or floats)
             if re.match(r'\d+\.\d+|\d+', token):  # Match positive or negative floats and integers
                 prefix_expr.append(token)
-            elif re.match(r'[A-Za-z_][\w.]*', token):  # Match functions and variables
+            elif re.match(r'[A-Za-z_][\w.]*', token) or token == '<constant>':  # Match functions and variables
                 prefix_expr.append(token)
             elif token == ')':
                 stack.append(token)
@@ -702,14 +709,14 @@ class SimpliPyEngine:
             return self.apply_rules_top_down(parsed_replacement)
 
         # Check pattern rules, starting with the largest patterns
-        if verbose:
-            print(f'Checking pattern rules for operator {operator} with subtree length {subtree_length}')
         if max_pattern_length is None:
             subtree_max_pattern_length = min(subtree_length, self.max_pattern_length)
         else:
             subtree_max_pattern_length = min(max_pattern_length, subtree_length, self.max_pattern_length)
 
         for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):
+            if verbose:
+                print(f'Checking pattern rules for operator {operator} with subtree length {pattern_length}')
             for rule in self.simplification_rules_patterns.get((pattern_length, operator,), []):
                 does_match, mapping = match_pattern(subtree, rule[0], mapping=None)
                 if does_match:
@@ -847,7 +854,7 @@ class SimpliPyEngine:
                 # Right operand
                 index = int(operator in {'+', '*'})
                 if operand_tuple_1 not in operator_annotation_dict[cc]:
-                    operator_annotation_dict[cc][operand_tuple_1] = [index, index - 1]  # [1, 0] if index == 1 (i.e. + or *) else [0, 1]
+                    operator_annotation_dict[cc][operand_tuple_1] = [index, 1 - index]  # [1, 0] if index == 1 (i.e. + or *) else [0, 1]
                 else:
                     if verbose:
                         print(f'Incrementing multiplicity of {operand_tuple_1} (index - 1 = {index - 1}) for {cc}')
