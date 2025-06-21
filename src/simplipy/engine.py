@@ -27,7 +27,7 @@ from simplipy.utils import (
     factorize_to_at_most, is_numeric_string, load_config, substitute_root_path,
     get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
-    construct_expressions, apply_mapping, match_pattern, remove_pow1, deparenthesize)
+    construct_expressions, apply_mapping, match_pattern, remove_pow1)
 
 
 class SimpliPyEngine:
@@ -97,7 +97,7 @@ class SimpliPyEngine:
             'mult': "pow",
         }
 
-        self.connectable_operators = set(['+', '-', '*', '/'])
+        self.binary_connectable_operators = {'+', '-', '*', '/'}
 
         dummy_variables = [f'x{i}' for i in range(100)]  # HACK
         if isinstance(rules, str):
@@ -253,51 +253,45 @@ class SimpliPyEngine:
                 # This regex must not match pow1_2 or pow1_3
                 if re.match(r'pow\d+(?!\_)', operator) and power == '**':
                     exponent = int(operator[3:])
-                    if write_operands[0].startswith('-'):
-                        stack.append(f'({write_operands[0]})**{exponent}')
-                    else:
-                        stack.append(f'{write_operands[0]}**{exponent}')
+                    stack.append(f'(({write_operands[0]})**{exponent})')
 
                 # If the operator is a fractional power operator such as pow1_2, format it as
                 # "pow(operand1, 0.5)" if power is 'func'
                 # "operand1**0.5" if power is '**'
                 elif re.match(r'pow1_\d+', operator) and power == '**':
                     exponent = int(operator[5:])
-                    if write_operands[0].startswith('-'):
-                        stack.append(f'({write_operands[0]})**(1/{exponent})')
-                    else:
-                        stack.append(f'{write_operands[0]}**(1/{exponent})')
+                    stack.append(f'({write_operands[0]}**(1/{exponent}))')
 
                 # If the operator is a function from a module, format it as
                 # "module.function(operand1, operand2, ...)"
                 elif '.' in write_operator or self.operator_arity_compat[operator] > 2:
                     # No need for parentheses here
-                    stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
+                    stack.append(f'{write_operator}({", ".join([operand for operand in write_operands])})')
 
                 # ** stays **
                 elif self.operator_aliases.get(operator, operator) == '**':
-                    stack.append(f'{write_operands[0]} {write_operator} {write_operands[1]}')
+                    stack.append(f'({write_operands[0]} {write_operator} {write_operands[1]})')
 
                 # If the operator is a binary operator, format it as
                 # "(operand1 operator operand2)"
                 elif self.operator_arity_compat[operator] == 2:
-                    stack.append(f'{write_operands[0]} {write_operator} {write_operands[1]}')
+                    stack.append(f'({write_operands[0]} {write_operator} {write_operands[1]})')
 
                 elif operator == 'neg':
-                    stack.append(f'-{write_operands[0]}')
+                    stack.append(f'-({write_operands[0]})')
 
                 elif operator == 'inv':
-                    stack.append(f'1/{write_operands[0]}')
+                    stack.append(f'(1/{write_operands[0]})')
 
                 else:
-                    stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
+                    stack.append(f'{write_operator}({", ".join([operand for operand in write_operands])})')
 
             else:
                 stack.append(token)
 
         infix_expression = stack.pop()
 
-        return deparenthesize(infix_expression)  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
+        return infix_expression  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
         '''
@@ -791,7 +785,7 @@ class SimpliPyEngine:
         while i >= 0:
             token = expression[i]
 
-            if token in self.connectable_operators:
+            if token in self.binary_connectable_operators:
                 operator = token
                 arity = 2
                 operands = list(reversed(stack[-arity:]))
@@ -820,18 +814,10 @@ class SimpliPyEngine:
                             operator_annotation_dict[cc][subtree_hash] = [0, 0]
 
                         if operator in {'-', '/'} and branch == 1:
-                            # if verbose:
-                            #     print(f'Flipping {subtree_hash}: {operator_annotation_dict[cc][subtree_hash]}')
-                            # # FIXME: Not all subtrees? Only the ones right from operator?
-                            # operator_annotation_dict[cc][subtree_hash][0], operator_annotation_dict[cc][subtree_hash][1] = operator_annotation_dict[cc][subtree_hash][1], operator_annotation_dict[cc][subtree_hash][0]
-
                             for p in range(2):
                                 if verbose:
                                     print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][1 - p]} at {1 - p} of {subtree_hash} (reversed)')
                                 operator_annotation_dict[cc][subtree_hash][1 - p] += operand_annotations_dict[0][cc][subtree_hash][p]
-
-                            # Don't flip the operator tuple
-                            # Flip the operand tuple and then add it to the operator tuple
 
                         else:
                             for p in range(2):
@@ -857,8 +843,8 @@ class SimpliPyEngine:
                     operator_annotation_dict[cc][operand_tuple_1] = [index, 1 - index]  # [1, 0] if index == 1 (i.e. + or *) else [0, 1]
                 else:
                     if verbose:
-                        print(f'Incrementing multiplicity of {operand_tuple_1} (index - 1 = {index - 1}) for {cc}')
-                    operator_annotation_dict[cc][operand_tuple_1][index - 1] += 1  # Increment multiplicity of right operand
+                        print(f'Incrementing multiplicity of {operand_tuple_1} (1 - index = {1 - index}) for {cc}')
+                    operator_annotation_dict[cc][operand_tuple_1][1 - index] += 1  # Increment multiplicity of right operand
 
                 if verbose:
                     print(f'/---- {token} ----')
@@ -1014,7 +1000,7 @@ class SimpliPyEngine:
                 print(f'Operator {operator} with operands {operands} is still connected: {still_connected}')
                 print(f'Operator parities: {operator_parity}')
 
-            if operator in self.connectable_operators:
+            if operator in self.binary_connectable_operators:
                 propagated_operand_parities: list[dict[str, int]] = [{}, {}]
                 if still_connected:
                     for cc, (operator_set, _) in self.connection_classes.items():
