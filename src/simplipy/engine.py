@@ -27,7 +27,7 @@ from simplipy.utils import (
     factorize_to_at_most, is_numeric_string, load_config, substitute_root_path,
     get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
-    construct_expressions, apply_mapping, match_pattern, remove_pow1, deparenthesize)
+    construct_expressions, apply_mapping, match_pattern, remove_pow1)
 
 
 class SimpliPyEngine:
@@ -97,7 +97,7 @@ class SimpliPyEngine:
             'mult': "pow",
         }
 
-        self.connectable_operators = set(['+', '-', '*', '/'])
+        self.binary_connectable_operators = {'+', '-', '*', '/'}
 
         dummy_variables = [f'x{i}' for i in range(100)]  # HACK
         if isinstance(rules, str):
@@ -237,6 +237,7 @@ class SimpliPyEngine:
         str
             The infix notation of the expression
         '''
+        # FIXME: Avoid unnecessary patentheses but keep necessary ones
         stack: list[str] = []
 
         for token in reversed(tokens):
@@ -259,13 +260,13 @@ class SimpliPyEngine:
                 # "operand1**0.5" if power is '**'
                 elif re.match(r'pow1_\d+', operator) and power == '**':
                     exponent = int(operator[5:])
-                    stack.append(f'(({write_operands[0]})**(1/{exponent}))')
+                    stack.append(f'({write_operands[0]}**(1/{exponent}))')
 
                 # If the operator is a function from a module, format it as
                 # "module.function(operand1, operand2, ...)"
                 elif '.' in write_operator or self.operator_arity_compat[operator] > 2:
                     # No need for parentheses here
-                    stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
+                    stack.append(f'{write_operator}({", ".join([operand for operand in write_operands])})')
 
                 # ** stays **
                 elif self.operator_aliases.get(operator, operator) == '**':
@@ -277,20 +278,20 @@ class SimpliPyEngine:
                     stack.append(f'({write_operands[0]} {write_operator} {write_operands[1]})')
 
                 elif operator == 'neg':
-                    stack.append(f'-{write_operands[0]}')
+                    stack.append(f'-({write_operands[0]})')
 
                 elif operator == 'inv':
                     stack.append(f'(1/{write_operands[0]})')
 
                 else:
-                    stack.append(f'{write_operator}({", ".join([deparenthesize(operand) for operand in write_operands])})')
+                    stack.append(f'{write_operator}({", ".join([operand for operand in write_operands])})')
 
             else:
                 stack.append(token)
 
         infix_expression = stack.pop()
 
-        return deparenthesize(infix_expression)  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
+        return infix_expression  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
         '''
@@ -307,7 +308,7 @@ class SimpliPyEngine:
             The prefix expression
         '''
         # Regex to tokenize expression properly (handles floating-point numbers)
-        token_pattern = re.compile(r'\d+\.\d+|\d+|[A-Za-z_][\w.]*|\*\*|[-+*/()]')
+        token_pattern = re.compile(r'<constant>|\d+\.\d+|\d+|[A-Za-z_][\w.]*|\*\*|[-+*/()]')
 
         # Tokenize the infix expression
         tokens = token_pattern.findall(infix_expression.replace(' ', ''))
@@ -325,7 +326,7 @@ class SimpliPyEngine:
             # Handle numbers (integers or floats)
             if re.match(r'\d+\.\d+|\d+', token):  # Match positive or negative floats and integers
                 prefix_expr.append(token)
-            elif re.match(r'[A-Za-z_][\w.]*', token):  # Match functions and variables
+            elif re.match(r'[A-Za-z_][\w.]*', token) or token == '<constant>':  # Match functions and variables
                 prefix_expr.append(token)
             elif token == ')':
                 stack.append(token)
@@ -702,14 +703,14 @@ class SimpliPyEngine:
             return self.apply_rules_top_down(parsed_replacement)
 
         # Check pattern rules, starting with the largest patterns
-        if verbose:
-            print(f'Checking pattern rules for operator {operator} with subtree length {subtree_length}')
         if max_pattern_length is None:
             subtree_max_pattern_length = min(subtree_length, self.max_pattern_length)
         else:
             subtree_max_pattern_length = min(max_pattern_length, subtree_length, self.max_pattern_length)
 
         for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):
+            if verbose:
+                print(f'Checking pattern rules for operator {operator} with subtree length {pattern_length}')
             for rule in self.simplification_rules_patterns.get((pattern_length, operator,), []):
                 does_match, mapping = match_pattern(subtree, rule[0], mapping=None)
                 if does_match:
@@ -784,7 +785,7 @@ class SimpliPyEngine:
         while i >= 0:
             token = expression[i]
 
-            if token in self.connectable_operators:
+            if token in self.binary_connectable_operators:
                 operator = token
                 arity = 2
                 operands = list(reversed(stack[-arity:]))
@@ -813,18 +814,10 @@ class SimpliPyEngine:
                             operator_annotation_dict[cc][subtree_hash] = [0, 0]
 
                         if operator in {'-', '/'} and branch == 1:
-                            # if verbose:
-                            #     print(f'Flipping {subtree_hash}: {operator_annotation_dict[cc][subtree_hash]}')
-                            # # FIXME: Not all subtrees? Only the ones right from operator?
-                            # operator_annotation_dict[cc][subtree_hash][0], operator_annotation_dict[cc][subtree_hash][1] = operator_annotation_dict[cc][subtree_hash][1], operator_annotation_dict[cc][subtree_hash][0]
-
                             for p in range(2):
                                 if verbose:
                                     print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][1 - p]} at {1 - p} of {subtree_hash} (reversed)')
                                 operator_annotation_dict[cc][subtree_hash][1 - p] += operand_annotations_dict[0][cc][subtree_hash][p]
-
-                            # Don't flip the operator tuple
-                            # Flip the operand tuple and then add it to the operator tuple
 
                         else:
                             for p in range(2):
@@ -847,11 +840,11 @@ class SimpliPyEngine:
                 # Right operand
                 index = int(operator in {'+', '*'})
                 if operand_tuple_1 not in operator_annotation_dict[cc]:
-                    operator_annotation_dict[cc][operand_tuple_1] = [index, index - 1]  # [1, 0] if index == 1 (i.e. + or *) else [0, 1]
+                    operator_annotation_dict[cc][operand_tuple_1] = [index, 1 - index]  # [1, 0] if index == 1 (i.e. + or *) else [0, 1]
                 else:
                     if verbose:
-                        print(f'Incrementing multiplicity of {operand_tuple_1} (index - 1 = {index - 1}) for {cc}')
-                    operator_annotation_dict[cc][operand_tuple_1][index - 1] += 1  # Increment multiplicity of right operand
+                        print(f'Incrementing multiplicity of {operand_tuple_1} (1 - index = {1 - index}) for {cc}')
+                    operator_annotation_dict[cc][operand_tuple_1][1 - index] += 1  # Increment multiplicity of right operand
 
                 if verbose:
                     print(f'/---- {token} ----')
@@ -1007,7 +1000,7 @@ class SimpliPyEngine:
                 print(f'Operator {operator} with operands {operands} is still connected: {still_connected}')
                 print(f'Operator parities: {operator_parity}')
 
-            if operator in self.connectable_operators:
+            if operator in self.binary_connectable_operators:
                 propagated_operand_parities: list[dict[str, int]] = [{}, {}]
                 if still_connected:
                     for cc, (operator_set, _) in self.connection_classes.items():
@@ -1147,17 +1140,22 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
-    def simplify(self, expression: list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str] | tuple[str, ...]:
-        length_before = len(expression)
-        original_expression = list(expression).copy()
-
-        if isinstance(expression, tuple):
-            was_tuple = True
+    def simplify(self, expression: str | list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False, verbose: bool = False) -> str | list[str] | tuple[str, ...]:
+        if isinstance(expression, str):
+            return_type = 'str'
+            original_expression: str | list[str] | tuple[str, ...] = "" + expression  # Create a copy
+            expression = self.parse(expression, convert_expression=True, mask_numbers=False)
+        elif isinstance(expression, tuple):
+            return_type = 'tuple'
+            original_expression = expression  # No need to copy immutable tuple
             expression = list(expression)
-            new_expression = expression.copy()
         else:
-            was_tuple = False
-            new_expression = expression
+            return_type = 'list'
+            original_expression = expression.copy()
+
+        new_expression = expression.copy()
+
+        length_before = len(expression)
 
         if verbose:
             print(f'Initial expression: {new_expression}')
@@ -1200,12 +1198,28 @@ class SimpliPyEngine:
 
         if len(new_expression) > length_before:
             # The expression has grown, which is not a simplification
-            if was_tuple:
-                return tuple(original_expression)
-            return original_expression
+            match return_type:
+                case 'str':
+                    return original_expression
+                case 'tuple':
+                    return tuple(original_expression)
+                case 'list':
+                    if inplace:
+                        expression[:] = original_expression
+                    else:
+                        expression = original_expression
+            return expression
 
-        if was_tuple:
-            return tuple(new_expression)
+        match return_type:
+            case 'str':
+                return self.prefix_to_infix(new_expression, realization=False, power='**')
+            case 'tuple':
+                return tuple(new_expression)
+            case 'list':
+                if inplace:
+                    expression[:] = new_expression
+                else:
+                    expression = new_expression
 
         return new_expression
 
