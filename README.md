@@ -19,6 +19,9 @@ engine = sp.SimpliPyEngine.from_config(sp.utils.get_path('configs', 'dev.yaml'))
 # Simplify prefix expressions
 engine.simplify(('/', '<constant>', '*', '/', '*', 'x3',' <constant>', 'x3', 'log', 'x3'))
 # > ('/', '<constant>', 'log', 'x3')
+
+engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
+# > 'x3 * <constant> / x3**2'
 ```
 
 # Performance
