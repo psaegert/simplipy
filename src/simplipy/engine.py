@@ -826,7 +826,7 @@ class SimpliPyEngine:
                     print(f'/---- {token} ----')
                     print()
 
-                # Label each subtree with its own hash to know which to prune later
+                # Label each subtree with its own hash to know which to cancel later
                 _ = [stack.pop() for _ in range(arity)]
                 _ = [stack_annotations.pop() for _ in range(arity)]
                 _ = [stack_labels.pop() for _ in range(arity)]
@@ -844,7 +844,7 @@ class SimpliPyEngine:
                 operands_annotations_dicts = list(reversed(stack_annotations[-arity:]))
                 operands_labels = list(reversed(stack_labels[-arity:]))
 
-                # Label each subtree with its own hash to know which to prune later
+                # Label each subtree with its own hash to know which to cancel later
                 _ = [stack.pop() for _ in range(arity)]
                 _ = [stack_annotations.pop() for _ in range(arity)]
                 _ = [stack_labels.pop() for _ in range(arity)]
@@ -874,7 +874,7 @@ class SimpliPyEngine:
 
         expression: list[str] = []
 
-        argmax_candidate = None
+        cancellation_candidate = None
         n_replaced = 0
         still_connected = False
 
@@ -885,15 +885,15 @@ class SimpliPyEngine:
             subtree_parities = stack_parity.pop()
             still_connected = stack_still_connected.pop()
 
-            if argmax_candidate is not None:
-                argmax_class, argmax_subtree, argmax_multiplicity_sum = argmax_candidate
+            if cancellation_candidate is not None:
+                argmax_class, cancelled_subtree, cancelled_multiplicity_sum = cancellation_candidate
                 still_connected = still_connected and (subtree[0] in self.connection_classes[argmax_class][0] or subtree[0] not in self.operator_arity)
 
                 if still_connected:
-                    if argmax_subtree == subtree_labels[0]:
+                    if cancelled_subtree == subtree_labels[0]:
                         neutral_element = self.connection_classes[argmax_class][1]
 
-                        if argmax_subtree == ('<constant>',):
+                        if cancelled_subtree == ('<constant>',):
                             first_replacement = ('<constant>',)
                             other_replacements: str | tuple[str, ...] = neutral_element
                         else:
@@ -902,10 +902,10 @@ class SimpliPyEngine:
 
                             if verbose:
                                 print()
-                                print(f'Processing subtree {subtree_labels[0]} with current parity {current_parity} and total multiplicity sum {argmax_multiplicity_sum}')
+                                print(f'Processing subtree {subtree_labels[0]} with current parity {current_parity} and total multiplicity sum {cancelled_multiplicity_sum}')
 
                             # FIXME
-                            if current_parity * argmax_multiplicity_sum >= 0:  # Negative parity and negative multiplicity cancel out
+                            if current_parity * cancelled_multiplicity_sum >= 0:  # Negative parity and negative multiplicity cancel out
                                 inverse_operator_prefix: tuple[str, ...] = ()
                                 double_inverse_operator_prefix: tuple[str, ...] = (inverse_operator,)
                             else:
@@ -915,38 +915,38 @@ class SimpliPyEngine:
                             if verbose:
                                 print(f'Inverse operator prefix: {inverse_operator_prefix}, double inverse operator prefix: {double_inverse_operator_prefix}')
 
-                            if argmax_multiplicity_sum == 0:
+                            if cancelled_multiplicity_sum == 0:
                                 # Term is cancelled entirely. Replace all occurences with the neutral element
                                 first_replacement = (neutral_element,)
                                 other_replacements = neutral_element
                                 if verbose:
-                                    print(f'Cancelled term {argmax_subtree} entirely: first replacement {first_replacement}, other replacements {other_replacements}')
+                                    print(f'Cancelled term {cancelled_subtree} entirely: first replacement {first_replacement}, other replacements {other_replacements}')
 
-                            if abs(argmax_multiplicity_sum) == 1:
+                            if abs(cancelled_multiplicity_sum) == 1:
                                 # Term occurs once. Replace every occurence after the first one with the neutral element
-                                first_replacement = inverse_operator_prefix + argmax_subtree
+                                first_replacement = inverse_operator_prefix + cancelled_subtree
                                 other_replacements = (neutral_element,)
                                 if verbose:
-                                    print(f'Cancelled term {argmax_subtree} once: first replacement {first_replacement}, other replacements {other_replacements}')
+                                    print(f'Cancelled term {cancelled_subtree} once: first replacement {first_replacement}, other replacements {other_replacements}')
 
-                            if abs(argmax_multiplicity_sum) > 1:
+                            if abs(cancelled_multiplicity_sum) > 1:
                                 # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
                                 hyper_operator = self.connection_classes_hyper[argmax_class]
                                 operator = self.connection_classes[argmax_class][0][0]  # Positive multiplicity
-                                if argmax_multiplicity_sum > 5 and is_prime(abs(argmax_multiplicity_sum)):
-                                    powers = factorize_to_at_most(abs(argmax_multiplicity_sum) - 1, self.max_power)
-                                    first_replacement = inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree + argmax_subtree
+                                if cancelled_multiplicity_sum > 5 and is_prime(abs(cancelled_multiplicity_sum)):
+                                    powers = factorize_to_at_most(abs(cancelled_multiplicity_sum) - 1, self.max_power)
+                                    first_replacement = inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + cancelled_subtree + cancelled_subtree
                                 else:
-                                    powers = factorize_to_at_most(abs(argmax_multiplicity_sum), self.max_power)
-                                    first_replacement = inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + argmax_subtree
+                                    powers = factorize_to_at_most(abs(cancelled_multiplicity_sum), self.max_power)
+                                    first_replacement = inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + cancelled_subtree
 
                                 other_replacements = (neutral_element,)
 
                                 if verbose:
-                                    print(f'Cancelled term {argmax_subtree} multiple times: first replacement {first_replacement}, other replacements {other_replacements}')
+                                    print(f'Cancelled term {cancelled_subtree} multiple times: first replacement {first_replacement}, other replacements {other_replacements}')
 
                                 if verbose:
-                                    print(f'Cancelled term {argmax_subtree} multiple times inverted: first replacement {first_replacement}, other replacements {other_replacements}')
+                                    print(f'Cancelled term {cancelled_subtree} multiple times inverted: first replacement {first_replacement}, other replacements {other_replacements}')
 
                         if n_replaced == 0:
                             expression.extend(first_replacement)
@@ -992,7 +992,7 @@ class SimpliPyEngine:
                         print(f'Reset parities to {propagated_operand_parities}')
 
                 # If no cancellation candidate has been identified yet, try to find one in the current subtree
-                if argmax_candidate is None:
+                if cancellation_candidate is None:
                     for cc in self.connection_classes:
                         for subtree_hash, multiplicity in subtree_annotation[0][cc].items():
                             # Consider candidates where
@@ -1001,7 +1001,7 @@ class SimpliPyEngine:
                             #   a. single constants <constant> can be cancelled
                             #   b. composite terms with constants cannot be cancelled with the current method (one <constant> needs to survive)
                             if sum(abs(m) for m in multiplicity) > 1 and ('<constant>' not in subtree_hash or len(subtree_hash) == 1):  # Cannot cancel terms with arbitrary constants
-                                argmax_candidate = (cc, subtree_hash, multiplicity[0] - multiplicity[1])
+                                cancellation_candidate = (cc, subtree_hash, multiplicity[0] - multiplicity[1])
                                 still_connected = True
 
                 # Add the operator to the expression
@@ -1145,12 +1145,12 @@ class SimpliPyEngine:
         if verbose:
             print(f'Initial expression: {new_expression}')
 
-        # Apply simplification rules and sort operands to get started
-        if apply_simplification_rules:
-            new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
+        # # Apply simplification rules and sort operands to get started
+        # if apply_simplification_rules:
+        #     new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
 
-        if verbose:
-            print(f'_apply_simplifcation_rules: {new_expression}')
+        # if verbose:
+        #     print(f'_apply_simplifcation_rules: {new_expression}')
 
         for i in range(max_iter):
             # Cancel any terms
