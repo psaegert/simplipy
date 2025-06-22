@@ -800,8 +800,6 @@ class SimpliPyEngine:
                 if verbose:
                     print(f'---- {token} ----')
 
-                # Distinguish between operator and operand dicts!
-
                 for branch, operand_annotations_dict in enumerate(operands_annotations_dicts):  # One dict for left and right branch
                     if verbose:
                         print(branch)
@@ -818,33 +816,11 @@ class SimpliPyEngine:
                                 if verbose:
                                     print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][1 - p]} at {1 - p} of {subtree_hash} (reversed)')
                                 operator_annotation_dict[cc][subtree_hash][1 - p] += operand_annotations_dict[0][cc][subtree_hash][p]
-
                         else:
                             for p in range(2):
                                 if verbose:
                                     print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][p]} at {p} of {subtree_hash}')
                                 operator_annotation_dict[cc][subtree_hash][p] += operand_annotations_dict[0][cc][subtree_hash][p]
-
-                # Add or increment multiplicities for subtree hashes for both operands
-                operand_tuple_0 = tuple(flatten_nested_list(operands[0])[::-1])
-                operand_tuple_1 = tuple(flatten_nested_list(operands[1])[::-1])
-
-                # Left operand
-                if operand_tuple_0 not in operator_annotation_dict[cc]:
-                    operator_annotation_dict[cc][operand_tuple_0] = [1, 0]  # Create new entry with multiplicity 1
-                else:
-                    if verbose:
-                        print(f'Incrementing multiplicity of {operand_tuple_0} (0) for {cc}')
-                    operator_annotation_dict[cc][operand_tuple_0][0] += 1  # Increment multiplicity of left operand
-
-                # Right operand
-                index = int(operator in {'+', '*'})
-                if operand_tuple_1 not in operator_annotation_dict[cc]:
-                    operator_annotation_dict[cc][operand_tuple_1] = [index, 1 - index]  # [1, 0] if index == 1 (i.e. + or *) else [0, 1]
-                else:
-                    if verbose:
-                        print(f'Incrementing multiplicity of {operand_tuple_1} (1 - index = {1 - index}) for {cc}')
-                    operator_annotation_dict[cc][operand_tuple_1][1 - index] += 1  # Increment multiplicity of right operand
 
                 if verbose:
                     print(f'/---- {token} ----')
@@ -880,7 +856,7 @@ class SimpliPyEngine:
                 continue
 
             stack.append([token])
-            stack_annotations.append([{cc: {tuple([token]): [0, 0]} for cc in self.connection_classes}])
+            stack_annotations.append([{cc: {tuple([token]): [1, 0]} for cc in self.connection_classes}])
             stack_labels.append([tuple([token])])
             i -= 1
 
@@ -1140,7 +1116,16 @@ class SimpliPyEngine:
 
         return flatten_nested_list(stack)[::-1]
 
-    def simplify(self, expression: str | list[str] | tuple[str, ...], max_iter: int = 5, max_pattern_length: int | None = None, mask_elementary_literals: bool = True, inplace: bool = False, collect_rule_statistics: bool = False, verbose: bool = False) -> str | list[str] | tuple[str, ...]:
+    def simplify(
+            self,
+            expression: str | list[str] | tuple[str, ...],
+            max_iter: int = 5,
+            max_pattern_length: int | None = None,
+            mask_elementary_literals: bool = True,
+            apply_simplification_rules: bool = True,
+            inplace: bool = False,
+            collect_rule_statistics: bool = False,
+            verbose: bool = False) -> str | list[str] | tuple[str, ...]:
         if isinstance(expression, str):
             return_type = 'str'
             original_expression: str | list[str] | tuple[str, ...] = "" + expression  # Create a copy
@@ -1161,7 +1146,8 @@ class SimpliPyEngine:
             print(f'Initial expression: {new_expression}')
 
         # Apply simplification rules and sort operands to get started
-        new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
+        if apply_simplification_rules:
+            new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
 
         if verbose:
             print(f'_apply_simplifcation_rules: {new_expression}')
@@ -1175,7 +1161,8 @@ class SimpliPyEngine:
                 print(f'{i}: cancel_terms: {new_expression}')
 
             # Apply simplification rules
-            new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
+            if apply_simplification_rules:
+                new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_rule_statistics=collect_rule_statistics, verbose=verbose)
 
             if verbose:
                 print(f'{i}: _apply_simplifcation_rules: {new_expression}')
