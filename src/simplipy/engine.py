@@ -48,8 +48,8 @@ class SimpliPyEngine:
 
         self.operator_inverses = {k: v["inverse"] for k, v in operators.items() if v.get("inverse") is not None}
         self.inverse_base = {
-            '*': ['inv', '/', '<1>'],
-            '+': ['neg', '-', '<0>'],
+            '*': ['inv', '/', '1'],
+            '+': ['neg', '-', '0'],
         }
         self.inverse_unary = {v[0]: [k, v[1], v[2]] for k, v in self.inverse_base.items()}
         self.inverse_binary = {v[1]: [k, v[0], v[2]] for k, v in self.inverse_base.items()}
