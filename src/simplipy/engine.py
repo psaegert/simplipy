@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 from simplipy.utils import (
     factorize_to_at_most, is_numeric_string, load_config, substitute_root_path,
-    get_used_modules, numbers_to_num, flatten_nested_list, is_prime, num_to_constants,
+    get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, num_to_constants,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
     construct_expressions, apply_mapping, match_pattern, remove_pow1)
 
@@ -69,6 +69,8 @@ class SimpliPyEngine:
         self.operator_arity_compat = deepcopy(self.operator_arity)
         self.operator_arity_compat['**'] = 2
 
+        self.operators = list(self.operator_arity.keys())
+
         self.max_power = max([int(op[3:]) for op in self.operator_tokens if re.match(r'pow\d+(?!\_)', op)] + [0])
         self.max_fractional_power = max([int(op[5:]) for op in self.operator_tokens if re.match(r'pow1_\d+', op)] + [0])
 
@@ -110,6 +112,8 @@ class SimpliPyEngine:
                     self.simplification_rules = deduplicate_rules(json.load(f), dummy_variables=dummy_variables)
         elif isinstance(rules, list):
             self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
+        else:
+            self.simplification_rules = []
 
         self.compile_rules()
 
@@ -580,7 +584,7 @@ class SimpliPyEngine:
         if convert_expression:
             parsed_expression = self.convert_expression(parsed_expression)
         if mask_numbers:
-            parsed_expression = numbers_to_num(parsed_expression, inplace=True)
+            parsed_expression = numbers_to_constant(parsed_expression, inplace=True)
 
         return remove_pow1(parsed_expression)  # HACK: Find a better place to put this
 
