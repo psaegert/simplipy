@@ -331,7 +331,7 @@ def apply_variable_mapping(prefix_expression: list[str], variable_mapping: dict[
     return list(map(lambda token: variable_mapping.get(token, token), prefix_expression))
 
 
-def numbers_to_num(prefix_expression: list[str], inplace: bool = False) -> list[str]:
+def numbers_to_constant(prefix_expression: list[str], inplace: bool = False) -> list[str]:
     '''
     Replace all numbers in a prefix expression with the string '<constant>'.
 
@@ -458,14 +458,14 @@ def safe_f(f: Callable, X: np.ndarray, constants: np.ndarray | None = None) -> n
     return y
 
 
-def remap_expression(source_expression: list[str], dummy_variables: list[str], variable_mapping: dict | None = None) -> tuple[list[str], dict]:
+def remap_expression(source_expression: list[str], dummy_variables: list[str], variable_mapping: dict | None = None, variable_prefix: str = "_", enumeration_offset: int = 0) -> tuple[list[str], dict]:
     source_expression = deepcopy(source_expression)
     if variable_mapping is None:
         variable_mapping = {}
         for i, token in enumerate(source_expression):
             if token in dummy_variables:
                 if token not in variable_mapping:
-                    variable_mapping[token] = f'_{len(variable_mapping)}'
+                    variable_mapping[token] = f'{variable_prefix}{len(variable_mapping) + enumeration_offset}'
 
     for i, token in enumerate(source_expression):
         if token in dummy_variables:
