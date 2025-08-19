@@ -108,7 +108,7 @@ def pow1_3(x: float) -> float:
         # Handle numpy arrays
         if np.iscomplexobj(x):
             # Handle complex numbers
-            return np.cbrt(x)
+            return x ** (1 / 3)
         x = np.asarray(x)
         x = np.where(x < 0, -(-x) ** (1 / 3), x ** (1 / 3))
         return x
