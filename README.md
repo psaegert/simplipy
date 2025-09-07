@@ -29,7 +29,7 @@ engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 
 # Performance
 
-<img src="./assets/images/dev_7-3_multi_simplification_length_histogram.png" alt="Original vs Simplified Length and Simplification Time"/>
+<img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/dev_7-3_multi_simplification_length_histogram.png" alt="Original vs Simplified Length and Simplification Time"/>
 
 > Simplification efficacy and efficiency for different maximum pattern lengths (Engine: `dev_7-3`).
 > Original expressions sampled with the [Lample-Charton Algorithm](https://arxiv.org/abs/1912.01412) using the following parameters:
@@ -119,7 +119,7 @@ pytest -v
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.2.0},
+    version = {0.2.2},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
