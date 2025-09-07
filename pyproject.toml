@@ -80,3 +80,9 @@ disallow_incomplete_defs = true
 explicit_package_bases = true
 exclude = "(.venv|tests/|experimental/)"
 ignore_missing_imports = true
+
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests (requires network)",
+]
