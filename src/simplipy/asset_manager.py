@@ -24,7 +24,7 @@ ASSET_KEYS = {
 # --- Core Functions ---
 
 
-def get_cache_dir() -> Path:
+def get_default_cache_dir() -> Path:
     """
     Gets the OS-appropriate cache directory for SimpliPy assets.
     Follows XDG Base Directory Specification on Linux.
@@ -50,7 +50,7 @@ def fetch_manifest() -> dict:
         print("Please check your internet connection and repository access.")
         return {}
 
-def get_asset_path(asset_type: AssetType, name: str, auto_install: bool = True) -> str | None:
+def get_asset_path(asset_type: AssetType, name: str, install: bool = False, local_dir: Path | str | None = None) -> str | None:
     """
     Gets the local path to an asset's entrypoint file.
 
@@ -73,17 +73,20 @@ def get_asset_path(asset_type: AssetType, name: str, auto_install: bool = True) 
     if not asset_info:
         print(f"Error: Unknown {asset_type} '{name}'.")
         return None
+    
+    if local_dir is None:
+        local_dir = get_default_cache_dir()
+    elif isinstance(local_dir, str):
+        local_dir = Path(local_dir)
 
-    cache_dir = get_cache_dir()
-    asset_dir = cache_dir / f"{asset_type}s" / name
-    entrypoint_path = asset_dir / asset_info['entrypoint']
+    entrypoint_path = local_dir / asset_info['entrypoint']
 
     if entrypoint_path.exists():
         return str(entrypoint_path)
 
-    if auto_install:
-        print(f"{asset_type.capitalize()} '{name}' not found locally. Attempting to install...")
-        if install_asset(asset_type, name):
+    if install:
+        print(f"{asset_type.capitalize()} '{name}' not found locally. Attempting to install")
+        if install_asset(asset_type, name, local_dir=local_dir):
             return str(entrypoint_path)
         else:
             print(f"Failed to install {asset_type} '{name}'.")
@@ -91,7 +94,7 @@ def get_asset_path(asset_type: AssetType, name: str, auto_install: bool = True) 
 
     return None
 
-def install_asset(asset_type: AssetType, name: str, force: bool = False) -> bool:
+def install_asset(asset_type: AssetType, name: str, force: bool = False, local_dir: Path | str | None = None) -> bool:
     """
     Installs an asset (e.g., a ruleset directory) from Hugging Face.
     """
@@ -102,57 +105,63 @@ def install_asset(asset_type: AssetType, name: str, force: bool = False) -> bool
     key = ASSET_KEYS[asset_type]
     asset_info = manifest.get(key, {}).get(name)
     if not asset_info:
-        print(f"Error: Unknown {asset_type} '{name}'.")
+        print(f"Error: Unknown {asset_type}: '{name}'.")
         list_assets(asset_type)
         return False
+    
+    if local_dir is None:
+        local_dir = get_default_cache_dir()
+    elif isinstance(local_dir, str):
+        local_dir = Path(local_dir)
+    local_dir.mkdir(parents=True, exist_ok=True)
+    local_path = local_dir / key / name
 
-    cache_dir = get_cache_dir()
-    asset_dir = cache_dir / f"{asset_type}s" / name
-
-    if asset_dir.exists() and not force:
-        print(f"{asset_type.capitalize()} '{name}' is already installed at {asset_dir}")
+    if local_path.exists() and not force:
+        print(f"{asset_type.capitalize()} '{name}' is already installed at {local_path}")
         print("Use --force to reinstall.")
         return True
 
-    if asset_dir.exists() and force:
+    if local_path.exists() and force:
         print(f"Force option specified. Removing existing version of '{name}'...")
-        remove_asset(asset_type, name, quiet=True)
+        remove_asset(asset_type, name, quiet=True, local_dir=local_dir)
 
-    print(f"Downloading {asset_type} '{name}'...")
+    print(f"Downloading {asset_type} '{name}' from {asset_info['repo_id']} to {local_path}")
     try:
-        for file_path in asset_info['files']:
+        for file in asset_info['files']:
+            print(file)
             hf_hub_download(
                 repo_id=asset_info['repo_id'],
-                filename=file_path,
+                filename=file,
                 repo_type="dataset",
-                local_dir=asset_dir,
-                local_dir_use_symlinks=False # Ensures files are copied
+                local_dir=local_dir,
             )
-        print(f"Successfully installed '{name}' to {asset_dir}")
+        print(f"Successfully installed '{name}' to {local_dir}")
         return True
     except HfHubHTTPError as e:
         print(f"Error downloading '{name}': {e}")
         # Clean up partial download
-        if asset_dir.exists():
-            shutil.rmtree(asset_dir)
+        if local_dir.exists():
+            shutil.rmtree(local_dir)
         return False
 
-def remove_asset(asset_type: AssetType, name: str, quiet: bool = False) -> bool:
+def remove_asset(asset_type: AssetType, name: str, quiet: bool = False, local_dir: Path | str | None = None) -> bool:
     """
     Removes a locally installed asset.
     """
-    cache_dir = get_cache_dir()
-
     key = ASSET_KEYS[asset_type]
-    asset_dir = cache_dir / key / name
+    if local_dir is None:
+        local_dir = get_default_cache_dir()
+    elif isinstance(local_dir, str):
+        local_dir = Path(local_dir)
+    local_path = local_dir / key / name
 
-    if not asset_dir.exists():
+    if not local_path.exists():
         if not quiet:
             print(f"{asset_type.capitalize()} '{name}' is not installed.")
         return True
 
     try:
-        shutil.rmtree(asset_dir)
+        shutil.rmtree(local_path)
         if not quiet:
             print(f"Successfully removed '{name}'.")
         return True
@@ -161,7 +170,7 @@ def remove_asset(asset_type: AssetType, name: str, quiet: bool = False) -> bool:
             print(f"Error removing '{name}': {e}")
         return False
 
-def list_assets(asset_type: AssetType, installed_only: bool = False) -> None:
+def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: Path | str | None = None) -> None:
     """
     Lists available or installed assets.
     """
@@ -171,15 +180,18 @@ def list_assets(asset_type: AssetType, installed_only: bool = False) -> None:
     
     key = ASSET_KEYS[asset_type]
 
-    print(f"--- {'Installed' if installed_only else 'Available'} {asset_type.capitalize()}s ---")
+    print(f"--- {'Installed' if installed_only else 'Available'} {key.capitalize()} ---")
 
-    cache_dir = get_cache_dir()
+    if local_dir is None:
+        local_dir = get_default_cache_dir()
+    elif isinstance(local_dir, str):
+        local_dir = Path(local_dir)
     asset_collection = manifest.get(key, {})
 
     found_any = False
     for name, info in asset_collection.items():
-        asset_dir = cache_dir / key / name
-        is_installed = asset_dir.exists()
+        local_path = local_dir / key / name
+        is_installed = local_path.exists()
 
         if installed_only and not is_installed:
             continue
