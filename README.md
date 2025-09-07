@@ -14,21 +14,21 @@
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.from_config(sp.utils.get_path('configs', 'dev.yaml'))
+engine = sp.SimpliPyEngine.from_config(sp.utils.get_path('configs', 'dev_7-3.yaml'))
 
 # Simplify prefix expressions
-engine.simplify(('/', '<constant>', '*', '/', '*', 'x3',' <constant>', 'x3', 'log', 'x3'))
+engine.simplify(('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'))
 # > ('/', '<constant>', 'log', 'x3')
 
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
-# > 'x3 * <constant> / x3**2'
+# > '(<constant> / x3)'
 ```
 
 # Performance
 
-<img src="./assets/images/dev_7-2_multi_simplification_length_histogram.png" alt="Original vs Simplified Length and Simplification Time"/>
+<img src="./assets/images/dev_7-3_multi_simplification_length_histogram.png" alt="Original vs Simplified Length and Simplification Time"/>
 
-> Simplification efficacy and efficiency for different maximum pattern lengths (Engine: `dev_7-2`).
+> Simplification efficacy and efficiency for different maximum pattern lengths (Engine: `dev_7-3`).
 > Original expressions sampled with the [Lample-Charton Algorithm](https://arxiv.org/abs/1912.01412) using the following parameters:
 > - 0 to 3 variables
 > - 0 to 20 operators (corresponding to lengths of 0 to 41)
@@ -116,7 +116,7 @@ pytest -v
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.0.3},
+    version = {0.2.0},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
