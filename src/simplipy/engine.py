@@ -38,94 +38,61 @@ class SimpliPyEngine:
     ----------
     operators : dict[str, dict[str, Any]]
         A dictionary of operators with their properties
-    variables : int
-        The number of variables
+    rules : list[tuple] | None
+        A list of simplification rules. If None, the engine will have no rules.
     """
-    def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple[tuple[str, ...], tuple[str, ...]]] | str | None = None) -> None:
+    def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None) -> None:
+        # This part, which sets up all the operator properties, is unchanged.
         self.operator_tokens = list(operators.keys())
-
         self.operator_aliases = {alias: operator for operator, properties in operators.items() for alias in properties['alias']}
-
         self.operator_inverses = {k: v["inverse"] for k, v in operators.items() if v.get("inverse") is not None}
-        self.inverse_base = {
-            '*': ['inv', '/', '1'],
-            '+': ['neg', '-', '0'],
-        }
+    
+        self.inverse_base = {'*': ['inv', '/', '1'], '+': ['neg', '-', '0']}
         self.inverse_unary = {v[0]: [k, v[1], v[2]] for k, v in self.inverse_base.items()}
         self.inverse_binary = {v[1]: [k, v[0], v[2]] for k, v in self.inverse_base.items()}
 
         self.unary_mult_div_operators = {k: v["inverse"] for k, v in operators.items() if k.startswith('mult') or k.startswith('div')}
-
         self.commutative_operators = [k for k, v in operators.items() if v.get("commutative", False)]
 
         self.operator_realizations = {k: v["realization"] for k, v in operators.items()}
         self.realization_to_operator = {v: k for k, v in self.operator_realizations.items()}
 
         self.operator_precedence_compat = {k: v.get("precedence", i) for i, (k, v) in enumerate(operators.items())}
-        self.operator_precedence_compat['**'] = 3  # FIXME: Don't hardcode this
-        self.operator_precedence_compat['sqrt'] = 3  # FIXME: Don't hardcode this
-
+        self.operator_precedence_compat['**'] = 3
+        self.operator_precedence_compat['sqrt'] = 3
+    
         self.operator_arity = {k: v["arity"] for k, v in operators.items()}
         self.operator_arity_compat = deepcopy(self.operator_arity)
         self.operator_arity_compat['**'] = 2
-
         self.operators = list(self.operator_arity.keys())
-
+    
         self.max_power = max([int(op[3:]) for op in self.operator_tokens if re.match(r'pow\d+(?!\_)', op)] + [0])
         self.max_fractional_power = max([int(op[5:]) for op in self.operator_tokens if re.match(r'pow1_\d+', op)] + [0])
-
-        self.modules = get_used_modules(''.join(f"{op}(" for op in self.operator_realizations.values()))  # HACK: This can be done more elegantly for sure
+    
+        self.modules = get_used_modules(''.join(f"{op}(" for op in self.operator_realizations.values()))
         self.import_modules()
-
-        self.connection_classes = {
-            'add': (['+', '-'], "0"),
-            'mult': (['*', '/'], "1"),
-        }
-
-        self.operator_to_class = {
-            '+': 'add',
-            '-': 'add',
-            '*': 'mult',
-            '/': 'mult'
-        }
-
-        self.connection_classes_inverse = {
-            'add': "neg",
-            'mult': "inv",
-        }
-
-        self.connection_classes_hyper = {
-            'add': "mult",
-            'mult': "pow",
-        }
-
+    
+        self.connection_classes = {'add': (['+', '-'], "0"), 'mult': (['*', '/'], "1")}
+        self.operator_to_class = {'+': 'add', '-': 'add', '*': 'mult', '/': 'mult'}
+        self.connection_classes_inverse = {'add': "neg", 'mult': "inv"}
+        self.connection_classes_hyper = {'add': "mult", 'mult': "pow"}
         self.binary_connectable_operators = {'+', '-', '*', '/'}
 
-        dummy_variables = [f'x{i}' for i in range(100)]  # HACK
-        if isinstance(rules, str):
-            if not os.path.exists(substitute_root_path(rules)):
-                # raise FileNotFoundError(f"Rules file {rules} does not exist")
-                warnings.warn(f"Rules file {rules} does not exist. Engine will not use simplification rules.", UserWarning)
-                self.simplification_rules = []
-            else:
-                with open(substitute_root_path(rules), 'r') as f:
-                    self.simplification_rules = deduplicate_rules(json.load(f), dummy_variables=dummy_variables)
-        elif isinstance(rules, list):
-            self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
-        else:
+        # This is the simplified rules handling logic.
+        # It no longer checks if `rules` is a string or performs any file I/O.
+        # It only accepts a list of rules or None.
+        dummy_variables = [f'x{i}' for i in range(100)]
+        if rules is None:
             self.simplification_rules = []
+        else:
+            self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
 
+        # This part is also unchanged.
         self.compile_rules()
-
-        # Initialize statistics for rule applications
         self.rule_application_statistics: defaultdict[tuple, int] = defaultdict(int)
 
     def compile_rules(self) -> None:
-        '''
-        Compile the simplification rules into a more efficient form for pattern matching.
-        This is done by converting the rules into trees and organizing them by operator and arity.
-        '''
-        # Organize rules into two categories: with patterns and without patterns
+        # ... (This method is unchanged)
         simplification_rules_patterns = []
         simplification_rules_no_patterns = []
         for r in self.simplification_rules:
@@ -133,42 +100,33 @@ class SimpliPyEngine:
                 simplification_rules_patterns.append(r)
             else:
                 simplification_rules_no_patterns.append(r)
-
-        # To be set in construct_rule_patterns
         self.max_pattern_length = 0
-
-        # Rules with patterns need to be converted to trees for pattern matching
         self.simplification_rules_patterns: dict[tuple, list[tuple[list, list]]] = self.construct_rule_patterns(simplification_rules_patterns)
-
-        # Rules without patterns are stored as tuples of prefix expressions
         self.simplification_rules_no_patterns: dict[tuple, tuple] = {tuple(r[0]): tuple(r[1]) for r in simplification_rules_no_patterns}
 
-    def import_modules(self) -> None:  # TODO: Still necessary?
+    def import_modules(self) -> None:
         for module in self.modules:
             if module not in globals():
                 globals()[module] = importlib.import_module(module)
 
     @classmethod
-    def from_config(cls, config: dict[str, Any] | str) -> "SimpliPyEngine":
-        '''
-        Load an ExpressionSpace from a configuration file or dictionary.
-
-        Parameters
-        ----------
-        config : dict[str, Any] | str
-            The configuration file or dictionary.
-
-        Returns
-        -------
-        ExpressionSpace
-            The ExpressionSpace object.
-        '''
-        config_ = load_config(config, resolve_paths=True)
-
-        if "expressions" in config_.keys():
-            config_ = config_["expressions"]
-
-        return cls(operators=config_["operators"], rules=config_.get("rules"))
+    def from_config(cls, config_path: str) -> "SimpliPyEngine":
+        config_path = os.path.abspath(config_path)
+        config = load_config(config_path)
+        rules = []
+        rules_file = config.get('rules')
+        if rules_file:
+            if not os.path.isabs(rules_file):
+                config_dir = os.path.dirname(config_path)
+                rules_path = os.path.join(config_dir, rules_file)
+            else:
+                rules_path = rules_file
+            if os.path.exists(rules_path):
+                with open(rules_path, 'r') as f:
+                    rules = json.load(f)
+            else:
+                warnings.warn(f"Rules file '{rules_path}' specified in config not found.", UserWarning)
+        return cls(operators=config['operators'], rules=rules)
 
     def is_valid(self, prefix_expression: list[str], verbose: bool = False) -> bool:
         '''
