@@ -1,4 +1,3 @@
-import os
 import json
 import shutil
 from pathlib import Path
@@ -33,6 +32,7 @@ def get_default_cache_dir() -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
+
 def fetch_manifest() -> dict:
     """
     Downloads the latest asset manifest from Hugging Face.
@@ -50,6 +50,7 @@ def fetch_manifest() -> dict:
         print("Please check your internet connection and repository access.")
         return {}
 
+
 def get_asset_path(asset_type: AssetType, name: str, install: bool = False, local_dir: Path | str | None = None) -> str | None:
     """
     Gets the local path to an asset's entrypoint file.
@@ -66,14 +67,14 @@ def get_asset_path(asset_type: AssetType, name: str, install: bool = False, loca
     manifest = fetch_manifest()
     if not manifest:
         return None
-    
+
     key = ASSET_KEYS[asset_type]
     asset_info = manifest.get(key, {}).get(name)
 
     if not asset_info:
         print(f"Error: Unknown {asset_type} '{name}'.")
         return None
-    
+
     if local_dir is None:
         local_dir = get_default_cache_dir()
     elif isinstance(local_dir, str):
@@ -94,6 +95,7 @@ def get_asset_path(asset_type: AssetType, name: str, install: bool = False, loca
 
     return None
 
+
 def install_asset(asset_type: AssetType, name: str, force: bool = False, local_dir: Path | str | None = None) -> bool:
     """
     Installs an asset (e.g., a ruleset directory) from Hugging Face.
@@ -108,7 +110,7 @@ def install_asset(asset_type: AssetType, name: str, force: bool = False, local_d
         print(f"Error: Unknown {asset_type}: '{name}'.")
         list_assets(asset_type)
         return False
-    
+
     if local_dir is None:
         local_dir = get_default_cache_dir()
     elif isinstance(local_dir, str):
@@ -144,6 +146,7 @@ def install_asset(asset_type: AssetType, name: str, force: bool = False, local_d
             shutil.rmtree(local_dir)
         return False
 
+
 def remove_asset(asset_type: AssetType, name: str, quiet: bool = False, local_dir: Path | str | None = None) -> bool:
     """
     Removes a locally installed asset.
@@ -170,6 +173,7 @@ def remove_asset(asset_type: AssetType, name: str, quiet: bool = False, local_di
             print(f"Error removing '{name}': {e}")
         return False
 
+
 def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: Path | str | None = None) -> None:
     """
     Lists available or installed assets.
@@ -177,7 +181,7 @@ def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: 
     manifest = fetch_manifest()
     if not manifest:
         return
-    
+
     key = ASSET_KEYS[asset_type]
 
     print(f"--- {'Installed' if installed_only else 'Available'} {key.capitalize()} ---")

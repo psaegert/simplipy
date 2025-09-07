@@ -1,5 +1,5 @@
+huggingface_hub
 numpy
+pyyaml
 scipy
 tqdm
-pyyaml
-huggingface_hub

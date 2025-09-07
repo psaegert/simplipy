@@ -1,16 +1,13 @@
 import pytest
 import json
-from pathlib import Path
 import numpy as np
 import warnings
 from collections import defaultdict
 import simplipy as sp
-from unittest.mock import patch, MagicMock
 
 # Assume the new module is at simplipy.asset_manager
 from simplipy import asset_manager
 from simplipy import SimpliPyEngine
-from simplipy.utils import load_config # Assuming this is where it is
 
 
 # Mark this test to indicate it uses the network.
@@ -21,7 +18,6 @@ def test_equivalence_10k_with_asset_manager():
     Integration test: Downloads real assets and runs the equivalence check.
     This is the original test, modified to use the new asset manager.
     """
-    import simplipy as sp
 
     sp.install_asset('ruleset', 'dev_7-3')
     sp.install_asset('test-data', 'expressions_10k')
@@ -46,7 +42,7 @@ def test_equivalence_10k_with_asset_manager():
     dummy_variables = ['x1', 'x2', 'x3']
 
     for i, expression in enumerate(expressions):
-        rng = np.random.default_rng(seed=42 + i) # Vary seed slightly per case
+        rng = np.random.default_rng(seed=42 + i)  # Vary seed slightly per case
         X = rng.normal(0, 5, size=(10_000, len(dummy_variables)))
         C = rng.normal(0, 5, size=100)
 

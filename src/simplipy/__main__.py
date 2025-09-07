@@ -7,13 +7,14 @@ from simplipy.asset_manager import (
     install_asset, remove_asset, list_assets, get_asset_path
 )
 
+
 def main(argv: str = None) -> None:
     parser = argparse.ArgumentParser(description='SimpliPy CLI Tool')
     subparsers = parser.add_subparsers(dest='command_name', required=True)
 
     find_simplifications_parser = subparsers.add_parser("find-rules")
     find_simplifications_parser.add_argument(
-        '-e', '--engine', type=str, required=True, 
+        '-e', '--engine', type=str, required=True,
         help='Name of an official engine (e.g., dev_7-3) or a local path to an engine configuration file'
     )
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
@@ -46,7 +47,7 @@ def main(argv: str = None) -> None:
             # Resolve engine name to a config path (will auto-install if needed)
             engine_config_path = get_asset_path('ruleset', args.engine)
             if not engine_config_path:
-                sys.exit(1) # get_asset_path prints the error
+                sys.exit(1)  # get_asset_path prints the error
 
             if args.verbose:
                 print(f'Finding simplifications with engine {engine_config_path}')
@@ -85,13 +86,14 @@ def main(argv: str = None) -> None:
             if args.type in ['ruleset', 'all']:
                 list_assets('ruleset', installed_only=args.installed)
             if args.type == 'all':
-                print() # Spacer
+                print()  # Spacer
             if args.type in ['test-data', 'all']:
                 list_assets('test-data', installed_only=args.installed)
 
         case _:
             parser.print_help()
             sys.exit(1)
+
 
 if __name__ == '__main__':
     main()

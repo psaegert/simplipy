@@ -24,7 +24,7 @@ from scipy.optimize import curve_fit, OptimizeWarning
 from tqdm import tqdm
 
 from simplipy.utils import (
-    factorize_to_at_most, is_numeric_string, load_config, substitute_root_path,
+    factorize_to_at_most, is_numeric_string, load_config,
     get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, num_to_constants,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
     construct_expressions, apply_mapping, match_pattern, remove_pow1)
@@ -46,7 +46,7 @@ class SimpliPyEngine:
         self.operator_tokens = list(operators.keys())
         self.operator_aliases = {alias: operator for operator, properties in operators.items() for alias in properties['alias']}
         self.operator_inverses = {k: v["inverse"] for k, v in operators.items() if v.get("inverse") is not None}
-    
+
         self.inverse_base = {'*': ['inv', '/', '1'], '+': ['neg', '-', '0']}
         self.inverse_unary = {v[0]: [k, v[1], v[2]] for k, v in self.inverse_base.items()}
         self.inverse_binary = {v[1]: [k, v[0], v[2]] for k, v in self.inverse_base.items()}
@@ -60,18 +60,18 @@ class SimpliPyEngine:
         self.operator_precedence_compat = {k: v.get("precedence", i) for i, (k, v) in enumerate(operators.items())}
         self.operator_precedence_compat['**'] = 3
         self.operator_precedence_compat['sqrt'] = 3
-    
+
         self.operator_arity = {k: v["arity"] for k, v in operators.items()}
         self.operator_arity_compat = deepcopy(self.operator_arity)
         self.operator_arity_compat['**'] = 2
         self.operators = list(self.operator_arity.keys())
-    
+
         self.max_power = max([int(op[3:]) for op in self.operator_tokens if re.match(r'pow\d+(?!\_)', op)] + [0])
         self.max_fractional_power = max([int(op[5:]) for op in self.operator_tokens if re.match(r'pow1_\d+', op)] + [0])
-    
+
         self.modules = get_used_modules(''.join(f"{op}(" for op in self.operator_realizations.values()))
         self.import_modules()
-    
+
         self.connection_classes = {'add': (['+', '-'], "0"), 'mult': (['*', '/'], "1")}
         self.operator_to_class = {'+': 'add', '-': 'add', '*': 'mult', '/': 'mult'}
         self.connection_classes_inverse = {'add': "neg", 'mult': "inv"}

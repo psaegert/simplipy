@@ -1,4 +1,3 @@
-import pytest
 from pathlib import Path
 
 # This assumes your asset management code is saved in 'asset_manager.py'
