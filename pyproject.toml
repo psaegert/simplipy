@@ -7,8 +7,14 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
-version = "0.0.3"
-urls = { Github = "https://github.com/psaegert/simplipy"}
+version = "0.2.0"
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+
+[project.urls]
+Homepage = "https://github.com/psaegert/simplipy"
+Issues = "https://github.com/psaegert/simplipy/issues"
+PyPI = "https://pypi.org/project/simplipy/"
 
 [project.scripts]
 simplipy = "simplipy.__main__:main"
