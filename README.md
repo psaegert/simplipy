@@ -10,6 +10,9 @@
 
 # Usage
 
+```sh
+pip install simplipy
+```
 
 ```python
 import simplipy as sp
