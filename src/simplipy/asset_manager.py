@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Literal
@@ -12,7 +13,7 @@ from huggingface_hub.utils import HfHubHTTPError
 HF_MANIFEST_REPO = "psaegert/simplipy-assets"
 HF_MANIFEST_FILENAME = "manifest.json"
 
-AssetType = Literal['ruleset', 'test-data']
+AssetType = Literal['ruleset', 'test-data', 'all']
 
 ASSET_KEYS = {
     'ruleset': 'rulesets',
@@ -47,11 +48,10 @@ def fetch_manifest() -> dict:
             return json.load(f)
     except HfHubHTTPError as e:
         print(f"Error: Could not download the asset manifest from Hugging Face: {e}")
-        print("Please check your internet connection and repository access.")
         return {}
 
 
-def get_asset_path(asset_type: AssetType, name: str, install: bool = False, local_dir: Path | str | None = None) -> str | None:
+def get_path(asset: str, install: bool = False, local_dir: Path | str | None = None) -> str | None:
     """
     Gets the local path to an asset's entrypoint file.
 
@@ -59,44 +59,41 @@ def get_asset_path(asset_type: AssetType, name: str, install: bool = False, loca
 
     Returns the path to the asset's entrypoint file (e.g., config.yaml).
     """
-    # 1. Check if 'name' is already a valid local path
-    if Path(name).exists():
-        return name
+    # Check if 'asset' is a valid local path
+    if Path(asset).exists():
+        return asset
 
-    # 2. Treat 'name' as an official asset name
+    # Otherwise, treat 'asset' as an official asset name
     manifest = fetch_manifest()
     if not manifest:
-        return None
+        raise RuntimeError("Could not fetch asset manifest.")
 
-    key = ASSET_KEYS[asset_type]
-    asset_info = manifest.get(key, {}).get(name)
-
+    asset_info = manifest.get(asset, {})
     if not asset_info:
-        print(f"Error: Unknown {asset_type} '{name}'.")
-        return None
+        list_assets(asset_type='all')
+        raise ValueError(f"Error: Unknown asset: '{asset}'. See above for available assets.")
 
     if local_dir is None:
         local_dir = get_default_cache_dir()
     elif isinstance(local_dir, str):
         local_dir = Path(local_dir)
 
-    entrypoint_path = local_dir / asset_info['entrypoint']
+    entrypoint_path = local_dir / asset_info['directory'] / asset_info['entrypoint']
 
     if entrypoint_path.exists():
         return str(entrypoint_path)
 
     if install:
-        print(f"{asset_type.capitalize()} '{name}' not found locally. Attempting to install")
-        if install_asset(asset_type, name, local_dir=local_dir):
+        print(f"Asset '{asset}' is not installed. Installing.")
+        if install_asset(asset, local_dir=local_dir):
             return str(entrypoint_path)
         else:
-            print(f"Failed to install {asset_type} '{name}'.")
-            return None
+            raise RuntimeError(f"Failed to install asset '{asset}'.")
 
-    return None
+    raise FileNotFoundError(f"Asset '{asset}' is not installed. Use install=True to download it.")
 
 
-def install_asset(asset_type: AssetType, name: str, force: bool = False, local_dir: Path | str | None = None) -> bool:
+def install_asset(asset: str, force: bool = False, local_dir: Path | str | None = None) -> bool:
     """
     Installs an asset (e.g., a ruleset directory) from Hugging Face.
     """
@@ -104,11 +101,10 @@ def install_asset(asset_type: AssetType, name: str, force: bool = False, local_d
     if not manifest:
         return False
 
-    key = ASSET_KEYS[asset_type]
-    asset_info = manifest.get(key, {}).get(name)
+    asset_info = manifest.get(asset)
     if not asset_info:
-        print(f"Error: Unknown {asset_type}: '{name}'.")
-        list_assets(asset_type)
+        print(f"Error: Unknown asset: '{asset}'.")
+        list_assets(asset_type='all')
         return False
 
     if local_dir is None:
@@ -116,61 +112,70 @@ def install_asset(asset_type: AssetType, name: str, force: bool = False, local_d
     elif isinstance(local_dir, str):
         local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
-    local_path = local_dir / key / name
+    local_path = local_dir / asset_info['directory']
 
     if local_path.exists() and not force:
-        print(f"{asset_type.capitalize()} '{name}' is already installed at {local_path}")
-        print("Use --force to reinstall.")
+        print(f"Asset '{asset}' is already installed at {local_path}.")
+        print("Use force=True or --force to reinstall.")
         return True
 
     if local_path.exists() and force:
-        print(f"Force option specified. Removing existing version of '{name}'...")
-        remove_asset(asset_type, name, quiet=True, local_dir=local_dir)
+        print(f"Force option specified. Removing existing version of '{asset}'...")
+        uninstall_asset(asset, quiet=True, local_dir=local_dir)
 
-    print(f"Downloading {asset_type} '{name}' from {asset_info['repo_id']} to {local_path}")
+    print(f"Installing asset '{asset}' to {local_path}.")
     try:
         for file in asset_info['files']:
-            print(file)
+            
             hf_hub_download(
                 repo_id=asset_info['repo_id'],
-                filename=file,
+                filename=os.path.join(asset_info['directory'], file),
                 repo_type="dataset",
                 local_dir=local_dir,
             )
-        print(f"Successfully installed '{name}' to {local_dir}")
+        print(f"Successfully installed '{asset}'.")
         return True
     except HfHubHTTPError as e:
-        print(f"Error downloading '{name}': {e}")
+        print(f"Error downloading asset '{asset}': {e}")
         # Clean up partial download
         if local_dir.exists():
             shutil.rmtree(local_dir)
         return False
 
 
-def remove_asset(asset_type: AssetType, name: str, quiet: bool = False, local_dir: Path | str | None = None) -> bool:
+def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | None = None) -> bool:
     """
     Removes a locally installed asset.
     """
-    key = ASSET_KEYS[asset_type]
     if local_dir is None:
         local_dir = get_default_cache_dir()
     elif isinstance(local_dir, str):
         local_dir = Path(local_dir)
-    local_path = local_dir / key / name
+
+    manifest = fetch_manifest()
+    if not manifest:
+        return False
+
+    asset_info = manifest.get(asset)
+    if not asset_info:
+        list_assets(asset_type='all', installed_only=True)
+        raise ValueError(f"Error: Unknown asset: '{asset}'. See above for installed assets.")
+
+    local_path = local_dir / asset_info['directory']
 
     if not local_path.exists():
         if not quiet:
-            print(f"{asset_type.capitalize()} '{name}' is not installed.")
+            print(f"Asset '{asset}' is not installed.")
         return True
 
     try:
         shutil.rmtree(local_path)
         if not quiet:
-            print(f"Successfully removed '{name}'.")
+            print(f"Successfully removed '{asset}'.")
         return True
     except OSError as e:
         if not quiet:
-            print(f"Error removing '{name}': {e}")
+            print(f"Error removing '{asset}': {e}")
         return False
 
 
@@ -182,19 +187,18 @@ def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: 
     if not manifest:
         return
 
-    key = ASSET_KEYS[asset_type]
-
-    print(f"--- {'Installed' if installed_only else 'Available'} {key.capitalize()} ---")
+    print(f"--- {'Installed' if installed_only else 'Available'} Assets ---")
 
     if local_dir is None:
         local_dir = get_default_cache_dir()
     elif isinstance(local_dir, str):
         local_dir = Path(local_dir)
-    asset_collection = manifest.get(key, {})
 
     found_any = False
-    for name, info in asset_collection.items():
-        local_path = local_dir / key / name
+    for name, info in manifest.items():
+        if asset_type != 'all' and info.get('type') != asset_type:
+            continue
+        local_path = local_dir / info['directory']
         is_installed = local_path.exists()
 
         if installed_only and not is_installed:

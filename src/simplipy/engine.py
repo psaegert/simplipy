@@ -10,6 +10,7 @@ import signal
 import pprint
 from types import CodeType, FunctionType
 from typing import Callable
+from pathlib import Path
 from multiprocessing import Queue, Process
 from multiprocessing.shared_memory import SharedMemory
 from typing import Any, Literal
@@ -28,6 +29,8 @@ from simplipy.utils import (
     get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, num_to_constants,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
     construct_expressions, apply_mapping, match_pattern, remove_pow1)
+
+from simplipy.asset_manager import get_path
 
 
 class SimpliPyEngine:
@@ -127,6 +130,10 @@ class SimpliPyEngine:
             else:
                 warnings.warn(f"Rules file '{rules_path}' specified in config not found.", UserWarning)
         return cls(operators=config['operators'], rules=rules)
+
+    @classmethod
+    def load(cls, path: str, install: bool = False, local_dir: Path | str | None = None) -> "SimpliPyEngine":
+        return cls.from_config(get_path(path, install=install, local_dir=local_dir))
 
     def is_valid(self, prefix_expression: list[str], verbose: bool = False) -> bool:
         '''

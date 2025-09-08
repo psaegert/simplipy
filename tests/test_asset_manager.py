@@ -1,7 +1,8 @@
 from pathlib import Path
 
 # This assumes your asset management code is saved in 'asset_manager.py'
-from simplipy import asset_manager
+import simplipy as sp
+import pytest
 
 # --- Test Constants ---
 # These tests use real, known assets from the psaegert/simplipy-assets manifest.
@@ -18,9 +19,8 @@ def test_install_and_remove_asset(tmp_path: Path):
     # --- 1. Installation ---
     # Arrange: Use tmp_path as our isolated local directory.
     # Act: Install a known valid ruleset.
-    install_success = asset_manager.install_asset(
-        asset_type='ruleset',
-        name=VALID_RULESET,
+    install_success = sp.install(
+        asset=VALID_RULESET,
         local_dir=tmp_path
     )
 
@@ -35,9 +35,8 @@ def test_install_and_remove_asset(tmp_path: Path):
     # --- 2. Removal ---
     # Arrange: The asset is now installed.
     # Act: Remove the same asset.
-    remove_success = asset_manager.remove_asset(
-        asset_type='ruleset',
-        name=VALID_RULESET,
+    remove_success = sp.uninstall(
+        asset=VALID_RULESET,
         local_dir=tmp_path
     )
 
@@ -52,9 +51,8 @@ def test_install_non_existent_asset(tmp_path: Path):
     """
     # Arrange: An invalid asset name.
     # Act: Attempt to install the non-existent asset.
-    success = asset_manager.install_asset(
-        asset_type='ruleset',
-        name=INVALID_ASSET,
+    success = sp.install(
+        asset=INVALID_ASSET,
         local_dir=tmp_path
     )
 
@@ -70,9 +68,8 @@ def test_get_asset_path_auto_install(tmp_path: Path):
     """
     # Arrange: The asset is not installed since tmp_path is empty.
     # Act: Get the path with auto_install=True (the default).
-    path_str = asset_manager.get_asset_path(
-        asset_type='ruleset',
-        name=VALID_RULESET,
+    path_str = sp.get_path(
+        asset=VALID_RULESET,
         local_dir=tmp_path,
         install=True
     )
@@ -87,19 +84,20 @@ def test_get_asset_path_auto_install(tmp_path: Path):
 
 def test_get_asset_path_no_install(tmp_path: Path):
     """
-    Tests that get_asset_path returns None if an asset is not installed
+    Tests that get_asset_path raises FileNotFoundError if an asset is not installed
     and install is explicitly set to False.
     """
     # Arrange: The asset is not installed.
-    # Act: Get the path with install=False.
-    path_str = asset_manager.get_asset_path(
-        asset_type='ruleset',
-        name=VALID_RULESET,
-        local_dir=tmp_path
-    )
+    # Act & Assert: Get the path with install=False should raise FileNotFoundError.
+    
+    with pytest.raises(FileNotFoundError):
+        sp.get_path(
+            asset=VALID_RULESET,
+            local_dir=tmp_path,
+            install=False
+        )
 
-    # Assert: The function returns None and does not install the asset.
-    assert path_str is None
+    # Assert: The asset should not be installed.
     assert not (tmp_path / "rulesets" / VALID_RULESET).exists()
 
 
@@ -113,9 +111,8 @@ def test_get_asset_path_for_local_file(tmp_path: Path):
     local_file.touch()
 
     # Act: Call get_asset_path with the full path to the local file.
-    path_str = asset_manager.get_asset_path(
-        asset_type='ruleset',
-        name=str(local_file)
+    path_str = sp.get_path(
+        asset=str(local_file)
     )
 
     # Assert: The function returns the original path string without modification.
@@ -128,21 +125,21 @@ def test_list_assets_installed_and_available(capsys, tmp_path: Path):
     `capsys` is a pytest fixture to capture stdout.
     """
     # --- 1. List all available assets when none are installed ---
-    asset_manager.list_assets('ruleset', installed_only=False, local_dir=tmp_path)
+    sp.list_assets('ruleset', installed_only=False, local_dir=tmp_path)
     captured = capsys.readouterr()
     output = captured.out
 
-    assert "--- Available Rulesets ---" in output
+    assert "--- Available Assets ---" in output
     assert VALID_RULESET in output
     assert "[installed]" not in output  # Should not be marked as installed
 
     # --- 2. Install an asset and list only installed ---
-    asset_manager.install_asset('ruleset', VALID_RULESET, local_dir=tmp_path)
-    asset_manager.list_assets('ruleset', installed_only=True, local_dir=tmp_path)
+    sp.install(VALID_RULESET, local_dir=tmp_path)
+    sp.list_assets('ruleset', installed_only=True, local_dir=tmp_path)
     captured = capsys.readouterr()
     output = captured.out
 
-    assert "--- Installed Rulesets ---" in output
+    assert "--- Installed Assets ---" in output
     assert VALID_RULESET in output
     assert "[installed]" in output
     # A known asset that wasn't installed should not be in the output.
@@ -155,16 +152,15 @@ def test_force_reinstall(tmp_path: Path):
     asset before reinstalling it.
     """
     # Arrange: Install an asset and add a custom file to its directory.
-    asset_manager.install_asset('ruleset', VALID_RULESET, local_dir=tmp_path)
+    sp.install(VALID_RULESET, local_dir=tmp_path)
     asset_dir = tmp_path / "rulesets" / VALID_RULESET
     custom_file = asset_dir / "custom_file.txt"
     custom_file.touch()
     assert custom_file.exists()  # Verify setup
 
     # Act: Reinstall the same asset with force=True.
-    success = asset_manager.install_asset(
-        asset_type='ruleset',
-        name=VALID_RULESET,
+    success = sp.install(
+        asset=VALID_RULESET,
         force=True,
         local_dir=tmp_path
     )
@@ -181,11 +177,13 @@ def test_install_different_asset_types(tmp_path: Path):
     and stored in their respective subdirectories.
     """
     # Arrange & Act: Install one of each asset type.
-    ruleset_success = asset_manager.install_asset(
-        'ruleset', VALID_RULESET, local_dir=tmp_path
+    ruleset_success = sp.install(
+        asset=VALID_RULESET,
+        local_dir=tmp_path
     )
-    test_data_success = asset_manager.install_asset(
-        'test-data', VALID_TEST_DATA, local_dir=tmp_path
+    test_data_success = sp.install(
+        asset=VALID_TEST_DATA,
+        local_dir=tmp_path
     )
 
     # Assert: Both installations succeeded and created the correct directories.

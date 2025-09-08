@@ -4,7 +4,7 @@ import os
 from simplipy import SimpliPyEngine
 from simplipy.utils import substitute_root_path, load_config
 from simplipy.asset_manager import (
-    install_asset, remove_asset, list_assets, get_asset_path
+    install_asset, uninstall_asset, list_assets, get_path
 )
 
 
@@ -45,7 +45,7 @@ def main(argv: str = None) -> None:
     match args.command_name:
         case 'find-rules':
             # Resolve engine name to a config path (will auto-install if needed)
-            engine_config_path = get_asset_path('ruleset', args.engine)
+            engine_config_path = get_path('ruleset', args.engine)
             if not engine_config_path:
                 sys.exit(1)  # get_asset_path prints the error
 
@@ -79,7 +79,7 @@ def main(argv: str = None) -> None:
                 sys.exit(1)
 
         case 'remove':
-            if not remove_asset(args.type, args.name):
+            if not uninstall_asset(args.type, args.name):
                 sys.exit(1)
 
         case 'list':
