@@ -126,7 +126,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
     print(f"Installing asset '{asset}' to {local_path}.")
     try:
         for file in asset_info['files']:
-            
+
             hf_hub_download(
                 repo_id=asset_info['repo_id'],
                 filename=os.path.join(asset_info['directory'], file),

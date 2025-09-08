@@ -89,7 +89,7 @@ def test_get_asset_path_no_install(tmp_path: Path):
     """
     # Arrange: The asset is not installed.
     # Act & Assert: Get the path with install=False should raise FileNotFoundError.
-    
+
     with pytest.raises(FileNotFoundError):
         sp.get_path(
             asset=VALID_RULESET,
