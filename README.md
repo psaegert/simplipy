@@ -129,7 +129,7 @@ pytest -v
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.2.2},
+    version = {0.2.3},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
