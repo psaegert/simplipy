@@ -11,7 +11,7 @@ from simplipy import SimpliPyEngine
 
 
 # Mark this test to indicate it uses the network.
-# You can run pytest with `pytest -m "not integration"` to skip it.
+# Run pytest with `pytest -m "not integration"` to skip it.
 @pytest.mark.integration
 def test_equivalence_10k_with_asset_manager():
     """
@@ -19,22 +19,12 @@ def test_equivalence_10k_with_asset_manager():
     This is the original test, modified to use the new asset manager.
     """
 
-    sp.install_asset('ruleset', 'dev_7-3')
-    sp.install_asset('test-data', 'expressions_10k')
-
-    # --- MODIFICATION: Use asset_manager to get paths ---
-    # This will automatically download and cache the assets on the first run.
-    engine_config_path = asset_manager.get_asset_path('ruleset', 'dev_7-3')
-    test_data_path = asset_manager.get_asset_path('test-data', 'expressions_10k')
-
-    print(f"Engine config path: {engine_config_path}")
+    sp.install('expressions_10k')
+    test_data_path = asset_manager.get_path('expressions_10k')
     print(f"Test data path: {test_data_path}")
-
-    assert engine_config_path is not None, "Failed to get engine config path"
     assert test_data_path is not None, "Failed to get test data path"
 
-    # --- The rest of the test is the same as before ---
-    engine = SimpliPyEngine.from_config(engine_config_path)
+    engine = SimpliPyEngine.load("dev_7-3", install=True)
 
     with open(test_data_path, "r") as f:
         expressions = json.load(f)
