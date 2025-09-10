@@ -31,7 +31,7 @@ def test_traverse_dict():
     data = {'a': 1, 'b': {'c': 2, 'd': 3}, 'e': {'f': {'g': 4}}}
     expected = [('a', 1), ('c', 2), ('d', 3), ('g', 4)]
     result = list(utils.traverse_dict(data))
-    assert sorted(result) == sorted(expected) # Sort for order-insensitivity
+    assert sorted(result) == sorted(expected)  # Sort for order-insensitivity
 
 
 def test_codify():
@@ -90,7 +90,7 @@ def test_numbers_to_constant():
     # Test not in-place
     result = utils.numbers_to_constant(expr, inplace=False)
     assert result == expected
-    assert expr[2] == '3.14' # Original should be unchanged
+    assert expr[2] == '3.14'  # Original should be unchanged
 
     # Test in-place
     utils.numbers_to_constant(expr, inplace=True)
@@ -121,7 +121,7 @@ def test_flatten_nested_list():
     (29, True),
     (4, False),
     (30, False),
-    (91, False), # 7 * 13
+    (91, False),  # 7 * 13
 ])
 def test_is_prime(n, expected):
     """Tests the primality test function."""
@@ -154,11 +154,11 @@ def test_remap_expression():
     expr = ['+', 'y', '*', 'x', 'y']
     dummy_vars = ['x', 'y']
     remapped_expr, mapping = utils.remap_expression(expr, dummy_vars)
-    
+
     # The specific mapping can vary, but the structure must be consistent
     expected_expr = ['+', '_0', '*', '_1', '_0']
     expected_mapping = {'y': '_0', 'x': '_1'}
-    
+
     assert remapped_expr == expected_expr
     assert mapping == expected_mapping
 
@@ -171,16 +171,16 @@ def test_deduplicate_rules():
         (('+', 'x', 'y'), ('+', 'y', 'x')),
         (('+', 'z', 'y'), ('+', 'y', 'z')),
     ]
-    
+
     deduped = utils.deduplicate_rules(rules, dummy_vars)
-    
+
     # Canonical forms of the expected rules
     expected_rules = [
         (('+', '_0', '_1'), ('+', '_1', '_0')),
     ]
 
     print(deduped)
-    
+
     # We need to remap the output to check for canonical equivalence
     remapped_deduped = []
     for src, tgt in deduped:
@@ -210,7 +210,7 @@ def test_factorize_to_at_most():
     assert sorted(utils.factorize_to_at_most(100, 10)) == [10, 10]
     # It tries its best, but may produce a factor larger than max_factor
     assert sorted(utils.factorize_to_at_most(99, 10)) == [9, 11]
-    assert utils.factorize_to_at_most(13, 10) == [13] # Prime number case
+    assert utils.factorize_to_at_most(13, 10) == [13]  # Prime number case
 
     # Test for potential infinite loop
     with pytest.raises(ValueError):
@@ -221,12 +221,12 @@ def test_mask_elementary_literals():
     """Tests masking of all numeric string literals."""
     expr = ['+', 'x', '3.14', '*', 'y', '-5.2e3']
     expected = ['+', 'x', '<constant>', '*', 'y', '<constant>']
-    
+
     # Test not in-place
     original_expr = deepcopy(expr)
     result = utils.mask_elementary_literals(expr, inplace=False)
     assert result == expected
-    assert expr == original_expr # Ensure original is not modified
+    assert expr == original_expr  # Ensure original is not modified
 
     # Test in-place
     utils.mask_elementary_literals(expr, inplace=True)
@@ -240,10 +240,10 @@ def test_construct_expressions():
         2: {('sin', 'x')}
     }
     non_leaf_nodes = {'+': 2, 'neg': 1}
-    
+
     generator = utils.construct_expressions(expressions_of_length, non_leaf_nodes)
     result = set(generator)
-    
+
     expected_expressions = {
         # Unary op
         ('neg', 'x'),

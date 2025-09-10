@@ -6,6 +6,7 @@ import yaml
 
 from simplipy.utils import apply_on_nested
 
+
 def load_config(config: dict[str, Any] | str, resolve_paths: bool = True) -> dict[str, Any]:
     '''
     Load a configuration file.
@@ -47,6 +48,7 @@ def load_config(config: dict[str, Any] | str, resolve_paths: bool = True) -> dic
         config_ = config
 
     return config_
+
 
 def save_config(config: dict[str, Any], directory: str, filename: str, reference: str = 'relative', recursive: bool = True, resolve_paths: bool = False) -> None:
     '''
@@ -93,7 +95,7 @@ def save_config(config: dict[str, Any], directory: str, filename: str, reference
                 apply_on_nested(config_, save_config_absolute_func)
             case _:
                 raise ValueError(f'Invalid reference type: {reference}')
-            
+
     save_path = os.path.join(directory, filename)
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 

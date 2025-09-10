@@ -1,5 +1,5 @@
 mkdocs
+mkdocs-autorefs
 mkdocs-material
 mkdocstrings[python]
-mkdocs-autorefs
 pymdown-extensions

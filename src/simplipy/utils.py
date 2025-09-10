@@ -283,6 +283,7 @@ def numbers_to_constant(prefix_expression: list[str], inplace: bool = False) -> 
 
     return modified_prefix_expression
 
+
 # TODO: Merge with numbers_to_constant?
 def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False, convert_numbers_to_constant: bool = True) -> tuple[list[str], list[str]]:
     """Convert numeric placeholders to indexed constant names (e.g., C_0, C_1).
