@@ -119,8 +119,16 @@ pre-commit install
 Test the package with `pytest`:
 
 ```sh
-pytest -v
+pytest tests --cov src --cov-report html
 ```
+
+or
+
+```sh
+pytest tests --cov src --cov-report html -m "not integration"
+```
+
+to skip integration tests.
 
 # Citation
 ```bibtex

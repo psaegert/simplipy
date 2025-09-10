@@ -38,7 +38,7 @@ def test_equivalence_10k_with_asset_manager():
 
         # Source Expression
         executable_prefix_expression = engine.operators_to_realizations(expression)
-        prefix_expression_with_constants, constants = sp.num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
+        prefix_expression_with_constants, constants = sp.explicit_constant_placeholders(executable_prefix_expression, convert_numbers_to_constant=False)
         code_string = engine.prefix_to_infix(prefix_expression_with_constants, realization=True)
         code = sp.codify(code_string, dummy_variables + constants)
         f = engine.code_to_lambda(code)
@@ -47,7 +47,7 @@ def test_equivalence_10k_with_asset_manager():
         engine.rule_application_statistics = defaultdict(int)
         simplified_expression = engine.simplify(expression, collect_rule_statistics=True)
         executable_candidate_expression = engine.operators_to_realizations(simplified_expression)
-        candidate_prefix_expression_with_constants, candidate_constants = sp.num_to_constants(executable_candidate_expression, convert_numbers_to_constant=False)
+        candidate_prefix_expression_with_constants, candidate_constants = sp.explicit_constant_placeholders(executable_candidate_expression, convert_numbers_to_constant=False)
         candidate_code_string = engine.prefix_to_infix(candidate_prefix_expression_with_constants, realization=True)
         candidate_code = sp.codify(candidate_code_string, dummy_variables + candidate_constants)
         f_candidate = engine.code_to_lambda(candidate_code)

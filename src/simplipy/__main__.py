@@ -2,7 +2,7 @@ import argparse
 import sys
 import os
 from simplipy import SimpliPyEngine
-from simplipy.utils import substitute_root_path, load_config
+from simplipy.utils import load_config
 from simplipy.asset_manager import (
     install_asset, uninstall_asset, list_assets, get_path
 )
@@ -55,12 +55,10 @@ def main(argv: str = None) -> None:
             # SimpliPyEngine.from_config now receives a guaranteed valid path
             engine = SimpliPyEngine.from_config(engine_config_path)
 
-            resolved_output_file = substitute_root_path(args.output_file)
+            if not os.path.exists(os.path.dirname(args.output_file)):
+                os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
 
-            if not os.path.exists(os.path.dirname(resolved_output_file)):
-                os.makedirs(os.path.dirname(resolved_output_file), exist_ok=True)
-
-            rule_finding_config = load_config(substitute_root_path(args.config), resolve_paths=True)
+            rule_finding_config = load_config(args.config, resolve_paths=True)
 
             engine.find_rules(
                 max_source_pattern_length=rule_finding_config['max_source_pattern_length'],
@@ -69,7 +67,7 @@ def main(argv: str = None) -> None:
                 extra_internal_terms=rule_finding_config.get('extra_internal_terms', None),
                 X=rule_finding_config['n_samples'],
                 constants_fit_retries=rule_finding_config['constants_fit_retries'],
-                output_file=resolved_output_file,
+                output_file=args.output_file,
                 save_every=args.save_every,
                 reset_rules=args.reset_rules,
                 verbose=args.verbose)
