@@ -1,29 +1,78 @@
 # Project information
 site_name: SimpliPy
 site_author: Paul Saegert
+site_url: https://github.com/psaegert/simplipy # Optional: Add your site's URL
+repo_url: https://github.com/psaegert/simplipy
+repo_name: psaegert/simplipy
 
 # Theme configuration
 theme:
   name: material
+  palette:
+    # Light mode
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
   features:
-    - content.code.copy
     - navigation.tabs
+    - navigation.sections
+    - navigation.instant
+    - navigation.top
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+    - content.code.annotate
+    - content.code.copy
 
-# Extensions
+# Extensions for better rendering
 markdown_extensions:
-  - pymdownx.highlight
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
   - pymdownx.superfences
+  - admonition
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
 
 nav:
   - Home: index.md
-  - API Reference: api.md
+  - API Reference:
+    - Overview: api/index.md
+    - SimpliPy Engine: api/engine.md
+    - Utils: api/utils.md
+    - "I/O": api/io.md
+    - Operators: api/operators.md
+    - Asset Management: api/asset_manager.md
 
+# Plugin configurations
 plugins:
+  - search # Built-in search plugin
   - mkdocstrings:
       handlers:
         python:
-          # Add this 'paths' list to tell mkdocstrings where to find your code.
           paths: [src]
           options:
-            # You can add other global options here if needed
-            show_source: false
+            # Explicitly set the docstring style to numpy
+            docstring_style: numpy
+            # Render docstrings in a separate tabbed layout
+            docstring_section_style: spacy
+            # Show type annotations in signatures
+            show_signature_annotations: true
+            # Separate type annotations with a colon
+            separate_signature: true
+            # Do not show the module name before each object
+            show_root_heading: false
+            # Group members by type (e.g., functions, classes)
+            members_order: source
+            show_source: true # This will now create a link
+  - autorefs # Automatically create cross-references

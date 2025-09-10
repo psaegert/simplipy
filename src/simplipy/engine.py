@@ -34,15 +34,39 @@ from simplipy.asset_manager import get_path
 
 
 class SimpliPyEngine:
-    """
-    Management and manipulation of expressions / equations with properties and methods for parsing, encoding, decoding, and transforming equations
+    """Manages and manipulates symbolic expressions.
+
+    This class provides a comprehensive toolkit for parsing, transforming,
+    and simplifying mathematical expressions. It operates on expressions in
+    prefix notation (a list of tokens) and uses a customizable set of
+    operators and simplification rules.
 
     Parameters
     ----------
     operators : dict[str, dict[str, Any]]
-        A dictionary of operators with their properties
-    rules : list[tuple] | None
-        A list of simplification rules. If None, the engine will have no rules.
+        A dictionary defining the operators. Each key is the operator's
+        canonical name (e.g., 'add', 'sin'), and the value is another
+        dictionary specifying its properties like 'arity', 'realization'
+        (the corresponding Python function), 'inverse', etc.
+    rules : list[tuple] or None, optional
+        A list of simplification rules. Each rule is a tuple containing two
+        lists of strings: the pattern to match and the replacement expression,
+        both in prefix notation. If None, the engine is initialized with no
+        rules.
+
+    Attributes
+    ----------
+    operator_tokens : list[str]
+        A list of all defined operator names.
+    operator_arity : dict[str, int]
+        A mapping from operator names to their arity (number of arguments).
+    simplification_rules : list[tuple]
+        The list of simplification rules loaded into the engine.
+    simplification_rules_patterns : dict
+        A compiled version of rules that involve pattern variables (e.g., _0),
+        organized for efficient matching.
+    simplification_rules_no_patterns : dict
+        A compiled version of explicit rules without pattern variables.
     """
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None) -> None:
         # This part, which sets up all the operator properties, is unchanged.
@@ -95,7 +119,13 @@ class SimpliPyEngine:
         self.rule_application_statistics: defaultdict[tuple, int] = defaultdict(int)
 
     def compile_rules(self) -> None:
-        # ... (This method is unchanged)
+        """Compiles the text-based rules into an efficient internal format.
+
+        This method processes the `self.simplification_rules` list,
+        separating them into rules with patterns (like '_0', '_1') and
+        explicit rules. It then converts the patterns into a tree-based
+        structure optimized for fast matching against expression subtrees.
+        """
         simplification_rules_patterns = []
         simplification_rules_no_patterns = []
         for r in self.simplification_rules:
@@ -108,12 +138,34 @@ class SimpliPyEngine:
         self.simplification_rules_no_patterns: dict[tuple, tuple] = {tuple(r[0]): tuple(r[1]) for r in simplification_rules_no_patterns}
 
     def import_modules(self) -> None:
+        """Imports Python modules required by operator realizations.
+
+        The engine inspects the 'realization' strings of all operators
+        (e.g., 'np.sin') to identify necessary modules (e.g., 'numpy') and
+        imports them into the global namespace to make them available for
+        expression evaluation.
+        """
         for module in self.modules:
             if module not in globals():
                 globals()[module] = importlib.import_module(module)
 
     @classmethod
     def from_config(cls, config_path: str) -> "SimpliPyEngine":
+        """Creates a SimpliPyEngine instance from a JSON configuration file.
+
+        The configuration file should specify the `operators` and can
+        optionally provide a path to a `rules` file.
+
+        Parameters
+        ----------
+        config_path : str
+            The absolute or relative path to the JSON configuration file.
+
+        Returns
+        -------
+        SimpliPyEngine
+            A new instance of the engine configured as per the file.
+        """
         config_path = os.path.abspath(config_path)
         config = load_config(config_path)
         rules = []
@@ -133,24 +185,47 @@ class SimpliPyEngine:
 
     @classmethod
     def load(cls, path: str, install: bool = False, local_dir: Path | str | None = None) -> "SimpliPyEngine":
+        """Loads a pre-defined engine configuration from the asset manager.
+
+        This provides a convenient way to load standard engine configurations
+        distributed with the `simplipy` package.
+
+        Parameters
+        ----------
+        path : str
+            The name of the configuration to load (e.g., 'default').
+        install : bool, optional
+            If True, forces the download of the asset if not found locally.
+            Defaults to False.
+        local_dir : Path or str or None, optional
+            A local directory to search for the assets. Defaults to None,
+            which uses the default asset directory.
+
+        Returns
+        -------
+        SimpliPyEngine
+            A new instance of the engine.
+        """
         return cls.from_config(get_path(path, install=install, local_dir=local_dir))
 
     def is_valid(self, prefix_expression: list[str], verbose: bool = False) -> bool:
-        '''
-        Check if a prefix expression is valid.
+        """Checks if a prefix expression is syntactically valid.
+
+        An expression is valid if every operator has the correct number of
+        operands according to its defined arity.
 
         Parameters
         ----------
         prefix_expression : list[str]
-            The prefix expression.
+            The expression in prefix notation.
         verbose : bool, optional
-            Whether to print error messages, by default False.
+            If True, prints the reason for invalidity. Defaults to False.
 
         Returns
         -------
         bool
-            Whether the expression is valid.
-        '''
+            True if the expression is valid, False otherwise.
+        """
         stack: list[str] = []
 
         if len(prefix_expression) > 1 and prefix_expression[0] not in self.operator_arity:
@@ -189,24 +264,26 @@ class SimpliPyEngine:
         return True
 
     def prefix_to_infix(self, tokens: list[str], power: Literal['func', '**'] = 'func', realization: bool = False) -> str:
-        '''
-        Convert a list of tokens in prefix notation to infix notation
+        """Converts a prefix expression to a human-readable infix string.
 
         Parameters
         ----------
         tokens : list[str]
-            List of tokens in prefix notation
-        power : Literal['func', '**'], optional
-            Whether to use the 'func' or '**' notation for power operators, by default 'func'
+            The list of tokens in prefix notation.
+        power : {'func', '**'}, optional
+            Determines how power operators are rendered. 'func' uses
+            functional notation like `pow2(x)`, while '**' uses `(x)**2`.
+            Defaults to 'func'.
         realization : bool, optional
-            Whether to use the realization (python code) of the operators, by default False
+            If True, uses the Python realization of operators (e.g., 'np.sin')
+            instead of their canonical names (e.g., 'sin'). Defaults to False.
 
         Returns
         -------
         str
-            The infix notation of the expression
-        '''
-        # FIXME: Avoid unnecessary patentheses but keep necessary ones
+            The infix representation of the expression.
+        """
+        # FIXME: Avoid unnecessary parentheses but keep necessary ones
         stack: list[str] = []
 
         for token in reversed(tokens):
@@ -263,19 +340,21 @@ class SimpliPyEngine:
         return infix_expression  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
-        '''
-        Convert an infix expression to a prefix expression
+        """Converts an infix expression string to prefix notation.
+
+        This method uses a standard algorithm (related to Shunting-yard) to
+        parse the infix string, respecting operator precedence and parentheses.
 
         Parameters
         ----------
         infix_expression : str
-            The infix expression
+            The mathematical expression in infix notation.
 
         Returns
         -------
         list[str]
-            The prefix expression
-        '''
+            A list of tokens representing the expression in prefix notation.
+        """
         # Regex to tokenize expression properly (handles floating-point numbers)
         token_pattern = re.compile(r'<constant>|\d+\.\d+|\d+|[A-Za-z_][\w.]*|\*\*|[-+*/()]')
 
@@ -329,19 +408,26 @@ class SimpliPyEngine:
         return prefix_expr[::-1]
 
     def convert_expression(self, prefix_expr: list[str]) -> list[str]:
-        '''
-        Convert an expression to a supported form
+        """Normalizes an expression into the engine's standard internal format.
+
+        This method performs several key conversions:
+        1.  Converts standard binary operators like `**` into the engine's
+            unary power operators (e.g., `pow2`, `pow1_3`).
+        2.  Combines chained power operators (e.g., `pow2(pow3(x))` becomes
+            `pow6(x)`).
+        3.  Handles unary negation, applying it directly to numbers where
+            possible.
 
         Parameters
         ----------
         prefix_expr : list[str]
-            The prefix expression
+            The prefix expression to convert.
 
         Returns
         -------
         list[str]
-            The converted expression
-        '''
+            The normalized prefix expression.
+        """
         stack: list = []
         i = len(prefix_expr) - 1
 
@@ -520,29 +606,27 @@ class SimpliPyEngine:
             infix_expression: str,
             convert_expression: bool = True,
             mask_numbers: bool = False) -> list[str]:
-        '''
-        Parse an infix expression into a prefix expression
+        """Parses an infix string into a standardized prefix expression.
+
+        This is a high-level parsing utility that combines `infix_to_prefix`
+        with optional conversion and number masking steps.
 
         Parameters
         ----------
         infix_expression : str
-            The infix expression
-        substitute_special_constants : bool, optional
-            Whether to substitute special constants, by default True
+            The mathematical expression in infix notation.
         convert_expression : bool, optional
-            Whether to convert the expression, by default True
-        convert_variable_names : bool, optional
-            Whether to convert variable names, by default True
+            If True, the expression is normalized using `convert_expression`.
+            Defaults to True.
         mask_numbers : bool, optional
-            Whether to mask numbers, by default False
-        too_many_variables : Literal['ignore', 'raise'], optional
-            Whether to ignore or raise an error if there are too many variables, by default 'ignore'
+            If True, all numerical literals in the expression are replaced
+            with a generic '<constant>' token. Defaults to False.
 
         Returns
         -------
         list[str]
-            The prefix expression
-        '''
+            The final processed prefix expression.
+        """
 
         parsed_expression = self.infix_to_prefix(infix_expression)
 
@@ -554,6 +638,22 @@ class SimpliPyEngine:
         return remove_pow1(parsed_expression)  # HACK: Find a better place to put this
 
     def prefix_to_tree(self, expression: list[str]) -> list:
+        """Converts a flat prefix expression into a nested tree structure.
+
+        The tree is represented as a nested list, where each subtree is a
+        list of the form `[operator, [operand1, operand2, ...]]` and leaves
+        are lists of the form `[variable]`.
+
+        Parameters
+        ----------
+        expression : list[str]
+            The expression in prefix notation.
+
+        Returns
+        -------
+        list
+            The nested list representing the expression tree.
+        """
         def build_tree(index: int) -> tuple[list | None, int]:
             if index >= len(expression):
                 return None, index
@@ -587,6 +687,25 @@ class SimpliPyEngine:
         return result
 
     def construct_rule_patterns(self, rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], verbose: bool = False) -> dict[tuple, list[tuple[list, list]]]:
+        """Transforms a list of rules into a structured dictionary of pattern trees.
+
+        This pre-processes rules for efficient matching. It groups rules by the
+        length and root operator of their patterns and converts the flat
+        prefix patterns into tree structures using `prefix_to_tree`.
+
+        Parameters
+        ----------
+        rules_list : list[tuple]
+            A list of simplification rules to process.
+        verbose : bool, optional
+            If True, displays a progress bar. Defaults to False.
+
+        Returns
+        -------
+        dict
+            A dictionary mapping `(pattern_length, root_operator)` tuples to a
+            list of `(pattern_tree, replacement_tree)` tuples.
+        """
         # Group the rules by arity
         rules_list_of_operator: defaultdict[str, list] = defaultdict(list)
         for rule in rules_list:
@@ -617,7 +736,25 @@ class SimpliPyEngine:
         return rules_trees_organized
 
     def parse_subtree(self, tokens: list[str] | tuple[str, ...], start_idx: int) -> tuple[list, int]:
-        """Parse a subtree from tokens starting at start_idx, return (subtree, next_idx)"""
+        """Parses a complete subtree from a token list starting at a given index.
+
+        Recursively consumes tokens corresponding to an operator and its
+        operands to build a single expression tree.
+
+        Parameters
+        ----------
+        tokens : list[str] or tuple[str, ...]
+            A sequence of tokens in prefix notation.
+        start_idx : int
+            The index in `tokens` where the subtree is assumed to start.
+
+        Returns
+        -------
+        subtree : list
+            The parsed subtree as a nested list.
+        next_idx : int
+            The index of the token immediately following the parsed subtree.
+        """
         if start_idx >= len(tokens):
             raise ValueError(f"Start index {start_idx} is out of bounds for tokens {tokens}")
 
@@ -639,7 +776,29 @@ class SimpliPyEngine:
             return [token], start_idx + 1
 
     def apply_rules_top_down(self, subtree: list, max_pattern_length: int | None = None, collect_rule_statistics: bool = False, verbose: bool = False) -> list:
-        """Apply simplification rules to a subtree in a top-down manner"""
+        """Recursively applies simplification rules to an expression tree.
+
+        It attempts to match rules at the current node (top-down). If no rule
+        matches, it recursively calls itself on the node's children. After
+        the children are simplified, it re-checks for matching rules at the
+        current node, in case a child's simplification enables a new rule.
+
+        Parameters
+        ----------
+        subtree : list
+            The expression tree (nested list) to simplify.
+        max_pattern_length : int or None, optional
+            The maximum length of a rule pattern to consider. Defaults to None.
+        collect_rule_statistics : bool, optional
+            If True, records which rules are successfully applied. Defaults to False.
+        verbose : bool, optional
+            If True, prints detailed information about rule applications. Defaults to False.
+
+        Returns
+        -------
+        list
+            The simplified expression tree.
+        """
         if len(subtree) == 1:
             # Terminal node, no rules to apply
             return subtree
@@ -729,6 +888,29 @@ class SimpliPyEngine:
         return simplified_subtree
 
     def apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_rule_statistics: bool = False, verbose: bool = False) -> list[str]:
+        """Applies all loaded simplification rules to a prefix expression.
+
+        This method serves as a wrapper around `apply_rules_top_down`. It
+        first converts the flat prefix expression into a tree, applies the
+        rules recursively, and then flattens the resulting tree back into
+        prefix notation.
+
+        Parameters
+        ----------
+        expression : list[str] or tuple[str, ...]
+            The expression in prefix notation.
+        max_pattern_length : int or None, optional
+            The maximum length of rule patterns to attempt to match.
+        collect_rule_statistics : bool, optional
+            If True, updates statistics on rule application counts.
+        verbose : bool, optional
+            If True, enables detailed logging of the simplification process.
+
+        Returns
+        -------
+        list[str]
+            The simplified expression in prefix notation.
+        """
         if all(t == '<constant>' or t in self.operator_arity for t in expression):
             return ['<constant>']
 
@@ -744,6 +926,30 @@ class SimpliPyEngine:
         return flatten_nested_list(simplified_tree)[::-1]
 
     def collect_multiplicities(self, expression: list[str] | tuple[str, ...], verbose: bool = False) -> tuple[list, list, list]:
+        """Traverses an expression tree to find subtrees that can be cancelled.
+
+        This method performs a bottom-up traversal of the expression, counting
+        the occurrences of each unique subtree within additive (`+`, `-`) and
+        multiplicative (`*`, `/`) contexts. For example, in `(a*b) + (a*b)`,
+        it identifies that the subtree `(a*b)` appears twice in an additive
+        context.
+
+        Parameters
+        ----------
+        expression : list[str] or tuple[str, ...]
+            The expression in prefix notation.
+        verbose : bool, optional
+            If True, prints detailed debugging information. Defaults to False.
+
+        Returns
+        -------
+        expression_tree : list
+            The expression represented as a tree.
+        annotations_tree : list
+            A parallel tree containing the multiplicity counts for each subtree.
+        labels_tree : list
+            A parallel tree containing unique identifiers for each subtree.
+        """
         stack: list = []
         stack_annotations: list = []
         stack_labels: list = []
@@ -836,6 +1042,31 @@ class SimpliPyEngine:
         return stack, stack_annotations, stack_labels
 
     def cancel_terms(self, expression_tree: list, expression_annotations_tree: list, stack_labels: list, verbose: bool = False) -> list[str]:
+        """Reconstructs an expression, cancelling terms based on multiplicity counts.
+
+        Using the annotated tree from `collect_multiplicities`, this method
+        identifies the best candidate for cancellation (e.g., a term that appears
+        with both positive and negative signs). It then rebuilds the expression
+        while replacing the cancelled terms with the appropriate neutral element
+        ('0' for addition, '1' for multiplication) or a simplified form (e.g.,
+        `x + x` becomes `2 * x`).
+
+        Parameters
+        ----------
+        expression_tree : list
+            The nested list representation of the expression.
+        expression_annotations_tree : list
+            The corresponding tree of multiplicity annotations.
+        stack_labels : list
+            The corresponding tree of subtree labels.
+        verbose : bool, optional
+            If True, prints detailed debugging information. Defaults to False.
+
+        Returns
+        -------
+        list[str]
+            A new prefix expression with terms cancelled.
+        """
         stack = expression_tree
         stack_annotations = expression_annotations_tree
         stack_parity = [{cc: 1 for cc in self.connection_classes} for _ in range(len(stack_labels))]
@@ -1003,6 +1234,23 @@ class SimpliPyEngine:
         return expression
 
     def sort_operands(self, expression: list[str] | tuple[str, ...]) -> list[str]:
+        """Sorts the operands of commutative operators to create a canonical form.
+
+        This method traverses the expression and, for any commutative operator
+        (like `+` or `*`), it sorts its operands based on a consistent key.
+        This ensures that expressions like `b + a` and `a + b` are treated as
+        identical.
+
+        Parameters
+        ----------
+        expression : list[str] or tuple[str, ...]
+            The expression in prefix notation.
+
+        Returns
+        -------
+        list[str]
+            The expression with sorted operands, in prefix notation.
+        """
         stack: list = []
         i = len(expression) - 1
 
@@ -1095,6 +1343,40 @@ class SimpliPyEngine:
             inplace: bool = False,
             collect_rule_statistics: bool = False,
             verbose: bool = False) -> str | list[str] | tuple[str, ...]:
+        """Performs a full simplification of a mathematical expression.
+
+        This is the main public method for simplification. It iteratively
+        applies term cancellation, rule-based simplification, and operand
+        sorting until the expression stops changing or `max_iter` is reached.
+
+        Parameters
+        ----------
+        expression : str or list[str] or tuple[str, ...]
+            The expression to simplify, given as an infix string or a
+            prefix token list/tuple.
+        max_iter : int, optional
+            The maximum number of simplification iterations. Defaults to 5.
+        max_pattern_length : int or None, optional
+            The maximum length of a rule pattern to consider.
+        mask_elementary_literals : bool, optional
+            If True, replaces literals like '0' and '1' that result from
+            cancellation with a generic `<constant>` token. Defaults to True.
+        apply_simplification_rules : bool, optional
+            If False, skips the rule-based simplification step. Defaults to True.
+        inplace : bool, optional
+            If the input is a list, this modifies it directly. Defaults to False.
+        collect_rule_statistics : bool, optional
+            If True, records which rules are successfully applied.
+        verbose : bool, optional
+            If True, prints the expression after each simplification step.
+
+        Returns
+        -------
+        str or list[str] or tuple[str, ...]
+            The simplified expression, in the same format as the input. If the
+            simplification results in a longer expression, the original
+            expression is returned.
+        """
         if isinstance(expression, str):
             return_type = 'str'
             original_expression: str | list[str] | tuple[str, ...] = "" + expression  # Create a copy
@@ -1180,6 +1462,30 @@ class SimpliPyEngine:
         return new_expression
 
     def exist_constants_that_fit(self, expression: list[str] | tuple[str, ...], variables: list[str], X: np.ndarray, y_target: np.ndarray) -> bool:
+        """Checks if numerical constants exist to make an expression fit data.
+
+        Given an expression with `<constant>` placeholders, this method uses
+        `scipy.optimize.curve_fit` to determine if there is a set of numerical
+        values for these placeholders that makes the expression accurately
+        model the relationship between input data `X` and target data `y_target`.
+
+        Parameters
+        ----------
+        expression : list[str] or tuple[str, ...]
+            The prefix expression, potentially containing `<constant>` tokens.
+        variables : list[str]
+            A list of variable names corresponding to the columns of `X`.
+        X : np.ndarray
+            The input data, with shape (n_samples, n_variables).
+        y_target : np.ndarray
+            The target data to be fitted.
+
+        Returns
+        -------
+        bool
+            True if a set of constants is found that results in a close fit,
+            False otherwise.
+        """
         if isinstance(expression, tuple):
             expression = list(expression)
 
@@ -1233,6 +1539,20 @@ class SimpliPyEngine:
             operator_arity: dict,
             constants_fit_challenges: int,
             constants_fit_retries: int) -> None:
+        """A worker process for discovering simplification rules in parallel.
+
+        This function runs in a separate process. It fetches an expression from
+        the `work_queue`, evaluates it on a set of random numerical data, and
+        compares the result against a library of simpler candidate expressions.
+        If a numerical equivalence is found, it is considered a potential new
+        simplification rule and is placed on the `result_queue`.
+
+        Notes
+        -----
+        This method is designed for internal use by the `find_rules` method
+        and is not intended to be called directly.
+        """
+
         signal.signal(signal.SIGINT, signal.SIG_IGN)
 
         try:
@@ -1376,7 +1696,48 @@ class SimpliPyEngine:
             reset_rules: bool = True,
             verbose: bool = False,
             n_workers: int | None = None) -> None:
+        """Systematically discovers new simplification rules.
 
+        This powerful method automates the discovery of simplification rules.
+        It operates in two phases:
+        1.  **Generation**: It combinatorially generates all possible valid
+            expressions up to `max_source_pattern_length`.
+        2.  **Verification**: It uses a pool of worker processes to test each
+            generated expression for equivalence with any shorter expression.
+            Equivalences are found by evaluating both expressions on random
+            numerical data.
+
+        Discovered rules are added to the engine and can be saved to a file.
+
+        Parameters
+        ----------
+        max_source_pattern_length : int, optional
+            The maximum length of expressions to generate and test.
+        max_target_pattern_length : int or None, optional
+            The maximum length of a valid simplified expression. If None, any
+            shorter expression is considered a valid simplification.
+        dummy_variables : int or list[str] or None, optional
+            The variables to use when generating expressions.
+        extra_internal_terms : list[str] or None, optional
+            Additional leaf nodes (e.g., '<constant>') to include.
+        X : np.ndarray or int or None, optional
+            The numerical data for testing equivalence. If an int, specifies
+            the number of samples to generate. If None, defaults to 1024 samples.
+        constants_fit_challenges : int, optional
+            Number of random constant sets to test for equivalence.
+        constants_fit_retries : int, optional
+            Number of retries for the curve fitting process.
+        output_file : str or None, optional
+            If provided, saves the discovered rules to this JSON file.
+        save_every : int, optional
+            How often to save the rules to the output file.
+        reset_rules : bool, optional
+            If True, clears existing rules before starting.
+        verbose : bool, optional
+            If True, shows progress bars and status updates.
+        n_workers : int or None, optional
+            Number of parallel processes to use. Defaults to the number of CPU cores.
+        """
         # Signal handler for main process
         interrupted = False
 
@@ -1659,19 +2020,22 @@ class SimpliPyEngine:
                         json.dump(self.simplification_rules, file, indent=4)
 
     def operand_key(self, operands: list) -> tuple:
-        '''
-        Returns a key for sorting the operands of a commutative operator.
+        """Generates a key for sorting operands of a commutative operator.
+
+        The key is a tuple designed to produce a consistent, canonical ordering.
+        It prioritizes variables, then numbers, and finally complex subtrees.
+        Subtrees are sorted by length and then recursively by their contents.
 
         Parameters
         ----------
         operands : list
-            The operands to sort.
+            The operand to generate a key for, represented as a tree node.
 
         Returns
         -------
         tuple
-            The key for sorting the operands.
-        '''
+            A sortable key.
+        """
         if len(operands) > 1 and isinstance(operands[0], str):
             # if operands[0] in self.operator_arity_compat or operands[0] in self.operator_aliases:
             # Node
@@ -1691,50 +2055,54 @@ class SimpliPyEngine:
         raise ValueError(f'None of the criteria matched for operands {operands}:\n1. ({len(operands) > 1}, {isinstance(operands[0], str)}, {operands[0] in self.operator_arity_compat or operands[0] in self.operator_aliases})\n2. ({len(operands) == 1}, {isinstance(operands[0], str)})\n3. ({isinstance(operands, str)})')
 
     def operators_to_realizations(self, prefix_expression: list[str] | tuple[str, ...]) -> list[str] | tuple[str, ...]:
-        '''
-        Converts a prefix expression from operators to realizations.
+        """Converts operator names in an expression to their Python realizations.
+
+        This method replaces tokens like 'add' or 'sin' with their executable
+        counterparts like '+' or 'np.sin', making the expression ready for
+        evaluation.
 
         Parameters
         ----------
-        prefix_expression : list[str]
-            The prefix expression to convert.
+        prefix_expression : list[str] or tuple[str, ...]
+            The prefix expression with canonical operator names.
 
         Returns
         -------
-        list[str]
-            The converted prefix expression.
-        '''
+        list[str] or tuple[str, ...]
+            The prefix expression with Python-executable operator realizations.
+        """
         return [self.operator_realizations.get(token, token) for token in prefix_expression]
 
     def realizations_to_operators(self, prefix_expression: list[str]) -> list[str]:
-        '''
-        Converts a prefix expression from realizations to operators.
+        """Converts Python realizations in an expression back to operator names.
+
+        This is the inverse of `operators_to_realizations`, replacing tokens
+        like '+' or 'np.sin' with their canonical engine names like 'add' or 'sin'.
 
         Parameters
         ----------
         prefix_expression : list[str]
-            The prefix expression to convert.
+            The prefix expression with Python-executable realizations.
 
         Returns
         -------
         list[str]
-            The converted prefix expression.
-        '''
+            The prefix expression with canonical operator names.
+        """
         return [self.realization_to_operator.get(token, token) for token in prefix_expression]
 
     @staticmethod
     def code_to_lambda(code: CodeType) -> Callable[..., float]:
-        '''
-        Converts a code object to a lambda function.
+        """Converts a Python code object into an executable lambda function.
 
         Parameters
         ----------
         code : CodeType
-            The code object to convert.
+            The compiled code object to convert.
 
         Returns
         -------
         Callable[..., float]
-            The lambda function.
-        '''
+            An executable lambda function.
+        """
         return FunctionType(code, globals())()
