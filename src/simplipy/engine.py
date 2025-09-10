@@ -26,7 +26,7 @@ from tqdm import tqdm
 
 from simplipy.utils import (
     factorize_to_at_most, is_numeric_string,
-    get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, num_to_constants,
+    get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, explicit_constant_placeholders,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
     construct_expressions, apply_mapping, match_pattern, remove_pow1)
 from simplipy.io import load_config
@@ -1184,7 +1184,7 @@ class SimpliPyEngine:
             expression = list(expression)
 
         executable_prefix_expression = self.operators_to_realizations(expression)
-        prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
+        prefix_expression_with_constants, constants = explicit_constant_placeholders(executable_prefix_expression, convert_numbers_to_constant=False)
         code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
         code = codify(code_string, variables + constants)
         f = self.code_to_lambda(code)
@@ -1264,7 +1264,7 @@ class SimpliPyEngine:
 
                 # Evaluate expression
                 executable_prefix_expression = self.operators_to_realizations(expression)
-                prefix_expression_with_constants, constants = num_to_constants(executable_prefix_expression, convert_numbers_to_constant=False)
+                prefix_expression_with_constants, constants = explicit_constant_placeholders(executable_prefix_expression, convert_numbers_to_constant=False)
                 code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
                 code = codify(code_string, dummy_variables + constants)
 
@@ -1285,7 +1285,7 @@ class SimpliPyEngine:
 
                             for candidate_expression in candidate_expressions:
                                 executable_candidate = self.operators_to_realizations(candidate_expression)
-                                prefix_candidate_w_constants, candidate_constants = num_to_constants(executable_candidate, convert_numbers_to_constant=False)
+                                prefix_candidate_w_constants, candidate_constants = explicit_constant_placeholders(executable_candidate, convert_numbers_to_constant=False)
                                 candidate_code = self.prefix_to_infix(prefix_candidate_w_constants, realization=True)
                                 candidate_compiled = codify(candidate_code, dummy_variables + candidate_constants)
                                 f_candidate = self.code_to_lambda(candidate_compiled)
