@@ -25,11 +25,11 @@ from scipy.optimize import curve_fit, OptimizeWarning
 from tqdm import tqdm
 
 from simplipy.utils import (
-    factorize_to_at_most, is_numeric_string, load_config,
+    factorize_to_at_most, is_numeric_string,
     get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, num_to_constants,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
     construct_expressions, apply_mapping, match_pattern, remove_pow1)
-
+from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
 

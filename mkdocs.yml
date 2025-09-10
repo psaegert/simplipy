@@ -1,0 +1,29 @@
+# Project information
+site_name: SimpliPy
+site_author: Paul Saegert
+
+# Theme configuration
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.tabs
+
+# Extensions
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - API Reference: api.md
+
+plugins:
+  - mkdocstrings:
+      handlers:
+        python:
+          # Add this 'paths' list to tell mkdocstrings where to find your code.
+          paths: [src]
+          options:
+            # You can add other global options here if needed
+            show_source: false
