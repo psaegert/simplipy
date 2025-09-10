@@ -137,7 +137,7 @@ to skip integration tests.
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.2.3},
+    version = {0.2.4},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
