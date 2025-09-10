@@ -4,6 +4,7 @@ site_author: Paul Saegert
 site_url: https://github.com/psaegert/simplipy # Optional: Add your site's URL
 repo_url: https://github.com/psaegert/simplipy
 repo_name: psaegert/simplipy
+edit_uri: blob/dev/ # <-- Add this line
 
 # Theme configuration
 theme:
