@@ -1,3 +1,0 @@
-## SimpliPy Engine
-
-::: simplipy.engine
