@@ -68,7 +68,7 @@ def save_config(config: dict[str, Any], directory: str, filename: str, reference
         - 'absolute': absolute paths
     recursive : bool, optional
         Save any referenced configs too
-    # '''
+    '''
     config_ = copy.deepcopy(config)
 
     def save_config_relative_func(value: Any) -> Any:

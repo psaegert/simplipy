@@ -1,3 +1,0 @@
-## Utilities
-
-::: simplipy.utils
