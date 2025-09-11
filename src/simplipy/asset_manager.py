@@ -13,10 +13,10 @@ from huggingface_hub.utils import HfHubHTTPError
 HF_MANIFEST_REPO = "psaegert/simplipy-assets"
 HF_MANIFEST_FILENAME = "manifest.json"
 
-AssetType = Literal['ruleset', 'test-data', 'all']
+AssetType = Literal['engine', 'test-data', 'all']
 
 ASSET_KEYS = {
-    'ruleset': 'rulesets',
+    'engine': 'engines',
     'test-data': 'test-data'
 }
 
@@ -25,9 +25,17 @@ ASSET_KEYS = {
 
 
 def get_default_cache_dir() -> Path:
-    """
-    Gets the OS-appropriate cache directory for SimpliPy assets.
-    Follows XDG Base Directory Specification on Linux.
+    """Get the default OS-appropriate cache directory for SimpliPy assets.
+
+    This function determines the standard cache location based on the user's
+    operating system, following the XDG Base Directory Specification on Linux.
+    It ensures the directory exists, creating it if necessary.
+
+    Returns
+    -------
+    pathlib.Path
+        The path to the cache directory.
+
     """
     cache_dir = Path(platformdirs.user_cache_dir(appname="simplipy"))
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -35,8 +43,18 @@ def get_default_cache_dir() -> Path:
 
 
 def fetch_manifest() -> dict:
-    """
-    Downloads the latest asset manifest from Hugging Face.
+    """Download the latest asset manifest from Hugging Face Hub.
+
+    The manifest is a JSON file that contains metadata for all official
+    assets, including engines and test data. This function handles
+    potential network errors gracefully.
+
+    Returns
+    -------
+    dict
+        The parsed JSON manifest as a dictionary. Returns an empty dictionary
+        if the download fails.
+
     """
     try:
         manifest_path = hf_hub_download(
@@ -52,13 +70,45 @@ def fetch_manifest() -> dict:
 
 
 def get_path(asset: str, install: bool = False, local_dir: Path | str | None = None) -> str | None:
-    """
-    Gets the local path to an asset's entrypoint file.
+    """Resolve the local filesystem path to an asset's entrypoint file.
 
-    Handles local paths, official asset names, and auto-installation.
+    This function serves as a universal resolver for SimpliPy assets. It first
+    checks if the `asset` string is a valid local path. If not, it treats it
+    as an official asset name and looks it up in the manifest.
 
-    Returns the path to the asset's entrypoint file (e.g., config.yaml).
+    Parameters
+    ----------
+    asset : str
+        The identifier for the asset. This can be a direct path to a local
+        file (e.g., './my_rules.yaml') or the name of an official asset
+        (e.g., 'core-rules-v1').
+    install : bool, optional
+        If True, automatically downloads and installs the asset from
+        Hugging Face Hub if it is not found locally. Defaults to False.
+    local_dir : pathlib.Path | str | None, optional
+        The directory to check for the asset or install it into. If None,
+        the default cache directory is used. Defaults to None.
+
+    Returns
+    -------
+    str
+        The absolute path to the asset's entrypoint file.
+
+    Raises
+    ------
+    RuntimeError
+        If the asset manifest cannot be fetched from Hugging Face Hub or if
+        the installation fails when `install=True`.
+    ValueError
+        If `asset` is not a local path and is not a known asset name in the
+        manifest.
+    FileNotFoundError
+        If the asset is not found locally and `install` is False.
+
     """
+    if not asset or not isinstance(asset, str):
+        raise ValueError("Error: 'asset' must be a non-empty string.")
+
     # Check if 'asset' is a valid local path
     if Path(asset).exists():
         return asset
@@ -94,8 +144,29 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
 
 
 def install_asset(asset: str, force: bool = False, local_dir: Path | str | None = None) -> bool:
-    """
-    Installs an asset (e.g., a ruleset directory) from Hugging Face.
+    """Install a SimpliPy asset from Hugging Face Hub.
+
+    Downloads all files associated with a given asset from its corresponding
+    Hugging Face repository and places them in the specified local directory.
+
+    Parameters
+    ----------
+    asset : str
+        The name of the official asset to install.
+    force : bool, optional
+        If True, any existing local version of the asset will be removed
+        before the new version is installed. Defaults to False.
+    local_dir : pathlib.Path | str | None, optional
+        The directory to install the asset into. If None, the default cache
+        directory is used. Defaults to None.
+
+    Returns
+    -------
+    bool
+        True if the installation was successful or if the asset was already
+        installed. False if the asset name is unknown or a download error
+        occurs.
+
     """
     manifest = fetch_manifest()
     if not manifest:
@@ -144,8 +215,32 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
 
 
 def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | None = None) -> bool:
-    """
-    Removes a locally installed asset.
+    """Remove a locally installed SimpliPy asset.
+
+    This function deletes the entire directory associated with the specified
+    asset from the local filesystem.
+
+    Parameters
+    ----------
+    asset : str
+        The name of the asset to uninstall.
+    quiet : bool, optional
+        If True, suppresses console output messages. Defaults to False.
+    local_dir : pathlib.Path | str | None, optional
+        The directory from which to uninstall the asset. If None, the
+        default cache directory is used. Defaults to None.
+
+    Returns
+    -------
+    bool
+        True if the asset was successfully removed or was not installed to
+        begin with. False if an OS error occurs during removal.
+
+    Raises
+    ------
+    ValueError
+        If `asset` is not a known asset name in the manifest.
+
     """
     if local_dir is None:
         local_dir = get_default_cache_dir()
@@ -180,8 +275,23 @@ def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | Non
 
 
 def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: Path | str | None = None) -> None:
-    """
-    Lists available or installed assets.
+    """List available or installed SimpliPy assets.
+
+    Fetches the asset manifest and checks the local filesystem to print a
+    formatted list of assets, their descriptions, and their installation
+    status to standard output.
+
+    Parameters
+    ----------
+    asset_type : {'engine', 'test-data', 'all'}
+        The category of assets to list.
+    installed_only : bool, optional
+        If True, the list is filtered to show only assets that are currently
+        installed locally. Defaults to False.
+    local_dir : pathlib.Path | str | None, optional
+        The directory to check for installed assets. If None, the default
+        cache directory is used. Defaults to None.
+
     """
     manifest = fetch_manifest()
     if not manifest:
