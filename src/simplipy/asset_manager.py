@@ -146,7 +146,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
 
     if install:
         print(f"Asset '{asset}' is not installed. Installing.")
-        if install_asset(asset, local_dir=local_dir):
+        if install_asset(asset, local_dir=local_dir, repo_id=repo_id, manifest_filename=manifest_filename):
             return str(entrypoint_path)
         else:
             raise RuntimeError(f"Failed to install asset '{asset}'.")
