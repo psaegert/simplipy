@@ -38,6 +38,8 @@ engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # > '(<constant> / x3)'
 ```
 
+More examples can be found in the [documentation](https://simplipy.readthedocs.io/).
+
 # Performance
 
 <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/dev_7-3_multi_simplification_length_histogram.png" alt="Original vs Simplified Length and Simplification Time"/>
@@ -73,13 +75,11 @@ Test the package with `pytest`:
 pytest tests --cov src --cov-report html
 ```
 
-or
+or to skip integration tests,
 
 ```sh
 pytest tests --cov src --cov-report html -m "not integration"
 ```
-
-to skip integration tests.
 
 # Citation
 ```bibtex
@@ -88,7 +88,7 @@ to skip integration tests.
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.2.4},
+    version = {0.2.5},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
