@@ -1,5 +1,6 @@
 dev/
 simplipy-assets/
+simplipy-assets-test/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

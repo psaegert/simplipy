@@ -38,6 +38,8 @@ engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # > '(<constant> / x3)'
 ```
 
+More examples can be found in the [documentation](https://simplipy.readthedocs.io/).
+
 # Performance
 
 <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/dev_7-3_multi_simplification_length_histogram.png" alt="Original vs Simplified Length and Simplification Time"/>
@@ -54,56 +56,6 @@ engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 > Orange points are within the 95% confidence interval of the shortest simplified length for the respective original length.
 > Using patterns beyond a length of 4 tokens does not yield significant improvements and comes at a cost of increased simplification time.
 
-
-# Collecting Rules
-
-```sh
-simplipy find-rules -e "{{ROOT}}/configs/my_config.yaml" -c "{{ROOT}}/configs/create_my_config.yaml" -o "{{ROOT}}/data/rules/my_config.json" -v --reset-rules
-```
-
-- `-e` is the path to the engine configuration file to use as a backend
-- `-c` is the path to the configuration file containing parameters for finding rules
-- `-o` is the output path for the collected rules
-- `-v` enables verbose output
-- `--reset-rules` will start with an empty rule set, otherwise it will append to the existing rules loaded with the engine
-
-A configuration file for collecting rules could look like this:
-
-```yaml
-# This includes special symbols for intermediate simplification steps
-extra_internal_terms: [
-  '<constant>',
-  '0',
-  '1',
-  '(-1)',
-  'np.pi',
-  'np.e',
-  'float("inf")',
-  'float("-inf")',
-  'float("nan")'
-]
-
-# Number of dummy variables used to create equations
-# null means the number of dummy variables is determined automatically based on max source pattern length
-dummy_variables: null  
-
-# Maximum number of tokens in the source equation
-max_source_pattern_length: 3
-
-# Maximum number of tokens in the target equation
-max_target_pattern_length: 2
-
-# Number of data points to compute the image of the equation
-n_samples: 1024
-
-# Number of combinations of constants to sample for each equation
-# This prevents false positives due to unlucky constant combinations
-constants_fit_challenges: 16
-
-# Number of retries for each challenge to find a valid constant combination
-# This accounts for optimization problems that may not converge
-constants_fit_retries: 16
-```
 
 # Development
 
@@ -123,13 +75,11 @@ Test the package with `pytest`:
 pytest tests --cov src --cov-report html
 ```
 
-or
+or to skip integration tests,
 
 ```sh
 pytest tests --cov src --cov-report html -m "not integration"
 ```
-
-to skip integration tests.
 
 # Citation
 ```bibtex
@@ -138,7 +88,7 @@ to skip integration tests.
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.2.4},
+    version = {0.2.5},
     url = {https://github.com/psaegert/simplipy}
 }
 ```

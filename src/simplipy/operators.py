@@ -8,10 +8,12 @@ _torch_checked = False
 
 
 def neg(x: float) -> float:
+    """Return the element-wise negation of x."""
     return -x
 
 
 def inv(x: float) -> float:
+    """Return the element-wise multiplicative inverse of x."""
     # numpy will handle the x = 0 case
     if isinstance(x, Iterable):
         return 1 / x
@@ -25,6 +27,7 @@ def inv(x: float) -> float:
 
 
 def div(x: float, y: float) -> float:
+    """Return the element-wise division of x by y."""
     # numpy will handle the x = 0 case
     if isinstance(y, Iterable):
         return x / y
@@ -51,58 +54,72 @@ def div(x: float, y: float) -> float:
 
 
 def mult2(x: float) -> float:
+    """Multiply x by 2."""
     return 2 * x
 
 
 def mult3(x: float) -> float:
+    """Multiply x by 3."""
     return 3 * x
 
 
 def mult4(x: float) -> float:
+    """Multiply x by 4."""
     return 4 * x
 
 
 def mult5(x: float) -> float:
+    """Multiply x by 5."""
     return 5 * x
 
 
 def div2(x: float) -> float:
+    """Divide x by 2."""
     return x / 2
 
 
 def div3(x: float) -> float:
+    """Divide x by 3."""
     return x / 3
 
 
 def div4(x: float) -> float:
+    """Divide x by 4."""
     return x / 4
 
 
 def div5(x: float) -> float:
+    """Divide x by 5."""
     return x / 5
 
 
 def pow2(x: float) -> float:
+    """Return x raised to the power of 2."""
     return x ** 2
 
 
 def pow3(x: float) -> float:
+    """Return x raised to the power of 3."""
     return x ** 3
 
 
 def pow4(x: float) -> float:
+    """Return x raised to the power of 4."""
     return x ** 4
 
 
 def pow5(x: float) -> float:
+    """Return x raised to the power of 5."""
     return x ** 5
 
 
 def pow1_2(x: float) -> float:
+    """Return the square root of x."""
     return x ** 0.5
 
 
 def pow1_3(x: float) -> float:
+    """Return the real-valued cube root of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -140,10 +157,12 @@ def pow1_3(x: float) -> float:
 
 
 def pow1_4(x: float) -> float:
+    """Return the fourth root of x."""
     return x ** 0.25
 
 
 def pow1_5(x: float) -> float:
+    """Return the real-valued fifth root of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -181,6 +200,7 @@ def pow1_5(x: float) -> float:
 
 
 def abs(x: float) -> float:
+    """Return the element-wise absolute value of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -207,6 +227,7 @@ def abs(x: float) -> float:
 
 
 def sin(x: float) -> float:
+    """Return the element-wise sine of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -230,6 +251,7 @@ def sin(x: float) -> float:
 
 
 def cos(x: float) -> float:
+    """Return the element-wise cosine of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -253,6 +275,7 @@ def cos(x: float) -> float:
 
 
 def tan(x: float) -> float:
+    """Return the element-wise tangent of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -276,6 +299,7 @@ def tan(x: float) -> float:
 
 
 def asin(x: float) -> float:
+    """Return the element-wise inverse sine of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -299,6 +323,7 @@ def asin(x: float) -> float:
 
 
 def acos(x: float) -> float:
+    """Return the element-wise inverse cosine of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -322,6 +347,7 @@ def acos(x: float) -> float:
 
 
 def atan(x: float) -> float:
+    """Return the element-wise inverse tangent of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -345,6 +371,7 @@ def atan(x: float) -> float:
 
 
 def sinh(x: float) -> float:
+    """Return the element-wise hyperbolic sine of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -368,6 +395,7 @@ def sinh(x: float) -> float:
 
 
 def cosh(x: float) -> float:
+    """Return the element-wise hyperbolic cosine of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -391,6 +419,7 @@ def cosh(x: float) -> float:
 
 
 def tanh(x: float) -> float:
+    """Return the element-wise hyperbolic tangent of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -414,6 +443,7 @@ def tanh(x: float) -> float:
 
 
 def asinh(x: float) -> float:
+    """Return the element-wise inverse hyperbolic sine of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -437,6 +467,7 @@ def asinh(x: float) -> float:
 
 
 def acosh(x: float) -> float:
+    """Return the element-wise inverse hyperbolic cosine of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -460,6 +491,7 @@ def acosh(x: float) -> float:
 
 
 def atanh(x: float) -> float:
+    """Return the element-wise inverse hyperbolic tangent of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -483,6 +515,7 @@ def atanh(x: float) -> float:
 
 
 def exp(x: float) -> float:
+    """Return the element-wise exponential of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -506,6 +539,7 @@ def exp(x: float) -> float:
 
 
 def log(x: float) -> float:
+    """Return the element-wise natural logarithm of x."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray):
         # Handle numpy arrays
@@ -529,6 +563,7 @@ def log(x: float) -> float:
 
 
 def pow(x: float, y: float) -> float:
+    """Return x raised to the power of y, element-wise."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray) or isinstance(y, np.ndarray):
         # Handle numpy arrays

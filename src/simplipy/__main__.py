@@ -2,7 +2,7 @@ import argparse
 import sys
 import os
 from simplipy import SimpliPyEngine
-from simplipy.utils import load_config
+from simplipy.io import load_config
 from simplipy.asset_manager import (
     install_asset, uninstall_asset, list_assets, get_path
 )
@@ -26,17 +26,17 @@ def main(argv: str = None) -> None:
     # Install command
     install_parser = subparsers.add_parser("install", help="Install official assets from Hugging Face")
     install_parser.add_argument('name', type=str, help='Name of the asset to install')
-    install_parser.add_argument('--type', choices=['ruleset', 'test-data'], default='ruleset', help='Type of asset to install')
+    install_parser.add_argument('--type', choices=['engine', 'test-data'], default='engine', help='Type of asset to install')
     install_parser.add_argument('--force', action='store_true', help='Force reinstall even if already installed')
 
     # Remove command
     remove_parser = subparsers.add_parser("remove", help="Remove installed assets")
     remove_parser.add_argument('name', type=str, help='Name of the asset to remove')
-    remove_parser.add_argument('--type', choices=['ruleset', 'test-data'], default='ruleset', help='Type of asset to remove')
+    remove_parser.add_argument('--type', choices=['engine', 'test-data'], default='engine', help='Type of asset to remove')
 
     # List command
     list_parser = subparsers.add_parser("list", help="List available or installed assets")
-    list_parser.add_argument('--type', choices=['ruleset', 'test-data', 'all'], default='all', help='Type of asset to list')
+    list_parser.add_argument('--type', choices=['engine', 'test-data', 'all'], default='all', help='Type of asset to list')
     list_parser.add_argument('--installed', action='store_true', help='List only installed assets')
 
     args = parser.parse_args(argv)
@@ -45,7 +45,7 @@ def main(argv: str = None) -> None:
     match args.command_name:
         case 'find-rules':
             # Resolve engine name to a config path (will auto-install if needed)
-            engine_config_path = get_path('ruleset', args.engine)
+            engine_config_path = get_path(args.engine)
             if not engine_config_path:
                 sys.exit(1)  # get_asset_path prints the error
 
@@ -81,8 +81,8 @@ def main(argv: str = None) -> None:
                 sys.exit(1)
 
         case 'list':
-            if args.type in ['ruleset', 'all']:
-                list_assets('ruleset', installed_only=args.installed)
+            if args.type in ['engine', 'all']:
+                list_assets('engine', installed_only=args.installed)
             if args.type == 'all':
                 print()  # Spacer
             if args.type in ['test-data', 'all']:

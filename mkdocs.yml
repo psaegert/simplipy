@@ -45,6 +45,7 @@ markdown_extensions:
 
 nav:
   - API-Reference: api.md
+  - Creating Rulesets: rules.md
 
 # Plugin configurations
 plugins:

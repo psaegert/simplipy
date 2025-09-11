@@ -5,11 +5,14 @@ import simplipy as sp
 import pytest
 
 # --- Test Constants ---
-# These tests use real, known assets from the psaegert/simplipy-assets manifest.
+# These tests use real, known assets from the psaegert/simplipy-assets-test manifest.
 # An active internet connection is required to run them.
-VALID_RULESET = "dev_7-3"
+VALID_ENGINE = "dev_7-3"
 VALID_TEST_DATA = "expressions_10k"
 INVALID_ASSET = "this-asset-does-not-exist"
+
+HF_MANIFEST_REPO = "psaegert/simplipy-assets-test"
+HF_MANIFEST_FILENAME = "manifest.json"
 
 
 def test_install_and_remove_asset(tmp_path: Path):
@@ -18,15 +21,17 @@ def test_install_and_remove_asset(tmp_path: Path):
     """
     # --- 1. Installation ---
     # Arrange: Use tmp_path as our isolated local directory.
-    # Act: Install a known valid ruleset.
+    # Act: Install a known valid engine.
     install_success = sp.install(
-        asset=VALID_RULESET,
-        local_dir=tmp_path
+        asset=VALID_ENGINE,
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: Check that the installation was successful and files exist.
     assert install_success is True
-    expected_dir = tmp_path / "rulesets" / VALID_RULESET
+    expected_dir = tmp_path / "engines" / VALID_ENGINE
     assert expected_dir.is_dir()
     # Based on the manifest for 'dev_7-3', these files should exist.
     assert (expected_dir / "config.yaml").is_file()
@@ -36,8 +41,10 @@ def test_install_and_remove_asset(tmp_path: Path):
     # Arrange: The asset is now installed.
     # Act: Remove the same asset.
     remove_success = sp.uninstall(
-        asset=VALID_RULESET,
-        local_dir=tmp_path
+        asset=VALID_ENGINE,
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: The removal should be successful and the directory should be gone.
@@ -53,12 +60,14 @@ def test_install_non_existent_asset(tmp_path: Path):
     # Act: Attempt to install the non-existent asset.
     success = sp.install(
         asset=INVALID_ASSET,
-        local_dir=tmp_path
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: The function should return False and not create any directories.
     assert success is False
-    assert not (tmp_path / "rulesets" / INVALID_ASSET).exists()
+    assert not (tmp_path / "engines" / INVALID_ASSET).exists()
 
 
 def test_get_asset_path_auto_install(tmp_path: Path):
@@ -69,15 +78,17 @@ def test_get_asset_path_auto_install(tmp_path: Path):
     # Arrange: The asset is not installed since tmp_path is empty.
     # Act: Get the path with auto_install=True (the default).
     path_str = sp.get_path(
-        asset=VALID_RULESET,
+        asset=VALID_ENGINE,
         local_dir=tmp_path,
-        install=True
+        install=True,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: A valid path string is returned and the asset is now installed.
     assert path_str is not None
-    # The manifest for 'dev_7-3' has entrypoint 'rulesets/dev_7-3/config.yaml'.
-    expected_path = tmp_path / "rulesets" / VALID_RULESET / "config.yaml"
+    # The manifest for 'dev_7-3' has entrypoint 'engines/dev_7-3/config.yaml'.
+    expected_path = tmp_path / "engines" / VALID_ENGINE / "config.yaml"
     assert path_str == str(expected_path)
     assert expected_path.is_file()
 
@@ -92,13 +103,15 @@ def test_get_asset_path_no_install(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         sp.get_path(
-            asset=VALID_RULESET,
+            asset=VALID_ENGINE,
             local_dir=tmp_path,
-            install=False
+            install=False,
+            repo_id=HF_MANIFEST_REPO,
+            manifest_filename=HF_MANIFEST_FILENAME
         )
 
     # Assert: The asset should not be installed.
-    assert not (tmp_path / "rulesets" / VALID_RULESET).exists()
+    assert not (tmp_path / "engines" / VALID_ENGINE).exists()
 
 
 def test_get_asset_path_for_local_file(tmp_path: Path):
@@ -112,7 +125,9 @@ def test_get_asset_path_for_local_file(tmp_path: Path):
 
     # Act: Call get_asset_path with the full path to the local file.
     path_str = sp.get_path(
-        asset=str(local_file)
+        asset=str(local_file),
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: The function returns the original path string without modification.
@@ -125,22 +140,22 @@ def test_list_assets_installed_and_available(capsys, tmp_path: Path):
     `capsys` is a pytest fixture to capture stdout.
     """
     # --- 1. List all available assets when none are installed ---
-    sp.list_assets('ruleset', installed_only=False, local_dir=tmp_path)
+    sp.list_assets('engine', installed_only=False, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
     captured = capsys.readouterr()
     output = captured.out
 
     assert "--- Available Assets ---" in output
-    assert VALID_RULESET in output
+    assert VALID_ENGINE in output
     assert "[installed]" not in output  # Should not be marked as installed
 
     # --- 2. Install an asset and list only installed ---
-    sp.install(VALID_RULESET, local_dir=tmp_path)
-    sp.list_assets('ruleset', installed_only=True, local_dir=tmp_path)
+    sp.install(VALID_ENGINE, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
+    sp.list_assets('engine', installed_only=True, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
     captured = capsys.readouterr()
     output = captured.out
 
     assert "--- Installed Assets ---" in output
-    assert VALID_RULESET in output
+    assert VALID_ENGINE in output
     assert "[installed]" in output
     # A known asset that wasn't installed should not be in the output.
     assert "cis-benchmark-v1" not in output
@@ -152,15 +167,15 @@ def test_force_reinstall(tmp_path: Path):
     asset before reinstalling it.
     """
     # Arrange: Install an asset and add a custom file to its directory.
-    sp.install(VALID_RULESET, local_dir=tmp_path)
-    asset_dir = tmp_path / "rulesets" / VALID_RULESET
+    sp.install(VALID_ENGINE, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
+    asset_dir = tmp_path / "engines" / VALID_ENGINE
     custom_file = asset_dir / "custom_file.txt"
     custom_file.touch()
     assert custom_file.exists()  # Verify setup
 
     # Act: Reinstall the same asset with force=True.
     success = sp.install(
-        asset=VALID_RULESET,
+        asset=VALID_ENGINE,
         force=True,
         local_dir=tmp_path
     )
@@ -173,28 +188,32 @@ def test_force_reinstall(tmp_path: Path):
 
 def test_install_different_asset_types(tmp_path: Path):
     """
-    Tests that different asset types ('ruleset', 'test-data') are handled
+    Tests that different asset types ('engine', 'test-data') are handled
     and stored in their respective subdirectories.
     """
     # Arrange & Act: Install one of each asset type.
-    ruleset_success = sp.install(
-        asset=VALID_RULESET,
-        local_dir=tmp_path
+    engine_success = sp.install(
+        asset=VALID_ENGINE,
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
     test_data_success = sp.install(
         asset=VALID_TEST_DATA,
-        local_dir=tmp_path
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: Both installations succeeded and created the correct directories.
-    assert ruleset_success is True
+    assert engine_success is True
     assert test_data_success is True
 
-    expected_ruleset_dir = tmp_path / "rulesets" / VALID_RULESET
+    expected_engine_dir = tmp_path / "engines" / VALID_ENGINE
     expected_test_data_dir = tmp_path / "test-data" / "expressions_10k.json"
 
-    print(expected_ruleset_dir)
+    print(expected_engine_dir)
     print(expected_test_data_dir)
 
-    assert expected_ruleset_dir.is_dir()
+    assert expected_engine_dir.is_dir()
     assert expected_test_data_dir.is_file()
