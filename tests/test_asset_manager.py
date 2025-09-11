@@ -5,11 +5,14 @@ import simplipy as sp
 import pytest
 
 # --- Test Constants ---
-# These tests use real, known assets from the psaegert/simplipy-assets manifest.
+# These tests use real, known assets from the psaegert/simplipy-assets-test manifest.
 # An active internet connection is required to run them.
 VALID_ENGINE = "dev_7-3"
 VALID_TEST_DATA = "expressions_10k"
 INVALID_ASSET = "this-asset-does-not-exist"
+
+HF_MANIFEST_REPO = "psaegert/simplipy-assets-test"
+HF_MANIFEST_FILENAME = "manifest.json"
 
 
 def test_install_and_remove_asset(tmp_path: Path):
@@ -21,7 +24,9 @@ def test_install_and_remove_asset(tmp_path: Path):
     # Act: Install a known valid engine.
     install_success = sp.install(
         asset=VALID_ENGINE,
-        local_dir=tmp_path
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: Check that the installation was successful and files exist.
@@ -37,7 +42,9 @@ def test_install_and_remove_asset(tmp_path: Path):
     # Act: Remove the same asset.
     remove_success = sp.uninstall(
         asset=VALID_ENGINE,
-        local_dir=tmp_path
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: The removal should be successful and the directory should be gone.
@@ -53,7 +60,9 @@ def test_install_non_existent_asset(tmp_path: Path):
     # Act: Attempt to install the non-existent asset.
     success = sp.install(
         asset=INVALID_ASSET,
-        local_dir=tmp_path
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: The function should return False and not create any directories.
@@ -71,7 +80,9 @@ def test_get_asset_path_auto_install(tmp_path: Path):
     path_str = sp.get_path(
         asset=VALID_ENGINE,
         local_dir=tmp_path,
-        install=True
+        install=True,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: A valid path string is returned and the asset is now installed.
@@ -94,7 +105,9 @@ def test_get_asset_path_no_install(tmp_path: Path):
         sp.get_path(
             asset=VALID_ENGINE,
             local_dir=tmp_path,
-            install=False
+            install=False,
+            repo_id=HF_MANIFEST_REPO,
+            manifest_filename=HF_MANIFEST_FILENAME
         )
 
     # Assert: The asset should not be installed.
@@ -112,7 +125,9 @@ def test_get_asset_path_for_local_file(tmp_path: Path):
 
     # Act: Call get_asset_path with the full path to the local file.
     path_str = sp.get_path(
-        asset=str(local_file)
+        asset=str(local_file),
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: The function returns the original path string without modification.
@@ -125,7 +140,7 @@ def test_list_assets_installed_and_available(capsys, tmp_path: Path):
     `capsys` is a pytest fixture to capture stdout.
     """
     # --- 1. List all available assets when none are installed ---
-    sp.list_assets('engine', installed_only=False, local_dir=tmp_path)
+    sp.list_assets('engine', installed_only=False, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
     captured = capsys.readouterr()
     output = captured.out
 
@@ -134,8 +149,8 @@ def test_list_assets_installed_and_available(capsys, tmp_path: Path):
     assert "[installed]" not in output  # Should not be marked as installed
 
     # --- 2. Install an asset and list only installed ---
-    sp.install(VALID_ENGINE, local_dir=tmp_path)
-    sp.list_assets('engine', installed_only=True, local_dir=tmp_path)
+    sp.install(VALID_ENGINE, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
+    sp.list_assets('engine', installed_only=True, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
     captured = capsys.readouterr()
     output = captured.out
 
@@ -152,7 +167,7 @@ def test_force_reinstall(tmp_path: Path):
     asset before reinstalling it.
     """
     # Arrange: Install an asset and add a custom file to its directory.
-    sp.install(VALID_ENGINE, local_dir=tmp_path)
+    sp.install(VALID_ENGINE, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
     asset_dir = tmp_path / "engines" / VALID_ENGINE
     custom_file = asset_dir / "custom_file.txt"
     custom_file.touch()
@@ -179,11 +194,15 @@ def test_install_different_asset_types(tmp_path: Path):
     # Arrange & Act: Install one of each asset type.
     engine_success = sp.install(
         asset=VALID_ENGINE,
-        local_dir=tmp_path
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
     test_data_success = sp.install(
         asset=VALID_TEST_DATA,
-        local_dir=tmp_path
+        local_dir=tmp_path,
+        repo_id=HF_MANIFEST_REPO,
+        manifest_filename=HF_MANIFEST_FILENAME
     )
 
     # Assert: Both installations succeeded and created the correct directories.

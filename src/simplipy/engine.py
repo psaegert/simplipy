@@ -184,7 +184,7 @@ class SimpliPyEngine:
         return cls(operators=config['operators'], rules=rules)
 
     @classmethod
-    def load(cls, path: str, install: bool = False, local_dir: Path | str | None = None) -> "SimpliPyEngine":
+    def load(cls, path: str, install: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> "SimpliPyEngine":
         """Loads a pre-defined engine configuration from the asset manager.
 
         This provides a convenient way to load standard engine configurations
@@ -200,13 +200,17 @@ class SimpliPyEngine:
         local_dir : Path or str or None, optional
             A local directory to search for the assets. Defaults to None,
             which uses the default asset directory.
+        repo_id : str or None, optional
+            The Hugging Face repository ID where the manifest is stored. If None, the default repository ID is used.
+        manifest_filename : str or None, optional
+            The filename of the manifest file. If None, the default filename is used.
 
         Returns
         -------
         SimpliPyEngine
             A new instance of the engine.
         """
-        return cls.from_config(get_path(path, install=install, local_dir=local_dir))
+        return cls.from_config(get_path(path, install=install, local_dir=local_dir, repo_id=repo_id, manifest_filename=manifest_filename))
 
     def is_valid(self, prefix_expression: list[str], verbose: bool = False) -> bool:
         """Checks if a prefix expression is syntactically valid.

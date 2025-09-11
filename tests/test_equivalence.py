@@ -9,6 +9,9 @@ import simplipy as sp
 from simplipy import asset_manager
 from simplipy import SimpliPyEngine
 
+HF_MANIFEST_REPO = "psaegert/simplipy-assets-test"
+HF_MANIFEST_FILENAME = "manifest.json"
+
 
 # Mark this test to indicate it uses the network.
 # Run pytest with `pytest -m "not integration"` to skip it.
@@ -19,8 +22,7 @@ def test_equivalence_10k_with_asset_manager():
     This is the original test, modified to use the new asset manager.
     """
 
-    sp.install('expressions_10k')
-    test_data_path = asset_manager.get_path('expressions_10k')
+    test_data_path = asset_manager.get_path('expressions_10k', install=True, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
     print(f"Test data path: {test_data_path}")
     assert test_data_path is not None, "Failed to get test data path"
 

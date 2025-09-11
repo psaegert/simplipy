@@ -42,12 +42,19 @@ def get_default_cache_dir() -> Path:
     return cache_dir
 
 
-def fetch_manifest() -> dict:
+def fetch_manifest(repo_id: str | None = None, manifest_filename: str | None = None) -> dict:
     """Download the latest asset manifest from Hugging Face Hub.
 
     The manifest is a JSON file that contains metadata for all official
     assets, including engines and test data. This function handles
     potential network errors gracefully.
+
+    Parameters
+    ----------
+    repo_id : str, optional
+        The Hugging Face repository ID where the manifest is stored. If None, the default repository ID is used.
+    manifest_filename : str, optional
+        The filename of the manifest file. If None, the default filename is used.
 
     Returns
     -------
@@ -58,8 +65,8 @@ def fetch_manifest() -> dict:
     """
     try:
         manifest_path = hf_hub_download(
-            repo_id=HF_MANIFEST_REPO,
-            filename=HF_MANIFEST_FILENAME,
+            repo_id=repo_id or HF_MANIFEST_REPO,
+            filename=manifest_filename or HF_MANIFEST_FILENAME,
             repo_type="dataset",
         )
         with open(manifest_path, 'r') as f:
@@ -69,7 +76,7 @@ def fetch_manifest() -> dict:
         return {}
 
 
-def get_path(asset: str, install: bool = False, local_dir: Path | str | None = None) -> str | None:
+def get_path(asset: str, install: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> str | None:
     """Resolve the local filesystem path to an asset's entrypoint file.
 
     This function serves as a universal resolver for SimpliPy assets. It first
@@ -88,6 +95,10 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     local_dir : pathlib.Path | str | None, optional
         The directory to check for the asset or install it into. If None,
         the default cache directory is used. Defaults to None.
+    repo_id : str, optional
+        The Hugging Face repository ID where the manifest is stored. If None, the default repository ID is used.
+    manifest_filename : str, optional
+        The filename of the manifest file. If None, the default filename is used.
 
     Returns
     -------
@@ -114,7 +125,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
         return asset
 
     # Otherwise, treat 'asset' as an official asset name
-    manifest = fetch_manifest()
+    manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
     if not manifest:
         raise RuntimeError("Could not fetch asset manifest.")
 
@@ -143,7 +154,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     raise FileNotFoundError(f"Asset '{asset}' is not installed. Use install=True to download it.")
 
 
-def install_asset(asset: str, force: bool = False, local_dir: Path | str | None = None) -> bool:
+def install_asset(asset: str, force: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> bool:
     """Install a SimpliPy asset from Hugging Face Hub.
 
     Downloads all files associated with a given asset from its corresponding
@@ -159,6 +170,10 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
     local_dir : pathlib.Path | str | None, optional
         The directory to install the asset into. If None, the default cache
         directory is used. Defaults to None.
+    repo_id : str, optional
+        The Hugging Face repository ID where the manifest is stored. If None, the default repository ID is used.
+    manifest_filename : str, optional
+        The filename of the manifest file. If None, the default filename is used.
 
     Returns
     -------
@@ -168,7 +183,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
         occurs.
 
     """
-    manifest = fetch_manifest()
+    manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
     if not manifest:
         return False
 
@@ -214,7 +229,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
         return False
 
 
-def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | None = None) -> bool:
+def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> bool:
     """Remove a locally installed SimpliPy asset.
 
     This function deletes the entire directory associated with the specified
@@ -229,6 +244,10 @@ def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | Non
     local_dir : pathlib.Path | str | None, optional
         The directory from which to uninstall the asset. If None, the
         default cache directory is used. Defaults to None.
+    repo_id : str, optional
+        The Hugging Face repository ID where the manifest is stored. If None, the default repository ID is used.
+    manifest_filename : str, optional
+        The filename of the manifest file. If None, the default filename is used.
 
     Returns
     -------
@@ -247,16 +266,16 @@ def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | Non
     elif isinstance(local_dir, str):
         local_dir = Path(local_dir)
 
-    manifest = fetch_manifest()
-    if not manifest:
-        return False
+    manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
+    if manifest:
+        asset_info = manifest.get(asset)
+        if not asset_info:
+            list_assets(asset_type='all', installed_only=True)
+            raise ValueError(f"Error: Unknown asset: '{asset}'. See above for installed assets.")
 
-    asset_info = manifest.get(asset)
-    if not asset_info:
-        list_assets(asset_type='all', installed_only=True)
-        raise ValueError(f"Error: Unknown asset: '{asset}'. See above for installed assets.")
-
-    local_path = local_dir / asset_info['directory']
+        local_path = local_dir / asset_info['directory']
+    else:
+        local_path = local_dir / asset
 
     if not local_path.exists():
         if not quiet:
@@ -274,7 +293,7 @@ def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | Non
         return False
 
 
-def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: Path | str | None = None) -> None:
+def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> None:
     """List available or installed SimpliPy assets.
 
     Fetches the asset manifest and checks the local filesystem to print a
@@ -291,9 +310,13 @@ def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: 
     local_dir : pathlib.Path | str | None, optional
         The directory to check for installed assets. If None, the default
         cache directory is used. Defaults to None.
+    repo_id : str, optional
+        The Hugging Face repository ID where the manifest is stored. If None, the default repository ID is used.
+    manifest_filename : str, optional
+        The filename of the manifest file. If None, the default filename is used.
 
     """
-    manifest = fetch_manifest()
+    manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
     if not manifest:
         return
 
