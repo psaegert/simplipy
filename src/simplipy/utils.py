@@ -547,58 +547,98 @@ def is_numeric_string(s: str) -> bool:
 
 
 def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[int]:
-    """Factorize an integer into factors less than or equal to a maximum value.
+    """Factorize an integer into factors limited by ``max_factor``.
 
-    This function attempts to break down an integer `p` into a list of factors,
-    where each factor is no larger than `max_factor`. It uses a greedy approach,
-    repeatedly dividing by the largest possible factor.
+    This helper decomposes ``p`` into a list of factors whose product equals
+    ``p`` such that every factor is less than or equal to ``max_factor``. If the
+    decomposition is impossible (for example because ``p`` contains a prime
+    factor larger than ``max_factor``) a :class:`ValueError` is raised instead of
+    returning an invalid factorization.
 
     Parameters
     ----------
     p : int
-        The integer to factorize.
+        The integer to factorize. Must be greater than or equal to ``1``.
     max_factor : int
-        The maximum allowable value for any single factor.
+        The maximum allowable value for any single factor. Must be at least 2.
     max_iter : int, optional
-        The maximum number of iterations to prevent an infinite loop,
-        by default 1000.
+        A soft cap on the number of prime factors processed. If the algorithm
+        exceeds this limit, a :class:`ValueError` is raised to guard against
+        accidental infinite loops.
 
     Returns
     -------
     list[int]
-        A list of factors for the integer `p`.
+        The factors of ``p``. Their product is equal to ``p`` and each factor is
+        less than or equal to ``max_factor``.
 
     Raises
     ------
     ValueError
-        If the factorization does not complete within `max_iter` iterations.
+        If ``p`` cannot be decomposed using the specified ``max_factor`` value
+        or if ``max_iter`` is exceeded.
 
     Examples
     --------
     >>> factorize_to_at_most(100, 10)
     [10, 10]
-    >>> factorize_to_at_most(99, 10)
-    [9, 11] # Note: 11 is > 10, but factorization completes. It tries its best.
+    >>> factorize_to_at_most(18, 5)
+    [3, 3, 2]
     """
-    if is_prime(p):
-        return [p]
-    p_factors = []
-    i = 0
-    while p > 1:
-        for j in range(max_factor, 0, -1):
-            if j == 1:
-                p_factors.append(p)
-                p = 1
-                break
-            if p % j == 0:
-                p_factors.append(j)
-                p //= j
-                break
-        i += 1
-        if i > max_iter:
-            raise ValueError(f'Factorization of {p} into at most {max_factor} factors failed after {max_iter} iterations')
 
-    return p_factors
+    if p < 1:
+        raise ValueError("p must be a positive integer")
+    if max_factor < 2:
+        raise ValueError("max_factor must be at least 2")
+
+    if p == 1:
+        return []
+
+    remaining = p
+    factors: list[int] = []
+    current_factor = 1
+    processed_factors = 0
+
+    def flush_current() -> None:
+        nonlocal current_factor
+        if current_factor > 1:
+            factors.append(current_factor)
+            current_factor = 1
+
+    divisor = 2
+    while divisor * divisor <= remaining:
+        while remaining % divisor == 0:
+            processed_factors += 1
+            if processed_factors > max_iter:
+                raise ValueError(
+                    f'Factorization of {p} into factors <= {max_factor} exceeded {max_iter} steps')
+
+            if divisor > max_factor:
+                raise ValueError(f'Cannot factorize {p} with factors <= {max_factor}')
+
+            if current_factor * divisor <= max_factor:
+                current_factor *= divisor
+            else:
+                flush_current()
+                current_factor = divisor
+
+            remaining //= divisor
+        divisor = 3 if divisor == 2 else divisor + 2
+
+    if remaining > 1:
+        # remaining is prime at this point
+        if remaining > max_factor:
+            raise ValueError(f'Cannot factorize {p} with factors <= {max_factor}')
+
+        if current_factor * remaining <= max_factor:
+            current_factor *= remaining
+        else:
+            flush_current()
+            current_factor = remaining
+
+    flush_current()
+
+    return factors
 
 
 def mask_elementary_literals(prefix_expression: list[str], inplace: bool = False) -> list[str]:
