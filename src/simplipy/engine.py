@@ -568,19 +568,22 @@ class SimpliPyEngine:
                 if len(operator_chain) > 0:
                     p = prod(int(re.match(operator_pattern_grouped, op).group(1)) for op in operator_chain)  # type: ignore
 
-                    # Factorize p into at most self.max_power or self.max_fractional_power
-                    p_factors = factorize_to_at_most(p, max_power)
+                    try:
+                        p_factors = factorize_to_at_most(p, max_power)
+                        new_operators = [f'{operator_base}{factor}' for factor in p_factors]
 
-                    # Construct the new operators
-                    new_operators = []
-                    for p in p_factors:
-                        new_operators.append(f'{operator_base}{p}')
-
-                    if len(new_operators) == 0:
-                        new_chain = current_operand
-                    else:
-                        new_chain = [new_operators[-1], [current_operand]]
-                        for op in new_operators[-2::-1]:
+                        if len(new_operators) == 0:
+                            new_chain = current_operand
+                        else:
+                            new_chain = [new_operators[-1], [current_operand]]
+                            for op in new_operators[-2::-1]:
+                                new_chain = [op, [new_chain]]
+                    except ValueError:
+                        # Fall back to the original chain of operators when the
+                        # exponent cannot be expressed using the configured
+                        # unary power operators.
+                        new_chain = [operator_chain[-1], [current_operand]]
+                        for op in operator_chain[-2::-1]:
                             new_chain = [op, [new_chain]]
 
                     _ = [stack.pop() for _ in range(arity)]
@@ -1137,12 +1140,29 @@ class SimpliPyEngine:
                                 # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
                                 hyper_operator = self.connection_classes_hyper[argmax_class]
                                 operator = self.connection_classes[argmax_class][0][0]  # Positive multiplicity
-                                if cancelled_multiplicity_sum > 5 and is_prime(abs(cancelled_multiplicity_sum)):
-                                    powers = factorize_to_at_most(abs(cancelled_multiplicity_sum) - 1, self.max_power)
-                                    first_replacement = inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + cancelled_subtree + cancelled_subtree
-                                else:
-                                    powers = factorize_to_at_most(abs(cancelled_multiplicity_sum), self.max_power)
-                                    first_replacement = inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + cancelled_subtree
+                                try:
+                                    if cancelled_multiplicity_sum > 5 and is_prime(abs(cancelled_multiplicity_sum)):
+                                        powers = factorize_to_at_most(abs(cancelled_multiplicity_sum) - 1, self.max_power)
+                                        first_replacement = inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + cancelled_subtree + cancelled_subtree
+                                    else:
+                                        powers = factorize_to_at_most(abs(cancelled_multiplicity_sum), self.max_power)
+                                        first_replacement = inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + cancelled_subtree
+                                except ValueError:
+                                    # Fall back to a representation that stays within the
+                                    # available operator set. For additive contexts we use
+                                    # a binary multiplication with an explicit integer
+                                    # coefficient; for multiplicative contexts we use the
+                                    # binary ``pow`` operator with a numeric exponent.
+                                    magnitude = abs(cancelled_multiplicity_sum)
+                                    coefficient_token = str(magnitude)
+
+                                    if argmax_class == 'add':
+                                        fallback_prefix = inverse_operator_prefix + ('*', coefficient_token)
+                                        first_replacement = fallback_prefix + cancelled_subtree
+                                    else:
+                                        # Multiplicative class
+                                        fallback_prefix = inverse_operator_prefix + ('pow',)
+                                        first_replacement = fallback_prefix + cancelled_subtree + (coefficient_token,)
 
                                 other_replacements = (neutral_element,)
 

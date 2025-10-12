@@ -1,5 +1,6 @@
 # test_utils.py
 
+import math
 import pytest
 import numpy as np
 from types import CodeType
@@ -207,14 +208,94 @@ def test_is_numeric_string(s, expected):
 
 def test_factorize_to_at_most():
     """Tests integer factorization with a max factor limit."""
-    assert sorted(utils.factorize_to_at_most(100, 10)) == [10, 10]
-    # It tries its best, but may produce a factor larger than max_factor
-    assert sorted(utils.factorize_to_at_most(99, 10)) == [9, 11]
-    assert utils.factorize_to_at_most(13, 10) == [13]  # Prime number case
+    factors_100 = utils.factorize_to_at_most(100, 10)
+    assert math.prod(factors_100) == 100
+    assert all(f <= 10 for f in factors_100)
+
+    factors_90 = utils.factorize_to_at_most(90, 10)
+    assert math.prod(factors_90) == 90
+    assert all(f <= 10 for f in factors_90)
+
+    with pytest.raises(ValueError):
+        utils.factorize_to_at_most(99, 10)
+
+    with pytest.raises(ValueError):
+        utils.factorize_to_at_most(13, 10)
 
     # Test for potential infinite loop
     with pytest.raises(ValueError):
         utils.factorize_to_at_most(99, 10, max_iter=1)
+
+
+def _assert_factorization(p: int, max_factor: int, factors: list[int]) -> None:
+    assert math.prod(factors) == p
+    assert all(f <= max_factor for f in factors)
+    # Adjacent factors should already be maximally packed.
+    for left, right in zip(factors, factors[1:]):
+        assert left * right > max_factor
+
+
+@pytest.mark.parametrize(
+    "p,max_factor,expected",
+    [
+        (6, 6, [6]),
+        (16, 4, [4, 4]),
+        (64, 8, [8, 8]),
+        (72, 6, [3, 4, 6]),
+        (90, 9, [3, 5, 6]),
+        (96, 8, [3, 4, 8]),
+        (125, 5, [5, 5, 5]),
+        (225, 15, [5, 5, 9]),
+        (256, 10, [4, 8, 8]),
+        (343, 7, [7, 7, 7]),
+    ],
+)
+def test_factorize_to_at_most_success_profiles(p, max_factor, expected):
+    factors = utils.factorize_to_at_most(p, max_factor)
+    _assert_factorization(p, max_factor, factors)
+    assert sorted(factors) == sorted(expected)
+
+
+def test_factorize_to_at_most_returns_empty_for_one():
+    assert utils.factorize_to_at_most(1, 10) == []
+
+
+@pytest.mark.parametrize(
+    "p,max_factor",
+    [
+        (97, 10),
+        (49, 6),
+        (2021, 20),
+        (2 * 3 * 5 * 7, 6),
+    ],
+)
+def test_factorize_to_at_most_rejects_large_prime_factors(p, max_factor):
+    with pytest.raises(ValueError):
+        utils.factorize_to_at_most(p, max_factor)
+
+
+@pytest.mark.parametrize(
+    "p,max_factor,error_message",
+    [
+        (0, 10, "p must be a positive integer"),
+        (-4, 10, "p must be a positive integer"),
+        (10, 1, "max_factor must be at least 2"),
+    ],
+)
+def test_factorize_to_at_most_validates_inputs(p, max_factor, error_message):
+    with pytest.raises(ValueError) as exc_info:
+        utils.factorize_to_at_most(p, max_factor)
+    assert error_message in str(exc_info.value)
+
+
+def test_factorize_to_at_most_max_iter_guard_triggers():
+    with pytest.raises(ValueError, match=r"exceeded 3 steps"):
+        utils.factorize_to_at_most(16, 4, max_iter=3)
+
+
+def test_factorize_to_at_most_respects_large_max_iter():
+    factors = utils.factorize_to_at_most(3 ** 8, 27, max_iter=20)
+    _assert_factorization(3 ** 8, 27, factors)
 
 
 def test_mask_elementary_literals():
