@@ -409,7 +409,7 @@ class SimpliPyEngine:
 
         if len(stack) != 1:
             raise ValueError(
-                f"Malformed prefix expression: too many operands remain after processing. "
+                "Malformed prefix expression: too many operands remain after processing. "
                 f"Stack: {[part for part, _, _ in stack]}"
             )
 

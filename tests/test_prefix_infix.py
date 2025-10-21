@@ -95,6 +95,13 @@ def test_prefix_to_infix_roundtrip_preserves_structure(engine: SimpliPyEngine, p
     assert canonical_roundtrip == canonical_original
 
 
+def test_prefix_to_infix_raises_on_extra_operands(engine: SimpliPyEngine) -> None:
+    malformed_prefix = ['x', 'y', 'z']
+
+    with pytest.raises(ValueError, match='Malformed prefix expression'):
+        engine.prefix_to_infix(malformed_prefix)
+
+
 @pytest.mark.parametrize(
     "infix",
     [
