@@ -268,80 +268,149 @@ class SimpliPyEngine:
         return True
 
     def prefix_to_infix(self, tokens: list[str], power: Literal['func', '**'] = 'func', realization: bool = False) -> str:
-        """Converts a prefix expression to a human-readable infix string.
+        """Converts a prefix expression to a human-readable infix string with minimal parentheses."""
 
-        Parameters
-        ----------
-        tokens : list[str]
-            The list of tokens in prefix notation.
-        power : {'func', '**'}, optional
-            Determines how power operators are rendered. 'func' uses
-            functional notation like `pow2(x)`, while '**' uses `(x)**2`.
-            Defaults to 'func'.
-        realization : bool, optional
-            If True, uses the Python realization of operators (e.g., 'np.sin')
-            instead of their canonical names (e.g., 'sin'). Defaults to False.
+        if not tokens:
+            return ''
 
-        Returns
-        -------
-        str
-            The infix representation of the expression.
-        """
-        # FIXME: Avoid unnecessary parentheses but keep necessary ones
-        stack: list[str] = []
+        # Use the configured operator precedence as a baseline for deciding
+        # when parentheses are necessary. Higher numbers mean higher precedence.
+        op_precedence = self.operator_precedence_compat
+        op_associativity = {
+            '+': 'left',
+            '-': 'left',
+            '*': 'left',
+            '/': 'left',
+            '**': 'right',
+            'pow': 'right',
+        }
+
+        FUNC_PRECEDENCE = float('inf')
+        TERMINAL_PRECEDENCE = float('inf')
+
+        # Stack elements are tuples of (rendered_str, precedence_value, root_operator)
+        stack: list[tuple[str, float, str | None]] = []
+
+        def right_allows_flatten(parent_op: str, child_root: str | None) -> bool:
+            """Return True if a right operand with the same precedence can omit parentheses."""
+            if child_root is None:
+                return True
+
+            flatten_map: dict[str, set[str]] = {
+                '+': {'+', '-'},
+                '*': {'*', '/'},
+            }
+            return child_root in flatten_map.get(parent_op, set())
 
         for token in reversed(tokens):
             operator = self.realization_to_operator.get(token, token)
-            operator_realization = self.operator_realizations.get(operator, operator)
-            if operator in self.operator_tokens or operator in self.operator_aliases or operator in self.operator_arity_compat:
-                write_operator = operator_realization if realization else operator
-                write_operands = [stack.pop() for _ in range(self.operator_arity_compat[operator])]
+            canonical_operator = self.operator_aliases.get(operator, operator)
 
-                # If the operator is a power operator, format it as
-                # "pow(operand1, operand2)" if power is 'func'
-                # "operand1**operand2" if power is '**'
-                # This regex must not match pow1_2 or pow1_3
-                if re.match(r'pow\d+(?!\_)', operator) and power == '**':
-                    exponent = int(operator[3:])
-                    stack.append(f'(({write_operands[0]})**{exponent})')
+            if (
+                canonical_operator in self.operator_tokens
+                or operator in self.operator_aliases
+                or canonical_operator in self.operator_arity_compat
+            ):
+                arity = self.operator_arity_compat.get(canonical_operator, 1)
 
-                # If the operator is a fractional power operator such as pow1_2, format it as
-                # "pow(operand1, 0.5)" if power is 'func'
-                # "operand1**0.5" if power is '**'
-                elif re.match(r'pow1_\d+', operator) and power == '**':
-                    exponent = int(operator[5:])
-                    stack.append(f'({write_operands[0]}**(1/{exponent}))')
+                if len(stack) < arity:
+                    raise ValueError(f"Invalid prefix expression: Not enough operands for operator '{operator}'")
 
-                # If the operator is a function from a module, format it as
-                # "module.function(operand1, operand2, ...)"
-                elif '.' in write_operator or self.operator_arity_compat[operator] > 2:
-                    # No need for parentheses here
-                    stack.append(f'{write_operator}({", ".join([operand for operand in write_operands])})')
+                operands_data = [stack.pop() for _ in range(arity)]
 
-                # ** stays **
-                elif self.operator_aliases.get(operator, operator) == '**':
-                    stack.append(f'({write_operands[0]} {write_operator} {write_operands[1]})')
+                write_operator = (
+                    self.operator_realizations.get(canonical_operator, canonical_operator)
+                    if realization
+                    else canonical_operator
+                )
 
-                # If the operator is a binary operator, format it as
-                # "(operand1 operator operand2)"
-                elif self.operator_arity_compat[operator] == 2:
-                    stack.append(f'({write_operands[0]} {write_operator} {write_operands[1]})')
+                # Render realization strings that look like fully qualified callables
+                if realization and ('.' in write_operator or self.operator_arity_compat.get(canonical_operator, 0) > 2):
+                    rendered = f"{write_operator}({', '.join(op_str for op_str, _, _ in operands_data)})"
+                    stack.append((rendered, FUNC_PRECEDENCE, canonical_operator))
+                    continue
 
-                elif operator == 'neg':
-                    stack.append(f'-({write_operands[0]})')
+                current_precedence = op_precedence.get(canonical_operator, op_precedence.get('pow', FUNC_PRECEDENCE))
+                current_assoc = op_associativity.get(canonical_operator, 'left')
 
-                elif operator == 'inv':
-                    stack.append(f'(1/{write_operands[0]})')
+                if arity == 2:
+                    left_str, left_prec, left_root = operands_data[0]
+                    right_str, right_prec, right_root = operands_data[1]
 
-                else:
-                    stack.append(f'{write_operator}({", ".join([operand for operand in write_operands])})')
+                    if canonical_operator == 'pow' and power == 'func':
+                        rendered = f'{write_operator}({left_str}, {right_str})'
+                        stack.append((rendered, FUNC_PRECEDENCE, canonical_operator))
+                        continue
 
+                    if canonical_operator == 'pow' and power == '**':
+                        write_operator = '**'
+                        current_precedence = op_precedence.get('**', current_precedence)
+                        current_assoc = 'right'
+
+                    if left_prec < current_precedence or (
+                        left_prec == current_precedence and current_assoc == 'right'
+                    ):
+                        left_str = f'({left_str})'
+
+                    if right_prec < current_precedence or (
+                        right_prec == current_precedence and current_assoc == 'left'
+                        and not right_allows_flatten(canonical_operator, right_root)
+                    ):
+                        right_str = f'({right_str})'
+
+                    rendered = f'{left_str} {write_operator} {right_str}'
+                    stack.append((rendered, current_precedence, canonical_operator))
+                    continue
+
+                if arity == 1:
+                    operand_str, operand_prec, operand_root = operands_data[0]
+                    is_pow_op = re.match(r'pow\d+(?!_)', canonical_operator)
+                    is_frac_pow_op = re.match(r'pow1_\d+', canonical_operator)
+
+                    if canonical_operator == 'neg':
+                        if operand_prec < current_precedence:
+                            operand_str = f'({operand_str})'
+                        rendered = f'-{operand_str}'
+                        stack.append((rendered, current_precedence, canonical_operator))
+                        continue
+
+                    if canonical_operator == 'inv':
+                        if operand_prec <= current_precedence:
+                            operand_str = f'({operand_str})'
+                        rendered = f'1/{operand_str}'
+                        inv_precedence = op_precedence.get('/', current_precedence)
+                        stack.append((rendered, inv_precedence, canonical_operator))
+                        continue
+
+                    if power == '**' and (is_pow_op or is_frac_pow_op):
+                        power_precedence = op_precedence.get('**', current_precedence)
+                        if operand_prec <= power_precedence:
+                            operand_str = f'({operand_str})'
+
+                        if is_pow_op:
+                            exponent = int(canonical_operator[3:])
+                            rendered = f'{operand_str}**{exponent}'
+                        else:
+                            denominator = int(canonical_operator[5:])
+                            rendered = f'{operand_str}**(1/{denominator})'
+
+                        stack.append((rendered, power_precedence, canonical_operator))
+                        continue
+
+                    rendered = f'{write_operator}({operand_str})'
+                    stack.append((rendered, FUNC_PRECEDENCE, canonical_operator))
+                    continue
+
+                # Fallback for nullary or higher arity operators
+                rendered = f"{write_operator}({', '.join(op_str for op_str, _, _ in operands_data)})"
+                stack.append((rendered, FUNC_PRECEDENCE, canonical_operator))
             else:
-                stack.append(token)
+                stack.append((token, TERMINAL_PRECEDENCE, None))
 
-        infix_expression = stack.pop()
+        if len(stack) != 1:
+            return ' '.join(part for part, _, _ in stack)
 
-        return infix_expression  # FIXME: Sometimes result in "1 + x) / (2 * x" instead of "(1 + x) / (2 * x)"
+        return stack[0][0]
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
         """Converts an infix expression string to prefix notation.
