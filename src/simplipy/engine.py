@@ -408,7 +408,10 @@ class SimpliPyEngine:
                 stack.append((token, TERMINAL_PRECEDENCE, None))
 
         if len(stack) != 1:
-            return ' '.join(part for part, _, _ in stack)
+            raise ValueError(
+                f"Malformed prefix expression: too many operands remain after processing. "
+                f"Stack: {[part for part, _, _ in stack]}"
+            )
 
         return stack[0][0]
 
