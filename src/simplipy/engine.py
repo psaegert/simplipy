@@ -69,7 +69,7 @@ class SimpliPyEngine:
         A compiled version of explicit rules without pattern variables.
     """
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None) -> None:
-        # This part, which sets up all the operator properties, is unchanged.
+        # Cache operator metadata for quick access during parsing and evaluation.
         self.operator_tokens = list(operators.keys())
         self.operator_aliases = {alias: operator for operator, properties in operators.items() for alias in properties['alias']}
         self.operator_inverses = {k: v["inverse"] for k, v in operators.items() if v.get("inverse") is not None}
@@ -105,16 +105,14 @@ class SimpliPyEngine:
         self.connection_classes_hyper = {'add': "mult", 'mult': "pow"}
         self.binary_connectable_operators = {'+', '-', '*', '/'}
 
-        # This is the simplified rules handling logic.
-        # It no longer checks if `rules` is a string or performs any file I/O.
-        # It only accepts a list of rules or None.
+        # Normalize the incoming rule list and eliminate duplicate patterns.
         dummy_variables = [f'x{i}' for i in range(100)]
         if rules is None:
             self.simplification_rules = []
         else:
             self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
 
-        # This part is also unchanged.
+        # Build the compiled lookup tables that power rule application.
         self.compile_rules()
         self.rule_application_statistics: defaultdict[tuple, int] = defaultdict(int)
 
@@ -268,7 +266,31 @@ class SimpliPyEngine:
         return True
 
     def prefix_to_infix(self, tokens: list[str], power: Literal['func', '**'] = 'func', realization: bool = False) -> str:
-        """Converts a prefix expression to a human-readable infix string with minimal parentheses."""
+        """Converts a prefix expression to an infix string with minimal parentheses.
+
+        Parameters
+        ----------
+        tokens : list[str]
+            The prefix expression to render.
+        power : {'func', '**'}, optional
+            Controls how power operators are emitted. ``'func'`` keeps canonical
+            engine names such as ``pow3(x)``, while ``'**'`` renders Python-style
+            exponentiation.
+        realization : bool, optional
+            If True, operator tokens are replaced with their runtime
+            realizations (for example, ``'sin'`` becomes ``'np.sin'``), so the
+            output can be compiled directly.
+
+        Returns
+        -------
+        str
+            The formatted infix expression.
+
+        Raises
+        ------
+        ValueError
+            If the provided tokens do not form a well-formed prefix expression.
+        """
 
         if not tokens:
             return ''
@@ -688,7 +710,9 @@ class SimpliPyEngine:
         """Parses an infix string into a standardized prefix expression.
 
         This is a high-level parsing utility that combines `infix_to_prefix`
-        with optional conversion and number masking steps.
+        with optional canonicalization and number masking. The resulting token
+        list is additionally cleaned up via `remove_pow1` to drop redundant
+        ``pow1_1`` occurrences.
 
         Parameters
         ----------
@@ -704,7 +728,8 @@ class SimpliPyEngine:
         Returns
         -------
         list[str]
-            The final processed prefix expression.
+            The processed prefix expression after conversion, masking (if
+            enabled), and `remove_pow1` cleanup.
         """
 
         parsed_expression = self.infix_to_prefix(infix_expression)
@@ -1023,11 +1048,15 @@ class SimpliPyEngine:
         Returns
         -------
         expression_tree : list
-            The expression represented as a tree.
+            A stack-based representation of the expression tree. Each entry is a
+            nested list of the form ``[operator, operands]`` mirroring the
+            structure consumed by `cancel_terms`.
         annotations_tree : list
-            A parallel tree containing the multiplicity counts for each subtree.
+            A parallel stack holding multiplicity annotations for each subtree,
+            organized by connection class.
         labels_tree : list
-            A parallel tree containing unique identifiers for each subtree.
+            A parallel stack containing stable identifiers for every subtree,
+            used to detect duplicates during cancellation.
         """
         stack: list = []
         stack_annotations: list = []
@@ -1133,18 +1162,22 @@ class SimpliPyEngine:
         Parameters
         ----------
         expression_tree : list
-            The nested list representation of the expression.
+            The stack produced by `collect_multiplicities`, containing the
+            nested expression structure.
         expression_annotations_tree : list
-            The corresponding tree of multiplicity annotations.
+            The parallel stack of multiplicity annotations returned by
+            `collect_multiplicities`.
         stack_labels : list
-            The corresponding tree of subtree labels.
+            The parallel stack of subtree labels returned by
+            `collect_multiplicities`.
         verbose : bool, optional
             If True, prints detailed debugging information. Defaults to False.
 
         Returns
         -------
         list[str]
-            A new prefix expression with terms cancelled.
+            A simplified prefix expression with the detected duplicates merged
+            or removed.
         """
         stack = expression_tree
         stack_annotations = expression_annotations_tree
@@ -1637,11 +1670,14 @@ class SimpliPyEngine:
             constants_fit_retries: int) -> None:
         """A worker process for discovering simplification rules in parallel.
 
-        This function runs in a separate process. It fetches an expression from
-        the `work_queue`, evaluates it on a set of random numerical data, and
+        This function runs in a separate process. It fetches work items of the
+        form ``(expression, simplified_length, allowed_candidate_lengths)`` from
+        `work_queue`, evaluates the expression on shared random data, and
         compares the result against a library of simpler candidate expressions.
         If a numerical equivalence is found, it is considered a potential new
-        simplification rule and is placed on the `result_queue`.
+        simplification rule and is placed on the `result_queue`; otherwise ``None``
+        is queued to signal that no rule was discovered. A sentinel ``None`` work
+        item triggers a graceful shutdown.
 
         Notes
         -----
@@ -1803,7 +1839,8 @@ class SimpliPyEngine:
             Equivalences are found by evaluating both expressions on random
             numerical data.
 
-        Discovered rules are added to the engine and can be saved to a file.
+        Discovered rules are deduplicated, compiled into the running engine, and
+        can optionally be saved to disk.
 
         Parameters
         ----------
