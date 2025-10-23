@@ -10,11 +10,12 @@ import numpy as np
 
 
 def apply_on_nested(structure: list | dict, func: Callable) -> list | dict:
-    """Recursively apply a function to all non-dict/list values in a nested structure.
+    """Recursively apply a function to all non-structural values in a nested container.
 
-    This function traverses a nested dictionary or list and applies the provided
-    function `func` to every value that is not a dictionary or a list itself.
-    The modification is done in-place.
+    This function traverses a nested dictionary or list and applies ``func`` to
+    every value that is not itself a ``dict`` or ``list``. The original
+    ``structure`` is mutated; the same instance is returned for convenience. If
+    ``structure`` is neither a list nor a dictionary, it is returned unchanged.
 
     Parameters
     ----------
@@ -26,13 +27,16 @@ def apply_on_nested(structure: list | dict, func: Callable) -> list | dict:
     Returns
     -------
     list or dict
-        The modified nested structure with the function applied to its values.
+        The input ``structure`` with ``func`` applied to all terminal values.
 
     Examples
     --------
     >>> data = {'a': 1, 'b': {'c': 2, 'd': [{'e': 3}, {'f': 4}, 3]}}
-    >>> sp.utils.apply_on_nested(data, lambda x: x * 10)
+    >>> result = apply_on_nested(data, lambda x: x * 10)
+    >>> result
     {'a': 10, 'b': {'c': 20, 'd': [{'e': 30}, {'f': 40}, 30]}}
+    >>> data is result
+    True
     """
     if isinstance(structure, list):
         for i, value in enumerate(structure):
@@ -120,11 +124,12 @@ def codify(code_string: str, variables: list[str] | None = None) -> CodeType:
 
 
 def get_used_modules(infix_expression: str) -> list[str]:
-    """Extract top-level Python modules used in an infix expression string.
+    """Return the names of top-level Python modules referenced in an infix expression.
 
-    Parses a string to find all occurrences of module-like function calls
-    (e.g., `numpy.sin(...)`, `math.cos(...)`) and returns a unique list of the
-    top-level modules. The 'numpy' module is always included by default.
+    The function scans for dotted attribute accesses that look like module
+    usages (for example ``numpy.sin(...)`` or ``math.cos(...)``) and collects
+    their leading module names. The module ``numpy`` is always included so that
+    downstream evaluation logic can rely on it being available.
 
     Parameters
     ----------
@@ -134,11 +139,12 @@ def get_used_modules(infix_expression: str) -> list[str]:
     Returns
     -------
     list[str]
-        A list of unique top-level module names found in the expression.
+        Unique module names referenced in ``infix_expression``. The order is
+        derived from the underlying ``set`` and should be treated as arbitrary.
 
     Examples
     --------
-    >>> get_used_modules("numpy.sin(x) + math.exp(y)")
+    >>> sorted(get_used_modules("numpy.sin(x) + math.exp(y)"))
     ['math', 'numpy']
     """
     # Match the expression against `module.submodule. ... .function(`
@@ -158,41 +164,47 @@ def get_used_modules(infix_expression: str) -> list[str]:
 def substitude_constants(prefix_expression: list[str], values: list | np.ndarray, constants: list[str] | None = None, inplace: bool = False) -> list[str]:
     """Substitute placeholders in a prefix expression with numeric values.
 
-    This function replaces constant placeholders like `<constant>` or `C_i`
-    in a prefix-notated expression with the provided numerical values in order.
+    This helper replaces constant placeholders such as ``"<constant>"`` or the
+    tokens listed in ``constants`` with the values supplied in ``values``. Values
+    are consumed from left to right as matching tokens are encountered.
 
     Parameters
     ----------
     prefix_expression : list[str]
         The prefix expression containing constant placeholders.
     values : list or np.ndarray
-        The numerical values to substitute into the expression.
+        The numeric values to substitute into the expression.
     constants : list[str] or None, optional
-        An explicit list of constant names to be replaced, by default None.
+        An explicit list of placeholder names to be replaced. When ``None``,
+        the function considers ``"<constant>"`` and ``C_i`` tokens. Defaults to
+        ``None``.
     inplace : bool, optional
-        If True, modifies the list in-place; otherwise, returns a new list.
-        Defaults to False.
+        If ``True``, modifies ``prefix_expression`` in-place; otherwise, works on
+        a shallow copy. Defaults to ``False``.
 
     Returns
     -------
     list[str]
-        The prefix expression with placeholders replaced by values.
+        The prefix expression with placeholders replaced by strings holding the
+        given numeric values.
+
+    Raises
+    ------
+    IndexError
+        If there are more placeholders than supplied ``values``.
 
     Examples
     --------
-    With default constant placeholders:
     >>> expr = ['*', '<constant>', '+', 'x', '<constant>']
-    >>> substitude_constants(expr, [3.14, 2.71], constants=None)
+    >>> substitude_constants(expr, [3.14, 2.71])
     ['*', '3.14', '+', 'x', '2.71']
 
-    With default constant names:
     >>> expr = ['*', 'C_0', '+', 'x', 'C_1']
-    >>> substitute_constants(expr, [3.14, 2.71], constants=['C_0', 'C_1'])
+    >>> substitude_constants(expr, [3.14, 2.71], constants=['C_0', 'C_1'])
     ['*', '3.14', '+', 'x', '2.71']
 
-    With custom constant names:
     >>> expr = ['*', 'k1', '+', 'x', 'k2']
-    >>> substitute_constants(expr, [3.14, 2.71], constants=['k1', 'k2'])
+    >>> substitude_constants(expr, [3.14, 2.71], constants=['k1', 'k2'])
     ['*', '3.14', '+', 'x', '2.71']
     """
     if inplace:
@@ -285,66 +297,74 @@ def numbers_to_constant(prefix_expression: list[str], inplace: bool = False) -> 
 
 
 def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False, convert_numbers_to_constant: bool = True) -> tuple[list[str], list[str]]:
-    """Convert numeric placeholders to indexed constant names (e.g., C_0, C_1).
+    """Convert placeholder tokens to explicit constant names (for example ``C_0``, ``C_1``).
 
-    Replaces `<constant>` tokens and optionally numeric strings with unique,
-    indexed constant names. This prepares the expression for compilation into a
-    function where constants are passed as named arguments.
+    ``"<constant>"`` tokens — and, when ``convert_numbers_to_constant`` is ``True``,
+    integer-like numeric strings or existing ``C_i`` tokens — are replaced with
+    explicit constant identifiers. This is useful for generating call signatures
+    where constants are passed as named arguments.
 
     Parameters
     ----------
     prefix_expression : list[str]
         The prefix expression to process.
     constants : list[str] or None, optional
-        An initial list of constants to use for naming, by default None.
+        Initial constant names to reuse before generating new ones. The returned
+        list includes these values plus any newly generated identifiers.
     inplace : bool, optional
-        If True, modifies the list in-place; otherwise, returns a new list.
-        Defaults to False.
+        If ``True``, modifies the input list; otherwise, works on a shallow copy.
+        Defaults to ``False``.
     convert_numbers_to_constant : bool, optional
-        If True, also convert numeric strings to indexed constants.
-        Defaults to True.
+        If ``True``, numeric strings consisting only of digits are also replaced.
+        Defaults to ``True``.
 
     Returns
     -------
     tuple[list[str], list[str]]
-        A tuple containing:
-        - The modified prefix expression.
-        - The list of constant names used.
+        Two items: the modified prefix expression and the list of constant
+        names used in order of appearance.
 
     Examples
     --------
-    >>> expr = ['*', '<constant>', '+', 'x', '2.5']
+    >>> expr = ['*', '<constant>', '+', 'x', '2']
     >>> explicit_constant_placeholders(expr)
     (['*', 'C_0', '+', 'x', 'C_1'], ['C_0', 'C_1'])
+
+    >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'])
+    (['+', 'K', 'C_0'], ['K', 'C_0', 'C_1'])
     """
     if inplace:
         modified_prefix_expression = prefix_expression
     else:
         modified_prefix_expression = prefix_expression.copy()
 
-    constant_index = 0
-    if constants is None:
-        constants = []
-    else:
-        constants = list(constants)
+    provided_constants = list(constants) if constants is not None else []
+    used_constants: list[str] = []
+    provided_index = 0
+    generated_index = 0
 
     for i, token in enumerate(prefix_expression):
         if token == "<constant>" or (convert_numbers_to_constant and (re.match(r"C_\d+", token) or token.isnumeric())):
-            if constants is not None and len(constants) > constant_index:
-                modified_prefix_expression[i] = constants[constant_index]
+            if provided_index < len(provided_constants):
+                constant_name = provided_constants[provided_index]
+                provided_index += 1
             else:
-                modified_prefix_expression[i] = f"C_{constant_index}"
-            constants.append(f"C_{constant_index}")
-            constant_index += 1
+                constant_name = f"C_{generated_index}"
+                generated_index += 1
 
-    return modified_prefix_expression, constants
+            modified_prefix_expression[i] = constant_name
+            used_constants.append(constant_name)
+
+    return modified_prefix_expression, used_constants
 
 
 def flatten_nested_list(nested_list: list) -> list[str]:
-    """Flatten an arbitrarily nested list into a single list.
+    """Flatten an arbitrarily nested list into a single list of leaf values.
 
-    This function uses a non-recursive, stack-based approach to efficiently
-    flatten a nested list structure into a single flat list of elements.
+    A stack-based traversal is used to avoid recursion limits. Because a LIFO
+    stack is employed, values appear in reverse depth-first order relative to
+    the original nesting. ``list(reversed(...))`` can be used to restore a
+    left-to-right ordering if required.
 
     Parameters
     ----------
@@ -354,7 +374,7 @@ def flatten_nested_list(nested_list: list) -> list[str]:
     Returns
     -------
     list[str]
-        The flattened list.
+        The flattened list of elements encountered during traversal.
 
     Examples
     --------
@@ -404,23 +424,37 @@ def is_prime(n: int) -> bool:
 def safe_f(f: Callable, X: np.ndarray, constants: np.ndarray | None = None) -> np.ndarray:
     """Safely evaluate a compiled function on an array of inputs.
 
-    This wrapper executes a function `f`, handling optional constants and
-    ensuring the output is always a NumPy array of the correct shape, even if
-    the function returns a scalar.
+    The callable ``f`` is invoked with the columns of ``X`` unpacked as separate
+    arguments, followed by any optional ``constants``. Scalar results are
+    broadcast to all samples to guarantee a one-dimensional NumPy array of
+    length ``X.shape[0]``.
 
     Parameters
     ----------
     f : Callable
         The function to evaluate.
     X : np.ndarray
-        The input data array, where rows are samples and columns are features.
+        Two-dimensional array of input samples. Each column is passed as a
+        positional argument to ``f``.
     constants : np.ndarray or None, optional
-        An array of constant values to pass to the function, by default None.
+        Extra constant values appended when calling ``f``. Defaults to ``None``.
 
     Returns
     -------
     np.ndarray
-        The result of the function evaluation as a NumPy array.
+        A one-dimensional array with the evaluation results for each row of
+        ``X``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> f = lambda x, y: x + y
+    >>> safe_f(f, np.array([[1, 2], [3, 4]]))
+    array([3, 7])
+
+    >>> g = lambda x, y, c0: c0
+    >>> safe_f(g, np.array([[1, 2], [3, 4]]), constants=np.array([5]))
+    array([5, 5])
     """
     if constants is None:
         y = f(*X.T)
@@ -569,7 +603,8 @@ def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[
     -------
     list[int]
         The factors of ``p``. Their product is equal to ``p`` and each factor is
-        less than or equal to ``max_factor``.
+        less than or equal to ``max_factor``. The factors are yielded in the
+        order they are discovered and are not sorted.
 
     Raises
     ------
@@ -580,9 +615,9 @@ def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[
     Examples
     --------
     >>> factorize_to_at_most(100, 10)
-    [10, 10]
+    [4, 5, 5]
     >>> factorize_to_at_most(18, 5)
-    [3, 3, 2]
+    [2, 3, 3]
     """
 
     if p < 1:
@@ -673,29 +708,37 @@ def mask_elementary_literals(prefix_expression: list[str], inplace: bool = False
 
 
 def construct_expressions(expressions_of_length: dict[int, set[tuple[str, ...]]], non_leaf_nodes: dict[str, int], must_have_sizes: list | set | None = None) -> Generator[tuple[str, ...], None, None]:
-    """Generate new, larger expressions by combining existing smaller ones.
+    """Generate new prefix expressions by combining existing building blocks.
 
-    This generator function builds complex mathematical expressions by taking a
-    set of existing expressions (grouped by length) and combining them using
-    a given set of operators (non-leaf nodes). It systematically creates all
-    possible new valid expressions.
+    Expressions are grouped by length in ``expressions_of_length``. For each
+    operator in ``non_leaf_nodes`` the generator enumerates every compatible
+    tuple of child expressions and yields the resulting prefix encoding. When
+    ``must_have_sizes`` is provided, at least one operand must have a length
+    contained in that collection before the expression is yielded.
 
     Parameters
     ----------
     expressions_of_length : dict[int, set[tuple[str, ...]]]
-        A dictionary mapping expression length to a set of expressions of that
-        length. These are the building blocks.
+        Mapping from expression length to the set of expressions with that
+        length.
     non_leaf_nodes : dict[str, int]
-        A dictionary of operators, mapping the operator token to its arity.
+        Mapping from operator tokens to their arity.
     must_have_sizes : list or set or None, optional
-        If provided, only generates combinations where at least one child
-        expression has a length present in this set. This is an optimization
-        to avoid redundant constructions. Defaults to None.
+        If provided, filters generated combinations so that at least one child
+        expression has a length contained in this collection. Defaults to
+        ``None``.
 
     Yields
     ------
     tuple[str, ...]
-        A new, valid prefix expression constructed from the inputs.
+        Newly constructed prefix expressions.
+
+    Examples
+    --------
+    >>> expressions = {1: {('x',), ('y',)}}
+    >>> operators = {'+': 2}
+    >>> sorted(construct_expressions(expressions, operators))
+    [('+', 'x', 'x'), ('+', 'x', 'y'), ('+', 'y', 'x'), ('+', 'y', 'y')]
     """
     expressions_of_length_with_lists = {k: list(v) for k, v in expressions_of_length.items()}
 
@@ -716,24 +759,32 @@ def construct_expressions(expressions_of_length: dict[int, set[tuple[str, ...]]]
 
 
 def apply_mapping(tree: list, mapping: dict[str, Any]) -> list:
-    """Apply a variable mapping to a target expression tree.
+    """Apply a placeholder-to-subtree mapping to a target expression tree.
 
-    This function is used after a successful pattern match. It takes a target
-    expression tree (which may contain placeholders like `_0`, `_1`) and a
-    mapping from those placeholders to actual subtrees. It returns a new tree
-    where all placeholders have been replaced by their corresponding subtrees.
+    Trees are represented as ``[operator, [operands...]]`` where each operand is
+    itself a tree. Leaves are encoded as one-element lists, for example
+    ``['x']``. Placeholders such as ``'_0'`` are replaced with the corresponding
+    subtree provided in ``mapping``.
 
     Parameters
     ----------
     tree : list
         The target expression tree containing placeholders.
     mapping : dict[str, Any]
-        The dictionary mapping placeholders to subtrees.
+        Dictionary mapping placeholder names to the subtrees that should
+        replace them.
 
     Returns
     -------
     list
-        The new expression tree with placeholders substituted.
+        A new expression tree with placeholders substituted.
+
+    Examples
+    --------
+    >>> template = ['mul', [['_0'], ['_1']]]
+    >>> mapping = {'_0': ['x'], '_1': ['add', [['y'], ['z']]]}
+    >>> apply_mapping(template, mapping)
+    ['mul', [['x'], ['add', [['y'], ['z']]]]]
     """
     # If the tree is a leaf node, replace the placeholder with the actual subtree defined in the mapping
     if len(tree) == 1 and isinstance(tree[0], str):
@@ -748,11 +799,10 @@ def apply_mapping(tree: list, mapping: dict[str, Any]) -> list:
 def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
     """Recursively match an expression tree against a pattern tree.
 
-    This function performs structural pattern matching. It checks if `tree`
-    conforms to the structure of `pattern`. The pattern can contain
-    placeholders (e.g., `_0`, `_1`) which match any subtree. If a match is
-    found, it returns True and a dictionary mapping the placeholders to the
-    subtrees they matched.
+    ``tree`` and ``pattern`` use the same representation as described in
+    :func:`apply_mapping`. Placeholders in ``pattern`` (for example ``'_0'``)
+    match any subtree. When a match succeeds the mapping is populated with the
+    subtrees that correspond to each placeholder.
 
     Parameters
     ----------
@@ -761,15 +811,21 @@ def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = No
     pattern : list
         The pattern tree to match against.
     mapping : dict[str, Any] or None, optional
-        An initial mapping dictionary. If None, an empty one is created.
-        Defaults to None.
+        Initial mapping dictionary. If ``None``, an empty one is created.
 
     Returns
     -------
     tuple[bool, dict[str, Any]]
-        A tuple containing:
-        - A boolean indicating if the match was successful.
-        - The dictionary mapping placeholders to the matched subtrees.
+        ``(True, mapping)`` when the structures align; otherwise ``(False, mapping)``.
+        The returned mapping may contain partial assignments even when the match
+        fails.
+
+    Examples
+    --------
+    >>> tree = ['mul', [['x'], ['add', [['y'], ['z']]]]]
+    >>> pattern = ['mul', [['_a'], ['_b']]]
+    >>> match_pattern(tree, pattern)
+    (True, {'_a': ['x'], '_b': ['add', [['y'], ['z']]]})
     """
     if mapping is None:
         mapping = {}

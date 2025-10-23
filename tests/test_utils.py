@@ -108,6 +108,20 @@ def test_explicit_constant_placeholders():
     assert sorted(result_constants) == sorted(expected_constants)
 
 
+def test_explicit_constant_placeholders_reuses_provided_constants():
+    expr = ['+', 'C_3', '<constant>']
+    result_expr, result_constants = utils.explicit_constant_placeholders(expr, constants=['K'])
+    assert result_expr == ['+', 'K', 'C_0']
+    assert result_constants == ['K', 'C_0']
+
+
+def test_explicit_constant_placeholders_discards_unused_constants():
+    expr = ['+', '<constant>']
+    result_expr, result_constants = utils.explicit_constant_placeholders(expr, constants=['K', 'L'])
+    assert result_expr == ['+', 'K']
+    assert result_constants == ['K']
+
+
 def test_flatten_nested_list():
     """Tests flattening of a nested list."""
     # Note: The implementation reverses the list, so the test reflects that.

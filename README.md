@@ -35,7 +35,7 @@ engine.simplify(('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'lo
 
 # Simplify infix expressions
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
-# > '(<constant> / x3)'
+# > '<constant> / x3'
 ```
 
 More examples can be found in the [documentation](https://simplipy.readthedocs.io/).
@@ -88,7 +88,7 @@ pytest tests --cov src --cov-report html -m "not integration"
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.2.8},
+    version = {0.2.9},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
