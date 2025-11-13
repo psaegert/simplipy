@@ -453,8 +453,9 @@ class SimpliPyEngine:
         list[str]
             A list of tokens representing the expression in prefix notation.
         """
-        # Regex to tokenize expression properly (handles floating-point numbers)
-        token_pattern = re.compile(r'<constant>|\d+\.\d+|\d+|[A-Za-z_][\w.]*|\*\*|[-+*/()]')
+        # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
+        number_pattern = r'(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
+        token_pattern = re.compile(rf'<constant>|{number_pattern}|[A-Za-z_][\w.]*|\*\*|[-+*/()]')
 
         # Tokenize the infix expression
         tokens = token_pattern.findall(infix_expression.replace(' ', ''))
@@ -469,8 +470,8 @@ class SimpliPyEngine:
         while i < len(tokens):
             token = tokens[i]
 
-            # Handle numbers (integers or floats)
-            if re.match(r'\d+\.\d+|\d+', token):  # Match positive or negative floats and integers
+            # Handle numbers (integers, floats, or scientific notation)
+            if re.fullmatch(number_pattern, token):
                 prefix_expr.append(token)
             elif re.match(r'[A-Za-z_][\w.]*', token) or token == '<constant>':  # Match functions and variables
                 prefix_expr.append(token)

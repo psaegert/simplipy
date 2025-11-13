@@ -130,6 +130,17 @@ def test_infix_to_prefix_roundtrip_preserves_semantics(engine: SimpliPyEngine, i
     assert canonical_roundtrip == canonical_original
 
 
+def test_parse_handles_scientific_notation(engine: SimpliPyEngine) -> None:
+    tokens = engine.parse('1.234e-5 * sin(v1)', convert_expression=False)
+    assert tokens == ['*', '1.234e-5', 'sin', 'v1']
+
+    canonical_tokens = engine.parse('1.234e-5 * sin(v1)')
+    assert canonical_tokens == ['*', '1.234e-5', 'sin', 'v1']
+
+    rendered = engine.prefix_to_infix(canonical_tokens)
+    assert rendered == '1.234e-5 * sin(v1)'
+
+
 def evaluate_prefix(
         engine: SimpliPyEngine,
         prefix: list[str],
