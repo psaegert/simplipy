@@ -455,7 +455,8 @@ class SimpliPyEngine:
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
         number_pattern = r'(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
-        token_pattern = re.compile(rf'<constant>|{number_pattern}|[A-Za-z_][\w.]*|\*\*|[-+*/()]')
+        # Include caret '^' as a distinct power token so users can write x ^ 3
+        token_pattern = re.compile(rf'<constant>|{number_pattern}|[A-Za-z_][\w.]*|\*\*|[-+*/^()]')
 
         # Tokenize the infix expression
         tokens = token_pattern.findall(infix_expression.replace(' ', ''))
@@ -469,6 +470,10 @@ class SimpliPyEngine:
         i = 0
         while i < len(tokens):
             token = tokens[i]
+
+            # Normalize alternative power symbol '^' to the canonical '**'
+            if token == '^':
+                token = '**'
 
             # Handle numbers (integers, floats, or scientific notation)
             if re.fullmatch(number_pattern, token):

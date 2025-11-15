@@ -141,6 +141,20 @@ def test_parse_handles_scientific_notation(engine: SimpliPyEngine) -> None:
     assert rendered == '1.234e-5 * sin(v1)'
 
 
+def test_parse_handles_caret_power(engine: SimpliPyEngine) -> None:
+    # caret '^' should be accepted as power and be semantically equivalent to '**'
+    # We don't assert the exact unconverted token layout (implementation details may vary
+    # between engines), but the canonical converted form must represent a power
+    # and the roundtrip infix must be a power expression.
+    canonical = engine.parse('x1 ^ 3')
+    # After conversion the engine should use its internal power operators (e.g. 'pow3')
+    assert isinstance(canonical, list) and len(canonical) >= 1
+
+    rendered = engine.prefix_to_infix(canonical, power='**')
+    # Accept either 'x1**3' or 'x1 ** 3' formatting
+    assert rendered.replace(' ', '') == 'x1**3'
+
+
 def evaluate_prefix(
         engine: SimpliPyEngine,
         prefix: list[str],

@@ -88,7 +88,7 @@ pytest tests --cov src --cov-report html -m "not integration"
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.2.10},
+    version = {0.2.11},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
