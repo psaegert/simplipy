@@ -13,7 +13,7 @@ from typing import Callable
 from pathlib import Path
 from multiprocessing import Queue, Process
 from multiprocessing.shared_memory import SharedMemory
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from copy import deepcopy
 from math import prod
 from collections import defaultdict
@@ -1470,14 +1470,14 @@ class SimpliPyEngine:
 
     def simplify(
             self,
-            expression: str | list[str] | tuple[str, ...],
+            expression: str | list[str] | tuple[str, ...] | np.ndarray,
             max_iter: int = 5,
             max_pattern_length: int | None = None,
             mask_elementary_literals: bool = True,
             apply_simplification_rules: bool = True,
             inplace: bool = False,
             collect_rule_statistics: bool = False,
-            verbose: bool = False) -> str | list[str] | tuple[str, ...]:
+            verbose: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Performs a full simplification of a mathematical expression.
 
         This is the main public method for simplification. It iteratively
@@ -1486,9 +1486,9 @@ class SimpliPyEngine:
 
         Parameters
         ----------
-        expression : str or list[str] or tuple[str, ...]
-            The expression to simplify, given as an infix string or a
-            prefix token list/tuple.
+        expression : str or list[str] or tuple[str, ...] or np.ndarray
+            The expression to simplify, given as an infix string, a prefix
+            token list/tuple, or a one-dimensional numpy array of tokens.
         max_iter : int, optional
             The maximum number of simplification iterations. Defaults to 5.
         max_pattern_length : int or None, optional
@@ -1507,26 +1507,42 @@ class SimpliPyEngine:
 
         Returns
         -------
-        str or list[str] or tuple[str, ...]
+        str or list[str] or tuple[str, ...] or np.ndarray
             The simplified expression, in the same format as the input. If the
             simplification results in a longer expression, the original
             expression is returned.
         """
+        list_expression_ref: list[str] | None = None
+        original_expression: str | list[str] | tuple[str, ...] | np.ndarray
+        current_expression: list[str]
+
         if isinstance(expression, str):
             return_type = 'str'
-            original_expression: str | list[str] | tuple[str, ...] = "" + expression  # Create a copy
-            expression = self.parse(expression, convert_expression=True, mask_numbers=False)
+            original_expression = "" + expression  # Create a copy
+            current_expression = self.parse(expression, convert_expression=True, mask_numbers=False)
         elif isinstance(expression, tuple):
             return_type = 'tuple'
             original_expression = expression  # No need to copy immutable tuple
-            expression = list(expression)
+            current_expression = list(expression)
+        elif isinstance(expression, np.ndarray):
+            if expression.ndim != 1:
+                raise ValueError('`simplify` expects a one-dimensional numpy array of tokens')
+            if expression.dtype.kind not in {'U', 'S', 'O'}:
+                raise ValueError('`simplify` expects a numpy array of string-like tokens')
+            if inplace:
+                raise ValueError('`inplace=True` is not supported when the expression is a numpy array')
+            return_type = 'np_array'
+            original_expression = expression.copy()
+            current_expression = cast(list[str], expression.tolist())
         else:
             return_type = 'list'
+            list_expression_ref = expression
             original_expression = expression.copy()
+            current_expression = expression.copy()
 
-        new_expression = expression.copy()
+        new_expression: list[str] = current_expression.copy()
 
-        length_before = len(expression)
+        length_before = len(current_expression)
 
         if verbose:
             print(f'Initial expression: {new_expression}')
@@ -1553,9 +1569,9 @@ class SimpliPyEngine:
             if verbose:
                 print(f'{i}: _apply_simplifcation_rules: {new_expression}')
 
-            if new_expression == expression:
+            if new_expression == current_expression:
                 break
-            expression = new_expression
+            current_expression = new_expression
 
         # Sort operands
         new_expression = self.sort_operands(new_expression)
@@ -1576,23 +1592,29 @@ class SimpliPyEngine:
                     return original_expression
                 case 'tuple':
                     return tuple(original_expression)
+                case 'np_array':
+                    original_np_expression = cast(np.ndarray, original_expression)
+                    return original_np_expression.copy()
                 case 'list':
-                    if inplace:
-                        expression[:] = original_expression
-                    else:
-                        expression = original_expression
-            return expression
+                    if inplace and list_expression_ref is not None:
+                        list_expression_ref[:] = original_expression
+                        return list_expression_ref
+                    return original_expression
+            return original_expression
 
         match return_type:
             case 'str':
                 return self.prefix_to_infix(new_expression, realization=False, power='**')
             case 'tuple':
                 return tuple(new_expression)
+            case 'np_array':
+                original_np_expression = cast(np.ndarray, original_expression)
+                return np.array(new_expression, dtype=original_np_expression.dtype, copy=True)
             case 'list':
-                if inplace:
-                    expression[:] = new_expression
-                else:
-                    expression = new_expression
+                if inplace and list_expression_ref is not None:
+                    list_expression_ref[:] = new_expression
+                    return list_expression_ref
+                return new_expression
 
         return new_expression
 
