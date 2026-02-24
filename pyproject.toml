@@ -7,7 +7,7 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
-version = "0.2.11"
+version = "0.2.12"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
@@ -37,7 +37,14 @@ dev = [
     "types-tqdm",
     "types-toml",
     "types-PyYAML",
-    "radon"
+    "radon",
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocs-autorefs",
+    "mkdocstrings",
+    "mkdocs-get-deps",
+    "mkdocs-material-extensions",
+    "mkdocstrings-python"
 ]
 torch = [
     "torch>=1.0.0"
