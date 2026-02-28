@@ -17,6 +17,9 @@
 
 </div>
 
+# Publications
+- Saegert & Köthe 2026, _Breaking the Simplification Bottleneck in Amortized Neural Symbolic Regression_ (preprint, under review) [https://arxiv.org/abs/2602.08885](https://arxiv.org/abs/2602.08885)
+
 
 # Usage
 
@@ -42,7 +45,7 @@ More examples can be found in the [documentation](https://simplipy.readthedocs.i
 
 # Performance
 
-<img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/dev_7-3_multi_simplification_length_histogram.png" alt="Original vs Simplified Length and Simplification Time"/>
+<!-- <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplification_comparison_simplipy_sympy.svg" alt="Original vs Simplified Length and Simplification Time"/>
 
 > Simplification efficacy and efficiency for different maximum pattern lengths (Engine: `dev_7-3`).
 > Original expressions sampled with the [Lample-Charton Algorithm](https://arxiv.org/abs/1912.01412) using the following parameters:
@@ -54,8 +57,18 @@ More examples can be found in the [documentation](https://simplipy.readthedocs.i
 >
 > Points show bootstrapped mean and 95% confidence interval (N = 10,000).
 > Orange points are within the 95% confidence interval of the shortest simplified length for the respective original length.
-> Using patterns beyond a length of 4 tokens does not yield significant improvements and comes at a cost of increased simplification time.
+> Using patterns beyond a length of 4 tokens does not yield significant improvements and comes at a cost of increased simplification time. -->
 
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplification_comparison_simplipy_sympy.svg" alt="Original vs Simplified Length and Simplification Time" width="500">
+      <p><strong>Left:</strong> Empirical Cumulative Distribution Functions (ECDFs) of simplification wall-clock time. Our SimpliPy rewriting engine (shades of blue, varying Lmax) operates in the low to moderate millisecond regime, orders of magnitude faster than the SymPy <a href="https://peerj.com/articles/cs-103/">[Meurer et al. 2017]</a> baseline (orange, red). <strong>Right:</strong> ECDF of the simplification ratio |τ ∗|/|τ |. The inset highlights the tail of the distribution. Our method with Lmax ≥ 5 achieves simplification ratios comparable to the SymPy baseline while maintaining high throughput.<br>
+      Source expressions are sampled with 0 to 17 unique variables and 1 to 35 symbols <a href="https://arxiv.org/abs/2602.08885">[Saegert & Köthe 2026]</a></p>
+    </td>
+  </tr>
+</table>
 
 # Development
 
@@ -83,6 +96,17 @@ pytest tests --cov src --cov-report html -m "not integration"
 
 # Citation
 ```bibtex
+@misc{saegert2026breakingsimplificationbottleneckamortized,
+  title   = {Breaking the Simplification Bottleneck in Amortized Neural Symbolic Regression},
+  author  = {Paul Saegert and Ullrich Köthe},
+  year    = {2026},
+  eprint  = {2602.08885},
+  archivePrefix =  {arXiv},
+  primaryClass  = {cs.LG},
+  url     = {https://arxiv.org/abs/2602.08885},
+}
+
+% Optionally
 @software{simplipy-2025,
     author = {Paul Saegert},
     title = {Efficient Simplification of Mathematical Expressions},
