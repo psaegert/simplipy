@@ -2042,6 +2042,11 @@ class SimpliPyEngine:
                     try:
                         expression_to_simplify = next(work_iter)
                         simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
+                        # Skip expressions that already simplify via existing rules (Kruskal-style pruning)
+                        if simplified_length < len(expression_to_simplify):
+                            n_scanned += 1
+                            pbar.update(1)
+                            continue
                         if max_target_pattern_length is None:
                             allowed_candidate_lengths = tuple(range(simplified_length))
                         else:
@@ -2095,6 +2100,11 @@ class SimpliPyEngine:
                                     current_length = len(expression_to_simplify)
 
                                 simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
+                                # Skip expressions that already simplify via existing rules (Kruskal-style pruning)
+                                if simplified_length < len(expression_to_simplify):
+                                    n_scanned += 1
+                                    pbar.update(1)
+                                    continue
                                 if max_target_pattern_length is None:
                                     allowed_candidate_lengths = tuple(range(simplified_length))
                                 else:
