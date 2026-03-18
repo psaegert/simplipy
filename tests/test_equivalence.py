@@ -2,7 +2,6 @@ import pytest
 import json
 import numpy as np
 import warnings
-from collections import defaultdict
 import simplipy as sp
 
 # Assume the new module is at simplipy.asset_manager
@@ -46,8 +45,7 @@ def test_equivalence_10k_with_asset_manager():
         f = engine.code_to_lambda(code)
 
         # Candidate Expression
-        engine.rule_application_statistics = defaultdict(int)
-        simplified_expression = engine.simplify(expression, collect_rule_statistics=True)
+        simplified_expression = engine.simplify(expression, collect_statistics=True)
         executable_candidate_expression = engine.operators_to_realizations(simplified_expression)
         candidate_prefix_expression_with_constants, candidate_constants = sp.explicit_constant_placeholders(executable_candidate_expression, convert_numbers_to_constant=False)
         candidate_code_string = engine.prefix_to_infix(candidate_prefix_expression_with_constants, realization=True)
@@ -109,6 +107,6 @@ def test_equivalence_10k_with_asset_manager():
             print(f'Percent of mismatches (absolute): {np.mean(np.abs(y_filtered - y_candidate_filtered) > 1e-8) * 100:.2f}%')
             print(f'Percent of mismatches (relative): {np.mean(np.abs((y_filtered - y_candidate_filtered) / np.where(y_filtered != 0, y_filtered, 1)) > 1e-5) * 100:.2f}%')
 
-            print(engine.rule_application_statistics)
+            print(engine.simplification_statistics)
 
         assert expressions_match, "Expressions do not match"

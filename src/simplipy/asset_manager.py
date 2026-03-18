@@ -1,5 +1,4 @@
 import json
-import os
 import shutil
 from pathlib import Path
 from typing import Literal
@@ -215,7 +214,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
 
             hf_hub_download(
                 repo_id=asset_info['repo_id'],
-                filename=os.path.join(asset_info['directory'], file),
+                filename=f"{asset_info['directory']}/{file}",
                 repo_type="dataset",
                 local_dir=local_dir,
             )
