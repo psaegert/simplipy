@@ -1016,7 +1016,7 @@ class SimpliPyEngine:
                 print(f'Applied explicit rule\t{flat_subtree} ->\n\t\t{replacement}\nto subtree\t{subtree}\n')
             # Parse and recursively simplify the replacement
             parsed_replacement, _ = self.parse_subtree(list(replacement), 0)
-            return self.apply_rules_top_down(parsed_replacement)
+            return self.apply_rules_top_down(parsed_replacement, max_pattern_length, collect_statistics, verbose)
 
         # Check pattern rules, starting with the largest patterns
         if max_pattern_length is None:
@@ -1046,10 +1046,10 @@ class SimpliPyEngine:
                     if verbose:
                         print(f'Applied pattern rule\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{subtree}\nwith mapping\t{mapping}\n')
                     # Recursively simplify the replacement
-                    return self.apply_rules_top_down(replacement_tree, max_pattern_length)
+                    return self.apply_rules_top_down(replacement_tree, max_pattern_length, collect_statistics, verbose)
 
         # No rule applied at this level, recursively simplify operands
-        simplified_operands = [self.apply_rules_top_down(operand, max_pattern_length) for operand in operands]
+        simplified_operands = [self.apply_rules_top_down(operand, max_pattern_length, collect_statistics, verbose) for operand in operands]
         simplified_subtree = [operator, simplified_operands]
 
         # After simplifying operands, check again if a rule now applies
@@ -1067,7 +1067,7 @@ class SimpliPyEngine:
             if verbose:
                 print(f'Applied explicit rule (after operand simplification)\t{flat_simplified} ->\n\t\t{replacement}\nto subtree\t{simplified_subtree}\n')
             parsed_replacement, _ = self.parse_subtree(list(replacement), 0)
-            return self.apply_rules_top_down(parsed_replacement, max_pattern_length)
+            return self.apply_rules_top_down(parsed_replacement, max_pattern_length, collect_statistics, verbose)
 
         # Check pattern rules again
         for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):
@@ -1089,7 +1089,7 @@ class SimpliPyEngine:
                         stats.post_operand_rule_applications += 1
                     if verbose:
                         print(f'Applied pattern rule (after operand simplification)\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{simplified_subtree}\nwith mapping\t{mapping}\n')
-                    return self.apply_rules_top_down(replacement_tree, max_pattern_length)
+                    return self.apply_rules_top_down(replacement_tree, max_pattern_length, collect_statistics, verbose)
 
         return simplified_subtree
 
