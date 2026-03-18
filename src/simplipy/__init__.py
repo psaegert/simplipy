@@ -1,4 +1,4 @@
-from .engine import SimpliPyEngine
+from .engine import SimpliPyEngine, SimplificationStatistics
 from . import engine
 from . import operators
 from . import utils
