@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 import os
 from simplipy import SimpliPyEngine
@@ -22,6 +23,15 @@ def main(argv: str = None) -> None:
     find_simplifications_parser.add_argument('-s', '--save-every', type=int, default=100_000, help='Save the simplifications every n rules')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
+
+    # Prune-rules command
+    prune_rules_parser = subparsers.add_parser("prune-rules", help="Remove explicit rules subsumed by wildcard-pattern rules")
+    prune_rules_parser.add_argument(
+        '-e', '--engine', type=str, required=True,
+        help='Name of an official engine (e.g., dev_7-3) or a local path to an engine configuration file'
+    )
+    prune_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned rules json file')
+    prune_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
     # Install command
     install_parser = subparsers.add_parser("install", help="Install official assets from Hugging Face")
@@ -71,6 +81,25 @@ def main(argv: str = None) -> None:
                 save_every=args.save_every,
                 reset_rules=args.reset_rules,
                 verbose=args.verbose)
+
+        case 'prune-rules':
+            engine_config_path = get_path(args.engine)
+            if not engine_config_path:
+                sys.exit(1)
+
+            engine = SimpliPyEngine.from_config(engine_config_path)
+            n_before = len(engine.simplification_rules)
+            n_pruned = engine.prune_redundant_rules(verbose=args.verbose)
+
+            output_dir = os.path.dirname(args.output_file)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+
+            with open(args.output_file, 'w') as f:
+                json.dump(engine.simplification_rules, f, indent=4)
+
+            print(f'Pruned {n_pruned} redundant rules ({n_before} -> {len(engine.simplification_rules)})')
+            print(f'Saved to {args.output_file}')
 
         case 'install':
             if not install_asset(args.type, args.name, force=args.force):

@@ -2,6 +2,7 @@ import re
 import time
 import math
 import itertools
+from collections import Counter
 from types import CodeType
 from typing import Any, Generator, Callable
 from copy import deepcopy
@@ -929,3 +930,33 @@ def remove_pow1(prefix_expression: list[str]) -> list[str]:
         filtered_expression.append(token)
 
     return filtered_expression
+
+
+_WILDCARD_RE = re.compile(r'^_\d+$')
+
+
+def violates_wildcard_multiplicity(lhs: list[str] | tuple[str, ...], rhs: list[str] | tuple[str, ...]) -> bool:
+    """Check whether a rule violates the non-increasing wildcard multiplicity condition.
+
+    A rule ``lhs -> rhs`` violates the condition when any wildcard token
+    (matching ``_\\d+``) appears *more* times on the right-hand side than on
+    the left-hand side. Enforcing this property guarantees that repeated
+    rule application cannot increase expression size, which is required for
+    termination of the simplification loop.
+
+    Parameters
+    ----------
+    lhs : list[str] or tuple[str, ...]
+        The source (left-hand side) of the rule in prefix notation.
+    rhs : list[str] or tuple[str, ...]
+        The target (right-hand side) of the rule in prefix notation.
+
+    Returns
+    -------
+    bool
+        ``True`` if the rule violates the condition (i.e. some wildcard has
+        higher multiplicity on the RHS), ``False`` otherwise.
+    """
+    lhs_wc = Counter(t for t in lhs if _WILDCARD_RE.match(t))
+    rhs_wc = Counter(t for t in rhs if _WILDCARD_RE.match(t))
+    return any(rhs_wc[w] > lhs_wc[w] for w in rhs_wc)
