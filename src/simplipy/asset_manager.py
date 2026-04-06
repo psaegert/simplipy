@@ -75,7 +75,7 @@ def fetch_manifest(repo_id: str | None = None, manifest_filename: str | None = N
         return {}
 
 
-def get_path(asset: str, install: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> str | None:
+def get_path(asset: str, install: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> str:
     """Resolve the local filesystem path to an asset's entrypoint file.
 
     This function serves as a universal resolver for SimpliPy assets. It first

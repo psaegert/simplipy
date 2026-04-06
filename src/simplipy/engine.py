@@ -29,7 +29,8 @@ from simplipy.utils import (
     factorize_to_at_most, is_numeric_string,
     get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, explicit_constant_placeholders,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
-    construct_expressions, apply_mapping, match_pattern, remove_pow1, violates_wildcard_multiplicity)
+    construct_expressions, apply_mapping, match_pattern, remove_pow1, violates_wildcard_multiplicity,
+    _WILDCARD_RE)
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
@@ -199,7 +200,7 @@ class SimpliPyEngine:
         for idx, r in enumerate(self.simplification_rules):
             key = (tuple(r[0]), tuple(r[1]))
             self._rule_index_lookup[key] = idx
-            if any(re.match(r'_\d+', t) for t in r[0]):
+            if any(_WILDCARD_RE.match(t) for t in r[0]):
                 simplification_rules_patterns.append(r)
             else:
                 simplification_rules_no_patterns.append(r)
@@ -216,10 +217,10 @@ class SimpliPyEngine:
         transformation, or when constant folding / term cancellation achieve
         the same result.
 
-        The method temporarily removes each explicit rule from the compiled
-        lookup dict, runs :meth:`simplify`, and checks whether the output
-        matches.  After identifying all redundant rules it updates
-        :attr:`simplification_rules` and recompiles.
+        Rules are tested and removed serially: once a rule is found redundant
+        it stays removed for all subsequent tests.  This avoids over-pruning
+        in the case where two explicit rules each appear redundant in the
+        presence of the other but neither is covered by a pattern rule alone.
 
         Parameters
         ----------
@@ -232,44 +233,44 @@ class SimpliPyEngine:
         int
             The number of rules that were pruned.
         """
-        is_wildcard = re.compile(r'^_\d+$')
-
         # Collect indices of explicit (non-pattern) rules
         explicit_indices = [
             i for i, (lhs, _rhs) in enumerate(self.simplification_rules)
-            if not any(is_wildcard.match(t) for t in lhs)
+            if not any(_WILDCARD_RE.match(t) for t in lhs)
         ]
 
-        redundant_indices: set[int] = set()
+        n_pruned = 0
+        pruned_indices: set[int] = set()
 
         for idx in tqdm(explicit_indices, desc='Pruning redundant rules', disable=not verbose):
             lhs, rhs = self.simplification_rules[idx]
             lhs_key = tuple(lhs)
 
-            # Temporarily remove this explicit rule from the compiled dict
+            # Remove this explicit rule from the compiled dict
             saved = self.simplification_rules_no_patterns.pop(lhs_key, None)
 
-            try:
-                result = self.simplify(list(lhs), mask_elementary_literals=False)
-                if tuple(result) == tuple(rhs):
-                    redundant_indices.add(idx)
-            finally:
-                # Restore the rule so subsequent tests are independent
+            result = self.simplify(list(lhs), mask_elementary_literals=False)
+            if tuple(result) == tuple(rhs):
+                # Rule is redundant — keep it removed
+                pruned_indices.add(idx)
+                n_pruned += 1
+            else:
+                # Rule is needed — restore it
                 if saved is not None:
                     self.simplification_rules_no_patterns[lhs_key] = saved
 
-        if redundant_indices:
+        if pruned_indices:
             self.simplification_rules = [
                 rule for i, rule in enumerate(self.simplification_rules)
-                if i not in redundant_indices
+                if i not in pruned_indices
             ]
             self.compile_rules()
 
         if verbose:
-            print(f'Pruned {len(redundant_indices)} redundant explicit rules '
+            print(f'Pruned {n_pruned} redundant explicit rules '
                   f'({len(self.simplification_rules)} rules remaining)')
 
-        return len(redundant_indices)
+        return n_pruned
 
     def import_modules(self) -> None:
         """Imports Python modules required by operator realizations.
@@ -2042,7 +2043,7 @@ class SimpliPyEngine:
                     result_queue.put(None)
                 else:
                     # Prefer candidates with fewer <constant> tokens; among ties, keep discovery order.
-                    # Lazily check the non-increasing wildcard multiplicity condition (termination guarantee).
+                    # Lazily check the non-increasing wildcard multiplicity condition (no subtree duplication).
                     found_simplifications.sort(key=lambda s: s.count('<constant>'))
                     selected = None
                     for candidate in found_simplifications:
@@ -2073,6 +2074,7 @@ class SimpliPyEngine:
             output_file: str | None = None,
             save_every: int = 100,
             reset_rules: bool = True,
+            prune: bool = False,
             verbose: bool = False,
             n_workers: int | None = None) -> None:
         """Systematically discovers new simplification rules.
@@ -2113,6 +2115,10 @@ class SimpliPyEngine:
             How often to save the rules to the output file.
         reset_rules : bool, optional
             If True, clears existing rules before starting.
+        prune : bool, optional
+            If True, runs :meth:`prune_redundant_rules` after discovery to
+            remove explicit rules that are subsumed by wildcard-pattern rules.
+            This can be expensive for large rule sets. Defaults to False.
         verbose : bool, optional
             If True, shows progress bars and status updates.
         n_workers : int or None, optional
@@ -2407,7 +2413,8 @@ class SimpliPyEngine:
                     time.sleep(1)  # Give time for the user to interrupt the process
                     self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
                     self.compile_rules()
-                    self.prune_redundant_rules(verbose=verbose)
+                    if prune:
+                        self.prune_redundant_rules(verbose=verbose)
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
 

@@ -22,6 +22,7 @@ def main(argv: str = None) -> None:
     find_simplifications_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to the output json file')
     find_simplifications_parser.add_argument('-s', '--save-every', type=int, default=100_000, help='Save the simplifications every n rules')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
+    find_simplifications_parser.add_argument('--prune', action='store_true', help='Prune redundant explicit rules after discovery (can be expensive)')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
 
     # Prune-rules command
@@ -54,10 +55,11 @@ def main(argv: str = None) -> None:
     # Execute the command
     match args.command_name:
         case 'find-rules':
-            # Resolve engine name to a config path (will auto-install if needed)
-            engine_config_path = get_path(args.engine)
-            if not engine_config_path:
-                sys.exit(1)  # get_asset_path prints the error
+            try:
+                engine_config_path = get_path(args.engine)
+            except (FileNotFoundError, ValueError, RuntimeError) as e:
+                print(f'Error: {e}', file=sys.stderr)
+                sys.exit(1)
 
             if args.verbose:
                 print(f'Finding simplifications with engine {engine_config_path}')
@@ -80,11 +82,14 @@ def main(argv: str = None) -> None:
                 output_file=args.output_file,
                 save_every=args.save_every,
                 reset_rules=args.reset_rules,
+                prune=args.prune,
                 verbose=args.verbose)
 
         case 'prune-rules':
-            engine_config_path = get_path(args.engine)
-            if not engine_config_path:
+            try:
+                engine_config_path = get_path(args.engine)
+            except (FileNotFoundError, ValueError, RuntimeError) as e:
+                print(f'Error: {e}', file=sys.stderr)
                 sys.exit(1)
 
             engine = SimpliPyEngine.from_config(engine_config_path)

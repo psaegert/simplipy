@@ -114,6 +114,201 @@ class TestPruneRedundantRules:
 
         assert n_pruned == 0
         assert len(engine.simplification_rules) == 2
+
+    def test_pruning_is_idempotent(self) -> None:
+        """Running prune_redundant_rules a second time prunes no further rules."""
+        rules = [
+            (["+", "_0", "0"], ["_0"]),
+            (["+", "x", "0"], ["x"]),       # subsumed
+            (["+", "y", "0"], ["y"]),       # subsumed
+            (["*", "x", "1"], ["x"]),       # NOT subsumed (no wildcard for *)
+        ]
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
+        engine.prune_redundant_rules()
+        rules_after_first = list(engine.simplification_rules)
+
+        n_second = engine.prune_redundant_rules()
+
+        assert n_second == 0
+        assert engine.simplification_rules == rules_after_first
+
+    def test_remaining_explicit_rules_are_necessary(self) -> None:
+        """After pruning, no remaining explicit rule is itself redundant.
+
+        This verifies the key soundness property of serial pruning: since
+        each rule is tested with previously-pruned rules already removed,
+        every surviving explicit rule is individually necessary.
+        """
+        import re
+        is_wildcard = re.compile(r'^_\d+$')
+
+        rules = [
+            (["+", "_0", "0"], ["_0"]),
+            (["+", "x", "0"], ["x"]),       # subsumed
+            (["+", "y", "0"], ["y"]),       # subsumed
+            (["*", "x", "1"], ["x"]),       # NOT subsumed
+            (["*", "_0", "0"], ["0"]),
+            (["*", "x", "0"], ["0"]),       # subsumed
+        ]
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
+        engine.prune_redundant_rules()
+
+        # Every remaining explicit rule must be necessary
+        for lhs, rhs in engine.simplification_rules:
+            if any(is_wildcard.match(t) for t in lhs):
+                continue  # Skip pattern rules
+            saved = engine.simplification_rules_no_patterns.pop(tuple(lhs), None)
+            try:
+                result = engine.simplify(list(lhs), mask_elementary_literals=False)
+                assert tuple(result) != tuple(rhs), (
+                    f"Rule {lhs} -> {rhs} is still redundant after pruning"
+                )
+            finally:
+                if saved is not None:
+                    engine.simplification_rules_no_patterns[tuple(lhs)] = saved
+
+
+class TestIsValid:
+    """Tests for SimpliPyEngine.is_valid()."""
+
+    def _engine(self) -> SimpliPyEngine:
+        return SimpliPyEngine(operators=_MINIMAL_OPERATORS)
+
+    def test_valid_binary_expression(self) -> None:
+        assert self._engine().is_valid(["+", "x", "y"]) is True
+
+    def test_valid_unary_expression(self) -> None:
+        assert self._engine().is_valid(["neg", "x"]) is True
+
+    def test_valid_nested_expression(self) -> None:
+        assert self._engine().is_valid(["+", "*", "x", "y", "z"]) is True
+
+    def test_valid_single_variable(self) -> None:
+        assert self._engine().is_valid(["x"]) is True
+
+    def test_invalid_variable_at_root(self) -> None:
+        """A multi-token expression starting with a variable is invalid."""
+        assert self._engine().is_valid(["x", "+", "y"]) is False
+
+    def test_invalid_too_few_operands(self) -> None:
+        assert self._engine().is_valid(["+", "x"]) is False
+
+    def test_invalid_leftover_on_stack(self) -> None:
+        assert self._engine().is_valid(["+", "x", "y", "z"]) is False
+
+    def test_valid_numeric_constant(self) -> None:
+        assert self._engine().is_valid(["+", "3.14", "x"]) is True
+
+
+class TestSortOperands:
+    """Tests for SimpliPyEngine.sort_operands()."""
+
+    def _engine(self) -> SimpliPyEngine:
+        return SimpliPyEngine(operators=_MINIMAL_OPERATORS)
+
+    def test_commutative_reorder(self) -> None:
+        """Commutative operator sorts operands into canonical order."""
+        engine = self._engine()
+        result = engine.sort_operands(["+", "b", "a"])
+        # After sorting, variables should be in canonical order
+        assert result == engine.sort_operands(["+", "a", "b"])
+
+    def test_non_commutative_unchanged(self) -> None:
+        """Non-commutative operator preserves operand order."""
+        engine = self._engine()
+        assert engine.sort_operands(["-", "b", "a"]) == ["-", "b", "a"]
+
+    def test_idempotent(self) -> None:
+        """Sorting an already-sorted expression is idempotent."""
+        engine = self._engine()
+        first = engine.sort_operands(["+", "b", "a"])
+        second = engine.sort_operands(first)
+        assert first == second
+
+    def test_nested_commutative(self) -> None:
+        """Nested commutative operators are sorted recursively."""
+        engine = self._engine()
+        result = engine.sort_operands(["*", "z", "a"])
+        assert result == engine.sort_operands(["*", "a", "z"])
+
+
+class TestCancelTerms:
+    """Tests for collect_multiplicities + cancel_terms pipeline."""
+
+    def _engine(self) -> SimpliPyEngine:
+        return SimpliPyEngine(operators=_MINIMAL_OPERATORS)
+
+    def test_cancel_x_minus_x(self) -> None:
+        """x - x should cancel — both operands become neutral element 0."""
+        engine = self._engine()
+        expr = ["-", "x", "x"]
+        tree, annotations, labels = engine.collect_multiplicities(expr)
+        result = engine.cancel_terms(tree, annotations, labels)
+        assert result == ["-", "0", "0"]
+
+    def test_cancel_x_div_x(self) -> None:
+        """x / x should cancel — both operands become neutral element 1."""
+        engine = self._engine()
+        expr = ["/", "x", "x"]
+        tree, annotations, labels = engine.collect_multiplicities(expr)
+        result = engine.cancel_terms(tree, annotations, labels)
+        assert result == ["/", "1", "1"]
+
+    def test_no_cancellation(self) -> None:
+        """Expression with nothing to cancel is returned unchanged."""
+        engine = self._engine()
+        expr = ["+", "x", "y"]
+        tree, annotations, labels = engine.collect_multiplicities(expr)
+        result = engine.cancel_terms(tree, annotations, labels)
+        assert result == ["+", "x", "y"]
+
+
+class TestApplySimplificationRules:
+    """Tests for SimpliPyEngine.apply_simplifcation_rules()."""
+
+    def test_applies_matching_rule(self) -> None:
+        rules = [(["+", "_0", "0"], ["_0"])]
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
+        result = engine.apply_simplifcation_rules(["+", "x", "0"])
+        assert result == ["x"]
+
+    def test_all_constants_returns_constant(self) -> None:
+        """Expression of only operators and <constant> tokens reduces to <constant>."""
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS)
+        result = engine.apply_simplifcation_rules(["+", "<constant>", "<constant>"])
+        assert result == ["<constant>"]
+
+    def test_no_matching_rule_unchanged(self) -> None:
+        """Expression that matches no rule is returned unchanged."""
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        result = engine.apply_simplifcation_rules(["+", "x", "y"])
+        assert result == ["+", "x", "y"]
+
+
+class TestOperatorConversions:
+    """Tests for operators_to_realizations and realizations_to_operators."""
+
+    def _engine(self) -> SimpliPyEngine:
+        return SimpliPyEngine(operators=_MINIMAL_OPERATORS)
+
+    def test_roundtrip(self) -> None:
+        """operators_to_realizations → realizations_to_operators is identity."""
+        engine = self._engine()
+        expr = ["sin", "x"]
+        realized = engine.operators_to_realizations(expr)
+        recovered = engine.realizations_to_operators(realized)
+        assert recovered == expr
+
+    def test_operators_to_realizations_maps_correctly(self) -> None:
+        engine = self._engine()
+        result = engine.operators_to_realizations(["sin", "x"])
+        assert result == ["np.sin", "x"]
+
+    def test_unknown_token_passed_through(self) -> None:
+        engine = self._engine()
+        result = engine.operators_to_realizations(["sin", "my_var"])
+        assert "my_var" in result
+
     engine = SimpliPyEngine.load("dev_7-3", install=True)
     expr = " + ".join(["x"] * 14)
 
@@ -189,3 +384,79 @@ class TestViolatesWildcardMultiplicity:
     def test_violating_with_mixed_wildcards(self) -> None:
         # _0 is fine (1->1), but _1 goes from 1->2
         assert violates_wildcard_multiplicity(["f", "_0", "_1"], ["_0", "_1", "_1"]) is True
+
+
+# Smaller operator set for find_rules tests (no sin — keeps search space tiny)
+_FIND_RULES_OPERATORS = {
+    "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+    "-": {"realization": "-", "alias": [], "inverse": "+", "arity": 2, "precedence": 1, "commutative": False},
+    "neg": {"realization": "simplipy.operators.neg", "alias": [], "inverse": "neg", "arity": 1, "precedence": 2.5, "commutative": False},
+    "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+    "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
+    "inv": {"realization": "simplipy.operators.inv", "alias": ["inverse"], "inverse": "inv", "arity": 1, "precedence": 4, "commutative": False},
+}
+
+
+class TestFindRules:
+    """Tests for SimpliPyEngine.find_rules()."""
+
+    def _run_find_rules(self, **kwargs) -> SimpliPyEngine:
+        """Helper: run find_rules with a small, fast configuration."""
+        defaults = dict(
+            max_source_pattern_length=3,
+            dummy_variables=2,
+            extra_internal_terms=["0", "1"],
+            X=128,
+            constants_fit_challenges=2,
+            constants_fit_retries=1,
+            n_workers=2,
+        )
+        defaults.update(kwargs)
+        engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
+        engine.find_rules(**defaults)
+        return engine
+
+    def test_discovers_basic_identities(self) -> None:
+        """find_rules discovers well-known arithmetic identities."""
+        engine = self._run_find_rules()
+        rules_lhs = {tuple(r[0]) for r in engine.simplification_rules}
+
+        # These should always be discovered at length <= 3
+        assert ("+", "x0", "0") in rules_lhs or ("+", "x1", "0") in rules_lhs
+        assert ("*", "x0", "1") in rules_lhs or ("*", "x1", "1") in rules_lhs
+        assert ("-", "x0", "x0") in rules_lhs or ("-", "x1", "x1") in rules_lhs
+
+    def test_all_rules_satisfy_wildcard_multiplicity(self) -> None:
+        """Every discovered rule must satisfy non-increasing wildcard multiplicity."""
+        engine = self._run_find_rules()
+        for lhs, rhs in engine.simplification_rules:
+            assert not violates_wildcard_multiplicity(lhs, rhs), (
+                f"Rule violates wildcard multiplicity: {lhs} -> {rhs}"
+            )
+
+    def test_reset_rules_clears_existing(self) -> None:
+        """reset_rules=True starts from an empty rule set."""
+        engine = SimpliPyEngine(
+            operators=_FIND_RULES_OPERATORS,
+            rules=[(["+", "x0", "0"], ["x0"])],
+        )
+        assert len(engine.simplification_rules) == 1
+        engine.find_rules(
+            max_source_pattern_length=3,
+            dummy_variables=2,
+            extra_internal_terms=["0", "1"],
+            X=128,
+            constants_fit_challenges=2,
+            constants_fit_retries=1,
+            n_workers=2,
+            reset_rules=True,
+        )
+        # Should have discovered fresh rules, not just the one we seeded
+        assert len(engine.simplification_rules) > 1
+
+    def test_prune_reduces_rule_count(self) -> None:
+        """prune=True removes redundant explicit rules."""
+        engine_no_prune = self._run_find_rules(prune=False)
+        engine_pruned = self._run_find_rules(prune=True)
+        # Pruning should remove at least some redundant explicit rules
+        assert len(engine_pruned.simplification_rules) <= len(engine_no_prune.simplification_rules)

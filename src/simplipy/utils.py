@@ -940,9 +940,9 @@ def violates_wildcard_multiplicity(lhs: list[str] | tuple[str, ...], rhs: list[s
 
     A rule ``lhs -> rhs`` violates the condition when any wildcard token
     (matching ``_\\d+``) appears *more* times on the right-hand side than on
-    the left-hand side. Enforcing this property guarantees that repeated
-    rule application cannot increase expression size, which is required for
-    termination of the simplification loop.
+    the left-hand side. Enforcing this property prevents duplication of
+    wildcard-matched subtrees by ensuring that no wildcard occurs more often
+    in the replacement than in the pattern.
 
     Parameters
     ----------
