@@ -29,7 +29,8 @@ from simplipy.utils import (
     factorize_to_at_most, is_numeric_string,
     get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, explicit_constant_placeholders,
     codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
-    construct_expressions, apply_mapping, match_pattern, remove_pow1)
+    construct_expressions, apply_mapping, match_pattern, remove_pow1, violates_wildcard_multiplicity,
+    _WILDCARD_RE)
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
@@ -199,13 +200,77 @@ class SimpliPyEngine:
         for idx, r in enumerate(self.simplification_rules):
             key = (tuple(r[0]), tuple(r[1]))
             self._rule_index_lookup[key] = idx
-            if any(re.match(r'_\d+', t) for t in r[0]):
+            if any(_WILDCARD_RE.match(t) for t in r[0]):
                 simplification_rules_patterns.append(r)
             else:
                 simplification_rules_no_patterns.append(r)
         self.max_pattern_length = 0
         self.simplification_rules_patterns: dict[tuple, list[tuple[list, list]]] = self.construct_rule_patterns(simplification_rules_patterns)
         self.simplification_rules_no_patterns: dict[tuple, tuple] = {tuple(r[0]): tuple(r[1]) for r in simplification_rules_no_patterns}
+
+    def prune_redundant_rules(self, verbose: bool = False) -> int:
+        """Remove explicit rules that are subsumed by wildcard-pattern rules.
+
+        An explicit rule ``(e, r_e)`` is *redundant* if the engine still
+        simplifies ``e`` to ``r_e`` when that single rule is removed.  This
+        happens when a wildcard-pattern rule already covers the same
+        transformation, or when constant folding / term cancellation achieve
+        the same result.
+
+        Rules are tested and removed serially: once a rule is found redundant
+        it stays removed for all subsequent tests.  This avoids over-pruning
+        in the case where two explicit rules each appear redundant in the
+        presence of the other but neither is covered by a pattern rule alone.
+
+        Parameters
+        ----------
+        verbose : bool, optional
+            If True, shows a progress bar and prints a summary.
+            Defaults to False.
+
+        Returns
+        -------
+        int
+            The number of rules that were pruned.
+        """
+        # Collect indices of explicit (non-pattern) rules
+        explicit_indices = [
+            i for i, (lhs, _rhs) in enumerate(self.simplification_rules)
+            if not any(_WILDCARD_RE.match(t) for t in lhs)
+        ]
+
+        n_pruned = 0
+        pruned_indices: set[int] = set()
+
+        for idx in tqdm(explicit_indices, desc='Pruning redundant rules', disable=not verbose):
+            lhs, rhs = self.simplification_rules[idx]
+            lhs_key = tuple(lhs)
+
+            # Remove this explicit rule from the compiled dict
+            saved = self.simplification_rules_no_patterns.pop(lhs_key, None)
+
+            result = self.simplify(list(lhs), mask_elementary_literals=False)
+            if tuple(result) == tuple(rhs):
+                # Rule is redundant — keep it removed
+                pruned_indices.add(idx)
+                n_pruned += 1
+            else:
+                # Rule is needed — restore it
+                if saved is not None:
+                    self.simplification_rules_no_patterns[lhs_key] = saved
+
+        if pruned_indices:
+            self.simplification_rules = [
+                rule for i, rule in enumerate(self.simplification_rules)
+                if i not in pruned_indices
+            ]
+            self.compile_rules()
+
+        if verbose:
+            print(f'Pruned {n_pruned} redundant explicit rules '
+                  f'({len(self.simplification_rules)} rules remaining)')
+
+        return n_pruned
 
     def import_modules(self) -> None:
         """Imports Python modules required by operator realizations.
@@ -1977,13 +2042,19 @@ class SimpliPyEngine:
                     # No simplification found
                     result_queue.put(None)
                 else:
-                    found_simplifications_without_num = [simplification for simplification in found_simplifications if '<constant>' not in simplification]
-                    if found_simplifications_without_num:
-                        # Prefer simplifications without <constant>
-                        result_queue.put((expression, found_simplifications_without_num[0]))
+                    # Prefer candidates with fewer <constant> tokens; among ties, keep discovery order.
+                    # Lazily check the non-increasing wildcard multiplicity condition (no subtree duplication).
+                    found_simplifications.sort(key=lambda s: s.count('<constant>'))
+                    selected = None
+                    for candidate in found_simplifications:
+                        if not violates_wildcard_multiplicity(expression, candidate):
+                            selected = candidate
+                            break
+                    if selected is not None:
+                        result_queue.put((expression, selected))
                     else:
-                        # No simplification without <constant> found, return the first found simplification
-                        result_queue.put((expression, found_simplifications[0]))
+                        # All candidates violate wildcard multiplicity
+                        result_queue.put(None)
 
         except Exception as e:
             # Log exceptions to result queue
@@ -2003,6 +2074,7 @@ class SimpliPyEngine:
             output_file: str | None = None,
             save_every: int = 100,
             reset_rules: bool = True,
+            prune: bool = False,
             verbose: bool = False,
             n_workers: int | None = None) -> None:
         """Systematically discovers new simplification rules.
@@ -2043,6 +2115,10 @@ class SimpliPyEngine:
             How often to save the rules to the output file.
         reset_rules : bool, optional
             If True, clears existing rules before starting.
+        prune : bool, optional
+            If True, runs :meth:`prune_redundant_rules` after discovery to
+            remove explicit rules that are subsumed by wildcard-pattern rules.
+            This can be expensive for large rule sets. Defaults to False.
         verbose : bool, optional
             If True, shows progress bars and status updates.
         n_workers : int or None, optional
@@ -2227,6 +2303,7 @@ class SimpliPyEngine:
                                 print(f"Error in worker {result[1]}: {result[2]}")
                                 print(result[2])
                                 raise result[1]
+
                             self.simplification_rules.append(result)
 
                         # Send new work if available (but not if interrupted)
@@ -2336,6 +2413,8 @@ class SimpliPyEngine:
                     time.sleep(1)  # Give time for the user to interrupt the process
                     self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
                     self.compile_rules()
+                    if prune:
+                        self.prune_redundant_rules(verbose=verbose)
                     with open(output_file, 'w') as file:
                         json.dump(self.simplification_rules, file, indent=4)
 
