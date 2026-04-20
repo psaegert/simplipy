@@ -34,6 +34,15 @@ def main(argv: str = None) -> None:
     prune_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned rules json file')
     prune_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
+    # Resolve-rules command
+    resolve_rules_parser = subparsers.add_parser("resolve-rules", help="Replace <constant> with actual numeric values in all-numeric rules")
+    resolve_rules_parser.add_argument(
+        '-e', '--engine', type=str, required=True,
+        help='Name of an official engine (e.g., dev_7-3) or a local path to an engine configuration file'
+    )
+    resolve_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the resolved rules json file')
+    resolve_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
+
     # Install command
     install_parser = subparsers.add_parser("install", help="Install official assets from Hugging Face")
     install_parser.add_argument('name', type=str, help='Name of the asset to install')
@@ -104,6 +113,26 @@ def main(argv: str = None) -> None:
                 json.dump(engine.simplification_rules, f, indent=4)
 
             print(f'Pruned {n_pruned} redundant rules ({n_before} -> {len(engine.simplification_rules)})')
+            print(f'Saved to {args.output_file}')
+
+        case 'resolve-rules':
+            try:
+                engine_config_path = get_path(args.engine)
+            except (FileNotFoundError, ValueError, RuntimeError) as e:
+                print(f'Error: {e}', file=sys.stderr)
+                sys.exit(1)
+
+            engine = SimpliPyEngine.from_config(engine_config_path)
+            n_resolved = engine.resolve_constant_rules(verbose=args.verbose)
+
+            output_dir = os.path.dirname(args.output_file)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+
+            with open(args.output_file, 'w') as f:
+                json.dump(engine.simplification_rules, f, indent=4)
+
+            print(f'Resolved {n_resolved} rules ({len(engine.simplification_rules)} total)')
             print(f'Saved to {args.output_file}')
 
         case 'install':
