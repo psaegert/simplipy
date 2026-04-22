@@ -57,7 +57,9 @@ class SimplificationStatistics:
     post_operand_rule_applications : int
         Rules that fired only after children were simplified first.
     constant_folding_count : int
-        How often the all-operands-are-``<constant>`` short-circuit fired.
+        How often constant folding fired in rule application, including both
+        fully numeric operand folds and mixed
+        ``<constant>``/numeric/named-constant leaf folds.
     rule_match_attempts : int
         Total ``match_pattern`` calls made.
     rule_match_hits : int
@@ -271,6 +273,52 @@ class SimpliPyEngine:
                   f'({len(self.simplification_rules)} rules remaining)')
 
         return n_pruned
+
+    def resolve_constant_rules(self, verbose: bool = False) -> int:
+        """Replace ``<constant>`` with the actual numeric value in all-numeric rules.
+
+        Some rules discovered by :meth:`find_rules` map an expression whose
+        leaves are all numeric literals to the generic ``<constant>`` token
+        (e.g. ``mult2(1) → <constant>``).  This method evaluates every such
+        rule and replaces the ``<constant>`` replacement with the concrete
+        numeric result (e.g. ``mult2(1) → 2``), allowing downstream constant
+        folding to continue folding with exact values.
+
+        Only rules whose left-hand side leaves **all** pass
+        :func:`~simplipy.utils.is_numeric_string` are affected.  Rules
+        involving named constants (``np.e``, ``np.pi``, ``(-1)``), generic
+        ``<constant>`` placeholders, or wildcard variables are left unchanged.
+
+        Parameters
+        ----------
+        verbose : bool, optional
+            If True, prints each resolved rule.  Defaults to False.
+
+        Returns
+        -------
+        int
+            The number of rules whose replacement was resolved.
+        """
+        n_resolved = 0
+        for i, rule in enumerate(self.simplification_rules):
+            lhs, rhs = rule
+            if tuple(rhs) != ('<constant>',):
+                continue
+            leaves = [t for t in lhs if t not in self.operator_arity]
+            if not leaves or not all(is_numeric_string(t) for t in leaves):
+                continue
+            result_token = self._evaluate_constant_subtree(list(lhs))
+            if result_token is not None:
+                if verbose:
+                    print(f'Resolved: {list(lhs)} -> ["{result_token}"] (was ["<constant>"])')
+                self.simplification_rules[i] = (tuple(lhs), (result_token,))
+                n_resolved += 1
+        if n_resolved > 0:
+            self.compile_rules()
+        if verbose:
+            print(f'Resolved {n_resolved} constant rules '
+                  f'({len(self.simplification_rules)} rules total)')
+        return n_resolved
 
     def import_modules(self) -> None:
         """Imports Python modules required by operator realizations.
@@ -1022,6 +1070,79 @@ class SimpliPyEngine:
             # It's a terminal (constant or variable)
             return [token], start_idx + 1
 
+    def _evaluate_constant_subtree(self, flat_expression: list[str]) -> str | None:
+        """Evaluate a fully numeric prefix expression to a single value.
+
+        Uses the existing compilation pipeline to evaluate an expression
+        whose tokens are all operators and numeric literals (no variables).
+
+        Parameters
+        ----------
+        flat_expression : list[str]
+            A prefix expression where every leaf is a numeric literal.
+
+        Returns
+        -------
+        str or None
+            The result formatted as a string token, or ``None`` if evaluation
+            fails for any reason.
+        """
+        try:
+            expr_with_realizations = self.operators_to_realizations(flat_expression)
+            infix_str = self.prefix_to_infix(list(expr_with_realizations), realization=True)
+            code = codify(infix_str, variables=[])
+            f = self.code_to_lambda(code)
+            result = f()
+
+            if isinstance(result, complex):
+                return None
+
+            # Format the result
+            import math
+            if isinstance(result, np.integer):
+                return str(int(result))
+            if math.isnan(result):
+                return 'float("nan")'
+            if math.isinf(result):
+                return 'float("-inf")' if result < 0 else 'float("inf")'
+            if result == int(result):
+                return str(int(result))
+            return str(result)
+        except Exception:
+            return None
+
+    def _try_fold_constants(self, operator: str, operands: list[list], stats: 'SimplificationStatistics | None') -> list | None:
+        """Attempt constant folding on a subtree whose operands are leaves.
+
+        Returns the folded result as a tree node, or ``None`` when folding is
+        not applicable.
+        """
+        all_leaves = all(len(op) == 1 for op in operands)
+        if not all_leaves:
+            return None
+
+        _NAMED_CONSTANTS = frozenset({'np.e', 'np.pi'})
+        values = [op[0] for op in operands]
+        all_numeric = all(is_numeric_string(v) for v in values)
+        all_constant_or_numeric = all(
+            is_numeric_string(v) or v == '<constant>' or v in _NAMED_CONSTANTS
+            for v in values
+        )
+
+        if all_numeric:
+            flat = [operator] + values
+            result_token = self._evaluate_constant_subtree(flat)
+            if result_token is not None:
+                if stats is not None:
+                    stats.constant_folding_count += 1
+                return [result_token]
+        elif all_constant_or_numeric:
+            if stats is not None:
+                stats.constant_folding_count += 1
+            return ['<constant>']
+
+        return None
+
     def apply_rules_top_down(self, subtree: list, max_pattern_length: int | None = None, collect_statistics: bool = False, verbose: bool = False) -> list:
         """Recursively applies simplification rules to an expression tree.
 
@@ -1054,12 +1175,6 @@ class SimpliPyEngine:
 
         operator = subtree[0]
         operands = subtree[1]
-
-        # First, check if all operands are constants
-        if all(len(operand) == 1 and operand[0] == '<constant>' for operand in operands):
-            if stats is not None:
-                stats.constant_folding_count += 1
-            return ['<constant>']
 
         # Convert subtree to flat form for rule matching
         flat_subtree = tuple(flatten_nested_list(subtree)[::-1])
@@ -1113,6 +1228,11 @@ class SimpliPyEngine:
                     # Recursively simplify the replacement
                     return self.apply_rules_top_down(replacement_tree, max_pattern_length, collect_statistics, verbose)
 
+        # No rule matched — try constant folding as fallback
+        folded = self._try_fold_constants(operator, operands, stats)
+        if folded is not None:
+            return folded
+
         # No rule applied at this level, recursively simplify operands
         simplified_operands = [self.apply_rules_top_down(operand, max_pattern_length, collect_statistics, verbose) for operand in operands]
         simplified_subtree = [operator, simplified_operands]
@@ -1155,6 +1275,11 @@ class SimpliPyEngine:
                     if verbose:
                         print(f'Applied pattern rule (after operand simplification)\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{simplified_subtree}\nwith mapping\t{mapping}\n')
                     return self.apply_rules_top_down(replacement_tree, max_pattern_length, collect_statistics, verbose)
+
+        # No rule matched after operand simplification — try constant folding as fallback
+        folded = self._try_fold_constants(operator, simplified_operands, stats)
+        if folded is not None:
+            return folded
 
         return simplified_subtree
 
@@ -1950,7 +2075,15 @@ class SimpliPyEngine:
                     continue
 
                 # Check if purely numerical
-                if all([t == '<constant>' or t in operator_arity for t in expression]) and len(expression) > 1:
+                if all(t == '<constant>' or t in operator_arity or is_numeric_string(t) for t in expression) and len(expression) > 1:
+                    # If every non-operator token is a numeric literal,
+                    # evaluate to the actual value instead of '<constant>'.
+                    non_ops = [t for t in expression if t not in operator_arity]
+                    if non_ops and all(is_numeric_string(t) for t in non_ops):
+                        result_token = self._evaluate_constant_subtree(list(expression))
+                        if result_token is not None:
+                            result_queue.put((expression, (result_token,)))
+                            continue
                     result_queue.put((expression, ('<constant>',)))
                     continue
 
@@ -2051,6 +2184,14 @@ class SimpliPyEngine:
                             selected = candidate
                             break
                     if selected is not None:
+                        # If the best candidate is '<constant>' but the source
+                        # expression is all-numeric, evaluate to the actual value.
+                        if tuple(selected) == ('<constant>',):
+                            src_leaves = [t for t in expression if t not in operator_arity]
+                            if src_leaves and all(is_numeric_string(t) for t in src_leaves):
+                                result_token = self._evaluate_constant_subtree(list(expression))
+                                if result_token is not None:
+                                    selected = (result_token,)
                         result_queue.put((expression, selected))
                     else:
                         # All candidates violate wildcard multiplicity
@@ -2309,34 +2450,36 @@ class SimpliPyEngine:
                         # Send new work if available (but not if interrupted)
                         if not interrupted:
                             try:
-                                expression_to_simplify = next(work_iter)
+                                while True:
+                                    expression_to_simplify = next(work_iter)
 
-                                if len(expression_to_simplify) > current_length:
-                                    # This means that the collected rules can be applied to coming expressions
-                                    # To avoid redundant rules, we incorporate the rules into the simplification to raise the requirements for rules
-                                    if verbose:
-                                        print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
-                                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
-                                    self.compile_rules()
-                                    if output_file is not None:
+                                    if len(expression_to_simplify) > current_length:
+                                        # This means that the collected rules can be applied to coming expressions
+                                        # To avoid redundant rules, we incorporate the rules into the simplification to raise the requirements for rules
                                         if verbose:
-                                            print("Saving rules after increasing expression length...")
-                                        with open(output_file, 'w') as file:
-                                            json.dump(self.simplification_rules, file, indent=4)
-                                    current_length = len(expression_to_simplify)
+                                            print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
+                                        self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
+                                        self.compile_rules()
+                                        if output_file is not None:
+                                            if verbose:
+                                                print("Saving rules after increasing expression length...")
+                                            with open(output_file, 'w') as file:
+                                                json.dump(self.simplification_rules, file, indent=4)
+                                        current_length = len(expression_to_simplify)
 
-                                simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
-                                # Skip expressions that already simplify via existing rules (Kruskal-style pruning)
-                                if simplified_length < len(expression_to_simplify):
-                                    n_scanned += 1
-                                    pbar.update(1)
-                                    continue
-                                if max_target_pattern_length is None:
-                                    allowed_candidate_lengths = tuple(range(simplified_length))
-                                else:
-                                    allowed_candidate_lengths = tuple(range(min(simplified_length, max_target_pattern_length + 1)))
-                                work_queue.put((expression_to_simplify, simplified_length, allowed_candidate_lengths))
-                                active_tasks += 1
+                                    simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
+                                    # Skip expressions that already simplify via existing rules (Kruskal-style pruning)
+                                    if simplified_length < len(expression_to_simplify):
+                                        n_scanned += 1
+                                        pbar.update(1)
+                                        continue
+                                    if max_target_pattern_length is None:
+                                        allowed_candidate_lengths = tuple(range(simplified_length))
+                                    else:
+                                        allowed_candidate_lengths = tuple(range(min(simplified_length, max_target_pattern_length + 1)))
+                                    work_queue.put((expression_to_simplify, simplified_length, allowed_candidate_lengths))
+                                    active_tasks += 1
+                                    break
                             except StopIteration:
                                 pass
 
