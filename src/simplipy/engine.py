@@ -1097,6 +1097,8 @@ class SimpliPyEngine:
 
             # Format the result
             import math
+            if isinstance(result, np.integer):
+                return str(int(result))
             if math.isnan(result):
                 return 'float("nan")'
             if math.isinf(result):
