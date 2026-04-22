@@ -1950,7 +1950,7 @@ class SimpliPyEngine:
                     continue
 
                 # Check if purely numerical
-                if all([t == '<constant>' or t in operator_arity for t in expression]) and len(expression) > 1:
+                if all([t == '<constant>' or t in operator_arity or is_numeric_string(t) for t in expression]) and len(expression) > 1:
                     result_queue.put((expression, ('<constant>',)))
                     continue
 

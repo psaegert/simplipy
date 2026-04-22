@@ -1,5 +1,7 @@
+import multiprocessing as mp
 import numpy as np
 import pytest
+from multiprocessing.shared_memory import SharedMemory
 
 from simplipy import SimpliPyEngine
 from simplipy.utils import violates_wildcard_multiplicity
@@ -460,3 +462,67 @@ class TestFindRules:
         engine_pruned = self._run_find_rules(prune=True)
         # Pruning should remove at least some redundant explicit rules
         assert len(engine_pruned.simplification_rules) <= len(engine_no_prune.simplification_rules)
+
+
+class TestFindRuleWorkerNumericShortCircuit:
+    """Tests that find_rule_worker short-circuits purely-numeric expressions."""
+
+    def _make_shared_X(self, n_samples: int = 32, n_vars: int = 2):
+        """Create a small shared-memory array for worker tests."""
+        X_data = np.random.normal(size=(n_samples, n_vars))
+        shm = SharedMemory(create=True, size=X_data.nbytes)
+        X_shared = np.ndarray(X_data.shape, dtype=X_data.dtype, buffer=shm.buf)
+        X_shared[:] = X_data[:]
+        return shm, X_data.shape, X_data.dtype
+
+    def _run_worker(self, expression, engine, shm, X_shape, X_dtype, dummy_variables):
+        """Submit one work item to find_rule_worker and return the result."""
+        work_q = mp.Queue()
+        result_q = mp.Queue()
+        # The worker needs allowed_candidate_lengths to be non-empty and > 0
+        simplified_length = len(expression)
+        allowed_candidate_lengths = tuple(range(1, simplified_length))
+        work_q.put((expression, simplified_length, allowed_candidate_lengths))
+        work_q.put(None)  # sentinel
+
+        p = mp.Process(
+            target=engine.find_rule_worker,
+            args=(
+                0, work_q, result_q,
+                X_shape, X_dtype, shm.name,
+                {},  # no candidates needed — we only test the short-circuit path
+                dummy_variables,
+                engine.operator_arity,
+                1, 1,
+            )
+        )
+        p.start()
+        p.join(timeout=10)
+        assert p.exitcode == 0, "Worker process exited with an error"
+        return result_q.get_nowait()
+
+    @pytest.mark.parametrize("expression", [
+        ("+", "1", "2"),
+        ("*", "2.5", "3"),
+        ("+", "1", "<constant>"),
+        ("+", "<constant>", "2.5"),
+        ("*", "<constant>", "<constant>"),
+    ])
+    def test_purely_numeric_expression_short_circuits(self, expression) -> None:
+        """Expressions consisting only of operators, '<constant>', and numeric
+        string literals must be immediately mapped to ('<constant>',) without
+        entering the expensive candidate-search loop."""
+        engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
+        dummy_variables = ["x0", "x1"]
+        shm, X_shape, X_dtype = self._make_shared_X()
+        try:
+            result = self._run_worker(list(expression), engine, shm, X_shape, X_dtype, dummy_variables)
+        finally:
+            shm.close()
+            shm.unlink()
+
+        assert result is not None
+        lhs, rhs = result
+        assert tuple(rhs) == ("<constant>",), (
+            f"Expected ('<constant>',) for expression {expression}, got {rhs}"
+        )
