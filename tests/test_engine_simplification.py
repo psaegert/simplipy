@@ -504,9 +504,18 @@ class TestFindRuleWorkerNumericShortCircuit:
             if p.is_alive():
                 p.kill()
                 p.join(timeout=1)
-            pytest.fail("Worker process did not exit within 10 seconds and was terminated")
-        assert p.exitcode == 0, f"Worker process exited with code {p.exitcode}"
-        return result_q.get_nowait()
+        try:
+            p.join(timeout=10)
+            assert p.exitcode == 0, "Worker process exited with an error"
+            return result_q.get(timeout=5)
+        finally:
+            if p.is_alive():
+                p.terminate()
+                p.join()
+            work_q.close()
+            work_q.join_thread()
+            result_q.close()
+            result_q.join_thread()
 
     @pytest.mark.parametrize("expression", [
         ("+", "1", "2"),
