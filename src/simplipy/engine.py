@@ -57,7 +57,9 @@ class SimplificationStatistics:
     post_operand_rule_applications : int
         Rules that fired only after children were simplified first.
     constant_folding_count : int
-        How often the all-operands-are-``<constant>`` short-circuit fired.
+        How often constant folding fired in rule application, including both
+        fully numeric operand folds and mixed
+        ``<constant>``/numeric/named-constant leaf folds.
     rule_match_attempts : int
         Total ``match_pattern`` calls made.
     rule_match_hits : int
