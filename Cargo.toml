@@ -21,7 +21,7 @@ crate-type = ["cdylib", "rlib"]
 #   cargo search pyo3   (the 0.27 line is current-stable as of 2026-06; bump deliberately).
 # abi3-py311 -> ONE wheel per (platform, arch) for CPython >= 3.11 (matches simplipy's
 # requires-python = ">=3.11"); no per-minor-version wheel matrix.
-pyo3 = { version = "0.27", features = ["abi3-py311", "extension-module"] }
+pyo3 = { version = "0.29", features = ["abi3-py311", "extension-module"] }
 
 # Asset loading: REUSE simplipy's HF-hub config.yaml + rules.json UNCHANGED (one source of
 # truth for both Python and Rust). serde_json parses the 23 MB rules.json; serde_yaml the
