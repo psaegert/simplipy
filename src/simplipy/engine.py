@@ -499,14 +499,19 @@ class SimpliPyEngine:
         stack: list[tuple[str, float, str | None]] = []
 
         def right_allows_flatten(parent_op: str, child_root: str | None) -> bool:
-            """Return True if a right operand with the same precedence can omit parentheses."""
+            """Return True if a right operand with the same precedence can omit parentheses.
+
+            FIX (conversion-quirk #5, render half): the original flattened equal-precedence right
+            operands of `+`/`*` (e.g. `a + (b + c)` rendered as `a + b + c`), which round-trips ONLY
+            with a right-leaning parse. Paired with the left-associative `infix_to_prefix` parse (the
+            parse half of the #5 fix), a right operand at equal precedence MUST keep its parentheses so
+            the structure is recoverable. Flattening is therefore disabled (empty map) so that
+            `prefix_to_infix` and `infix_to_prefix` stay round-trip inverses under standard associativity.
+            """
             if child_root is None:
                 return True
 
-            flatten_map: dict[str, set[str]] = {
-                '+': {'+', '-'},
-                '*': {'*', '/'},
-            }
+            flatten_map: dict[str, set[str]] = {}
             return child_root in flatten_map.get(parent_op, set())
 
         for token in reversed(tokens):
@@ -684,8 +689,20 @@ class SimpliPyEngine:
                     token = 'neg'
 
                 if stack and stack[-1] != ')' and token != ')':
-                    while stack and self.operator_precedence_compat.get(stack[-1], 0) >= self.operator_precedence_compat.get(token, 0):
-                        prefix_expr.append(stack.pop())
+                    # FIX (conversion-quirk #5, parse half): respect operator associativity. The
+                    # original `>=` pop on this right-to-left scan right-leaned LEFT-assoc chains,
+                    # misparsing un-parenthesized infix (`1/2 * m * v**2` -> 1/(2*m*v**2)). Pop on strict
+                    # `>` for left-assoc operators; `>=` only for the right-assoc power operators
+                    # ('**'/'pow'). Coordinated with the render half (`right_allows_flatten` disabled)
+                    # so prefix<->infix round-trip identity is preserved.
+                    cur_prec = self.operator_precedence_compat.get(token, 0)
+                    right_assoc = token in ('**', 'pow')
+                    while stack and stack[-1] != ')':
+                        top_prec = self.operator_precedence_compat.get(stack[-1], 0)
+                        if top_prec > cur_prec or (top_prec == cur_prec and right_assoc):
+                            prefix_expr.append(stack.pop())
+                        else:
+                            break
                     stack.append(token)
                 else:
 

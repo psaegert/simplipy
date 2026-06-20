@@ -51,6 +51,27 @@ def test_quirk4_caret_matches_starstar_for_unary_minus(engine):
     assert engine.infix_to_prefix("x1 ^ - x2") == ["neg", "**", "x1", "x2"]
 
 
+# -- #5: operator associativity, fixed as a COORDINATED parse+render change (left-assoc parse +
+#    right_allows_flatten disabled), so prefix<->infix round-trip identity is preserved. -----------
+def test_quirk5_left_associativity(engine):
+    # the kinetic-energy form: (1/2)*m*v**2, NOT 1/(2*m*v**2).
+    assert engine.infix_to_prefix("1/2 * m * v ** 2") == ["*", "*", "/", "1", "2", "m", "**", "v", "2"]
+    assert engine.infix_to_prefix("a - b - c") == ["-", "-", "a", "b", "c"]
+    assert engine.infix_to_prefix("a / b / c") == ["/", "/", "a", "b", "c"]
+    assert engine.infix_to_prefix("a ** b ** c") == ["**", "a", "**", "b", "c"]  # right-assoc kept
+    assert engine.infix_to_prefix("a - (b - c)") == ["-", "a", "-", "b", "c"]  # parens respected
+
+
+def test_quirk5_render_parenthesizes_right_chains(engine):
+    # the render half: equal-precedence right operands keep parens (no flatten), so left-assoc parse
+    # recovers the structure.
+    assert engine.prefix_to_infix(["+", "a", "+", "b", "c"]) == "a + (b + c)"
+    assert engine.prefix_to_infix(["+", "+", "a", "b", "c"]) == "a + b + c"  # left-nest flattens
+    # round-trip identity holds for a right-nested associative chain.
+    pre = ["*", "a", "*", "b", "c"]
+    assert engine.parse(engine.prefix_to_infix(pre, power="**"), convert_expression=False) == pre
+
+
 # -- #6: a raw unconfigured powN token no longer crashes pass-1 -----------------------------------
 def test_quirk6_raw_powN_no_crash(engine):
     assert engine.convert_expression(["pow7", "x1"]) == ["pow7", "x1"]
