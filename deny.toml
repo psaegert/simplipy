@@ -1,0 +1,35 @@
+# cargo-deny policy (supply-chain / license / advisory gate for the Rust core).
+[advisories]
+version = 2
+yanked = "deny"
+# Fail on unmaintained advisories for OUR dependencies (the reason we use serde_yaml_ng, not the
+# unmaintained serde_yaml). "workspace" scopes it to deps we control, not arbitrary transitive crates.
+unmaintained = "workspace"
+
+[licenses]
+version = 2
+# Don't fail/warn on allow-list entries no current crate happens to use (BSD-2/3, ISC, Zlib, ...): the
+# list is a forward-looking permissive set, not an exact match of today's dependency tree.
+unused-allowed-license = "allow"
+# Permissive licenses compatible with the project MIT license. Unicode-DFS-2016 / Unicode-3.0 cover
+# `unicode-ident` (a transitive `syn`/`proc-macro2` dep); ryu resolves to Apache-2.0 via its OR clause.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

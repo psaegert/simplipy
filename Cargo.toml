@@ -1,0 +1,59 @@
+[package]
+name = "simplipy-core"
+version = "0.3.0"              # kept in lockstep with the Python package version (pyproject.toml)
+edition = "2021"
+rust-version = "1.77"          # real MSRV floor of the resolved dependency tree (rustc-hash 2.x = 1.77)
+description = "Rust inline-phase backend for the SimpliPy prefix-expression simplifier (PyO3, the simplipy._core extension)"
+authors = ["Paul Saegert"]
+license = "MIT"
+repository = "https://github.com/psaegert/simplipy"
+readme = "README.md"
+
+# cdylib = the Python extension module (`simplipy._core`) loaded over FFI.
+# rlib   = lets integration tests / criterion link the core directly with ZERO Python crossings.
+[lib]
+name = "_core"
+path = "rust/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Pin to current-stable PyO3. VERIFY the exact patch at setup time:
+#   cargo search pyo3   (the 0.27 line is current-stable as of 2026-06; bump deliberately).
+# abi3-py311 -> ONE wheel per (platform, arch) for CPython >= 3.11 (matches simplipy's
+# requires-python = ">=3.11"); no per-minor-version wheel matrix.
+pyo3 = { version = "0.29", features = ["abi3-py311", "extension-module"] }
+
+# Asset loading: REUSE simplipy's HF-hub config.yaml + rules.json UNCHANGED (one source of
+# truth for both Python and Rust). serde_json parses the 23 MB rules.json; serde_yaml the
+# operator config. No forked on-disk format in v1 (the rkyv/mmap precompiled cache is a
+# documented LATER optimization, gated behind the `fast-assets` feature below).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# serde_yaml is UNMAINTAINED (archived by its author; RUSTSEC unmaintained advisory) and would trip
+# the cargo-audit / cargo-deny gate. Use the maintained drop-in fork serde_yaml_ng instead.
+serde_yaml_ng = "0.10"
+
+# Fast hashing for the rule-bucket index ((pattern_length, root_operator) -> rules, and the
+# first-operand-symbol filter). FxHashMap: deterministic iteration is NOT relied upon; where
+# order matters (rule-application winner) we preserve insertion order explicitly.
+rustc-hash = "2"
+
+# Shortest correctly-rounded float->decimal (round-half-even), matching CPython's repr/dtoa digit
+# choice. Rust std's `{}`/`{:e}` Display differs from Python on the rare equidistant-shortest tie
+# (same f64, different last digit), so the numeric-folding result formatter uses ryu's digits and
+# applies Python's fixed/scientific notation rules on top.
+ryu = "1.0"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[features]
+default = []
+# LATER (NOT v1): precompile rules.json -> a Rust-native rkyv/mmap cache for ~instant load.
+# Ships behind a feature so v1 stays on the unchanged HF asset (single source of truth).
+fast-assets = []
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "unwind"               # PyO3 maps Rust panics -> Python exceptions; do NOT abort

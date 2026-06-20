@@ -27,6 +27,13 @@
 pip install simplipy
 ```
 
+> As of 0.3.0 the inline phase (`simplify`, conversions, validation) is a compiled Rust extension
+> (`simplipy._core`). Prebuilt wheels are published for Linux (x86_64/aarch64), macOS (x86_64/arm64)
+> and Windows (x64) on CPython ≥ 3.11, so `pip install simplipy` does not compile anything for most
+> users. Installing from the **source distribution** (an unsupported platform, or `--no-binary`)
+> requires a Rust toolchain (`rustup`, MSRV 1.77). If the extension is unavailable at runtime, the
+> package transparently falls back to a slower pure-Python implementation.
+
 ```python
 import simplipy as sp
 
@@ -63,8 +70,8 @@ More examples can be found in the [documentation](https://simplipy.readthedocs.i
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplification_comparison_simplipy_sympy.svg" alt="Original vs Simplified Length and Simplification Time" width="500">
-      <p><strong>Left:</strong> Empirical Cumulative Distribution Functions (ECDFs) of simplification wall-clock time. Our SimpliPy rewriting engine (shades of blue, varying Lmax) operates in the low to moderate millisecond regime, orders of magnitude faster than the SymPy <a href="https://peerj.com/articles/cs-103/">[Meurer et al. 2017]</a> baseline (orange, red). <strong>Right:</strong> ECDF of the simplification ratio |τ ∗|/|τ |. The inset highlights the tail of the distribution. Our method with Lmax ≥ 5 achieves simplification ratios comparable to the SymPy baseline while maintaining high throughput.<br>
+      <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplification_comparison_sympy_python_rust.svg" alt="Simplification time and ratio ECDFs: SymPy vs SimpliPy (Python 0.2.15) vs SimpliPy (Rust 0.3.0)" width="680">
+      <p><strong>Top row:</strong> SimpliPy <code>0.3.0</code> (Rust inline engine, green). <strong>Bottom row:</strong> SimpliPy <code>0.2.15</code> (pure Python, blue). <strong>Left:</strong> Empirical Cumulative Distribution Functions (ECDFs) of simplification wall-clock time across maximum pattern lengths L<sub>max</sub> = 0–7, with the SymPy <a href="https://peerj.com/articles/cs-103/">[Meurer et al. 2017]</a> baseline (orange, red). The Rust inline engine is roughly 5× to 100× faster than the pure-Python engine at the same L<sub>max</sub> (≈ 15× at L<sub>max</sub> = 4), and both are orders of magnitude faster than SymPy. <strong>Right:</strong> ECDF of the simplification ratio |τ ∗|/|τ | (inset: zoom on the low-ratio region where the L<sub>max</sub> curves separate); the Rust and Python engines produce near-identical ratios, so the Rust port is a pure speed-up with no change in simplification behaviour.<br>
       Source expressions are sampled with 0 to 17 unique variables and 1 to 35 symbols <a href="https://arxiv.org/abs/2602.08885">[Saegert & Köthe 2026]</a></p>
     </td>
   </tr>

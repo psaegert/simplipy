@@ -23,3 +23,9 @@ class TestCLI:
         with pytest.raises(SystemExit, match="1"):
             main(["find-rules", "-e", "nonexistent_engine_xyz",
                   "-c", "dummy.yaml", "-o", "out.json"])
+
+    def test_resolve_rules_missing_engine_exits(self) -> None:
+        """resolve-rules with a nonexistent engine exits with code 1."""
+        with pytest.raises(SystemExit, match="1"):
+            main(["resolve-rules", "-e", "nonexistent_engine_xyz",
+                  "-o", "out.json"])

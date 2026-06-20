@@ -424,7 +424,9 @@ class TestFindRules:
         # These should always be discovered at length <= 3
         assert ("+", "x0", "0") in rules_lhs or ("+", "x1", "0") in rules_lhs
         assert ("*", "x0", "1") in rules_lhs or ("*", "x1", "1") in rules_lhs
-        assert ("-", "x0", "x0") in rules_lhs or ("-", "x1", "x1") in rules_lhs
+        # x - x is now handled natively by cancel_terms + constant folding,
+        # so check for x - 0 instead.
+        assert ("-", "x0", "0") in rules_lhs or ("-", "x1", "0") in rules_lhs
 
     def test_all_rules_satisfy_wildcard_multiplicity(self) -> None:
         """Every discovered rule must satisfy non-increasing wildcard multiplicity."""
@@ -460,3 +462,155 @@ class TestFindRules:
         engine_pruned = self._run_find_rules(prune=True)
         # Pruning should remove at least some redundant explicit rules
         assert len(engine_pruned.simplification_rules) <= len(engine_no_prune.simplification_rules)
+
+
+class TestConstantFolding:
+    """Tests for numeric constant folding in apply_rules_top_down."""
+
+    def _engine(self, rules=None) -> SimpliPyEngine:
+        return SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
+
+    def test_binary_addition_folding(self) -> None:
+        """1.23 + 4.56 should evaluate to a numeric result close to 5.79."""
+        engine = self._engine()
+        result = engine.simplify(["+", "1.23", "4.56"], mask_elementary_literals=False)
+        assert len(result) == 1
+        assert abs(float(result[0]) - 5.79) < 1e-10
+
+    def test_binary_subtraction_folding(self) -> None:
+        """5 - 3 should evaluate to 2."""
+        engine = self._engine()
+        result = engine.simplify(["-", "5", "3"], mask_elementary_literals=False)
+        assert result == ["2"]
+
+    def test_integer_result_formatting(self) -> None:
+        """Integer-valued results should not have a decimal point."""
+        engine = self._engine()
+        result = engine.simplify(["+", "1", "2"], mask_elementary_literals=False)
+        assert result == ["3"]
+
+    def test_unary_folding(self) -> None:
+        """neg(3) should evaluate to -3."""
+        engine = self._engine()
+        result = engine.simplify(["neg", "3"], mask_elementary_literals=False)
+        assert result == ["-3"]
+
+    def test_nested_constant_folding(self) -> None:
+        """2 * 3 + 4 should evaluate to 10 via nested folding."""
+        engine = self._engine()
+        result = engine.simplify(["+", "*", "2", "3", "4"], mask_elementary_literals=False)
+        assert result == ["10"]
+
+    def test_division_by_zero_produces_inf(self) -> None:
+        """1 / 0 should produce float("inf") token."""
+        engine = self._engine()
+        result = engine.simplify(["/", "1", "0"], mask_elementary_literals=False)
+        assert result == ['float("inf")']
+
+    def test_mixed_constant_and_placeholder(self) -> None:
+        """<constant> + numeric should fold to <constant>."""
+        engine = self._engine()
+        result = engine.simplify(["+", "1.23", "<constant>"], mask_elementary_literals=False)
+        assert result == ["<constant>"]
+
+    def test_constant_placeholder_still_folds(self) -> None:
+        """<constant> + <constant> should still fold to <constant>."""
+        engine = self._engine()
+        result = engine.simplify(["+", "<constant>", "<constant>"], mask_elementary_literals=False)
+        assert result == ["<constant>"]
+
+    def test_folding_enables_further_rules(self) -> None:
+        """1 - 1 = 0, then x + 0 should simplify to x via rule."""
+        engine = self._engine(rules=[(["+", "_0", "0"], ["_0"])])
+        result = engine.simplify(["+", "x", "-", "1", "1"], mask_elementary_literals=False)
+        assert result == ["x"]
+
+    def test_simplify_infix_numeric_constants(self) -> None:
+        """End-to-end: infix '1.23 + 4.56' should become '<constant>'."""
+        engine = self._engine()
+        result = engine.simplify("1.23 + 4.56")
+        assert result == "<constant>"
+
+    def test_constant_folding_statistics(self) -> None:
+        """constant_folding_count should increment on folding."""
+        engine = self._engine()
+        engine.simplify(["+", "1", "2"], collect_statistics=True)
+        assert engine.simplification_statistics is not None
+        assert engine.simplification_statistics.constant_folding_count >= 1
+
+
+class TestResolveConstantRules:
+    """Tests for resolve_constant_rules()."""
+
+    def _engine(self, rules) -> SimpliPyEngine:
+        return SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
+
+    def test_resolves_numeric_rule(self) -> None:
+        """A rule like sin(1) -> <constant> should be resolved to the actual value."""
+        engine = self._engine(rules=[
+            (["sin", "1"], ["<constant>"]),
+        ])
+        n = engine.resolve_constant_rules()
+        assert n == 1
+        # The rule should now have the actual sin(1) value
+        rhs = engine.simplification_rules[0][1]
+        assert '<constant>' not in rhs
+        assert abs(float(rhs[0]) - 0.8414709848078965) < 1e-10
+
+    def test_leaves_named_constant_rules_unchanged(self) -> None:
+        """Rules with np.e or np.pi in the LHS should NOT be resolved."""
+        engine = self._engine(rules=[
+            (["sin", "np.pi"], ["<constant>"]),
+        ])
+        n = engine.resolve_constant_rules()
+        assert n == 0
+        assert tuple(engine.simplification_rules[0][1]) == ('<constant>',)
+
+    def test_leaves_wildcard_rules_unchanged(self) -> None:
+        """Pattern rules with wildcards should NOT be resolved."""
+        engine = self._engine(rules=[
+            (["-", "_0", "_0"], ["<constant>"]),
+        ])
+        n = engine.resolve_constant_rules()
+        assert n == 0
+        assert tuple(engine.simplification_rules[0][1]) == ('<constant>',)
+
+    def test_leaves_non_constant_replacement_unchanged(self) -> None:
+        """Rules whose replacement is not <constant> should NOT be touched."""
+        engine = self._engine(rules=[
+            (["+", "1", "0"], ["1"]),
+        ])
+        n = engine.resolve_constant_rules()
+        assert n == 0
+        assert tuple(engine.simplification_rules[0][1]) == ('1',)
+
+    def test_compile_rules_called(self) -> None:
+        """After resolution, compile_rules should update lookup tables."""
+        engine = self._engine(rules=[
+            (["sin", "1"], ["<constant>"]),
+        ])
+        engine.resolve_constant_rules()
+        # The compiled explicit rules should have the resolved value
+        key = ("sin", "1")
+        assert key in engine.simplification_rules_no_patterns
+        rhs = engine.simplification_rules_no_patterns[key]
+        assert rhs != ("<constant>",)
+
+    def test_multiple_rules_mixed(self) -> None:
+        """Only the eligible rules should be resolved; others stay intact."""
+        engine = self._engine(rules=[
+            (["sin", "1"], ["<constant>"]),          # all-numeric -> resolve
+            (["-", "_0", "_0"], ["<constant>"]),      # wildcard -> skip
+            (["+", "1", "0"], ["1"]),                 # not <constant> rhs -> skip
+            (["neg", "1"], ["<constant>"]),            # all-numeric -> resolve
+        ])
+        n = engine.resolve_constant_rules()
+        assert n == 2
+        # sin(1) resolved
+        assert '<constant>' not in engine.simplification_rules[0][1]
+        # _0 - _0 untouched
+        assert tuple(engine.simplification_rules[1][1]) == ('<constant>',)
+        # + 1 0 untouched
+        assert tuple(engine.simplification_rules[2][1]) == ('1',)
+        # neg(1) resolved to -1
+        assert tuple(engine.simplification_rules[3][1]) == ('-1',)

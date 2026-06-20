@@ -6,10 +6,19 @@ authors = [
     ]
 readme = "README.md"
 requires-python = ">=3.11"
-dynamic = ["dependencies"]
-version = "0.2.15"
+version = "0.3.0"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
+# The INLINE phase (simplify + conversions + validation) is the compiled Rust `simplipy._core`;
+# the OFFLINE phase (rule mining + curve_fit) stays pure Python. numpy/scipy are offline-only at
+# runtime, huggingface_hub powers asset resolution.
+dependencies = [
+    "huggingface_hub",
+    "numpy",
+    "pyyaml",
+    "scipy",
+    "tqdm",
+]
 
 [project.urls]
 Homepage = "https://github.com/psaegert/simplipy"
@@ -20,11 +29,6 @@ ReadtheDocs = "https://simplipy.readthedocs.io/"
 [project.scripts]
 simplipy = "simplipy.__main__:main"
 
-
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
-
-
 [project.optional-dependencies]
 dev = [
     "pre-commit",
@@ -33,7 +37,6 @@ dev = [
     "mypy",
     "flake8",
     "pygount",
-    "types-setuptools",
     "types-tqdm",
     "types-toml",
     "types-PyYAML",
@@ -50,21 +53,16 @@ torch = [
     "torch>=1.0.0"
 ]
 
-[tool.setuptools]
-include-package-data = true
-
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-
 [build-system]
-requires = [
-    "setuptools>=78",
-    "wheel",
-    "platformdirs==4.3.8",
-]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+# Mixed layout: Python package at src/simplipy/ (unchanged src-layout); the compiled inline core is
+# placed at simplipy/_core. The Rust crate lives under rust/ (Cargo.toml [lib] path = "rust/lib.rs").
+python-source = "src"
+module-name = "simplipy._core"
+features = ["pyo3/extension-module"]
 
 
 [tool.flake8]
@@ -73,6 +71,7 @@ exclude = [
     ".git",
 	"__pycache__",
 	"build",
+	"target",
 	"venv",
 	".venv",
 	"env",

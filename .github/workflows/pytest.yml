@@ -8,26 +8,68 @@ name: pytest
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
-      # Checkout the repository with LFS files
       - uses: actions/checkout@v4.2.2
         with:
-          lfs: true
+          lfs: false
 
-      # Setup Python
-      - name: Setup Python 3.12
+      - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5.6.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
-      # Install the package and development requirements
+      # Rust toolchain: the inline core (simplipy._core) is compiled by maturin during the editable
+      # install below.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Install the package and development requirements. maturin (PEP 660) builds + installs the Rust
+      # extension for the editable install.
       - name: Install package and development requirements
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
-      # Run the tests
       - name: Run tests
+        run: pytest tests
+
+  rust-checks:
+    name: Rust (fmt / clippy / test / deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Stage the dev_7-3 engine asset (the cargo parity tests load it)
         run: |
-          pytest tests
+          python -m pip install --quiet huggingface_hub
+          python - <<'PY'
+          import json, os
+          from huggingface_hub import hf_hub_download
+          manifest = json.load(open(hf_hub_download("psaegert/simplipy-assets", "manifest.json", repo_type="dataset")))
+          info = manifest["dev_7-3"]
+          cache = os.path.expanduser("~/.cache/simplipy")
+          for f in info["files"]:
+              hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
+          print("staged dev_7-3 ->", os.path.join(cache, info["directory"]))
+          PY
+      - name: rustfmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --lib --all-features
+      - name: cargo test (asset staged above -> parity tests run; they self-skip if it is ever absent)
+        run: cargo test --lib
+      - name: cargo-deny (supply-chain / license / advisory gate)
+        uses: EmbarkStudios/cargo-deny-action@v2
