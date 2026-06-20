@@ -35,6 +35,45 @@ from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
 
+def _load_c_pow() -> 'Callable[[float, float], float] | None':
+    """Bind the raw system C ``pow`` (the IEEE-754 special-case table), the SAME symbol the Rust
+    ``_core`` folder calls. Constant folding (``_apply_numeric_op``) routes ``pow`` through this so the
+    pure-Python and Rust-backed engines fold bit-identically on a given platform's libm.
+
+    Neither of Python's built-in powers is usable here: ``x ** y`` promotes a negative base with a
+    non-integer exponent to a *complex* and raises ``OverflowError`` on magnitude overflow (losing the
+    sign), while ``math.pow`` adds its own domain checks that raise where C ``pow`` returns ``nan``/
+    ``inf``. ctypes gives the unguarded C function. Returns ``None`` if libm cannot be located (then
+    folding falls back to the pure-Python approximation in ``_apply_numeric_op``).
+    """
+    import ctypes
+    import ctypes.util
+    import math
+    for name in (ctypes.util.find_library('m'), 'libm.so.6', 'libm.so',
+                 ctypes.util.find_library('c'), 'msvcrt'):
+        if not name:
+            continue
+        try:
+            fn = ctypes.CDLL(name).pow
+        except (OSError, AttributeError):
+            continue
+        fn.restype = ctypes.c_double
+        fn.argtypes = (ctypes.c_double, ctypes.c_double)
+        # Validate that this symbol really is the IEEE-754 C `pow` before trusting it (a wrong binding
+        # -- e.g. a Windows runtime symbol named `pow` with different semantics -- would silently diverge;
+        # better to fall through to the `**` fallback). Check a few special cases libm `pow` defines.
+        try:
+            if (fn(-0.0, -1.0) == -math.inf and fn(2.0, 3.0) == 8.0
+                    and math.isnan(fn(-1.0, 0.5)) and fn(-2.0, 3.0) == -8.0):
+                return fn
+        except Exception:
+            pass
+    return None
+
+
+_C_POW = _load_c_pow()
+
+
 @dataclass
 class SimplificationStatistics:
     """Collects detailed statistics about a simplification run.
@@ -57,7 +96,9 @@ class SimplificationStatistics:
     post_operand_rule_applications : int
         Rules that fired only after children were simplified first.
     constant_folding_count : int
-        How often the all-operands-are-``<constant>`` short-circuit fired.
+        How often constant folding fired in rule application, including both
+        fully numeric operand folds and mixed
+        ``<constant>``/numeric/named-constant leaf folds.
     rule_match_attempts : int
         Total ``match_pattern`` calls made.
     rule_match_hits : int
@@ -272,6 +313,52 @@ class SimpliPyEngine:
 
         return n_pruned
 
+    def resolve_constant_rules(self, verbose: bool = False) -> int:
+        """Replace ``<constant>`` with the actual numeric value in all-numeric rules.
+
+        Some rules discovered by :meth:`find_rules` map an expression whose
+        leaves are all numeric literals to the generic ``<constant>`` token
+        (e.g. ``mult2(1) → <constant>``).  This method evaluates every such
+        rule and replaces the ``<constant>`` replacement with the concrete
+        numeric result (e.g. ``mult2(1) → 2``), allowing downstream constant
+        folding to continue folding with exact values.
+
+        Only rules whose left-hand side leaves **all** pass
+        :func:`~simplipy.utils.is_numeric_string` are affected.  Rules
+        involving named constants (``np.e``, ``np.pi``, ``(-1)``), generic
+        ``<constant>`` placeholders, or wildcard variables are left unchanged.
+
+        Parameters
+        ----------
+        verbose : bool, optional
+            If True, prints each resolved rule.  Defaults to False.
+
+        Returns
+        -------
+        int
+            The number of rules whose replacement was resolved.
+        """
+        n_resolved = 0
+        for i, rule in enumerate(self.simplification_rules):
+            lhs, rhs = rule
+            if tuple(rhs) != ('<constant>',):
+                continue
+            leaves = [t for t in lhs if t not in self.operator_arity]
+            if not leaves or not all(is_numeric_string(t) for t in leaves):
+                continue
+            result_token = self._evaluate_constant_subtree(list(lhs))
+            if result_token is not None:
+                if verbose:
+                    print(f'Resolved: {list(lhs)} -> ["{result_token}"] (was ["<constant>"])')
+                self.simplification_rules[i] = (tuple(lhs), (result_token,))
+                n_resolved += 1
+        if n_resolved > 0:
+            self.compile_rules()
+        if verbose:
+            print(f'Resolved {n_resolved} constant rules '
+                  f'({len(self.simplification_rules)} rules total)')
+        return n_resolved
+
     def import_modules(self) -> None:
         """Imports Python modules required by operator realizations.
 
@@ -451,14 +538,19 @@ class SimpliPyEngine:
         stack: list[tuple[str, float, str | None]] = []
 
         def right_allows_flatten(parent_op: str, child_root: str | None) -> bool:
-            """Return True if a right operand with the same precedence can omit parentheses."""
+            """Return True if a right operand with the same precedence can omit parentheses.
+
+            FIX (conversion-quirk #5, render half): the original flattened equal-precedence right
+            operands of `+`/`*` (e.g. `a + (b + c)` rendered as `a + b + c`), which round-trips ONLY
+            with a right-leaning parse. Paired with the left-associative `infix_to_prefix` parse (the
+            parse half of the #5 fix), a right operand at equal precedence MUST keep its parentheses so
+            the structure is recoverable. Flattening is therefore disabled (empty map) so that
+            `prefix_to_infix` and `infix_to_prefix` stay round-trip inverses under standard associativity.
+            """
             if child_root is None:
                 return True
 
-            flatten_map: dict[str, set[str]] = {
-                '+': {'+', '-'},
-                '*': {'*', '/'},
-            }
+            flatten_map: dict[str, set[str]] = {}
             return child_root in flatten_map.get(parent_op, set())
 
         for token in reversed(tokens):
@@ -592,8 +684,13 @@ class SimpliPyEngine:
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
         number_pattern = r'(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
+        # The numeric folder's inf/nan result tokens (`float("inf")` / `float("-inf")` / `float("nan")`)
+        # are kept ATOMIC so a folded constant round-trips through prefix<->infix; otherwise the
+        # tokenizer splits them on the '(' / '"'. Must LEAD the alternation so it wins over the bare
+        # `float` ident prefix; the token is then classified as a leaf by the ident branch below.
+        float_special = r'float\("(?:-?inf|nan)"\)'
         # Include caret '^' as a distinct power token so users can write x ^ 3
-        token_pattern = re.compile(rf'<constant>|{number_pattern}|[A-Za-z_][\w.]*|\*\*|[-+*/^()]')
+        token_pattern = re.compile(rf'{float_special}|<constant>|{number_pattern}|[A-Za-z_][\w.]*|\*\*|[-+*/^()]')
 
         # Tokenize the infix expression
         tokens = token_pattern.findall(infix_expression.replace(' ', ''))
@@ -626,13 +723,30 @@ class SimpliPyEngine:
                     stack.pop()  # Pop the ')'
             else:
                 # Handle binary and unary operators
-                if token == '-' and (i == len(tokens) - 1 or tokens[i + 1] == '(' or (tokens[i + 1]) in self.operator_precedence_compat):
+                # FIX (conversion-quirk #4): the '^'->'**' normalization (applied to the current token
+                # above) must ALSO apply to the unary-minus lookahead, else `x ^ -y` parses '-' as
+                # binary while the equivalent `x ** -y` parses it as unary.
+                next_token = tokens[i + 1] if i + 1 < len(tokens) else None
+                next_token = '**' if next_token == '^' else next_token
+                if token == '-' and (i == len(tokens) - 1 or next_token == '(' or next_token in self.operator_precedence_compat):
                     # Handle unary negation (not part of a number)
                     token = 'neg'
 
                 if stack and stack[-1] != ')' and token != ')':
-                    while stack and self.operator_precedence_compat.get(stack[-1], 0) >= self.operator_precedence_compat.get(token, 0):
-                        prefix_expr.append(stack.pop())
+                    # FIX (conversion-quirk #5, parse half): respect operator associativity. The
+                    # original `>=` pop on this right-to-left scan right-leaned LEFT-assoc chains,
+                    # misparsing un-parenthesized infix (`1/2 * m * v**2` -> 1/(2*m*v**2)). Pop on strict
+                    # `>` for left-assoc operators; `>=` only for the right-assoc power operators
+                    # ('**'/'pow'). Coordinated with the render half (`right_allows_flatten` disabled)
+                    # so prefix<->infix round-trip identity is preserved.
+                    cur_prec = self.operator_precedence_compat.get(token, 0)
+                    right_assoc = token in ('**', 'pow')
+                    while stack and stack[-1] != ')':
+                        top_prec = self.operator_precedence_compat.get(stack[-1], 0)
+                        if top_prec > cur_prec or (top_prec == cur_prec and right_assoc):
+                            prefix_expr.append(stack.pop())
+                        else:
+                            break
                     stack.append(token)
                 else:
 
@@ -677,21 +791,24 @@ class SimpliPyEngine:
 
             if token in self.operator_arity_compat or token in self.operator_aliases or re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
                 operator = self.operator_aliases.get(token, token)
-                arity = self.operator_arity_compat[operator]
+                # FIX (conversion-quirk #6): use .get (as pass-2 already does) so a raw unconfigured
+                # powN token (constructible as a node but not a config operator) is handled like a
+                # unary power instead of raising KeyError -- the construct-vs-dispatch asymmetry.
+                arity = self.operator_arity_compat.get(operator, 1)
 
                 if operator == 'neg':
                     # If the operand of neg is a number, combine them
-                    if isinstance(stack[-1][0], str):
-                        if is_numeric_string(stack[-1][0]):
-                            stack[-1][0] = f'-{stack[-1][0]}'
-                        elif is_numeric_string(stack[-1][0]):
+                    if isinstance(stack[-1][0], str) and is_numeric_string(stack[-1][0]):
+                        # FIX (conversion-quirk #3): negating a numeric literal toggles ONE leading
+                        # '-' (strip if already negative, else prepend). The original strip branch was
+                        # dead (its `elif` repeated the `if` guard), so neg(-5) produced the literal
+                        # token '--5' instead of '5'.
+                        if stack[-1][0].startswith('-'):
                             stack[-1][0] = stack[-1][0][1:]
                         else:
-                            # General case: assemble operator and its operands
-                            operands = [stack.pop() for _ in range(arity)]
-                            stack.append([operator, operands])
+                            stack[-1][0] = f'-{stack[-1][0]}'
                     else:
-                        # General case: assemble operator and its operands+
+                        # General case: assemble operator and its operands
                         operands = [stack.pop() for _ in range(arity)]
                         stack.append([operator, operands])
 
@@ -703,17 +820,24 @@ class SimpliPyEngine:
                     if len(exponent) == 1:
                         if re.match(r'-?\d+$', exponent[0]):  # Integer exponent
                             exponent_value: int | float = int(exponent[0])
-                            pow_operator = f'pow{abs(exponent_value)}'
-                            if exponent_value < 0:
-                                stack.append(['inv', [[pow_operator, [base]]]])
+                            if exponent_value == 0:
+                                # FIX (conversion-quirk #2): x**0 -> 1 (not the invalid token 'pow0').
+                                stack.append(['1'])
                             else:
-                                stack.append([pow_operator, [base]])
+                                pow_operator = f'pow{abs(exponent_value)}'
+                                if exponent_value < 0:
+                                    stack.append(['inv', [[pow_operator, [base]]]])
+                                else:
+                                    stack.append([pow_operator, [base]])
                         elif is_numeric_string(exponent[0]):  # Floating-point exponent
                             exponent_value = float(exponent[0])
 
                             # Try to convert the exponent into a fraction
                             abs_exponent_fraction = fractions.Fraction(abs(float(exponent[0]))).limit_denominator()
-                            if abs_exponent_fraction.numerator <= 5 and abs_exponent_fraction.denominator <= 5:
+                            if abs_exponent_fraction.numerator == 0:
+                                # FIX (conversion-quirk #2): x**0.0 -> 1 (not 'pow0').
+                                stack.append(['1'])
+                            elif abs_exponent_fraction.numerator <= 5 and abs_exponent_fraction.denominator <= 5:
                                 # Format the fraction as a combination of power operators, i.e. "x**(2/3)" -> "pow1_3(pow2(x))"
                                 new_expression = [base]
                                 if abs_exponent_fraction.numerator != 1:
@@ -734,12 +858,16 @@ class SimpliPyEngine:
                             # Integer fraction exponent
                             numerator = int(exponent[1][0][0])
                             denominator = int(exponent[1][1][0])
-                            numerator_power = f'pow{abs(numerator)}'
-                            denominator_power = f'pow1_{abs(denominator)}'
-                            if numerator * denominator < 0:
-                                stack.append(['inv', [[denominator_power, [[numerator_power, [base]]]]]])
+                            if numerator == 0:
+                                # FIX (conversion-quirk #2): x**(0/N) -> 1 (not 'pow0').
+                                stack.append(['1'])
                             else:
-                                stack.append([denominator_power, [[numerator_power, [base]]]])
+                                numerator_power = f'pow{abs(numerator)}'
+                                denominator_power = f'pow1_{abs(denominator)}'
+                                if numerator * denominator < 0:
+                                    stack.append(['inv', [[denominator_power, [[numerator_power, [base]]]]]])
+                                else:
+                                    stack.append([denominator_power, [[numerator_power, [base]]]])
                         else:
                             exponent_value = int(exponent[1][0][0]) / int(exponent[1][1][0])
                             abs_exponent_fraction = fractions.Fraction(abs(exponent_value)).limit_denominator()
@@ -787,7 +915,13 @@ class SimpliPyEngine:
                 current_operand = operands[0]
 
                 operator_bases = ['pow1_', 'pow']
-                operator_patterns = [r'pow1_\d+', r'pow\d+']
+                # FIX (conversion-quirk #1): the integer-pow chain pattern needs the SAME negative
+                # lookahead as the outer dispatch (r'pow\d+(?!_)'). Without it, the chain-extension
+                # match below (`re.match(operator_pattern, current_operand[0])`) matches a child
+                # 'pow1_M' (it sees the 'pow1' prefix), absorbs it, multiplies the exponent by 1
+                # (re.match(r'pow(\d+)','pow1_M').group(1)=='1'), and SILENTLY DROPS the _M
+                # denominator: pow2(pow1_3(x)) -> pow2(x). The lookahead stops the absorption.
+                operator_patterns = [r'pow1_\d+', r'pow\d+(?!_)']
                 operator_patterns_grouped = [r'pow1_(\d+)', r'pow(\d+)']
                 max_powers = [self.max_fractional_power, self.max_power]
                 for base, pattern, pattern_grouped, p in zip(operator_bases, operator_patterns, operator_patterns_grouped, max_powers):
@@ -1022,6 +1156,198 @@ class SimpliPyEngine:
             # It's a terminal (constant or variable)
             return [token], start_idx + 1
 
+    def _evaluate_constant_subtree(self, flat_expression: list[str]) -> str | None:
+        """Evaluate a fully numeric prefix expression to a single value (token).
+
+        Deterministic IEEE-754 ``f64`` + ``libm`` folding (the ``numeric`` engine line): the subtree is
+        evaluated with Python floats (``math`` -> the platform libm), folding to the f64 result --
+        including ``inf``/``nan`` (``1/0 -> float("inf")``, ``sqrt(-1) -> float("nan")``). An unparseable
+        leaf returns ``None``. This is deterministic (no numpy version/SIMD variance) and matches the
+        Rust ``_core`` folder byte-for-byte on a given build (same libm), so the pure-Python and
+        Rust-backed engines fold identically.
+
+        Parameters
+        ----------
+        flat_expression : list[str]
+            A prefix expression where every leaf is a numeric literal.
+
+        Returns
+        -------
+        str or None
+            The result token: ``str(int)`` if integer-valued, ``float("inf")`` / ``float("-inf")`` /
+            ``float("nan")`` for a non-finite result, else ``str(float)``. ``None`` if a leaf cannot be
+            parsed as a number or the expression is malformed (extra/missing tokens).
+        """
+        import math
+
+        pos = 0
+
+        def ev() -> float:
+            nonlocal pos
+            tok = flat_expression[pos]
+            pos += 1
+            arity = self.operator_arity_compat.get(tok)
+            if arity is None:
+                return float(tok)  # leaf; ValueError propagates -> None (no alias resolution -- matches Rust)
+            args = [ev() for _ in range(arity)]
+            return self._apply_numeric_op(tok, args)
+
+        try:
+            result = ev()
+            if pos != len(flat_expression):
+                return None  # extra tokens (malformed)
+        except (ValueError, IndexError, OverflowError, ZeroDivisionError):
+            return None
+
+        if math.isnan(result):
+            return 'float("nan")'
+        if math.isinf(result):
+            return 'float("-inf")' if result < 0 else 'float("inf")'
+        if result == int(result):
+            return str(int(result))
+        return str(result)
+
+    def _apply_numeric_op(self, name: str, a: list[float]) -> float:
+        """One canonical operator on float operands, as IEEE-754 f64 + libm (mirrors the Rust
+        ``apply_op``). Reproduces libm's inf/nan exactly (``math`` raises where libm returns inf/nan),
+        so intermediate non-finite values propagate identically before the finiteness gate."""
+        import math
+
+        if _C_POW is not None:
+            fp = _C_POW  # raw C `pow` -> bit-identical to the Rust `_core` folder, IEEE-754 special cases
+        else:
+            def fp(x: float, y: float) -> float:
+                # Fallback when libm can't be located: approximate C `pow` with Python's `**`. A negative
+                # base with a non-integer exponent is NaN (C `pow`), not complex/Overflow -- check first,
+                # since `**` would raise OverflowError on a huge magnitude or return a complex.
+                if x < 0.0 and math.isfinite(y) and y != math.floor(y):
+                    return math.nan
+                try:
+                    r = x ** y
+                except OverflowError:
+                    # correctly-signed inf: negative iff a negative base raised to an ODD integer exponent.
+                    neg = x < 0.0 and y == math.floor(y) and int(y) % 2 != 0
+                    return -math.inf if neg else math.inf
+                except ZeroDivisionError:
+                    return math.inf  # 0 ** negative -> +inf (f64 powf), not a ValueError
+                except ValueError:
+                    return math.nan
+                return math.nan if isinstance(r, complex) else r
+
+        x = a[0]
+        if name == '+':
+            return x + a[1]
+        if name == '-':
+            return x - a[1]
+        if name == '*':
+            return x * a[1]
+        if name == '/':
+            if a[1] == 0.0:
+                return math.inf if x > 0 else (-math.inf if x < 0 else math.nan)
+            return x / a[1]
+        if name == 'pow':
+            return fp(x, a[1])
+        if name == 'neg':
+            return -x
+        if name == 'inv':
+            return math.inf if x == 0.0 else 1.0 / x
+        if name == 'abs':
+            return math.fabs(x)
+        if name in ('mult2', 'mult3', 'mult4', 'mult5'):
+            return float(name[4:]) * x
+        if name in ('div2', 'div3', 'div4', 'div5'):
+            return x / float(name[3:])
+        if name in ('pow2', 'pow3', 'pow4', 'pow5'):
+            return fp(x, float(name[3:]))
+        if name == 'pow1_2':
+            return fp(x, 0.5)
+        if name == 'pow1_4':
+            return fp(x, 0.25)
+        if name == 'pow1_3':
+            return -fp(-x, 1.0 / 3.0) if x < 0 else fp(x, 1.0 / 3.0)
+        if name == 'pow1_5':
+            return -fp(-x, 1.0 / 5.0) if x < 0 else fp(x, 1.0 / 5.0)
+        # sin/cos/tan: Python's math RAISES on a non-finite argument; the C functions (-> Rust) return
+        # NaN. Match C so an inf intermediate (e.g. from `1/0`) propagates to NaN, not an exception.
+        if name == 'sin':
+            return math.sin(x) if math.isfinite(x) else math.nan
+        if name == 'cos':
+            return math.cos(x) if math.isfinite(x) else math.nan
+        if name == 'tan':
+            return math.tan(x) if math.isfinite(x) else math.nan
+        if name == 'asin':
+            return math.asin(x) if -1.0 <= x <= 1.0 else math.nan
+        if name == 'acos':
+            return math.acos(x) if -1.0 <= x <= 1.0 else math.nan
+        if name == 'atan':
+            return math.atan(x)
+        if name == 'sinh':
+            try:
+                return math.sinh(x)
+            except OverflowError:
+                return math.inf if x > 0 else -math.inf
+        if name == 'cosh':
+            try:
+                return math.cosh(x)
+            except OverflowError:
+                return math.inf
+        if name == 'tanh':
+            return math.tanh(x)
+        if name == 'asinh':
+            return math.asinh(x)
+        if name == 'acosh':
+            return math.acosh(x) if x >= 1.0 else math.nan
+        if name == 'atanh':
+            if -1.0 < x < 1.0:
+                return math.atanh(x)
+            if x == 1.0:
+                return math.inf
+            if x == -1.0:
+                return -math.inf
+            return math.nan
+        if name == 'exp':
+            try:
+                return math.exp(x)
+            except OverflowError:
+                return math.inf
+        if name == 'log':
+            if x > 0.0:
+                return math.log(x)
+            return -math.inf if x == 0.0 else math.nan
+        raise ValueError(f"unknown numeric operator {name!r}")
+
+    def _try_fold_constants(self, operator: str, operands: list[list], stats: 'SimplificationStatistics | None') -> list | None:
+        """Attempt constant folding on a subtree whose operands are leaves.
+
+        Returns the folded result as a tree node, or ``None`` when folding is
+        not applicable.
+        """
+        all_leaves = all(len(op) == 1 for op in operands)
+        if not all_leaves:
+            return None
+
+        _NAMED_CONSTANTS = frozenset({'np.e', 'np.pi'})
+        values = [op[0] for op in operands]
+        all_numeric = all(is_numeric_string(v) for v in values)
+        all_constant_or_numeric = all(
+            is_numeric_string(v) or v == '<constant>' or v in _NAMED_CONSTANTS
+            for v in values
+        )
+
+        if all_numeric:
+            flat = [operator] + values
+            result_token = self._evaluate_constant_subtree(flat)
+            if result_token is not None:
+                if stats is not None:
+                    stats.constant_folding_count += 1
+                return [result_token]
+        elif all_constant_or_numeric:
+            if stats is not None:
+                stats.constant_folding_count += 1
+            return ['<constant>']
+
+        return None
+
     def apply_rules_top_down(self, subtree: list, max_pattern_length: int | None = None, collect_statistics: bool = False, verbose: bool = False) -> list:
         """Recursively applies simplification rules to an expression tree.
 
@@ -1054,12 +1380,6 @@ class SimpliPyEngine:
 
         operator = subtree[0]
         operands = subtree[1]
-
-        # First, check if all operands are constants
-        if all(len(operand) == 1 and operand[0] == '<constant>' for operand in operands):
-            if stats is not None:
-                stats.constant_folding_count += 1
-            return ['<constant>']
 
         # Convert subtree to flat form for rule matching
         flat_subtree = tuple(flatten_nested_list(subtree)[::-1])
@@ -1113,6 +1433,11 @@ class SimpliPyEngine:
                     # Recursively simplify the replacement
                     return self.apply_rules_top_down(replacement_tree, max_pattern_length, collect_statistics, verbose)
 
+        # No rule matched — try constant folding as fallback
+        folded = self._try_fold_constants(operator, operands, stats)
+        if folded is not None:
+            return folded
+
         # No rule applied at this level, recursively simplify operands
         simplified_operands = [self.apply_rules_top_down(operand, max_pattern_length, collect_statistics, verbose) for operand in operands]
         simplified_subtree = [operator, simplified_operands]
@@ -1155,6 +1480,11 @@ class SimpliPyEngine:
                     if verbose:
                         print(f'Applied pattern rule (after operand simplification)\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{simplified_subtree}\nwith mapping\t{mapping}\n')
                     return self.apply_rules_top_down(replacement_tree, max_pattern_length, collect_statistics, verbose)
+
+        # No rule matched after operand simplification — try constant folding as fallback
+        folded = self._try_fold_constants(operator, simplified_operands, stats)
+        if folded is not None:
+            return folded
 
         return simplified_subtree
 
@@ -1950,7 +2280,15 @@ class SimpliPyEngine:
                     continue
 
                 # Check if purely numerical
-                if all([t == '<constant>' or t in operator_arity for t in expression]) and len(expression) > 1:
+                if all(t == '<constant>' or t in operator_arity or is_numeric_string(t) for t in expression) and len(expression) > 1:
+                    # If every non-operator token is a numeric literal,
+                    # evaluate to the actual value instead of '<constant>'.
+                    non_ops = [t for t in expression if t not in operator_arity]
+                    if non_ops and all(is_numeric_string(t) for t in non_ops):
+                        result_token = self._evaluate_constant_subtree(list(expression))
+                        if result_token is not None:
+                            result_queue.put((expression, (result_token,)))
+                            continue
                     result_queue.put((expression, ('<constant>',)))
                     continue
 
@@ -2051,6 +2389,14 @@ class SimpliPyEngine:
                             selected = candidate
                             break
                     if selected is not None:
+                        # If the best candidate is '<constant>' but the source
+                        # expression is all-numeric, evaluate to the actual value.
+                        if tuple(selected) == ('<constant>',):
+                            src_leaves = [t for t in expression if t not in operator_arity]
+                            if src_leaves and all(is_numeric_string(t) for t in src_leaves):
+                                result_token = self._evaluate_constant_subtree(list(expression))
+                                if result_token is not None:
+                                    selected = (result_token,)
                         result_queue.put((expression, selected))
                     else:
                         # All candidates violate wildcard multiplicity
@@ -2309,34 +2655,36 @@ class SimpliPyEngine:
                         # Send new work if available (but not if interrupted)
                         if not interrupted:
                             try:
-                                expression_to_simplify = next(work_iter)
+                                while True:
+                                    expression_to_simplify = next(work_iter)
 
-                                if len(expression_to_simplify) > current_length:
-                                    # This means that the collected rules can be applied to coming expressions
-                                    # To avoid redundant rules, we incorporate the rules into the simplification to raise the requirements for rules
-                                    if verbose:
-                                        print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
-                                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
-                                    self.compile_rules()
-                                    if output_file is not None:
+                                    if len(expression_to_simplify) > current_length:
+                                        # This means that the collected rules can be applied to coming expressions
+                                        # To avoid redundant rules, we incorporate the rules into the simplification to raise the requirements for rules
                                         if verbose:
-                                            print("Saving rules after increasing expression length...")
-                                        with open(output_file, 'w') as file:
-                                            json.dump(self.simplification_rules, file, indent=4)
-                                    current_length = len(expression_to_simplify)
+                                            print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
+                                        self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
+                                        self.compile_rules()
+                                        if output_file is not None:
+                                            if verbose:
+                                                print("Saving rules after increasing expression length...")
+                                            with open(output_file, 'w') as file:
+                                                json.dump(self.simplification_rules, file, indent=4)
+                                        current_length = len(expression_to_simplify)
 
-                                simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
-                                # Skip expressions that already simplify via existing rules (Kruskal-style pruning)
-                                if simplified_length < len(expression_to_simplify):
-                                    n_scanned += 1
-                                    pbar.update(1)
-                                    continue
-                                if max_target_pattern_length is None:
-                                    allowed_candidate_lengths = tuple(range(simplified_length))
-                                else:
-                                    allowed_candidate_lengths = tuple(range(min(simplified_length, max_target_pattern_length + 1)))
-                                work_queue.put((expression_to_simplify, simplified_length, allowed_candidate_lengths))
-                                active_tasks += 1
+                                    simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
+                                    # Skip expressions that already simplify via existing rules (Kruskal-style pruning)
+                                    if simplified_length < len(expression_to_simplify):
+                                        n_scanned += 1
+                                        pbar.update(1)
+                                        continue
+                                    if max_target_pattern_length is None:
+                                        allowed_candidate_lengths = tuple(range(simplified_length))
+                                    else:
+                                        allowed_candidate_lengths = tuple(range(min(simplified_length, max_target_pattern_length + 1)))
+                                    work_queue.put((expression_to_simplify, simplified_length, allowed_candidate_lengths))
+                                    active_tasks += 1
+                                    break
                             except StopIteration:
                                 pass
 
