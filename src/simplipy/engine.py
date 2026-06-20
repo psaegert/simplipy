@@ -674,7 +674,12 @@ class SimpliPyEngine:
                     stack.pop()  # Pop the ')'
             else:
                 # Handle binary and unary operators
-                if token == '-' and (i == len(tokens) - 1 or tokens[i + 1] == '(' or (tokens[i + 1]) in self.operator_precedence_compat):
+                # FIX (conversion-quirk #4): the '^'->'**' normalization (applied to the current token
+                # above) must ALSO apply to the unary-minus lookahead, else `x ^ -y` parses '-' as
+                # binary while the equivalent `x ** -y` parses it as unary.
+                next_token = tokens[i + 1] if i + 1 < len(tokens) else None
+                next_token = '**' if next_token == '^' else next_token
+                if token == '-' and (i == len(tokens) - 1 or next_token == '(' or next_token in self.operator_precedence_compat):
                     # Handle unary negation (not part of a number)
                     token = 'neg'
 
@@ -725,21 +730,24 @@ class SimpliPyEngine:
 
             if token in self.operator_arity_compat or token in self.operator_aliases or re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
                 operator = self.operator_aliases.get(token, token)
-                arity = self.operator_arity_compat[operator]
+                # FIX (conversion-quirk #6): use .get (as pass-2 already does) so a raw unconfigured
+                # powN token (constructible as a node but not a config operator) is handled like a
+                # unary power instead of raising KeyError -- the construct-vs-dispatch asymmetry.
+                arity = self.operator_arity_compat.get(operator, 1)
 
                 if operator == 'neg':
                     # If the operand of neg is a number, combine them
-                    if isinstance(stack[-1][0], str):
-                        if is_numeric_string(stack[-1][0]):
-                            stack[-1][0] = f'-{stack[-1][0]}'
-                        elif is_numeric_string(stack[-1][0]):
+                    if isinstance(stack[-1][0], str) and is_numeric_string(stack[-1][0]):
+                        # FIX (conversion-quirk #3): negating a numeric literal toggles ONE leading
+                        # '-' (strip if already negative, else prepend). The original strip branch was
+                        # dead (its `elif` repeated the `if` guard), so neg(-5) produced the literal
+                        # token '--5' instead of '5'.
+                        if stack[-1][0].startswith('-'):
                             stack[-1][0] = stack[-1][0][1:]
                         else:
-                            # General case: assemble operator and its operands
-                            operands = [stack.pop() for _ in range(arity)]
-                            stack.append([operator, operands])
+                            stack[-1][0] = f'-{stack[-1][0]}'
                     else:
-                        # General case: assemble operator and its operands+
+                        # General case: assemble operator and its operands
                         operands = [stack.pop() for _ in range(arity)]
                         stack.append([operator, operands])
 
@@ -751,17 +759,24 @@ class SimpliPyEngine:
                     if len(exponent) == 1:
                         if re.match(r'-?\d+$', exponent[0]):  # Integer exponent
                             exponent_value: int | float = int(exponent[0])
-                            pow_operator = f'pow{abs(exponent_value)}'
-                            if exponent_value < 0:
-                                stack.append(['inv', [[pow_operator, [base]]]])
+                            if exponent_value == 0:
+                                # FIX (conversion-quirk #2): x**0 -> 1 (not the invalid token 'pow0').
+                                stack.append(['1'])
                             else:
-                                stack.append([pow_operator, [base]])
+                                pow_operator = f'pow{abs(exponent_value)}'
+                                if exponent_value < 0:
+                                    stack.append(['inv', [[pow_operator, [base]]]])
+                                else:
+                                    stack.append([pow_operator, [base]])
                         elif is_numeric_string(exponent[0]):  # Floating-point exponent
                             exponent_value = float(exponent[0])
 
                             # Try to convert the exponent into a fraction
                             abs_exponent_fraction = fractions.Fraction(abs(float(exponent[0]))).limit_denominator()
-                            if abs_exponent_fraction.numerator <= 5 and abs_exponent_fraction.denominator <= 5:
+                            if abs_exponent_fraction.numerator == 0:
+                                # FIX (conversion-quirk #2): x**0.0 -> 1 (not 'pow0').
+                                stack.append(['1'])
+                            elif abs_exponent_fraction.numerator <= 5 and abs_exponent_fraction.denominator <= 5:
                                 # Format the fraction as a combination of power operators, i.e. "x**(2/3)" -> "pow1_3(pow2(x))"
                                 new_expression = [base]
                                 if abs_exponent_fraction.numerator != 1:
@@ -782,12 +797,16 @@ class SimpliPyEngine:
                             # Integer fraction exponent
                             numerator = int(exponent[1][0][0])
                             denominator = int(exponent[1][1][0])
-                            numerator_power = f'pow{abs(numerator)}'
-                            denominator_power = f'pow1_{abs(denominator)}'
-                            if numerator * denominator < 0:
-                                stack.append(['inv', [[denominator_power, [[numerator_power, [base]]]]]])
+                            if numerator == 0:
+                                # FIX (conversion-quirk #2): x**(0/N) -> 1 (not 'pow0').
+                                stack.append(['1'])
                             else:
-                                stack.append([denominator_power, [[numerator_power, [base]]]])
+                                numerator_power = f'pow{abs(numerator)}'
+                                denominator_power = f'pow1_{abs(denominator)}'
+                                if numerator * denominator < 0:
+                                    stack.append(['inv', [[denominator_power, [[numerator_power, [base]]]]]])
+                                else:
+                                    stack.append([denominator_power, [[numerator_power, [base]]]])
                         else:
                             exponent_value = int(exponent[1][0][0]) / int(exponent[1][1][0])
                             abs_exponent_fraction = fractions.Fraction(abs(exponent_value)).limit_denominator()
@@ -835,7 +854,13 @@ class SimpliPyEngine:
                 current_operand = operands[0]
 
                 operator_bases = ['pow1_', 'pow']
-                operator_patterns = [r'pow1_\d+', r'pow\d+']
+                # FIX (conversion-quirk #1): the integer-pow chain pattern needs the SAME negative
+                # lookahead as the outer dispatch (r'pow\d+(?!_)'). Without it, the chain-extension
+                # match below (`re.match(operator_pattern, current_operand[0])`) matches a child
+                # 'pow1_M' (it sees the 'pow1' prefix), absorbs it, multiplies the exponent by 1
+                # (re.match(r'pow(\d+)','pow1_M').group(1)=='1'), and SILENTLY DROPS the _M
+                # denominator: pow2(pow1_3(x)) -> pow2(x). The lookahead stops the absorption.
+                operator_patterns = [r'pow1_\d+', r'pow\d+(?!_)']
                 operator_patterns_grouped = [r'pow1_(\d+)', r'pow(\d+)']
                 max_powers = [self.max_fractional_power, self.max_power]
                 for base, pattern, pattern_grouped, p in zip(operator_bases, operator_patterns, operator_patterns_grouped, max_powers):
