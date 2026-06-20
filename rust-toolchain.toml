@@ -1,0 +1,7 @@
+# Pin the toolchain so CI, local dev, and wheel builds agree.
+# `stable` floats to the latest stable on `rustup update`; pin an exact version
+# (e.g. "1.84.0") before a release to make wheels reproducible.
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

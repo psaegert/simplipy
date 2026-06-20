@@ -1,0 +1,20 @@
+# cargo-deny policy (supply-chain / license / advisory gate for the Rust core).
+[advisories]
+version = 2
+yanked = "deny"
+# Fail on unmaintained-crate advisories (we deliberately avoid serde_yaml -> use serde_yaml_ng).
+unmaintained = "all"
+
+[licenses]
+version = 2
+# Allow only permissive licenses compatible with the project MIT license.
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcard-dependencies = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
