@@ -35,6 +35,45 @@ from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
 
+def _load_c_pow() -> 'Callable[[float, float], float] | None':
+    """Bind the raw system C ``pow`` (the IEEE-754 special-case table), the SAME symbol the Rust
+    ``_core`` folder calls. Constant folding (``_apply_numeric_op``) routes ``pow`` through this so the
+    pure-Python and Rust-backed engines fold bit-identically on a given platform's libm.
+
+    Neither of Python's built-in powers is usable here: ``x ** y`` promotes a negative base with a
+    non-integer exponent to a *complex* and raises ``OverflowError`` on magnitude overflow (losing the
+    sign), while ``math.pow`` adds its own domain checks that raise where C ``pow`` returns ``nan``/
+    ``inf``. ctypes gives the unguarded C function. Returns ``None`` if libm cannot be located (then
+    folding falls back to the pure-Python approximation in ``_apply_numeric_op``).
+    """
+    import ctypes
+    import ctypes.util
+    import math
+    for name in (ctypes.util.find_library('m'), 'libm.so.6', 'libm.so',
+                 ctypes.util.find_library('c'), 'msvcrt'):
+        if not name:
+            continue
+        try:
+            fn = ctypes.CDLL(name).pow
+        except (OSError, AttributeError):
+            continue
+        fn.restype = ctypes.c_double
+        fn.argtypes = (ctypes.c_double, ctypes.c_double)
+        # Validate that this symbol really is the IEEE-754 C `pow` before trusting it (a wrong binding
+        # -- e.g. a Windows runtime symbol named `pow` with different semantics -- would silently diverge;
+        # better to fall through to the `**` fallback). Check a few special cases libm `pow` defines.
+        try:
+            if (fn(-0.0, -1.0) == -math.inf and fn(2.0, 3.0) == 8.0
+                    and math.isnan(fn(-1.0, 0.5)) and fn(-2.0, 3.0) == -8.0):
+                return fn
+        except Exception:
+            pass
+    return None
+
+
+_C_POW = _load_c_pow()
+
+
 @dataclass
 class SimplificationStatistics:
     """Collects detailed statistics about a simplification run.
@@ -1113,10 +1152,14 @@ class SimpliPyEngine:
             return [token], start_idx + 1
 
     def _evaluate_constant_subtree(self, flat_expression: list[str]) -> str | None:
-        """Evaluate a fully numeric prefix expression to a single value.
+        """Evaluate a fully numeric prefix expression to a single value (token).
 
-        Uses the existing compilation pipeline to evaluate an expression
-        whose tokens are all operators and numeric literals (no variables).
+        Deterministic IEEE-754 ``f64`` + ``libm`` folding (the ``numeric`` engine line): the subtree is
+        evaluated with Python floats (``math`` -> the platform libm), folding to the f64 result --
+        including ``inf``/``nan`` (``1/0 -> float("inf")``, ``sqrt(-1) -> float("nan")``). An unparseable
+        leaf returns ``None``. This is deterministic (no numpy version/SIMD variance) and matches the
+        Rust ``_core`` folder byte-for-byte on a given build (same libm), so the pure-Python and
+        Rust-backed engines fold identically.
 
         Parameters
         ----------
@@ -1126,32 +1169,147 @@ class SimpliPyEngine:
         Returns
         -------
         str or None
-            The result formatted as a string token, or ``None`` if evaluation
-            fails for any reason.
+            The result token: ``str(int)`` if integer-valued, ``float("inf")`` / ``float("-inf")`` /
+            ``float("nan")`` for a non-finite result, else ``str(float)``. ``None`` if a leaf cannot be
+            parsed as a number or the expression is malformed (extra/missing tokens).
         """
+        import math
+
+        pos = 0
+
+        def ev() -> float:
+            nonlocal pos
+            tok = flat_expression[pos]
+            pos += 1
+            arity = self.operator_arity_compat.get(tok)
+            if arity is None:
+                return float(tok)  # leaf; ValueError propagates -> None (no alias resolution -- matches Rust)
+            args = [ev() for _ in range(arity)]
+            return self._apply_numeric_op(tok, args)
+
         try:
-            expr_with_realizations = self.operators_to_realizations(flat_expression)
-            infix_str = self.prefix_to_infix(list(expr_with_realizations), realization=True)
-            code = codify(infix_str, variables=[])
-            f = self.code_to_lambda(code)
-            result = f()
-
-            if isinstance(result, complex):
-                return None
-
-            # Format the result
-            import math
-            if isinstance(result, np.integer):
-                return str(int(result))
-            if math.isnan(result):
-                return 'float("nan")'
-            if math.isinf(result):
-                return 'float("-inf")' if result < 0 else 'float("inf")'
-            if result == int(result):
-                return str(int(result))
-            return str(result)
-        except Exception:
+            result = ev()
+            if pos != len(flat_expression):
+                return None  # extra tokens (malformed)
+        except (ValueError, IndexError, OverflowError, ZeroDivisionError):
             return None
+
+        if math.isnan(result):
+            return 'float("nan")'
+        if math.isinf(result):
+            return 'float("-inf")' if result < 0 else 'float("inf")'
+        if result == int(result):
+            return str(int(result))
+        return str(result)
+
+    def _apply_numeric_op(self, name: str, a: list[float]) -> float:
+        """One canonical operator on float operands, as IEEE-754 f64 + libm (mirrors the Rust
+        ``apply_op``). Reproduces libm's inf/nan exactly (``math`` raises where libm returns inf/nan),
+        so intermediate non-finite values propagate identically before the finiteness gate."""
+        import math
+
+        if _C_POW is not None:
+            fp = _C_POW  # raw C `pow` -> bit-identical to the Rust `_core` folder, IEEE-754 special cases
+        else:
+            def fp(x: float, y: float) -> float:
+                # Fallback when libm can't be located: approximate C `pow` with Python's `**`. A negative
+                # base with a non-integer exponent is NaN (C `pow`), not complex/Overflow -- check first,
+                # since `**` would raise OverflowError on a huge magnitude or return a complex.
+                if x < 0.0 and math.isfinite(y) and y != math.floor(y):
+                    return math.nan
+                try:
+                    r = x ** y
+                except OverflowError:
+                    # correctly-signed inf: negative iff a negative base raised to an ODD integer exponent.
+                    neg = x < 0.0 and y == math.floor(y) and int(y) % 2 != 0
+                    return -math.inf if neg else math.inf
+                except ZeroDivisionError:
+                    return math.inf  # 0 ** negative -> +inf (f64 powf), not a ValueError
+                except ValueError:
+                    return math.nan
+                return math.nan if isinstance(r, complex) else r
+
+        x = a[0]
+        if name == '+':
+            return x + a[1]
+        if name == '-':
+            return x - a[1]
+        if name == '*':
+            return x * a[1]
+        if name == '/':
+            if a[1] == 0.0:
+                return math.inf if x > 0 else (-math.inf if x < 0 else math.nan)
+            return x / a[1]
+        if name == 'pow':
+            return fp(x, a[1])
+        if name == 'neg':
+            return -x
+        if name == 'inv':
+            return math.inf if x == 0.0 else 1.0 / x
+        if name == 'abs':
+            return math.fabs(x)
+        if name in ('mult2', 'mult3', 'mult4', 'mult5'):
+            return float(name[4:]) * x
+        if name in ('div2', 'div3', 'div4', 'div5'):
+            return x / float(name[3:])
+        if name in ('pow2', 'pow3', 'pow4', 'pow5'):
+            return fp(x, float(name[3:]))
+        if name == 'pow1_2':
+            return fp(x, 0.5)
+        if name == 'pow1_4':
+            return fp(x, 0.25)
+        if name == 'pow1_3':
+            return -fp(-x, 1.0 / 3.0) if x < 0 else fp(x, 1.0 / 3.0)
+        if name == 'pow1_5':
+            return -fp(-x, 1.0 / 5.0) if x < 0 else fp(x, 1.0 / 5.0)
+        # sin/cos/tan: Python's math RAISES on a non-finite argument; the C functions (-> Rust) return
+        # NaN. Match C so an inf intermediate (e.g. from `1/0`) propagates to NaN, not an exception.
+        if name == 'sin':
+            return math.sin(x) if math.isfinite(x) else math.nan
+        if name == 'cos':
+            return math.cos(x) if math.isfinite(x) else math.nan
+        if name == 'tan':
+            return math.tan(x) if math.isfinite(x) else math.nan
+        if name == 'asin':
+            return math.asin(x) if -1.0 <= x <= 1.0 else math.nan
+        if name == 'acos':
+            return math.acos(x) if -1.0 <= x <= 1.0 else math.nan
+        if name == 'atan':
+            return math.atan(x)
+        if name == 'sinh':
+            try:
+                return math.sinh(x)
+            except OverflowError:
+                return math.inf if x > 0 else -math.inf
+        if name == 'cosh':
+            try:
+                return math.cosh(x)
+            except OverflowError:
+                return math.inf
+        if name == 'tanh':
+            return math.tanh(x)
+        if name == 'asinh':
+            return math.asinh(x)
+        if name == 'acosh':
+            return math.acosh(x) if x >= 1.0 else math.nan
+        if name == 'atanh':
+            if -1.0 < x < 1.0:
+                return math.atanh(x)
+            if x == 1.0:
+                return math.inf
+            if x == -1.0:
+                return -math.inf
+            return math.nan
+        if name == 'exp':
+            try:
+                return math.exp(x)
+            except OverflowError:
+                return math.inf
+        if name == 'log':
+            if x > 0.0:
+                return math.log(x)
+            return -math.inf if x == 0.0 else math.nan
+        raise ValueError(f"unknown numeric operator {name!r}")
 
     def _try_fold_constants(self, operator: str, operands: list[list], stats: 'SimplificationStatistics | None') -> list | None:
         """Attempt constant folding on a subtree whose operands are leaves.
