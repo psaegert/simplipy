@@ -684,8 +684,13 @@ class SimpliPyEngine:
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
         number_pattern = r'(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
+        # The numeric folder's inf/nan result tokens (`float("inf")` / `float("-inf")` / `float("nan")`)
+        # are kept ATOMIC so a folded constant round-trips through prefix<->infix; otherwise the
+        # tokenizer splits them on the '(' / '"'. Must LEAD the alternation so it wins over the bare
+        # `float` ident prefix; the token is then classified as a leaf by the ident branch below.
+        float_special = r'float\("(?:-?inf|nan)"\)'
         # Include caret '^' as a distinct power token so users can write x ^ 3
-        token_pattern = re.compile(rf'<constant>|{number_pattern}|[A-Za-z_][\w.]*|\*\*|[-+*/^()]')
+        token_pattern = re.compile(rf'{float_special}|<constant>|{number_pattern}|[A-Za-z_][\w.]*|\*\*|[-+*/^()]')
 
         # Tokenize the infix expression
         tokens = token_pattern.findall(infix_expression.replace(' ', ''))
