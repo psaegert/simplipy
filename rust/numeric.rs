@@ -199,7 +199,12 @@ pub fn py_float_repr(x: f64) -> String {
         return "float(\"nan\")".to_string();
     }
     if x.is_infinite() {
-        return if x < 0.0 { "float(\"-inf\")" } else { "float(\"inf\")" }.to_string();
+        return if x < 0.0 {
+            "float(\"-inf\")"
+        } else {
+            "float(\"inf\")"
+        }
+        .to_string();
     }
     if x == x.trunc() {
         // `result == int(result)` -> `str(int(result))` (the exact integer; -0.0 -> "0").
@@ -222,7 +227,11 @@ pub fn py_float_repr(x: f64) -> String {
         } else {
             format!("{}.{}", &digits[..1], &digits[1..])
         };
-        format!("{sign}{mant}e{}{:02}", if dexp < 0 { "-" } else { "+" }, dexp.unsigned_abs())
+        format!(
+            "{sign}{mant}e{}{:02}",
+            if dexp < 0 { "-" } else { "+" },
+            dexp.unsigned_abs()
+        )
     } else if dexp >= 0 {
         // fixed, |x| >= 1: integer part is digits[..dexp+1] (no padding needed -- non-integer means a
         // fractional digit exists, so digits.len() > dexp+1), fraction is the rest.
@@ -252,7 +261,11 @@ fn shortest_digits(s: &str) -> (bool, String, i32) {
     let trailing = stripped.len() - stripped.trim_end_matches('0').len();
     let digits = stripped.trim_end_matches('0').to_string();
     k += trailing as i32; // each dropped trailing zero raises the exponent of the last digit
-    let digits = if digits.is_empty() { "0".to_string() } else { digits };
+    let digits = if digits.is_empty() {
+        "0".to_string()
+    } else {
+        digits
+    };
     let dexp = k + digits.len() as i32 - 1; // exponent of the leading digit
     (neg, digits, dexp)
 }
@@ -290,10 +303,14 @@ mod tests {
         assert_eq!(ev(&e, &["mult2", "3"]).as_deref(), Some("6"));
         // fold to the IEEE-754 f64 result, including inf/nan tokens.
         assert_eq!(ev(&e, &["/", "1", "0"]).as_deref(), Some("float(\"inf\")"));
-        assert_eq!(ev(&e, &["/", "-1", "0"]).as_deref(), Some("float(\"-inf\")"));
+        assert_eq!(
+            ev(&e, &["/", "-1", "0"]).as_deref(),
+            Some("float(\"-inf\")")
+        );
         assert_eq!(ev(&e, &["/", "0", "0"]).as_deref(), Some("float(\"nan\")"));
         assert_eq!(ev(&e, &["inv", "0"]).as_deref(), Some("float(\"inf\")"));
-        assert_eq!(ev(&e, &["pow1_2", "-1"]).as_deref(), Some("float(\"nan\")")); // sqrt(-1) = nan
+        assert_eq!(ev(&e, &["pow1_2", "-1"]).as_deref(), Some("float(\"nan\")"));
+        // sqrt(-1) = nan
     }
 
     /// The CPython-exact float formatter (ryu digits + Python notation): integer-valued -> str(int),

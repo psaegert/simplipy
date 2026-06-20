@@ -34,6 +34,15 @@ from simplipy.utils import (
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
+try:
+    # The compiled INLINE core: the Rust `simplify` + conversions + validation (the simplipy._core
+    # extension). OPTIONAL by design -- if the extension is missing/unbuilt, the pure-Python methods
+    # below are a faithful fallback (correct, just slower). Attached by from_config/load (path-based
+    # construction); absent for in-memory `SimpliPyEngine(operators=...)`.
+    from simplipy._core import Engine as _RustEngine  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover  (missing/unbuilt extension -> pure-Python fallback)
+    _RustEngine = None  # type: ignore[assignment, misc]
+
 
 def _load_c_pow() -> 'Callable[[float, float], float] | None':
     """Bind the raw system C ``pow`` (the IEEE-754 special-case table), the SAME symbol the Rust
@@ -71,7 +80,24 @@ def _load_c_pow() -> 'Callable[[float, float], float] | None':
     return None
 
 
-_C_POW = _load_c_pow()
+try:
+    _C_POW = _load_c_pow()
+except Exception:  # pragma: no cover  (e.g. `ctypes` unavailable / sandboxed Python)
+    # Hardening: a binding failure must NEVER break `import simplipy`. `_apply_numeric_op` already
+    # falls back to Python `**` when `_C_POW is None` (constant folding stays correct, just not via
+    # the raw C symbol on this platform).
+    _C_POW = None
+
+
+def _validate_ndarray_input(expression: 'np.ndarray', inplace: bool) -> None:
+    """The ndarray input contract for ``simplify`` (engine.py): 1-D, string-like dtype, no ``inplace``.
+    Shared by the Rust-routed fast path and the pure-Python path so the two cannot drift."""
+    if expression.ndim != 1:
+        raise ValueError('`simplify` expects a one-dimensional numpy array of tokens')
+    if expression.dtype.kind not in {'U', 'S', 'O'}:
+        raise ValueError('`simplify` expects a numpy array of string-like tokens')
+    if inplace:
+        raise ValueError('`inplace=True` is not supported when the expression is a numpy array')
 
 
 @dataclass
@@ -180,6 +206,10 @@ class SimpliPyEngine:
         A compiled version of explicit rules without pattern variables.
     """
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None) -> None:
+        # The compiled inline core (simplipy._core), attached by from_config/load when the engine is
+        # built from on-disk assets. Stays None for in-memory construction or a missing extension, in
+        # which case the inline methods fall back to their pure-Python implementations.
+        self._core = None
         # Cache operator metadata for quick access during parsing and evaluation.
         self.operator_tokens = list(operators.keys())
         self.operator_aliases = {alias: operator for operator, properties in operators.items() for alias in properties['alias']}
@@ -391,6 +421,7 @@ class SimpliPyEngine:
         config_path = os.path.abspath(config_path)
         config = load_config(config_path)
         rules = []
+        rules_path = None
         rules_file = config.get('rules')
         if rules_file:
             if not os.path.isabs(rules_file):
@@ -403,7 +434,34 @@ class SimpliPyEngine:
                     rules = json.load(f)
             else:
                 warnings.warn(f"Rules file '{rules_path}' specified in config not found.", UserWarning)
-        return cls(operators=config['operators'], rules=rules)
+                rules_path = None
+        engine = cls(operators=config['operators'], rules=rules)
+        # Attach the compiled inline core from the SAME resolved assets (single source of truth).
+        if rules_path is not None:
+            engine._attach_core(config_path, rules_path)
+        return engine
+
+    def _attach_core(self, config_path: str, rules_path: str) -> None:
+        """Build the compiled inline core (`simplipy._core`) from the resolved config + rules files.
+
+        The improved engine routes the inline hot path (simplify + conversions + validation) through
+        it. Best-effort: a missing extension or load failure leaves ``self._core = None`` and the
+        pure-Python methods below remain a faithful fallback.
+        """
+        if _RustEngine is None:
+            return
+        try:
+            self._core = _RustEngine.from_paths(config_path, rules_path)
+        except Exception as exc:  # pragma: no cover  (corrupt/incompatible asset -> Python fallback)
+            # The extension is built but failed to load this asset (version skew / corrupt file): warn
+            # so the silent degradation to the much slower pure-Python engine is observable.
+            warnings.warn(
+                f"simplipy._core failed to load the engine ({exc!r}); falling back to the slower "
+                f"pure-Python implementation.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            self._core = None
 
     @classmethod
     def load(cls, path: str, install: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> "SimpliPyEngine":
@@ -452,6 +510,11 @@ class SimpliPyEngine:
         bool
             True if the expression is valid, False otherwise.
         """
+        # The Rust core returns the same bool but cannot print the per-token `verbose` diagnostics;
+        # route the (rare) verbose call to the pure-Python path to preserve full parity.
+        if self._core is not None and not verbose:
+            return self._core.is_valid(list(prefix_expression))
+
         stack: list[str] = []
 
         if len(prefix_expression) > 1 and prefix_expression[0] not in self.operator_arity:
@@ -515,6 +578,9 @@ class SimpliPyEngine:
         ValueError
             If the provided tokens do not form a well-formed prefix expression.
         """
+
+        if self._core is not None:
+            return self._core.prefix_to_infix_fixed(list(tokens), power, realization)
 
         if not tokens:
             return ''
@@ -683,6 +749,9 @@ class SimpliPyEngine:
             A list of tokens representing the expression in prefix notation.
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
+        if self._core is not None:
+            return self._core.infix_to_prefix_fixed(infix_expression)
+
         number_pattern = r'(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
         # The numeric folder's inf/nan result tokens (`float("inf")` / `float("-inf")` / `float("nan")`)
         # are kept ATOMIC so a folded constant round-trips through prefix<->infix; otherwise the
@@ -783,6 +852,9 @@ class SimpliPyEngine:
         list[str]
             The normalized prefix expression.
         """
+        if self._core is not None:
+            return self._core.convert_expression_fixed(list(prefix_expr))
+
         stack: list = []
         i = len(prefix_expr) - 1
 
@@ -1008,6 +1080,9 @@ class SimpliPyEngine:
             The processed prefix expression after conversion, masking (if
             enabled), and `remove_pow1` cleanup.
         """
+
+        if self._core is not None:
+            return self._core.parse_fixed(infix_expression, convert_expression, mask_numbers)
 
         parsed_expression = self.infix_to_prefix(infix_expression)
 
@@ -2018,6 +2093,32 @@ class SimpliPyEngine:
             simplification results in a longer expression, the original
             expression is returned.
         """
+        # INLINE CORE (improved, fold=True): the deployed list/tuple/ndarray prefix-token path runs
+        # in Rust as one FFI unit. `collect_statistics` / `verbose` / a str input fall through to the
+        # pure-Python path below (which is the improved Python engine: it folds + uses the core for
+        # `parse`). Marshalling mirrors the upstream input contract exactly (validated by the suite's
+        # numpy-rejection test + the differential).
+        if self._core is not None and not collect_statistics and not verbose and not isinstance(expression, str):
+            # Match the Python path's state contract: a non-collecting call clears any prior stats.
+            self.simplification_statistics = None
+            if isinstance(expression, np.ndarray):
+                _validate_ndarray_input(expression, inplace)
+                out = self._core.simplify(expression.tolist(), max_iter, max_pattern_length,
+                                          mask_elementary_literals, apply_simplification_rules, True)
+                # Re-infer the string WIDTH from the result, keeping only the input dtype KIND: a fold
+                # can emit a token wider than any input token (e.g. `1/0 -> float("inf")`), and a fixed
+                # `dtype=expression.dtype` (whose width numpy sized to the inputs) would silently truncate.
+                return np.array(out).astype(expression.dtype.kind)
+            if isinstance(expression, tuple):
+                return tuple(self._core.simplify(list(expression), max_iter, max_pattern_length,
+                                                 mask_elementary_literals, apply_simplification_rules, True))
+            out = self._core.simplify(list(expression), max_iter, max_pattern_length,
+                                      mask_elementary_literals, apply_simplification_rules, True)
+            if inplace:
+                expression[:] = out
+                return expression
+            return out
+
         if collect_statistics:
             self.simplification_statistics = SimplificationStatistics()
         else:
@@ -2036,12 +2137,7 @@ class SimpliPyEngine:
             original_expression = expression  # No need to copy immutable tuple
             current_expression = list(expression)
         elif isinstance(expression, np.ndarray):
-            if expression.ndim != 1:
-                raise ValueError('`simplify` expects a one-dimensional numpy array of tokens')
-            if expression.dtype.kind not in {'U', 'S', 'O'}:
-                raise ValueError('`simplify` expects a numpy array of string-like tokens')
-            if inplace:
-                raise ValueError('`inplace=True` is not supported when the expression is a numpy array')
+            _validate_ndarray_input(expression, inplace)
             return_type = 'np_array'
             original_expression = expression.copy()
             current_expression = cast(list[str], expression.tolist())
@@ -2153,7 +2249,10 @@ class SimpliPyEngine:
                 return tuple(new_expression)
             case 'np_array':
                 original_np_expression = cast(np.ndarray, original_expression)
-                return np.array(new_expression, dtype=original_np_expression.dtype, copy=True)
+                # Re-infer the result width, keep the input dtype KIND (see the routed path above):
+                # constant folding can emit a token wider than any input token, which a fixed
+                # input-width dtype would silently truncate.
+                return np.array(new_expression).astype(original_np_expression.dtype.kind)
             case 'list':
                 if inplace and list_expression_ref is not None:
                     list_expression_ref[:] = new_expression
@@ -2801,7 +2900,7 @@ class SimpliPyEngine:
 
         raise ValueError(f'None of the criteria matched for operands {operands}:\n1. ({len(operands) > 1}, {isinstance(operands[0], str)}, {operands[0] in self.operator_arity_compat or operands[0] in self.operator_aliases})\n2. ({len(operands) == 1}, {isinstance(operands[0], str)})\n3. ({isinstance(operands, str)})')
 
-    def operators_to_realizations(self, prefix_expression: list[str] | tuple[str, ...]) -> list[str] | tuple[str, ...]:
+    def operators_to_realizations(self, prefix_expression: list[str] | tuple[str, ...]) -> list[str]:
         """Converts operator names in an expression to their Python realizations.
 
         This method replaces tokens like 'add' or 'sin' with their executable
@@ -2818,6 +2917,8 @@ class SimpliPyEngine:
         list[str] or tuple[str, ...]
             The prefix expression with Python-executable operator realizations.
         """
+        if self._core is not None:
+            return self._core.operators_to_realizations(list(prefix_expression))
         return [self.operator_realizations.get(token, token) for token in prefix_expression]
 
     def realizations_to_operators(self, prefix_expression: list[str]) -> list[str]:
@@ -2836,6 +2937,8 @@ class SimpliPyEngine:
         list[str]
             The prefix expression with canonical operator names.
         """
+        if self._core is not None:
+            return self._core.realizations_to_operators(list(prefix_expression))
         return [self.realization_to_operator.get(token, token) for token in prefix_expression]
 
     @staticmethod

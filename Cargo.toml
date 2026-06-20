@@ -1,8 +1,8 @@
 [package]
 name = "simplipy-core"
-version = "0.1.0"
+version = "0.3.0"              # kept in lockstep with the Python package version (pyproject.toml)
 edition = "2021"
-rust-version = "1.74"          # MSRV; bump only deliberately
+rust-version = "1.77"          # real MSRV floor of the resolved dependency tree (rustc-hash 2.x = 1.77)
 description = "Rust inline-phase backend for the SimpliPy prefix-expression simplifier (PyO3, the simplipy._core extension)"
 authors = ["Paul Saegert"]
 license = "MIT"

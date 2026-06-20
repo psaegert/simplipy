@@ -28,8 +28,6 @@ pub struct OperatorSpec {
 /// faithful behaviours (default precedence fallback = enumeration index) depend on it.
 #[derive(Debug, Default)]
 pub struct Operators {
-    pub order: Vec<String>,
-    pub specs: FxHashMap<String, OperatorSpec>,
     pub arity: FxHashMap<String, u8>,
     pub commutative: Vec<String>,
     /// `operator_inverses` (engine.py:145): `{k: v["inverse"]}` for operators with a declared
@@ -66,7 +64,8 @@ pub struct Operators {
 
 impl Operators {
     pub fn from_specs(order: Vec<String>, specs: FxHashMap<String, OperatorSpec>) -> Self {
-        let arity: FxHashMap<String, u8> = specs.iter().map(|(k, v)| (k.clone(), v.arity)).collect();
+        let arity: FxHashMap<String, u8> =
+            specs.iter().map(|(k, v)| (k.clone(), v.arity)).collect();
         let commutative = order
             .iter()
             .filter(|k| specs.get(*k).map(|s| s.commutative).unwrap_or(false))
@@ -77,12 +76,19 @@ impl Operators {
             .filter_map(|(k, v)| v.inverse.clone().map(|inv| (k.clone(), inv)))
             .collect();
         let max_power = order.iter().filter_map(|t| pow_power(t)).max().unwrap_or(0);
-        let max_fractional_power = order.iter().filter_map(|t| pow1_power(t)).max().unwrap_or(0);
+        let max_fractional_power = order
+            .iter()
+            .filter_map(|t| pow1_power(t))
+            .max()
+            .unwrap_or(0);
         // operator_precedence_compat: declared precedence, else the config enumeration index, then
         // overlay '**' = 3 and 'sqrt' = 3 (engine.py:157-159).
         let mut operator_precedence_compat: FxHashMap<String, f64> = FxHashMap::default();
         for (i, name) in order.iter().enumerate() {
-            let prec = specs.get(name).and_then(|s| s.precedence).unwrap_or(i as f64);
+            let prec = specs
+                .get(name)
+                .and_then(|s| s.precedence)
+                .unwrap_or(i as f64);
             operator_precedence_compat.insert(name.clone(), prec);
         }
         operator_precedence_compat.insert("**".to_string(), 3.0);
@@ -101,17 +107,18 @@ impl Operators {
             .collect();
         let mut operator_arity_compat: FxHashMap<String, u8> = arity.clone();
         operator_arity_compat.insert("**".to_string(), 2); // engine.py:163
-        // Build the realization maps in config (`order`) order so the inverse resolves last-wins.
+                                                           // Build the realization maps in config (`order`) order so the inverse resolves last-wins.
         let mut operator_realizations: FxHashMap<String, String> = FxHashMap::default();
         let mut realization_to_operator: FxHashMap<String, String> = FxHashMap::default();
         for name in &order {
-            let realization = specs.get(name).map(|s| s.realization.clone()).unwrap_or_default();
+            let realization = specs
+                .get(name)
+                .map(|s| s.realization.clone())
+                .unwrap_or_default();
             operator_realizations.insert(name.clone(), realization.clone());
             realization_to_operator.insert(realization, name.clone());
         }
         Self {
-            order,
-            specs,
             arity,
             commutative,
             operator_inverses,
@@ -189,7 +196,9 @@ impl Operators {
 pub(crate) fn pow_power(token: &str) -> Option<i64> {
     let rest = token.strip_prefix("pow")?;
     // one-or-more leading digits
-    let digit_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let digit_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     if digit_end == 0 {
         return None; // `\d+` requires at least one digit
     }

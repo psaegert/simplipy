@@ -125,7 +125,13 @@ fn collect_multiplicities(expression: &[String], ops: &Operators) -> Option<AnnN
             }
 
             let label = build_label(&operator, &operands);
-            stack.push(AnnNode { op: Some(operator), token: token.clone(), operands, own, label });
+            stack.push(AnnNode {
+                op: Some(operator),
+                token: token.clone(),
+                operands,
+                own,
+                label,
+            });
             i -= 1;
             continue;
         }
@@ -199,7 +205,11 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
     let mut n_replaced: i64 = 0;
 
     // stack initialized to the single root; parity {add:1, mult:1}; still_connected = False.
-    let mut stack: Vec<Frame> = vec![Frame { node: root, parity: [1, 1], still_connected: false }];
+    let mut stack: Vec<Frame> = vec![Frame {
+        node: root,
+        parity: [1, 1],
+        still_connected: false,
+    }];
 
     while let Some(frame) = stack.pop() {
         let subtree = frame.node;
@@ -207,7 +217,9 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
         let mut still_connected = frame.still_connected;
 
         if let Some((argmax_class, cancelled_subtree, cancelled_multiplicity_sum)) =
-            cancellation_candidate.as_ref().map(|(a, s, m)| (*a, s.clone(), *m))
+            cancellation_candidate
+                .as_ref()
+                .map(|(a, s, m)| (*a, s.clone(), *m))
         {
             // still_connected stays true only along operators of the cancellation class (or leaves).
             let st0 = subtree.token.as_str();
@@ -221,7 +233,10 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
                 let (first_replacement, other_replacements): (Vec<String>, Vec<String>) =
                     if cancelled_subtree.as_slice() == ["<constant>"] {
                         // A single <constant>: keep one, neutralize the rest.
-                        (vec!["<constant>".to_string()], vec![neutral_element.to_string()])
+                        (
+                            vec!["<constant>".to_string()],
+                            vec![neutral_element.to_string()],
+                        )
                     } else {
                         let current_parity = subtree_parities[argmax_class];
                         let inverse_operator = CC_INVERSE[argmax_class];
@@ -256,31 +271,39 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
                             let pos_operator = CONNECTION_OPS[argmax_class][0]; // positive-multiplicity op
                             let magnitude = cancelled_multiplicity_sum.abs();
 
-                            let built: Result<Vec<String>, ()> =
-                                if cancelled_multiplicity_sum > 5 && crate::utils::is_prime(magnitude)
-                                {
-                                    crate::utils::factorize_to_at_most(magnitude - 1, ops.max_power, 1000)
-                                        .map(|powers| {
-                                            let mut r = inverse_operator_prefix.clone();
-                                            r.push(pos_operator.to_string());
-                                            for p in &powers {
-                                                r.push(format!("{hyper_operator}{p}"));
-                                            }
-                                            r.extend(cancelled_subtree.iter().cloned());
-                                            r.extend(cancelled_subtree.iter().cloned());
-                                            r
-                                        })
-                                } else {
-                                    crate::utils::factorize_to_at_most(magnitude, ops.max_power, 1000)
-                                        .map(|powers| {
-                                            let mut r = inverse_operator_prefix.clone();
-                                            for p in &powers {
-                                                r.push(format!("{hyper_operator}{p}"));
-                                            }
-                                            r.extend(cancelled_subtree.iter().cloned());
-                                            r
-                                        })
-                                };
+                            let built: Result<Vec<String>, ()> = if cancelled_multiplicity_sum > 5
+                                && crate::utils::is_prime(magnitude)
+                            {
+                                crate::utils::factorize_to_at_most(
+                                    (magnitude - 1) as i128,
+                                    ops.max_power,
+                                    1000,
+                                )
+                                .map(|powers| {
+                                    let mut r = inverse_operator_prefix.clone();
+                                    r.push(pos_operator.to_string());
+                                    for p in &powers {
+                                        r.push(format!("{hyper_operator}{p}"));
+                                    }
+                                    r.extend(cancelled_subtree.iter().cloned());
+                                    r.extend(cancelled_subtree.iter().cloned());
+                                    r
+                                })
+                            } else {
+                                crate::utils::factorize_to_at_most(
+                                    magnitude as i128,
+                                    ops.max_power,
+                                    1000,
+                                )
+                                .map(|powers| {
+                                    let mut r = inverse_operator_prefix.clone();
+                                    for p in &powers {
+                                        r.push(format!("{hyper_operator}{p}"));
+                                    }
+                                    r.extend(cancelled_subtree.iter().cloned());
+                                    r
+                                })
+                            };
 
                             fr = match built {
                                 Ok(r) => r,
@@ -362,13 +385,25 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
             // Push children: zip(reversed(operands), reversed(propagated_parities)).
             // operands = [left, right] -> push (right, prop[1]) then (left, prop[0]); pop order
             // restores left-before-right (prefix output).
-            stack.push(Frame { node: &subtree.operands[1], parity: prop[1], still_connected });
-            stack.push(Frame { node: &subtree.operands[0], parity: prop[0], still_connected });
+            stack.push(Frame {
+                node: &subtree.operands[1],
+                parity: prop[1],
+                still_connected,
+            });
+            stack.push(Frame {
+                node: &subtree.operands[0],
+                parity: prop[0],
+                still_connected,
+            });
         } else {
             // General operator: children get reset parity {add:1, mult:1}; still_connected carried.
             expression.push(operator);
             for operand in subtree.operands.iter().rev() {
-                stack.push(Frame { node: operand, parity: [1, 1], still_connected });
+                stack.push(Frame {
+                    node: operand,
+                    parity: [1, 1],
+                    still_connected,
+                });
             }
         }
     }
@@ -415,17 +450,32 @@ mod tests {
             (&["-", "x1", "x1"], &["-", "0", "0"]),
             (&["*", "x1", "x1"], &["*", "pow2", "x1", "1"]),
             (&["+", "x1", "x2"], &["+", "x1", "x2"]),
-            (&["+", "+", "x1", "x1", "x1"], &["+", "+", "mult3", "x1", "0", "0"]),
-            (&["-", "x1", "+", "x1", "x1"], &["-", "neg", "x1", "+", "0", "0"]),
-            (&["+", "<constant>", "<constant>"], &["+", "<constant>", "0"]),
+            (
+                &["+", "+", "x1", "x1", "x1"],
+                &["+", "+", "mult3", "x1", "0", "0"],
+            ),
+            (
+                &["-", "x1", "+", "x1", "x1"],
+                &["-", "neg", "x1", "+", "0", "0"],
+            ),
+            (
+                &["+", "<constant>", "<constant>"],
+                &["+", "<constant>", "0"],
+            ),
             // 6 occurrences -> factorize(6,5) = [2,3] -> mult2 mult3.
             (
                 &["+", "+", "+", "+", "+", "x1", "x1", "x1", "x1", "x1", "x1"],
-                &["+", "+", "+", "+", "+", "mult2", "mult3", "x1", "0", "0", "0", "0", "0"],
+                &[
+                    "+", "+", "+", "+", "+", "mult2", "mult3", "x1", "0", "0", "0", "0", "0",
+                ],
             ),
         ];
         for (input, expected) in cases {
-            assert_eq!(e.cancel_terms(&toks(input)), toks(expected), "input {input:?}");
+            assert_eq!(
+                e.cancel_terms(&toks(input)),
+                toks(expected),
+                "input {input:?}"
+            );
         }
     }
 }

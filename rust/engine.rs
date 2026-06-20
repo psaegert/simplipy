@@ -29,7 +29,9 @@ struct EngineConfig {
 
 impl EngineConfig {
     /// (insertion-ordered operator names, name -> spec), preserving config.yaml order.
-    fn into_operators(self) -> Result<(Vec<String>, FxHashMap<String, OperatorSpec>), Box<dyn Error>> {
+    fn into_operators(
+        self,
+    ) -> Result<(Vec<String>, FxHashMap<String, OperatorSpec>), Box<dyn Error>> {
         let mut order = Vec::with_capacity(self.operators.len());
         let mut specs = FxHashMap::default();
         for (k, v) in self.operators {
@@ -52,7 +54,10 @@ impl Engine {
     /// Build from resolved local paths (the Python shim resolves HF-hub/local via simplipy's own
     /// asset_manager and hands us files; the Rust core is network-free). REUSES the unchanged
     /// config.yaml + rules.json (single source of truth shared with Python).
-    pub fn from_paths(config_yaml_path: &str, rules_json_path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn from_paths(
+        config_yaml_path: &str,
+        rules_json_path: &str,
+    ) -> Result<Self, Box<dyn Error>> {
         let cfg_text = fs::read_to_string(config_yaml_path)?;
         let cfg: EngineConfig = serde_yaml_ng::from_str(&cfg_text)?;
 
@@ -69,7 +74,11 @@ impl Engine {
         let operators = Operators::from_specs(order, specs);
         let compiled = CompiledRules::compile(raw, &|t| operators.arity_of(t));
 
-        Ok(Self { operators, rules: compiled, engine_id: crate::FAITHFUL_ENGINE_ID.to_string() })
+        Ok(Self {
+            operators,
+            rules: compiled,
+            engine_id: crate::FAITHFUL_ENGINE_ID.to_string(),
+        })
     }
 
     pub fn engine_id(&self) -> &str {
@@ -202,8 +211,19 @@ impl Engine {
 
     /// Faithful port of `parse` (engine.py:852): infix string -> standardized prefix expression
     /// (infix_to_prefix -> convert_expression -> numbers_to_constant -> remove_pow1).
-    pub fn parse(&self, infix_expression: &str, convert: bool, mask_numbers: bool) -> Result<Vec<String>, String> {
-        crate::convert::parse(infix_expression, &self.operators, convert, mask_numbers, false)
+    pub fn parse(
+        &self,
+        infix_expression: &str,
+        convert: bool,
+        mask_numbers: bool,
+    ) -> Result<Vec<String>, String> {
+        crate::convert::parse(
+            infix_expression,
+            &self.operators,
+            convert,
+            mask_numbers,
+            false,
+        )
     }
 
     /// Corrected (deliberate-improvement) variants of the conversion surface: the conversion-quirk
@@ -218,8 +238,19 @@ impl Engine {
         crate::convert::convert_expression(prefix_expr, &self.operators, true)
     }
 
-    pub fn parse_fixed(&self, infix_expression: &str, convert: bool, mask_numbers: bool) -> Result<Vec<String>, String> {
-        crate::convert::parse(infix_expression, &self.operators, convert, mask_numbers, true)
+    pub fn parse_fixed(
+        &self,
+        infix_expression: &str,
+        convert: bool,
+        mask_numbers: bool,
+    ) -> Result<Vec<String>, String> {
+        crate::convert::parse(
+            infix_expression,
+            &self.operators,
+            convert,
+            mask_numbers,
+            true,
+        )
     }
 
     /// Faithful port of `operators_to_realizations` (engine.py:2547): map each operator NAME to its
@@ -227,7 +258,13 @@ impl Engine {
     pub fn operators_to_realizations(&self, expression: &[String]) -> Vec<String> {
         expression
             .iter()
-            .map(|t| self.operators.operator_realizations.get(t).cloned().unwrap_or_else(|| t.clone()))
+            .map(|t| {
+                self.operators
+                    .operator_realizations
+                    .get(t)
+                    .cloned()
+                    .unwrap_or_else(|| t.clone())
+            })
             .collect()
     }
 
@@ -236,7 +273,13 @@ impl Engine {
     pub fn realizations_to_operators(&self, expression: &[String]) -> Vec<String> {
         expression
             .iter()
-            .map(|t| self.operators.realization_to_operator.get(t).cloned().unwrap_or_else(|| t.clone()))
+            .map(|t| {
+                self.operators
+                    .realization_to_operator
+                    .get(t)
+                    .cloned()
+                    .unwrap_or_else(|| t.clone())
+            })
             .collect()
     }
 
@@ -250,7 +293,12 @@ impl Engine {
     /// collapse is REMOVED and folding runs as a FALLBACK after each rule scan (`try_fold_constants`
     /// at the two sites = engine.py:1432/1480), so a rule that matches an all-`<constant>` subtree
     /// is tried before the subtree is collapsed (the position change the numeric branch introduced).
-    fn apply_rules_top_down(&self, node: Node, max_pattern_length: Option<usize>, fold: bool) -> Node {
+    fn apply_rules_top_down(
+        &self,
+        node: Node,
+        max_pattern_length: Option<usize>,
+        fold: bool,
+    ) -> Node {
         let operands = match &node {
             Node::Leaf(_) => return node,
             Node::Op { operands, .. } => operands,
@@ -304,7 +352,10 @@ impl Engine {
             .iter()
             .map(|o| self.apply_rules_top_down(o.clone(), max_pattern_length, fold))
             .collect();
-        let simplified = Node::Op { token: operator.to_string(), operands: simplified_operands };
+        let simplified = Node::Op {
+            token: operator.to_string(),
+            operands: simplified_operands,
+        };
 
         // Re-check exact rules on the rebuilt node.
         let mut flat2 = Vec::new();
@@ -331,7 +382,10 @@ impl Engine {
 
         // Numeric line: no rule after operand simplification -> fold fallback (engine.py:1480).
         if fold {
-            if let Node::Op { operands: simp_ops, .. } = &simplified {
+            if let Node::Op {
+                operands: simp_ops, ..
+            } = &simplified
+            {
                 if let Some(folded) = self.try_fold_constants(operator, simp_ops) {
                     return folded;
                 }
@@ -361,10 +415,14 @@ impl Engine {
             let mut flat: Vec<String> = Vec::with_capacity(values.len() + 1);
             flat.push(operator.to_string());
             flat.extend(values.iter().map(|v| v.to_string()));
-            return crate::numeric::evaluate_constant_subtree(&flat, &self.operators).map(Node::Leaf);
+            return crate::numeric::evaluate_constant_subtree(&flat, &self.operators)
+                .map(Node::Leaf);
         }
         let all_const_or_num = values.iter().all(|v| {
-            crate::utils::is_numeric_string(v) || *v == "<constant>" || *v == "np.e" || *v == "np.pi"
+            crate::utils::is_numeric_string(v)
+                || *v == "<constant>"
+                || *v == "np.e"
+                || *v == "np.pi"
         });
         if all_const_or_num {
             return Some(Node::Leaf("<constant>".to_string()));
@@ -454,6 +512,16 @@ mod tests {
     /// in the harness; this pins it in CI.
     #[test]
     fn simplify_matches_frozen_reference() {
+        // Skip when the (multi-MB, not-vendored) frozen corpus is absent -- the full 10k parity runs
+        // in the benchmark harness; this in-crate slice only fires where the fixtures are staged.
+        let corpus = format!(
+            "{}/benchmarks/corpus/raw_skeletons.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        if !std::path::Path::new(&corpus).exists() {
+            eprintln!("simplify_matches_frozen_reference: SKIPPED (corpus fixtures not vendored)");
+            return;
+        }
         let e = engine();
         let raw = load("raw_skeletons.json");
         for mpl in [4usize, 7usize] {
@@ -467,7 +535,10 @@ mod tests {
                 }
                 assert_eq!(&out, r, "mpl={mpl} input={s:?}");
             }
-            assert!(n_changed > 300, "expected most rows to simplify (got {n_changed}/400)");
+            assert!(
+                n_changed > 300,
+                "expected most rows to simplify (got {n_changed}/400)"
+            );
         }
     }
 
@@ -486,15 +557,15 @@ mod tests {
             &["+", "sin", "x1", "neg", "x2"],
         ];
         let invalid: &[&[&str]] = &[
-            &[],                       // empty
-            &["+"],                    // operator, no operands
-            &["sin"],                  // unary, no operand
-            &["+", "x1"],              // not enough operands
-            &["+", "x1", "x2", "x3"],  // leftover stack
-            &["x1", "x2"],             // multi-token starting with a leaf
-            &["--5"],                  // numeric-looking but float() raises
-            &["1e"],                   // ditto
-            &["+", "x1", "--5"],       // bad numeric operand
+            &[],                      // empty
+            &["+"],                   // operator, no operands
+            &["sin"],                 // unary, no operand
+            &["+", "x1"],             // not enough operands
+            &["+", "x1", "x2", "x3"], // leftover stack
+            &["x1", "x2"],            // multi-token starting with a leaf
+            &["--5"],                 // numeric-looking but float() raises
+            &["1e"],                  // ditto
+            &["+", "x1", "--5"],      // bad numeric operand
         ];
         for v in valid {
             let t: Vec<String> = v.iter().map(|s| s.to_string()).collect();
@@ -516,10 +587,19 @@ mod tests {
         let fwd = e.operators_to_realizations(&expr);
         assert_eq!(
             fwd,
-            t(&["*", "simplipy.operators.neg", "x1", "simplipy.operators.pow2", "<constant>"])
+            t(&[
+                "*",
+                "simplipy.operators.neg",
+                "x1",
+                "simplipy.operators.pow2",
+                "<constant>"
+            ])
         );
         assert_eq!(e.realizations_to_operators(&fwd), expr); // round-trips on canonical names
-        // non-operator tokens (vars / numerics / <constant>) are passed through unchanged.
-        assert_eq!(e.operators_to_realizations(&t(&["x1", "0", "<constant>"])), t(&["x1", "0", "<constant>"]));
+                                                             // non-operator tokens (vars / numerics / <constant>) are passed through unchanged.
+        assert_eq!(
+            e.operators_to_realizations(&t(&["x1", "0", "<constant>"])),
+            t(&["x1", "0", "<constant>"])
+        );
     }
 }

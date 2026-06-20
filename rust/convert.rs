@@ -86,9 +86,17 @@ pub fn prefix_to_infix(
     for token in tokens.iter().rev() {
         // operator = realization_to_operator.get(token, token) (469): an already-realized input token
         // (e.g. 'simplipy.operators.sin') maps back to canonical first (T12).
-        let operator: &str = ops.realization_to_operator.get(token).map(|s| s.as_str()).unwrap_or(token);
+        let operator: &str = ops
+            .realization_to_operator
+            .get(token)
+            .map(|s| s.as_str())
+            .unwrap_or(token);
         // canonical_operator = operator_aliases.get(operator, operator) (470).
-        let canonical: &str = ops.operator_aliases.get(operator).map(|s| s.as_str()).unwrap_or(operator);
+        let canonical: &str = ops
+            .operator_aliases
+            .get(operator)
+            .map(|s| s.as_str())
+            .unwrap_or(operator);
 
         // membership (472-476): 3-way OR.
         let is_op = ops.is_operator_token(canonical)
@@ -101,7 +109,11 @@ pub fn prefix_to_infix(
         }
 
         // arity = operator_arity_compat.get(canonical, 1) (477).
-        let arity = ops.operator_arity_compat.get(canonical).copied().unwrap_or(1) as usize;
+        let arity = ops
+            .operator_arity_compat
+            .get(canonical)
+            .copied()
+            .unwrap_or(1) as usize;
         if stack.len() < arity {
             // 479-480: ValueError with the RESOLVED operator var (pre-alias).
             return Err(format!(
@@ -113,7 +125,10 @@ pub fn prefix_to_infix(
 
         // write_operator (484-488): realization ? realization_map[canonical] : canonical.
         let write_operator: String = if realization {
-            ops.operator_realizations.get(canonical).cloned().unwrap_or_else(|| canonical.to_string())
+            ops.operator_realizations
+                .get(canonical)
+                .cloned()
+                .unwrap_or_else(|| canonical.to_string())
         } else {
             canonical.to_string()
         };
@@ -121,7 +136,11 @@ pub fn prefix_to_infix(
         // 491-494: realization '.'-in-name OR arity>2 -> pure func-form, PREEMPTS all special-cases (T1).
         if realization && (write_operator.contains('.') || arity > 2) {
             let joined = join_operands(&operands_data);
-            stack.push((format!("{write_operator}({joined})"), INF, Some(canonical.to_string())));
+            stack.push((
+                format!("{write_operator}({joined})"),
+                INF,
+                Some(canonical.to_string()),
+            ));
             continue;
         }
 
@@ -185,7 +204,11 @@ pub fn prefix_to_infix(
                 if operand_prec < current_precedence {
                     operand_str = format!("({operand_str})");
                 }
-                stack.push((format!("-{operand_str}"), current_precedence, Some(canonical.to_string())));
+                stack.push((
+                    format!("-{operand_str}"),
+                    current_precedence,
+                    Some(canonical.to_string()),
+                ));
                 continue;
             }
             if canonical == "inv" {
@@ -194,7 +217,11 @@ pub fn prefix_to_infix(
                     operand_str = format!("({operand_str})");
                 }
                 let inv_precedence = ops.precedence_get("/").unwrap_or(current_precedence);
-                stack.push((format!("1/{operand_str}"), inv_precedence, Some(canonical.to_string())));
+                stack.push((
+                    format!("1/{operand_str}"),
+                    inv_precedence,
+                    Some(canonical.to_string()),
+                ));
                 continue;
             }
             if power == Power::StarStar && (is_pow_op || is_frac_pow_op) {
@@ -214,13 +241,21 @@ pub fn prefix_to_infix(
                 continue;
             }
             // func fallback (563-564).
-            stack.push((format!("{write_operator}({operand_str})"), INF, Some(canonical.to_string())));
+            stack.push((
+                format!("{write_operator}({operand_str})"),
+                INF,
+                Some(canonical.to_string()),
+            ));
             continue;
         }
 
         // 567-569: nullary / arity>2 fallback (DEAD for dev_7-3; max arity 2, no nullary ops).
         let joined = join_operands(&operands_data);
-        stack.push((format!("{write_operator}({joined})"), INF, Some(canonical.to_string())));
+        stack.push((
+            format!("{write_operator}({joined})"),
+            INF,
+            Some(canonical.to_string()),
+        ));
     }
 
     if stack.len() != 1 {
@@ -238,7 +273,11 @@ pub fn prefix_to_infix(
 /// `', '.join(op_str for op_str, _, _ in operands_data)` (engine.py:492,568): join the rendered
 /// strings of the popped operands in pop order ([0]=left, ..).
 fn join_operands(operands_data: &[Item]) -> String {
-    operands_data.iter().map(|(s, _, _)| s.as_str()).collect::<Vec<_>>().join(", ")
+    operands_data
+        .iter()
+        .map(|(s, _, _)| s.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // ---- infix_to_prefix (engine.py:581) -------------------------------------------------------------
@@ -375,7 +414,10 @@ fn is_number_fullmatch(token: &str) -> bool {
 /// `re.match(r'[A-Za-z_][\w.]*', token)` (engine.py:622, unanchored): the token STARTS with an
 /// identifier char. (Since the classifier only ever sees tokenizer outputs, "starts with" suffices.)
 fn is_ident_start(token: &str) -> bool {
-    token.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+    token
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
 }
 
 /// Faithful port of `infix_to_prefix` (engine.py:581-653): a RIGHT-to-LEFT shunting-yard. Never
@@ -427,7 +469,9 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators, fixed: bool) -> 
             if token == "-"
                 && (next_raw.is_none()
                     || next_norm == Some("(")
-                    || next_norm.map(|t| ops.precedence_get(t).is_some()).unwrap_or(false))
+                    || next_norm
+                        .map(|t| ops.precedence_get(t).is_some())
+                        .unwrap_or(false))
             {
                 token = "neg".to_string();
             }
@@ -528,20 +572,26 @@ fn is_int_string(s: &str) -> bool {
 /// `re.match(r'pow\d+', s)` (engine.py:794, NO negative lookahead): starts with `pow` + >=1 digit.
 /// This DELIBERATELY matches `pow1_3` (sees the `pow1` prefix) -- the faithful chain-absorption bug (T3).
 fn matches_int_pow(s: &str) -> bool {
-    s.strip_prefix("pow").is_some_and(|r| r.bytes().next().is_some_and(|b| b.is_ascii_digit()))
+    s.strip_prefix("pow")
+        .is_some_and(|r| r.bytes().next().is_some_and(|b| b.is_ascii_digit()))
 }
 
 /// `re.match(r'pow1_\d+', s)` (engine.py:794): starts with `pow1_` + >=1 digit.
 fn matches_frac_pow(s: &str) -> bool {
-    s.strip_prefix("pow1_").is_some_and(|r| r.bytes().next().is_some_and(|b| b.is_ascii_digit()))
+    s.strip_prefix("pow1_")
+        .is_some_and(|r| r.bytes().next().is_some_and(|b| b.is_ascii_digit()))
 }
 
 /// `int(re.match(r'pow(\d+)', op).group(1))` (engine.py:810): the leading digit-run right after `pow`.
 /// For `pow1_3` this is `1` (the chain-absorption bug drops the `_3`).
-fn int_chain_exp(op: &str) -> Option<i64> {
+fn int_chain_exp(op: &str) -> Option<i128> {
     let rest = op.strip_prefix("pow")?;
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
-    rest[..end].parse::<i64>().ok()
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    // i128 (not i64): a `pow<N>` exponent can exceed i64 (e.g. `x ** 2^63`); Python's int() is
+    // arbitrary-precision, so parsing as i64 would drop a real exponent (-> wrong decomposition).
+    rest[..end].parse::<i128>().ok()
 }
 
 /// `Fraction(x).as_integer_ratio()` reduced (engine.py:719 `Fraction(abs(float(s)))`): the EXACT
@@ -740,7 +790,11 @@ fn handle_pow(base: Ir, exponent: Ir, _ops: &Operators, fixed: bool) -> Result<I
 /// `fixed` selects the deliberate-improvement corrected behavior (conversion-quirks #1 fractional power
 /// no longer absorbed/dropped, #2 `x**0`->`1`, #3 neg-of-literal toggles one minus, #6 raw `powN` no
 /// longer KeyErrors). `fixed=false` is the faithful deployed-tag `dev_7-3` behavior.
-pub fn convert_expression(prefix_expr: &[String], ops: &Operators, fixed: bool) -> Result<Vec<String>, String> {
+pub fn convert_expression(
+    prefix_expr: &[String],
+    ops: &Operators,
+    fixed: bool,
+) -> Result<Vec<String>, String> {
     // ---- PASS 1: build the nested-list IR (right-to-left) ----
     let mut stack: Vec<Ir> = Vec::new();
     for token in prefix_expr.iter().rev() {
@@ -752,7 +806,11 @@ pub fn convert_expression(prefix_expr: &[String], ops: &Operators, fixed: bool) 
             stack.push(Ir::L(vec![Ir::S(token.clone())])); // [token]
             continue;
         }
-        let operator = ops.operator_aliases.get(token).map(|s| s.as_str()).unwrap_or(token);
+        let operator = ops
+            .operator_aliases
+            .get(token)
+            .map(|s| s.as_str())
+            .unwrap_or(token);
         // arity = operator_arity_compat[operator] -- HARD index (KeyError on a raw unconfigured pow).
         let arity = match ops.operator_arity_compat.get(operator) {
             Some(a) => *a as usize,
@@ -795,8 +853,16 @@ pub fn convert_expression(prefix_expr: &[String], ops: &Operators, fixed: bool) 
     for token in need_to_convert.iter().rev() {
         let is_pow_token = pow_power(token).is_some() || pow1_power(token).is_some(); // r'pow\d+(?!_)' | r'pow1_\d+'
         if is_pow_token {
-            let operator = ops.operator_aliases.get(token).map(|s| s.as_str()).unwrap_or(token);
-            let arity = ops.operator_arity_compat.get(operator).map(|a| *a as usize).unwrap_or(1);
+            let operator = ops
+                .operator_aliases
+                .get(token)
+                .map(|s| s.as_str())
+                .unwrap_or(token);
+            let arity = ops
+                .operator_arity_compat
+                .get(operator)
+                .map(|a| *a as usize)
+                .unwrap_or(1);
             let operands = take_reversed_tail(&stack2, arity)?;
             let is_frac = matches_frac_pow(operator); // pow1_ pattern first; else int
 
@@ -812,7 +878,11 @@ pub fn convert_expression(prefix_expr: &[String], ops: &Operators, fixed: bool) 
                         Ir::S(op0)
                             if (is_frac && matches_frac_pow(op0))
                                 || (!is_frac
-                                    && if fixed { pow_power(op0).is_some() } else { matches_int_pow(op0) }) =>
+                                    && if fixed {
+                                        pow_power(op0).is_some()
+                                    } else {
+                                        matches_int_pow(op0)
+                                    }) =>
                         {
                             Some((op0.clone(), v[1].clone()))
                         }
@@ -830,12 +900,23 @@ pub fn convert_expression(prefix_expr: &[String], ops: &Operators, fixed: bool) 
             }
 
             // p = product of the chain's exponents (int family uses the bug-faithful leading-digit run).
-            let mut p: i64 = 1;
+            // i128: Python's `prod` is arbitrary-precision; i128 pushes the divergence boundary past
+            // any reachable exponent (the frac family `pow1_M` stays tiny).
+            let mut p: i128 = 1;
             for op in &operator_chain {
-                let e = if is_frac { pow1_power(op) } else { int_chain_exp(op) }.unwrap_or(0);
+                let e = if is_frac {
+                    pow1_power(op).map(|x| x as i128)
+                } else {
+                    int_chain_exp(op)
+                }
+                .unwrap_or(0);
                 p = p.saturating_mul(e);
             }
-            let max_p = if is_frac { ops.max_fractional_power } else { ops.max_power };
+            let max_p = if is_frac {
+                ops.max_fractional_power
+            } else {
+                ops.max_power
+            };
             let base_str = if is_frac { "pow1_" } else { "pow" };
 
             let new_chain = match crate::utils::factorize_to_at_most(p, max_p, 1000) {
@@ -850,8 +931,14 @@ pub fn convert_expression(prefix_expr: &[String], ops: &Operators, fixed: bool) 
                 stack2.pop();
             }
             stack2.push(new_chain);
-        } else if ops.operator_arity_compat.contains_key(token) || ops.operator_aliases.contains_key(token) {
-            let operator = ops.operator_aliases.get(token).map(|s| s.as_str()).unwrap_or(token);
+        } else if ops.operator_arity_compat.contains_key(token)
+            || ops.operator_aliases.contains_key(token)
+        {
+            let operator = ops
+                .operator_aliases
+                .get(token)
+                .map(|s| s.as_str())
+                .unwrap_or(token);
             let arity = *ops.operator_arity_compat.get(operator).unwrap() as usize;
             let operands = take_reversed_tail(&stack2, arity)?;
             for _ in 0..arity {
@@ -889,7 +976,10 @@ fn build_chain(ops_list: &[String], current_operand: Ir) -> Ir {
     if ops_list.is_empty() {
         return current_operand;
     }
-    let mut nc = Ir::L(vec![Ir::S(ops_list[ops_list.len() - 1].clone()), Ir::L(vec![current_operand])]);
+    let mut nc = Ir::L(vec![
+        Ir::S(ops_list[ops_list.len() - 1].clone()),
+        Ir::L(vec![current_operand]),
+    ]);
     for op in ops_list[..ops_list.len() - 1].iter().rev() {
         nc = Ir::L(vec![Ir::S(op.clone()), Ir::L(vec![nc])]);
     }
@@ -910,8 +1000,16 @@ pub fn parse(
     fixed: bool,
 ) -> Result<Vec<String>, String> {
     let parsed = infix_to_prefix(infix_expression, ops, fixed);
-    let parsed = if convert { convert_expression(&parsed, ops, fixed)? } else { parsed };
-    let parsed = if mask_numbers { crate::utils::numbers_to_constant(&parsed) } else { parsed };
+    let parsed = if convert {
+        convert_expression(&parsed, ops, fixed)?
+    } else {
+        parsed
+    };
+    let parsed = if mask_numbers {
+        crate::utils::numbers_to_constant(&parsed)
+    } else {
+        parsed
+    };
     Ok(crate::utils::remove_pow1(&parsed))
 }
 
@@ -944,21 +1042,54 @@ mod tests {
         let s = Power::StarStar;
         // T2 neg strict-< (equal-prec NO parens) vs T4 inv <= ; T1 realization preempt; T5 flatten.
         assert_eq!(p2i(&e, &["neg", "neg", "x1"], f, false).unwrap(), "--x1");
-        assert_eq!(p2i(&e, &["inv", "inv", "x1"], f, false).unwrap(), "1/(1/x1)");
-        assert_eq!(p2i(&e, &["*", "x2", "inv", "x1"], f, false).unwrap(), "x2 * (1/x1)");
-        assert_eq!(p2i(&e, &["-", "x1", "+", "x2", "x3"], f, false).unwrap(), "x1 - (x2 + x3)");
-        assert_eq!(p2i(&e, &["/", "/", "x1", "x2", "x3"], f, false).unwrap(), "x1 / x2 / x3");
-        assert_eq!(p2i(&e, &["*", "/", "x1", "x2", "/", "x3", "x4"], f, false).unwrap(), "x1 / x2 * x3 / x4");
+        assert_eq!(
+            p2i(&e, &["inv", "inv", "x1"], f, false).unwrap(),
+            "1/(1/x1)"
+        );
+        assert_eq!(
+            p2i(&e, &["*", "x2", "inv", "x1"], f, false).unwrap(),
+            "x2 * (1/x1)"
+        );
+        assert_eq!(
+            p2i(&e, &["-", "x1", "+", "x2", "x3"], f, false).unwrap(),
+            "x1 - (x2 + x3)"
+        );
+        assert_eq!(
+            p2i(&e, &["/", "/", "x1", "x2", "x3"], f, false).unwrap(),
+            "x1 / x2 / x3"
+        );
+        assert_eq!(
+            p2i(&e, &["*", "/", "x1", "x2", "/", "x3", "x4"], f, false).unwrap(),
+            "x1 / x2 * x3 / x4"
+        );
         // T7/T8 pow rendering + spacing.
-        assert_eq!(p2i(&e, &["pow", "x1", "x2"], f, false).unwrap(), "pow(x1, x2)");
+        assert_eq!(
+            p2i(&e, &["pow", "x1", "x2"], f, false).unwrap(),
+            "pow(x1, x2)"
+        );
         assert_eq!(p2i(&e, &["**", "x1", "x2"], f, false).unwrap(), "x1 ** x2");
-        assert_eq!(p2i(&e, &["pow", "pow", "x1", "x2", "x3"], s, false).unwrap(), "(x1 ** x2) ** x3");
-        assert_eq!(p2i(&e, &["*", "pow", "x1", "x2", "pow2", "x3"], s, false).unwrap(), "x1 ** x2 * x3**2");
-        assert_eq!(p2i(&e, &["pow2", "neg", "x1"], s, false).unwrap(), "(-x1)**2");
+        assert_eq!(
+            p2i(&e, &["pow", "pow", "x1", "x2", "x3"], s, false).unwrap(),
+            "(x1 ** x2) ** x3"
+        );
+        assert_eq!(
+            p2i(&e, &["*", "pow", "x1", "x2", "pow2", "x3"], s, false).unwrap(),
+            "x1 ** x2 * x3**2"
+        );
+        assert_eq!(
+            p2i(&e, &["pow2", "neg", "x1"], s, false).unwrap(),
+            "(-x1)**2"
+        );
         assert_eq!(p2i(&e, &["sqrt", "x1"], s, false).unwrap(), "x1**(1/2)");
         // T1 realization=True: only +,-,* infix; neg/div func-form; power ignored.
-        assert_eq!(p2i(&e, &["neg", "x1"], f, true).unwrap(), "simplipy.operators.neg(x1)");
-        assert_eq!(p2i(&e, &["pow", "x1", "x2"], s, true).unwrap(), "simplipy.operators.pow(x1, x2)");
+        assert_eq!(
+            p2i(&e, &["neg", "x1"], f, true).unwrap(),
+            "simplipy.operators.neg(x1)"
+        );
+        assert_eq!(
+            p2i(&e, &["pow", "x1", "x2"], s, true).unwrap(),
+            "simplipy.operators.pow(x1, x2)"
+        );
         assert_eq!(
             p2i(&e, &["+", "*", "x1", "x2", "sin", "x3"], f, true).unwrap(),
             "x1 * x2 + simplipy.operators.sin(x3)"
@@ -990,7 +1121,10 @@ mod tests {
         assert_eq!(i2p(&e, "-x1 ** 2"), v(&["neg", "**", "x1", "2"]));
         assert_eq!(i2p(&e, "-x1 * x2"), v(&["*", "neg", "x1", "x2"]));
         // T7 right-assoc via >= pop; T8 round-trip non-identity for inv.
-        assert_eq!(i2p(&e, "a - b - c - d"), v(&["-", "a", "-", "b", "-", "c", "d"]));
+        assert_eq!(
+            i2p(&e, "a - b - c - d"),
+            v(&["-", "a", "-", "b", "-", "c", "d"])
+        );
         assert_eq!(i2p(&e, "1/x1"), v(&["/", "1", "x1"]));
         // T6 tokenizer: '**' before '*', drop unmatched, empty parens.
         assert_eq!(i2p(&e, "x1***x2"), v(&["*", "**", "x1", "x2"]));
@@ -1015,29 +1149,71 @@ mod tests {
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         // integer exponent (live) + negative + pow1-vanish.
         assert_eq!(conv(&e, &["**", "x1", "2"]).unwrap(), v(&["pow2", "x1"]));
-        assert_eq!(conv(&e, &["**", "x1", "-2"]).unwrap(), v(&["inv", "pow2", "x1"]));
+        assert_eq!(
+            conv(&e, &["**", "x1", "-2"]).unwrap(),
+            v(&["inv", "pow2", "x1"])
+        );
         assert_eq!(conv(&e, &["**", "x1", "1"]).unwrap(), v(&["x1"]));
         assert_eq!(conv(&e, &["**", "x1", "0"]).unwrap(), v(&["pow0", "x1"]));
         // chain factorize order + VE fallback + mixed-chain absorption bug (T3).
-        assert_eq!(conv(&e, &["**", "x1", "6"]).unwrap(), v(&["pow2", "pow3", "x1"]));
+        assert_eq!(
+            conv(&e, &["**", "x1", "6"]).unwrap(),
+            v(&["pow2", "pow3", "x1"])
+        );
         assert_eq!(conv(&e, &["**", "x1", "7"]).unwrap(), v(&["pow7", "x1"]));
-        assert_eq!(conv(&e, &["**", "x1", "30"]).unwrap(), v(&["pow2", "pow3", "pow5", "x1"]));
-        assert_eq!(conv(&e, &["pow2", "pow2", "pow2", "x1"]).unwrap(), v(&["pow4", "pow2", "x1"]));
-        assert_eq!(conv(&e, &["pow2", "pow1_3", "x1"]).unwrap(), v(&["pow2", "x1"]));
-        assert_eq!(conv(&e, &["pow1_3", "pow2", "x1"]).unwrap(), v(&["pow1_3", "pow2", "x1"]));
-        assert_eq!(conv(&e, &["**", "**", "x1", "7", "2"]).unwrap(), v(&["pow2", "pow7", "x1"]));
+        assert_eq!(
+            conv(&e, &["**", "x1", "30"]).unwrap(),
+            v(&["pow2", "pow3", "pow5", "x1"])
+        );
+        assert_eq!(
+            conv(&e, &["pow2", "pow2", "pow2", "x1"]).unwrap(),
+            v(&["pow4", "pow2", "x1"])
+        );
+        assert_eq!(
+            conv(&e, &["pow2", "pow1_3", "x1"]).unwrap(),
+            v(&["pow2", "x1"])
+        );
+        assert_eq!(
+            conv(&e, &["pow1_3", "pow2", "x1"]).unwrap(),
+            v(&["pow1_3", "pow2", "x1"])
+        );
+        assert_eq!(
+            conv(&e, &["**", "**", "x1", "7", "2"]).unwrap(),
+            v(&["pow2", "pow7", "x1"])
+        );
         // neg-on-number double-minus (T7).
         assert_eq!(conv(&e, &["neg", "5"]).unwrap(), v(&["-5"]));
         assert_eq!(conv(&e, &["neg", "-5"]).unwrap(), v(&["--5"]));
-        assert_eq!(conv(&e, &["+", "neg", "2", "x1"]).unwrap(), v(&["+", "-2", "x1"]));
+        assert_eq!(
+            conv(&e, &["+", "neg", "2", "x1"]).unwrap(),
+            v(&["+", "-2", "x1"])
+        );
         // float branch (dead on real data) + integer-fraction (live: v^(3/2)).
-        assert_eq!(conv(&e, &["**", "x1", "0.5"]).unwrap(), v(&["pow1_2", "x1"]));
-        assert_eq!(conv(&e, &["**", "x1", "2.5"]).unwrap(), v(&["pow1_2", "pow5", "x1"]));
-        assert_eq!(conv(&e, &["**", "x1", "0.2"]).unwrap(), v(&["pow1_5", "x1"]));
-        assert_eq!(conv(&e, &["**", "x1", "0.1"]).unwrap(), v(&["pow", "x1", "0.1"])); // gate-fail KEEP
+        assert_eq!(
+            conv(&e, &["**", "x1", "0.5"]).unwrap(),
+            v(&["pow1_2", "x1"])
+        );
+        assert_eq!(
+            conv(&e, &["**", "x1", "2.5"]).unwrap(),
+            v(&["pow1_2", "pow5", "x1"])
+        );
+        assert_eq!(
+            conv(&e, &["**", "x1", "0.2"]).unwrap(),
+            v(&["pow1_5", "x1"])
+        );
+        assert_eq!(
+            conv(&e, &["**", "x1", "0.1"]).unwrap(),
+            v(&["pow", "x1", "0.1"])
+        ); // gate-fail KEEP
         assert_eq!(conv(&e, &["**", "x1", "0.0"]).unwrap(), v(&["pow0", "x1"]));
-        assert_eq!(conv(&e, &["**", "x1", "/", "3", "2"]).unwrap(), v(&["pow1_2", "pow3", "x1"]));
-        assert_eq!(conv(&e, &["**", "x1", "/", "-2", "3"]).unwrap(), v(&["inv", "pow1_3", "pow2", "x1"]));
+        assert_eq!(
+            conv(&e, &["**", "x1", "/", "3", "2"]).unwrap(),
+            v(&["pow1_2", "pow3", "x1"])
+        );
+        assert_eq!(
+            conv(&e, &["**", "x1", "/", "-2", "3"]).unwrap(),
+            v(&["inv", "pow1_3", "pow2", "x1"])
+        );
         // crash-parity: raw unconfigured powN token (T2) + dead float-division (T5).
         assert!(conv(&e, &["pow7", "x1"]).is_err());
         assert!(conv(&e, &["pow1", "x1"]).is_err());
@@ -1056,7 +1232,10 @@ mod tests {
         assert_eq!(p("x1 ** -2", true, false), v(&["neg", "pow2", "x1"]));
         assert_eq!(p("x1 ** -1", true, false), v(&["neg", "x1"]));
         // mask_numbers=True -> numbers_to_constant (float()-based).
-        assert_eq!(p("3.14 * x1 + 2", true, true), v(&["+", "*", "<constant>", "x1", "<constant>"]));
+        assert_eq!(
+            p("3.14 * x1 + 2", true, true),
+            v(&["+", "*", "<constant>", "x1", "<constant>"])
+        );
         // convert=False -> raw infix_to_prefix + remove_pow1 (no ** conversion).
         assert_eq!(p("x1 + x2", false, false), v(&["+", "x1", "x2"]));
     }
@@ -1068,13 +1247,24 @@ mod tests {
     fn fixed_quirk_behavior() {
         let e = engine();
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
-        let cf = |toks: &[&str]| e.convert_expression_fixed(&toks.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let cf = |toks: &[&str]| {
+            e.convert_expression_fixed(&toks.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        };
         // #1 fractional power preserved (faithful drops it).
-        assert_eq!(cf(&["pow2", "pow1_3", "x1"]).unwrap(), v(&["pow2", "pow1_3", "x1"]));
-        assert_eq!(e.convert_expression(&v(&["pow2", "pow1_3", "x1"])).unwrap(), v(&["pow2", "x1"])); // faithful still buggy
-        // #1 no over-fix: genuine chains still combine.
+        assert_eq!(
+            cf(&["pow2", "pow1_3", "x1"]).unwrap(),
+            v(&["pow2", "pow1_3", "x1"])
+        );
+        assert_eq!(
+            e.convert_expression(&v(&["pow2", "pow1_3", "x1"])).unwrap(),
+            v(&["pow2", "x1"])
+        ); // faithful still buggy
+           // #1 no over-fix: genuine chains still combine.
         assert_eq!(cf(&["pow2", "pow2", "x1"]).unwrap(), v(&["pow4", "x1"]));
-        assert_eq!(cf(&["pow1_2", "pow1_2", "x1"]).unwrap(), v(&["pow1_4", "x1"]));
+        assert_eq!(
+            cf(&["pow1_2", "pow1_2", "x1"]).unwrap(),
+            v(&["pow1_4", "x1"])
+        );
         // #2 x**0 -> 1 (faithful emits pow0).
         assert_eq!(cf(&["**", "x1", "0"]).unwrap(), v(&["1"]));
         assert_eq!(cf(&["**", "x1", "0.0"]).unwrap(), v(&["1"]));
@@ -1082,26 +1272,41 @@ mod tests {
         assert_eq!(cf(&["neg", "-5"]).unwrap(), v(&["5"]));
         assert_eq!(cf(&["neg", "5"]).unwrap(), v(&["-5"]));
         // #4 '^' parses unary-minus like '**'.
-        assert_eq!(e.infix_to_prefix_fixed("x1 ^ - x2"), v(&["neg", "**", "x1", "x2"]));
+        assert_eq!(
+            e.infix_to_prefix_fixed("x1 ^ - x2"),
+            v(&["neg", "**", "x1", "x2"])
+        );
         // #6 raw powN no longer KeyErrors.
         assert_eq!(cf(&["pow7", "x1"]).unwrap(), v(&["pow7", "x1"]));
         // faithful infix_to_prefix unchanged ('^' keeps '-' binary; '/' right-leans -- #5 held there).
         assert_eq!(e.infix_to_prefix("x1 ^ - x2"), v(&["-", "**", "x1", "x2"]));
-        assert_eq!(e.infix_to_prefix("a - b - c"), v(&["-", "a", "-", "b", "c"]));
+        assert_eq!(
+            e.infix_to_prefix("a - b - c"),
+            v(&["-", "a", "-", "b", "c"])
+        );
         // #5 fixed = COORDINATED parse+render: left-assoc parse + no-flatten render, round-trip kept.
         assert_eq!(
             e.infix_to_prefix_fixed("1/2 * m * v ** 2"),
             v(&["*", "*", "/", "1", "2", "m", "**", "v", "2"])
         );
-        assert_eq!(e.infix_to_prefix_fixed("a - b - c"), v(&["-", "-", "a", "b", "c"]));
-        assert_eq!(e.infix_to_prefix_fixed("a ** b ** c"), v(&["**", "a", "**", "b", "c"])); // right-assoc
         assert_eq!(
-            e.prefix_to_infix_fixed(&v(&["+", "a", "+", "b", "c"]), Power::Func, false).unwrap(),
+            e.infix_to_prefix_fixed("a - b - c"),
+            v(&["-", "-", "a", "b", "c"])
+        );
+        assert_eq!(
+            e.infix_to_prefix_fixed("a ** b ** c"),
+            v(&["**", "a", "**", "b", "c"])
+        ); // right-assoc
+        assert_eq!(
+            e.prefix_to_infix_fixed(&v(&["+", "a", "+", "b", "c"]), Power::Func, false)
+                .unwrap(),
             "a + (b + c)"
         );
         // round-trip identity in fixed mode (the invariant the coordinated fix preserves).
         let pre = v(&["*", "a", "*", "b", "c"]);
-        let inf = e.prefix_to_infix_fixed(&pre, Power::StarStar, false).unwrap();
+        let inf = e
+            .prefix_to_infix_fixed(&pre, Power::StarStar, false)
+            .unwrap();
         assert_eq!(e.parse_fixed(&inf, false, false).unwrap(), pre);
     }
 }

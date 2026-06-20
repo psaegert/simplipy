@@ -18,7 +18,9 @@ use crate::parse::Node;
 pub fn contains_constant(node: &Node) -> bool {
     match node {
         Node::Leaf(t) => t == "<constant>",
-        Node::Op { token, operands } => token == "<constant>" || operands.iter().any(contains_constant),
+        Node::Op { token, operands } => {
+            token == "<constant>" || operands.iter().any(contains_constant)
+        }
     }
 }
 
@@ -56,10 +58,16 @@ pub fn match_pattern<'a>(
             }
         }
         // Tree-structured pattern.
-        Node::Op { token: p_op, operands: p_operands } => match tree {
+        Node::Op {
+            token: p_op,
+            operands: p_operands,
+        } => match tree {
             // Leaf tree vs non-leaf pattern -> mismatch (Python len(tree)==1 & pattern_length!=1).
             Node::Leaf(_) => false,
-            Node::Op { token: t_op, operands: t_operands } => {
+            Node::Op {
+                token: t_op,
+                operands: t_operands,
+            } => {
                 if t_op != p_op {
                     return false;
                 }
@@ -206,7 +214,15 @@ pub fn is_prime(n: i64) -> bool {
 /// `*`/`pow`-coefficient fallback, so the raise conditions are CONTROL FLOW and must match exactly:
 /// `p < 1`, `max_factor < 2`, a `divisor > max_factor` mid-loop, a prime `remaining > max_factor`,
 /// or `processed_factors > max_iter`. `max_iter` defaults to 1000 at the Python call sites.
-pub fn factorize_to_at_most(p: i64, max_factor: i64, max_iter: i64) -> Result<Vec<i64>, ()> {
+// The final `flush_current!()` resets `current_factor` to 1 that is then never read -- a faithful
+// port of the Python nonlocal closure's reset, structurally part of the macro, not a bug.
+#[allow(unused_assignments)]
+pub fn factorize_to_at_most(p: i128, max_factor: i64, max_iter: i64) -> Result<Vec<i64>, ()> {
+    // `p` is i128 (not i64): a `pow<N>` exponent / chain product can exceed i64 (e.g. `x ** 2^63`),
+    // where Python's arbitrary-precision `prod`/`factorize` still decomposes faithfully. The emitted
+    // factors are all <= max_factor (a small int), so the output stays Vec<i64>. (Beyond i128 is the
+    // documented out-of-domain boundary, unreachable on any real expression.)
+    let max_factor_i128 = max_factor as i128;
     if p < 1 {
         return Err(());
     }
@@ -219,30 +235,30 @@ pub fn factorize_to_at_most(p: i64, max_factor: i64, max_iter: i64) -> Result<Ve
 
     let mut remaining = p;
     let mut factors: Vec<i64> = Vec::new();
-    let mut current_factor: i64 = 1;
+    let mut current_factor: i128 = 1;
     let mut processed_factors: i64 = 0;
 
     // `flush_current()` (the Python nonlocal closure): emit the accumulated factor if > 1, reset.
     macro_rules! flush_current {
         () => {
             if current_factor > 1 {
-                factors.push(current_factor);
+                factors.push(current_factor as i64); // current_factor <= max_factor -> fits i64
                 current_factor = 1;
             }
         };
     }
 
-    let mut divisor: i64 = 2;
+    let mut divisor: i128 = 2;
     while divisor * divisor <= remaining {
         while remaining % divisor == 0 {
             processed_factors += 1;
             if processed_factors > max_iter {
                 return Err(());
             }
-            if divisor > max_factor {
+            if divisor > max_factor_i128 {
                 return Err(());
             }
-            if current_factor * divisor <= max_factor {
+            if current_factor * divisor <= max_factor_i128 {
                 current_factor *= divisor;
             } else {
                 flush_current!();
@@ -255,10 +271,10 @@ pub fn factorize_to_at_most(p: i64, max_factor: i64, max_iter: i64) -> Result<Ve
 
     if remaining > 1 {
         // remaining is prime at this point
-        if remaining > max_factor {
+        if remaining > max_factor_i128 {
             return Err(());
         }
-        if current_factor * remaining <= max_factor {
+        if current_factor * remaining <= max_factor_i128 {
             current_factor *= remaining;
         } else {
             flush_current!();
@@ -305,7 +321,7 @@ mod tests {
         assert_eq!(factorize_to_at_most(0, 5, 1000), Err(()));
         assert_eq!(factorize_to_at_most(5, 1, 1000), Err(()));
         // A prime factor larger than max_factor cannot be decomposed -> ValueError (the fallback trigger).
-        assert_eq!(factorize_to_at_most(7, 5, 1000), Err(()));  // 7 prime > 5
+        assert_eq!(factorize_to_at_most(7, 5, 1000), Err(())); // 7 prime > 5
         assert_eq!(factorize_to_at_most(10, 3, 1000), Err(())); // needs factor 5 > 3
     }
 }

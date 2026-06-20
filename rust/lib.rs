@@ -1,5 +1,4 @@
-//! simplipy-rust: pure-Rust faithful re-implementation of the SimpliPy prefix-expression
-//! simplifier, exposed to Python as `simplipy_rust._core` via PyO3.
+//! The Rust inline backend for SimpliPy, exposed to Python as `simplipy._core` via PyO3.
 //!
 //! ## FFI design (load-bearing, per the verified analysis)
 //! The ENTIRE simplify fixpoint is ported as ONE FFI unit. A single call into Rust receives the
@@ -13,20 +12,44 @@
 //! Therefore the PyO3 layer here is deliberately THIN: marshal `list[str]` <-> `Vec<String>`,
 //! hold the compiled engine, and delegate the whole unit to `engine::Engine::simplify`.
 //!
-//! ## Faithful-v1 target
-//! Reproduce engine-id `dev_7-3` @ simplipy 0.2.15 (git 1fe9b7e) on skeleton inputs at
-//! `max_pattern_length=4` (deployed) and `=7` (offline). v1 is a behavioral drop-in; the only
-//! constant fold that fires on skeletons collapses an all-`<constant>` subtree to `["<constant>"]`
-//! (pure string/tree rewriting, NO float math), so the str(float)/str(int) repr hazard is OUT of
-//! scope for v1 (it belongs to the separate `dev_7-3_numeric` track).
-
-// NOTE: PyO3 0.27 (current-stable, pinned in Cargo.toml) Bound API. The exact shapes of
-// `PyList::new`, `Python::allow_threads`, and the `#[pymodule]` fn signature shift slightly across
-// PyO3 minors; VERIFY them against the pinned version at the first `maturin develop` (the crate
-// cannot build until the kernel bodies replace the `unimplemented!()` stubs anyway, so these are
-// fixed mechanically on the first real compile, not reconstructed from memory here).
+//! ## Two engine lines (selected per call, NOT per build)
+//! `Engine::simplify(fold)` and the `*_fixed` conversions select the line:
+//!   * `fold = false` + the plain conversions = FAITHFUL `dev_7-3` (byte-identical to the deployed
+//!     simplipy 0.2.15 / git 1fe9b7e; the v23.0 reproducibility anchor).
+//!   * `fold = true` + the `*_fixed` conversions = the IMPROVED ("numeric") line: numeric constant
+//!     folding (incl. `1/0 -> float("inf")`, via the `numeric` module's f64 + libm evaluator) + the
+//!     six conversion-quirk fixes + atomic inf/nan tokens. This is what the shipped package routes.
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
+
+/// Reject inputs the recursive kernel cannot safely handle, with a clean `ValueError` BEFORE it runs.
+/// Two off-distribution hazards, both of which would otherwise ABORT the interpreter (uncatchable):
+///   1. PATHOLOGICALLY LONG input -> the tree recursions (cancel / parse / apply_rules / sort) recurse
+///      ~one frame per nesting level and overflow the default stack. Real expressions are tiny
+///      (<~100 tokens); cap generously. (Python raises RecursionError in the same regime.)
+///   2. MALFORMED prefix (an operator with too few operands) -> `cancel_terms` / `parse_subtree`
+///      index-underflow-PANIC, and a panic across the GIL-released `detach` boundary can abort.
+///      `is_valid` is the (240k-differential-verified) arity check, false exactly on those shapes.
+///      Empty input is the one valid case `is_valid` rejects (`simplify([]) == []`), allowed through.
+/// Both checks are O(n) and only fire off the deployed distribution; valid inputs are unaffected. We
+/// deliberately do NOT replicate Python's path-dependent exception TYPE -- one clean `ValueError`.
+const MAX_TOKENS: usize = 4096;
+
+fn ensure_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<()> {
+    if tokens.len() > MAX_TOKENS {
+        return Err(PyValueError::new_err(format!(
+            "prefix expression too long ({} tokens > {MAX_TOKENS}); refusing to risk a deep-recursion stack overflow",
+            tokens.len()
+        )));
+    }
+    if !tokens.is_empty() && !inner.is_valid(tokens) {
+        return Err(PyValueError::new_err(
+            "invalid or malformed prefix expression",
+        ));
+    }
+    Ok(())
+}
 
 mod cancel;
 mod convert;
@@ -86,9 +109,9 @@ impl PyEngine {
         apply_simplification_rules: bool,
         fold: bool,
     ) -> PyResult<Py<PyList>> {
-        // Release the GIL for the pure-Rust kernel: parallel callers (corpus harness, dataloader
-        // workers) are not serialized on Python's lock.
-        let out = py.allow_threads(|| {
+        ensure_well_formed(&self.inner, &tokens)?;
+        // Release the GIL for the pure-Rust kernel (parallel callers are not serialized on Python's lock).
+        let out = py.detach(|| {
             self.inner.simplify(
                 &tokens,
                 max_iter,
@@ -112,7 +135,8 @@ impl PyEngine {
         max_pattern_length: Option<usize>,
         fold: bool,
     ) -> PyResult<Py<PyList>> {
-        let out = py.allow_threads(|| {
+        ensure_well_formed(&self.inner, &tokens)?;
+        let out = py.detach(|| {
             self.inner
                 .apply_simplification_rules(&tokens, max_pattern_length, fold)
         });
@@ -123,7 +147,8 @@ impl PyEngine {
     /// `cancel_terms(*collect_multiplicities(tokens))`. Used by the differential vs fresh Python
     /// before the whole `simplify` fixpoint (sort + iterate) is ported. `mpl`-independent.
     fn cancel_only(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
-        let out = py.allow_threads(|| self.inner.cancel_terms(&tokens));
+        ensure_well_formed(&self.inner, &tokens)?;
+        let out = py.detach(|| self.inner.cancel_terms(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 
@@ -131,7 +156,8 @@ impl PyEngine {
     /// `sort_operands`. Used by the differential vs fresh Python before the whole `simplify` fixpoint
     /// compose.
     fn sort_only(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
-        let out = py.allow_threads(|| self.inner.sort_operands(&tokens));
+        ensure_well_formed(&self.inner, &tokens)?;
+        let out = py.detach(|| self.inner.sort_operands(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 
@@ -139,7 +165,7 @@ impl PyEngine {
     /// Part of M2 (the drop-in-engine surface); the most-called simplipy method on the per-candidate
     /// inference path.
     fn is_valid(&self, py: Python<'_>, tokens: Vec<String>) -> bool {
-        py.allow_threads(|| self.inner.is_valid(&tokens))
+        py.detach(|| self.inner.is_valid(&tokens))
     }
 
     /// Faithful port of `prefix_to_infix` (engine.py:409). `power` in {'func','**'} (default 'func');
@@ -162,13 +188,13 @@ impl PyEngine {
                 )))
             }
         };
-        py.allow_threads(|| self.inner.prefix_to_infix(&tokens, power_mode, realization))
+        py.detach(|| self.inner.prefix_to_infix(&tokens, power_mode, realization))
             .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     /// Faithful port of `infix_to_prefix` (engine.py:581). Part of M2 (the drop-in-engine surface).
     fn infix_to_prefix(&self, py: Python<'_>, infix_expression: &str) -> PyResult<Py<PyList>> {
-        let out = py.allow_threads(|| self.inner.infix_to_prefix(infix_expression));
+        let out = py.detach(|| self.inner.infix_to_prefix(infix_expression));
         Ok(PyList::new(py, out)?.into())
     }
 
@@ -176,7 +202,7 @@ impl PyEngine {
     /// (the exact exception kind differs -- the differential checks failure-parity). Part of M2.
     fn convert_expression(&self, py: Python<'_>, prefix_expr: Vec<String>) -> PyResult<Py<PyList>> {
         let out = py
-            .allow_threads(|| self.inner.convert_expression(&prefix_expr))
+            .detach(|| self.inner.convert_expression(&prefix_expr))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
@@ -192,7 +218,10 @@ impl PyEngine {
         mask_numbers: bool,
     ) -> PyResult<Py<PyList>> {
         let out = py
-            .allow_threads(|| self.inner.parse(infix_expression, convert_expression, mask_numbers))
+            .detach(|| {
+                self.inner
+                    .parse(infix_expression, convert_expression, mask_numbers)
+            })
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
@@ -216,18 +245,29 @@ impl PyEngine {
                 )))
             }
         };
-        py.allow_threads(|| self.inner.prefix_to_infix_fixed(&tokens, power_mode, realization))
-            .map_err(pyo3::exceptions::PyValueError::new_err)
+        py.detach(|| {
+            self.inner
+                .prefix_to_infix_fixed(&tokens, power_mode, realization)
+        })
+        .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
-    fn infix_to_prefix_fixed(&self, py: Python<'_>, infix_expression: &str) -> PyResult<Py<PyList>> {
-        let out = py.allow_threads(|| self.inner.infix_to_prefix_fixed(infix_expression));
+    fn infix_to_prefix_fixed(
+        &self,
+        py: Python<'_>,
+        infix_expression: &str,
+    ) -> PyResult<Py<PyList>> {
+        let out = py.detach(|| self.inner.infix_to_prefix_fixed(infix_expression));
         Ok(PyList::new(py, out)?.into())
     }
 
-    fn convert_expression_fixed(&self, py: Python<'_>, prefix_expr: Vec<String>) -> PyResult<Py<PyList>> {
+    fn convert_expression_fixed(
+        &self,
+        py: Python<'_>,
+        prefix_expr: Vec<String>,
+    ) -> PyResult<Py<PyList>> {
         let out = py
-            .allow_threads(|| self.inner.convert_expression_fixed(&prefix_expr))
+            .detach(|| self.inner.convert_expression_fixed(&prefix_expr))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
@@ -241,20 +281,31 @@ impl PyEngine {
         mask_numbers: bool,
     ) -> PyResult<Py<PyList>> {
         let out = py
-            .allow_threads(|| self.inner.parse_fixed(infix_expression, convert_expression, mask_numbers))
+            .detach(|| {
+                self.inner
+                    .parse_fixed(infix_expression, convert_expression, mask_numbers)
+            })
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
 
     /// Faithful port of `operators_to_realizations` (engine.py:2547).
-    fn operators_to_realizations(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
-        let out = py.allow_threads(|| self.inner.operators_to_realizations(&tokens));
+    fn operators_to_realizations(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+    ) -> PyResult<Py<PyList>> {
+        let out = py.detach(|| self.inner.operators_to_realizations(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 
     /// Faithful port of `realizations_to_operators` (engine.py:2566).
-    fn realizations_to_operators(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
-        let out = py.allow_threads(|| self.inner.realizations_to_operators(&tokens));
+    fn realizations_to_operators(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+    ) -> PyResult<Py<PyList>> {
+        let out = py.detach(|| self.inner.realizations_to_operators(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 
@@ -262,7 +313,7 @@ impl PyEngine {
     /// the subtree cannot be folded (complex result / unparseable leaf / unknown operator) -- matching
     /// Python `_evaluate_constant_subtree`. Validation entry for the differential.
     fn evaluate_constant_subtree(&self, py: Python<'_>, tokens: Vec<String>) -> Option<String> {
-        py.allow_threads(|| self.inner.evaluate_constant_subtree(&tokens))
+        py.detach(|| self.inner.evaluate_constant_subtree(&tokens))
     }
 
     /// The CPython-exact `str(float)` formatter alone (the result-formatting half of numeric folding),

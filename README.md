@@ -27,6 +27,13 @@
 pip install simplipy
 ```
 
+> As of 0.3.0 the inline phase (`simplify`, conversions, validation) is a compiled Rust extension
+> (`simplipy._core`). Prebuilt wheels are published for Linux (x86_64/aarch64), macOS (x86_64/arm64)
+> and Windows (x64) on CPython ≥ 3.11, so `pip install simplipy` does not compile anything for most
+> users. Installing from the **source distribution** (an unsupported platform, or `--no-binary`)
+> requires a Rust toolchain (`rustup`, MSRV 1.77). If the extension is unavailable at runtime, the
+> package transparently falls back to a slower pure-Python implementation.
+
 ```python
 import simplipy as sp
 

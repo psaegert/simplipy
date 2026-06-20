@@ -36,7 +36,11 @@ enum Key {
     /// `(1, float(token))` -- a numeric leaf.
     Num(f64),
     /// `(2, len(flatten(node)), child_keys, op)` -- a composite subtree.
-    Node { len: usize, children: Vec<Key>, op: String },
+    Node {
+        len: usize,
+        children: Vec<Key>,
+        op: String,
+    },
 }
 
 #[inline]
@@ -57,11 +61,21 @@ fn key_cmp(a: &Key, b: &Key) -> Ordering {
     match (a, b) {
         (Key::Var(x), Key::Var(y)) => x.cmp(y),
         (Key::Num(x), Key::Num(y)) => x.total_cmp(y),
-        (Key::Node { len: l1, children: c1, op: o1 }, Key::Node { len: l2, children: c2, op: o2 }) => {
-            l1.cmp(l2)
-                .then_with(|| vec_key_cmp(c1, c2))
-                .then_with(|| o1.cmp(o2))
-        }
+        (
+            Key::Node {
+                len: l1,
+                children: c1,
+                op: o1,
+            },
+            Key::Node {
+                len: l2,
+                children: c2,
+                op: o2,
+            },
+        ) => l1
+            .cmp(l2)
+            .then_with(|| vec_key_cmp(c1, c2))
+            .then_with(|| o1.cmp(o2)),
         _ => tag(a).cmp(&tag(b)),
     }
 }
@@ -116,7 +130,12 @@ fn python_float(s: &str) -> Option<f64> {
 /// Gather the BOUNDARY operand paths of the maximal same-`operator` chain rooted at `node`: a child
 /// that is a leaf, or a composite with a DIFFERENT operator, is a boundary (recorded); a composite
 /// with the SAME operator is followed. Order is irrelevant (paths are sorted by the caller).
-fn collect_positions(node: &Node, operator: &str, path: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
+fn collect_positions(
+    node: &Node,
+    operator: &str,
+    path: &mut Vec<usize>,
+    out: &mut Vec<Vec<usize>>,
+) {
     let operands = match node {
         Node::Op { operands, .. } => operands,
         Node::Leaf(_) => return,
@@ -205,20 +224,32 @@ pub fn sort_operands_unit(expression: &[String], ops: &Operators) -> Vec<String>
                         Node::Leaf(_) => unreachable!(),
                     };
                     let c = operands[1].clone();
-                    let inner = Node::Op { token: operator.clone(), operands: vec![b, c] };
-                    stack.push(Node::Op { token: operator.clone(), operands: vec![a, inner] });
+                    let inner = Node::Op {
+                        token: operator.clone(),
+                        operands: vec![b, c],
+                    };
+                    stack.push(Node::Op {
+                        token: operator.clone(),
+                        operands: vec![a, inner],
+                    });
                     i -= 1;
                     continue;
                 }
 
-                let subtree = Node::Op { token: operator.clone(), operands };
+                let subtree = Node::Op {
+                    token: operator.clone(),
+                    operands,
+                };
                 stack.push(sort_commutative_node(subtree, &operator));
                 i -= 1;
                 continue;
             }
 
             // Non-commutative operator: rebuild with operands in order (alias-canonicalized operator).
-            stack.push(Node::Op { token: operator, operands });
+            stack.push(Node::Op {
+                token: operator,
+                operands,
+            });
         } else {
             // Leaf.
             stack.push(Node::Leaf(token.clone()));
@@ -264,10 +295,13 @@ mod tests {
         let cases: &[(&[&str], &[&str])] = &[
             (&["+", "x3", "x1"], &["+", "x1", "x3"]),
             (&["*", "x3", "x1"], &["*", "x1", "x3"]),
-            (&["-", "x3", "x1"], &["-", "x3", "x1"]),         // non-commutative: unchanged
-            (&["+", "0", "x1"], &["+", "x1", "0"]),            // var(tag0) < num(tag1)
+            (&["-", "x3", "x1"], &["-", "x3", "x1"]), // non-commutative: unchanged
+            (&["+", "0", "x1"], &["+", "x1", "0"]),   // var(tag0) < num(tag1)
             (&["+", "<constant>", "x1"], &["+", "<constant>", "x1"]), // '<' < 'x'
-            (&["+", "sin", "x1", "sin", "x1"], &["+", "sin", "x1", "sin", "x1"]), // stable, equal
+            (
+                &["+", "sin", "x1", "sin", "x1"],
+                &["+", "sin", "x1", "sin", "x1"],
+            ), // stable, equal
             // rotation fires -> SKIPS sort (x2,x3,x1 NOT fully sorted):
             (&["+", "+", "x2", "x3", "x1"], &["+", "x2", "+", "x3", "x1"]),
             // right-nested chain is fully sorted:

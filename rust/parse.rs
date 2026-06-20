@@ -46,7 +46,13 @@ pub fn parse_subtree(
                 operands.push(operand);
                 idx = next;
             }
-            (Node::Op { token: token.clone(), operands }, idx)
+            (
+                Node::Op {
+                    token: token.clone(),
+                    operands,
+                },
+                idx,
+            )
         }
         None => (Node::Leaf(token.clone()), start_idx + 1),
     }
