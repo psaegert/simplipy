@@ -63,6 +63,22 @@ mod utils;
 
 pub use engine::Engine;
 
+/// Test helper: load the `dev_7-3` engine, or `None` if its HF asset is not staged in the local
+/// cache (e.g. a CI job or fresh checkout that did not download it). The asset-dependent parity
+/// tests early-return on `None` (skip) rather than panic; the same kernel behaviour is covered end-
+/// to-end by the Python `pytest` suite, which downloads the asset.
+#[cfg(test)]
+pub(crate) fn test_engine() -> Option<Engine> {
+    let home = std::env::var("HOME").ok()?;
+    let cfg = format!("{home}/.cache/simplipy/engines/dev_7-3/config.yaml");
+    if !std::path::Path::new(&cfg).exists() {
+        eprintln!("SKIP: dev_7-3 HF asset not staged in ~/.cache/simplipy");
+        return None;
+    }
+    let rules = format!("{home}/.cache/simplipy/engines/dev_7-3/rules.json");
+    Some(Engine::from_paths(&cfg, &rules).expect("engine loads"))
+}
+
 /// Engine-id this build faithfully reproduces. Bump (new engine-id) on any quality-shifting
 /// change so prior training results (v23.0) stay reproducible against the old id.
 pub const FAITHFUL_ENGINE_ID: &str = "dev_7-3";

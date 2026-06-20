@@ -275,13 +275,8 @@ mod tests {
     use super::py_float_repr;
     use crate::Engine;
 
-    fn engine() -> Engine {
-        let home = std::env::var("HOME").unwrap();
-        Engine::from_paths(
-            &format!("{home}/.cache/simplipy/engines/dev_7-3/config.yaml"),
-            &format!("{home}/.cache/simplipy/engines/dev_7-3/rules.json"),
-        )
-        .expect("engine loads")
+    fn engine() -> Option<Engine> {
+        crate::test_engine()
     }
 
     fn ev(e: &Engine, toks: &[&str]) -> Option<String> {
@@ -292,7 +287,7 @@ mod tests {
     /// numerically-correct-modulo-numpy-ULP (see benchmarks/diff_numeric.py); not asserted here.
     #[test]
     fn evaluate_exact_cases() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         assert_eq!(ev(&e, &["+", "2", "3"]).as_deref(), Some("5"));
         assert_eq!(ev(&e, &["-", "3", "5"]).as_deref(), Some("-2"));
         assert_eq!(ev(&e, &["/", "7", "2"]).as_deref(), Some("3.5"));

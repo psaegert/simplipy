@@ -1018,13 +1018,8 @@ mod tests {
     use super::Power;
     use crate::Engine;
 
-    fn engine() -> Engine {
-        let home = std::env::var("HOME").unwrap();
-        Engine::from_paths(
-            &format!("{home}/.cache/simplipy/engines/dev_7-3/config.yaml"),
-            &format!("{home}/.cache/simplipy/engines/dev_7-3/rules.json"),
-        )
-        .expect("engine loads")
+    fn engine() -> Option<Engine> {
+        crate::test_engine()
     }
 
     fn p2i(e: &Engine, toks: &[&str], power: Power, realization: bool) -> Result<String, String> {
@@ -1037,7 +1032,7 @@ mod tests {
     /// benchmarks/diff_prefix_to_infix.py; this pins the killer traps in CI.
     #[test]
     fn prefix_to_infix_traps() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         let f = Power::Func;
         let s = Power::StarStar;
         // T2 neg strict-< (equal-prec NO parens) vs T4 inv <= ; T1 realization preempt; T5 flatten.
@@ -1108,7 +1103,7 @@ mod tests {
     /// infix + 25 adversarial, each direction) in benchmarks/diff_infix_to_prefix.py.
     #[test]
     fn infix_to_prefix_traps() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         // T1 leading unary (only reachable insert(-1)==push path); T4 standalone '-'.
         assert_eq!(i2p(&e, "-x1"), v(&["neg", "x1"]));
@@ -1145,7 +1140,7 @@ mod tests {
     /// real convert inputs + 51 adversarial, incl. crash-parity) in benchmarks/diff_convert_expression.py.
     #[test]
     fn convert_expression_traps() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         // integer exponent (live) + negative + pow1-vanish.
         assert_eq!(conv(&e, &["**", "x1", "2"]).unwrap(), v(&["pow2", "x1"]));
@@ -1224,7 +1219,7 @@ mod tests {
     /// in benchmarks/diff_parse.py.
     #[test]
     fn parse_traps() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         let p = |s: &str, c: bool, m: bool| e.parse(s, c, m).unwrap();
         // default (convert=True, mask=False): integer power + negative exponent -> neg (NOT inv).
@@ -1245,7 +1240,7 @@ mod tests {
     /// faithful (dev_7-3) variants keep the buggy behavior (pinned in the *_traps tests).
     #[test]
     fn fixed_quirk_behavior() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         let cf = |toks: &[&str]| {
             e.convert_expression_fixed(&toks.iter().map(|s| s.to_string()).collect::<Vec<_>>())

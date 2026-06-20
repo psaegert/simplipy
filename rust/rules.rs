@@ -175,21 +175,8 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
 
-    fn cfg_path() -> String {
-        format!(
-            "{}/.cache/simplipy/engines/dev_7-3/config.yaml",
-            std::env::var("HOME").unwrap()
-        )
-    }
-    fn rules_path() -> String {
-        format!(
-            "{}/.cache/simplipy/engines/dev_7-3/rules.json",
-            std::env::var("HOME").unwrap()
-        )
-    }
-
-    fn engine() -> Engine {
-        Engine::from_paths(&cfg_path(), &rules_path()).expect("engine loads")
+    fn engine() -> Option<Engine> {
+        crate::test_engine()
     }
 
     #[derive(serde::Deserialize)]
@@ -221,7 +208,7 @@ mod tests {
             eprintln!("rust_buckets_match_python_ground_truth: SKIPPED (ground-truth fixture not vendored)");
             return;
         }
-        let eng = engine();
+        let Some(eng) = engine() else { return };
         let c = eng.rules();
         let gt = ground_truth();
 
@@ -257,7 +244,7 @@ mod tests {
     /// candidates() == the asset-ordered bucket filtered to {wildcard} U {concrete head == query}.
     #[test]
     fn operand_index_invariant_holds() {
-        let eng = engine();
+        let Some(eng) = engine() else { return };
         let c = eng.rules();
         const ABSENT: &str = "\0__absent_head__\0";
         let mut checks = 0usize;

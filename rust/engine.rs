@@ -492,13 +492,8 @@ mod tests {
     use crate::Engine;
     use std::fs;
 
-    fn engine() -> Engine {
-        let home = std::env::var("HOME").unwrap();
-        Engine::from_paths(
-            &format!("{home}/.cache/simplipy/engines/dev_7-3/config.yaml"),
-            &format!("{home}/.cache/simplipy/engines/dev_7-3/rules.json"),
-        )
-        .expect("engine loads")
+    fn engine() -> Option<Engine> {
+        crate::test_engine()
     }
 
     fn load(name: &str) -> Vec<Vec<String>> {
@@ -522,7 +517,7 @@ mod tests {
             eprintln!("simplify_matches_frozen_reference: SKIPPED (corpus fixtures not vendored)");
             return;
         }
-        let e = engine();
+        let Some(e) = engine() else { return };
         let raw = load("raw_skeletons.json");
         for mpl in [4usize, 7usize] {
             let reference = load(&format!("reference_dev_7-3_mpl{mpl}.json"));
@@ -546,7 +541,7 @@ mod tests {
     /// corpus+fuzz gate lives in benchmarks/diff_is_valid.py). Pins each reject path + the numeric guard.
     #[test]
     fn is_valid_cases() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         let valid: &[&[&str]] = &[
             &["x1"],
             &["<constant>"],
@@ -581,7 +576,7 @@ mod tests {
     /// names <-> realizations, non-operator tokens untouched, round-trip on canonical prefix.
     #[test]
     fn realizations_round_trip() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         let t = |s: &[&str]| -> Vec<String> { s.iter().map(|x| x.to_string()).collect() };
         let expr = t(&["*", "neg", "x1", "pow2", "<constant>"]);
         let fwd = e.operators_to_realizations(&expr);

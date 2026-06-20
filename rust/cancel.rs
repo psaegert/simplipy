@@ -425,13 +425,8 @@ pub fn cancel_terms_unit(expression: &[String], ops: &Operators) -> Vec<String> 
 mod tests {
     use crate::Engine;
 
-    fn engine() -> Engine {
-        let home = std::env::var("HOME").unwrap();
-        Engine::from_paths(
-            &format!("{home}/.cache/simplipy/engines/dev_7-3/config.yaml"),
-            &format!("{home}/.cache/simplipy/engines/dev_7-3/rules.json"),
-        )
-        .expect("engine loads")
+    fn engine() -> Option<Engine> {
+        crate::test_engine()
     }
 
     fn toks(s: &[&str]) -> Vec<String> {
@@ -444,7 +439,7 @@ mod tests {
     /// the additive-vs-multiplicative neutral element.
     #[test]
     fn cancel_canonical_cases() {
-        let e = engine();
+        let Some(e) = engine() else { return };
         let cases: &[(&[&str], &[&str])] = &[
             (&["+", "x1", "x1"], &["+", "mult2", "x1", "0"]),
             (&["-", "x1", "x1"], &["-", "0", "0"]),
