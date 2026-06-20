@@ -22,6 +22,21 @@ costs that dominate at scale. SimpliPy was created to remove those bottlenecks:
 	candidates per minute.
 
 
+## Performance
+
+As of `0.3.0` the inline phase (`simplify`, conversions, validation) runs in a compiled Rust
+extension (`simplipy._core`), a large speed-up over the previous pure-Python engine at identical
+simplification behaviour.
+
+![Simplification time and ratio ECDFs: SymPy vs SimpliPy Python 0.2.15 vs SimpliPy Rust 0.3.0](https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplification_comparison_sympy_python_rust.svg)
+
+ECDFs of simplification wall-clock time (left) and simplification ratio (right) across maximum
+pattern lengths `L_max = 0`–`7`. **Top:** SimpliPy `0.3.0` (Rust, green); **bottom:** SimpliPy
+`0.2.15` (pure Python, blue); the SymPy baseline is orange/red. The Rust inline engine is roughly
+5× to 100× faster than the pure-Python engine at the same `L_max` (≈ 15× at `L_max = 4`) and orders
+of magnitude faster than SymPy, while producing near-identical simplification ratios.
+
+
 ## Simplification Pipeline (Pseudo-Algorithm)
 
 ```text
