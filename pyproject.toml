@@ -9,12 +9,29 @@ requires-python = ">=3.11"
 version = "0.3.0"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
+keywords = ["symbolic-regression", "simplification", "expression", "prefix", "rewriting", "rust"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
+]
 # The INLINE phase (simplify + conversions + validation) is the compiled Rust `simplipy._core`;
 # the OFFLINE phase (rule mining + curve_fit) stays pure Python. numpy/scipy are offline-only at
-# runtime, huggingface_hub powers asset resolution.
+# runtime, huggingface_hub powers asset resolution, platformdirs resolves the asset cache directory.
 dependencies = [
     "huggingface_hub",
     "numpy",
+    "platformdirs",
     "pyyaml",
     "scipy",
     "tqdm",

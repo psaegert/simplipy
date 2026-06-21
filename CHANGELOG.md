@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — Rust inline backend + the "numeric" engine line (MAJOR behavior change)
+## 0.3.0 — 2026-06-21 — Rust inline backend + the "numeric" engine line (MAJOR behavior change)
 
 This release rewrites SimpliPy's **inline phase** (`simplify`, the prefix/infix conversions, and
 validation) as a compiled Rust extension (`simplipy._core`) and makes the improved **numeric** engine
@@ -16,7 +16,7 @@ length 3; the `rules.json` asset is byte-identical). What changed is the engine 
    their `f64` result (e.g. `1/0 → float("inf")`, `sqrt(-1) → float("nan")`); the folding fires as a
    fallback after rule matching, so a rule that applies to an all-`<constant>` subtree is tried before
    the subtree is collapsed.
-2. **Six conversion bug fixes** (previously documented in `docs/CONVERSION_QUIRKS.md`), most notably:
+2. **Six conversion bug fixes**, most notably:
    a fractional-power child (`pow1_M`) is no longer silently dropped by `convert_expression`; left/right
    associativity in `infix_to_prefix`/`prefix_to_infix` is corrected (and round-trip-preserving);
    `x**0`, `--5`, `^`-vs-`**` unary-minus, and raw `powN` are handled correctly.
@@ -61,3 +61,4 @@ length 3; the `rules.json` asset is byte-identical). What changed is the engine 
 - Build backend switched from setuptools to **maturin** (mixed layout: Python at `src/simplipy/`,
   Rust crate under `rust/`, compiled module `simplipy._core`). One abi3 wheel per platform/arch for
   CPython ≥ 3.11.
+- **New runtime dependency:** `platformdirs` (resolves the per-user asset cache directory).
