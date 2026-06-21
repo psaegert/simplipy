@@ -2092,6 +2092,14 @@ class SimpliPyEngine:
             The simplified expression, in the same format as the input. If the
             simplification results in a longer expression, the original
             expression is returned.
+
+        Notes
+        -----
+        As of 0.3.0, all-numeric subtrees are folded to their ``f64`` value as a
+        fallback after rule matching, including non-finite results
+        (``1/0`` -> ``float("inf")``, ``sqrt(-1)`` -> ``float("nan")``). The
+        resulting ``float("inf")`` / ``float("-inf")`` / ``float("nan")`` tokens
+        are atomic and round-trip through the prefix/infix conversions.
         """
         # INLINE CORE (improved, fold=True): the deployed list/tuple/ndarray prefix-token path runs
         # in Rust as one FFI unit. `collect_statistics` / `verbose` / a str input fall through to the

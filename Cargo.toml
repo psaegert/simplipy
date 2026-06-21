@@ -2,7 +2,7 @@
 name = "simplipy-core"
 version = "0.3.0"              # kept in lockstep with the Python package version (pyproject.toml)
 edition = "2021"
-rust-version = "1.77"          # real MSRV floor of the resolved dependency tree (rustc-hash 2.x = 1.77)
+rust-version = "1.83"          # MSRV floor of the resolved tree (pyo3 0.29 requires Rust >= 1.83)
 description = "Rust inline-phase backend for the SimpliPy prefix-expression simplifier (PyO3, the simplipy._core extension)"
 authors = ["Paul Saegert"]
 license = "MIT"
@@ -18,7 +18,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Pin to current-stable PyO3. VERIFY the exact patch at setup time:
-#   cargo search pyo3   (the 0.27 line is current-stable as of 2026-06; bump deliberately).
+#   cargo search pyo3   (0.29 is the current pin; bump deliberately and re-check rust-version/MSRV).
 # abi3-py311 -> ONE wheel per (platform, arch) for CPython >= 3.11 (matches simplipy's
 # requires-python = ">=3.11"); no per-minor-version wheel matrix.
 pyo3 = { version = "0.29", features = ["abi3-py311", "extension-module"] }

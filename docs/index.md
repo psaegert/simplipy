@@ -53,7 +53,7 @@ function simplify(expr, max_iter=5):
         if converged(tokens):
             break
 
-    return finalize(tokens)  # prefix list or infix string, caller’s choice
+    return finalize(tokens)  # prefix list or infix string, caller's choice
 ```
 
 This loop is intentionally lightweight: each pass performs a handful of pure
