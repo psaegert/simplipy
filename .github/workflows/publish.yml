@@ -21,7 +21,7 @@ jobs:
         platform:
           - { runner: ubuntu-latest,   target: x86_64 }
           - { runner: ubuntu-latest,   target: aarch64 }
-          - { runner: macos-13,        target: x86_64 }
+          - { runner: macos-latest,    target: x86_64 }   # cross-compiled on the arm64 runner (macos-13 Intel runners are retired)
           - { runner: macos-latest,    target: aarch64 }
           - { runner: windows-latest,  target: x64 }
     steps:
