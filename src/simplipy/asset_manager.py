@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 import platformdirs
+from filelock import FileLock
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
 
@@ -85,6 +86,22 @@ def fetch_manifest(repo_id: str | None = None, manifest_filename: str | None = N
         return {}
 
 
+def _asset_files_present(local_dir: Path, asset_info: dict) -> bool:
+    """Return True iff *every* file of the asset is present locally (a COMPLETE install).
+
+    Checking the whole file set (not just the directory or the entrypoint) is what makes
+    concurrent installs safe: a partially-downloaded asset is correctly treated as not-installed.
+    Backward-compatible with caches installed before the completeness check existed.
+    """
+    base = local_dir / asset_info['directory']
+    if not base.is_dir():
+        return False
+    files = asset_info.get('files')
+    if not files:
+        return (base / asset_info['entrypoint']).exists()
+    return all((base / f).exists() for f in files)
+
+
 def get_path(asset: str, install: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> str:
     """Resolve the local filesystem path to an asset's entrypoint file.
 
@@ -150,7 +167,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
 
     entrypoint_path = local_dir / asset_info['directory'] / asset_info['entrypoint']
 
-    if entrypoint_path.exists():
+    if _asset_files_present(local_dir, asset_info):
         return str(entrypoint_path)
 
     if install:
@@ -209,33 +226,44 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
     local_dir.mkdir(parents=True, exist_ok=True)
     local_path = local_dir / asset_info['directory']
 
-    if local_path.exists() and not force:
-        print(f"Asset '{asset}' is already installed at {local_path}.")
-        print("Use force=True or --force to reinstall.")
-        return True
+    # Serialize concurrent installs of the SAME asset across processes. Without this, multiple
+    # workers racing on a cold cache observe a half-downloaded asset (the directory or entrypoint
+    # exists before all files do) and load a corrupt engine. The lock makes install atomic w.r.t.
+    # other processes; everyone else blocks, then finds a COMPLETE install.
+    lock_path = str(local_dir / (asset_info['directory'].replace('/', '_') + '.lock'))
+    with FileLock(lock_path):
+        # Re-check INSIDE the lock: another process may have just completed the install.
+        if _asset_files_present(local_dir, asset_info) and not force:
+            print(f"Asset '{asset}' is already installed at {local_path}.")
+            print("Use force=True or --force to reinstall.")
+            return True
 
-    if local_path.exists() and force:
-        print(f"Force option specified. Removing existing version of '{asset}'...")
-        uninstall_asset(asset, quiet=True, local_dir=local_dir)
+        if local_path.exists() and force:
+            print(f"Force option specified. Removing existing version of '{asset}'...")
+            uninstall_asset(asset, quiet=True, local_dir=local_dir)
+        elif local_path.exists():
+            # A prior attempt left a PARTIAL install (dir present, files incomplete) -> clear it.
+            shutil.rmtree(local_path, ignore_errors=True)
 
-    print(f"Installing asset '{asset}' to {local_path}.")
-    try:
-        for file in asset_info['files']:
+        print(f"Installing asset '{asset}' to {local_path}.")
+        try:
+            for file in asset_info['files']:
 
-            hf_hub_download(
-                repo_id=asset_info['repo_id'],
-                filename=f"{asset_info['directory']}/{file}",
-                repo_type="dataset",
-                local_dir=local_dir,
-            )
-        print(f"Successfully installed '{asset}'.")
-        return True
-    except HfHubHTTPError as e:
-        print(f"Error downloading asset '{asset}': {e}")
-        # Clean up partial download
-        if local_dir.exists():
-            shutil.rmtree(local_dir)
-        return False
+                hf_hub_download(
+                    repo_id=asset_info['repo_id'],
+                    filename=f"{asset_info['directory']}/{file}",
+                    repo_type="dataset",
+                    local_dir=local_dir,
+                )
+            print(f"Successfully installed '{asset}'.")
+            return True
+        except HfHubHTTPError as e:
+            print(f"Error downloading asset '{asset}': {e}")
+            # Clean up only THIS asset's partial download -- never the shared cache root
+            # (rmtree(local_dir) would delete other assets / other workers' caches).
+            if local_path.exists():
+                shutil.rmtree(local_path, ignore_errors=True)
+            return False
 
 
 def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> bool:
