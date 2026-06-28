@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 — 2026-06-28 — expression-token normalization helpers
+
+Adds pure-Python `normalize_skeleton`, `normalize_expression`, and `normalize_variable_token`
+to the package root (also available as `simplipy.normalization`). These canonicalize a prefix
+token sequence -- variable tokens (`v1`/`x1`, case-insensitive) to a stable `x{n}`, and numeric
+literals to a `<constant>` placeholder (skeleton form) or kept as-is (expression form) -- so two
+expressions that are "the same" up to variable renaming / constant values compare equal.
+
+Relocated from flash-ansr (behavior-identical) so the canonicalizer lives at the shared
+expression-engine leaf that downstream packages (flash-ansr, sr-data, srbf) all depend on,
+keeping holdout-matching and symbolic-recovery scoring consistent by construction. No change to
+the Rust inline backend (`simplipy._core`) or any existing API; purely additive.
+
 ## 0.3.0 — 2026-06-21 — Rust inline backend + the "numeric" engine line (MAJOR behavior change)
 
 This release rewrites SimpliPy's **inline phase** (`simplify`, the prefix/infix conversions, and
