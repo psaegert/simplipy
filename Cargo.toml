@@ -1,6 +1,6 @@
 [package]
 name = "simplipy-core"
-version = "0.3.0"              # kept in lockstep with the Python package version (pyproject.toml)
+version = "0.3.1"              # kept in lockstep with the Python package version (pyproject.toml)
 edition = "2021"
 rust-version = "1.83"          # MSRV floor of the resolved tree (pyo3 0.29 requires Rust >= 1.83)
 description = "Rust inline-phase backend for the SimpliPy prefix-expression simplifier (PyO3, the simplipy._core extension)"
