@@ -261,4 +261,14 @@ Note on positive coverage: integration-level both-reduced cases were sparse here
 
 **Finding B (a real bug): `prune_redundant_rules` is broken with the Rust core.** It removes a rule by popping the *Python* `simplification_rules_no_patterns` dict, but `simplify` routes to the **Rust core** whose compiled rules are immutable per call — so the removed rule is still applied, every explicit rule looks "still derivable (by itself)," and it **over-prunes (measured 94%: 1369/1455 on a 2000-rule subset).** Using `--prune` with the shipped Rust engine would silently corrupt the ruleset.
 
-**Decision: NO action.** Given Finding A (little benefit) and Finding B (broken + a proper fix = a Rust-native prune, non-trivial), pruning is not worth pursuing now. Recommend: do NOT use `--prune` with the Rust engine, and add a guard that errors when `_core` is attached (small safety follow-up, flagged to the user). The headline is the GOOD news: the index makes larger rulesets online-affordable, so a thorough dev_9-4 does not need pruning to stay fast online.
+**Finding A stands** (the GOOD news: index makes larger rulesets online-affordable). **Finding B (the bug) is now FIXED** (user call: fix it, don't just warn).
+
+### Improvement 5b — prune_redundant_rules FIXED + measured (2026-06-30)
+
+`engine.rs Engine::prune_explicit(&mut self, ordered_lhs, mask_elementary_literals, fold)` does the redundancy test on the **Rust `no_patterns` map**: for each explicit `lhs` (in asset order), remove it, `simplify(lhs)` in the deployed config (`fold=true, mask_elementary_literals=false`), keep it removed iff the result still equals its `rhs` (serial — pruned rules stay removed). FFI `prune_explicit` (`&mut self`); Python `prune_redundant_rules` now **delegates to the Rust core when `_core` is attached** (the original in-place Python dict path is kept for the no-core case). 27/27 cargo tests (added `prune_explicit_is_correct`), fmt clean.
+
+**Measured (full dev_7-3 engine):**
+- **Correct now:** ~**25.6%** pruned (extrapolated, vs the broken **94%**); on a 500-sample, **136/136** pruned rules still simplify `lhs→rhs` via remaining rules (genuinely redundant); Python end-to-end on a 3000-subset prunes 8.1% (fewer covering rules in a subset).
+- **Runtime ≈ 2.5 s single-thread** for the full dev_7-3 prune (binned per-length extrapolation: each redundancy test is one Rust `simplify`, 3–51 µs by lhs length; length histogram {2:262,3:2229,4:1764,5:30265,6:37109,7:12171}). **Far cheaper than feared — no need to defer to a free box.**
+
+**Status:** fix done + validated at sample scale. The **full dev_7-3 prune run is left as the user's call** (it is ~2.5 s, runnable anytime on CPU) — but note pruning dev_7-3 itself is not a deliverable (it is the frozen v23.0 anchor; a pruned set = a new engine_id), and per Finding A the online benefit is small. The value delivered is the **correct, fast prune now available for a future dev_9-4** (where, combined with the size-insensitive online cost, a thorough mine stays affordable).

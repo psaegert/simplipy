@@ -504,6 +504,21 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
+    /// OFFLINE (Phase B): CORRECT `prune_redundant_rules` with the Rust core. Tests each explicit
+    /// `lhs` (in the given asset order) by removing it from the Rust rule map + re-simplifying; returns
+    /// the pruned `lhs` list. Replaces the Python prune, which over-pruned (~94%) because it removed
+    /// from a Python dict while `simplify` used the immutable Rust rules. Takes `&mut self`.
+    #[pyo3(signature = (ordered_lhs, mask_elementary_literals=false, fold=true))]
+    fn prune_explicit(
+        &mut self,
+        ordered_lhs: Vec<Vec<String>>,
+        mask_elementary_literals: bool,
+        fold: bool,
+    ) -> Vec<Vec<String>> {
+        self.inner
+            .prune_explicit(&ordered_lhs, mask_elementary_literals, fold)
+    }
+
     /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s --
     /// "constfree" | "affine" | "nonlinear". Affine candidates are fittable in closed form (no LM).
     fn classify_linearity(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<String> {

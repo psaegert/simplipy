@@ -214,6 +214,35 @@ impl Engine {
         )
     }
 
+    /// OFFLINE (Phase B): CORRECT prune of redundant explicit rules with the Rust core. The previous
+    /// Python `prune_redundant_rules` removed a rule from a stale PYTHON dict while `simplify` used the
+    /// IMMUTABLE Rust rules -> every rule looked "still derivable (by itself)" and it OVER-PRUNED (~94%).
+    /// This mutates the Rust `no_patterns` map: for each explicit `lhs` (in the given asset order),
+    /// remove it, `simplify(lhs)` with the deployed config, and keep it removed IFF the result still
+    /// equals its `rhs` (i.e. covered by other rules / folding). Serial -- a pruned rule stays removed
+    /// for subsequent tests (avoids over-pruning mutually-redundant pairs). Returns the pruned `lhs`
+    /// list; leaves the map in the pruned state.
+    pub fn prune_explicit(
+        &mut self,
+        ordered_lhs: &[Vec<String>],
+        mask_elementary_literals: bool,
+        fold: bool,
+    ) -> Vec<Vec<String>> {
+        let mut pruned = Vec::new();
+        for lhs in ordered_lhs {
+            let Some(rhs) = self.rules.no_patterns.remove(lhs) else {
+                continue; // not an explicit rule in this engine (skip)
+            };
+            let result = self.simplify(lhs, 5, None, mask_elementary_literals, true, fold);
+            if result == rhs {
+                pruned.push(lhs.clone()); // redundant: keep removed
+            } else {
+                self.rules.no_patterns.insert(lhs.clone(), rhs); // needed: restore
+            }
+        }
+        pruned
+    }
+
     /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s. See `crate::fit`.
     pub fn classify_linearity(&self, tokens: &[String]) -> Result<String, String> {
         crate::fit::classify(tokens, &self.operators).map(|l| l.as_str().to_string())
@@ -722,6 +751,39 @@ mod tests {
 
     fn engine() -> Option<Engine> {
         crate::test_engine()
+    }
+
+    /// `prune_explicit` (the corrected prune) must (a) NOT over-prune everything (the old Rust-core
+    /// bug pruned ~94%), and (b) every rule it prunes must STILL simplify lhs->rhs via the remaining
+    /// rules (genuinely redundant).
+    #[test]
+    fn prune_explicit_is_correct() {
+        let Some(mut e) = engine() else {
+            return;
+        };
+        let sample: Vec<Vec<String>> = e.rules().no_patterns.keys().take(300).cloned().collect();
+        if sample.is_empty() {
+            return;
+        }
+        let rhs_of: std::collections::HashMap<Vec<String>, Vec<String>> = sample
+            .iter()
+            .map(|l| (l.clone(), e.rules().no_patterns.get(l).unwrap().clone()))
+            .collect();
+        let pruned = e.prune_explicit(&sample, false, true);
+        assert!(
+            pruned.len() < sample.len(),
+            "prune must not remove everything (got {}/{})",
+            pruned.len(),
+            sample.len()
+        );
+        for lhs in &pruned {
+            let r = e.simplify(lhs, 5, None, false, true, true);
+            assert_eq!(
+                &r,
+                rhs_of.get(lhs).unwrap(),
+                "pruned rule must stay derivable"
+            );
+        }
     }
 
     fn load(name: &str) -> Vec<Vec<String>> {

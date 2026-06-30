@@ -304,6 +304,33 @@ class SimpliPyEngine:
         int
             The number of rules that were pruned.
         """
+        # FAST + CORRECT path: with the Rust core, the redundancy test must remove the rule from the
+        # RUST rule set (the immutable compiled rules `simplify` actually uses) -- not from the Python
+        # `simplification_rules_no_patterns` dict, which the core ignores (doing so over-prunes ~94%
+        # because every rule still "applies via itself"). `_core.prune_explicit` removes each explicit
+        # `lhs` from the Rust `no_patterns` map, re-`simplify`s, and keeps it removed iff still
+        # derivable -- mirroring this method's serial semantics, in the deployed config (fold=True,
+        # mask_elementary_literals=False).
+        if self._core is not None:
+            explicit_lhs = [
+                list(lhs) for lhs, _rhs in self.simplification_rules
+                if not any(_WILDCARD_RE.match(t) for t in lhs)
+            ]
+            pruned_lhs = self._core.prune_explicit(explicit_lhs, False, True)
+            pruned_set = {tuple(lhs) for lhs in pruned_lhs}
+            if pruned_set:
+                self.simplification_rules = [
+                    rule for rule in self.simplification_rules
+                    if tuple(rule[0]) not in pruned_set
+                ]
+                self.compile_rules()
+            if verbose:
+                print(f'Pruned {len(pruned_set)} redundant explicit rules '
+                      f'({len(self.simplification_rules)} rules remaining)')
+            return len(pruned_set)
+
+        # Pure-Python path (no compiled core): the original in-place dict prune is correct here because
+        # `simplify` uses `simplification_rules_no_patterns` directly.
         # Collect indices of explicit (non-pattern) rules
         explicit_indices = [
             i for i, (lhs, _rhs) in enumerate(self.simplification_rules)
