@@ -170,6 +170,9 @@ struct CandEntry {
     linearity: crate::fit::Linearity,
     tape: Tape,
     y_const_free: Option<Vec<f64>>,
+    /// Improvement 2: precomputed log-linear plan (form + the const-free `g` tape) for nonlinear
+    /// `pow(C,g)` / `pow(g,C)` candidates -> closed-form fit instead of the LM.
+    loglin: Option<(crate::fit::LogLinForm, Tape)>,
 }
 
 /// Bitmask over `var_names` of the variables appearing in `tokens` (<=32 vars).
@@ -222,6 +225,7 @@ fn candidate_matches(
                     atol,
                     retries,
                     s,
+                    cand.loglin.as_ref().map(|(f, t)| (*f, t)),
                 )
             };
             if !ok {
@@ -270,13 +274,23 @@ impl CandidateLibrary {
             } else {
                 None
             };
+            let linearity = crate::fit::classify(c, ops)?;
+            let loglin = if linearity == crate::fit::Linearity::Nonlinear {
+                match crate::fit::detect_log_linear(c, ops) {
+                    Some((form, g)) => Some((form, Tape::compile(&g, ops, var_names)?)),
+                    None => None,
+                }
+            } else {
+                None
+            };
             by_len[len].push(CandEntry {
                 tokens: c.clone(),
                 var_mask: var_mask(c, var_names),
                 n_const,
-                linearity: crate::fit::classify(c, ops)?,
+                linearity,
                 tape,
                 y_const_free,
+                loglin,
             });
         }
         Ok(CandidateLibrary {

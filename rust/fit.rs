@@ -391,6 +391,108 @@ fn lm_fit(
     c
 }
 
+/// The two log-linearizable single-constant power forms (Improvement 2): `pow(<constant>, g)` = C^g
+/// (constant base) and `pow(g, <constant>)` = g^C (constant exponent), with `g` const-free. ~65% of
+/// nonlinear-in-params candidates -- a closed-form least-squares solve in log-space instead of the LM.
+#[derive(Clone, Copy)]
+pub(crate) enum LogLinForm {
+    CPowG,
+    GPowC,
+}
+
+/// End index (exclusive) of the prefix subtree starting at `start` (arity walk).
+fn subtree_end(tokens: &[String], start: usize, ops: &Operators) -> Option<usize> {
+    let mut i = start;
+    let mut need = 1usize;
+    while need > 0 {
+        let tok = tokens.get(i)?;
+        i += 1;
+        need -= 1;
+        if let Some(a) = ops.arity_of(tok) {
+            need += a as usize;
+        }
+    }
+    Some(i)
+}
+
+/// Recognize `pow(<constant>, g)` / `pow(g, <constant>)` with a single `<constant>` and a const-free
+/// `g`. Returns (form, g_tokens) or None (-> the LM path).
+pub(crate) fn detect_log_linear(
+    tokens: &[String],
+    ops: &Operators,
+) -> Option<(LogLinForm, Vec<String>)> {
+    if tokens.first().map(|s| s.as_str()) != Some("pow") {
+        return None;
+    }
+    if tokens.iter().filter(|t| t.as_str() == "<constant>").count() != 1 {
+        return None;
+    }
+    let base_end = subtree_end(tokens, 1, ops)?;
+    let base = &tokens[1..base_end];
+    let exp = &tokens[base_end..];
+    let const_free = |toks: &[String]| toks.iter().all(|t| t != "<constant>");
+    if base.len() == 1 && base[0] == "<constant>" && const_free(exp) {
+        return Some((LogLinForm::CPowG, exp.to_vec()));
+    }
+    if exp.len() == 1 && exp[0] == "<constant>" && const_free(base) {
+        return Some((LogLinForm::GPowC, base.to_vec()));
+    }
+    None
+}
+
+/// Closed-form log-space least-squares for the recognized power forms. `cand_tape` evaluates the final
+/// fit at the solved constant (so the accept/reject `allclose` uses the EXACT operator semantics, same
+/// gate as the LM). Returns Some(decision) when the solve is computable (enough positive rows), else
+/// None -> fall back to the LM (preserves recall; e.g. negative-base integer-power cases).
+fn try_log_linear_fit(
+    form: LogLinForm,
+    g_tape: &Tape,
+    cand_tape: &Tape,
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    y: &[f64],
+    rtol: f64,
+    atol: f64,
+) -> Option<bool> {
+    let g = g_tape.eval_columns(cols, &[], n_rows);
+    let (mut num, mut den, mut nvalid) = (0.0f64, 0.0f64, 0usize);
+    let c = match form {
+        LogLinForm::CPowG => {
+            // y = C^g -> ln y = g * ln C ; solve u = ln C, C = exp(u).
+            for r in 0..n_rows {
+                let (gi, yi) = (g[r], y[r]);
+                if gi.is_finite() && yi.is_finite() && yi > 0.0 {
+                    num += gi * yi.ln();
+                    den += gi * gi;
+                    nvalid += 1;
+                }
+            }
+            if nvalid < 1 || den <= 0.0 {
+                return None;
+            }
+            (num / den).exp()
+        }
+        LogLinForm::GPowC => {
+            // y = g^C -> ln y = C * ln g ; solve C.
+            for r in 0..n_rows {
+                let (gi, yi) = (g[r], y[r]);
+                if gi.is_finite() && gi > 0.0 && yi.is_finite() && yi > 0.0 {
+                    let lg = gi.ln();
+                    num += lg * yi.ln();
+                    den += lg * lg;
+                    nvalid += 1;
+                }
+            }
+            if nvalid < 1 || den <= 0.0 {
+                return None;
+            }
+            num / den
+        }
+    };
+    let fitted = cand_tape.eval_columns(cols, &[c], n_rows);
+    Some(allclose(y, &fitted, rtol, atol))
+}
+
 /// The COMPLETE native `exist_constants_that_fit` (M3): affine candidates -> the closed-form path
 /// (deterministic, no restarts); nonlinear-in-params candidates -> `n_restarts` LM solves from random
 /// N(0,5) starts (mirroring the worker's retry loop), accept iff any makes `allclose(y_target,
@@ -419,8 +521,18 @@ pub fn exist_constants_fit(
         return Err("y_target length mismatch".to_string());
     }
     let cols = columns_from_row_major(x_flat, n_rows, n_vars);
+    // detect + compile the log-linear g-subtree once (nonlinear pow forms only).
+    let g_tape = if lin == Linearity::Nonlinear {
+        match detect_log_linear(candidate, ops) {
+            Some((form, g)) => Some((form, Tape::compile(&g, ops, var_names)?)),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let loglin = g_tape.as_ref().map(|(f, t)| (*f, t));
     Ok(exist_constants_fit_prepared(
-        &tape, lin, &cols, n_rows, y_target, rtol, atol, n_restarts, seed,
+        &tape, lin, &cols, n_rows, y_target, rtol, atol, n_restarts, seed, loglin,
     ))
 }
 
@@ -438,6 +550,7 @@ pub(crate) fn exist_constants_fit_prepared(
     atol: f64,
     n_restarts: usize,
     seed: u64,
+    loglin: Option<(LogLinForm, &Tape)>,
 ) -> bool {
     if lin == Linearity::ConstFree {
         let fitted = tape.eval_columns(cols, &[], n_rows);
@@ -445,6 +558,15 @@ pub(crate) fn exist_constants_fit_prepared(
     }
     if lin == Linearity::Affine {
         return fit_affine_check(tape, cols, y_target, n_rows, rtol, atol);
+    }
+    // Improvement 2: log-linearizable power forms -> closed-form (deterministic, no LM). The accept
+    // gate stays `allclose`; an uncomputable solve (None) falls through to the LM (preserves recall).
+    if let Some((form, g_tape)) = loglin {
+        if let Some(dec) =
+            try_log_linear_fit(form, g_tape, tape, cols, n_rows, y_target, rtol, atol)
+        {
+            return dec;
+        }
     }
     // Nonlinear-in-params: LM with random restarts.
     let k = tape.n_params;

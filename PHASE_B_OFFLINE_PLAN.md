@@ -221,3 +221,17 @@ Note on positive coverage: integration-level both-reduced cases were sparse here
 - parity: M4b ≡ M4a on **300/300 (100%)**; reduces-agree vs Python **298/300 (99.3%)** (same pathology-corner deltas).
 
 **Decision (kept):** the resident-vs-rebuild gain is only 1.1× here because dev_5-2's library is tiny (408 candidates) so the rebuild was already cheap; it scales with library size (matters for dev_7-3/dev_9-4). Kept anyway — it is the *correct* design for a real mine (build the library once), perfect parity, negligible added surface (`find_rule` delegates). **Note:** the 6.9× is single-thread per-core; `rayon` over sources was NOT added — it would parallelize the same as Python's multiprocessing pool, leaving the ~7× *ratio* unchanged, so per "keep it simple" it is deferred until a native batch mine genuinely needs absolute throughput.
+
+---
+
+## Improvement 2 — log-linearize `pow(C,x)` / `pow(x,C)` (built + measured 2026-06-30) — KEPT
+
+**Why (measured first):** 65% of nonlinear-in-params targets (3,291/5,065; 15.5% of all constant-bearing) are the single-constant power family `pow(<constant>, g)` = C^g or `pow(g, <constant>)` = g^C with `g` const-free — exactly the family that is slowest under the LM and where M3b's disagreements concentrated.
+
+**What:** `fit.rs` `detect_log_linear` + `try_log_linear_fit` — a closed-form least-squares solve in log-space (`ln y = g·ln C` → solve `ln C`; `ln y = C·ln g` → solve `C`), evaluating the final fit through the candidate tape so the accept gate stays `allclose`. Precomputed once per candidate (`CandEntry.loglin`); tried before the LM in `exist_constants_fit_prepared`; **falls back to the LM when the solve isn't computable** (e.g. non-positive `y` / negative-base integer powers) so recall is preserved. Only affects `max_target≥3` configs (these candidates are length-3). 26/26 cargo tests, fmt clean.
+
+**Measured (pow-family fits vs scipy):**
+- **Speed: 29.1× per fit** (28.2 µs vs 821 µs scipy) on the pow-family.
+- Decision parity (full nonlinear set): **97.67% positive** (up from 97.5%) / **99.83% negative** (1/600). The one negative is a coincidental single-fit the log-space optimum found; it is structurally filtered by the worker's 16-challenge resampling (a coincidence cannot survive 16 distinct `y`'s) and `allclose` still gates every accept, so soundness is preserved at the mine level.
+
+**Decision: KEPT** — a large speedup (29× on 65% of nonlinear fits) with positive parity slightly improved and no meaningful correctness cost. Soundness preserved (allclose gate + LM fallback + challenge filtering).
