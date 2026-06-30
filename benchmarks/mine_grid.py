@@ -54,8 +54,11 @@ def generate(eng, max_source, dummy):
     return eol
 
 
-def native_mine(eng, max_source, max_target, n_samples=1024, challenges=16, retries=16, seed=0, rng=None):
-    """The native all-cores mine. Returns (rules, timing) with per-phase wall-clock."""
+def native_mine(eng, max_source, max_target, n_samples=1024, challenges=16, retries=16, seed=0,
+                rng=None, budget_s=None, chunk=50000):
+    """The native all-cores mine for dev_(max_source)-(max_target): patterns (sources) up to length
+    `max_source`, candidate replacements up to length `max_target`. Returns (rules, info) with per-phase
+    wall-clock. `budget_s` caps the mine phase (checked between source chunks) -> info['incomplete']."""
     rng = rng or np.random.default_rng(seed)
     max_leaf = int(max_source - (max_source - 1) / 2)
     dummy = [f"x{i}" for i in range(max_leaf)]
@@ -73,18 +76,29 @@ def native_mine(eng, max_source, max_target, n_samples=1024, challenges=16, retr
 
     rules = []
     per_len = {}
+    incomplete = False
     t0 = time.perf_counter()
-    for L in sorted(eol):
+    # i-j semantics: sources of length up to max_source ONLY (drop the generation's over-produced
+    # tail -- `construct_expressions` reaches len 7 via binary(len3,len3) regardless of max_source).
+    for L in sorted(k for k in eol if k <= max_source):
         eng._core.set_rules(rules)
         sources_L = [list(e) for e in eol[L]]
         tl = time.perf_counter()
-        found = eng._core.mine_one_length(sources_L, lib, max_target, challenges, retries, seed + L, 1e-5, 1e-8)
-        per_len[L] = (len(sources_L), len(found), time.perf_counter() - tl)
-        if found:
-            rules = deduplicate_rules(rules + [tuple(map(tuple, r)) for r in found], dummy)
+        found_L = []
+        for c0 in range(0, len(sources_L), chunk):
+            found_L += eng._core.mine_one_length(
+                sources_L[c0:c0 + chunk], lib, max_target, challenges, retries, seed + L, 1e-5, 1e-8)
+            if budget_s and (time.perf_counter() - t0) > budget_s:
+                incomplete = True
+                break
+        per_len[L] = (len(sources_L), len(found_L), round(time.perf_counter() - tl, 3))
+        if found_L:
+            rules = deduplicate_rules(rules + [tuple(map(tuple, r)) for r in found_L], dummy)
+        if incomplete:
+            break
     t["mine"] = time.perf_counter() - t0
     t["total"] = t["generate"] + t["build_library"] + t["mine"]
-    return rules, {"timing": t, "per_length": per_len, "n_rules": len(rules),
+    return rules, {"timing": t, "per_length": per_len, "n_rules": len(rules), "incomplete": incomplete,
                    "n_candidates": len(candidates), "dummy": dummy}
 
 
@@ -131,16 +145,20 @@ def smoke():
     print("  (Python find_rules cannot cross-check: it returns 0 rules with the Rust core -- a separate bug.)")
 
 
-def run_grid(configs, n_samples=1024, out=None):
+def run_grid(configs, n_samples=1024, out=None, budget_s=1800):
+    # cheapest-first: smaller candidate-library (j) dominates per-source cost, then smaller i.
+    configs = sorted(configs, key=lambda ij: (ij[1], ij[0]))
     eng = SimpliPyEngine.from_config(CONFIG)
     results = []
     for (i, j) in configs:
-        print(f"--- dev_{i}-{j} ---", flush=True)
-        rules, info = native_mine(eng, i, j, n_samples=n_samples, seed=0)
+        print(f"--- dev_{i}-{j} (budget {budget_s}s) ---", flush=True)
+        rules, info = native_mine(eng, i, j, n_samples=n_samples, seed=0, budget_s=budget_s)
         rec = {"i": i, "j": j, **info["timing"], "n_rules": info["n_rules"],
-               "n_candidates": info["n_candidates"]}
+               "incomplete": info["incomplete"], "n_candidates": info["n_candidates"],
+               "per_length": info["per_length"]}
         results.append(rec)
-        print(f"    {rec}", flush=True)
+        print(f"    dev_{i}-{j}: total={rec['total']:.1f}s mine={rec['mine']:.1f}s rules={rec['n_rules']} "
+              f"incomplete={rec['incomplete']}", flush=True)
         if out:
             json.dump(results, open(out, "w"), indent=2)
     return results
@@ -153,15 +171,16 @@ if __name__ == "__main__":
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--n-samples", type=int, default=1024)
     ap.add_argument("--out", type=str, default=None)
+    ap.add_argument("--budget-s", type=int, default=1800, help="per-config mine wall-clock cap (s)")
     args = ap.parse_args()
     if args.smoke:
         smoke()
     elif args.full:
         configs = [(i, j) for i in range(2, 8) for j in range(1, i)]
-        run_grid(configs, n_samples=args.n_samples, out=args.out or "mine_grid_results.json")
+        run_grid(configs, n_samples=args.n_samples, out=args.out or "mine_grid_results.json", budget_s=args.budget_s)
     elif args.grid:
         flat = args.grid
         configs = list(zip(flat[0::2], flat[1::2]))
-        run_grid(configs, n_samples=args.n_samples, out=args.out)
+        run_grid(configs, n_samples=args.n_samples, out=args.out, budget_s=args.budget_s)
     else:
         ap.print_help()
