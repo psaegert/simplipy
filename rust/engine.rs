@@ -168,6 +168,52 @@ impl Engine {
         )
     }
 
+    /// OFFLINE miner (Phase B, M4b): build a RESIDENT candidate library (once per mine). See
+    /// `crate::worker::CandidateLibrary`.
+    pub fn build_candidate_library(
+        &self,
+        candidates: &[Vec<String>],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+    ) -> Result<crate::worker::CandidateLibrary, String> {
+        crate::worker::CandidateLibrary::build(
+            &self.operators,
+            candidates,
+            var_names,
+            x_flat,
+            n_rows,
+        )
+    }
+
+    /// OFFLINE miner (Phase B, M4b): the `find_rule_worker` decision over a resident library.
+    #[allow(clippy::too_many_arguments)]
+    pub fn find_rule_with_lib(
+        &self,
+        source: &[String],
+        simplified_length: usize,
+        max_target: Option<usize>,
+        lib: &crate::worker::CandidateLibrary,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+    ) -> Result<Option<Vec<String>>, String> {
+        crate::worker::find_rule_with_lib(
+            &self.operators,
+            source,
+            simplified_length,
+            max_target,
+            lib,
+            challenges,
+            retries,
+            seed,
+            rtol,
+            atol,
+        )
+    }
+
     /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s. See `crate::fit`.
     pub fn classify_linearity(&self, tokens: &[String]) -> Result<String, String> {
         crate::fit::classify(tokens, &self.operators).map(|l| l.as_str().to_string())

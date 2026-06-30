@@ -232,30 +232,79 @@ fn candidate_matches(
     true
 }
 
-/// The full native `find_rule_worker` decision (engine.py:2382-2510): all-numeric short-circuit, then
-/// scan candidates shortest-first (variable-subset filtered), dispatch const-free -> M2 / const-bearing
-/// -> M3, break on the first matching length, `select_best`. `candidates` = every expression up to
-/// `max_target`, indexed by length here (M4b makes the index resident). Returns the chosen target.
+/// A RESIDENT candidate library (M4b): every candidate precompiled to a tape and indexed by length,
+/// with each const-free candidate's `y` evaluated ONCE (not per source). Built once per mine; reused
+/// by `find_rule_with_lib` for every source -- this removes the per-source rebuild that `find_rule`
+/// (the M4a per-call path) pays.
+pub struct CandidateLibrary {
+    var_names: Vec<String>,
+    cols: Vec<Vec<f64>>,
+    n_rows: usize,
+    by_len: Vec<Vec<CandEntry>>, // index = candidate length
+}
+
+impl CandidateLibrary {
+    pub fn build(
+        ops: &Operators,
+        candidates: &[Vec<String>],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+    ) -> Result<Self, String> {
+        let n_vars = var_names.len();
+        if x_flat.len() != n_rows * n_vars {
+            return Err("x_flat shape mismatch".to_string());
+        }
+        let cols = columns_from_row_major(x_flat, n_rows, n_vars);
+        let max_len = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
+        let mut by_len: Vec<Vec<CandEntry>> = (0..=max_len).map(|_| Vec::new()).collect();
+        for c in candidates {
+            let len = c.len();
+            if len == 0 {
+                continue;
+            }
+            let tape = Tape::compile(c, ops, var_names)?;
+            let n_const = tape.n_params;
+            let y_const_free = if n_const == 0 {
+                Some(tape.eval_columns(&cols, &[], n_rows))
+            } else {
+                None
+            };
+            by_len[len].push(CandEntry {
+                tokens: c.clone(),
+                var_mask: var_mask(c, var_names),
+                n_const,
+                linearity: crate::fit::classify(c, ops)?,
+                tape,
+                y_const_free,
+            });
+        }
+        Ok(CandidateLibrary {
+            var_names: var_names.to_vec(),
+            cols,
+            n_rows,
+            by_len,
+        })
+    }
+}
+
+/// The full native `find_rule_worker` decision (engine.py:2382-2510) over a RESIDENT library (M4b):
+/// guard -> all-numeric short-circuit -> scan candidates shortest-first (variable-subset filtered),
+/// dispatch const-free -> M2 / const-bearing -> M3, break on the first matching length, `select_best`.
 #[allow(clippy::too_many_arguments)]
-pub fn find_rule(
+pub fn find_rule_with_lib(
     ops: &Operators,
     source: &[String],
     simplified_length: usize,
     max_target: Option<usize>,
-    candidates: &[Vec<String>],
-    var_names: &[String],
-    x_flat: &[f64],
-    n_rows: usize,
+    lib: &CandidateLibrary,
     challenges: usize,
     retries: usize,
     seed: u64,
     rtol: f64,
     atol: f64,
 ) -> Result<Option<Vec<String>>, String> {
-    // GUARD FIRST (engine.py:2384, BEFORE the short-circuit at :2390): allowed candidate lengths =
-    // range(min(slen, max_target+1)) | range(slen); max(allowed) = max_cand_len-1 <= 0 -> nothing to
-    // do. An all-constant source that simplify folded to length 1 has slen=1 -> caught here, exactly
-    // as Python (the driver also Kruskal-prunes such sources before the worker is even called).
+    // GUARD FIRST (engine.py:2384, BEFORE the short-circuit at :2390).
     let max_cand_len = match max_target {
         Some(mt) => simplified_length.min(mt + 1),
         None => simplified_length,
@@ -277,45 +326,16 @@ pub fn find_rule(
         }
         return Ok(Some(vec!["<constant>".to_string()]));
     }
-    let n_vars = var_names.len();
-    if x_flat.len() != n_rows * n_vars {
-        return Err("x_flat shape mismatch".to_string());
-    }
-    let cols = columns_from_row_major(x_flat, n_rows, n_vars);
-
-    let src_tape = Tape::compile(source, ops, var_names)?;
+    let src_tape = Tape::compile(source, ops, &lib.var_names)?;
     let n_src_const = src_tape.n_params;
-    let src_mask = var_mask(source, var_names);
+    let src_mask = var_mask(source, &lib.var_names);
     let combos = sign_combos(n_src_const);
 
-    // index candidates by length (only the lengths we will scan).
-    let mut by_len: Vec<Vec<CandEntry>> = (0..max_cand_len).map(|_| Vec::new()).collect();
-    for c in candidates {
-        let len = c.len();
-        if len == 0 || len >= max_cand_len {
-            continue;
-        }
-        let tape = Tape::compile(c, ops, var_names)?;
-        let n_const = tape.n_params;
-        let y_const_free = if n_const == 0 {
-            Some(tape.eval_columns(&cols, &[], n_rows))
-        } else {
-            None
-        };
-        by_len[len].push(CandEntry {
-            tokens: c.clone(),
-            var_mask: var_mask(c, var_names),
-            n_const,
-            linearity: crate::fit::classify(c, ops)?,
-            tape,
-            y_const_free,
-        });
-    }
-
     let mut rng = Rng::new(seed);
-    for length in 1..max_cand_len {
+    let scan_max = max_cand_len.min(lib.by_len.len());
+    for length in 1..scan_max {
         let mut matches: Vec<Vec<String>> = Vec::new();
-        for cand in &by_len[length] {
+        for cand in &lib.by_len[length] {
             if cand.var_mask & !src_mask != 0 {
                 continue; // candidate uses a variable the source lacks
             }
@@ -324,8 +344,8 @@ pub fn find_rule(
                 n_src_const,
                 &combos,
                 cand,
-                &cols,
-                n_rows,
+                &lib.cols,
+                lib.n_rows,
                 challenges,
                 retries,
                 rtol,
@@ -340,6 +360,39 @@ pub fn find_rule(
         }
     }
     Ok(None)
+}
+
+/// Per-call convenience (M4a): build a `CandidateLibrary` then delegate. Kept for the M4a FFI / tests;
+/// the mine uses the resident-library path.
+#[allow(clippy::too_many_arguments)]
+pub fn find_rule(
+    ops: &Operators,
+    source: &[String],
+    simplified_length: usize,
+    max_target: Option<usize>,
+    candidates: &[Vec<String>],
+    var_names: &[String],
+    x_flat: &[f64],
+    n_rows: usize,
+    challenges: usize,
+    retries: usize,
+    seed: u64,
+    rtol: f64,
+    atol: f64,
+) -> Result<Option<Vec<String>>, String> {
+    let lib = CandidateLibrary::build(ops, candidates, var_names, x_flat, n_rows)?;
+    find_rule_with_lib(
+        ops,
+        source,
+        simplified_length,
+        max_target,
+        &lib,
+        challenges,
+        retries,
+        seed,
+        rtol,
+        atol,
+    )
 }
 
 #[cfg(test)]

@@ -97,6 +97,13 @@ struct PyEngine {
     inner: engine::Engine,
 }
 
+/// OFFLINE miner (Phase B, M4b): a resident candidate library (built once per mine), passed back to
+/// `find_rule_lib`. Opaque handle; all compute is Rust.
+#[pyclass(name = "CandidateLibrary", module = "simplipy._core")]
+struct PyCandidateLibrary {
+    inner: worker::CandidateLibrary,
+}
+
 #[pymethods]
 impl PyEngine {
     /// Build from already-resolved local asset paths (the Python shim resolves HF-hub/local paths
@@ -444,6 +451,59 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
+    /// OFFLINE miner (Phase B, M4b): build a RESIDENT candidate library once per mine (precompiles
+    /// every candidate's tape + precomputes const-free `y`). Pass the returned handle to `find_rule_lib`.
+    fn build_candidate_library(
+        &self,
+        py: Python<'_>,
+        candidates: Vec<Vec<String>>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+    ) -> PyResult<PyCandidateLibrary> {
+        let inner = py
+            .detach(|| {
+                self.inner
+                    .build_candidate_library(&candidates, &var_names, &x_flat, n_rows)
+            })
+            .map_err(PyValueError::new_err)?;
+        Ok(PyCandidateLibrary { inner })
+    }
+
+    /// OFFLINE miner (Phase B, M4b): `find_rule_worker` decision over a resident `CandidateLibrary`
+    /// (no per-source rebuild, no per-call X marshaling). Returns the chosen target, or None.
+    #[pyo3(signature = (source, simplified_length, max_target, library, challenges=16, retries=16, seed=0, rtol=1e-5, atol=1e-8))]
+    #[allow(clippy::too_many_arguments)]
+    fn find_rule_lib(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        simplified_length: usize,
+        max_target: Option<usize>,
+        library: PyRef<'_, PyCandidateLibrary>,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+    ) -> PyResult<Option<Vec<String>>> {
+        let lib = &library.inner;
+        py.detach(|| {
+            self.inner.find_rule_with_lib(
+                &source,
+                simplified_length,
+                max_target,
+                lib,
+                challenges,
+                retries,
+                seed,
+                rtol,
+                atol,
+            )
+        })
+        .map_err(PyValueError::new_err)
+    }
+
     /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s --
     /// "constfree" | "affine" | "nonlinear". Affine candidates are fittable in closed form (no LM).
     fn classify_linearity(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<String> {
@@ -530,6 +590,7 @@ impl PyEngine {
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
+    m.add_class::<PyCandidateLibrary>()?;
     m.add("FAITHFUL_ENGINE_ID", FAITHFUL_ENGINE_ID)?;
     m.add("REFERENCE_SIMPLIPY_VERSION", REFERENCE_SIMPLIPY_VERSION)?;
     m.add("REFERENCE_SIMPLIPY_COMMIT", REFERENCE_SIMPLIPY_COMMIT)?;

@@ -209,3 +209,15 @@ Note (faithful, deliberate): `violates_wildcard_multiplicity` matches `^_\d+$`, 
 Note on positive coverage: integration-level both-reduced cases were sparse here (the curated rule sources were dominated by already-folded / inf-0 pathology rules that BOTH engines decline → agree as `None`). The positive *equivalence* decisions are exhaustively validated at the component level (M2 99.76 % positive over 2500 rules; M3a/M3b positive parity), and the cargo `find_rule_basic` test covers a clean positive scan; the definitive end-to-end positive validation is M4b's dev_5-2 rule-rediscovery.
 
 **Remaining (M4b):** a resident `CandidateLibrary` (build the length/var index + precompute const-free `y` ONCE per mine) + the driver (Rust generation or Python-fed sources, Kruskal-prune via Rust `simplify`, `rayon` WITHIN-length + barrier BETWEEN-lengths, incremental dedup/JSON save) + the end-to-end **dev_5-2 re-mine** vs the Python mine (rule-rediscovery) — where "more/larger patterns in the same time" is finally measured.
+
+---
+
+## Milestone 4b — RESULTS: resident `CandidateLibrary` (built + measured 2026-06-30)
+
+`rust/worker.rs` gains `CandidateLibrary` (precompile every candidate's tape + precompute const-free `y` ONCE) + `find_rule_with_lib` (the scan over the resident library; `find_rule` now delegates via a one-shot build). FFI: `CandidateLibrary` pyclass + `build_candidate_library` + `find_rule_lib`. 26/26 cargo tests, fmt clean, warning-free.
+
+**Measured (dev_5-2, 300 sources, CH=RT=16, single-thread, harness `scratchpad/m4b_measure.py`):**
+- **Python `find_rule_worker`: 12.02 s · M4a per-source-rebuild: 1.88 s (6.4×) · M4b resident: 1.75 s (6.9× vs Python, 1.1× vs M4a)**, +0.001 s one-time library build.
+- parity: M4b ≡ M4a on **300/300 (100%)**; reduces-agree vs Python **298/300 (99.3%)** (same pathology-corner deltas).
+
+**Decision (kept):** the resident-vs-rebuild gain is only 1.1× here because dev_5-2's library is tiny (408 candidates) so the rebuild was already cheap; it scales with library size (matters for dev_7-3/dev_9-4). Kept anyway — it is the *correct* design for a real mine (build the library once), perfect parity, negligible added surface (`find_rule` delegates). **Note:** the 6.9× is single-thread per-core; `rayon` over sources was NOT added — it would parallelize the same as Python's multiprocessing pool, leaving the ~7× *ratio* unchanged, so per "keep it simple" it is deferred until a native batch mine genuinely needs absolute throughput.
