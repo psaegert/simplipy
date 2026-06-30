@@ -135,6 +135,35 @@ impl Engine {
         )
     }
 
+    /// OFFLINE miner (Phase B, M3 complete): native `exist_constants_that_fit` -- affine candidates
+    /// via the closed-form path, nonlinear-in-params via `n_restarts` LM solves. See `crate::fit`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn exist_constants_fit(
+        &self,
+        candidate: &[String],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+        y_target: &[f64],
+        rtol: f64,
+        atol: f64,
+        n_restarts: usize,
+        seed: u64,
+    ) -> Result<bool, String> {
+        crate::fit::exist_constants_fit(
+            &self.operators,
+            candidate,
+            var_names,
+            x_flat,
+            n_rows,
+            y_target,
+            rtol,
+            atol,
+            n_restarts,
+            seed,
+        )
+    }
+
     /// DEV micro-benchmark (not a shipped surface): compile the tape + take X ONCE, then run
     /// `repeats` resident evaluations over all rows (param[0] perturbed per iter so nothing is
     /// hoisted), returning elapsed seconds. Measures the M3 residual-loop cost (X resident in Rust),

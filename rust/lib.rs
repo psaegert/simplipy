@@ -401,6 +401,32 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
+    /// OFFLINE miner (Phase B, M3 complete): native `exist_constants_that_fit`. Affine candidates ->
+    /// closed-form (deterministic); nonlinear-in-params -> `n_restarts` LM solves from random N(0,5)
+    /// starts (seeded). Accept iff any makes `allclose(y_target, fitted)` pass -- scipy's exact gate.
+    #[pyo3(signature = (candidate, var_names, x_flat, n_rows, y_target, rtol=1e-5, atol=1e-8, n_restarts=16, seed=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn exist_constants_fit(
+        &self,
+        py: Python<'_>,
+        candidate: Vec<String>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+        y_target: Vec<f64>,
+        rtol: f64,
+        atol: f64,
+        n_restarts: usize,
+        seed: u64,
+    ) -> PyResult<bool> {
+        py.detach(|| {
+            self.inner.exist_constants_fit(
+                &candidate, &var_names, &x_flat, n_rows, &y_target, rtol, atol, n_restarts, seed,
+            )
+        })
+        .map_err(PyValueError::new_err)
+    }
+
     /// DEV micro-benchmark (not a shipped surface): marshal X + compile the tape ONCE, then run
     /// `repeats` resident evaluations; returns elapsed seconds. Measures the M3 residual-loop cost
     /// (X resident in Rust), excluding per-call FFI marshaling.

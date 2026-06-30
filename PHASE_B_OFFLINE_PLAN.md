@@ -165,4 +165,18 @@ New `rust/fit.rs`: a `<constant>`-degree classifier (`ConstFree` / `Affine` / `N
 
 **Net:** the user's "maybe no optimizer" lever is confirmed and large — 76 % of constant-fits become a ~8×-faster, retry-free, deterministic closed-form decision at >99.8 % parity. The remaining **24 % nonlinear-in-params** candidates still need an optimizer → **M3b (native MINPACK-`lmdif` port)**, which also removes the ~782 µs scipy overhead on those.
 
-**Milestone map (updated):** M1 ✅ (evaluator + allclose) · M3a ✅ (affine closed-form, this section) · **M3b** = native LM for the nonlinear 24 % (accept/reject-faithful) · **M2** = the no-constant equivalence path (challenges × sign-combos × allclose) + wildcard selection + `rayon` · **M4** = compose M2+M3 into the full native `find_rule_worker` + driver (Kruskal prune via Rust `simplify`, incremental dedup/save). M2 and M3 are complementary halves of the candidate loop; both required.
+**Milestone map (updated):** M1 ✅ (evaluator + allclose) · M3a ✅ (affine closed-form) · M3b ✅ (native LM, below) · **M2** = the no-constant equivalence path (challenges × sign-combos × allclose) + wildcard selection + `rayon` · **M4** = compose M2+M3 into the full native `find_rule_worker` + driver (Kruskal prune via Rust `simplify`, incremental dedup/save). M2 and M3 are complementary halves of the candidate loop; both required.
+
+---
+
+## Milestone 3b — RESULTS: native Levenberg-Marquardt (built + measured 2026-06-30)
+
+`rust/fit.rs` extended with a native LM (`lm_fit`: Marquardt diagonal scaling, forward-difference Jacobian, early-exit on `allclose`) + a seeded splitmix64/Box-Muller PRNG for random restarts, wired into the complete native `exist_constants_that_fit` (`exist_constants_fit`: affine → closed-form, nonlinear → `n_restarts` LM solves). FFI `exist_constants_fit`. 22/22 cargo tests, fmt clean, warning-free. **M3 (the whole constant-fit kernel) is now native — no scipy on the fit path.**
+
+**Validated against scipy `curve_fit` on nonlinear dev_7-3 targets (R=16 restarts, harness `scratchpad/m3b_validate.py`):**
+- **Decision parity: 97.5 % positive / 100.0 % negative.**
+- **Soundness intact:** the 100 % NEGATIVE agreement (target vs an unrelated source's output) means the native LM never accepts a false fit scipy rejects — directly answering the review's "a different LM could mint new false equivalences" concern.
+- **Directionality:** the 2.5 % positive disagreements (10 Rust-finds-more, 5 Rust-misses) are **all** the ill-conditioned `pow(C, _0)` family (fitting an exponential *base* `C^x`), where convergence is restart-luck for *both* optimizers. Net, Rust recovers slightly more genuine rules. (Future "no-optimizer" refinement: `C^x` log-linearizes to `log(y)=x·log(C)` → closed form, same trick as M3a.)
+- **Speed: ~1× on nonlinear** (both run iterative LM) — as predicted; the speed win is the affine 76 %, M3b's job is completing the kernel natively with faithful decisions.
+
+**Why M3 is still a big win despite nonlinear being ~1×:** weighting by coverage, 76 % of fits get the ~8× deterministic closed-form (with the 16-retry loop collapsing to 1) and 24 % stay ~par. On top, going fully native unlocks the M4 structural wins this isolated micro-benchmark does NOT capture — no per-candidate Python recompile, no multiprocessing IPC/pickle, no GIL — which apply to ALL candidates. The realized miner speedup will exceed the per-fit numbers.

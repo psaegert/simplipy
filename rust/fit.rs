@@ -7,9 +7,11 @@
 //! `<constant>`s, for which the best fit is a single CLOSED-FORM least-squares solve -- no iteration,
 //! no random `p0`, no retries, and a DETERMINISTIC accept/reject decision.
 //!
-//! M3a (this file): the linearity classifier + the affine closed-form path. Nonlinear-in-params
-//! candidates return `None` (deferred to M3b, a native LM). The accept/reject gate stays `allclose`
-//! (crate::eval), so soundness is identical to scipy's: the optimizer only PROPOSES, allclose DISPOSES.
+//! M3a: the linearity classifier + the affine closed-form path (`exist_constants_fit_linear`).
+//! M3b: a native Levenberg-Marquardt (`lm_fit`) with random restarts for nonlinear-in-params
+//! candidates. The complete native `exist_constants_that_fit` is `exist_constants_fit` (affine ->
+//! closed-form, nonlinear -> LM). The accept/reject gate stays `allclose` (crate::eval), so soundness
+//! is identical to scipy's: the optimizer only PROPOSES constants, `allclose` DISPOSES.
 
 use crate::eval::{allclose, columns_from_row_major, Tape};
 use crate::operators::Operators;
@@ -253,6 +255,208 @@ pub fn exist_constants_fit_linear(
     )))
 }
 
+/// A tiny deterministic PRNG (splitmix64) + Box-Muller normal, for the LM's random restarts. We do
+/// NOT reproduce numpy's Mersenne-Twister stream (RNG divergence is expected and fine -- the miner is
+/// stochastic and re-mining yields a new engine-id); we only need reproducible N(0,5) restart points.
+struct Rng(u64);
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Rng(seed ^ 0x9E3779B97F4A7C15)
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^ (z >> 31)
+    }
+    fn next_f64(&mut self) -> f64 {
+        // 53-bit mantissa in [0, 1)
+        (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
+    }
+    fn normal(&mut self, mean: f64, sd: f64) -> f64 {
+        let u1 = self.next_f64().max(1e-300);
+        let u2 = self.next_f64();
+        mean + sd * (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+    }
+}
+
+/// One Levenberg-Marquardt least-squares solve (Marquardt diagonal scaling, forward-difference
+/// Jacobian) from start point `p0`, minimizing `||fitted(C) - y_valid||^2` over the valid rows
+/// `xv_cols` (m rows). The native analog of MINPACK `lmdif` (what scipy `curve_fit` calls). Returns
+/// the best parameters found. EARLY-EXITS as soon as the valid-row residual passes `allclose` (the
+/// goal is the accept/reject gate, not full convergence) -- this keeps positives cheap.
+#[allow(clippy::too_many_arguments)]
+fn lm_fit(
+    tape: &Tape,
+    xv_cols: &[Vec<f64>],
+    y_valid: &[f64],
+    m: usize,
+    k: usize,
+    p0: &[f64],
+    rtol: f64,
+    atol: f64,
+) -> Vec<f64> {
+    let resid = |c: &[f64]| -> (Vec<f64>, f64) {
+        let f = tape.eval_columns(xv_cols, c, m);
+        let r: Vec<f64> = f.iter().zip(y_valid).map(|(a, b)| a - b).collect();
+        let cost = r.iter().map(|x| x * x).sum::<f64>();
+        (r, cost)
+    };
+    let mut c = p0.to_vec();
+    let (mut r, mut cost) = resid(&c);
+    if !cost.is_finite() {
+        return c;
+    }
+    let close = |r: &[f64]| -> bool {
+        // valid-row allclose proxy: fitted = r + y_valid, allclose(y_valid, fitted).
+        r.iter()
+            .zip(y_valid)
+            .all(|(ri, &y)| ri.abs() <= atol + rtol * (ri + y).abs())
+    };
+    if close(&r) {
+        return c;
+    }
+    let mut lambda = 1e-3f64;
+    let eps = f64::EPSILON.sqrt();
+    for _iter in 0..50 {
+        // Jacobian transpose (k x m) by forward differences.
+        let fitted: Vec<f64> = r.iter().zip(y_valid).map(|(ri, y)| ri + y).collect();
+        let mut jt = vec![vec![0.0f64; m]; k];
+        for j in 0..k {
+            let h = eps * c[j].abs().max(1.0);
+            let mut cj = c.clone();
+            cj[j] += h;
+            let fj = tape.eval_columns(xv_cols, &cj, m);
+            for i in 0..m {
+                jt[j][i] = (fj[i] - fitted[i]) / h;
+            }
+        }
+        // JtJ (k x k) and Jtr (k).
+        let mut jtj = vec![vec![0.0f64; k]; k];
+        let mut jtr = vec![0.0f64; k];
+        for a in 0..k {
+            for i in 0..m {
+                jtr[a] += jt[a][i] * r[i];
+            }
+            for b in 0..k {
+                let mut s = 0.0;
+                for i in 0..m {
+                    s += jt[a][i] * jt[b][i];
+                }
+                jtj[a][b] = s;
+            }
+        }
+        // Inner loop: grow lambda until a step reduces the cost.
+        let mut stepped = false;
+        for _ in 0..30 {
+            let mut aug = jtj.clone();
+            for d in 0..k {
+                aug[d][d] += lambda * jtj[d][d].max(1e-12); // Marquardt diagonal scaling
+            }
+            let neg = jtr.iter().map(|v| -v).collect::<Vec<_>>();
+            let Some(delta) = solve(aug, neg) else {
+                lambda *= 3.0;
+                continue;
+            };
+            let c_new: Vec<f64> = c.iter().zip(&delta).map(|(a, b)| a + b).collect();
+            let (r_new, cost_new) = resid(&c_new);
+            if cost_new.is_finite() && cost_new < cost {
+                let dn: f64 = delta.iter().map(|x| x * x).sum::<f64>().sqrt();
+                let cn: f64 = c.iter().map(|x| x * x).sum::<f64>().sqrt();
+                let red = cost - cost_new;
+                c = c_new;
+                r = r_new;
+                lambda = (lambda * 0.3).max(1e-12);
+                stepped = true;
+                if close(&r) {
+                    return c; // accept/reject gate satisfied -> done
+                }
+                if red < 1e-12 * cost.max(1e-300) || dn < 1e-10 * (cn + 1e-10) {
+                    return c; // converged
+                }
+                cost = cost_new;
+                break;
+            } else {
+                lambda *= 3.0;
+                if lambda > 1e14 {
+                    return c; // stuck
+                }
+            }
+        }
+        if !stepped {
+            return c;
+        }
+    }
+    c
+}
+
+/// The COMPLETE native `exist_constants_that_fit` (M3): affine candidates -> the closed-form path
+/// (deterministic, no restarts); nonlinear-in-params candidates -> `n_restarts` LM solves from random
+/// N(0,5) starts (mirroring the worker's retry loop), accept iff any makes `allclose(y_target,
+/// fitted)` pass on ALL rows. The accept/reject GATE is identical to scipy's (allclose); only the
+/// optimizer that proposes constants differs. `seed` makes the restarts reproducible.
+#[allow(clippy::too_many_arguments)]
+pub fn exist_constants_fit(
+    ops: &Operators,
+    candidate: &[String],
+    var_names: &[String],
+    x_flat: &[f64],
+    n_rows: usize,
+    y_target: &[f64],
+    rtol: f64,
+    atol: f64,
+    n_restarts: usize,
+    seed: u64,
+) -> Result<bool, String> {
+    let lin = classify(candidate, ops)?;
+    let tape = Tape::compile(candidate, ops, var_names)?;
+    let n_vars = var_names.len();
+    if x_flat.len() != n_rows * n_vars {
+        return Err("x_flat shape mismatch".to_string());
+    }
+    if y_target.len() != n_rows {
+        return Err("y_target length mismatch".to_string());
+    }
+    let cols = columns_from_row_major(x_flat, n_rows, n_vars);
+
+    if lin == Linearity::ConstFree {
+        // no constants to fit: direct equivalence check (a candidate that reaches the fit path with
+        // no <constant> -- be robust and decide by allclose).
+        let fitted = tape.eval_columns(&cols, &[], n_rows);
+        return Ok(allclose(y_target, &fitted, rtol, atol));
+    }
+    if lin == Linearity::Affine {
+        return Ok(fit_affine_check(&tape, &cols, y_target, n_rows, rtol, atol));
+    }
+
+    // Nonlinear-in-params: LM with random restarts.
+    let k = tape.n_params;
+    let valid: Vec<usize> = (0..n_rows)
+        .filter(|&r| y_target[r].is_finite() && cols.iter().all(|c| c[r].is_finite()))
+        .collect();
+    if k > valid.len() {
+        return Ok(false); // scipy issue 13969 bail
+    }
+    let m = valid.len();
+    let xv: Vec<Vec<f64>> = cols
+        .iter()
+        .map(|c| valid.iter().map(|&r| c[r]).collect())
+        .collect();
+    let yv: Vec<f64> = valid.iter().map(|&r| y_target[r]).collect();
+
+    let mut rng = Rng::new(seed);
+    for _ in 0..n_restarts.max(1) {
+        let p0: Vec<f64> = (0..k).map(|_| rng.normal(0.0, 5.0)).collect();
+        let c = lm_fit(&tape, &xv, &yv, m, k, &p0, rtol, atol);
+        let fitted = tape.eval_columns(&cols, &c, n_rows);
+        if allclose(y_target, &fitted, rtol, atol) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +523,42 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn lm_fit_accepts_and_rejects() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let vars = s(&["_0", "_1"]);
+        let n = 200usize;
+        let mut xf = Vec::with_capacity(n * 2);
+        for r in 0..n {
+            xf.push((r as f64) * 0.05 - 5.0);
+            xf.push((r as f64) * -0.03 + 2.0);
+        }
+        // nonlinear-in-params candidate C0*sin(C1*_0)+C2
+        let cand = s(&[
+            "+",
+            "*",
+            "<constant>",
+            "sin",
+            "*",
+            "<constant>",
+            "_0",
+            "<constant>",
+        ]);
+        // y from KNOWN constants -> a fit exists -> accept (within a few restarts)
+        let y: Vec<f64> = (0..n)
+            .map(|r| 2.0 * (1.5 * xf[2 * r]).sin() + 0.5)
+            .collect();
+        assert!(e
+            .exist_constants_fit(&cand, &vars, &xf, n, &y, 1e-5, 1e-8, 16, 0)
+            .unwrap());
+        // y2 = exp(_0): not representable by C0*sin(C1*_0)+C2 -> reject
+        let y2: Vec<f64> = (0..n).map(|r| xf[2 * r].exp()).collect();
+        assert!(!e
+            .exist_constants_fit(&cand, &vars, &xf, n, &y2, 1e-5, 1e-8, 16, 0)
+            .unwrap());
     }
 }
