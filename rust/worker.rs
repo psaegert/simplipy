@@ -161,6 +161,187 @@ pub fn select_best(
     None
 }
 
+/// A precompiled candidate. Built per `find_rule` call here; M4b will make a `CandidateLibrary`
+/// resident across the whole mine (and precompute const-free `y` once instead of per source).
+struct CandEntry {
+    tokens: Vec<String>,
+    var_mask: u32,
+    n_const: usize,
+    linearity: crate::fit::Linearity,
+    tape: Tape,
+    y_const_free: Option<Vec<f64>>,
+}
+
+/// Bitmask over `var_names` of the variables appearing in `tokens` (<=32 vars).
+fn var_mask(tokens: &[String], var_names: &[String]) -> u32 {
+    let mut m = 0u32;
+    for (i, v) in var_names.iter().enumerate() {
+        if i < 32 && tokens.iter().any(|t| t == v) {
+            m |= 1 << i;
+        }
+    }
+    m
+}
+
+/// Test one candidate against a source across the challenge/sign-combo loop. Const-free candidates use
+/// the M2 `allclose` check (against the precomputed `y_const_free`); constant-bearing candidates use
+/// the M3 fit (`exist_constants_fit_prepared`, `retries` restarts) per combo. Rejects on first failure.
+#[allow(clippy::too_many_arguments)]
+fn candidate_matches(
+    src_tape: &Tape,
+    n_src_const: usize,
+    combos: &[Vec<f64>],
+    cand: &CandEntry,
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    challenges: usize,
+    retries: usize,
+    rtol: f64,
+    atol: f64,
+    rng: &mut Rng,
+) -> bool {
+    for _ in 0..challenges {
+        let rc: Vec<f64> = (0..n_src_const)
+            .map(|_| rng.normal(0.0, 5.0).abs())
+            .collect();
+        for combo in combos {
+            let p: Vec<f64> = rc.iter().zip(combo).map(|(r, c)| r * c).collect();
+            let y = src_tape.eval_columns(cols, &p, n_rows);
+            let ok = if cand.n_const == 0 {
+                // engine.py:2446: allclose(source, candidate)
+                allclose(&y, cand.y_const_free.as_ref().unwrap(), rtol, atol)
+            } else {
+                let s = rng.next_u64();
+                crate::fit::exist_constants_fit_prepared(
+                    &cand.tape,
+                    cand.linearity,
+                    cols,
+                    n_rows,
+                    &y,
+                    rtol,
+                    atol,
+                    retries,
+                    s,
+                )
+            };
+            if !ok {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// The full native `find_rule_worker` decision (engine.py:2382-2510): all-numeric short-circuit, then
+/// scan candidates shortest-first (variable-subset filtered), dispatch const-free -> M2 / const-bearing
+/// -> M3, break on the first matching length, `select_best`. `candidates` = every expression up to
+/// `max_target`, indexed by length here (M4b makes the index resident). Returns the chosen target.
+#[allow(clippy::too_many_arguments)]
+pub fn find_rule(
+    ops: &Operators,
+    source: &[String],
+    simplified_length: usize,
+    max_target: Option<usize>,
+    candidates: &[Vec<String>],
+    var_names: &[String],
+    x_flat: &[f64],
+    n_rows: usize,
+    challenges: usize,
+    retries: usize,
+    seed: u64,
+    rtol: f64,
+    atol: f64,
+) -> Result<Option<Vec<String>>, String> {
+    // GUARD FIRST (engine.py:2384, BEFORE the short-circuit at :2390): allowed candidate lengths =
+    // range(min(slen, max_target+1)) | range(slen); max(allowed) = max_cand_len-1 <= 0 -> nothing to
+    // do. An all-constant source that simplify folded to length 1 has slen=1 -> caught here, exactly
+    // as Python (the driver also Kruskal-prunes such sources before the worker is even called).
+    let max_cand_len = match max_target {
+        Some(mt) => simplified_length.min(mt + 1),
+        None => simplified_length,
+    };
+    if max_cand_len <= 1 {
+        return Ok(None);
+    }
+    // all-numeric short-circuit (engine.py:2390-2400), reached only after the guard passes.
+    if source.len() > 1
+        && source
+            .iter()
+            .all(|t| t == "<constant>" || ops.is_operator(t) || crate::utils::is_numeric_string(t))
+    {
+        let non_ops: Vec<&String> = source.iter().filter(|t| !ops.is_operator(t)).collect();
+        if !non_ops.is_empty() && non_ops.iter().all(|t| crate::utils::is_numeric_string(t)) {
+            if let Some(tok) = crate::numeric::evaluate_constant_subtree(source, ops) {
+                return Ok(Some(vec![tok]));
+            }
+        }
+        return Ok(Some(vec!["<constant>".to_string()]));
+    }
+    let n_vars = var_names.len();
+    if x_flat.len() != n_rows * n_vars {
+        return Err("x_flat shape mismatch".to_string());
+    }
+    let cols = columns_from_row_major(x_flat, n_rows, n_vars);
+
+    let src_tape = Tape::compile(source, ops, var_names)?;
+    let n_src_const = src_tape.n_params;
+    let src_mask = var_mask(source, var_names);
+    let combos = sign_combos(n_src_const);
+
+    // index candidates by length (only the lengths we will scan).
+    let mut by_len: Vec<Vec<CandEntry>> = (0..max_cand_len).map(|_| Vec::new()).collect();
+    for c in candidates {
+        let len = c.len();
+        if len == 0 || len >= max_cand_len {
+            continue;
+        }
+        let tape = Tape::compile(c, ops, var_names)?;
+        let n_const = tape.n_params;
+        let y_const_free = if n_const == 0 {
+            Some(tape.eval_columns(&cols, &[], n_rows))
+        } else {
+            None
+        };
+        by_len[len].push(CandEntry {
+            tokens: c.clone(),
+            var_mask: var_mask(c, var_names),
+            n_const,
+            linearity: crate::fit::classify(c, ops)?,
+            tape,
+            y_const_free,
+        });
+    }
+
+    let mut rng = Rng::new(seed);
+    for length in 1..max_cand_len {
+        let mut matches: Vec<Vec<String>> = Vec::new();
+        for cand in &by_len[length] {
+            if cand.var_mask & !src_mask != 0 {
+                continue; // candidate uses a variable the source lacks
+            }
+            if candidate_matches(
+                &src_tape,
+                n_src_const,
+                &combos,
+                cand,
+                &cols,
+                n_rows,
+                challenges,
+                retries,
+                rtol,
+                atol,
+                &mut rng,
+            ) {
+                matches.push(cand.tokens.clone());
+            }
+        }
+        if !matches.is_empty() {
+            return Ok(select_best(source, matches, ops)); // shortest matching length wins
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +423,57 @@ mod tests {
                 0
             )
             .unwrap());
+    }
+
+    #[test]
+    fn find_rule_basic() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let vars = s(&["x0", "x1"]);
+        let n = 64usize;
+        let mut xf = Vec::with_capacity(n * 2);
+        for r in 0..n {
+            xf.push((r as f64) * 0.1 - 3.0);
+            xf.push((r as f64) * -0.05 + 1.5);
+        }
+        let lib = vec![s(&["x0"]), s(&["x1"]), s(&["neg", "x0"]), s(&["abs", "x0"])];
+        // neg(neg(x0)) (len 3) simplifies to x0 -> find_rule should return ["x0"]
+        let r = e
+            .find_rule(
+                &s(&["neg", "neg", "x0"]),
+                3,
+                Some(2),
+                &lib,
+                &vars,
+                &xf,
+                n,
+                16,
+                16,
+                0,
+                1e-5,
+                1e-8,
+            )
+            .unwrap();
+        assert_eq!(r, Some(s(&["x0"])));
+        // sin(x0) (len 2) has no shorter equivalent in the library -> None
+        let r2 = e
+            .find_rule(
+                &s(&["sin", "x0"]),
+                2,
+                Some(2),
+                &lib,
+                &vars,
+                &xf,
+                n,
+                16,
+                16,
+                0,
+                1e-5,
+                1e-8,
+            )
+            .unwrap();
+        assert_eq!(r2, None);
     }
 
     #[test]

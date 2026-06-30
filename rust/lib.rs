@@ -403,6 +403,47 @@ impl PyEngine {
         crate::worker::violates_wildcard_multiplicity(&lhs, &rhs)
     }
 
+    /// OFFLINE miner (Phase B, M4): the full native `find_rule_worker` decision for one source --
+    /// short-circuit + candidate scan (const-free -> M2, constant-bearing -> M3) + selection. Returns
+    /// the chosen target token list, or None. `candidates` = the candidate library (expressions up to
+    /// max_target); indexed by length internally (M4b will make a resident CandidateLibrary).
+    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-5, atol=1e-8))]
+    #[allow(clippy::too_many_arguments)]
+    fn find_rule(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        simplified_length: usize,
+        max_target: Option<usize>,
+        candidates: Vec<Vec<String>>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+    ) -> PyResult<Option<Vec<String>>> {
+        py.detach(|| {
+            self.inner.find_rule(
+                &source,
+                simplified_length,
+                max_target,
+                &candidates,
+                &var_names,
+                &x_flat,
+                n_rows,
+                challenges,
+                retries,
+                seed,
+                rtol,
+                atol,
+            )
+        })
+        .map_err(PyValueError::new_err)
+    }
+
     /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s --
     /// "constfree" | "affine" | "nonlinear". Affine candidates are fittable in closed form (no LM).
     fn classify_linearity(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<String> {

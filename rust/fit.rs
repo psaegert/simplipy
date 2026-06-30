@@ -263,7 +263,7 @@ impl Rng {
     pub(crate) fn new(seed: u64) -> Self {
         Rng(seed ^ 0x9E3779B97F4A7C15)
     }
-    fn next_u64(&mut self) -> u64 {
+    pub(crate) fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E3779B97F4A7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
@@ -419,24 +419,40 @@ pub fn exist_constants_fit(
         return Err("y_target length mismatch".to_string());
     }
     let cols = columns_from_row_major(x_flat, n_rows, n_vars);
+    Ok(exist_constants_fit_prepared(
+        &tape, lin, &cols, n_rows, y_target, rtol, atol, n_restarts, seed,
+    ))
+}
 
+/// The post-compile core of `exist_constants_fit`, on a PRE-COMPILED tape + precomputed columns +
+/// known `Linearity`. The OFFLINE worker (`crate::worker`) calls this so each candidate's tape and
+/// classification are computed ONCE (at library build), not per challenge/source.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn exist_constants_fit_prepared(
+    tape: &Tape,
+    lin: Linearity,
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    y_target: &[f64],
+    rtol: f64,
+    atol: f64,
+    n_restarts: usize,
+    seed: u64,
+) -> bool {
     if lin == Linearity::ConstFree {
-        // no constants to fit: direct equivalence check (a candidate that reaches the fit path with
-        // no <constant> -- be robust and decide by allclose).
-        let fitted = tape.eval_columns(&cols, &[], n_rows);
-        return Ok(allclose(y_target, &fitted, rtol, atol));
+        let fitted = tape.eval_columns(cols, &[], n_rows);
+        return allclose(y_target, &fitted, rtol, atol);
     }
     if lin == Linearity::Affine {
-        return Ok(fit_affine_check(&tape, &cols, y_target, n_rows, rtol, atol));
+        return fit_affine_check(tape, cols, y_target, n_rows, rtol, atol);
     }
-
     // Nonlinear-in-params: LM with random restarts.
     let k = tape.n_params;
     let valid: Vec<usize> = (0..n_rows)
         .filter(|&r| y_target[r].is_finite() && cols.iter().all(|c| c[r].is_finite()))
         .collect();
     if k > valid.len() {
-        return Ok(false); // scipy issue 13969 bail
+        return false; // scipy issue 13969 bail
     }
     let m = valid.len();
     let xv: Vec<Vec<f64>> = cols
@@ -448,13 +464,13 @@ pub fn exist_constants_fit(
     let mut rng = Rng::new(seed);
     for _ in 0..n_restarts.max(1) {
         let p0: Vec<f64> = (0..k).map(|_| rng.normal(0.0, 5.0)).collect();
-        let c = lm_fit(&tape, &xv, &yv, m, k, &p0, rtol, atol);
-        let fitted = tape.eval_columns(&cols, &c, n_rows);
+        let c = lm_fit(tape, &xv, &yv, m, k, &p0, rtol, atol);
+        let fitted = tape.eval_columns(cols, &c, n_rows);
         if allclose(y_target, &fitted, rtol, atol) {
-            return Ok(true);
+            return true;
         }
     }
-    Ok(false)
+    false
 }
 
 #[cfg(test)]
