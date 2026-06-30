@@ -235,3 +235,30 @@ Note on positive coverage: integration-level both-reduced cases were sparse here
 - Decision parity (full nonlinear set): **97.67% positive** (up from 97.5%) / **99.83% negative** (1/600). The one negative is a coincidental single-fit the log-space optimum found; it is structurally filtered by the worker's 16-challenge resampling (a coincidence cannot survive 16 distinct `y`'s) and `allclose` still gates every accept, so soundness is preserved at the mine level.
 
 **Decision: KEPT** — a large speedup (29× on 65% of nonlinear fits) with positive parity slightly improved and no meaningful correctness cost. Soundness preserved (allclose gate + LM fallback + challenge filtering).
+
+---
+
+## Improvement 3 — port generation (`construct_expressions`) to Rust — NOT DONE (measured negligible)
+
+**Measured first (dev_5-2 mine generation-vs-verification split, `OMP=1`):**
+- generation (Python): **4.36 s** for 6,399,156 expressions.
+- Kruskal survivor fraction ~5.3% → ~337,022 survivors; native verification ~20.3 ms/survivor → full-mine verification **~6,844 s**.
+- **generation is ~0.06% of the native mine.**
+
+**Decision: NOT PORTED.** Porting generation — even at 10× — would save ~0.05% end-to-end. Per "no reason to complicate," the simpler Python generation stays. (It also confirms native verification at ~20 ms/survivor is ~15× the Python ~317 ms/source — consistent with the worker speedup. The full single-thread mine is ~1.9 h; `rayon` would divide that by cores, which is the real reason to add parallelism later, not generation.)
+
+---
+
+## Improvement 4 — port `deduplicate_rules` to Rust — NOT DONE (measured negligible)
+
+**Measured:** `deduplicate_rules` on the full 114k rule set takes **0.60 s**; it is called only ~5–10×/mine (per length boundary + periodic saves), each with fewer rules. Cumulative ≈ a few seconds vs ~6,844 s verification → **~0.05–0.1% of the mine.** **Decision: NOT PORTED** — keep the simpler Python (same rationale as generation).
+
+---
+
+## Improvement 5 — `prune_redundant_rules` investigation (offline + online) — 2 findings, NO action
+
+**Finding A (the actionable one, GOOD news): online `simplify` is ~size-insensitive.** Throughput vs ruleset size (mpl=4, fixed 6,000-expr corpus): 5k rules **8.3 µs/expr** · 20k **10.3** · 60k **12.5** · 114k **10.0** (flat within noise across a 23× range). The bucket + first-operand index makes online cost barely grow with ruleset size. Consequences: (1) pruning offers little *online* speedup; (2) **a larger dev_9-4 ruleset would NOT meaningfully hurt online `simplify`** — "more/larger patterns" are online-affordable, overturning the earlier feedback-cost worry (the index already mitigates it). The offline Kruskal-prune `simplify` is the same index, so pruning's offline benefit is also small.
+
+**Finding B (a real bug): `prune_redundant_rules` is broken with the Rust core.** It removes a rule by popping the *Python* `simplification_rules_no_patterns` dict, but `simplify` routes to the **Rust core** whose compiled rules are immutable per call — so the removed rule is still applied, every explicit rule looks "still derivable (by itself)," and it **over-prunes (measured 94%: 1369/1455 on a 2000-rule subset).** Using `--prune` with the shipped Rust engine would silently corrupt the ruleset.
+
+**Decision: NO action.** Given Finding A (little benefit) and Finding B (broken + a proper fix = a Rust-native prune, non-trivial), pruning is not worth pursuing now. Recommend: do NOT use `--prune` with the Rust engine, and add a guard that errors when `_core` is attached (small safety follow-up, flagged to the user). The headline is the GOOD news: the index makes larger rulesets online-affordable, so a thorough dev_9-4 does not need pruning to stay fast online.
