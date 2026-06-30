@@ -151,3 +151,18 @@ Branch `feat/offline-rust-miner`. New Rust: `rust/eval.rs` (column-wise tape eva
 **Revised M3 (the primary speedup milestone, now structure-aware):** (1) statically classify each constant-bearing candidate as linear-in-params vs nonlinear-in-params (does any `<constant>` pass through a nonlinear op?); (2) linear → closed-form solve in Rust (deterministic, no retries); (3) nonlinear → native MINPACK-`lmdif` port (accept/reject-faithful, removes scipy overhead); (4) tape reuse + rayon. The "more/larger in the same time" payoff is set by (1)–(2), not by the evaluator or a faithful port.
 
 **Build/run notes:** `cargo build --release` → copy `target/release/lib_core.so` → `src/simplipy/_core.abi3.so` (gitignored), import via `PYTHONPATH=src` with the `flash-ansr` (py3.13) env — leaves the env's installed simplipy 0.3.0 untouched. The env's installed package is NOT modified by this branch.
+
+---
+
+## Milestone 3a — RESULTS: linear-in-params closed-form fit (built + measured 2026-06-30)
+
+New `rust/fit.rs`: a `<constant>`-degree classifier (`ConstFree` / `Affine` / `Nonlinear`) + a closed-form affine fitter (build the design matrix by `eval(C=0)` and `eval(C=e_j)`, solve ridge-regularized normal equations on the finite-row mask, accept via `allclose`). FFI `classify_linearity` + `exist_constants_fit_linear` (returns `Some(decision)` for affine, `None` for nonlinear → deferred to M3b). 21/21 cargo tests, fmt clean, warning-free.
+
+**Validated against scipy `curve_fit` on dev_7-3 (harness `scratchpad/m3a_validate.py`):**
+- **Coverage: 76.1 %** of constant-bearing fit targets are **affine** (16,129 / 21,194) → ~3 in 4 `curve_fit` calls are replaceable by a deterministic closed-form solve.
+- **Decision parity: 99.83 %** positive / **99.93 %** negative vs `scipy.exist_constants_that_fit`. The ~0.17 % disagreements are all **pure-constant sources** (e.g. `(C⁴)^π`) — which the real miner short-circuits via constant-folding *before* `exist_constants_that_fit`, and where scipy's scalar-return quirk wrongly returns `False` while Rust correctly fits. Not real-mining inputs; Rust arguably more correct.
+- **Speed: 8.2× faster** per call (163.7 µs scipy → 19.8 µs Rust incl. FFI) **and deterministic** → in the worker the 16-retry loop collapses to 1 on affine candidates (~16× fewer fit attempts on top of the 8×).
+
+**Net:** the user's "maybe no optimizer" lever is confirmed and large — 76 % of constant-fits become a ~8×-faster, retry-free, deterministic closed-form decision at >99.8 % parity. The remaining **24 % nonlinear-in-params** candidates still need an optimizer → **M3b (native MINPACK-`lmdif` port)**, which also removes the ~782 µs scipy overhead on those.
+
+**Milestone map (updated):** M1 ✅ (evaluator + allclose) · M3a ✅ (affine closed-form, this section) · **M3b** = native LM for the nonlinear 24 % (accept/reject-faithful) · **M2** = the no-constant equivalence path (challenges × sign-combos × allclose) + wildcard selection + `rayon` · **M4** = compose M2+M3 into the full native `find_rule_worker` + driver (Kruskal prune via Rust `simplify`, incremental dedup/save). M2 and M3 are complementary halves of the candidate loop; both required.

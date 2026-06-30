@@ -55,6 +55,7 @@ mod cancel;
 mod convert;
 mod engine;
 mod eval;
+mod fit;
 mod numeric;
 mod operators;
 mod parse;
@@ -367,6 +368,37 @@ impl PyEngine {
     #[pyo3(signature = (a, b, rtol=1e-5, atol=1e-8))]
     fn allclose(a: Vec<f64>, b: Vec<f64>, rtol: f64, atol: f64) -> bool {
         crate::eval::allclose(&a, &b, rtol, atol)
+    }
+
+    /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s --
+    /// "constfree" | "affine" | "nonlinear". Affine candidates are fittable in closed form (no LM).
+    fn classify_linearity(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<String> {
+        py.detach(|| self.inner.classify_linearity(&tokens))
+            .map_err(PyValueError::new_err)
+    }
+
+    /// OFFLINE miner (Phase B, M3a): native `exist_constants_that_fit` for AFFINE-in-params
+    /// candidates -- a closed-form least-squares solve + the `allclose` decision gate (no optimizer,
+    /// deterministic). Returns `Some(decision)` for affine candidates, `None` for nonlinear-in-params
+    /// ones (deferred to the M3b native LM). Same accept/reject gate as scipy's path.
+    #[pyo3(signature = (candidate, var_names, x_flat, n_rows, y_target, rtol=1e-5, atol=1e-8))]
+    fn exist_constants_fit_linear(
+        &self,
+        py: Python<'_>,
+        candidate: Vec<String>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+        y_target: Vec<f64>,
+        rtol: f64,
+        atol: f64,
+    ) -> PyResult<Option<bool>> {
+        py.detach(|| {
+            self.inner.exist_constants_fit_linear(
+                &candidate, &var_names, &x_flat, n_rows, &y_target, rtol, atol,
+            )
+        })
+        .map_err(PyValueError::new_err)
     }
 
     /// DEV micro-benchmark (not a shipped surface): marshal X + compile the tape ONCE, then run

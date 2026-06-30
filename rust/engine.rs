@@ -105,6 +105,36 @@ impl Engine {
         crate::eval::evaluate_batch(&self.operators, tokens, var_names, x_flat, n_rows, params)
     }
 
+    /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s. See `crate::fit`.
+    pub fn classify_linearity(&self, tokens: &[String]) -> Result<String, String> {
+        crate::fit::classify(tokens, &self.operators).map(|l| l.as_str().to_string())
+    }
+
+    /// OFFLINE miner (Phase B, M3a): native `exist_constants_that_fit` for affine-in-params candidates
+    /// (closed-form least squares + allclose). `None` for nonlinear-in-params (deferred to M3b).
+    #[allow(clippy::too_many_arguments)]
+    pub fn exist_constants_fit_linear(
+        &self,
+        candidate: &[String],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+        y_target: &[f64],
+        rtol: f64,
+        atol: f64,
+    ) -> Result<Option<bool>, String> {
+        crate::fit::exist_constants_fit_linear(
+            &self.operators,
+            candidate,
+            var_names,
+            x_flat,
+            n_rows,
+            y_target,
+            rtol,
+            atol,
+        )
+    }
+
     /// DEV micro-benchmark (not a shipped surface): compile the tape + take X ONCE, then run
     /// `repeats` resident evaluations over all rows (param[0] perturbed per iter so nothing is
     /// hoisted), returning elapsed seconds. Measures the M3 residual-loop cost (X resident in Rust),
