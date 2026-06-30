@@ -272,3 +272,19 @@ Note on positive coverage: integration-level both-reduced cases were sparse here
 - **Runtime ≈ 2.5 s single-thread** for the full dev_7-3 prune (binned per-length extrapolation: each redundancy test is one Rust `simplify`, 3–51 µs by lhs length; length histogram {2:262,3:2229,4:1764,5:30265,6:37109,7:12171}). **Far cheaper than feared — no need to defer to a free box.**
 
 **Status:** fix done + validated at sample scale. The **full dev_7-3 prune run is left as the user's call** (it is ~2.5 s, runnable anytime on CPU) — but note pruning dev_7-3 itself is not a deliverable (it is the frozen v23.0 anchor; a pruned set = a new engine_id), and per Finding A the online benefit is small. The value delivered is the **correct, fast prune now available for a future dev_9-4** (where, combined with the size-insensitive online cost, a thorough mine stays affordable).
+
+---
+
+## M4 driver — PREPARED: all-cores native mine + grid timing harness (2026-06-30)
+
+For the user's grid experiment (record OFFLINE mining wall-clock across `dev_i-j`, i>j, i=2..7, all cores, then extrapolate), built the all-cores native mine:
+- `Engine::set_rules` (recompile to grow the Kruskal rule set length-by-length) + **`Engine::mine_one_length`** (rayon over a length's sources → Kruskal-prune + `find_rule`, all cores, GIL released). `rayon` dependency (offline-only). FFI for both. 27/27 cargo tests, fmt clean.
+- `benchmarks/mine_grid.py` — hybrid driver: Python outer loop (generation + `deduplicate_rules` canonicalization + length barrier) calls the native parallel inner loop; per-phase timing; `--smoke`, `--grid I J …`, `--full` (the 21-config grid).
+
+**Smoke (dev_3-2): native mine = 430 rules in 0.37 s, SOUNDNESS 430/430 (100%) verify as true equivalences.** dev_4-2 = 2283 rules in 314 s (single anchor; 4.7M over-produced sources).
+
+**Two findings:**
+1. **`find_rules` generation semantics (faithful, traced):** the loop stops at `max(len) ≥ max_source`, and `construct_expressions` produces up to `len 7` via `binary(len3,len3)` in 2 passes — so `max_source ∈ {4,5,6,7}` all generate up to len 7, differing mainly by **dummy-variable count** (2/3/3/4); `max_source ∈ {2,3}` are 1 pass (len ≤ 3, 1/2 vars). So the grid's cost is driven by dummy-var count (with `i`) and the candidate-library size (with `j`), not a clean source-length cap. The harness replicates this exactly.
+2. **Python `find_rules` is BROKEN with the Rust core** — returns **0 rules** even at `n_workers=1` (the forked worker uses the immutable `_core` and produces nothing; same class as the prune bug). So the shipped Python `find_rules` cannot mine with the Rust core. **The native mine is the working offline miner**, and faithfulness rests on: per-source M4a (99.44 % vs `find_rule_worker` called directly) + **100 % output soundness** + the shared (faithful) generation/`deduplicate_rules`. A full mine-level cross-check would need the pure-Python (no-`_core`) `find_rules`; deferred (low value — the native mine supersedes it).
+
+**Ready to launch** (`mine_grid.py --full --out …`) when valkyrie is free. The grid run records real all-cores offline wall-clock per `dev_i-j`, cheapest-first; the `i=7` high-`j` corner is extrapolated, not run (weeks–years). **Follow-up flagged:** the Python `find_rules`/`_core` bug (route it through the native mine, mirroring the prune fix) — separate from this prep.

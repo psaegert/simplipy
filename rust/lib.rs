@@ -504,6 +504,38 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
+    /// OFFLINE (Phase B, M4 driver): replace the engine's rules (recompile) -- grows the Kruskal-prune
+    /// rule set length-by-length during a mine. `rules` = the canonicalized (wildcard) rule list.
+    fn set_rules(&mut self, rules: Vec<(Vec<String>, Vec<String>)>) {
+        self.inner.set_rules(rules);
+    }
+
+    /// OFFLINE (Phase B, M4 driver): mine ONE source-length IN PARALLEL (rayon, all cores) -- Kruskal-
+    /// prune each source with the current rules, then `find_rule` on survivors. Returns the found
+    /// (source -> target) rules. The Python driver loops lengths, dedups/canonicalizes, and `set_rules`
+    /// between them (the order-dependent barrier). GIL released for the parallel work.
+    #[pyo3(signature = (sources, library, max_target, challenges=16, retries=16, seed=0, rtol=1e-5, atol=1e-8))]
+    #[allow(clippy::too_many_arguments)]
+    fn mine_one_length(
+        &self,
+        py: Python<'_>,
+        sources: Vec<Vec<String>>,
+        library: PyRef<'_, PyCandidateLibrary>,
+        max_target: Option<usize>,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+    ) -> Vec<(Vec<String>, Vec<String>)> {
+        let lib = &library.inner;
+        py.detach(|| {
+            self.inner.mine_one_length(
+                &sources, lib, max_target, challenges, retries, seed, rtol, atol,
+            )
+        })
+    }
+
     /// OFFLINE (Phase B): CORRECT `prune_redundant_rules` with the Rust core. Tests each explicit
     /// `lhs` (in the given asset order) by removing it from the Rust rule map + re-simplifying; returns
     /// the pruned `lhs` list. Replaces the Python prune, which over-pruned (~94%) because it removed

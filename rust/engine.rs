@@ -6,6 +6,7 @@
 use std::error::Error;
 use std::fs;
 
+use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 use crate::operators::{OperatorSpec, Operators};
@@ -212,6 +213,51 @@ impl Engine {
             rtol,
             atol,
         )
+    }
+
+    /// OFFLINE (Phase B, M4 driver): replace the engine's rules (recompile). Used by the mine driver
+    /// to GROW the Kruskal-prune rule set length-by-length (the Python outer loop dedups/canonicalizes
+    /// the found rules into wildcard patterns, then sets them here before the next length's inner loop).
+    pub fn set_rules(&mut self, raw: Vec<(Vec<String>, Vec<String>)>) {
+        let compiled = CompiledRules::compile(raw, &|t| self.operators.arity_of(t));
+        self.rules = compiled;
+    }
+
+    /// OFFLINE (Phase B, M4 driver): mine ONE source-length IN PARALLEL (rayon, all cores). For each
+    /// source: Kruskal-prune via `simplify` (current rules) -- skip if it shortens -- else `find_rule`
+    /// on it. Returns the found (source -> target) rules. Within a length the rule set is FIXED (the
+    /// Python driver `set_rules` between lengths = the order-dependent barrier), so the parallel map is
+    /// pure reads (`&self`), safe and deterministic (per-source seed = base seed + index).
+    #[allow(clippy::too_many_arguments)]
+    pub fn mine_one_length(
+        &self,
+        sources: &[Vec<String>],
+        lib: &crate::worker::CandidateLibrary,
+        max_target: Option<usize>,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+    ) -> Vec<(Vec<String>, Vec<String>)> {
+        sources
+            .par_iter()
+            .enumerate()
+            .filter_map(|(idx, src)| {
+                // Kruskal prune (engine.py:2722): simplify with the current rules; skip if it shortens.
+                let slen = self.simplify(src, 5, None, true, true, true).len();
+                if slen < src.len() {
+                    return None;
+                }
+                let s = seed.wrapping_add(idx as u64);
+                match self.find_rule_with_lib(
+                    src, slen, max_target, lib, challenges, retries, s, rtol, atol,
+                ) {
+                    Ok(Some(target)) => Some((src.clone(), target)),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     /// OFFLINE (Phase B): CORRECT prune of redundant explicit rules with the Rust core. The previous

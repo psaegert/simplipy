@@ -44,6 +44,11 @@ rustc-hash = "2"
 # applies Python's fixed/scientific notation rules on top.
 ryu = "1.0"
 
+# Data-parallelism for the OFFLINE miner's per-length inner loop (Kruskal-prune + find_rule over all
+# sources of a length, all cores). Not used by the inline (online) engine -- the online `simplify` is
+# one FFI unit per call and parallelism lives on the Python caller side.
+rayon = "1"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 

@@ -102,7 +102,7 @@ no_implicit_optional = false
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 explicit_package_bases = true
-exclude = "(.venv|tests/|dev/)"
+exclude = "(.venv|tests/|dev/|benchmarks/)"
 ignore_missing_imports = true
 
 
