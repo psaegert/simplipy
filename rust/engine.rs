@@ -85,6 +85,66 @@ impl Engine {
         &self.engine_id
     }
 
+    /// Crate-internal accessor for the operator tables (used by `crate::eval` tests/benches).
+    #[allow(dead_code)] // test/bench-only today; an M3 entry point
+    pub(crate) fn operators_ref(&self) -> &Operators {
+        &self.operators
+    }
+
+    /// OFFLINE miner kernel (Phase B): vectorized evaluation of a prefix expression over a batch of
+    /// rows. Variable leaves index `var_names` (column order), `<constant>` leaves bind to `params`
+    /// left-to-right, numeric/special literals fold to their value. See `crate::eval`.
+    pub fn evaluate_batch(
+        &self,
+        tokens: &[String],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+        params: &[f64],
+    ) -> Result<Vec<f64>, String> {
+        crate::eval::evaluate_batch(&self.operators, tokens, var_names, x_flat, n_rows, params)
+    }
+
+    /// DEV micro-benchmark (not a shipped surface): compile the tape + take X ONCE, then run
+    /// `repeats` resident evaluations over all rows (param[0] perturbed per iter so nothing is
+    /// hoisted), returning elapsed seconds. Measures the M3 residual-loop cost (X resident in Rust),
+    /// EXCLUDING the per-call FFI list marshaling -- the cost the in-Rust LM actually pays per
+    /// residual evaluation.
+    pub fn eval_bench_resident(
+        &self,
+        tokens: &[String],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+        params: &[f64],
+        repeats: usize,
+    ) -> Result<f64, String> {
+        let tape = crate::eval::Tape::compile(tokens, &self.operators, var_names)?;
+        let n_vars = var_names.len();
+        if x_flat.len() != n_rows * n_vars {
+            return Err("x_flat shape mismatch".to_string());
+        }
+        if params.len() < tape.n_params {
+            return Err("not enough params".to_string());
+        }
+        // Build the variable columns ONCE (the M3 LM would hold X resident, column-major).
+        let cols = crate::eval::columns_from_row_major(x_flat, n_rows, n_vars);
+        let mut p = params.to_vec();
+        let p0 = if p.is_empty() { 0.0 } else { p[0] };
+        let mut acc = 0.0f64;
+        let t = std::time::Instant::now();
+        for k in 0..repeats {
+            if !p.is_empty() {
+                p[0] = p0 + (k as f64) * 1e-12; // perturb so the loop is not hoisted
+            }
+            let out = tape.eval_columns(&cols, &p, n_rows);
+            acc += out[0] + out[n_rows - 1];
+        }
+        let elapsed = t.elapsed().as_secs_f64();
+        std::hint::black_box(acc);
+        Ok(elapsed)
+    }
+
     /// The compiled rule set (buckets + operand index). Exposed for the stage-(a) parity tests.
     pub fn rules(&self) -> &CompiledRules {
         &self.rules

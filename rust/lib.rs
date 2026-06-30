@@ -54,6 +54,7 @@ fn ensure_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<()>
 mod cancel;
 mod convert;
 mod engine;
+mod eval;
 mod numeric;
 mod operators;
 mod parse;
@@ -337,6 +338,55 @@ impl PyEngine {
     #[staticmethod]
     fn py_float_repr(x: f64) -> String {
         crate::numeric::py_float_repr(x)
+    }
+
+    /// OFFLINE miner kernel (Phase B, Milestone 1): vectorized evaluation of a prefix expression over
+    /// `n_rows` rows of row-major `x_flat` (shape `n_rows x len(var_names)`); `<constant>` slots bind
+    /// to `params` left-to-right; numeric/special literals fold to their value. Returns the length-
+    /// `n_rows` result column. NOT part of the inline (online) surface; replaces the Python
+    /// realize->infix->codify->lambda->safe_f residual path inside `find_rule_worker`.
+    fn evaluate_batch(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+        params: Vec<f64>,
+    ) -> PyResult<Vec<f64>> {
+        py.detach(|| {
+            self.inner
+                .evaluate_batch(&tokens, &var_names, &x_flat, n_rows, &params)
+        })
+        .map_err(PyValueError::new_err)
+    }
+
+    /// `numpy.allclose(a, b, rtol, atol, equal_nan=True)` -- the miner's accept/reject decision gate.
+    /// `b` is the asymmetric reference (second arg), matching the miner's call order. Static.
+    #[staticmethod]
+    #[pyo3(signature = (a, b, rtol=1e-5, atol=1e-8))]
+    fn allclose(a: Vec<f64>, b: Vec<f64>, rtol: f64, atol: f64) -> bool {
+        crate::eval::allclose(&a, &b, rtol, atol)
+    }
+
+    /// DEV micro-benchmark (not a shipped surface): marshal X + compile the tape ONCE, then run
+    /// `repeats` resident evaluations; returns elapsed seconds. Measures the M3 residual-loop cost
+    /// (X resident in Rust), excluding per-call FFI marshaling.
+    fn eval_bench_resident(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+        params: Vec<f64>,
+        repeats: usize,
+    ) -> PyResult<f64> {
+        py.detach(|| {
+            self.inner
+                .eval_bench_resident(&tokens, &var_names, &x_flat, n_rows, &params, repeats)
+        })
+        .map_err(PyValueError::new_err)
     }
 
     #[getter]

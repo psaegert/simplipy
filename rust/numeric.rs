@@ -89,6 +89,29 @@ fn eval_node(tokens: &[String], idx: &mut usize, ops: &Operators) -> Option<f64>
     }
 }
 
+/// Map a non-operator, non-`<constant>` leaf token to the f64 value Python's eval of the realized
+/// infix would produce: the special constants (`np.pi`, `np.e`, the `float("...")` tokens, the
+/// parenthesized `(-1)` form from `extra_internal_terms`), then the general `float(token)` numeric
+/// literals. `None` for a token that is neither (an unknown leaf). Used by the OFFLINE evaluator.
+pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
+    match tok {
+        "np.pi" => return Some(std::f64::consts::PI),
+        "np.e" => return Some(std::f64::consts::E),
+        "float(\"inf\")" => return Some(f64::INFINITY),
+        "float(\"-inf\")" => return Some(f64::NEG_INFINITY),
+        "float(\"nan\")" => return Some(f64::NAN),
+        _ => {}
+    }
+    if let Some(v) = parse_pyfloat(tok) {
+        return Some(v);
+    }
+    // a parenthesized literal such as "(-1)" (Python evals "(-1)" -> -1.0).
+    if let Some(inner) = tok.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        return parse_pyfloat(inner);
+    }
+    None
+}
+
 /// Python `float(token)` for the literal forms `is_numeric_string` admits. Handles a trailing dot
 /// (`1.` -> 1.0) which Rust's `parse` rejects.
 fn parse_pyfloat(tok: &str) -> Option<f64> {
@@ -104,68 +127,78 @@ fn parse_pyfloat(tok: &str) -> Option<f64> {
     None
 }
 
-/// Apply one canonical operator to its numeric operands as IEEE-754 f64 + libm: exact arithmetic, the
-/// custom `div`/`inv` signed-zero results, the real cube/fifth roots, and libm transcendentals. inf/nan
-/// propagate naturally and are filtered by the finiteness gate in `evaluate_constant_subtree`. `None`
-/// only for an unknown operator.
-fn apply_op(name: &str, a: &[f64]) -> Option<f64> {
-    let v = match name {
-        // bare arithmetic realizations
-        "+" => a[0] + a[1],
-        "-" => a[0] - a[1],
-        "*" => a[0] * a[1],
-        // `/` realization is `operators.div`: scalar zero-divisor -> signed inf / nan (operators.py:29)
-        "/" => op_div(a[0], a[1]),
-        // binary `pow` = `x ** y` = C pow (invalid -> NaN, overflow -> inf)
-        "pow" => cpow(a[0], a[1]),
-        "neg" => -a[0],
+/// Resolve a unary canonical operator to its scalar kernel as a (capture-free) function pointer, or
+/// `None` if `name` is not a unary operator. Resolving ONCE (at tape-compile) lets the OFFLINE
+/// vectorized evaluator (`crate::eval`) run a tight per-column loop with NO per-element string
+/// dispatch -- the key to matching numpy's vectorized speed. Same semantics as before (exact
+/// arithmetic, custom `inv` zero handling, real odd roots, libm transcendentals via the C symbols).
+pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
+    Some(match name {
+        "neg" => |x| -x,
         // inv: x == 0 (incl -0.0) -> +inf (operators.py:15)
-        "inv" => {
-            if a[0] == 0.0 {
-                f64::INFINITY
-            } else {
-                1.0 / a[0]
-            }
-        }
-        "abs" => a[0].abs(),
-        "mult2" => 2.0 * a[0],
-        "mult3" => 3.0 * a[0],
-        "mult4" => 4.0 * a[0],
-        "mult5" => 5.0 * a[0],
-        "div2" => a[0] / 2.0,
-        "div3" => a[0] / 3.0,
-        "div4" => a[0] / 4.0,
-        "div5" => a[0] / 5.0,
+        "inv" => |x| if x == 0.0 { f64::INFINITY } else { 1.0 / x },
+        "abs" => |x: f64| x.abs(),
+        "mult2" => |x| 2.0 * x,
+        "mult3" => |x| 3.0 * x,
+        "mult4" => |x| 4.0 * x,
+        "mult5" => |x| 5.0 * x,
+        "div2" => |x| x / 2.0,
+        "div3" => |x| x / 3.0,
+        "div4" => |x| x / 4.0,
+        "div5" => |x| x / 5.0,
         // pow{N} = `x ** N` (C pow, matches Python float.__pow__); integer exponent -> always real
-        "pow2" => cpow(a[0], 2.0),
-        "pow3" => cpow(a[0], 3.0),
-        "pow4" => cpow(a[0], 4.0),
-        "pow5" => cpow(a[0], 5.0),
-        // pow1_2 / pow1_4 = `x ** 0.5` / `x ** 0.25`: a negative base gives NaN -> caught by the
-        // finiteness gate (-> no fold), which is what we want (keep `sqrt(-1)` symbolic).
-        "pow1_2" => cpow(a[0], 0.5),
-        "pow1_4" => cpow(a[0], 0.25),
+        "pow2" => |x| cpow(x, 2.0),
+        "pow3" => |x| cpow(x, 3.0),
+        "pow4" => |x| cpow(x, 4.0),
+        "pow5" => |x| cpow(x, 5.0),
+        // pow1_2 / pow1_4 = `x ** 0.5` / `x ** 0.25`: negative base -> NaN (keep `sqrt(-1)` symbolic).
+        "pow1_2" => |x| cpow(x, 0.5),
+        "pow1_4" => |x| cpow(x, 0.25),
         // pow1_3 / pow1_5: real cube/fifth root (operators.py:121,164) -- sign-folded, always real
-        "pow1_3" => real_odd_root(a[0], 1.0 / 3.0),
-        "pow1_5" => real_odd_root(a[0], 1.0 / 5.0),
+        "pow1_3" => |x| real_odd_root(x, 1.0 / 3.0),
+        "pow1_5" => |x| real_odd_root(x, 1.0 / 5.0),
         // transcendentals via the SYSTEM libm (same functions Python's `math` calls)
-        "sin" => unsafe { cmath::sin(a[0]) },
-        "cos" => unsafe { cmath::cos(a[0]) },
-        "tan" => unsafe { cmath::tan(a[0]) },
-        "asin" => unsafe { cmath::asin(a[0]) },
-        "acos" => unsafe { cmath::acos(a[0]) },
-        "atan" => unsafe { cmath::atan(a[0]) },
-        "sinh" => unsafe { cmath::sinh(a[0]) },
-        "cosh" => unsafe { cmath::cosh(a[0]) },
-        "tanh" => unsafe { cmath::tanh(a[0]) },
-        "asinh" => unsafe { cmath::asinh(a[0]) },
-        "acosh" => unsafe { cmath::acosh(a[0]) },
-        "atanh" => unsafe { cmath::atanh(a[0]) },
-        "exp" => unsafe { cmath::exp(a[0]) },
-        "log" => unsafe { cmath::log(a[0]) },
-        _ => return None, // unknown operator -> unfoldable
-    };
-    Some(v)
+        "sin" => |x| unsafe { cmath::sin(x) },
+        "cos" => |x| unsafe { cmath::cos(x) },
+        "tan" => |x| unsafe { cmath::tan(x) },
+        "asin" => |x| unsafe { cmath::asin(x) },
+        "acos" => |x| unsafe { cmath::acos(x) },
+        "atan" => |x| unsafe { cmath::atan(x) },
+        "sinh" => |x| unsafe { cmath::sinh(x) },
+        "cosh" => |x| unsafe { cmath::cosh(x) },
+        "tanh" => |x| unsafe { cmath::tanh(x) },
+        "asinh" => |x| unsafe { cmath::asinh(x) },
+        "acosh" => |x| unsafe { cmath::acosh(x) },
+        "atanh" => |x| unsafe { cmath::atanh(x) },
+        "exp" => |x| unsafe { cmath::exp(x) },
+        "log" => |x| unsafe { cmath::log(x) },
+        _ => return None,
+    })
+}
+
+/// Resolve a binary canonical operator to its scalar kernel as a function pointer, or `None`.
+pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
+    Some(match name {
+        "+" => |a, b| a + b,
+        "-" => |a, b| a - b,
+        "*" => |a, b| a * b,
+        // `/` realization is `operators.div`: scalar zero-divisor -> signed inf / nan (operators.py:29)
+        "/" => op_div,
+        // binary `pow` = `x ** y` = C pow (invalid -> NaN, overflow -> inf)
+        "pow" => cpow,
+        _ => return None,
+    })
+}
+
+/// Apply one canonical operator to its numeric operands as IEEE-754 f64 + libm. Thin dispatcher over
+/// `unary_fn`/`binary_fn` (ONE semantics source of truth, shared by the inline folder and the OFFLINE
+/// vectorized evaluator). `None` for an unknown operator or wrong operand count.
+pub(crate) fn apply_op(name: &str, a: &[f64]) -> Option<f64> {
+    match a.len() {
+        1 => unary_fn(name).map(|f| f(a[0])),
+        2 => binary_fn(name).map(|f| f(a[0], a[1])),
+        _ => None,
+    }
 }
 
 /// `operators.div` scalar branch (operators.py:29-53): `y==0` -> `x>0`:+inf, `x<0`:-inf, `x==0`:nan.
