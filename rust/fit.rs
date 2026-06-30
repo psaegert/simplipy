@@ -258,9 +258,9 @@ pub fn exist_constants_fit_linear(
 /// A tiny deterministic PRNG (splitmix64) + Box-Muller normal, for the LM's random restarts. We do
 /// NOT reproduce numpy's Mersenne-Twister stream (RNG divergence is expected and fine -- the miner is
 /// stochastic and re-mining yields a new engine-id); we only need reproducible N(0,5) restart points.
-struct Rng(u64);
+pub(crate) struct Rng(u64);
 impl Rng {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Rng(seed ^ 0x9E3779B97F4A7C15)
     }
     fn next_u64(&mut self) -> u64 {
@@ -274,7 +274,7 @@ impl Rng {
         // 53-bit mantissa in [0, 1)
         (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
     }
-    fn normal(&mut self, mean: f64, sd: f64) -> f64 {
+    pub(crate) fn normal(&mut self, mean: f64, sd: f64) -> f64 {
         let u1 = self.next_f64().max(1e-300);
         let u2 = self.next_f64();
         mean + sd * (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()

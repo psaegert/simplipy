@@ -180,3 +180,17 @@ New `rust/fit.rs`: a `<constant>`-degree classifier (`ConstFree` / `Affine` / `N
 - **Speed: ~1× on nonlinear** (both run iterative LM) — as predicted; the speed win is the affine 76 %, M3b's job is completing the kernel natively with faithful decisions.
 
 **Why M3 is still a big win despite nonlinear being ~1×:** weighting by coverage, 76 % of fits get the ~8× deterministic closed-form (with the 16-retry loop collapsing to 1) and 24 % stay ~par. On top, going fully native unlocks the M4 structural wins this isolated micro-benchmark does NOT capture — no per-candidate Python recompile, no multiprocessing IPC/pickle, no GIL — which apply to ALL candidates. The realized miner speedup will exceed the per-fit numbers.
+
+---
+
+## Milestone 2 — RESULTS: no-constant equivalence + selection primitives (built + measured 2026-06-30)
+
+New `rust/worker.rs` (the constant-FREE candidate branch + selection): `equivalent_no_const` (the source-constant resampling test, engine.py:2433-2452: eval the const-free candidate once, then require `allclose(source, candidate)` across `challenges` resamplings × every `{-1,0,1}` sign combo), `violates_wildcard_multiplicity` (utils.py:938 port), and `select_best` (fewest-`<constant>` stable, skip wildcard-violators, all-numeric fold). Adds NO new numerics — only `allclose` (M1). FFI `equivalent_no_const` + `violates_wildcard_multiplicity`. 25/25 cargo tests, fmt clean, warning-free.
+
+**Validated against Python (harness `scratchpad/m2_validate.py`):**
+- **`violates_wildcard_multiplicity`: 0 disagreements / 134,000 pairs** (all 114k rule pairs, which carry `_j` wildcards, + 20k synthetic) — exact.
+- **No-constant equivalence: 99.76 % positive / 99.96 % negative** parity vs a faithful Python replication; directionality balanced (3 Rust-more, 4 Rust-less). Every disagreement is the inf/nan/signed-zero/`(-1)`-fractional-power corner — the same improved-vs-faithful IEEE boundary from M1, not new behavior. On finite non-pathological expressions: effectively 100 %.
+
+Note (faithful, deliberate): `violates_wildcard_multiplicity` matches `^_\d+$`, so on dummy-variable (`x0`..) MINING expressions it is INERT exactly as in Python → selection reduces to "fewest `<constant>` first" during mining (the `_j` form only exists after `deduplicate_rules` canonicalizes).
+
+**Remaining for a runnable native miner (M4):** the `find_rule` scan assembly (iterate the candidate library by length / variable-subset, dispatch const-free → M2 / constant-bearing → M3, early-break on the first matching length, `select_best`) + the driver (generation, Kruskal-prune via the Rust `simplify`, `rayon` over sources WITHIN a length with a barrier BETWEEN lengths to preserve the order-dependent Kruskal/dedup, incremental JSON save). Then the end-to-end gate: re-mine **dev_5-2** natively and compare rule-rediscovery vs the Python mine. All per-candidate DECISION primitives (M1+M2+M3) are now native and validated; M4 is assembly + driver + the real "more/larger patterns" measurement.

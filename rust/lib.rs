@@ -62,6 +62,7 @@ mod parse;
 mod rules;
 mod sort;
 mod utils;
+mod worker;
 
 pub use engine::Engine;
 
@@ -368,6 +369,38 @@ impl PyEngine {
     #[pyo3(signature = (a, b, rtol=1e-5, atol=1e-8))]
     fn allclose(a: Vec<f64>, b: Vec<f64>, rtol: f64, atol: f64) -> bool {
         crate::eval::allclose(&a, &b, rtol, atol)
+    }
+
+    /// OFFLINE miner (Phase B, M2): the no-constant equivalence test (engine.py:2433-2452). The
+    /// candidate must be constant-free; the source's constants are resampled over `challenges` rounds
+    /// and every sign combination, requiring `allclose(source, candidate)` every time.
+    #[pyo3(signature = (source, candidate, var_names, x_flat, n_rows, challenges=16, rtol=1e-5, atol=1e-8, seed=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn equivalent_no_const(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        candidate: Vec<String>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+        challenges: usize,
+        rtol: f64,
+        atol: f64,
+        seed: u64,
+    ) -> PyResult<bool> {
+        py.detach(|| {
+            self.inner.equivalent_no_const_check(
+                &source, &candidate, &var_names, &x_flat, n_rows, challenges, rtol, atol, seed,
+            )
+        })
+        .map_err(PyValueError::new_err)
+    }
+
+    /// OFFLINE miner (Phase B, M2): the wildcard-multiplicity rule guard (utils.py:938).
+    #[staticmethod]
+    fn violates_wildcard_multiplicity(lhs: Vec<String>, rhs: Vec<String>) -> bool {
+        crate::worker::violates_wildcard_multiplicity(&lhs, &rhs)
     }
 
     /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s --

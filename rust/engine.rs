@@ -105,6 +105,34 @@ impl Engine {
         crate::eval::evaluate_batch(&self.operators, tokens, var_names, x_flat, n_rows, params)
     }
 
+    /// OFFLINE miner (Phase B, M2): the no-constant equivalence test. See `crate::worker`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn equivalent_no_const_check(
+        &self,
+        source: &[String],
+        candidate: &[String],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+        challenges: usize,
+        rtol: f64,
+        atol: f64,
+        seed: u64,
+    ) -> Result<bool, String> {
+        crate::worker::equivalent_no_const_check(
+            &self.operators,
+            source,
+            candidate,
+            var_names,
+            x_flat,
+            n_rows,
+            challenges,
+            rtol,
+            atol,
+            seed,
+        )
+    }
+
     /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s. See `crate::fit`.
     pub fn classify_linearity(&self, tokens: &[String]) -> Result<String, String> {
         crate::fit::classify(tokens, &self.operators).map(|l| l.as_str().to_string())
