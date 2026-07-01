@@ -6,7 +6,7 @@ authors = [
     ]
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.3.1"
+version = "0.3.2"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 keywords = ["symbolic-regression", "simplification", "expression", "prefix", "rewriting", "rust"]

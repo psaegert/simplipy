@@ -79,8 +79,14 @@ simplipy list --type engine
 simplipy list --installed        # only assets already downloaded
 ```
 
-To install or remove assets, use the Python API (the `simplipy` asset-manager functions
-`install` / `uninstall` / `get_path`), which is also what the engine loader uses under the hood:
+Install or remove an asset by name:
+
+```sh
+simplipy install dev_7-3         # download an asset from Hugging Face (--force to reinstall)
+simplipy remove dev_7-3          # remove a locally installed asset
+```
+
+The same operations are available from Python (this is also what the engine loader uses under the hood):
 
 ```python
 import simplipy as sp

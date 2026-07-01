@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.2 — 2026-07-01 — CLI `install` / `remove` fix + docs
+
+### Fixed
+- **`simplipy install <name>` / `simplipy remove <name>` now work.** They previously passed the
+  asset *type* as the asset name (and the name as the `force`/`quiet` flag), so every invocation
+  raised `ValueError: Unknown asset: 'engine'`. The commands now take just an asset name and wrap
+  the call in clean error handling (a clear message + exit 1 instead of a traceback). The vestigial
+  `--type` flag is removed from `install`/`remove` (the asset manager resolves by name; `list`
+  keeps `--type`).
+
+### Docs
+- Documented the normalization helpers in the API reference; added a CLI reference for
+  `list` / `prune-rules` / `resolve-rules` / `install` / `remove`; qualified `SimpliPyEngine`
+  methods in the component overview; named `symbolic-data` as the direct downstream in the family DAG.
+
 ## 0.3.1 — 2026-06-28 — expression-token normalization helpers
 
 Adds pure-Python `normalize_skeleton`, `normalize_expression`, and `normalize_variable_token`

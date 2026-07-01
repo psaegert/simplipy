@@ -44,15 +44,13 @@ def main(argv: str = None) -> None:
     resolve_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
     # Install command
-    install_parser = subparsers.add_parser("install", help="Install official assets from Hugging Face")
-    install_parser.add_argument('name', type=str, help='Name of the asset to install')
-    install_parser.add_argument('--type', choices=['engine', 'test-data'], default='engine', help='Type of asset to install')
+    install_parser = subparsers.add_parser("install", help="Install an official asset from Hugging Face")
+    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. dev_7-3)')
     install_parser.add_argument('--force', action='store_true', help='Force reinstall even if already installed')
 
     # Remove command
-    remove_parser = subparsers.add_parser("remove", help="Remove installed assets")
-    remove_parser.add_argument('name', type=str, help='Name of the asset to remove')
-    remove_parser.add_argument('--type', choices=['engine', 'test-data'], default='engine', help='Type of asset to remove')
+    remove_parser = subparsers.add_parser("remove", help="Remove an installed asset")
+    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. dev_7-3)')
 
     # List command
     list_parser = subparsers.add_parser("list", help="List available or installed assets")
@@ -137,11 +135,21 @@ def main(argv: str = None) -> None:
             print(f'Saved to {args.output_file}')
 
         case 'install':
-            if not install_asset(args.type, args.name, force=args.force):
+            try:
+                installed = install_asset(args.name, force=args.force)
+            except (FileNotFoundError, ValueError, RuntimeError) as e:
+                print(f'Error: {e}', file=sys.stderr)
+                sys.exit(1)
+            if not installed:
                 sys.exit(1)
 
         case 'remove':
-            if not uninstall_asset(args.type, args.name):
+            try:
+                removed = uninstall_asset(args.name)
+            except (FileNotFoundError, ValueError, RuntimeError) as e:
+                print(f'Error: {e}', file=sys.stderr)
+                sys.exit(1)
+            if not removed:
                 sys.exit(1)
 
         case 'list':
