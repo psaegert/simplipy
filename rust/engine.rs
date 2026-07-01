@@ -736,7 +736,8 @@ impl Engine {
     /// THE whole-unit kernel. Faithful port of the `simplify` fixpoint (engine.py:1815-1924), the
     /// prefix-token-list contract: per iteration `cancel_terms` -> `apply_simplification_rules`
     /// (when enabled), break when the iteration is a no-op vs the previous (`<= max_iter`); then
-    /// `sort_operands`; then `mask_elementary_literals` (when enabled); then the LONGER-RESULT GUARD
+    /// `mask_elementary_literals` (when enabled); then `sort_operands` (mask-BEFORE-sort so the
+    /// canonical operand order is a fixpoint -- idempotent); then the LONGER-RESULT GUARD
     /// (engine.py:1886/1893: if the result is longer than the original input, return the ORIGINAL).
     ///
     /// Returns the simplified prefix tokens (the Python `'list'` return). The `inplace` /
@@ -773,13 +774,18 @@ impl Engine {
             current_expression = new_expression.clone();
         }
 
-        // Sort operands (once, after the loop).
-        new_expression = crate::sort::sort_operands_unit(&new_expression, &self.operators);
-
-        // Mask elementary literals (0/1/coefficients -> <constant>).
+        // Mask elementary literals (0/1/coefficients -> <constant>) BEFORE sorting, so the final
+        // operand order is computed on the canonical (masked) tokens. Masking still runs AFTER the
+        // rule loop, so which rules fire is unchanged; this only reorders the operands of
+        // masked-literal cases and makes sort/mask a fixpoint -- fixing the sort-then-mask
+        // non-idempotency (a literal's post-sort position differed from <constant>'s, so a re-pass
+        // re-sorted the now-masked token).
         if mask_elementary_literals {
             new_expression = crate::utils::mask_elementary_literals(&new_expression);
         }
+
+        // Sort operands (once, after masking).
+        new_expression = crate::sort::sort_operands_unit(&new_expression, &self.operators);
 
         // Longer-result guard: a result longer than the input is not a simplification.
         if new_expression.len() > length_before {

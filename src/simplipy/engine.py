@@ -2235,15 +2235,10 @@ class SimpliPyEngine:
                 break
             current_expression = new_expression
 
-        # Sort operands
-        t0 = time.perf_counter() if collect_statistics else 0.0
-        new_expression = self.sort_operands(new_expression)
-        if collect_statistics:
-            self.simplification_statistics.stage_timings['sort_operands'] += time.perf_counter() - t0  # type: ignore[union-attr]
-
-        if verbose:
-            print(f'{i}: sort_operands: {new_expression}')
-
+        # Mask elementary literals BEFORE sorting, so the final operand order is computed on the
+        # canonical (masked) tokens -> sort/mask is a fixpoint (idempotent). Masking still runs
+        # AFTER the rule loop, so which rules fire is unchanged; only the operand order of
+        # masked-literal cases changes. (Mirrors the Rust kernel; see engine.rs simplify.)
         if mask_elementary_literals:
             t0 = time.perf_counter() if collect_statistics else 0.0
             new_expression = mask_elementary_literals_fn(new_expression, inplace=inplace)
@@ -2252,6 +2247,15 @@ class SimpliPyEngine:
 
             if verbose:
                 print(f'{i}: mask_elementary_literals: {new_expression}')
+
+        # Sort operands (after masking)
+        t0 = time.perf_counter() if collect_statistics else 0.0
+        new_expression = self.sort_operands(new_expression)
+        if collect_statistics:
+            self.simplification_statistics.stage_timings['sort_operands'] += time.perf_counter() - t0  # type: ignore[union-attr]
+
+        if verbose:
+            print(f'{i}: sort_operands: {new_expression}')
 
         result_rejected = len(new_expression) > length_before
 
