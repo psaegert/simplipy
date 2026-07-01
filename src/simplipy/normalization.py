@@ -8,7 +8,7 @@ equal: variable tokens (``v1``/``x1`` style, case-insensitive) are renamed to a 
 These are pure-string helpers (no engine state) so every consumer -- holdout matching,
 symbolic-recovery scoring, dataset preparation -- can reuse identical behavior. They were
 relocated here (0.3.1) from flash-ansr, behavior-identical, so the canonicalizer lives at
-the shared expression-engine leaf that flash-ansr, sr-data, and srbf all depend on.
+the shared expression-engine leaf that symbolic-data, flash-ansr, and srbf all depend on.
 """
 from __future__ import annotations
 

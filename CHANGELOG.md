@@ -9,7 +9,7 @@ literals to a `<constant>` placeholder (skeleton form) or kept as-is (expression
 expressions that are "the same" up to variable renaming / constant values compare equal.
 
 Relocated from flash-ansr (behavior-identical) so the canonicalizer lives at the shared
-expression-engine leaf that downstream packages (flash-ansr, sr-data, srbf) all depend on,
+expression-engine leaf that downstream packages (symbolic-data, flash-ansr, srbf) all depend on,
 keeping holdout-matching and symbolic-recovery scoring consistent by construction. No change to
 the Rust inline backend (`simplipy._core`) or any existing API; purely additive.
 

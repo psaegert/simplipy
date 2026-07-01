@@ -2,10 +2,16 @@
 
 SimpliPy is a high-throughput symbolic simplifier built for workloads where
 classic tools like SymPy struggle—think millions of expressions in the pre-training of
-Flash-ANSR's prefix-based transformer models. Instead of converting tokens into
+prefix-based transformer models. Instead of converting tokens into
 heavyweight objects and back again, SimpliPy keeps expressions as lightweight
 prefix lists, enabling rapid rewriting and direct integration with machine
 learning pipelines.
+
+SimpliPy is the shared expression-engine leaf of a four-package family:
+`simplipy` ◄── `symbolic-data` ◄── { `flash-ansr`, `srbf` }. Its direct
+downstream is `symbolic-data`, the model-agnostic symbolic-regression data
+layer, and through it SimpliPy feeds Flash-ANSR training and the srbf benchmark
+framework.
 
 
 ## Why SimpliPy Exists
@@ -17,9 +23,10 @@ costs that dominate at scale. SimpliPy was created to remove those bottlenecks:
 	time, so there's no repeated parsing or AST allocation.
 - **Deterministic pipelines** – Rule application, operand sorting, and literal
 	masking always produce the same layout, which keeps downstream caches warm.
-- **GPU-friendly integration** – Outputs map directly into Flash-ANSR's input
-	space without any conversion step, making it practical to simplify millions of
-	candidates per minute.
+- **ML-pipeline integration** – Outputs stay in the prefix token space consumed
+	by the `symbolic-data` layer (and through it by Flash-ANSR training) without
+	any conversion step, making it practical to simplify millions of candidates
+	per minute.
 
 
 ## Performance
@@ -64,20 +71,21 @@ expressions.
 ## Key Components
 
 - **Parsing & normalization** – `SimpliPyEngine.parse` and
-	`convert_expression` convert infix input, harmonize power operators, and
-	propagate unary negation without losing prefix fidelity.
-- **Term cancellation** – `collect_multiplicities` and `cancel_terms` identify
-	subtrees that appear with opposite parity or redundant factors, pruning them
-	before any rules run.
-- **Rule execution** – `compile_rules` turns machine-discovered or human-authored
-	simplifications into tree patterns. `apply_simplifcation_rules` then performs
-	fast top-down matching in each iteration.
-- **Canonical ordering** – `sort_operands` imposes a stable ordering for
-	commutative operators, ensuring identical expressions share identical token
-	layouts.
-- **Rule discovery workflow** – `find_rules` explores expression space in
-	parallel worker processes, confirms identities with numeric sampling, and
-	writes back deduplicated rulesets that future engines can load instantly.
+	`SimpliPyEngine.convert_expression` convert infix input, harmonize power
+	operators, and propagate unary negation without losing prefix fidelity.
+- **Term cancellation** – `SimpliPyEngine.collect_multiplicities` and
+	`SimpliPyEngine.cancel_terms` identify subtrees that appear with opposite
+	parity or redundant factors, pruning them before any rules run.
+- **Rule execution** – `SimpliPyEngine.compile_rules` turns machine-discovered or
+	human-authored simplifications into tree patterns.
+	`SimpliPyEngine.apply_simplifcation_rules` then performs fast top-down matching
+	in each iteration.
+- **Canonical ordering** – `SimpliPyEngine.sort_operands` imposes a stable
+	ordering for commutative operators, ensuring identical expressions share
+	identical token layouts.
+- **Rule discovery workflow** – `SimpliPyEngine.find_rules` explores expression
+	space in parallel worker processes, confirms identities with numeric sampling,
+	and writes back deduplicated rulesets that future engines can load instantly.
 
 
 ## Quickstart
@@ -109,6 +117,36 @@ sp.list_assets("engine")
 # - dev_7-3         [installed]  Development engine 7-3 for mathematical expression simplification.
 # - dev_7-2                      Development engine 7-2 for mathematical expression simplification.
 ```
+
+## Normalization
+
+Besides the engine, SimpliPy exports pure-string normalization helpers at the
+package root: `normalize_skeleton`, `normalize_expression`, and
+`normalize_variable_token` (also available as `simplipy.normalization`). They
+canonicalize a prefix token sequence so that two expressions that are "the same"
+up to variable renaming / constant values compare equal, giving downstream
+consumers (holdout matching, symbolic-recovery scoring) identical behavior by
+construction.
+
+```python
+import simplipy as sp
+
+# Skeleton form: variables -> x{n}, numeric literals -> <constant>
+sp.normalize_skeleton(['+', 'v1', '2.5'])
+# -> ['+', 'x1', '<constant>']
+
+# Expression form: variables canonicalized, numeric literals kept intact
+sp.normalize_expression(['+', 'V1', '2.5'])
+# -> ['+', 'x1', '2.5']
+
+# Classify / canonicalize a single token -> (normalized_token, is_variable)
+sp.normalize_variable_token('X3')
+# -> ('x3', True)
+sp.normalize_variable_token('sin')
+# -> ('sin', False)
+```
+
+See the [Normalization](api.md#normalization) API reference for details.
 
 ## Where to go next
 

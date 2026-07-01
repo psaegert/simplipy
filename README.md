@@ -48,6 +48,33 @@ engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # > '<constant> / x3'
 ```
 
+## Normalization
+
+The root-exported `normalize_skeleton`, `normalize_expression`, and
+`normalize_variable_token` helpers (also available as `simplipy.normalization`)
+canonicalize a prefix token sequence so that two expressions that are "the same"
+up to variable renaming / constant values compare equal. They are pure-string
+helpers with no engine state, so consumers such as holdout matching and
+symbolic-recovery scoring share identical behavior by construction.
+
+```python
+import simplipy as sp
+
+# Skeleton form: variables -> x{n}, numeric literals -> <constant>
+sp.normalize_skeleton(['+', 'v1', '2.5'])
+# > ['+', 'x1', '<constant>']
+
+# Expression form: variables canonicalized, numeric literals kept intact
+sp.normalize_expression(['+', 'V1', '2.5'])
+# > ['+', 'x1', '2.5']
+
+# Classify / canonicalize a single token -> (normalized_token, is_variable)
+sp.normalize_variable_token('X3')
+# > ('x3', True)
+sp.normalize_variable_token('sin')
+# > ('sin', False)
+```
+
 More examples can be found in the [documentation](https://simplipy.readthedocs.io/).
 
 # Performance
@@ -104,7 +131,7 @@ pytest tests --cov src --cov-report html -m "not integration"
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2025,
     publisher = {GitHub},
-    version = {0.3.0},
+    version = {0.3.1},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
