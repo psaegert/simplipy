@@ -1,3 +1,14 @@
+"""Numerically safe realizations of the mathematical operators.
+
+Provides the element-wise Python/NumPy functions that back the engine's operator
+tokens: unary maps (e.g. ``neg``, ``inv``, ``sin``, ``exp``, ``log``), the binary
+operators ``div`` (``x / y``) and ``pow`` (``x ** y``), and families of unary
+scale-by-constant operators (``mult2``..``mult5`` multiply by n; ``div2``..``div5``
+divide by n), integer powers (``pow2``..``pow5`` raise to the power n), and integer
+roots (``pow1_2``..``pow1_5`` take the nth root).
+The functions handle singular inputs (such as division by zero) by returning signed
+infinities or NaN rather than raising, and operate on both scalars and array-likes.
+"""
 from typing import Iterable
 from types import ModuleType
 import numpy as np

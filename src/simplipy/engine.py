@@ -1,3 +1,12 @@
+"""Core simplification engine for symbolic expressions in prefix notation.
+
+Defines :class:`SimpliPyEngine`, which parses, converts, evaluates, and simplifies
+mathematical expressions given as prefix token lists using a configurable set of
+operators and rewrite rules, and :class:`SimplificationStatistics`, a dataclass that
+records per-run metrics of a simplification pass. When available, the engine dispatches
+the inline simplification/conversion/validation core to the compiled Rust extension
+(``simplipy._core``) and otherwise falls back to an equivalent pure-Python implementation.
+"""
 import re
 import importlib
 import fractions
@@ -430,7 +439,7 @@ class SimpliPyEngine:
 
     @classmethod
     def from_config(cls, config_path: str) -> "SimpliPyEngine":
-        """Creates a SimpliPyEngine instance from a JSON configuration file.
+        """Creates a SimpliPyEngine instance from a YAML configuration file.
 
         The configuration file should specify the `operators` and can
         optionally provide a path to a `rules` file.
@@ -438,7 +447,7 @@ class SimpliPyEngine:
         Parameters
         ----------
         config_path : str
-            The absolute or relative path to the JSON configuration file.
+            The absolute or relative path to the YAML configuration file.
 
         Returns
         -------

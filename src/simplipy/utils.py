@@ -1,3 +1,12 @@
+"""Helper utilities for manipulating prefix-notation expressions and configs.
+
+Collects the shared, engine-independent building blocks used across SimpliPy: prefix
+token-tree operations (traversal, mapping, and remapping of variables and constants),
+pattern matching and wildcard handling for rewrite rules, rule deduplication,
+constant/placeholder handling, expression compilation and safe evaluation (``codify``,
+``safe_f``), small number-theory helpers (``is_prime``, ``factorize_to_at_most``), and
+generic nested-container utilities.
+"""
 import re
 import time
 import math
@@ -332,7 +341,7 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     (['*', 'C_0', '+', 'x', 'C_1'], ['C_0', 'C_1'])
 
     >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'])
-    (['+', 'K', 'C_0'], ['K', 'C_0', 'C_1'])
+    (['+', 'K', 'C_0'], ['K', 'C_0'])
     """
     if inplace:
         modified_prefix_expression = prefix_expression

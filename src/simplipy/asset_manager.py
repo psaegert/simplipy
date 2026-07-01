@@ -1,3 +1,13 @@
+"""Discovery, installation, and resolution of SimpliPy assets.
+
+Manages named assets (such as engine rulesets and test data) that are distributed via
+the Hugging Face Hub. Provides helpers to locate the local cache directory
+(:func:`get_default_cache_dir`), fetch and parse the asset manifest
+(:func:`fetch_manifest`), install and uninstall assets (:func:`install_asset`,
+:func:`uninstall_asset`), list installed and available assets (:func:`list_assets`),
+and resolve an asset name or local path to a concrete entrypoint file
+(:func:`get_path`).
+"""
 import json
 import shutil
 from pathlib import Path

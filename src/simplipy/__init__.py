@@ -1,3 +1,11 @@
+"""SimpliPy: efficient simplification of mathematical expressions.
+
+Exposes the public API for parsing, transforming, and simplifying symbolic
+expressions in prefix notation: the :class:`SimpliPyEngine` and its
+:class:`SimplificationStatistics` companion, expression-normalization helpers,
+token/rule utilities, and asset management for downloading and resolving engine
+rulesets and test data.
+"""
 from .engine import SimpliPyEngine, SimplificationStatistics
 from . import engine
 from . import operators

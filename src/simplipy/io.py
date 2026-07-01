@@ -1,3 +1,10 @@
+"""Reading and writing of SimpliPy YAML configuration files.
+
+Provides :func:`load_config`, which loads a configuration from a dictionary or YAML
+file and optionally resolves referenced paths, and :func:`save_config`, which writes a
+configuration dictionary back to a YAML file with configurable path referencing and
+optional recursive saving of nested configs.
+"""
 import os
 from typing import Any
 
@@ -63,9 +70,10 @@ def save_config(config: dict[str, Any], directory: str, filename: str, reference
     filename : str
         The name of the configuration file.
     reference : str, optional
-        Determines the reference base path. One of
-        - 'project': relative to the project root
+        How nested-config paths are written when ``recursive=True``. One of
+        - 'relative' (default): paths relative to the save directory
         - 'absolute': absolute paths
+        Any other value raises ``ValueError``.
     recursive : bool, optional
         Save any referenced configs too
     '''
