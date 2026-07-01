@@ -1975,7 +1975,35 @@ class SimpliPyEngine:
         return expression
 
     def sort_operands(self, expression: list[str] | tuple[str, ...]) -> list[str]:
-        """Sorts the operands of commutative operators to create a canonical form.
+        """Sort commutative operands into a canonical order (IDEMPOTENT).
+
+        Iterates :meth:`_sort_operands_once` to a fixpoint. A single pass leaves left-nested
+        commutative chains only partially sorted -- the rotation special case rebalances the nesting
+        but skips the sort that pass -- so this wrapper re-runs until the result stabilises. Converges
+        in ``<= depth`` passes (the rotation monotonically right-nests; once right-nested the sort is
+        idempotent under the total-order key); the ``len + 1`` bound is a safety net. Ensures ``b + a``
+        and ``a + b`` -- and every associativity variant of ``a + b + c`` -- reach the same form.
+
+        Parameters
+        ----------
+        expression : list[str] or tuple[str, ...]
+            The expression in prefix notation.
+
+        Returns
+        -------
+        list[str]
+            The expression with sorted operands, in prefix notation.
+        """
+        prev = list(expression)
+        for _ in range(len(prev) + 1):
+            result = self._sort_operands_once(prev)
+            if result == prev:
+                return result
+            prev = result
+        return prev
+
+    def _sort_operands_once(self, expression: list[str] | tuple[str, ...]) -> list[str]:
+        """One pass of the commutative-operand sort (see :meth:`sort_operands`, which iterates it).
 
         This method traverses the expression and, for any commutative operator
         (like `+` or `*`), it sorts its operands based on a consistent key.

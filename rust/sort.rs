@@ -1,14 +1,15 @@
-//! Faithful port of `sort_operands` (engine.py:1636) + `operand_key` (engine.py:2512): the canonical
-//! operand ordering for commutative operators (`+`, `*`), the last stage of the `simplify` fixpoint
-//! (it runs ONCE, after the loop). Public entry: [`sort_operands_unit`].
+//! Canonical operand ordering for commutative operators (`+`, `*`), the last stage of the `simplify`
+//! fixpoint. Public entry [`sort_operands_unit`] is IDEMPOTENT: it iterates [`sort_operands_once`]
+//! (the per-pass port of `sort_operands`, engine.py:1636) to a fixpoint.
 //!
-//! ## Mechanism (and one deliberate quirk)
-//! Right-to-left scan builds subtrees bottom-up. For a commutative node it:
+//! ## Mechanism (and the rotation drift the fixpoint fixes)
+//! One pass (`sort_operands_once`), right-to-left, builds subtrees bottom-up. For a commutative node:
 //!  1. **Rotation special case** (engine.py:1667): if the LEFT operand is a composite Op with the
 //!     SAME operator (`op(op(A,B), C)`), right-rotate to `op(A, op(B,C))` and `continue` -- which
-//!     SKIPS the sort for this node. This is faithful: left-nested chains at the root come out only
-//!     partially sorted (verified: `sort(['+','+','x2','x3','x1']) == ['+','x2','+','x3','x1']`). Do
-//!     NOT "fix" this to fully canonicalize.
+//!     SKIPS the sort for this node. So a single pass leaves left-nested chains only PARTIALLY sorted
+//!     (`sort_once(['+','+','x2','x3','x1']) == ['+','x2','+','x3','x1']`) -- NON-idempotent. The
+//!     IMPROVED engine iterates to a fixpoint ([`sort_operands_unit`]) so the rotation right-nests
+//!     and the next pass sorts: the fully canonical `['+','x1','+','x2','x3']`.
 //!  2. Otherwise: gather the maximal same-operator chain's BOUNDARY operands (leaves or
 //!     different-operator composites) as index PATHS, sort the paths lexicographically, sort the
 //!     operands by [`operand_key`] (STABLE), and place sorted-operand[i] at sorted-path[i] in a clone.
@@ -197,9 +198,28 @@ fn sort_commutative_node(subtree: Node, operator: &str) -> Node {
     new_subtree
 }
 
-/// Faithful port of `sort_operands` (engine.py:1636). On a malformed expression that does not
-/// collapse to a single root, returns the input unchanged (out of the deployment contract).
+/// Idempotent `sort_operands`: iterate [`sort_operands_once`] to a fixpoint. A single pass leaves
+/// left-nested commutative chains only PARTIALLY sorted -- the rotation special case rebalances the
+/// nesting but SKIPS the sort that pass, so `sort_once(sort_once(x)) != sort_once(x)`. Iterating
+/// converges to the fully-sorted canonical form. Terminates in <= depth passes (the rotation
+/// monotonically right-nests; once right-nested the sort is idempotent under the total-order key --
+/// measured max 3 on the dev_7-3 corpus); the `0..=len` bound is a safety net.
 pub fn sort_operands_unit(expression: &[String], ops: &Operators) -> Vec<String> {
+    let mut prev = expression.to_vec();
+    for _ in 0..=expression.len() {
+        let next = sort_operands_once(&prev, ops);
+        if next == prev {
+            return next;
+        }
+        prev = next;
+    }
+    prev
+}
+
+/// One pass of the commutative-operand sort (see module docs). NOT idempotent on its own for
+/// left-nested chains; callers use [`sort_operands_unit`], which iterates this to a fixpoint. On a
+/// malformed expression that does not collapse to a single root, returns the input unchanged.
+fn sort_operands_once(expression: &[String], ops: &Operators) -> Vec<String> {
     let mut stack: Vec<Node> = Vec::new();
 
     let mut i = expression.len() as isize - 1;
@@ -282,8 +302,8 @@ mod tests {
 
     /// Canonical sort cases cross-checked against fresh Python (see benchmarks/diff_sort.py for the
     /// 10037+ corpus gate). Pins: simple swap, non-commutative no-op, the tag ordering (var < num),
-    /// stability on equal composite operands, and the rotation-SKIPS-sort quirk (faithful, NOT
-    /// "cleaned up" -- left-nested chains come out only partially sorted).
+    /// stability on equal composite operands, and the rotation+fixpoint (left-nested chains now come
+    /// out FULLY sorted -- the idempotent wrapper iterates the partial single pass to convergence).
     #[test]
     fn sort_canonical_cases() {
         let Some(e) = engine() else { return };
@@ -297,8 +317,8 @@ mod tests {
                 &["+", "sin", "x1", "sin", "x1"],
                 &["+", "sin", "x1", "sin", "x1"],
             ), // stable, equal
-            // rotation fires -> SKIPS sort (x2,x3,x1 NOT fully sorted):
-            (&["+", "+", "x2", "x3", "x1"], &["+", "x2", "+", "x3", "x1"]),
+            // rotation fires, then the fixpoint sorts: left-nested chain -> fully canonical:
+            (&["+", "+", "x2", "x3", "x1"], &["+", "x1", "+", "x2", "x3"]),
             // right-nested chain is fully sorted:
             (&["+", "x1", "+", "x3", "x2"], &["+", "x1", "+", "x2", "x3"]),
             // composite operand sorts after leaves (tag 2):
