@@ -1,14 +1,24 @@
 # Changelog
 
-## 0.3.2 — 2026-07-01 — CLI `install` / `remove` fix + docs
+## 0.4.0 — 2026-07-01 — native offline rule-miner + simplify fixes + CLI fix
+
+### Added
+- **Native (Rust-core) offline rule mining.** An all-cores native mine driver (with a grid timing
+  harness) supersedes the pure-Python `find_rules` for offline discovery against the Rust `_core`.
+- **Closed-form `pow(C, x)` / `pow(x, C)` log-linearization** in the offline pipeline.
 
 ### Fixed
-- **`simplipy install <name>` / `simplipy remove <name>` now work.** They previously passed the
-  asset *type* as the asset name (and the name as the `force`/`quiet` flag), so every invocation
-  raised `ValueError: Unknown asset: 'engine'`. The commands now take just an asset name and wrap
-  the call in clean error handling (a clear message + exit 1 instead of a traceback). The vestigial
-  `--type` flag is removed from `install`/`remove` (the asset manager resolves by name; `list`
-  keeps `--type`).
+- **`sort_operands` is now idempotent** — canonical operand order is a fixpoint (rotation iterated to
+  convergence; mask-before-sort), so simplifying a simplified expression no longer changes it. This can
+  change the canonical operand ordering of some expressions vs 0.3.x (verified not to affect the
+  downstream symbolic-data / flash-ansr / srbf test goldens).
+- **`prune_redundant_rules` corrected against the Rust core** (the pure-Python prune produced 0 rules
+  with `_core`); offline grid mining caps sources at length ≤ i and chunks the per-config budget.
+- **`simplipy install <name>` / `simplipy remove <name>` now work.** They previously passed the asset
+  *type* as the asset name (and the name as `force`/`quiet`), so every invocation raised
+  `ValueError: Unknown asset: 'engine'`. They now take just an asset name with clean error handling
+  (message + exit 1, no traceback); the vestigial `--type` flag is dropped from `install`/`remove`
+  (`list` keeps it).
 
 ### Docs
 - Documented the normalization helpers in the API reference; added a CLI reference for
