@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.1 — 2026-07-02 — find_rules works with the Rust core + safe concurrent asset installs
+
+### Fixed
+- **`find_rules` now mines natively on the Rust core.** With `_core` attached (any engine from
+  `load()` / `from_config()`), the fork-based Python pool mined **0 rules**: the workers mutate
+  Python-side rule state while `simplify` runs on the immutable core — the same class of bug as the
+  0.4.0 `prune_redundant_rules` fix. Phase 2 now delegates to the native mine when the core is
+  attached (candidate library + per-length `mine_one_length` + `set_rules` between lengths,
+  rayon-parallel; cap with `RAYON_NUM_THREADS`; `n_workers` only applies to the pure-Python
+  fallback). Mined rules are now always canonicalized to the wildcard (`_j`) form.
+- **`find_rules(X=<ndarray>)`** no longer raises `NameError` (the documented array form was never
+  assigned to the internal data variable).
+- **Concurrent cold-cache asset installs are now safe.** Installs serialize per asset via a
+  `FileLock`, and an asset only counts as installed when **every** file in its manifest is present,
+  so a partially-downloaded asset is correctly treated as not installed. New dependency: `filelock`.
+
+### Changed
+- Offline-mining research artifacts (the Phase-B plan, the capability-gap analysis, and the mine
+  grid/validation drivers) moved out of the released repo into the research archive.
+
 ## 0.4.0 — 2026-07-01 — native offline rule-miner + simplify fixes + CLI fix
 
 ### Added
