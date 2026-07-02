@@ -2583,6 +2583,78 @@ class SimpliPyEngine:
         finally:
             X_shm.close()
 
+    def _find_rules_native(
+            self,
+            expressions_of_length: dict[int, set[tuple[str, ...]]],
+            max_source_pattern_length: int,
+            max_target_pattern_length: int | None,
+            dummy_variables: list[str],
+            X_data: np.ndarray,
+            constants_fit_challenges: int,
+            constants_fit_retries: int,
+            output_file: str | None,
+            prune: bool,
+            verbose: bool,
+            interrupted: Callable[[], bool]) -> None:
+        """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
+
+        Mirrors the pure-Python worker pool, but correctly against the core: per source
+        length (shortest first), each source is Kruskal-pruned against the rules found so
+        far and searched for an equivalent shorter candidate; the growing rule set is
+        pushed into the core between lengths (``set_rules``), which the Python pool cannot
+        do (the core is immutable from forked workers, so it would mine nothing).
+        Parallelism is rayon over all cores; cap it with ``RAYON_NUM_THREADS``.
+        """
+        assert self._core is not None
+
+        if max_target_pattern_length is None:
+            # Any strictly shorter candidate is a valid replacement.
+            max_candidate_length = max_source_pattern_length - 1
+        else:
+            max_candidate_length = max_target_pattern_length
+
+        candidates = [
+            list(expression)
+            for length in sorted(expressions_of_length)
+            if length <= max_candidate_length
+            for expression in expressions_of_length[length]
+        ]
+        library = self._core.build_candidate_library(
+            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0])
+
+        # Existing rules (empty after reset_rules=True) join the Kruskal pruning and the
+        # final deduplicated set, like the pure-Python path.
+        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.simplification_rules]
+
+        # Sources: lengths up to max_source_pattern_length only (`construct_expressions`
+        # over-produces a tail of longer expressions beyond the documented contract).
+        for length in sorted(k for k in expressions_of_length if k <= max_source_pattern_length):
+            if interrupted():
+                break
+            self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
+            sources = [list(expression) for expression in expressions_of_length[length]]
+            found = self._core.mine_one_length(
+                sources, library, max_target_pattern_length,
+                constants_fit_challenges, constants_fit_retries, length)
+            if found:
+                rules = deduplicate_rules(
+                    rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found],
+                    dummy_variables, verbose=verbose)
+            if verbose:
+                print(f'Length {length}: {len(sources):,} sources, {len(found):,} new rules, {len(rules):,} total')
+            if output_file is not None:
+                with open(output_file, 'w') as file:
+                    json.dump(rules, file, indent=4)
+
+        self.simplification_rules = list(rules)
+        self.compile_rules()
+        self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
+        if prune:
+            self.prune_redundant_rules(verbose=verbose)
+        if output_file is not None:
+            with open(output_file, 'w') as file:
+                json.dump(self.simplification_rules, file, indent=4)
+
     def find_rules(
             self,
             max_source_pattern_length: int = 7,
@@ -2644,6 +2716,10 @@ class SimpliPyEngine:
             If True, shows progress bars and status updates.
         n_workers : int or None, optional
             Number of parallel processes to use. Defaults to the number of CPU cores.
+            Only applies to the pure-Python fallback: with the compiled core attached
+            (an engine from :meth:`load`/:meth:`from_config`), the mine runs natively on
+            the Rust engine, parallelized over all cores via rayon; cap it with the
+            ``RAYON_NUM_THREADS`` environment variable instead.
         """
         # Signal handler for main process
         interrupted = False
@@ -2675,6 +2751,8 @@ class SimpliPyEngine:
             X_data = np.random.normal(loc=0, scale=5, size=(1024, len(dummy_variables)))
         elif isinstance(X, int):
             X_data = np.random.normal(loc=0, scale=5, size=(X, len(dummy_variables)))
+        else:
+            X_data = np.asarray(X, dtype=np.float64)
 
         leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
@@ -2723,6 +2801,30 @@ class SimpliPyEngine:
             print(f"Finished generating expressions up to size {max_source_pattern_length}. Total expressions: {total_expressions:,}")
             for length, expressions in sorted(expressions_of_length.items()):
                 print(f"Size {length}: {len(expressions):,} expressions")
+
+        # --- Phase 2 (compiled core): mine natively on the Rust engine ---
+        # The fork-based Python pool below mutates Python-side rule state while `simplify`
+        # runs on the immutable Rust core, so with `_core` attached it mines 0 rules (the
+        # same class of bug as the old `prune_redundant_rules`; see `prune_explicit`).
+        # Mirror that fix: delegate the mine to the native engine.
+        if self._core is not None:
+            try:
+                self._find_rules_native(
+                    expressions_of_length,
+                    max_source_pattern_length,
+                    max_target_pattern_length,
+                    dummy_variables,
+                    X_data,
+                    constants_fit_challenges,
+                    constants_fit_retries,
+                    output_file,
+                    prune,
+                    verbose,
+                    lambda: interrupted,
+                )
+            finally:
+                signal.signal(signal.SIGINT, old_handler)
+            return
 
         expressions_of_length_and_variables: dict[int, dict[tuple[str, ...], set[tuple[str, ...]]]] = {}
         for length, expressions in expressions_of_length.items():

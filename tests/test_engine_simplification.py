@@ -464,6 +464,72 @@ class TestFindRules:
         assert len(engine_pruned.simplification_rules) <= len(engine_no_prune.simplification_rules)
 
 
+class TestFindRulesWithCore:
+    """find_rules on an engine with the compiled Rust core attached.
+
+    Regression tests for the core mine: the fork-based Python pool mutates Python-side
+    rule state while `simplify` runs on the immutable Rust core, so before the native
+    delegation an engine from `from_config`/`load` mined 0 rules.
+    """
+
+    def _core_engine(self, tmp_path) -> SimpliPyEngine:
+        """Build an engine from tmp config+rules files so `from_config` attaches the core."""
+        import json
+
+        import yaml
+
+        rules_path = tmp_path / "rules.json"
+        rules_path.write_text(json.dumps([]))
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump({"operators": _FIND_RULES_OPERATORS, "rules": "rules.json"}))
+        engine = SimpliPyEngine.from_config(str(config_path))
+        assert engine._core is not None, "compiled core failed to attach; the native mine path is untested"
+        return engine
+
+    def test_native_mine_discovers_basic_identities(self, tmp_path) -> None:
+        """A core-attached engine must mine rules (it returned 0 before the native path)."""
+        engine = self._core_engine(tmp_path)
+        engine.find_rules(
+            max_source_pattern_length=3,
+            dummy_variables=2,
+            extra_internal_terms=["0", "1"],
+            X=128,
+            constants_fit_challenges=2,
+            constants_fit_retries=1,
+        )
+        assert len(engine.simplification_rules) > 0
+        # The native path always dedups/canonicalizes: dummy variables become `_j` wildcards.
+        rules_lhs = {tuple(r[0]) for r in engine.simplification_rules}
+        assert ("+", "_0", "0") in rules_lhs
+        assert ("*", "_0", "1") in rules_lhs
+
+    def test_native_mine_updates_the_live_core(self, tmp_path) -> None:
+        """After the mine, `simplify` (which runs on the core) must apply the new rules."""
+        engine = self._core_engine(tmp_path)
+        engine.find_rules(
+            max_source_pattern_length=3,
+            dummy_variables=2,
+            extra_internal_terms=["0", "1"],
+            X=128,
+            constants_fit_challenges=2,
+            constants_fit_retries=1,
+        )
+        assert list(engine.simplify(["+", "x0", "0"])) == ["x0"]
+
+    def test_x_as_array_is_accepted(self, tmp_path) -> None:
+        """Passing X as an ndarray (documented) must work (it raised NameError before)."""
+        engine = self._core_engine(tmp_path)
+        engine.find_rules(
+            max_source_pattern_length=3,
+            dummy_variables=2,
+            extra_internal_terms=["0", "1"],
+            X=np.random.default_rng(0).normal(0, 5, size=(128, 2)),
+            constants_fit_challenges=2,
+            constants_fit_retries=1,
+        )
+        assert len(engine.simplification_rules) > 0
+
+
 class TestConstantFolding:
     """Tests for numeric constant folding in apply_rules_top_down."""
 
