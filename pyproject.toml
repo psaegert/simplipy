@@ -29,6 +29,7 @@ classifiers = [
 # the OFFLINE phase (rule mining + curve_fit) stays pure Python. numpy/scipy are offline-only at
 # runtime, huggingface_hub powers asset resolution, platformdirs resolves the asset cache directory.
 dependencies = [
+    "filelock",
     "huggingface_hub",
     "numpy",
     "platformdirs",
