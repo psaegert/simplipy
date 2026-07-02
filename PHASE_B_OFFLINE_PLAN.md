@@ -288,3 +288,51 @@ For the user's grid experiment (record OFFLINE mining wall-clock across `dev_i-j
 2. **Python `find_rules` is BROKEN with the Rust core** — returns **0 rules** even at `n_workers=1` (the forked worker uses the immutable `_core` and produces nothing; same class as the prune bug). So the shipped Python `find_rules` cannot mine with the Rust core. **The native mine is the working offline miner**, and faithfulness rests on: per-source M4a (99.44 % vs `find_rule_worker` called directly) + **100 % output soundness** + the shared (faithful) generation/`deduplicate_rules`. A full mine-level cross-check would need the pure-Python (no-`_core`) `find_rules`; deferred (low value — the native mine supersedes it).
 
 **Ready to launch** (`mine_grid.py --full --out …`) when valkyrie is free. The grid run records real all-cores offline wall-clock per `dev_i-j`, cheapest-first; the `i=7` high-`j` corner is extrapolated, not run (weeks–years). **Follow-up flagged:** the Python `find_rules`/`_core` bug (route it through the native mine, mirroring the prune fix) — separate from this prep.
+
+---
+
+## Grid RESULT + projected time surface (2026-06-30)
+
+Ran the grid on valkyrie (32 cores), **stopped early** (user needed the box) after **10 configs completed**: the full `j=1` band (`dev_2..7-1`) and `dev_3..6-2`. That is enough to fit and validate the cost model — no need to run the expensive cells.
+
+**Measured (mine wall-clock, 32 cores):** `dev_7-1` 21.3 s · `dev_6-1` 10.2 s · `dev_4-2` 39.9 s · `dev_5-2` 290 s · **`dev_6-2` 923 s**.
+
+**Cost model.** The per-candidate cost is NOT constant — it rises with `j` (more/longer candidates → more `curve_fit`) and converges with `i`. Calibrated `c` (effective µs/candidate) at large `i`: **6.3 µs (j=1) → 19 µs (j=2)**. This gives `total(i,j) ≈ K · N_sources(i) · library(i,j)^β` with **β = 1.32**, `K = 8.64e-8 s` (fit on the converged anchors `dev_7-1`, `dev_6-2`).
+- **`N_sources(i)` and `library(i,j)` are KNOWN exactly for every cell** — the `j=1` band recorded source counts at *all* lengths `k ≤ i`, so candidate-library sizes for j=3-6 are real data. Only `c` is extrapolated.
+- **Validation:** model reproduces `dev_6-2` (1.00×), `dev_5-2` (0.80×), `dev_6-1` (0.86×) — tight on the large-`i` configs that dominate cost. Underestimates small-`i` (overhead not modelled; those are cheap anyway).
+
+**Projected offline-mine time (32 cores), `*` = measured:**
+
+| i \ j | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| 4 | 0s* | 16s* | 28 m | — | — | — |
+| 5 | 2s* | 3.9 m* | 7.0 h | 3.1 d | — | — |
+| 6 | 9s* | 15 m* | 28 h | 12 d | ~0.8 y | — |
+| 7 | 21s* | 37 m | **2.8 d** | 33 d | 2.3 y | 15 y |
+
+**Reliability tiers:** j ≤ 3 solid (±~2×; `dev_7-3` ≈ **2.8 d** is real); j = 4 moderate (±2-4×; `dev_7-4` ≈ a month); j ≥ 5 order-of-magnitude only ("categorically infeasible"). Because longer candidates get disproportionately expensive, β likely **steepens** for high `j` → the j≥4 cells are **lower bounds**.
+
+**Conclusion (answers the original question).** The shipped `dev_7-3` engine ≈ **2.8 days on 32 cores** — now feasible to re-mine on a single free box (a real Rust-port win; it formerly needed a cluster). But "more / larger patterns" hits a **combinatorial** wall: each `+1` to `j` multiplies the candidate library ~30-200×, so `dev_7-4` ≈ a month and beyond is years. No amount of Rust changes `library(i,j)^1.32`. The port's payoff is the fast online phase + making moderate re-mines (≤ `dev_7-3`) cluster-free; `dev_9-4` / j≥4 is not worth pursuing. Raw data: `scratchpad/mine_grid_results.json`.
+
+---
+
+## Fingerprint-bucketing redesign — ANALYZED + REFUTED as a wall-breaker (2026-06-30)
+
+Asked whether a fundamentally better ALGORITHM (numeric equivalence-class **fingerprint-bucketing**: hash each expression's K-point output vector → group-by in O(N+L) instead of the brute-force O(N×L) all-pairs scan) could break the `library^1.32` wall and make `dev_9-4` feasible. Ran a 9-agent feasibility+soundness workflow (2 analysis lenses returned placeholder output / 1 errored — degraded; the load-bearing evidence is the 3 adversarial verify lenses, which measured real data, + an independent cross-check here).
+
+**VERDICT: NO — bucketing is a ~1.2-1.5× constant factor, not a wall-breaker.** It advances **zero** steps of `j`; `dev_7-4`/`dev_9-4` stay infeasible.
+
+**Why (Amdahl on the wrong half).** Bucketing only removes the **scan**, which is the **cheap** half:
+- const-bearing candidates are a **minority by count** (measured: **12-15% of the library, ~flat across j**; cross-checked on the 114k shipped rules: 12.2% LHS / 18.6% RHS / 27.4% either-side const-bearing) — so the "const-bearing re-dominates at large j" worry is empirically FALSE.
+- but **cost-weighted, that ~13% carries ~70-80% of mining time**: an `allclose` (const-free test) ≈ 3 µs vs a constant FIT ≈ 85 µs avg (nonlinear LM up to 782 µs, M1-measured). Bucketing makes the ~20-30% cheap slice free → ceiling speedup ≈ **1.21× (1.06-2.85× sensitivity)**.
+- the residual **cannot be bucketed in principle**: `exist_constants_fit` (`worker.rs:217-229`) fits the *candidate's* constants to the *source's* y — a **directional containment test**, asymmetric + non-transitive → not an equivalence relation → no partition/group-by. A const-free source must still scan every const-bearing candidate (point-in-family = projection, not hash-equality).
+
+**Also:** the literal "partition into equivalence classes; shortest = canonical" is **unsound** — `allclose` (rtol=1e-5) is non-transitive/asymmetric, so class-building can emit rules brute-force rejects (false merge). Salvageable only as strict **filter-then-confirm** (hash = over-inclusive filter; emit only after the exact directed gate) — sound, but still just the ~1.3× win.
+
+**This was already known:** M1 fingered `curve_fit` as the cost ("the offline win must come from ALGORITHM, not language"), which is exactly why M3 built faster **fits** (affine closed-form 8×, log-linear 29×), not a scan-side hash. Bucketing optimizes the part already measured as cheap.
+
+**The real levers for "more/larger patterns" (neither breaks the wall for a UNIVERSAL engine):**
+1. **Faster fits** (the dominant ~70%): extend M3 (native LM batching for the nonlinear remainder). Constant-factor, but on the right half → raises the ceiling toward ~2-3×.
+2. **Corpus-weighted mining**: mine only expressions that occur in real data / model outputs → shrinks `N_sources` (the OTHER factor). The **only** lever that meaningfully changes feasibility — but it's a **scope change** (corpus-specific engine_id, narrower guarantee), not a scaling fix. Orthogonal to bucketing; composes.
+
+**Cheapest decisive confirmation (run later on a free box):** wire const-free bucketing (filter-then-confirm) into a re-mine of `dev_6-2` (923 s brute-force anchor); expect ~1.3-1.5× speedup + **0 false merges** + tiny recall gap. If it lands there, bucketing is a minor optimization and effort should go to fits / corpus-weighting. Durable adversarial record: `scratchpad/constants_killer_verdict.md`.

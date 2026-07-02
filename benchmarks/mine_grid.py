@@ -94,6 +94,9 @@ def native_mine(eng, max_source, max_target, n_samples=1024, challenges=16, retr
         per_len[L] = (len(sources_L), len(found_L), round(time.perf_counter() - tl, 3))
         if found_L:
             rules = deduplicate_rules(rules + [tuple(map(tuple, r)) for r in found_L], dummy)
+        print(f"    [len {L}] sources={len(sources_L)} found={len(found_L)} "
+              f"pass={per_len[L][2]:.0f}s cum_rules={len(rules)} elapsed={time.perf_counter()-t0:.0f}s",
+              flush=True)
         if incomplete:
             break
     t["mine"] = time.perf_counter() - t0
