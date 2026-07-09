@@ -932,11 +932,20 @@ class SimpliPyEngine:
                                 # FIX (conversion-quirk #2): x**0 -> 1 (not the invalid token 'pow0').
                                 stack.append(['1'])
                             else:
-                                pow_operator = f'pow{abs(exponent_value)}'
-                                if exponent_value < 0:
-                                    stack.append(['inv', [[pow_operator, [base]]]])
+                                try:
+                                    # Only exponents decomposable into the unary pow2..pow{max_power}
+                                    # vocabulary may become powN tokens; non-smooth exponents (7, 11,
+                                    # 14, ...) previously produced phantom operators like `pow7` with
+                                    # no realization, corrupting arity downstream. Keep binary pow.
+                                    factorize_to_at_most(abs(exponent_value), self.max_power)
+                                except ValueError:
+                                    stack.append(['pow', [base, exponent]])
                                 else:
-                                    stack.append([pow_operator, [base]])
+                                    pow_operator = f'pow{abs(exponent_value)}'
+                                    if exponent_value < 0:
+                                        stack.append(['inv', [[pow_operator, [base]]]])
+                                    else:
+                                        stack.append([pow_operator, [base]])
                         elif is_numeric_string(exponent[0]):  # Floating-point exponent
                             exponent_value = float(exponent[0])
 
@@ -970,12 +979,20 @@ class SimpliPyEngine:
                                 # FIX (conversion-quirk #2): x**(0/N) -> 1 (not 'pow0').
                                 stack.append(['1'])
                             else:
-                                numerator_power = f'pow{abs(numerator)}'
-                                denominator_power = f'pow1_{abs(denominator)}'
-                                if numerator * denominator < 0:
-                                    stack.append(['inv', [[denominator_power, [[numerator_power, [base]]]]]])
+                                try:
+                                    # Same decomposability gate as the integer branch, for both the
+                                    # power (pow{num}) and the root (pow1_{den}) halves.
+                                    factorize_to_at_most(abs(numerator), self.max_power)
+                                    factorize_to_at_most(abs(denominator), self.max_fractional_power)
+                                except ValueError:
+                                    stack.append(['pow', [base, exponent]])
                                 else:
-                                    stack.append([denominator_power, [[numerator_power, [base]]]])
+                                    numerator_power = f'pow{abs(numerator)}'
+                                    denominator_power = f'pow1_{abs(denominator)}'
+                                    if numerator * denominator < 0:
+                                        stack.append(['inv', [[denominator_power, [[numerator_power, [base]]]]]])
+                                    else:
+                                        stack.append([denominator_power, [[numerator_power, [base]]]])
                         else:
                             exponent_value = int(exponent[1][0][0]) / int(exponent[1][1][0])
                             abs_exponent_fraction = fractions.Fraction(abs(exponent_value)).limit_denominator()

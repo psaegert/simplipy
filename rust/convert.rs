@@ -691,7 +691,7 @@ fn pow_keep(base: Ir, exponent: Ir) -> Ir {
 
 /// `**` handling (engine.py:702-763): integer / float / integer-fraction exponent. `Err` mirrors the
 /// dead len==2 float-division branch's `int()` `ValueError` (failure-parity).
-fn handle_pow(base: Ir, exponent: Ir, _ops: &Operators, fixed: bool) -> Result<Ir, String> {
+fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir, String> {
     let ev = match &exponent {
         Ir::L(v) => v,
         Ir::S(_) => return Ok(pow_keep(base, exponent)),
@@ -705,6 +705,15 @@ fn handle_pow(base: Ir, exponent: Ir, _ops: &Operators, fixed: bool) -> Result<I
             let v: i128 = tok.parse().map_err(|_| "int overflow".to_string())?;
             if fixed && v == 0 {
                 return Ok(Ir::L(vec![Ir::S("1".into())])); // FIX (#2): x**0 -> 1 (not 'pow0')
+            }
+            // Decomposability gate (FIX: phantom powN): only exponents factorizable into the
+            // unary pow2..pow{max_power} vocabulary may become powN tokens; non-smooth
+            // exponents (7, 11, 14, ...) previously emitted operators like `pow7` with no
+            // realization, corrupting arity downstream. Keep binary pow instead.
+            if crate::utils::factorize_to_at_most(v.unsigned_abs() as i128, ops.max_power, 1000)
+                .is_err()
+            {
+                return Ok(pow_keep(base, exponent));
             }
             let pow_op = format!("pow{}", v.unsigned_abs());
             if v < 0 {
@@ -759,6 +768,15 @@ fn handle_pow(base: Ir, exponent: Ir, _ops: &Operators, fixed: bool) -> Result<I
                     let denominator: i128 = dt.parse().map_err(|_| "int overflow".to_string())?;
                     if fixed && numerator == 0 {
                         return Ok(Ir::L(vec![Ir::S("1".into())])); // FIX (#2): x**(0/N) -> 1
+                    }
+                    // Same decomposability gate for the power (pow{num}) and root (pow1_{den}).
+                    if crate::utils::factorize_to_at_most(
+                        numerator.unsigned_abs() as i128, ops.max_power, 1000).is_err()
+                        || crate::utils::factorize_to_at_most(
+                            denominator.unsigned_abs() as i128, ops.max_fractional_power, 1000)
+                            .is_err()
+                    {
+                        return Ok(pow_keep(base, exponent));
                     }
                     let num_power = format!("pow{}", numerator.unsigned_abs());
                     let den_power = format!("pow1_{}", denominator.unsigned_abs());

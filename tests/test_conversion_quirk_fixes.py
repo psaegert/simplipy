@@ -83,3 +83,31 @@ def test_no_regression_on_ordinary_expressions(engine):
     assert engine.parse("x1 ^ 2") == ["pow2", "x1"]
     assert engine.parse("x1 * x2 + x3") == ["+", "*", "x1", "x2", "x3"]
     assert engine.parse("sin(x1) / x2", mask_numbers=True) == ["/", "sin", "x1", "x2"]
+
+
+def test_non_smooth_exponents_keep_binary_pow(engine):
+    """FIX (phantom powN): exponents not decomposable into pow2..pow{max_power} must stay
+    binary `pow`, never phantom tokens like `pow7` (which have no realization and corrupt
+    arity downstream). Smooth exponents keep their exact previous form."""
+    # non-smooth: binary pow survives and REALIZES
+    assert engine.parse("v1 ** 7", mask_numbers=False) == ["pow", "v1", "7"]
+    assert engine.parse("v1 ** 14", mask_numbers=False) == ["pow", "v1", "14"]
+    assert engine.parse("v1 ** (7/3)", mask_numbers=False) == ["pow", "v1", "/", "7", "3"]
+    # smooth: unchanged decompositions
+    assert engine.parse("v1 ** 6 + v1", mask_numbers=False) == ["+", "pow2", "pow3", "v1", "v1"]
+    assert engine.parse("v1 ** 8", mask_numbers=False) == ["pow4", "pow2", "v1"]
+    assert engine.parse("v1 ** (4/3)", mask_numbers=False) == ["pow1_3", "pow4", "v1"]
+
+
+def test_high_degree_polynomial_chain_realizes(engine):
+    """End-to-end regression for the original failure (Nonic / Livermore-9/-22): a chain
+    containing x**7 must parse, realize, codify, and evaluate."""
+    import numpy as np
+    from simplipy.utils import codify
+
+    chain = " + ".join([f"v1 ** {k}" for k in range(9, 1, -1)] + ["v1"])
+    prefix = engine.parse(chain, mask_numbers=False)
+    realized = engine.operators_to_realizations(prefix)
+    fn = engine.code_to_lambda(codify(engine.prefix_to_infix(realized, realization=True), ["v1"]))
+    x = np.linspace(-1.0, 1.0, 7)
+    assert np.allclose(fn(x), sum(x ** k for k in range(2, 10)) + x)
