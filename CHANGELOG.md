@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.5.0 — 2026-07-11 — sound rule-mine checker (2026-07-10 audit) + Python mining mirror removed
+
+Full audit report: `EQUIVALENCE_AUDIT_2026-07-10.md`. The pre-0.5.0 checker shipped ~8.3% defective
+rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard rules such as
+`asin(cosh(_0)) -> nan` (false at 0, where the source is pi/2).
+
+### Fixed (checker soundness)
+- **Vacuous equal_nan acceptance closed.** An accepted replacement must now evaluate FINITE on at
+  least `min_informative` rows (default `n_rows / 8`). Const-free candidates gate once on their
+  precomputed finite count (provably equivalent to per-instance gating); const-bearing candidates
+  accumulate finite source rows across passing fit instances.
+- **Tolerances tightened** `rtol` 1e-5 -> 1e-9, `atol` 1e-8 -> 1e-12 (0 borderline rules in the
+  840-rule audit sample; tanh/exp saturation towers are no longer "equal" to constants).
+- **Heavy-tailed, seeded evaluation matrix** (`_mining_sample_x`): 40% N(0,5) + 25% U(-50,50) +
+  25% signed log-uniform magnitudes 1e-6..1e6 + 10% exact corner points ({+-0.0, +-0.1, +-0.5,
+  +-1, +-2, +-e, +-pi, +-10}). The corner points make the checker STRICT about measure-zero
+  counterexamples (e.g. `mul(_0, inv(_0)) -> 1` is now rejected: false at exactly 0).
+- **Stage-2 confirmation** (`confirm=True`): every mined pair is re-verified on an independent,
+  twice-as-wide X with fresh constant draws and seeds before it can enter the Kruskal cascade.
+- **IEEE inv/div semantics** aligned across the Rust kernels, the scalar Python operators and the
+  constant folder (`1/±0 = ±inf`, `x/0` sign-correct): the mine now certifies exactly the semantics
+  the deployed numpy engine executes.
+- **Complete Phase-1 enumeration.** The old pass-based closure stopped once the maximum length was
+  REACHED, not SATURATED: the dev_7-3 mine saw 444,865 of the 9.0e9 length<=7 expressions and missed
+  e.g. ALL 179,685 triple-unary chains at length 4. Phase 1 is now a bottom-up DP per length,
+  complete by construction and cross-checked against an exact count DP every run.
+- **Universe policy for infeasible lengths** (`source_sample_per_length`): lengths whose complete
+  universe explodes (dev set: 2.4e8 at length 6, 8.8e9 at length 7) are drawn uniformly from the
+  complete universe via a count-weighted top-down sampler; coverage is always logged, and sampling
+  inside the candidate range warns (the library then no longer certifies minimality).
+- **Full determinism**: seeded master RNG (`seed=42`), sorted set iteration for sources and the
+  candidate library, derived per-length seed blocks. Same seed => identical rule set.
+- **Fit-path completeness**: `constants_fit_challenges` / `constants_fit_retries` defaults raised
+  5 -> 16 end to end (the old find_rules passed 5 against an FFI default of 16; measured fit-path
+  completeness at 5/5 was ~24%).
+
+### Changed
+- **Perf**: the source expression is now evaluated once per source (per challenge instance) and
+  shared across the whole candidate scan, instead of per (candidate, challenge, sign-combo); a
+  const-free source collapses to a single challenge instance (identical targets add no evidence
+  and only multiplied fit flakiness).
+
+### Removed (BREAKING)
+- **The pure-Python mining mirror is gone**: `find_rule_worker`, `exist_constants_that_fit` and the
+  fork/SharedMemory pool (with the `n_workers` parameter). It duplicated `rust/worker.rs`/`fit.rs`
+  and repeatedly desynced from them (the audit's IEEE inv/div fork). `find_rules` now requires the
+  compiled core and raises `RuntimeError` on a bare engine; parallelism is rayon's
+  (`RAYON_NUM_THREADS`).
+
+### Compatibility
+- Shipped rule assets (`dev_7-3` etc.) are unchanged by this release; they remain the v23 anchor.
+  A re-mine with the hardened checker is a separate, explicitly-versioned artifact.
+
+
 ## 0.4.1 — 2026-07-02 — find_rules works with the Rust core + safe concurrent asset installs
 
 ### Fixed

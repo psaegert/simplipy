@@ -1,5 +1,15 @@
 # Equivalence-checker audit — rule mining (2026-07-10)
 
+> **STATUS 2026-07-11: RESOLVED — all six fixes implemented and released as 0.5.0**
+> (commits 7af1cce, f9e6cc1 + the 0.5.0 hardening commit; see `CHANGELOG.md` 0.5.0 and
+> `tests/test_mining_soundness.py`, which encodes every probe below as a regression test).
+> Informativeness gate + rtol 1e-9/atol 1e-12 + heavy-tailed corner-bearing seeded X +
+> stage-2 confirmation; IEEE inv/div alignment; complete DP Phase-1 enumeration
+> cross-checked against the count DP + uniform-sampling universe policy for lengths 6-7;
+> full determinism (seed=42); challenges/retries 16/16; source-eval hoisting; the
+> pure-Python mining mirror is REMOVED (native-only mine). dev_7-3 stays frozen as the
+> v23 anchor; the 7-4 re-mine runs on the hardened checker as a new versioned artifact.
+
 Three audit lenses (code review, adversarial probes against the compiled 0.4.2 core,
 re-verification of 840 stratified dev_7-3 rules with 100k-point wide-domain sampling +
 sympy). VERDICT: the checker is NOT sound or reproducible as shipped; the planned 7-4

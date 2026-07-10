@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "simplipy-core"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "pyo3",

@@ -717,6 +717,100 @@ def mask_elementary_literals(prefix_expression: list[str], inplace: bool = False
     return modified_prefix_expression
 
 
+def compositions(total: int, k: int) -> Generator[tuple[int, ...], None, None]:
+    """Yield all ordered compositions of ``total`` into ``k`` parts, each part >= 1.
+
+    Deterministic (lexicographic in the first part) -- the expression-universe DP,
+    the count DP and the uniform sampler below all iterate compositions in this
+    exact order, which is what makes the sampler's cumulative-weight walk valid.
+    """
+    if k == 1:
+        if total >= 1:
+            yield (total,)
+        return
+    for first in range(1, total - k + 2):
+        for rest in compositions(total - first, k - 1):
+            yield (first,) + rest
+
+
+def enumerate_expressions(
+        leaf_nodes: list[str],
+        non_leaf_nodes: dict[str, int],
+        max_length: int) -> dict[int, set[tuple[str, ...]]]:
+    """COMPLETE bottom-up enumeration of prefix expressions by length.
+
+    Every prefix expression of length L > 1 decomposes uniquely as a root operator
+    plus child expressions of lengths >= 1 summing to L - 1, so filling lengths in
+    ascending order is exhaustive by induction -- in contrast to the pass-based
+    closure this replaces (2026-07-10 audit), which stopped when the maximum length
+    was REACHED rather than SATURATED and silently missed e.g. every triple-unary
+    chain at length 4 (93.6% of that length's universe in the dev_7-3 mine).
+
+    The work and memory are exactly the universe size; check
+    :func:`count_expressions` FIRST -- complete enumeration is infeasible beyond
+    ~1e7 expressions (the dev operator set crosses that between lengths 5 and 6).
+    """
+    out: dict[int, set[tuple[str, ...]]] = {1: {(leaf,) for leaf in leaf_nodes}}
+    for target in range(2, max_length + 1):
+        bucket: set[tuple[str, ...]] = set()
+        for operator, arity in non_leaf_nodes.items():
+            for parts in compositions(target - 1, arity):
+                for combination in itertools.product(*(out[part] for part in parts)):
+                    bucket.add((operator,) + tuple(itertools.chain.from_iterable(combination)))
+        out[target] = bucket
+    return out
+
+
+def count_expressions(n_leaves: int, non_leaf_nodes: dict[str, int], max_length: int) -> dict[int, int]:
+    """Count the complete expression universe per length (same DP as ``enumerate_expressions``).
+
+    Cheap (polynomial in ``max_length``), so it can size a universe long before
+    enumeration is attempted; ``enumerate_expressions`` results must match these
+    counts exactly (two paths, one truth).
+    """
+    counts = {1: n_leaves}
+    for target in range(2, max_length + 1):
+        total = 0
+        for _operator, arity in non_leaf_nodes.items():
+            for parts in compositions(target - 1, arity):
+                weight = 1
+                for part in parts:
+                    weight *= counts[part]
+                total += weight
+        counts[target] = total
+    return counts
+
+
+def sample_expression(
+        length: int,
+        leaf_nodes: list[str],
+        non_leaf_nodes: dict[str, int],
+        counts: dict[int, int],
+        rng: np.random.Generator) -> tuple[str, ...]:
+    """Draw ONE expression uniformly from the COMPLETE universe of the given length.
+
+    Top-down count-weighted sampling: pick the root operator and the child-length
+    composition with probability proportional to the number of expressions they
+    root (``counts`` from :func:`count_expressions`), then recurse. Exactly uniform
+    over the full universe WITHOUT materializing it -- this is the only sound way
+    to represent lengths whose complete universe is too large to enumerate
+    (dev operator set: 2.4e8 at length 6, 8.8e9 at length 7).
+    """
+    if length == 1:
+        return (leaf_nodes[int(rng.integers(len(leaf_nodes)))],)
+    remaining = int(rng.integers(counts[length]))
+    for operator, arity in non_leaf_nodes.items():
+        for parts in compositions(length - 1, arity):
+            weight = 1
+            for part in parts:
+                weight *= counts[part]
+            if remaining < weight:
+                return (operator,) + tuple(itertools.chain.from_iterable(
+                    sample_expression(part, leaf_nodes, non_leaf_nodes, counts, rng) for part in parts))
+            remaining -= weight
+    raise AssertionError(f'count DP inconsistent at length {length}')
+
+
 def construct_expressions(expressions_of_length: dict[int, set[tuple[str, ...]]], non_leaf_nodes: dict[str, int], must_have_sizes: list | set | None = None) -> Generator[tuple[str, ...], None, None]:
     """Generate new prefix expressions by combining existing building blocks.
 

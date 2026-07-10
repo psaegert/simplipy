@@ -205,13 +205,10 @@ fn var_mask(tokens: &[String], var_names: &[String]) -> u32 {
 /// the M3 fit (`exist_constants_fit_prepared`, `retries` restarts) per combo. Rejects on first failure.
 #[allow(clippy::too_many_arguments)]
 fn candidate_matches(
-    src_tape: &Tape,
-    n_src_const: usize,
-    combos: &[Vec<f64>],
+    y_src: &[Vec<f64>],
     cand: &CandEntry,
     cols: &[Vec<f64>],
     n_rows: usize,
-    challenges: usize,
     retries: usize,
     rtol: f64,
     atol: f64,
@@ -226,43 +223,64 @@ fn candidate_matches(
     // Const-bearing arm: accumulate finite SOURCE rows over passing instances; vacuous instances
     // (e.g. an all-NaN zero-constant combo matched vacuously by the fit) contribute no evidence.
     let mut total_informative: usize = 0;
-    for _ in 0..challenges {
-        let rc: Vec<f64> = (0..n_src_const)
-            .map(|_| rng.normal(0.0, 5.0).abs())
-            .collect();
-        for combo in combos {
-            let p: Vec<f64> = rc.iter().zip(combo).map(|(r, c)| r * c).collect();
-            let y = src_tape.eval_columns(cols, &p, n_rows);
-            let ok = if cand.n_const == 0 {
-                // engine.py:2446: allclose(source, candidate)
-                allclose(&y, cand.y_const_free.as_ref().unwrap(), rtol, atol)
-            } else {
-                let s = rng.next_u64();
-                crate::fit::exist_constants_fit_prepared(
-                    &cand.tape,
-                    cand.linearity,
-                    cols,
-                    n_rows,
-                    &y,
-                    rtol,
-                    atol,
-                    retries,
-                    s,
-                    cand.loglin.as_ref().map(|(f, t)| (*f, t)),
-                )
-            };
-            if !ok {
-                return false;
-            }
-            if cand.n_const > 0 {
-                total_informative += crate::eval::count_finite(&y);
-            }
+    for y in y_src {
+        let ok = if cand.n_const == 0 {
+            // engine.py (historical find_rule_worker): allclose(source, candidate)
+            allclose(y, cand.y_const_free.as_ref().unwrap(), rtol, atol)
+        } else {
+            let s = rng.next_u64();
+            crate::fit::exist_constants_fit_prepared(
+                &cand.tape,
+                cand.linearity,
+                cols,
+                n_rows,
+                y,
+                rtol,
+                atol,
+                retries,
+                s,
+                cand.loglin.as_ref().map(|(f, t)| (*f, t)),
+            )
+        };
+        if !ok {
+            return false;
+        }
+        if cand.n_const > 0 {
+            total_informative += crate::eval::count_finite(y);
         }
     }
     if cand.n_const > 0 && total_informative < min_informative {
         return false;
     }
     true
+}
+
+/// The source-side challenge instances, evaluated ONCE PER SOURCE and shared across every candidate
+/// (2026-07-10 audit, perf): the old layout re-evaluated the source inside `candidate_matches`, i.e.
+/// per (candidate, challenge, sign-combo) -- for a const-free source that was `challenges` identical
+/// evaluations per scanned candidate. A const-free source has exactly one distinct instance, so its
+/// challenge count collapses to 1 (identical targets add no evidence and only multiply fit flakiness).
+fn source_instances(
+    src_tape: &Tape,
+    n_src_const: usize,
+    combos: &[Vec<f64>],
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    challenges: usize,
+    rng: &mut Rng,
+) -> Vec<Vec<f64>> {
+    let eff_challenges = if n_src_const == 0 { 1 } else { challenges };
+    let mut out = Vec::with_capacity(eff_challenges * combos.len());
+    for _ in 0..eff_challenges {
+        let rc: Vec<f64> = (0..n_src_const)
+            .map(|_| rng.normal(0.0, 5.0).abs())
+            .collect();
+        for combo in combos {
+            let p: Vec<f64> = rc.iter().zip(combo).map(|(r, c)| r * c).collect();
+            out.push(src_tape.eval_columns(cols, &p, n_rows));
+        }
+    }
+    out
 }
 
 /// A RESIDENT candidate library (M4b): every candidate precompiled to a tape and indexed by length,
@@ -386,6 +404,16 @@ pub fn find_rule_with_lib(
     let combos = sign_combos(n_src_const);
 
     let mut rng = Rng::new(seed);
+    // Source instances shared across the whole candidate scan (see `source_instances`).
+    let y_src = source_instances(
+        &src_tape,
+        n_src_const,
+        &combos,
+        &lib.cols,
+        lib.n_rows,
+        challenges,
+        &mut rng,
+    );
     let scan_max = max_cand_len.min(lib.by_len.len());
     for length in 1..scan_max {
         let mut matches: Vec<Vec<String>> = Vec::new();
@@ -394,13 +422,10 @@ pub fn find_rule_with_lib(
                 continue; // candidate uses a variable the source lacks
             }
             if candidate_matches(
-                &src_tape,
-                n_src_const,
-                &combos,
+                &y_src,
                 cand,
                 &lib.cols,
                 lib.n_rows,
-                challenges,
                 retries,
                 rtol,
                 atol,

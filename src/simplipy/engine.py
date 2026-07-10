@@ -32,7 +32,8 @@ from simplipy.utils import (
     factorize_to_at_most, is_numeric_string,
     get_used_modules, numbers_to_constant, flatten_nested_list, is_prime,
     deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
-    construct_expressions, apply_mapping, match_pattern, remove_pow1,
+    enumerate_expressions, count_expressions, sample_expression,
+    apply_mapping, match_pattern, remove_pow1,
     _WILDCARD_RE)
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
@@ -2527,7 +2528,8 @@ class SimpliPyEngine:
             atol: float = 1e-12,
             min_informative: int | None = None,
             seed: int | None = 42,
-            confirm: bool = True) -> None:
+            confirm: bool = True,
+            source_sample_per_length: dict[int, int] | None = None) -> None:
         """Systematically discovers new simplification rules.
 
         This powerful method automates the discovery of simplification rules.
@@ -2592,6 +2594,18 @@ class SimpliPyEngine:
             If True (default), every mined rule is re-verified on an independent,
             twice-as-wide X with fresh constant draws before it enters the rule set
             (stage-2 confirmation; kills data-luck accepts).
+        source_sample_per_length : dict[int, int] or None, optional
+            The UNIVERSE POLICY for lengths whose complete expression universe is too
+            large to enumerate. A length mapped here is represented by that many
+            expressions drawn UNIFORMLY from its complete universe (seeded top-down
+            count-weighted sampler; see :func:`simplipy.utils.sample_expression`)
+            instead of exhaustive enumeration. All other lengths are enumerated
+            COMPLETELY (the pre-0.5.0 enumerator was silently incomplete: it stopped
+            when the maximum length was reached, not saturated -- 2026-07-10 audit).
+            Coverage is always logged; sampling a length inside the candidate/
+            replacement range additionally warns, because the candidate library then
+            no longer certifies "no shorter equivalent exists". The dev operator set
+            crosses enumeration feasibility between lengths 5 (6.8e6) and 6 (2.4e8).
 
         Notes
         -----
@@ -2657,43 +2671,50 @@ class SimpliPyEngine:
         leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
 
-        # --- Phase 1: Generate expressions ---
+        # --- Phase 1: build the source/candidate universe ---
+        # COMPLETE bottom-up DP enumeration per length (2026-07-10 audit: the old
+        # pass-based closure stopped once max_source_pattern_length was REACHED, not
+        # SATURATED -- the dev_7-3 mine saw 444,865 of the 9.0e9 length<=7 expressions
+        # and missed e.g. ALL 179,685 triple-unary chains at length 4). Lengths whose
+        # complete universe is infeasible are drawn as a seeded uniform sample from the
+        # complete universe instead (`source_sample_per_length`).
+        source_sample_per_length = dict(source_sample_per_length or {})
+        counts = count_expressions(len(leaf_nodes), non_leaf_nodes, max_source_pattern_length)
+        enumerate_max = max(
+            (length for length in range(1, max_source_pattern_length + 1)
+             if length not in source_sample_per_length),
+            default=1)
         if verbose:
-            print(f"Phase 1: Generating all expressions up to length {max_source_pattern_length}")
+            print(f"Phase 1: enumerating all expressions up to length {enumerate_max}"
+                  + (f", sampling lengths {sorted(source_sample_per_length)}" if source_sample_per_length else ""))
 
-        expressions_of_length: dict[int, set[tuple[str, ...]]] = defaultdict(set)
-        new_expressions_of_length: defaultdict[int, set[tuple[str, ...]]] = defaultdict(set)
+        expressions_of_length = enumerate_expressions(leaf_nodes, non_leaf_nodes, enumerate_max)
+        # Two paths, one truth: the enumerated universe must match the count DP exactly.
+        for length, expressions in expressions_of_length.items():
+            if len(expressions) != counts[length]:
+                raise AssertionError(
+                    f'enumeration incomplete at length {length}: {len(expressions):,} != {counts[length]:,}')
 
-        # Initialize with leaf nodes
-        for leaf in leaf_nodes:
-            expressions_of_length[1].add((leaf,))
-
-        # Generate expressions level by level
-        new_sizes: set[int] = set()
-        while max(expressions_of_length.keys()) < max_source_pattern_length:  # This means that every smaller size is already generated
-            for expression in construct_expressions(expressions_of_length, non_leaf_nodes, must_have_sizes=new_sizes):
-                new_expressions_of_length[len(expression)].add(expression)
-
-            new_sizes = set()
-            lengths_before = {k: len(v) for k, v in expressions_of_length.items()}
-            for new_length, new_hashes in new_expressions_of_length.items():
-                expressions_of_length[new_length].update(new_hashes)
-            lengths_after = {k: len(v) for k, v in new_expressions_of_length.items()}
-
-            for length in lengths_after.keys():
-                if length not in lengths_before or lengths_after[length] > lengths_before[length]:
-                    new_sizes.add(length)
-
-            if verbose:
-                print(f'Constructed expressions of sizes {sorted(new_sizes)}:')
-                for length, count in sorted(lengths_after.items()):
-                    print(f'  {length:2d}: {count:,} new expressions')
-
-            # Move the new hashes to the main dictionary
-            for length, new_hashes in new_expressions_of_length.items():
-                expressions_of_length[length].update(new_hashes)
-
-            new_expressions_of_length.clear()
+        max_candidate_length = (max_source_pattern_length - 1 if max_target_pattern_length is None
+                                else max_target_pattern_length)
+        for length in sorted(source_sample_per_length):
+            if not 1 < length <= max_source_pattern_length:
+                raise ValueError(f'source_sample_per_length length {length} outside 2..{max_source_pattern_length}')
+            if length <= max_candidate_length:
+                warnings.warn(
+                    f'length {length} is SAMPLED but lies inside the candidate/replacement range '
+                    f'(<= {max_candidate_length}): the candidate library will be INCOMPLETE and '
+                    f'shorter equivalents can be missed', UserWarning)
+            target = min(source_sample_per_length[length], counts[length])
+            draws: set[tuple[str, ...]] = set()
+            attempts = 0
+            while len(draws) < target and attempts < 20 * target:
+                draws.add(sample_expression(length, leaf_nodes, non_leaf_nodes, counts, _rng))
+                attempts += 1
+            expressions_of_length[length] = draws
+            # NO silent caps: always state the achieved coverage.
+            print(f'Phase 1: length {length} SAMPLED: {len(draws):,} of {counts[length]:,} '
+                  f'({len(draws) / counts[length]:.3%} of the complete universe)')
 
         total_expressions = sum(len(v) for v in expressions_of_length.values())
 
