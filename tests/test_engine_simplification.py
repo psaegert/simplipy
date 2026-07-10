@@ -398,9 +398,24 @@ _FIND_RULES_OPERATORS = {
 
 
 class TestFindRules:
-    """Tests for SimpliPyEngine.find_rules()."""
+    """Tests for SimpliPyEngine.find_rules() (native-only since 0.5.0)."""
 
-    def _run_find_rules(self, **kwargs) -> SimpliPyEngine:
+    def _core_engine(self, tmp_path, rules=None) -> SimpliPyEngine:
+        """Build an engine from tmp config+rules files so `from_config` attaches the core."""
+        import json
+
+        import yaml
+
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        rules_path = tmp_path / "rules.json"
+        rules_path.write_text(json.dumps(rules or []))
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump({"operators": _FIND_RULES_OPERATORS, "rules": "rules.json"}))
+        engine = SimpliPyEngine.from_config(str(config_path))
+        assert engine._core is not None, "compiled core failed to attach"
+        return engine
+
+    def _run_find_rules(self, tmp_path, **kwargs) -> SimpliPyEngine:
         """Helper: run find_rules with a small, fast configuration."""
         defaults = dict(
             max_source_pattern_length=3,
@@ -409,39 +424,47 @@ class TestFindRules:
             X=128,
             constants_fit_challenges=2,
             constants_fit_retries=1,
-            n_workers=2,
         )
         defaults.update(kwargs)
-        engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
+        engine = self._core_engine(tmp_path)
         engine.find_rules(**defaults)
         return engine
 
-    def test_discovers_basic_identities(self) -> None:
-        """find_rules discovers well-known arithmetic identities."""
-        engine = self._run_find_rules()
+    def test_requires_compiled_core(self) -> None:
+        """A bare engine (no core) must fail loudly: the Python mining mirror is gone."""
+        engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
+        with pytest.raises(RuntimeError, match="compiled core"):
+            engine.find_rules(max_source_pattern_length=3, dummy_variables=2, X=128)
+
+    def test_discovers_basic_identities(self, tmp_path) -> None:
+        """find_rules discovers well-known arithmetic identities (wildcard form)."""
+        engine = self._run_find_rules(tmp_path)
         rules_lhs = {tuple(r[0]) for r in engine.simplification_rules}
 
         # These should always be discovered at length <= 3
-        assert ("+", "x0", "0") in rules_lhs or ("+", "x1", "0") in rules_lhs
-        assert ("*", "x0", "1") in rules_lhs or ("*", "x1", "1") in rules_lhs
-        # x - x is now handled natively by cancel_terms + constant folding,
+        assert ("+", "_0", "0") in rules_lhs
+        assert ("*", "_0", "1") in rules_lhs
+        # x - x is handled natively by cancel_terms + constant folding,
         # so check for x - 0 instead.
-        assert ("-", "x0", "0") in rules_lhs or ("-", "x1", "0") in rules_lhs
+        assert ("-", "_0", "0") in rules_lhs
 
-    def test_all_rules_satisfy_wildcard_multiplicity(self) -> None:
+    def test_deterministic_across_runs(self, tmp_path) -> None:
+        """Same seed => identical rule set (2026-07-10 audit: the mine was unseeded)."""
+        rules_a = self._run_find_rules(tmp_path / "a", seed=7).simplification_rules
+        rules_b = self._run_find_rules(tmp_path / "b", seed=7).simplification_rules
+        assert rules_a == rules_b
+
+    def test_all_rules_satisfy_wildcard_multiplicity(self, tmp_path) -> None:
         """Every discovered rule must satisfy non-increasing wildcard multiplicity."""
-        engine = self._run_find_rules()
+        engine = self._run_find_rules(tmp_path)
         for lhs, rhs in engine.simplification_rules:
             assert not violates_wildcard_multiplicity(lhs, rhs), (
                 f"Rule violates wildcard multiplicity: {lhs} -> {rhs}"
             )
 
-    def test_reset_rules_clears_existing(self) -> None:
+    def test_reset_rules_clears_existing(self, tmp_path) -> None:
         """reset_rules=True starts from an empty rule set."""
-        engine = SimpliPyEngine(
-            operators=_FIND_RULES_OPERATORS,
-            rules=[(["+", "x0", "0"], ["x0"])],
-        )
+        engine = self._core_engine(tmp_path, rules=[(["+", "x0", "0"], ["x0"])])
         assert len(engine.simplification_rules) == 1
         engine.find_rules(
             max_source_pattern_length=3,
@@ -450,16 +473,15 @@ class TestFindRules:
             X=128,
             constants_fit_challenges=2,
             constants_fit_retries=1,
-            n_workers=2,
             reset_rules=True,
         )
         # Should have discovered fresh rules, not just the one we seeded
         assert len(engine.simplification_rules) > 1
 
-    def test_prune_reduces_rule_count(self) -> None:
+    def test_prune_reduces_rule_count(self, tmp_path) -> None:
         """prune=True removes redundant explicit rules."""
-        engine_no_prune = self._run_find_rules(prune=False)
-        engine_pruned = self._run_find_rules(prune=True)
+        engine_no_prune = self._run_find_rules(tmp_path / "a", prune=False)
+        engine_pruned = self._run_find_rules(tmp_path / "b", prune=True)
         # Pruning should remove at least some redundant explicit rules
         assert len(engine_pruned.simplification_rules) <= len(engine_no_prune.simplification_rules)
 

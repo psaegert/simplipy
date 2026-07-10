@@ -118,6 +118,7 @@ impl Engine {
         challenges: usize,
         rtol: f64,
         atol: f64,
+        min_informative: usize,
         seed: u64,
     ) -> Result<bool, String> {
         crate::worker::equivalent_no_const_check(
@@ -130,6 +131,7 @@ impl Engine {
             challenges,
             rtol,
             atol,
+            min_informative,
             seed,
         )
     }
@@ -151,6 +153,7 @@ impl Engine {
         seed: u64,
         rtol: f64,
         atol: f64,
+        min_informative: usize,
     ) -> Result<Option<Vec<String>>, String> {
         crate::worker::find_rule(
             &self.operators,
@@ -166,6 +169,7 @@ impl Engine {
             seed,
             rtol,
             atol,
+            min_informative,
         )
     }
 
@@ -200,6 +204,7 @@ impl Engine {
         seed: u64,
         rtol: f64,
         atol: f64,
+        min_informative: usize,
     ) -> Result<Option<Vec<String>>, String> {
         crate::worker::find_rule_with_lib(
             &self.operators,
@@ -212,6 +217,7 @@ impl Engine {
             seed,
             rtol,
             atol,
+            min_informative,
         )
     }
 
@@ -239,6 +245,7 @@ impl Engine {
         seed: u64,
         rtol: f64,
         atol: f64,
+        min_informative: usize,
     ) -> Vec<(Vec<String>, Vec<String>)> {
         sources
             .par_iter()
@@ -252,6 +259,7 @@ impl Engine {
                 let s = seed.wrapping_add(idx as u64);
                 match self.find_rule_with_lib(
                     src, slen, max_target, lib, challenges, retries, s, rtol, atol,
+                    min_informative,
                 ) {
                     Ok(Some(target)) => Some((src.clone(), target)),
                     _ => None,

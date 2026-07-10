@@ -12,8 +12,6 @@ import importlib
 import fractions
 import os
 import warnings
-import multiprocessing as mp
-import queue
 import time
 import signal
 import pprint
@@ -21,24 +19,20 @@ from dataclasses import dataclass, field
 from types import CodeType, FunctionType
 from typing import Callable
 from pathlib import Path
-from multiprocessing import Queue, Process
-from multiprocessing.shared_memory import SharedMemory
 from typing import Any, Literal, cast
 from copy import deepcopy
 from math import prod
 from collections import defaultdict
-from itertools import product
 
 import numpy as np
 import json
-from scipy.optimize import curve_fit, OptimizeWarning
 from tqdm import tqdm
 
 from simplipy.utils import (
     factorize_to_at_most, is_numeric_string,
-    get_used_modules, numbers_to_constant, flatten_nested_list, is_prime, explicit_constant_placeholders,
-    codify, safe_f, deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
-    construct_expressions, apply_mapping, match_pattern, remove_pow1, violates_wildcard_multiplicity,
+    get_used_modules, numbers_to_constant, flatten_nested_list, is_prime,
+    deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
+    construct_expressions, apply_mapping, match_pattern, remove_pow1,
     _WILDCARD_RE)
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
@@ -2359,251 +2353,68 @@ class SimpliPyEngine:
 
         return new_expression
 
-    def exist_constants_that_fit(self, expression: list[str] | tuple[str, ...], variables: list[str], X: np.ndarray, y_target: np.ndarray) -> bool:
-        """Checks if numerical constants exist to make an expression fit data.
+    def _mining_sample_x(self, n_rows: int, n_vars: int, rng: np.random.Generator) -> np.ndarray:
+        """Sample the mine's numerical evaluation matrix X (2026-07-10 audit).
 
-        Given an expression with `<constant>` placeholders, this method uses
-        `scipy.optimize.curve_fit` to determine if there is a set of numerical
-        values for these placeholders that makes the expression accurately
-        model the relationship between input data `X` and target data `y_target`.
+        Heavy-tailed MIXTURE instead of the historical pure N(0, 5): a mined pattern's
+        wildcards bind arbitrary SUBTREE values at application time, so equivalence
+        certification must exercise magnitudes far outside a Gaussian's bulk (tanh/exp
+        saturation plateaus, huge/tiny magnitudes) and the exact algebraic corner points
+        (0, +-1, ...) where false identities like ``asin(cosh(_0)) -> nan`` are refuted.
+        Mixture per ELEMENT (so a row can pair a huge x0 with a corner-point x1):
 
-        Parameters
-        ----------
-        expression : list[str] or tuple[str, ...]
-            The prefix expression, potentially containing `<constant>` tokens.
-        variables : list[str]
-            A list of variable names corresponding to the columns of `X`.
-        X : np.ndarray
-            The input data, with shape (n_samples, n_variables).
-        y_target : np.ndarray
-            The target data to be fitted.
+        - 40% N(0, 5) (the historical distribution; dense near typical values)
+        - 25% U(-50, 50)
+        - 25% signed log-uniform magnitudes 1e-6..1e6 (exposes saturation false-equalities)
+        - 10% exact special values {+-0.0, +-0.1, +-0.5, +-1, +-2, +-e, +-pi, +-10}
 
-        Returns
-        -------
-        bool
-            True if a set of constants is found that results in a close fit,
-            False otherwise.
+        NOTE the exact corner points make the checker STRICT: an identity that fails on a
+        measure-zero set (e.g. ``mul(_0, inv(_0)) -> 1``, false at 0) is now rejected,
+        which matches deployment (benchmark data contains exact zeros/integers).
         """
-        if isinstance(expression, tuple):
-            expression = list(expression)
+        shape = (n_rows, n_vars)
+        choice = rng.choice(4, size=shape, p=(0.40, 0.25, 0.25, 0.10))
+        normal = rng.normal(0.0, 5.0, size=shape)
+        uniform = rng.uniform(-50.0, 50.0, size=shape)
+        magnitudes = 10.0 ** rng.uniform(-6.0, 6.0, size=shape) * rng.choice((-1.0, 1.0), size=shape)
+        specials = np.array([0.0, -0.0, 0.1, -0.1, 0.5, -0.5, 1.0, -1.0,
+                             2.0, -2.0, np.e, -np.e, np.pi, -np.pi, 10.0, -10.0])
+        special = rng.choice(specials, size=shape)
+        return np.where(choice == 0, normal,
+                        np.where(choice == 1, uniform,
+                                 np.where(choice == 2, magnitudes, special)))
 
-        executable_prefix_expression = self.operators_to_realizations(expression)
-        prefix_expression_with_constants, constants = explicit_constant_placeholders(executable_prefix_expression, convert_numbers_to_constant=False)
-        code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
-        code = codify(code_string, variables + constants)
-        f = self.code_to_lambda(code)
-
-        def pred_function(X: np.ndarray, *constants: np.ndarray | None) -> float | np.ndarray:
-            if len(constants) == 0:
-                y = safe_f(f, X)
-            y = safe_f(f, X, constants)
-
-            # If the numbers are complex, return nan
-            if np.iscomplexobj(y):
-                return np.full(X.shape[0], np.nan)
-
-            return y
-
-        p0 = np.random.normal(loc=0, scale=5, size=len(constants))
-
-        is_valid = np.isfinite(X).all(axis=1) & np.isfinite(y_target)
-
-        if not np.any(is_valid) or len(constants) > is_valid.sum():  # https://github.com/scipy/scipy/issues/13969
-            return False
-
-        try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=OptimizeWarning)
-                popt, _ = curve_fit(pred_function, X[is_valid], y_target[is_valid].flatten(), p0=p0)
-        except RuntimeError:
-            return False
-
-        y = f(*X.T, *popt)
-        if not isinstance(y, np.ndarray):
-            y = np.full(X.shape[0], y)  # type: ignore
-
-        return np.allclose(y_target, y, equal_nan=True)
-
-    def find_rule_worker(
+    def _confirm_mined_rules(
             self,
-            worker_id: int,
-            work_queue: Queue,
-            result_queue: Queue,
-            X_shape: tuple,
-            X_dtype: np.dtype,
-            X_shm_name: str,
-            expressions_of_length_and_variables: dict,
+            found: list,
             dummy_variables: list[str],
-            operator_arity: dict,
+            X_confirm: np.ndarray,
             constants_fit_challenges: int,
-            constants_fit_retries: int) -> None:
-        """A worker process for discovering simplification rules in parallel.
+            constants_fit_retries: int,
+            rtol: float,
+            atol: float,
+            min_informative: int,
+            seed: int) -> list:
+        """STAGE-2 CONFIRMATION (2026-07-10 audit): re-verify each mined (source -> target)
+        pair on an INDEPENDENT, wider X before it may enter the rule set.
 
-        This function runs in a separate process. It fetches work items of the
-        form ``(expression, simplified_length, allowed_candidate_lengths)`` from
-        `work_queue`, evaluates the expression on shared random data, and
-        compares the result against a library of simpler candidate expressions.
-        If a numerical equivalence is found, it is considered a potential new
-        simplification rule and is placed on the `result_queue`; otherwise ``None``
-        is queued to signal that no rule was discovered. A sentinel ``None`` work
-        item triggers a graceful shutdown.
-
-        Notes
-        -----
-        This method is designed for internal use by the `find_rules` method
-        and is not intended to be called directly.
+        Same checker, fresh data, fresh constant draws and seeds: this kills data-luck
+        accepts (agreement within tolerance only on the mine X, saturation plateaus,
+        lucky constant draws) without a second implementation to keep in sync. The
+        caller scales ``min_informative`` to the confirm matrix's row count.
         """
-
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-        try:
-            # Reconstruct arrays from shared memory
-            X_shm = SharedMemory(name=X_shm_name)
-            X: np.ndarray = np.ndarray(X_shape, dtype=X_dtype, buffer=X_shm.buf)
-
-            # Main work loop
-            while True:
-                work_item = work_queue.get()
-
-                # Check for sentinel
-                if work_item is None:
-                    break
-
-                expression, simplified_length, allowed_candidate_lengths = work_item
-
-                if len(allowed_candidate_lengths) == 0 or max(allowed_candidate_lengths) <= 0 or simplified_length <= min(allowed_candidate_lengths):  # Request unrealistic simplification or already have better simplification than requested
-                    # No candidates allowed, skip this expression
-                    result_queue.put(None)
-                    continue
-
-                # Check if purely numerical
-                if all(t == '<constant>' or t in operator_arity or is_numeric_string(t) for t in expression) and len(expression) > 1:
-                    # If every non-operator token is a numeric literal,
-                    # evaluate to the actual value instead of '<constant>'.
-                    non_ops = [t for t in expression if t not in operator_arity]
-                    if non_ops and all(is_numeric_string(t) for t in non_ops):
-                        result_token = self._evaluate_constant_subtree(list(expression))
-                        if result_token is not None:
-                            result_queue.put((expression, (result_token,)))
-                            continue
-                    result_queue.put((expression, ('<constant>',)))
-                    continue
-
-                expression_variables = list(set(expression) & set(dummy_variables))
-
-                # Evaluate expression
-                executable_prefix_expression = self.operators_to_realizations(expression)
-                prefix_expression_with_constants, constants = explicit_constant_placeholders(executable_prefix_expression, convert_numbers_to_constant=False)
-                code_string = self.prefix_to_infix(prefix_expression_with_constants, realization=True)
-                code = codify(code_string, dummy_variables + constants)
-
-                f = self.code_to_lambda(code)
-
-                # Suppress warnings in worker
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=RuntimeWarning)
-
-                    found_simplifications = []
-
-                    # Check against all smaller expressions
-                    for candidate_length in allowed_candidate_lengths:
-                        for candidate_variables, candidate_expressions in expressions_of_length_and_variables.get(candidate_length, {}).items():
-                            if any(var not in expression_variables for var in candidate_variables):
-                                # The candidate expression contains variables not in the original expression. It cannot be a simplification.
-                                continue
-
-                            for candidate_expression in candidate_expressions:
-                                executable_candidate = self.operators_to_realizations(candidate_expression)
-                                prefix_candidate_w_constants, candidate_constants = explicit_constant_placeholders(executable_candidate, convert_numbers_to_constant=False)
-                                candidate_code = self.prefix_to_infix(prefix_candidate_w_constants, realization=True)
-                                candidate_compiled = codify(candidate_code, dummy_variables + candidate_constants)
-                                f_candidate = self.code_to_lambda(candidate_compiled)
-
-                                # Check if expressions are equivalent
-                                if len(candidate_constants) == 0:
-                                    y_candidate = safe_f(f_candidate, X)
-                                    if not isinstance(y_candidate, np.ndarray):
-                                        y_candidate = np.full(X.shape[0], y_candidate)
-
-                                    # Resample constants to avoid false positives
-                                    # The expression is considered a match unless one of the challenges fails
-                                    expressions_match = True
-                                    for challenge_id in range(constants_fit_challenges):
-                                        random_constants = np.random.normal(loc=0, scale=5, size=len(constants))
-                                        # Try all combinations of positive and negative constants
-                                        for positive_negative_constant_combination in product((-1, 0, 1), repeat=len(constants)):
-                                            y = safe_f(f, X, np.abs(random_constants) * positive_negative_constant_combination)  # abs may be redundant here
-                                            if not np.allclose(y, y_candidate, equal_nan=True):
-                                                expressions_match = False
-                                                break
-
-                                        if not expressions_match:
-                                            # A combination produced a different result, abort this candidate
-                                            break
-
-                                else:
-                                    # Resample constants to avoid false positives
-                                    # The expression is considered a match unless one of the challenges fails
-                                    expressions_match = True
-                                    for challenge_id in range(constants_fit_challenges):
-                                        # Need to check if constants can be fitted
-                                        random_constants = np.random.normal(loc=0, scale=5, size=len(constants))
-                                        # Try all combinations of positive and negative constants
-                                        for positive_negative_constant_combination in product((-1, 0, 1), repeat=len(constants)):
-                                            y = safe_f(f, X, np.abs(random_constants) * positive_negative_constant_combination)  # abs may be redundant here
-                                            for _ in range(constants_fit_retries):
-                                                if self.exist_constants_that_fit(candidate_expression, dummy_variables, X, y):
-                                                    # Found a candidate that fits, next challenge please
-                                                    break
-                                            else:
-                                                # No candidate found that fits, not all challenges could be solved, abort this candidate
-                                                expressions_match = False
-                                                break
-
-                                        if not expressions_match:
-                                            # A combination produced a different result, abort this candidate
-                                            break
-
-                                if expressions_match:
-                                    found_simplifications.append(candidate_expression)
-                                    # Still check for further candidates of the same length
-
-                        if found_simplifications:
-                            # Found at least one simplification for the current length
-                            # Every further candidate will be longer, so we can stop checking
-                            break
-
-                if not found_simplifications:
-                    # No simplification found
-                    result_queue.put(None)
-                else:
-                    # Prefer candidates with fewer <constant> tokens; among ties, keep discovery order.
-                    # Lazily check the non-increasing wildcard multiplicity condition (no subtree duplication).
-                    found_simplifications.sort(key=lambda s: s.count('<constant>'))
-                    selected = None
-                    for candidate in found_simplifications:
-                        if not violates_wildcard_multiplicity(expression, candidate):
-                            selected = candidate
-                            break
-                    if selected is not None:
-                        # If the best candidate is '<constant>' but the source
-                        # expression is all-numeric, evaluate to the actual value.
-                        if tuple(selected) == ('<constant>',):
-                            src_leaves = [t for t in expression if t not in operator_arity]
-                            if src_leaves and all(is_numeric_string(t) for t in src_leaves):
-                                result_token = self._evaluate_constant_subtree(list(expression))
-                                if result_token is not None:
-                                    selected = (result_token,)
-                        result_queue.put((expression, selected))
-                    else:
-                        # All candidates violate wildcard multiplicity
-                        result_queue.put(None)
-
-        except Exception as e:
-            # Log exceptions to result queue
-            result_queue.put(('ERROR', e, (expression, simplified_length, allowed_candidate_lengths)))
-        finally:
-            X_shm.close()
+        assert self._core is not None
+        n_rows = X_confirm.shape[0]
+        x_flat = X_confirm.flatten(order='C').tolist()
+        confirmed = []
+        for idx, (source, target) in enumerate(found):
+            result = self._core.find_rule(
+                list(source), len(source), None, [list(target)], list(dummy_variables),
+                x_flat, n_rows, constants_fit_challenges, constants_fit_retries,
+                seed + idx, rtol, atol, min_informative)
+            if result is not None:
+                confirmed.append((source, target))
+        return confirmed
 
     def _find_rules_native(
             self,
@@ -2617,7 +2428,13 @@ class SimpliPyEngine:
             output_file: str | None,
             prune: bool,
             verbose: bool,
-            interrupted: Callable[[], bool]) -> None:
+            interrupted: Callable[[], bool],
+            rtol: float = 1e-9,
+            atol: float = 1e-12,
+            min_informative: int = 128,
+            mine_seed: int = 42,
+            confirm_seed: int = 43,
+            X_confirm: np.ndarray | None = None) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
@@ -2635,11 +2452,14 @@ class SimpliPyEngine:
         else:
             max_candidate_length = max_target_pattern_length
 
+        # `sorted` inner iteration: set order is PYTHONHASHSEED-dependent, and the checker
+        # accepts the FIRST passing candidate -- unsorted iteration made the mined rule set
+        # non-reproducible run-to-run (2026-07-10 audit).
         candidates = [
             list(expression)
             for length in sorted(expressions_of_length)
             if length <= max_candidate_length
-            for expression in expressions_of_length[length]
+            for expression in sorted(expressions_of_length[length])
         ]
         library = self._core.build_candidate_library(
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0])
@@ -2654,10 +2474,22 @@ class SimpliPyEngine:
             if interrupted():
                 break
             self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
-            sources = [list(expression) for expression in expressions_of_length[length]]
+            sources = [list(expression) for expression in sorted(expressions_of_length[length])]
+            # Per-length seed block: lengths are spaced by 2^40 (far above any per-length
+            # source count) so the per-source streams (seed + index) never collide.
             found = self._core.mine_one_length(
                 sources, library, max_target_pattern_length,
-                constants_fit_challenges, constants_fit_retries, length)
+                constants_fit_challenges, constants_fit_retries,
+                mine_seed + (length << 40), rtol, atol, min_informative)
+            if found and X_confirm is not None:
+                n_mined = len(found)
+                found = self._confirm_mined_rules(
+                    found, dummy_variables, X_confirm,
+                    constants_fit_challenges, constants_fit_retries, rtol, atol,
+                    max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0])),
+                    confirm_seed + (length << 40))
+                if verbose and len(found) < n_mined:
+                    print(f'Length {length}: stage-2 confirmation rejected {n_mined - len(found):,} of {n_mined:,} mined rules')
             if found:
                 rules = deduplicate_rules(
                     rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found],
@@ -2684,14 +2516,18 @@ class SimpliPyEngine:
             dummy_variables: int | list[str] | None = None,
             extra_internal_terms: list[str] | None = None,
             X: np.ndarray | int | None = None,
-            constants_fit_challenges: int = 5,
-            constants_fit_retries: int = 5,
+            constants_fit_challenges: int = 16,
+            constants_fit_retries: int = 16,
             output_file: str | None = None,
             save_every: int = 100,
             reset_rules: bool = True,
             prune: bool = False,
             verbose: bool = False,
-            n_workers: int | None = None) -> None:
+            rtol: float = 1e-9,
+            atol: float = 1e-12,
+            min_informative: int | None = None,
+            seed: int | None = 42,
+            confirm: bool = True) -> None:
         """Systematically discovers new simplification rules.
 
         This powerful method automates the discovery of simplification rules.
@@ -2736,13 +2572,42 @@ class SimpliPyEngine:
             This can be expensive for large rule sets. Defaults to False.
         verbose : bool, optional
             If True, shows progress bars and status updates.
-        n_workers : int or None, optional
-            Number of parallel processes to use. Defaults to the number of CPU cores.
-            Only applies to the pure-Python fallback: with the compiled core attached
-            (an engine from :meth:`load`/:meth:`from_config`), the mine runs natively on
-            the Rust engine, parallelized over all cores via rayon; cap it with the
-            ``RAYON_NUM_THREADS`` environment variable instead.
+        rtol : float, optional
+            Relative tolerance of the numerical equivalence check. The default (1e-9)
+            is deliberately strict: at the old 1e-5, saturation plateaus (tanh/exp
+            towers within 1e-5 of 1 or 0 over the whole sample) were accepted as
+            identities (2026-07-10 audit).
+        atol : float, optional
+            Absolute tolerance of the numerical equivalence check (default 1e-12).
+        min_informative : int or None, optional
+            Minimum number of rows on which the accepted replacement evaluates FINITE.
+            Defaults to ``X.shape[0] // 8``. This is the vacuous-acceptance gate: with
+            ``equal_nan=True``, an all-NaN candidate trivially "agrees" with an almost
+            -everywhere-NaN source (e.g. ``asin(cosh(_0)) -> nan``, false at 0).
+        seed : int or None, optional
+            Seed for the evaluation matrix, constant challenges and per-source RNG
+            streams. The default (42) makes the mine REPRODUCIBLE run-to-run; pass
+            None for entropy-based seeding.
+        confirm : bool, optional
+            If True (default), every mined rule is re-verified on an independent,
+            twice-as-wide X with fresh constant draws before it enters the rule set
+            (stage-2 confirmation; kills data-luck accepts).
+
+        Notes
+        -----
+        The mine runs NATIVELY on the compiled Rust core (``simplipy._core``),
+        parallelized over all cores via rayon; cap it with the ``RAYON_NUM_THREADS``
+        environment variable. The engine must therefore be constructed via
+        :meth:`from_config` or :meth:`load`. The pure-Python mining mirror was removed
+        in 0.5.0: it duplicated the Rust checker (``rust/worker.rs``/``fit.rs``) and
+        repeatedly desynced from it (IEEE inv/div semantics fork, 2026-07-10 audit).
         """
+        if self._core is None:
+            raise RuntimeError(
+                'find_rules requires the compiled core (simplipy._core): construct the engine '
+                'via SimpliPyEngine.from_config or SimpliPyEngine.load. The pure-Python mining '
+                'mirror was removed in 0.5.0.')
+
         # Signal handler for main process
         interrupted = False
 
@@ -2769,12 +2634,25 @@ class SimpliPyEngine:
             self.simplification_rules = []
             self.compile_rules()
 
+        # 2026-07-10 audit: the mine's X is SEEDED (reproducibility) and defaults to a
+        # heavy-tailed MIXTURE (N(0,5) + wide uniform + signed log-uniform magnitudes + special
+        # values) instead of pure N(0,5), so equivalence certification sees the value ranges that
+        # rule APPLICATION will see (wildcards bind arbitrary subtree values).
+        _rng = np.random.default_rng(seed)
         if X is None:
-            X_data = np.random.normal(loc=0, scale=5, size=(1024, len(dummy_variables)))
+            X_data = self._mining_sample_x(1024, len(dummy_variables), _rng)
         elif isinstance(X, int):
-            X_data = np.random.normal(loc=0, scale=5, size=(X, len(dummy_variables)))
+            X_data = self._mining_sample_x(X, len(dummy_variables), _rng)
         else:
             X_data = np.asarray(X, dtype=np.float64)
+        if min_informative is None:
+            min_informative = X_data.shape[0] // 8
+
+        # Independent, wider confirm matrix + derived integer seeds (drawn from the same
+        # master stream, so one `seed` reproduces the whole mine).
+        X_confirm = self._mining_sample_x(2 * X_data.shape[0], len(dummy_variables), _rng) if confirm else None
+        mine_seed = int(_rng.integers(2 ** 62))
+        confirm_seed = int(_rng.integers(2 ** 62))
 
         leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
@@ -2824,246 +2702,29 @@ class SimpliPyEngine:
             for length, expressions in sorted(expressions_of_length.items()):
                 print(f"Size {length}: {len(expressions):,} expressions")
 
-        # --- Phase 2 (compiled core): mine natively on the Rust engine ---
-        # The fork-based Python pool below mutates Python-side rule state while `simplify`
-        # runs on the immutable Rust core, so with `_core` attached it mines 0 rules (the
-        # same class of bug as the old `prune_redundant_rules`; see `prune_explicit`).
-        # Mirror that fix: delegate the mine to the native engine.
-        if self._core is not None:
-            try:
-                self._find_rules_native(
-                    expressions_of_length,
-                    max_source_pattern_length,
-                    max_target_pattern_length,
-                    dummy_variables,
-                    X_data,
-                    constants_fit_challenges,
-                    constants_fit_retries,
-                    output_file,
-                    prune,
-                    verbose,
-                    lambda: interrupted,
-                )
-            finally:
-                signal.signal(signal.SIGINT, old_handler)
-            return
-
-        expressions_of_length_and_variables: dict[int, dict[tuple[str, ...], set[tuple[str, ...]]]] = {}
-        for length, expressions in expressions_of_length.items():
-            expressions_of_length_and_variables[length] = defaultdict(set)
-            for expression in expressions:
-                expression_variables = list(set(expression) & set(dummy_variables))  # This gets the dummy variables used in the expression
-                expressions_of_length_and_variables[length][tuple(sorted(expression_variables))].add(expression)
-
-        # --- Phase 2: Parallel rule finding ---
-        if n_workers is None:
-            n_workers = mp.cpu_count()
-
-        # Create shared memory for arrays
-        X_shm = SharedMemory(create=True, size=X_data.nbytes)
-        X_shared: np.ndarray = np.ndarray(X_data.shape, dtype=X_data.dtype, buffer=X_shm.buf)
-        X_shared[:] = X_data[:]
-
-        # Create queues
-        work_queue: mp.Queue = mp.Queue()
-        result_queue: mp.Queue = mp.Queue()
-
-        # Start workers
-        workers = []
-        for i in range(n_workers):
-            p = Process(
-                target=self.find_rule_worker,
-                args=(
-                    i, work_queue, result_queue,
-                    X_data.shape, X_data.dtype, X_shm.name,
-                    dict(expressions_of_length_and_variables),  # Make a copy for each worker
-                    dummy_variables,
-                    self.operator_arity,
-                    constants_fit_challenges,
-                    constants_fit_retries,
-                )
+        # --- Phase 2: mine natively on the Rust engine (the only mining path since 0.5.0) ---
+        try:
+            self._find_rules_native(
+                expressions_of_length,
+                max_source_pattern_length,
+                max_target_pattern_length,
+                dummy_variables,
+                X_data,
+                constants_fit_challenges,
+                constants_fit_retries,
+                output_file,
+                prune,
+                verbose,
+                lambda: interrupted,
+                rtol=rtol,
+                atol=atol,
+                min_informative=min_informative,
+                mine_seed=mine_seed,
+                confirm_seed=confirm_seed,
+                X_confirm=X_confirm,
             )
-            p.daemon = True  # Make workers daemon processes
-            p.start()
-            workers.append(p)
-
-        # Main processing loop
-        n_scanned = 0
-        active_tasks = 0
-
-        # Create iterator over all work items
-        work_items = [
-            expression_to_simplify
-            for _, expressions in sorted(expressions_of_length.items())  # We don't care about the variables here
-            for expression_to_simplify in expressions
-        ]
-        work_iter = iter(work_items)
-
-        pbar = tqdm(total=len(work_items), desc="Finding rules", disable=not verbose)
-
-        current_length = 0
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning)
-
-            try:
-                # Initial work distribution
-                for _ in range(min(n_workers * 2, len(work_items))):  # Queue 2x workers for efficiency
-                    try:
-                        expression_to_simplify = next(work_iter)
-                        simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
-                        # Skip expressions that already simplify via existing rules (Kruskal-style pruning)
-                        if simplified_length < len(expression_to_simplify):
-                            n_scanned += 1
-                            pbar.update(1)
-                            continue
-                        if max_target_pattern_length is None:
-                            allowed_candidate_lengths = tuple(range(simplified_length))
-                        else:
-                            allowed_candidate_lengths = tuple(range(min(simplified_length, max_target_pattern_length + 1)))
-                        work_queue.put((expression_to_simplify, simplified_length, allowed_candidate_lengths))
-                        active_tasks += 1
-                    except StopIteration:
-                        break
-
-                current_length = len(expression_to_simplify)
-
-                # Process results and distribute new work
-                try:
-                    while active_tasks > 0 and not interrupted:
-                        # Get result with timeout to allow checking stop conditions
-                        try:
-                            result = result_queue.get(timeout=0.1)
-                        except queue.Empty:
-                            # Check if interrupted during wait
-                            if interrupted:
-                                break
-                            continue
-
-                        active_tasks -= 1
-
-                        # Process result
-                        if result is not None:
-                            if result[0] == 'ERROR':
-                                print(f"Error in worker {result[1]}: {result[2]}")
-                                print(result[2])
-                                raise result[1]
-
-                            self.simplification_rules.append(result)
-
-                        # Send new work if available (but not if interrupted)
-                        if not interrupted:
-                            try:
-                                while True:
-                                    expression_to_simplify = next(work_iter)
-
-                                    if len(expression_to_simplify) > current_length:
-                                        # This means that the collected rules can be applied to coming expressions
-                                        # To avoid redundant rules, we incorporate the rules into the simplification to raise the requirements for rules
-                                        if verbose:
-                                            print(f'Increasing expression length from {current_length} to {len(expression_to_simplify)}')
-                                        self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
-                                        self.compile_rules()
-                                        if output_file is not None:
-                                            if verbose:
-                                                print("Saving rules after increasing expression length...")
-                                            with open(output_file, 'w') as file:
-                                                json.dump(self.simplification_rules, file, indent=4)
-                                        current_length = len(expression_to_simplify)
-
-                                    simplified_length = len(self.simplify(expression_to_simplify, max_iter=5))
-                                    # Skip expressions that already simplify via existing rules (Kruskal-style pruning)
-                                    if simplified_length < len(expression_to_simplify):
-                                        n_scanned += 1
-                                        pbar.update(1)
-                                        continue
-                                    if max_target_pattern_length is None:
-                                        allowed_candidate_lengths = tuple(range(simplified_length))
-                                    else:
-                                        allowed_candidate_lengths = tuple(range(min(simplified_length, max_target_pattern_length + 1)))
-                                    work_queue.put((expression_to_simplify, simplified_length, allowed_candidate_lengths))
-                                    active_tasks += 1
-                                    break
-                            except StopIteration:
-                                pass
-
-                        n_scanned += 1
-                        pbar.update(1)
-                        # Calculate the display string for the last rule with truncation
-                        last_rule = self.simplification_rules[-1] if self.simplification_rules else 'None'
-                        last_rule_str = str(last_rule)[:64].ljust(64)  # Truncate and pad
-
-                        # Format with fixed widths
-                        pbar.set_postfix_str(
-                            f"Rules: {len(self.simplification_rules):>6,}, "  # 6 chars, right-aligned
-                            f"Active tasks: {active_tasks:>3}, "              # 3 chars, right-aligned
-                            f"Last rule: {last_rule_str}"                     # Fixed 30 chars
-                        )
-
-                        # Periodic saving
-                        if output_file is not None and n_scanned % save_every == 0:
-                            if verbose:
-                                print(f"Saving rules after processing {n_scanned} expressions...")
-                            self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
-                            self.compile_rules()
-                            with open(output_file, 'w') as file:
-                                json.dump(self.simplification_rules, file, indent=4)
-                except Exception as e:
-                    print(f"Error during processing: {e}")
-                    interrupted = True
-
-            finally:
-                # Restore original signal handler
-                signal.signal(signal.SIGINT, old_handler)
-
-                pbar.close()
-
-                # Clean shutdown or force termination
-                if interrupted:
-                    print("Force terminating workers...")
-                    for p in workers:
-                        if p.is_alive():
-                            p.terminate()
-                            p.join(timeout=0.5)
-                            if p.is_alive():
-                                p.kill()
-                else:
-                    # Normal shutdown
-                    print("Shutting down workers...")
-                    for _ in workers:
-                        try:
-                            work_queue.put(None, timeout=0.1)
-                        except Exception as e:
-                            print(e)
-                            pass
-
-                    for p in workers:
-                        p.join(timeout=2)
-                        if p.is_alive():
-                            p.terminate()
-
-                # Cleanup resources
-                try:
-                    X_shm.close()
-                    X_shm.unlink()
-                except Exception as e:
-                    print(e)
-                    pass
-
-                # Close queues
-                work_queue.close()
-                result_queue.close()
-
-                if output_file is not None:
-                    if verbose:
-                        print("Saving results...")
-                    time.sleep(1)  # Give time for the user to interrupt the process
-                    self.simplification_rules = deduplicate_rules(self.simplification_rules, dummy_variables, verbose=verbose)
-                    self.compile_rules()
-                    if prune:
-                        self.prune_redundant_rules(verbose=verbose)
-                    with open(output_file, 'w') as file:
-                        json.dump(self.simplification_rules, file, indent=4)
+        finally:
+            signal.signal(signal.SIGINT, old_handler)
 
     def operand_key(self, operands: list) -> tuple:
         """Generates a key for sorting operands of a commutative operator.

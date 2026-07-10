@@ -219,6 +219,13 @@ pub fn evaluate_batch(
 /// numpy's special handling -- two NaNs are equal; infinities are close iff equal (same sign), never
 /// close to a finite or opposite-sign inf. `b` is the asymmetric reference (second arg), matching the
 /// miner's call order. Empty inputs -> True.
+/// Rows where the value is FINITE (not nan, not +-inf) -- the "informative evidence" measure of
+/// the 2026-07-10 equivalence audit: both-NaN / both-inf agreement is vacuous, so certification
+/// requires a minimum number of finite rows.
+pub fn count_finite(a: &[f64]) -> usize {
+    a.iter().filter(|v| v.is_finite()).count()
+}
+
 pub fn allclose(a: &[f64], b: &[f64], rtol: f64, atol: f64) -> bool {
     if a.len() != b.len() {
         return false;

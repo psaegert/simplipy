@@ -381,7 +381,10 @@ impl PyEngine {
     /// OFFLINE miner (Phase B, M2): the no-constant equivalence test (engine.py:2433-2452). The
     /// candidate must be constant-free; the source's constants are resampled over `challenges` rounds
     /// and every sign combination, requiring `allclose(source, candidate)` every time.
-    #[pyo3(signature = (source, candidate, var_names, x_flat, n_rows, challenges=16, rtol=1e-5, atol=1e-8, seed=0))]
+    /// Tolerances tightened + informativeness gate added by the 2026-07-10 equivalence audit:
+    /// `min_informative=None` resolves to `n_rows / 8` (certification requires that many rows
+    /// where both sides are FINITE -- kills vacuous all-NaN/inf acceptance).
+    #[pyo3(signature = (source, candidate, var_names, x_flat, n_rows, challenges=16, rtol=1e-9, atol=1e-12, min_informative=None, seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn equivalent_no_const(
         &self,
@@ -394,11 +397,14 @@ impl PyEngine {
         challenges: usize,
         rtol: f64,
         atol: f64,
+        min_informative: Option<usize>,
         seed: u64,
     ) -> PyResult<bool> {
+        let mi = min_informative.unwrap_or(n_rows / 8);
         py.detach(|| {
             self.inner.equivalent_no_const_check(
-                &source, &candidate, &var_names, &x_flat, n_rows, challenges, rtol, atol, seed,
+                &source, &candidate, &var_names, &x_flat, n_rows, challenges, rtol, atol, mi,
+                seed,
             )
         })
         .map_err(PyValueError::new_err)
@@ -414,7 +420,7 @@ impl PyEngine {
     /// short-circuit + candidate scan (const-free -> M2, constant-bearing -> M3) + selection. Returns
     /// the chosen target token list, or None. `candidates` = the candidate library (expressions up to
     /// max_target); indexed by length internally (M4b will make a resident CandidateLibrary).
-    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-5, atol=1e-8))]
+    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule(
         &self,
@@ -431,7 +437,9 @@ impl PyEngine {
         seed: u64,
         rtol: f64,
         atol: f64,
+        min_informative: Option<usize>,
     ) -> PyResult<Option<Vec<String>>> {
+        let mi = min_informative.unwrap_or(n_rows / 8);
         py.detach(|| {
             self.inner.find_rule(
                 &source,
@@ -446,6 +454,7 @@ impl PyEngine {
                 seed,
                 rtol,
                 atol,
+                mi,
             )
         })
         .map_err(PyValueError::new_err)
@@ -472,7 +481,7 @@ impl PyEngine {
 
     /// OFFLINE miner (Phase B, M4b): `find_rule_worker` decision over a resident `CandidateLibrary`
     /// (no per-source rebuild, no per-call X marshaling). Returns the chosen target, or None.
-    #[pyo3(signature = (source, simplified_length, max_target, library, challenges=16, retries=16, seed=0, rtol=1e-5, atol=1e-8))]
+    #[pyo3(signature = (source, simplified_length, max_target, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule_lib(
         &self,
@@ -486,8 +495,10 @@ impl PyEngine {
         seed: u64,
         rtol: f64,
         atol: f64,
+        min_informative: Option<usize>,
     ) -> PyResult<Option<Vec<String>>> {
         let lib = &library.inner;
+        let mi = min_informative.unwrap_or(lib.n_rows() / 8);
         py.detach(|| {
             self.inner.find_rule_with_lib(
                 &source,
@@ -499,6 +510,7 @@ impl PyEngine {
                 seed,
                 rtol,
                 atol,
+                mi,
             )
         })
         .map_err(PyValueError::new_err)
@@ -514,7 +526,7 @@ impl PyEngine {
     /// prune each source with the current rules, then `find_rule` on survivors. Returns the found
     /// (source -> target) rules. The Python driver loops lengths, dedups/canonicalizes, and `set_rules`
     /// between them (the order-dependent barrier). GIL released for the parallel work.
-    #[pyo3(signature = (sources, library, max_target, challenges=16, retries=16, seed=0, rtol=1e-5, atol=1e-8))]
+    #[pyo3(signature = (sources, library, max_target, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
     #[allow(clippy::too_many_arguments)]
     fn mine_one_length(
         &self,
@@ -527,11 +539,13 @@ impl PyEngine {
         seed: u64,
         rtol: f64,
         atol: f64,
+        min_informative: Option<usize>,
     ) -> Vec<(Vec<String>, Vec<String>)> {
         let lib = &library.inner;
+        let mi = min_informative.unwrap_or(lib.n_rows() / 8);
         py.detach(|| {
             self.inner.mine_one_length(
-                &sources, lib, max_target, challenges, retries, seed, rtol, atol,
+                &sources, lib, max_target, challenges, retries, seed, rtol, atol, mi,
             )
         })
     }

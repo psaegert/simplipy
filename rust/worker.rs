@@ -70,9 +70,18 @@ fn equivalent_no_const(
     challenges: usize,
     rtol: f64,
     atol: f64,
+    min_informative: usize,
     rng: &mut Rng,
 ) -> bool {
     let y_cand = candidate.eval_columns(x_cols, &[], n_rows);
+    // INFORMATIVENESS GATE (2026-07-10 audit): the candidate is const-free, so its y is FIXED.
+    // Any source instance passing allclose against it is finite exactly where y_cand is (a
+    // finite-vs-NaN/inf row fails allclose), so gating the CANDIDATE's finite count once is
+    // equivalent to gating every passing instance -- and kills the vacuous all-NaN/all-inf
+    // acceptance class (e.g. the shipped asin(cosh(_0)) -> nan family) outright.
+    if crate::eval::count_finite(&y_cand) < min_informative {
+        return false;
+    }
     let combos = sign_combos(n_src_const);
     for _ in 0..challenges {
         let rc: Vec<f64> = (0..n_src_const)
@@ -104,6 +113,7 @@ pub fn equivalent_no_const_check(
     challenges: usize,
     rtol: f64,
     atol: f64,
+    min_informative: usize,
     seed: u64,
 ) -> Result<bool, String> {
     let src_tape = Tape::compile(source, ops, var_names)?;
@@ -126,6 +136,7 @@ pub fn equivalent_no_const_check(
         challenges,
         rtol,
         atol,
+        min_informative,
         &mut rng,
     ))
 }
@@ -170,6 +181,9 @@ struct CandEntry {
     linearity: crate::fit::Linearity,
     tape: Tape,
     y_const_free: Option<Vec<f64>>,
+    /// count_finite(y_const_free) precomputed at library build (0 for const-bearing candidates):
+    /// the informativeness gate rejects vacuous (all-NaN/inf) candidates before any comparison.
+    finite_y: usize,
     /// Improvement 2: precomputed log-linear plan (form + the const-free `g` tape) for nonlinear
     /// `pow(C,g)` / `pow(g,C)` candidates -> closed-form fit instead of the LM.
     loglin: Option<(crate::fit::LogLinForm, Tape)>,
@@ -201,8 +215,17 @@ fn candidate_matches(
     retries: usize,
     rtol: f64,
     atol: f64,
+    min_informative: usize,
     rng: &mut Rng,
 ) -> bool {
+    // INFORMATIVENESS GATE (2026-07-10 audit), const-free arm: y is fixed, so gating its finite
+    // count once == gating every passing instance (finite-vs-NaN rows fail allclose).
+    if cand.n_const == 0 && cand.finite_y < min_informative {
+        return false;
+    }
+    // Const-bearing arm: accumulate finite SOURCE rows over passing instances; vacuous instances
+    // (e.g. an all-NaN zero-constant combo matched vacuously by the fit) contribute no evidence.
+    let mut total_informative: usize = 0;
     for _ in 0..challenges {
         let rc: Vec<f64> = (0..n_src_const)
             .map(|_| rng.normal(0.0, 5.0).abs())
@@ -231,7 +254,13 @@ fn candidate_matches(
             if !ok {
                 return false;
             }
+            if cand.n_const > 0 {
+                total_informative += crate::eval::count_finite(&y);
+            }
         }
+    }
+    if cand.n_const > 0 && total_informative < min_informative {
+        return false;
     }
     true
 }
@@ -248,6 +277,11 @@ pub struct CandidateLibrary {
 }
 
 impl CandidateLibrary {
+    /// Row count of the library's shared X (for resolving informativeness-gate defaults).
+    pub fn n_rows(&self) -> usize {
+        self.n_rows
+    }
+
     pub fn build(
         ops: &Operators,
         candidates: &[Vec<String>],
@@ -283,6 +317,10 @@ impl CandidateLibrary {
             } else {
                 None
             };
+            let finite_y = y_const_free
+                .as_ref()
+                .map(|y| crate::eval::count_finite(y))
+                .unwrap_or(0);
             by_len[len].push(CandEntry {
                 tokens: c.clone(),
                 var_mask: var_mask(c, var_names),
@@ -290,6 +328,7 @@ impl CandidateLibrary {
                 linearity,
                 tape,
                 y_const_free,
+                finite_y,
                 loglin,
             });
         }
@@ -317,6 +356,7 @@ pub fn find_rule_with_lib(
     seed: u64,
     rtol: f64,
     atol: f64,
+    min_informative: usize,
 ) -> Result<Option<Vec<String>>, String> {
     // GUARD FIRST (engine.py:2384, BEFORE the short-circuit at :2390).
     let max_cand_len = match max_target {
@@ -364,6 +404,7 @@ pub fn find_rule_with_lib(
                 retries,
                 rtol,
                 atol,
+                min_informative,
                 &mut rng,
             ) {
                 matches.push(cand.tokens.clone());
@@ -393,6 +434,7 @@ pub fn find_rule(
     seed: u64,
     rtol: f64,
     atol: f64,
+    min_informative: usize,
 ) -> Result<Option<Vec<String>>, String> {
     let lib = CandidateLibrary::build(ops, candidates, var_names, x_flat, n_rows)?;
     find_rule_with_lib(
@@ -406,6 +448,7 @@ pub fn find_rule(
         seed,
         rtol,
         atol,
+        min_informative,
     )
 }
 
@@ -459,6 +502,7 @@ mod tests {
                 16,
                 1e-5,
                 1e-8,
+                8,
                 0
             )
             .unwrap());
@@ -473,6 +517,7 @@ mod tests {
                 16,
                 1e-5,
                 1e-8,
+                8,
                 0
             )
             .unwrap());
@@ -487,6 +532,7 @@ mod tests {
                 16,
                 1e-5,
                 1e-8,
+                8,
                 0
             )
             .unwrap());
@@ -520,6 +566,7 @@ mod tests {
                 0,
                 1e-5,
                 1e-8,
+                8,
             )
             .unwrap();
         assert_eq!(r, Some(s(&["x0"])));
@@ -538,6 +585,7 @@ mod tests {
                 0,
                 1e-5,
                 1e-8,
+                8,
             )
             .unwrap();
         assert_eq!(r2, None);
