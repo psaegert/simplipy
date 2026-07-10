@@ -9,6 +9,7 @@ roots (``pow1_2``..``pow1_5`` take the nth root).
 The functions handle singular inputs (such as division by zero) by returning signed
 infinities or NaN rather than raising, and operate on both scalars and array-likes.
 """
+import math
 from typing import Iterable
 from types import ModuleType
 import numpy as np
@@ -29,9 +30,10 @@ def inv(x: float) -> float:
     if isinstance(x, Iterable):
         return 1 / x
 
-    # Manually handle scalar case
+    # Manually handle scalar case (python floats raise on 1/0). Sign-aware like the numpy
+    # array branch above: 1/+0.0 -> +inf, 1/-0.0 -> -inf (IEEE).
     if x == 0:
-        return float('inf')
+        return math.copysign(float('inf'), x)
 
     # All safe
     return 1 / x
@@ -43,21 +45,19 @@ def div(x: float, y: float) -> float:
     if isinstance(y, Iterable):
         return x / y
 
-    # Manually handle scalar case
+    # Manually handle scalar case (python floats raise on x/0). IEEE like the numpy array
+    # branch: the SIGN OF THE ZERO DIVISOR participates (1/-0.0 -> -inf); 0/0 -> nan.
     if y == 0:
-        # When x is an iterable, multiply with infinity to let the sign determine the result
+        # x iterable / scalar zero: let numpy do IEEE division (keeps divisor sign semantics)
         if isinstance(x, Iterable):
-            return x * float('inf')
+            return x / np.float64(y)
 
-        # When x is a scalar, return inf or -inf depending on the sign of x
         if not isinstance(x, complex):
-            if x > 0:
-                return float('inf')
-            elif x < 0:
-                return float('-inf')
+            if x == 0 or math.isnan(x):
+                return float('nan')
+            return math.copysign(float('inf'), x) * math.copysign(1.0, y)
 
-        # Both x and y are zero.
-        # Return NaN to indicate an undefined result
+        # complex numerator: undefined here
         return float('nan')
 
     # All safe

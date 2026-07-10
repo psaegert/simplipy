@@ -1370,15 +1370,20 @@ class SimpliPyEngine:
         if name == '*':
             return x * a[1]
         if name == '/':
+            # IEEE like the deployed numpy array branch: zero-DIVISOR sign participates
+            # (1/-0.0 -> -inf); 0/0 and nan/0 -> nan (2026-07-10 equivalence audit).
             if a[1] == 0.0:
-                return math.inf if x > 0 else (-math.inf if x < 0 else math.nan)
+                if x == 0.0 or math.isnan(x):
+                    return math.nan
+                return math.copysign(math.inf, x) * math.copysign(1.0, a[1])
             return x / a[1]
         if name == 'pow':
             return fp(x, a[1])
         if name == 'neg':
             return -x
         if name == 'inv':
-            return math.inf if x == 0.0 else 1.0 / x
+            # IEEE: 1/+0 -> +inf, 1/-0 -> -inf (matches numpy; 2026-07-10 equivalence audit)
+            return math.copysign(math.inf, x) if x == 0.0 else 1.0 / x
         if name == 'abs':
             return math.fabs(x)
         if name in ('mult2', 'mult3', 'mult4', 'mult5'):

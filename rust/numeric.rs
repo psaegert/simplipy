@@ -135,8 +135,10 @@ fn parse_pyfloat(tok: &str) -> Option<f64> {
 pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
     Some(match name {
         "neg" => |x| -x,
-        // inv: x == 0 (incl -0.0) -> +inf (operators.py:15)
-        "inv" => |x| if x == 0.0 { f64::INFINITY } else { 1.0 / x },
+        // inv: plain IEEE 1/x (1/+0 -> +inf, 1/-0 -> -inf) == the deployed numpy ARRAY branch.
+        // The old +inf-for-any-zero special case was the python SCALAR quirk; the 2026-07-10
+        // equivalence audit showed the miner must match deployment (numpy) semantics.
+        "inv" => |x| 1.0 / x,
         "abs" => |x: f64| x.abs(),
         "mult2" => |x| 2.0 * x,
         "mult3" => |x| 3.0 * x,
@@ -201,19 +203,12 @@ pub(crate) fn apply_op(name: &str, a: &[f64]) -> Option<f64> {
     }
 }
 
-/// `operators.div` scalar branch (operators.py:29-53): `y==0` -> `x>0`:+inf, `x<0`:-inf, `x==0`:nan.
+/// Division: plain IEEE `x / y` == the deployed numpy ARRAY branch (sign of a ZERO DIVISOR
+/// participates: 1/-0.0 = -inf; 0/0 = nan). The old sign-of-numerator-only special case was the
+/// python SCALAR quirk; the 2026-07-10 equivalence audit showed rules certified under it can be
+/// false under deployment (numpy) semantics.
 fn op_div(x: f64, y: f64) -> f64 {
-    if y == 0.0 {
-        if x > 0.0 {
-            f64::INFINITY
-        } else if x < 0.0 {
-            f64::NEG_INFINITY
-        } else {
-            f64::NAN
-        }
-    } else {
-        x / y
-    }
+    x / y
 }
 
 /// `pow1_3`/`pow1_5` real odd root (operators.py:121,164): `x<0 -> -(-x)**r` else `x**r`.

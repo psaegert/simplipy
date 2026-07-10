@@ -1167,13 +1167,16 @@ mod tests {
             v(&["inv", "pow2", "x1"])
         );
         assert_eq!(conv(&e, &["**", "x1", "1"]).unwrap(), v(&["x1"]));
-        assert_eq!(conv(&e, &["**", "x1", "0"]).unwrap(), v(&["pow0", "x1"]));
+        // 0.4.2 factorize gate: exponent 0 is not decomposable -> binary pow kept (pow0 was
+        // an INVALID token anyway, quirk #2); expectation updated from the pre-0.4.2 trap.
+        assert_eq!(conv(&e, &["**", "x1", "0"]).unwrap(), v(&["pow", "x1", "0"]));
         // chain factorize order + VE fallback + mixed-chain absorption bug (T3).
         assert_eq!(
             conv(&e, &["**", "x1", "6"]).unwrap(),
             v(&["pow2", "pow3", "x1"])
         );
-        assert_eq!(conv(&e, &["**", "x1", "7"]).unwrap(), v(&["pow7", "x1"]));
+        // 0.4.2 phantom-pow fix: 7 is non-5-smooth -> binary pow kept (was the corrupting pow7).
+        assert_eq!(conv(&e, &["**", "x1", "7"]).unwrap(), v(&["pow", "x1", "7"]));
         assert_eq!(
             conv(&e, &["**", "x1", "30"]).unwrap(),
             v(&["pow2", "pow3", "pow5", "x1"])
@@ -1190,9 +1193,10 @@ mod tests {
             conv(&e, &["pow1_3", "pow2", "x1"]).unwrap(),
             v(&["pow1_3", "pow2", "x1"])
         );
+        // 0.4.2: inner non-smooth exponent stays binary; smooth outer still absorbs to pow2.
         assert_eq!(
             conv(&e, &["**", "**", "x1", "7", "2"]).unwrap(),
-            v(&["pow2", "pow7", "x1"])
+            v(&["pow2", "pow", "x1", "7"])
         );
         // neg-on-number double-minus (T7).
         assert_eq!(conv(&e, &["neg", "5"]).unwrap(), v(&["-5"]));
