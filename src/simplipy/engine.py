@@ -2444,7 +2444,8 @@ class SimpliPyEngine:
             min_informative: int = 128,
             mine_seed: int = 42,
             confirm_seed: int = 43,
-            X_confirm: np.ndarray | None = None) -> None:
+            X_confirm: np.ndarray | None = None,
+            candidate_fold_filter: bool = True) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
@@ -2472,7 +2473,11 @@ class SimpliPyEngine:
             for expression in sorted(expressions_of_length[length])
         ]
         library = self._core.build_candidate_library(
-            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0])
+            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0],
+            fold_filter=candidate_fold_filter)
+        if verbose:
+            print(f'Candidate library: {library.n_candidates:,} candidates'
+                  f' ({library.n_filtered:,} var-free filtered)')
 
         # Existing rules (empty after reset_rules=True) join the Kruskal pruning and the
         # final deduplicated set, like the pure-Python path.
@@ -2538,7 +2543,8 @@ class SimpliPyEngine:
             min_informative: int | None = None,
             seed: int | None = 42,
             confirm: bool = True,
-            source_sample_per_length: dict[int, int] | None = None) -> None:
+            source_sample_per_length: dict[int, int] | None = None,
+            candidate_fold_filter: bool = True) -> None:
         """Systematically discovers new simplification rules.
 
         This powerful method automates the discovery of simplification rules.
@@ -2623,6 +2629,16 @@ class SimpliPyEngine:
             replacement range additionally warns, because the candidate library then
             no longer certifies "no shorter equivalent exists". The dev operator set
             crosses enumeration feasibility between lengths 5 (6.8e6) and 6 (2.4e8).
+        candidate_fold_filter : bool, optional
+            Drop VARIABLE-FREE candidates of length >= 2 from the candidate library
+            (default True). Sound: a var-free candidate evaluates to one scalar per
+            constant-assignment, so any source it matches is constant-valued and the
+            length-1 ``<constant>`` candidate (whose presence gates the filter)
+            already matches at a strictly shorter length, preempting it in the
+            shortest-first scan. This removes the bulk of the constant-bearing
+            (LM-fit) candidate arm -- the dominant per-source cost for const-free
+            sources -- without changing any mined rule. Set False only for a
+            reference mine (e.g. the filtered-vs-unfiltered parity gate).
 
         Notes
         -----
@@ -2760,6 +2776,7 @@ class SimpliPyEngine:
                 mine_seed=mine_seed,
                 confirm_seed=confirm_seed,
                 X_confirm=X_confirm,
+                candidate_fold_filter=candidate_fold_filter,
             )
         finally:
             signal.signal(signal.SIGINT, old_handler)

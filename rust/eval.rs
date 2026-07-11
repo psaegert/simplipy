@@ -292,13 +292,18 @@ mod tests {
         // source-nonfinite rows are don't-care (domain extension)
         assert!(allclose_extends(&[f64::NAN, 1.0], &[1.0, 1.0], r, a)); // x/x -> 1 shape
         assert!(allclose_extends(&[f64::INFINITY, 2.0], &[5.0, 2.0], r, a)); // overflow row
-        // source-finite rows are hard constraints
+                                                                             // source-finite rows are hard constraints
         assert!(!allclose_extends(&[1.0], &[f64::NAN], r, a)); // asin(cosh)->nan shape
         assert!(!allclose_extends(&[1.0], &[f64::INFINITY], r, a));
         assert!(!allclose_extends(&[1.0], &[1.1], r, a));
         assert!(allclose_extends(&[1.0, 2.0], &[1.0, 2.0 + 1e-13], r, a));
         // all-nonfinite source: vacuously true -> the caller's evidence gate must reject
-        assert!(allclose_extends(&[f64::NAN, f64::NAN], &[f64::NAN, 3.0], r, a));
+        assert!(allclose_extends(
+            &[f64::NAN, f64::NAN],
+            &[f64::NAN, 3.0],
+            r,
+            a
+        ));
         assert!(!allclose_extends(&[1.0, 2.0], &[1.0], r, a)); // length mismatch
     }
 

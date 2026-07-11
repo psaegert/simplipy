@@ -199,85 +199,271 @@ fn fit_affine_check(
     if k > valid.len() {
         return false; // underdetermined -> scipy bails -> False
     }
-    // Solve the least-squares system A c ~= t over the valid rows by HOUSEHOLDER QR (2026-07-11).
-    // The former path formed the NORMAL equations A^T A and solved those; on a wide-magnitude X that
-    // SQUARES the condition number (cond(A^T A) = cond(A)^2), losing ~2x the digits, so the intercept
-    // of an EXACT affine relationship came out ~5e-9 off -- past rtol -- and the whole C0*f(x)+C1
-    // family spuriously rejected. QR works on A directly (cond(A), not its square) and is rank-
-    // revealing, so it needs no conditioning-dependent Tikhonov ridge (whose trace scaling biased the
-    // small column). A_valid is m x k; solve min ||A_valid c - t_valid||.
+    // BARE `<constant>` candidate (fitted == v on every row; detected structurally as k == 1
+    // with a zero base and an all-ones basis): decide by EXACT interval-intersection
+    // feasibility instead of least squares. The accept gate is per-row RELATIVE, so its
+    // feasible set is an intersection of intervals in v -- and a (weighted or unweighted)
+    // least-squares mean is NOT a Chebyshev center: for skewed rows the mean can sit outside
+    // a NONEMPTY feasible set (adversarially demonstrated: 63 rows at e-2.4e-9, one at
+    // e+2.4e-9, all within the band of v = e, mean rejected), which broke the fold-filter
+    // dominance argument (`<constant>` must accept whenever ANY var-free candidate's value
+    // does). The exact decision restores dominance as a theorem, up to f64 rounding of the
+    // interval endpoints themselves (~1 ulp, 7 orders below the rtol band).
+    if k == 1 && (0..n_rows).all(|r| b[r] == 0.0 && a[0][r] == 1.0) {
+        return fits_constant_exact(y_target, rtol, atol);
+    }
+    // Solve the least-squares system A c ~= t over the valid rows by HOUSEHOLDER QR (2026-07-11;
+    // the former normal-equations path SQUARED the condition number, see `QrFactor`), with three
+    // stabilizers added for the GROWING-BASIS recall gap (2026-07-11, readiness BLOCKER 2):
+    //
+    // 1. ROW WEIGHTS mirroring the accept gate. `allclose_extends` is RELATIVE per row
+    //    (|y - fitted| <= atol + rtol*|fitted|), but an unweighted solve minimizes ABSOLUTE
+    //    residuals, so rows with huge |y| dominate. With a growing basis (exp/cosh/pow3+ on the
+    //    heavy-tailed mine X), y's own f64 rounding on those rows (eps*|y| ~ 1e5 at |y| ~ 1e21)
+    //    exceeds an O(1) intercept, whose information lives ONLY in the small-|y| rows: the
+    //    unweighted solve buried it and the whole C0*f(x)+C1 / f(x)+C1 family rejected on
+    //    exactly-true constants (0/4) while interceptless C0*f(x) passed. Weighting each row by
+    //    ~1/tolerance_r makes the solve optimize the criterion the gate actually checks. The gate
+    //    itself is UNCHANGED: a solved c still has to pass `allclose_extends` on all rows, so
+    //    this is recall-only -- no new accept class exists that the gate would not certify.
+    // 2. COLUMN max-abs equilibration: keeps the QR's working magnitudes O(1) (a raw exp-basis
+    //    column reaches ~1e308, where the reflector norm itself can overflow) and removes the
+    //    column-imbalance part of the conditioning; solutions are rescaled back.
+    // 3. FIXED-ROUND iterative refinement on the retained factor: for a CONSISTENT system (a
+    //    true rule) it polishes the solution toward machine precision even at large kappa; for
+    //    an inconsistent one the residual is ~orthogonal to range(A) and the update is ~0.
+    //    Fixed rounds keep the path deterministic.
     let m = valid.len();
-    let mut qr: Vec<Vec<f64>> = (0..k)
+    // (a) column max-abs equilibration on the RAW columns, BEFORE weighting: a huge-but-FINITE
+    // basis entry (sinh(705) ~ 7.5e305) times a large row weight (up to 1/atol = 1e12 where
+    // y ~ 0, e.g. the exact-cancellation rows of cosh(x) - sinh(x)) overflows to inf and NaNs
+    // the whole solve -- a false REJECT of true fits, adversarially demonstrated on the real
+    // mining X. Scaled first, basis entries are <= 1 and every later product stays finite.
+    let mut acols: Vec<Vec<f64>> = (0..k)
         .map(|j| valid.iter().map(|&r| a[j][r]).collect::<Vec<f64>>())
-        .collect(); // column-major: qr[j][row]
-    let mut t: Vec<f64> = valid.iter().map(|&r| y_target[r] - b[r]).collect();
-    let Some(c) = householder_lstsq(&mut qr, &mut t, m, k) else {
+        .collect(); // column-major over valid rows
+    let traw: Vec<f64> = valid.iter().map(|&r| y_target[r] - b[r]).collect();
+    let mut scale = vec![1.0f64; k];
+    for (j, col) in acols.iter_mut().enumerate() {
+        let s = col.iter().fold(0.0f64, |acc, v| acc.max(v.abs()));
+        if s.is_finite() && s > 0.0 {
+            scale[j] = s;
+            for v in col.iter_mut() {
+                *v /= s;
+            }
+        }
+    }
+    // (b) row weights, capped so the weighted RHS also stays finite (a row needing the cap has
+    // its residual target astronomically outside the band -- the fit is infeasible there and
+    // the gate rejects it; the cap only keeps the algebra finite instead of NaN).
+    let w: Vec<f64> = valid
+        .iter()
+        .zip(&traw)
+        .map(|(&r, tr)| {
+            let wr = 1.0 / (atol + rtol * y_target[r].abs()).max(1e-300);
+            if tr.abs() > 1.0 {
+                wr.min(1e290 / tr.abs())
+            } else {
+                wr
+            }
+        })
+        .collect();
+    let aw: Vec<Vec<f64>> = acols
+        .iter()
+        .map(|col| {
+            col.iter()
+                .zip(&w)
+                .map(|(v, wi)| v * wi)
+                .collect::<Vec<f64>>()
+        })
+        .collect(); // column-major, scaled then row-weighted; entries bounded by max(w) <= 1e300
+    let tw: Vec<f64> = traw.iter().zip(&w).map(|(tr, wi)| tr * wi).collect();
+    // NO second (post-weighting) equilibration: the combined per-column scale s1*s2 (basis
+    // max-abs ~ 1e303 times weight scale ~ 1e12) overflows f64, turning `scale[j]` into inf and
+    // the unscaled solution into 0 -- a false reject on exactly the huge-basis rows the
+    // pre-weighting scale exists for (cosh/sinh at |x| ~ 705). The single raw-column scale keeps
+    // every intermediate (matrix entries, scaled solution c*s1, and the unscale) representable.
+    let Some(factor) = QrFactor::factor(aw.clone(), m, k) else {
         return false; // rank-deficient with an inconsistent RHS -> no exact fit
     };
+    let Some(mut cs) = factor.solve(tw.clone()) else {
+        return false;
+    };
+    for _ in 0..2 {
+        let mut resid = tw.clone();
+        for (col, c_j) in aw.iter().zip(&cs) {
+            for (res, v) in resid.iter_mut().zip(col) {
+                *res -= v * c_j;
+            }
+        }
+        match factor.solve(resid) {
+            Some(d) => {
+                for (c_j, d_j) in cs.iter_mut().zip(&d) {
+                    *c_j += d_j;
+                }
+            }
+            None => break,
+        }
+    }
+    let c: Vec<f64> = cs.iter().zip(&scale).map(|(v, s)| v / s).collect();
     // fitted on ALL rows = eval at the solved constants (exact for an affine model).
     // GENERIC EQUIVALENCE (2026-07-11): source-nonfinite rows are extendable, source-finite bind.
     let fitted = tape.eval_columns(x_cols, &c, n_rows);
-    allclose_extends(y_target, &fitted, rtol, atol)
+    if allclose_extends(y_target, &fitted, rtol, atol) {
+        return true;
+    }
+    // KNIFE-EDGE rescue (2026-07-11 verification): exact-cancellation rows (cosh(x) - sinh(x)
+    // = 0.0 bitwise at large x) tolerate ~atol while d(fitted)/dc ~ 1e303, so they demand
+    // constants BITWISE equal to the true ones -- any solver's +-1-ulp output is a coin flip
+    // (the old solver "won" some seeds by luck, lost others). When the solved constants sit
+    // within ~rtol of integers, re-gate at the snapped integers: deterministic accept for the
+    // integer-constant rule class, and STILL gate-certified (no new accept class -- an accepted
+    // snap is just another "constants exist" witness). The nearness guard keeps the extra eval
+    // off the ordinary reject path.
+    let near_int = c
+        .iter()
+        .all(|v| (v - v.round()).abs() <= 1e-9 * v.abs().max(1.0));
+    if near_int && c.iter().any(|v| *v != v.round()) {
+        let snapped: Vec<f64> = c.iter().map(|v| v.round()).collect();
+        let fitted2 = tape.eval_columns(x_cols, &snapped, n_rows);
+        if allclose_extends(y_target, &fitted2, rtol, atol) {
+            return true;
+        }
+    }
+    false
 }
 
-/// Householder QR least-squares: solve min ||A c - t|| for the m x k column-major `qr` (`qr[j][row]`)
-/// and length-m `t`, both consumed in place. Returns the length-k solution, or `None` if a column is
-/// rank-deficient (zero pivot). Never forms A^T A, so the working conditioning is cond(A), not its
-/// square -- the whole reason for QR over the normal equations here. Standard for a tall skinny LS.
-fn householder_lstsq(qr: &mut [Vec<f64>], t: &mut [f64], m: usize, k: usize) -> Option<Vec<f64>> {
-    let mut r_diag = vec![0.0f64; k];
-    for j in 0..k {
-        // Householder reflector zeroing qr[j][j+1..m].
-        let mut norm = 0.0f64;
-        for row in j..m {
-            norm = norm.hypot(qr[j][row]);
+/// EXACT feasibility decision for fitting a bare constant: does ANY v satisfy the accept gate
+/// |y_r - v| <= atol + rtol*|v| on every FINITE row of `y` (nonfinite rows are extendable, per
+/// `allclose_extends`)? The feasible set is an intersection of per-row intervals, tracked
+/// separately for the v >= 0 and v <= 0 branches (the gate's |v| makes the bounds branch-
+/// dependent). This is the decision procedure the fold-filter dominance theorem needs: any
+/// var-free candidate's fitted value is one such v, so its acceptance implies nonemptiness here.
+fn fits_constant_exact(y: &[f64], rtol: f64, atol: f64) -> bool {
+    let mut any = false;
+    let (mut lo_p, mut hi_p) = (0.0f64, f64::INFINITY); // v >= 0 branch
+    let (mut lo_n, mut hi_n) = (f64::NEG_INFINITY, 0.0f64); // v <= 0 branch
+    for &yr in y {
+        if !yr.is_finite() {
+            continue;
         }
-        if norm == 0.0 {
-            return None; // zero column -> rank-deficient
+        any = true;
+        // v >= 0: |y - v| <= atol + rtol*v  <=>  (y-atol)/(1+rtol) <= v <= (y+atol)/(1-rtol)
+        lo_p = lo_p.max((yr - atol) / (1.0 + rtol));
+        hi_p = hi_p.min((yr + atol) / (1.0 - rtol));
+        // v <= 0: |y - v| <= atol - rtol*v  <=>  (y-atol)/(1-rtol) <= v <= (y+atol)/(1+rtol)
+        lo_n = lo_n.max((yr - atol) / (1.0 - rtol));
+        hi_n = hi_n.min((yr + atol) / (1.0 + rtol));
+    }
+    if !any {
+        return false; // no binding row -> no evidence for a constant (mirrors the k > valid bail)
+    }
+    lo_p <= hi_p || lo_n <= hi_n
+}
+
+/// Householder QR factorization of an m x k column-major design (`qr[j][row]`), reusable across
+/// multiple right-hand sides -- the iterative-refinement loop in `fit_affine_check` re-solves the
+/// SAME factor for each residual RHS. Never forms A^T A, so the working conditioning is cond(A),
+/// not its square -- the whole reason for QR over the normal equations here. After `factor`, the
+/// reflectors live below/on the diagonal, R above it, and R's diagonal in `r_diag` (the reflector
+/// maps column j to -sigma*e_j, so R[j][j] = -norm; the sign convention is pinned by
+/// `householder_lstsq_recovers_exact_solution`). A column with an all-zero subdiagonal gets the
+/// IDENTITY reflector (LAPACK tau = 0): the general formula would place v_j = 0 and divide by it,
+/// NaN-ing the solve -- the m == k last column ALWAYS lands there, so exact-interpolation fits
+/// (k constants on exactly k valid rows) used to reject spuriously.
+struct QrFactor {
+    qr: Vec<Vec<f64>>,
+    r_diag: Vec<f64>,
+    identity: Vec<bool>,
+    m: usize,
+    k: usize,
+}
+
+impl QrFactor {
+    fn factor(mut qr: Vec<Vec<f64>>, m: usize, k: usize) -> Option<Self> {
+        let mut r_diag = vec![0.0f64; k];
+        let mut identity = vec![false; k];
+        for j in 0..k {
+            // Householder reflector zeroing qr[j][j+1..m].
+            let mut norm_below = 0.0f64;
+            for row in (j + 1)..m {
+                norm_below = norm_below.hypot(qr[j][row]);
+            }
+            if norm_below == 0.0 {
+                if qr[j][j] == 0.0 {
+                    return None; // zero column -> rank-deficient
+                }
+                // already upper-triangular at j: H_j = I, nothing to apply
+                r_diag[j] = qr[j][j];
+                identity[j] = true;
+                continue;
+            }
+            let mut norm = norm_below.hypot(qr[j][j]);
+            // pick the sign that avoids cancellation
+            if qr[j][j] > 0.0 {
+                norm = -norm;
+            }
+            for row in j..m {
+                qr[j][row] /= norm;
+            }
+            qr[j][j] += 1.0;
+            // apply the reflector to the remaining columns
+            for c in (j + 1)..k {
+                let mut s = 0.0f64;
+                for row in j..m {
+                    s += qr[j][row] * qr[c][row];
+                }
+                let s = -s / qr[j][j];
+                for row in j..m {
+                    qr[c][row] += s * qr[j][row];
+                }
+            }
+            r_diag[j] = -norm;
         }
-        // pick the sign that avoids cancellation
-        if qr[j][j] > 0.0 {
-            norm = -norm;
-        }
-        for row in j..m {
-            qr[j][row] /= norm;
-        }
-        qr[j][j] += 1.0;
-        // apply the reflector to the remaining columns and to t
-        for c in (j + 1)..k {
+        Some(QrFactor {
+            qr,
+            r_diag,
+            identity,
+            m,
+            k,
+        })
+    }
+
+    /// Solve min ||A x - t|| for one RHS using the stored reflectors; consumes `t`.
+    fn solve(&self, mut t: Vec<f64>) -> Option<Vec<f64>> {
+        for j in 0..self.k {
+            if self.identity[j] {
+                continue;
+            }
             let mut s = 0.0f64;
-            for row in j..m {
-                s += qr[j][row] * qr[c][row];
+            for row in j..self.m {
+                s += self.qr[j][row] * t[row];
             }
-            let s = -s / qr[j][j];
-            for row in j..m {
-                qr[c][row] += s * qr[j][row];
+            let s = -s / self.qr[j][j];
+            for row in j..self.m {
+                t[row] += s * self.qr[j][row];
             }
         }
-        let mut s = 0.0f64;
-        for row in j..m {
-            s += qr[j][row] * t[row];
+        // back-substitute R x = (Q^T t)[..k]: diag in r_diag, above-diag in qr.
+        let mut x = vec![0.0f64; self.k];
+        for j in (0..self.k).rev() {
+            if self.r_diag[j] == 0.0 {
+                return None;
+            }
+            let mut s = t[j];
+            for c in (j + 1)..self.k {
+                s -= self.qr[c][j] * x[c];
+            }
+            x[j] = s / self.r_diag[j];
         }
-        let s = -s / qr[j][j];
-        for row in j..m {
-            t[row] += s * qr[j][row];
-        }
-        // the reflector maps column j to -sigma*e_j (sigma = `norm`), so R[j][j] = -norm.
-        r_diag[j] = -norm;
+        Some(x)
     }
-    // back-substitute R x = (Q^T t)[..k], with R upper-triangular: diag in r_diag, above-diag in qr.
-    let mut x = vec![0.0f64; k];
-    for j in (0..k).rev() {
-        if r_diag[j] == 0.0 {
-            return None;
-        }
-        let mut s = t[j];
-        for c in (j + 1)..k {
-            s -= qr[c][j] * x[c];
-        }
-        x[j] = s / r_diag[j];
-    }
-    Some(x)
+}
+
+/// One-shot factor + solve (kept for the unit test pinning the R[j][j] = -norm convention).
+#[cfg(test)]
+fn householder_lstsq(qr: Vec<Vec<f64>>, t: Vec<f64>, m: usize, k: usize) -> Option<Vec<f64>> {
+    QrFactor::factor(qr, m, k)?.solve(t)
 }
 
 /// Native `exist_constants_that_fit` for the AFFINE case (M3a). Returns `Some(decision)` if the
@@ -738,22 +924,151 @@ mod tests {
         // overdetermined well-conditioned system with an EXACT solution; pins the R[j][j] = -norm
         // sign convention (a +norm bug returns an inconsistent, wrong solution).
         let m = 50usize;
-        let mut col0: Vec<f64> = (0..m).map(|r| (r as f64) * 0.1 - 2.5).collect();
-        let mut col1: Vec<f64> = vec![1.0; m];
+        let col0: Vec<f64> = (0..m).map(|r| (r as f64) * 0.1 - 2.5).collect();
+        let col1: Vec<f64> = vec![1.0; m];
         // t = 3.0*col0 - 1.7*col1 exactly
-        let mut t: Vec<f64> = (0..m).map(|r| 3.0 * col0[r] - 1.7).collect();
-        let mut qr = vec![std::mem::take(&mut col0), std::mem::take(&mut col1)];
-        let c = super::householder_lstsq(&mut qr, &mut t, m, 2).unwrap();
+        let t: Vec<f64> = (0..m).map(|r| 3.0 * col0[r] - 1.7).collect();
+        let c = super::householder_lstsq(vec![col0, col1], t, m, 2).unwrap();
         assert!((c[0] - 3.0).abs() < 1e-12, "slope {} != 3.0", c[0]);
         assert!((c[1] + 1.7).abs() < 1e-12, "intercept {} != -1.7", c[1]);
         // wide-magnitude column (the conditioning case): still exact via QR
-        let mut big0: Vec<f64> = (0..m).map(|r| ((r as f64) - 25.0) * 40.0).collect();
-        let mut big1: Vec<f64> = vec![1.0; m];
-        let mut bt: Vec<f64> = (0..m).map(|r| 7.0 * big0[r]).collect(); // intercept exactly 0
-        let mut bqr = vec![std::mem::take(&mut big0), std::mem::take(&mut big1)];
-        let bc = super::householder_lstsq(&mut bqr, &mut bt, m, 2).unwrap();
+        let big0: Vec<f64> = (0..m).map(|r| ((r as f64) - 25.0) * 40.0).collect();
+        let big1: Vec<f64> = vec![1.0; m];
+        let bt: Vec<f64> = (0..m).map(|r| 7.0 * big0[r]).collect(); // intercept exactly 0
+        let bc = super::householder_lstsq(vec![big0, big1], bt, m, 2).unwrap();
         assert!((bc[0] - 7.0).abs() < 1e-12);
         assert!(bc[1].abs() < 1e-9, "intercept {} not ~0", bc[1]);
+    }
+
+    #[test]
+    fn affine_growing_basis_intercept_recovers() {
+        // BLOCKER-2 regression (2026-07-11 readiness doc): with a growing basis (exp/cosh/pow3+)
+        // an additive intercept was unrecoverable -- the unweighted solve let rows with |y|~1e21
+        // dominate, whose f64 rounding exceeds an O(1) intercept. C0*f(x)+C1 and f(x)+C1 rejected
+        // on exactly-true constants while interceptless C0*f(x) passed. The row-weighted solve
+        // must certify the family at mine tolerances; a non-member must still reject.
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let vars = s(&["_0"]);
+        let n = 256usize;
+        // dense sweep incl. rows where exp(x) spans 1e-300 .. 1e304 (no overflow rows: those are
+        // masked by the y-finite gate anyway; the precision cliff is what this test pins)
+        let xf: Vec<f64> = (0..n)
+            .map(|r| ((r as f64) / (n as f64) - 0.5) * 1400.0)
+            .collect();
+        let y: Vec<f64> = xf.iter().map(|&x| 2.5 * x.exp() - 1.3).collect();
+        let cand = s(&["+", "*", "<constant>", "exp", "_0", "<constant>"]);
+        assert_eq!(
+            e.exist_constants_fit_linear(&cand, &vars, &xf, n, &y, 1e-9, 1e-12)
+                .unwrap(),
+            Some(true),
+            "C0*exp(_0)+C1 must certify on exactly-true constants"
+        );
+        // single-constant intercept form f(x)+C (also 0/4 before the fix)
+        let y2: Vec<f64> = xf.iter().map(|&x| x.exp() + 4.2).collect();
+        let cand2 = s(&["+", "exp", "_0", "<constant>"]);
+        assert_eq!(
+            e.exist_constants_fit_linear(&cand2, &vars, &xf, n, &y2, 1e-9, 1e-12)
+                .unwrap(),
+            Some(true),
+            "exp(_0)+C must certify on an exactly-true constant"
+        );
+        // soundness: a non-member (additive non-constant part) must still reject
+        let y3: Vec<f64> = xf.iter().map(|&x| x.exp() + x.sin()).collect();
+        assert_eq!(
+            e.exist_constants_fit_linear(&cand, &vars, &xf, n, &y3, 1e-9, 1e-12)
+                .unwrap(),
+            Some(false),
+            "exp(_0)+sin(_0) is not in the C0*exp(_0)+C1 family"
+        );
+    }
+
+    #[test]
+    fn bare_constant_exact_feasibility() {
+        // ADVERSARIAL regression (2026-07-11 verification): the accept gate's feasible set for a
+        // bare <constant> is an interval intersection; a least-squares mean is NOT its Chebyshev
+        // center and rejected a feasible skewed case (63 rows at e-d, 1 at e+d, d inside the
+        // band) -- breaking the fold-filter dominance. The exact decision must accept it.
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let vars = s(&["_0"]);
+        let n = 64usize;
+        let xf: Vec<f64> = (0..n).map(|r| r as f64).collect();
+        let ec = std::f64::consts::E;
+        let d = 2.4e-9; // inside the band atol + rtol*e = 1e-12 + 1e-9*e ~ 2.72e-9
+        let mut y = vec![ec - d; n];
+        y[n - 1] = ec + d;
+        let cand = s(&["<constant>"]);
+        assert_eq!(
+            e.exist_constants_fit_linear(&cand, &vars, &xf, n, &y, 1e-9, 1e-12)
+                .unwrap(),
+            Some(true),
+            "v = e is feasible on every row; the exact decision must find it"
+        );
+        // infeasible: spread wider than any band -> reject
+        let mut y2 = vec![ec - 1.0e-8; n];
+        y2[n - 1] = ec + 1.0e-8;
+        assert_eq!(
+            e.exist_constants_fit_linear(&cand, &vars, &xf, n, &y2, 1e-9, 1e-12)
+                .unwrap(),
+            Some(false)
+        );
+        // negative-branch sanity
+        let y3 = vec![-3.5f64; n];
+        assert_eq!(
+            e.exist_constants_fit_linear(&cand, &vars, &xf, n, &y3, 1e-9, 1e-12)
+                .unwrap(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn weighted_design_overflow_is_safe() {
+        // ADVERSARIAL regression (2026-07-11 verification): rows pairing a huge-but-FINITE basis
+        // (sinh(705) ~ 7.5e305) with y ~ 0 (cosh(x) - sinh(x) cancels bitwise to 0.0 at large x)
+        // get weight ~ 1/atol = 1e12; weighting the RAW basis overflowed to inf and NaN'd the
+        // solve -> false reject of the exactly-true C = -1. Column-scale-then-weight must accept.
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let vars = s(&["_0"]);
+        let xs: Vec<f64> = vec![
+            -3.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 100.0, 300.0, 705.0, 705.5,
+            706.0,
+        ];
+        let n = xs.len();
+        // y = cosh(x) + C*sinh(x) at C = -1 (= exp(-x); 0.0 bitwise at x >= ~705)
+        let y: Vec<f64> = xs.iter().map(|&x| x.cosh() - x.sinh()).collect();
+        let cand = s(&["+", "cosh", "_0", "*", "<constant>", "sinh", "_0"]);
+        assert_eq!(
+            e.exist_constants_fit_linear(&cand, &vars, &xs, n, &y, 1e-9, 1e-12)
+                .unwrap(),
+            Some(true),
+            "exactly-true C = -1 must certify despite 1e305-scale basis rows at y ~ 0"
+        );
+    }
+
+    #[test]
+    fn exact_interpolation_k_equals_m() {
+        // Degenerate-reflector regression (2026-07-11 verification, pre-existing): with exactly
+        // k valid rows the QR's last column has an EMPTY subdiagonal; the general reflector
+        // formula divides by zero and NaNs the solve -> exact interpolation fits rejected.
+        // The identity-reflector branch must handle it.
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let vars = s(&["_0"]);
+        let xf: Vec<f64> = vec![1.0, 3.0];
+        let y: Vec<f64> = vec![2.0 * 1.0 - 5.0, 2.0 * 3.0 - 5.0]; // 2x - 5 on 2 rows, k = 2
+        let cand = s(&["+", "*", "<constant>", "_0", "<constant>"]);
+        assert_eq!(
+            e.exist_constants_fit_linear(&cand, &vars, &xf, 2, &y, 1e-9, 1e-12)
+                .unwrap(),
+            Some(true),
+            "k == m exact interpolation must certify"
+        );
     }
 
     #[test]

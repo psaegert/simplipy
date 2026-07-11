@@ -154,6 +154,7 @@ impl Engine {
         rtol: f64,
         atol: f64,
         min_informative: usize,
+        fold_filter: bool,
     ) -> Result<Option<Vec<String>>, String> {
         crate::worker::find_rule(
             &self.operators,
@@ -170,17 +171,20 @@ impl Engine {
             rtol,
             atol,
             min_informative,
+            fold_filter,
         )
     }
 
     /// OFFLINE miner (Phase B, M4b): build a RESIDENT candidate library (once per mine). See
-    /// `crate::worker::CandidateLibrary`.
+    /// `crate::worker::CandidateLibrary` for the `fold_filter` (var-free candidate minimization)
+    /// semantics and its soundness argument.
     pub fn build_candidate_library(
         &self,
         candidates: &[Vec<String>],
         var_names: &[String],
         x_flat: &[f64],
         n_rows: usize,
+        fold_filter: bool,
     ) -> Result<crate::worker::CandidateLibrary, String> {
         crate::worker::CandidateLibrary::build(
             &self.operators,
@@ -188,6 +192,7 @@ impl Engine {
             var_names,
             x_flat,
             n_rows,
+            fold_filter,
         )
     }
 
@@ -258,7 +263,15 @@ impl Engine {
                 }
                 let s = seed.wrapping_add(idx as u64);
                 match self.find_rule_with_lib(
-                    src, slen, max_target, lib, challenges, retries, s, rtol, atol,
+                    src,
+                    slen,
+                    max_target,
+                    lib,
+                    challenges,
+                    retries,
+                    s,
+                    rtol,
+                    atol,
                     min_informative,
                 ) {
                     Ok(Some(target)) => Some((src.clone(), target)),

@@ -105,6 +105,21 @@ struct PyCandidateLibrary {
 }
 
 #[pymethods]
+impl PyCandidateLibrary {
+    /// Candidates kept in the library (post fold-filter).
+    #[getter]
+    fn n_candidates(&self) -> usize {
+        self.inner.n_candidates()
+    }
+
+    /// Variable-free candidates dropped by the fold-filter (0 when the filter is off or inert).
+    #[getter]
+    fn n_filtered(&self) -> usize {
+        self.inner.n_filtered()
+    }
+}
+
+#[pymethods]
 impl PyEngine {
     /// Build from already-resolved local asset paths (the Python shim resolves HF-hub/local paths
     /// via simplipy's own asset_manager and hands us the files, so asset resolution stays in ONE
@@ -402,11 +417,10 @@ impl PyEngine {
         min_informative: Option<usize>,
         seed: u64,
     ) -> PyResult<bool> {
-        let mi = min_informative.unwrap_or(n_rows / 8);
+        let mi = min_informative.unwrap_or((n_rows / 8).max(1));
         py.detach(|| {
             self.inner.equivalent_no_const_check(
-                &source, &candidate, &var_names, &x_flat, n_rows, challenges, rtol, atol, mi,
-                seed,
+                &source, &candidate, &var_names, &x_flat, n_rows, challenges, rtol, atol, mi, seed,
             )
         })
         .map_err(PyValueError::new_err)
@@ -422,7 +436,7 @@ impl PyEngine {
     /// short-circuit + candidate scan (const-free -> M2, constant-bearing -> M3) + selection. Returns
     /// the chosen target token list, or None. `candidates` = the candidate library (expressions up to
     /// max_target); indexed by length internally (M4b will make a resident CandidateLibrary).
-    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
+    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, fold_filter=true))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule(
         &self,
@@ -440,8 +454,9 @@ impl PyEngine {
         rtol: f64,
         atol: f64,
         min_informative: Option<usize>,
+        fold_filter: bool,
     ) -> PyResult<Option<Vec<String>>> {
-        let mi = min_informative.unwrap_or(n_rows / 8);
+        let mi = min_informative.unwrap_or((n_rows / 8).max(1));
         py.detach(|| {
             self.inner.find_rule(
                 &source,
@@ -457,6 +472,7 @@ impl PyEngine {
                 rtol,
                 atol,
                 mi,
+                fold_filter,
             )
         })
         .map_err(PyValueError::new_err)
@@ -464,6 +480,9 @@ impl PyEngine {
 
     /// OFFLINE miner (Phase B, M4b): build a RESIDENT candidate library once per mine (precompiles
     /// every candidate's tape + precomputes const-free `y`). Pass the returned handle to `find_rule_lib`.
+    /// `fold_filter` (default on) drops var-free candidates of length >= 2 -- the sound "candidate
+    /// minimization" lever (7-4 readiness BLOCKER 1); see `worker::CandidateLibrary::build`.
+    #[pyo3(signature = (candidates, var_names, x_flat, n_rows, fold_filter=true))]
     fn build_candidate_library(
         &self,
         py: Python<'_>,
@@ -471,11 +490,17 @@ impl PyEngine {
         var_names: Vec<String>,
         x_flat: Vec<f64>,
         n_rows: usize,
+        fold_filter: bool,
     ) -> PyResult<PyCandidateLibrary> {
         let inner = py
             .detach(|| {
-                self.inner
-                    .build_candidate_library(&candidates, &var_names, &x_flat, n_rows)
+                self.inner.build_candidate_library(
+                    &candidates,
+                    &var_names,
+                    &x_flat,
+                    n_rows,
+                    fold_filter,
+                )
             })
             .map_err(PyValueError::new_err)?;
         Ok(PyCandidateLibrary { inner })
@@ -500,7 +525,7 @@ impl PyEngine {
         min_informative: Option<usize>,
     ) -> PyResult<Option<Vec<String>>> {
         let lib = &library.inner;
-        let mi = min_informative.unwrap_or(lib.n_rows() / 8);
+        let mi = min_informative.unwrap_or((lib.n_rows() / 8).max(1));
         py.detach(|| {
             self.inner.find_rule_with_lib(
                 &source,
@@ -544,7 +569,7 @@ impl PyEngine {
         min_informative: Option<usize>,
     ) -> Vec<(Vec<String>, Vec<String>)> {
         let lib = &library.inner;
-        let mi = min_informative.unwrap_or(lib.n_rows() / 8);
+        let mi = min_informative.unwrap_or((lib.n_rows() / 8).max(1));
         py.detach(|| {
             self.inner.mine_one_length(
                 &sources, lib, max_target, challenges, retries, seed, rtol, atol, mi,

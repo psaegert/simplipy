@@ -199,7 +199,30 @@ struct CandEntry {
     /// Improvement 2: precomputed log-linear plan (form + the const-free `g` tape) for nonlinear
     /// `pow(C,g)` / `pow(g,C)` candidates -> closed-form fit instead of the LM.
     loglin: Option<(crate::fit::LogLinForm, Tape)>,
+    /// FNV-1a over the tokens: the ORDER-INDEPENDENT ingredient of the per-(candidate, instance)
+    /// fit seed (see `candidate_matches`), so a candidate's LM restart stream depends only on the
+    /// source seed and the candidate itself -- never on which OTHER candidates are in the library
+    /// or where in the scan it sits. This is what makes the fold-filter parity gate exact:
+    /// a filtered and an unfiltered mine draw IDENTICAL fit randomness for every shared candidate.
+    hash: u64,
 }
+
+/// FNV-1a over a token slice, with a separator byte so ["ab","c"] != ["a","bc"].
+fn token_hash(tokens: &[String]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for t in tokens {
+        for b in t.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h ^= 0xff;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Weyl-sequence increment (golden-ratio) used to mix the instance index into the fit seed.
+const SEED_GOLDEN: u64 = 0x9E3779B97F4A7C15;
 
 /// Bitmask over `var_names` of the variables appearing in `tokens` (<=32 vars).
 fn var_mask(tokens: &[String], var_names: &[String]) -> u32 {
@@ -225,7 +248,7 @@ fn candidate_matches(
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    rng: &mut Rng,
+    fit_seed: u64,
 ) -> bool {
     // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
@@ -235,13 +258,24 @@ fn candidate_matches(
     // EVIDENCE = UNIQUE rows where SOME instance's source is finite (BOTH arms; see
     // `equivalent_no_const` for why repetition across instances must not count).
     let mut evidence = vec![false; n_rows];
-    for y in y_src {
+    for (inst, y) in y_src.iter().enumerate() {
         let ok = if cand.n_const == 0 {
             // GENERIC EQUIVALENCE (2026-07-11): source-finite rows must match; source-nonfinite
             // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate.
             allclose_extends(y, cand.y_const_free.as_ref().unwrap(), rtol, atol)
         } else {
-            let s = rng.next_u64();
+            // ORDER-INDEPENDENT fit seed (2026-07-11): a pure function of (per-source seed,
+            // candidate tokens, instance index), NOT a draw from the scan-order RNG stream --
+            // dropping or reordering OTHER candidates (e.g. the fold-filter) must not change
+            // this candidate's LM restarts, or the filtered-vs-unfiltered parity gate would
+            // drown in seed-shift noise. `Rng::new(..).next_u64()` is one splitmix64 step,
+            // i.e. a full 64-bit mix of the combined key.
+            let s = Rng::new(
+                fit_seed
+                    .wrapping_add(cand.hash)
+                    .wrapping_add((inst as u64).wrapping_mul(SEED_GOLDEN)),
+            )
+            .next_u64();
             crate::fit::exist_constants_fit_prepared(
                 &cand.tape,
                 cand.linearity,
@@ -302,6 +336,10 @@ pub struct CandidateLibrary {
     cols: Vec<Vec<f64>>,
     n_rows: usize,
     by_len: Vec<Vec<CandEntry>>, // index = candidate length
+    /// candidates kept in the library (post-filter)
+    n_candidates: usize,
+    /// variable-free candidates dropped by the fold-filter (0 when the filter is off/inert)
+    n_filtered: usize,
 }
 
 impl CandidateLibrary {
@@ -310,12 +348,43 @@ impl CandidateLibrary {
         self.n_rows
     }
 
+    /// Candidates kept in the library (post-filter).
+    pub fn n_candidates(&self) -> usize {
+        self.n_candidates
+    }
+
+    /// Variable-free candidates dropped by the fold-filter.
+    pub fn n_filtered(&self) -> usize {
+        self.n_filtered
+    }
+
+    /// Build the resident library. With `fold_filter` (the 7-4 readiness BLOCKER-1 lever,
+    /// 2026-07-11), VARIABLE-FREE candidates of length >= 2 are dropped, PROVIDED the bare
+    /// `["<constant>"]` candidate is present (otherwise the filter is inert -- conservative).
+    ///
+    /// SOUNDNESS (the narrow, provable form of "candidate minimization"): a variable-free
+    /// candidate evaluates to ONE scalar per constant-assignment (a constant function of X), so
+    /// - const-bearing var-free (`sin(<constant>)`, `pow(<constant>,<constant>)`, ...): any
+    ///   source instance it matches is (near-)constant-valued, which the length-1 `<constant>`
+    ///   candidate also matches -- with a fit family (all of R) that SUPERSET-dominates the
+    ///   wrapper's reachable set;
+    /// - const-free var-free (`exp(1)`, `neg(np.pi)`, ...): a fixed value; any match implies the
+    ///   per-instance `<constant>` fit matches too (and its all-nonfinite members never match:
+    ///   the finite-evidence gate rejects them).
+    /// Since `find_rule_with_lib` scans lengths SHORTEST-FIRST and returns at the first matching
+    /// length, the length-1 `<constant>` match preempts every length>=2 var-free candidate, which
+    /// is therefore never selectable and can be dropped without changing any mined rule. The one
+    /// theoretical edge is tolerance-band width: `<constant>`'s solved fit sits within <= 2x the
+    /// per-row tolerance of the wrapper's (mean vs member), relevant only for sources within
+    /// ~rtol of the band edge -- real mine values agree to ~1e-16 vs rtol 1e-9, and the
+    /// filtered-vs-unfiltered mine parity test certifies the dominance empirically.
     pub fn build(
         ops: &Operators,
         candidates: &[Vec<String>],
         var_names: &[String],
         x_flat: &[f64],
         n_rows: usize,
+        fold_filter: bool,
     ) -> Result<Self, String> {
         let n_vars = var_names.len();
         if x_flat.len() != n_rows * n_vars {
@@ -324,9 +393,24 @@ impl CandidateLibrary {
         let cols = columns_from_row_major(x_flat, n_rows, n_vars);
         let max_len = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
         let mut by_len: Vec<Vec<CandEntry>> = (0..=max_len).map(|_| Vec::new()).collect();
+        let filter_active = fold_filter
+            && candidates
+                .iter()
+                .any(|c| c.len() == 1 && c[0] == "<constant>");
+        let mut n_candidates = 0usize;
+        let mut n_filtered = 0usize;
         for c in candidates {
             let len = c.len();
             if len == 0 {
+                continue;
+            }
+            let vm = var_mask(c, var_names);
+            // Filter decision NOT via `vm == 0`: the scan mask truncates at 32 variables, so a
+            // candidate whose only variables have index >= 32 would be misclassified as
+            // var-free and wrongly dropped. The filter checks ALL var_names.
+            let has_var = c.iter().any(|t| var_names.iter().any(|v| v == t));
+            if filter_active && len >= 2 && !has_var {
+                n_filtered += 1;
                 continue;
             }
             let tape = Tape::compile(c, ops, var_names)?;
@@ -351,20 +435,24 @@ impl CandidateLibrary {
                 .unwrap_or(0);
             by_len[len].push(CandEntry {
                 tokens: c.clone(),
-                var_mask: var_mask(c, var_names),
+                var_mask: vm,
                 n_const,
                 linearity,
                 tape,
                 y_const_free,
                 finite_y,
                 loglin,
+                hash: token_hash(c),
             });
+            n_candidates += 1;
         }
         Ok(CandidateLibrary {
             var_names: var_names.to_vec(),
             cols,
             n_rows,
             by_len,
+            n_candidates,
+            n_filtered,
         })
     }
 }
@@ -440,7 +528,7 @@ pub fn find_rule_with_lib(
                 rtol,
                 atol,
                 min_informative,
-                &mut rng,
+                seed,
             ) {
                 matches.push(cand.tokens.clone());
             }
@@ -470,8 +558,9 @@ pub fn find_rule(
     rtol: f64,
     atol: f64,
     min_informative: usize,
+    fold_filter: bool,
 ) -> Result<Option<Vec<String>>, String> {
-    let lib = CandidateLibrary::build(ops, candidates, var_names, x_flat, n_rows)?;
+    let lib = CandidateLibrary::build(ops, candidates, var_names, x_flat, n_rows, fold_filter)?;
     find_rule_with_lib(
         ops,
         source,
@@ -602,6 +691,7 @@ mod tests {
                 1e-5,
                 1e-8,
                 8,
+                true,
             )
             .unwrap();
         assert_eq!(r, Some(s(&["x0"])));
@@ -621,9 +711,103 @@ mod tests {
                 1e-5,
                 1e-8,
                 8,
+                true,
             )
             .unwrap();
         assert_eq!(r2, None);
+    }
+
+    #[test]
+    fn fold_filter_drops_var_free_and_preserves_decisions() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let n = 128usize;
+        let xf: Vec<f64> = (0..n).map(|r| (r as f64) * 0.11 - 7.0).collect();
+        // library incl. the bare <constant> (guard token), var-free const-bearing (sin(<c>),
+        // pow2(<c>)), var-free const-free (exp(1)), and var-bearing candidates
+        let cands = vec![
+            s(&["x0"]),
+            s(&["<constant>"]),
+            s(&["sin", "<constant>"]),
+            s(&["pow2", "<constant>"]),
+            s(&["exp", "1"]),
+            s(&["neg", "x0"]),
+            s(&["*", "<constant>", "x0"]),
+        ];
+        let filtered = CandidateLibrary::build(ops, &cands, &vars, &xf, n, true).unwrap();
+        let raw = CandidateLibrary::build(ops, &cands, &vars, &xf, n, false).unwrap();
+        assert_eq!(filtered.n_filtered(), 3); // sin(<c>), pow2(<c>), exp(1)
+        assert_eq!(filtered.n_candidates(), 4);
+        assert_eq!(raw.n_filtered(), 0);
+        assert_eq!(raw.n_candidates(), 7);
+        // WITHOUT the bare <constant> the filter must be INERT (conservative guard)
+        let no_bare: Vec<Vec<String>> = cands[2..].to_vec();
+        let inert = CandidateLibrary::build(ops, &no_bare, &vars, &xf, n, true).unwrap();
+        assert_eq!(inert.n_filtered(), 0);
+        // decision parity on both a constant-valued and a non-constant source: the dominance
+        // lemma says the length-1 <constant> preempts every var-free candidate, so filtered and
+        // raw libraries must decide identically (incl. the ORDER-INDEPENDENT fit seeds).
+        for src in [
+            s(&["-", "x0", "x0"]),    // constant-valued (0) -> matches <constant> at len 1
+            s(&["+", "x0", "np.pi"]), // genuinely var-dependent
+            s(&["neg", "neg", "x0"]), // reduces to x0
+        ] {
+            let a = find_rule_with_lib(
+                ops,
+                &src,
+                src.len(),
+                Some(2),
+                &filtered,
+                16,
+                16,
+                7,
+                1e-9,
+                1e-12,
+                16,
+            )
+            .unwrap();
+            let b = find_rule_with_lib(
+                ops,
+                &src,
+                src.len(),
+                Some(2),
+                &raw,
+                16,
+                16,
+                7,
+                1e-9,
+                1e-12,
+                16,
+            )
+            .unwrap();
+            assert_eq!(a, b, "filtered vs raw decision diverged on {src:?}");
+        }
+    }
+
+    #[test]
+    fn fold_filter_keeps_var_dependent_candidates_beyond_32_vars() {
+        // ADVERSARIAL regression (2026-07-11 verification): the scan var_mask truncates at 32
+        // variables, so a candidate whose only variable has index >= 32 has var_mask == 0; the
+        // filter must NOT treat it as var-free (it checks all var_names directly).
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars: Vec<String> = (0..33).map(|i| format!("x{i}")).collect();
+        let n = 16usize;
+        let xf: Vec<f64> = (0..n * 33).map(|i| (i as f64) * 0.01 - 2.0).collect();
+        let cands = vec![
+            s(&["<constant>"]),
+            s(&["sin", "x32"]), // var-DEPENDENT, but var_mask == 0 (index >= 32)
+            s(&["sin", "x0"]),
+            s(&["exp", "<constant>"]), // genuinely var-free -> filtered
+        ];
+        let lib = CandidateLibrary::build(ops, &cands, &vars, &xf, n, true).unwrap();
+        assert_eq!(lib.n_filtered(), 1, "only exp(<constant>) may be dropped");
+        assert_eq!(lib.n_candidates(), 3);
     }
 
     #[test]

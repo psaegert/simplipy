@@ -771,10 +771,17 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
                     }
                     // Same decomposability gate for the power (pow{num}) and root (pow1_{den}).
                     if crate::utils::factorize_to_at_most(
-                        numerator.unsigned_abs() as i128, ops.max_power, 1000).is_err()
+                        numerator.unsigned_abs() as i128,
+                        ops.max_power,
+                        1000,
+                    )
+                    .is_err()
                         || crate::utils::factorize_to_at_most(
-                            denominator.unsigned_abs() as i128, ops.max_fractional_power, 1000)
-                            .is_err()
+                            denominator.unsigned_abs() as i128,
+                            ops.max_fractional_power,
+                            1000,
+                        )
+                        .is_err()
                     {
                         return Ok(pow_keep(base, exponent));
                     }
@@ -1169,14 +1176,20 @@ mod tests {
         assert_eq!(conv(&e, &["**", "x1", "1"]).unwrap(), v(&["x1"]));
         // 0.4.2 factorize gate: exponent 0 is not decomposable -> binary pow kept (pow0 was
         // an INVALID token anyway, quirk #2); expectation updated from the pre-0.4.2 trap.
-        assert_eq!(conv(&e, &["**", "x1", "0"]).unwrap(), v(&["pow", "x1", "0"]));
+        assert_eq!(
+            conv(&e, &["**", "x1", "0"]).unwrap(),
+            v(&["pow", "x1", "0"])
+        );
         // chain factorize order + VE fallback + mixed-chain absorption bug (T3).
         assert_eq!(
             conv(&e, &["**", "x1", "6"]).unwrap(),
             v(&["pow2", "pow3", "x1"])
         );
         // 0.4.2 phantom-pow fix: 7 is non-5-smooth -> binary pow kept (was the corrupting pow7).
-        assert_eq!(conv(&e, &["**", "x1", "7"]).unwrap(), v(&["pow", "x1", "7"]));
+        assert_eq!(
+            conv(&e, &["**", "x1", "7"]).unwrap(),
+            v(&["pow", "x1", "7"])
+        );
         assert_eq!(
             conv(&e, &["**", "x1", "30"]).unwrap(),
             v(&["pow2", "pow3", "pow5", "x1"])

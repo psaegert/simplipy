@@ -1,5 +1,33 @@
 # 7-4 re-mine readiness — consolidated overview (2026-07-11)
 
+> **STATUS UPDATE 2026-07-11 (later the same day): BLOCKERS 1 and 2 are RESOLVED, then
+> ADVERSARIALLY VERIFIED and hardened** (see the Unreleased CHANGELOG entry; cargo 35/35,
+> pytest 253/253 incl. an end-to-end filtered-vs-unfiltered mine parity test). The verification
+> round (5 refutation lenses + cross-checks) REFUTED the first dominance argument (least-squares
+> mean vs interval-intersection gate at the band edge) and found a weighted-design overflow
+> false-reject; both fixed (exact bare-`<constant>` feasibility decision; scale-before-weight +
+> capped weights + near-integer snap), plus the >=33-variable filter defect and the
+> min_informative=0 floor. Full detail in the CHANGELOG.
+> - **BLOCKER 1 (fold-filter)**: built as the provable generalization of the whitelist -- ALL
+>   variable-free candidates of length >= 2 are dropped (gated on the bare `<constant>` candidate
+>   being present; inert otherwise). On the real 13-leaf config the filter drops 374,031 of the
+>   566,280 len<=4 candidates (66%); hard const-free non-reducing probe sources (len 5-8) measure
+>   **374-474 s/source unfiltered -> 5.0-8.5 s/source filtered (55-88x)** at identical decisions.
+>   Fit seeds are now order-independent (pure function of source seed + candidate tokens +
+>   instance), making the parity gate exact.
+> - **BLOCKER 2 (affine growing-basis recall)**: root cause was NOT QR conditioning but row
+>   weighting -- rows with |y| ~ 1e21 carry f64 rounding noise (eps*|y|) larger than an O(1)
+>   intercept, so ANY unweighted solve buries it. Fixed with a row-weighted LS (weights mirror
+>   the relative accept gate: 1/(atol + rtol*|y_r|), pre-scaled columns, capped weights) + 2
+>   rounds of iterative refinement on the retained QR factor + a near-integer snap re-gate.
+>   Recall 0/4 -> 4/4 on C0*f(x)+C1 and f(x)+C1 for f in exp/cosh/sinh/pow3/pow4/pow5; the
+>   adversarial cosh/sinh cancellation slate went old 30/40 -> new 40/40 with zero regression
+>   flips; accept gate unchanged; negatives still reject.
+> - **BLOCKER 3 (L4+L5 calibration mine)**: still open -- the remaining gate before launch.
+>   NOTE the probe numbers above are worst-case sources (const-free, non-reducing, full scan at
+>   every length); the calibration mine measures the real source mix, which is what the
+>   <=2 / >5 CPU-s decision rule applies to.
+
 Fuses three parallel work streams from 2026-07-10/11 and re-verifies the load-bearing claims of
 each against the installed 0.5.0 core (HEAD `479c429`). Supersedes none of them; reconciles all:
 

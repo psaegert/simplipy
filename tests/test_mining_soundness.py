@@ -168,6 +168,37 @@ class TestCheckerSoundness:
             assert engine._core.exist_constants_fit_linear(
                 cand, ['x0'], x_flat, n, y.tolist(), 1e-9, 1e-12) is not True
 
+    def test_affine_growing_basis_family_certifies(self, engine, mining_x) -> None:
+        """REGRESSION for the growing-basis affine recall gap (2026-07-11, readiness
+        BLOCKER 2). With a fast-growing basis f (exp/cosh/pow3+), rows where |y| ~ 1e21
+        dominate an UNWEIGHTED least-squares solve in absolute terms, and y's own f64
+        rounding there (eps*|y|) exceeds an O(1) intercept -- so C0*f(x)+C1 and f(x)+C1
+        rejected on exactly-true constants (0/4) while interceptless C0*f(x) passed.
+        The row-weighted solve (weights ~ 1/(atol + rtol*|y_r|), mirroring the relative
+        accept gate) must certify the family; non-members must still reject."""
+        x_flat, n = mining_x
+        x0 = np.array(x_flat)
+        rng = np.random.default_rng(5)
+        for fname, f in (("exp", np.exp), ("cosh", np.cosh), ("pow2", np.square)):
+            for _ in range(4):
+                c0 = round(float(rng.normal(0, 5)), 3) or 1.7
+                c1 = round(float(rng.normal(0, 5)), 3) or -2.3
+                with np.errstate(all="ignore"):
+                    y_full = c0 * f(x0) + c1
+                    y_shift = f(x0) + c1
+                assert engine._core.exist_constants_fit_linear(
+                    ["+", "*", "<constant>", fname, "x0", "<constant>"],
+                    ["x0"], x_flat, n, y_full.tolist(), 1e-9, 1e-12) is True, (fname, c0, c1)
+                assert engine._core.exist_constants_fit_linear(
+                    ["+", fname, "x0", "<constant>"],
+                    ["x0"], x_flat, n, y_shift.tolist(), 1e-9, 1e-12) is True, (fname, c1)
+        # soundness: a non-member (additive non-constant part) must still reject
+        with np.errstate(all="ignore"):
+            y_neg = np.exp(x0) + np.sin(x0)
+        assert engine._core.exist_constants_fit_linear(
+            ["+", "*", "<constant>", "exp", "x0", "<constant>"],
+            ["x0"], x_flat, n, y_neg.tolist(), 1e-9, 1e-12) is not True
+
     def test_log_linear_pow_rewrite_certifies(self) -> None:
         """REGRESSION for the log-linear recall path + its 2026-07-11 LM-fallthrough
         fix: exp(x0+x0) == (e^2)^x0 is a valid rewrite to pow(<constant>, x0), and the
@@ -303,6 +334,85 @@ class TestEndToEndMineGate:
             outs.append(res.stdout.strip())
         assert outs[0] == outs[1], "ruleset differs across PYTHONHASHSEED -> non-reproducible"
         assert outs[0] != "[]"
+
+
+class TestFoldFilter:
+    """BLOCKER 1 (7-4 readiness): variable-free candidate minimization. Var-free candidates
+    of length >= 2 are dominated by the length-1 <constant> candidate (a var-free candidate
+    is a constant function of X per constant-assignment; the scan is shortest-first), so
+    dropping them must not change ANY mined rule -- while removing the bulk of the
+    constant-bearing (LM-fit) candidate arm that dominates const-free source cost."""
+
+    def test_counts_and_inert_guard(self, engine, mining_x) -> None:
+        x_flat, n = mining_x
+        cands = [["x0"], ["<constant>"], ["exp", "<constant>"], ["pow2", "<constant>"],
+                 ["exp", "1"], ["neg", "x0"], ["*", "<constant>", "x0"]]
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        assert lib.n_filtered == 3, "exp(<c>), pow2(<c>), exp(1) must be filtered"
+        assert lib.n_candidates == 4
+        raw = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, fold_filter=False)
+        assert raw.n_filtered == 0 and raw.n_candidates == 7
+        # without the bare <constant> candidate the filter must be INERT (conservative guard:
+        # dominance needs the length-1 <constant> to actually be scanned first)
+        lib2 = engine._core.build_candidate_library(cands[2:], ["x0"], x_flat, n)
+        assert lib2.n_filtered == 0
+
+    def test_dominance_holds_at_the_band_edge(self, engine) -> None:
+        """ADVERSARIAL regression (2026-07-11 verification workflow). The dominance lemma
+        REQUIRES the length-1 <constant> to accept whenever ANY feasible constant exists.
+        The least-squares mean solve violated that on skewed near-constant sources (63 rows
+        at e-2.4e-9, one at e+2.4e-9: v = e is feasible on EVERY row's band but the mean
+        sits outside the minority row's), making filtered and unfiltered mines DIVERGE
+        (raw selected ['exp','1'] at length 2, filtered returned None). With the exact
+        interval-intersection decision for the bare <constant>, both must agree."""
+        n = 64
+        e_const = float(np.e)
+        d = 2.4e-9  # inside the band atol + rtol*e ~ 2.72e-9
+        # (1) the PRIMITIVE: the exact <constant> decision accepts the feasible skewed case
+        y = np.full(n, e_const - d)
+        y[-1] = e_const + d
+        assert engine._core.exist_constants_fit_linear(
+            ["<constant>"], ["x0"], [float(r) for r in range(n)], n, y.tolist(),
+            1e-9, 1e-12) is True
+        # ... and still rejects an infeasible spread (soundness)
+        y_bad = np.full(n, e_const - 1e-8)
+        y_bad[-1] = e_const + 1e-8
+        assert engine._core.exist_constants_fit_linear(
+            ["<constant>"], ["x0"], [float(r) for r in range(n)], n, y_bad.tolist(),
+            1e-9, 1e-12) is not True
+        # (2) END-TO-END: the verification probe's exact divergence case. Crafted X (63 rows
+        # x0 = -1, one row x0 = +1); source exp(1) + 2.4e-9*x0 evaluates to the skewed y.
+        x_flat = [-1.0] * (n - 1) + [1.0]
+        src = ["+", "exp", "1", "*", "2.4e-9", "x0"]
+        cands = [["<constant>"], ["x0"], ["exp", "1"]]
+        results = []
+        for ff in (True, False):
+            lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, fold_filter=ff)
+            results.append(engine._core.find_rule_lib(
+                src, len(src), 2, lib, challenges=16, retries=16, seed=7,
+                rtol=1e-9, atol=1e-12))
+        assert results[0] == results[1], f"filtered {results[0]} != unfiltered {results[1]}"
+        assert results[0] is not None, "the feasible near-constant source must match"
+
+    def test_mine_parity_filtered_vs_unfiltered(self, tmp_path) -> None:
+        """THE PARITY GATE (readiness doc / feasibility Doc A): an end-to-end mine with and
+        without the fold-filter must produce the IDENTICAL ruleset. Fit seeds are a pure
+        function of (source seed, candidate tokens, instance) -- order-independent -- so the
+        two runs draw identical randomness for every shared candidate and can differ ONLY
+        via the dropped var-free candidates, which dominance says are never selectable."""
+        rulesets = []
+        for fold_filter in (True, False):
+            tag = str(fold_filter)
+            (tmp_path / f"rules_{tag}.json").write_text(json.dumps([]))
+            cfg = tmp_path / f"config_{tag}.yaml"
+            cfg.write_text(yaml.safe_dump({"operators": _OPERATORS, "rules": f"rules_{tag}.json"}))
+            eng = SimpliPyEngine.from_config(str(cfg))
+            eng.find_rules(max_source_pattern_length=3, dummy_variables=1,
+                           extra_internal_terms=["0", "1", "<constant>"], X=256, seed=7,
+                           verbose=False, candidate_fold_filter=fold_filter)
+            rulesets.append(sorted((tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules))
+        assert rulesets[0] == rulesets[1], "fold-filter changed the mined ruleset"
+        assert len(rulesets[0]) > 0
 
 
 class TestStageTwoConfirmation:
