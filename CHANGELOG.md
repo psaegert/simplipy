@@ -1,82 +1,43 @@
 # Changelog
 
-## Unreleased — 7-4 re-mine readiness: candidate fold-filter + growing-basis affine recall
+## Unreleased
 
-The two launch blockers from the internal readiness review (blockers 1 and 2). Mining-path
-only; the inline `simplify` engine and the shipped `dev_7-3` asset are untouched.
+Rule-mining improvements only; the inline `simplify` engine and the shipped `dev_7-3`
+asset are unchanged.
 
-### Added (BLOCKER 1 — candidate library minimization, the "fold-filter")
-- `find_rules(candidate_fold_filter=True)` / `_core.build_candidate_library(..., fold_filter=True)`:
-  VARIABLE-FREE candidates of length >= 2 (e.g. `sin(<constant>)`, `pow(<constant>,<constant>)`,
-  `exp(1)`) are dropped from the mining candidate library. Sound (the narrow, provable form of
-  candidate minimization): a var-free candidate evaluates to one scalar per constant-assignment,
-  so any source instance it matches is constant-valued -- which the length-1 `<constant>`
-  candidate also matches at a strictly shorter length, preempting it in the shortest-first scan;
-  the filter is gated on the bare `<constant>` candidate being present (inert otherwise).
-  This removes the bulk of the constant-bearing (LM-fit) candidate arm -- the dominant per-source
-  cost for const-free sources. Measured on the real
-  13-leaf dev config (complete len<=4 library = 566,280 candidates): the filter drops 374,031
-  var-free candidates (66%), and hard const-free non-reducing probe sources (len 5-8) go from
-  374-474 s/source to 5.0-8.5 s/source -- a 55-88x per-source speedup at identical decisions.
-  The library reports `n_candidates` / `n_filtered`; `find_rules(verbose=True)` logs both.
-- **Order-independent fit seeds.** The per-(candidate, instance) LM restart seed is now a pure
-  function of (per-source seed, candidate tokens, instance index) instead of a draw from the
-  scan-order RNG stream. Same-seed mines remain byte-reproducible; the mined output of a given
-  seed changes vs 0.5.0 only through restart-luck on marginal nonlinear fits. This makes the
-  filtered-vs-unfiltered parity gate exact: both runs draw identical fit randomness for every
-  shared candidate, so any ruleset diff would be attributable to the filter alone
-  (`TestFoldFilter::test_mine_parity_filtered_vs_unfiltered` certifies zero diff end-to-end).
+### Added
+- **Candidate library minimization** (`find_rules(candidate_fold_filter=True)`, default on):
+  variable-free candidates of length >= 2 are excluded from the mining candidate library.
+  This is provably behavior-preserving (any source they could match is already matched by
+  the length-1 `<constant>` candidate, which is scanned first) and removes the bulk of the
+  constant-fitting work: measured 55-88x faster per source on the dev configuration at
+  identical mining decisions. The library reports `n_candidates`/`n_filtered`.
+- **Provenance sidecar**: `find_rules(output_file=...)` now writes
+  `<output>.provenance.json` recording all parameters, derived seeds, the evaluation-matrix
+  specification, and per-length universe coverage, so a mined ruleset is reproducible from
+  its artifact alone.
+- **Per-run sampler validation**: sampled sources are checked for universe membership
+  (length, vocabulary, well-formedness) on every run.
 
-### Fixed (BLOCKER 2 — growing-basis affine recall)
-- The affine closed-form constant fit solves a ROW-WEIGHTED least-squares system (weights
-  `1/(atol + rtol*|y_r|)`, mirroring the RELATIVE per-row accept gate) with column max-abs
-  equilibration and two fixed rounds of iterative refinement on the retained Householder-QR
-  factor. Before: with a fast-growing basis (`exp`/`cosh`/`sinh`/`pow3+`), rows with |y| ~ 1e21
-  dominated the unweighted solve in absolute terms and their f64 rounding (eps*|y|) buried an
-  O(1) additive constant -- `C0*f(x)+C1` and `f(x)+C1` rejected on exactly-true constants (0/4
-  recall) while the interceptless `C0*f(x)` passed. Now 4/4 across the family. The accept gate
-  (`allclose_extends` at the solved constants, over all rows) is unchanged: the fix is
-  recall-only, negatives still reject.
+### Fixed
+- **Affine constant-fit recall with fast-growing bases**: fits of the form `C0*f(x)+C1`
+  and `f(x)+C1` for `f` in `exp`/`cosh`/`sinh`/`pow3`-`pow5` were spuriously rejected at
+  exactly-true constants. The closed-form solver now uses row weights matched to the
+  acceptance tolerance, overflow-safe column equilibration, iterative refinement, an exact
+  feasibility decision for the bare-`<constant>` candidate, and integer snapping for
+  exact-cancellation cases. The acceptance gate itself is unchanged (recall-only fix;
+  non-equivalences are still rejected).
+- Fold-filter variable detection is correct for configurations with more than 32 variables.
+- `min_informative` defaults are floored at 1 for very small evaluation matrices.
 
-### Hardened by the adversarial verification round (5 refutation lenses + independent cross-checks)
-A 20+-agent adversarial verification of the two changes above REFUTED the first version of the
-dominance argument and found one real recall regression; all findings are fixed and regression-
-tested (cargo 35, pytest 253):
-- **Exact interval decision for the bare `<constant>` candidate.** The accept gate's feasible set
-  in v is an intersection of per-row intervals; a (weighted or not) least-squares mean is NOT its
-  Chebyshev center, so for skewed near-constant sources (63 rows at `e-2.4e-9`, one at `e+2.4e-9`;
-  all within the band of v = e) `<constant>` rejected while the var-free `exp(1)` accepted --
-  filtered and unfiltered mines DIVERGED. The bare `<constant>` fit now solves the feasibility
-  problem exactly (branch-tracked interval intersection), which restores the fold-filter dominance
-  as a theorem (residual edge: ~1-ulp rounding of the interval endpoints, 7 orders below the band).
-- **Weighted-design overflow false-reject fixed.** A huge-but-finite basis entry (`sinh(705)` ~
-  7.5e305) times a large row weight (1/atol at exact-cancellation rows like `cosh(x)-sinh(x)` = 0.0)
-  overflowed to inf and NaN'd the solve. Columns are now equilibrated BEFORE weighting (entries
-  <= 1), weights are capped against the residual target, and the second (post-weighting)
-  equilibration was removed -- its combined scale product itself overflowed f64 and zeroed the
-  solution. Adversarial slate: old solver 30/40 accepts, new 40/40, zero old->new regression flips.
-- **Near-integer snap rescue.** Exact-cancellation rows tolerate ~atol while d(fitted)/dC ~ 1e303,
-  so they demand constants BITWISE equal to the true ones -- any solver's +-1-ulp output was a coin
-  flip. Solutions within ~rtol of integers are re-gated at the snapped integers (still
-  gate-certified; deterministic accept for the integer-constant rule class).
-- **Fold-filter var-detection fixed for >= 33 variables** (the scan `var_mask` truncates at 32; the
-  filter now checks all `var_names`, so a candidate whose only variable is `x32` is never dropped).
-- **`min_informative` default floored at 1** (integer division gave 0 for n_rows < 8, disabling the
-  evidence gate; unreachable at the mine's n_rows = 1024, hardened anyway).
-- Known bounded non-goal (documented, not fixed): a pair equivalent ONLY through bitwise-identical
-  float evaluation under heavy cancellation (y built from the candidate's own eval, e.g.
-  `3*cosh + 3*sinh` at negative x where the true value is below one ulp of the summands) can still
-  reject. Real mining pairs evaluate through structurally different trees, so their rounding noise
-  differs and the gate rejects such rows regardless of the solver; the old path passed this class
-  only by ulp-luck.
-- Verified HOLDS by the same round: end-to-end filtered-vs-unfiltered mine parity (three
-  independent mines, identical rulesets), byte-determinism across processes / PYTHONHASHSEED /
-  rayon thread counts, seed order-independence (0/160 divergences), refinement inertness on
-  inconsistent systems, deterministic rejection on NaN/inf designs.
+### Changed
+- **Constant-fit restart seeds are order-independent** (a pure function of the source seed,
+  candidate, and challenge instance). Mines remain byte-reproducible for a fixed seed; the
+  output of a given seed may differ from 0.5.0 on marginal nonlinear fits.
 
 ### Docs
-- 0.5.0 entry corrected: the mine-X log-uniform tier is 1e-4..1e3 (as the code has always
-  shipped), not 1e-6..1e6.
+- 0.5.0 entry corrected: the mine evaluation matrix's log-uniform tier is 1e-4..1e3, not
+  1e-6..1e6.
 
 ## 0.5.0 — 2026-07-11 — sound rule-mine checker (2026-07-10 audit) + Python mining mirror removed
 
