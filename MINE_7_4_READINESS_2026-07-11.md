@@ -23,10 +23,18 @@
 >   Recall 0/4 -> 4/4 on C0*f(x)+C1 and f(x)+C1 for f in exp/cosh/sinh/pow3/pow4/pow5; the
 >   adversarial cosh/sinh cancellation slate went old 30/40 -> new 40/40 with zero regression
 >   flips; accept gate unchanged; negatives still reject.
-> - **BLOCKER 3 (L4+L5 calibration mine)**: still open -- the remaining gate before launch.
->   NOTE the probe numbers above are worst-case sources (const-free, non-reducing, full scan at
->   every length); the calibration mine measures the real source mix, which is what the
->   <=2 / >5 CPU-s decision rule applies to.
+> - **BLOCKER 3 (calibration) DONE 2026-07-11 on solomon -- VERDICT: GO, COMMIT TIERS A+C.**
+>   24 minutes end-to-end at simplipy `357c795` on the real 13-leaf config: complete L<=4 mine
+>   = 6,849 rules in 39.5 s wall (969 CPU-s); sampled parity (1,000 L4 + 500 L5, identical fit
+>   seeds) = 655 survivors, ZERO mismatches; cost anchor (2,000 uniform L5) = survivors 38.9%,
+>   **1.377 CPU-s/source** (median wall 0.34 s, p90 4.0 s, max 8.9 s). Rule: 1.377 <= ~2 AND
+>   parity EXACT -> commit A+C. Tier B (complete L6) DECLINED as impractical (~446M CPU-s ~
+>   172 days on solomon's 30 threads, ~81 days even at 64 cores). Projections: complete L5
+>   ~4.4 wall-days on solomon; ~230k L5 rules (n=22 Poisson, roughly 150k-330k) vs the shipped
+>   dev_7-3's 33,922. Full record: fa-lab
+>   `experimental/simplipy_offline_miner/calibration_74/CALIB_VERDICT.md` (+ raw JSON).
+>   Remaining pre-launch: artifact PROVENANCE (item 5), pow-of-(-inf) kernel parity (item 4),
+>   sampler count-DP cross-check (item 6), L5-enumeration RAM check on solomon.
 
 Fuses three parallel work streams from 2026-07-10/11 and re-verifies the load-bearing claims of
 each against the installed 0.5.0 core (HEAD `479c429`). Supersedes none of them; reconciles all:
