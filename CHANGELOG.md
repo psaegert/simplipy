@@ -44,6 +44,13 @@ rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard 
   5 -> 16 end to end (the old find_rules passed 5 against an FFI default of 16; measured fit-path
   completeness at 5/5 was ~24%).
 
+- **Log-linear recall fix**: for `pow(<constant>, g)` candidates, only a closed-form log-space
+  ACCEPT short-circuits; an imprecise `Some(false)` solve (its ~1e-10 base error amplified past
+  rtol by large exponents on the heavy-tailed X) now SEEDS the LM restart instead of rejecting,
+  restoring the declared const-bearing policy ("accept iff constants EXIST that fit"). Surfaced by
+  a 20-agent adversarial verification of the generic-equivalence change (which found NO soundness
+  defects).
+
 ### Changed
 - **Perf**: the source expression is now evaluated once per source (per challenge instance) and
   shared across the whole candidate scan, instead of per (candidate, challenge, sign-combo); a

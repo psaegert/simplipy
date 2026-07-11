@@ -13,6 +13,7 @@ certification; together they gate the checker against regressions of:
 6. end-to-end: a small mine on operators that CAN express the vacuous pair must not ship it.
 """
 import json
+import os
 
 import numpy as np
 import pytest
@@ -133,6 +134,34 @@ class TestCheckerSoundness:
             ['asin', '+', 'cosh', 'x0', 'pow2', '<constant>'], 6, None,
             [['<constant>']], ['x0'], x_flat, n) is None
 
+    def test_evidence_counts_unique_rows_not_repetitions(self, engine, mining_x) -> None:
+        """DISCRIMINATING test for commit a99c12e (unique rows, not (row, instance)
+        multiplicity). Source asin(cosh(x0 * (C^2 + 1))): the multiplier C^2+1 is
+        never zero, so EVERY challenge instance is finite only at x0=0 (~9 corner
+        rows). Unique source-finite rows across all ~48 instances = ~9 < 128, so this
+        must REJECT -- but a reverted multiplicity-sum gate would see ~48*9 = ~432 and
+        wrongly ACCEPT. (Contrast test_generically_constant_source_certifies, where the
+        C=0 instance is finite on ALL rows -> genuine full evidence.)"""
+        x_flat, n = mining_x
+        assert engine._core.find_rule(
+            ['asin', 'cosh', '*', 'x0', '+', 'pow2', '<constant>', '1'], 8, None,
+            [['<constant>']], ['x0'], x_flat, n) is None
+
+    def test_log_linear_pow_rewrite_certifies(self) -> None:
+        """REGRESSION for the log-linear recall path + its 2026-07-11 LM-fallthrough
+        fix: exp(x0+x0) == (e^2)^x0 is a valid rewrite to pow(<constant>, x0), and the
+        const-bearing fit (closed-form log-space, or the LM restart seeded by it when
+        the closed-form is imprecise on a heavy tail) must certify it. Uses the dev
+        engine (the minimal test operator set has no `pow`). The code fix that only a
+        closed-form ACCEPT short-circuits -- a Some(false) seeds the LM instead of
+        rejecting -- is documented at rust/fit.rs (exist_constants_fit_prepared)."""
+        dev = SimpliPyEngine.load('dev_7-3', install=True)
+        x = np.linspace(-3.0, 3.0, 256).reshape(-1, 1)
+        xf = x.flatten(order='C').tolist()
+        assert dev._core.find_rule(
+            ['exp', '+', 'x0', 'x0'], 4, 3, [['pow', '<constant>', 'x0']],
+            ['x0'], xf, x.shape[0]) == ['pow', '<constant>', 'x0']
+
     def test_confirm_primitive_rejects_shipped_defect(self, engine, mining_x) -> None:
         """The exact dev_7-3 defect asin(cosh(_0)) -> nan, via the stage-2 confirm
         primitive (find_rule with the single paired candidate)."""
@@ -212,6 +241,57 @@ class TestEndToEndMineGate:
             seed=42,
         )
         assert len(engine.simplification_rules) > 0
+        # The real gate: no rule whose LHS is the vacuous asin(cosh(.)) family (which
+        # the pre-audit checker mined as -> nan). A blanket rhs != ['nan'] check would be
+        # inert here (nan is not a candidate token in this leaf set), so we assert on the
+        # LHS family that actually reaches the checker.
         for lhs, rhs in engine.simplification_rules:
             assert not ("asin" in lhs and "cosh" in lhs), (lhs, rhs)
-            assert list(rhs) != ["nan"], (lhs, rhs)
+
+    def test_determinism_across_processes(self, tmp_path) -> None:
+        """DISCRIMINATING determinism test: two SEPARATE interpreters with DIFFERENT
+        PYTHONHASHSEED must mine the identical ruleset. A same-process replica (the
+        weaker TestFindRules.test_deterministic_across_runs) shares set-iteration order
+        and cannot catch a removed sorted() reproducibility guard; this can."""
+        import json
+        import subprocess
+        import sys
+
+        (tmp_path / "rules.json").write_text(json.dumps([]))
+        (tmp_path / "config.yaml").write_text(
+            yaml.safe_dump({"operators": _OPERATORS, "rules": "rules.json"}))
+        prog = (
+            "import json, sys;"
+            "from simplipy import SimpliPyEngine;"
+            f"e = SimpliPyEngine.from_config({str(tmp_path / 'config.yaml')!r});"
+            "e.find_rules(max_source_pattern_length=3, dummy_variables=1,"
+            " extra_internal_terms=['0','1','<constant>'], X=256, seed=7, verbose=False);"
+            "print(json.dumps(sorted([[list(l), list(r)] for l, r in e.simplification_rules])))"
+        )
+        env_base = {**os.environ, "PYTHONPATH": "src", "OMP_NUM_THREADS": "1",
+                    "RAYON_NUM_THREADS": "2"}
+        outs = []
+        for hashseed in ("0", "12345"):
+            res = subprocess.run([sys.executable, "-c", prog],
+                                 env={**env_base, "PYTHONHASHSEED": hashseed},
+                                 capture_output=True, text=True, cwd=os.getcwd())
+            assert res.returncode == 0, res.stderr
+            outs.append(res.stdout.strip())
+        assert outs[0] == outs[1], "ruleset differs across PYTHONHASHSEED -> non-reproducible"
+        assert outs[0] != "[]"
+
+
+class TestStageTwoConfirmation:
+    """The stage-2 confirmation (confirm=True) must actually filter, not pass through."""
+
+    def test_confirm_filters_a_data_luck_rule(self, engine, mining_x) -> None:
+        """_confirm_mined_rules re-verifies on an INDEPENDENT wider X. A (source, target)
+        pair that the checker rejects there must be dropped. Direct probe of the confirm
+        primitive on the shipped defect: asin(cosh(x0)) -> nan is rejected by the confirm
+        X, so _confirm_mined_rules returns [] for it while keeping a genuine rule."""
+        x_confirm = engine._mining_sample_x(2048, 1, np.random.default_rng(99))
+        kept = engine._confirm_mined_rules(
+            [(('asin', 'cosh', 'x0'), ('nan',)), (('+', 'x0', '0'), ('x0',))],
+            ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 123)
+        assert (('asin', 'cosh', 'x0'), ('nan',)) not in kept
+        assert (('+', 'x0', '0'), ('x0',)) in kept

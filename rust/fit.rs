@@ -444,8 +444,11 @@ pub(crate) fn detect_log_linear(
 
 /// Closed-form log-space least-squares for the recognized power forms. `cand_tape` evaluates the final
 /// fit at the solved constant (so the accept/reject `allclose` uses the EXACT operator semantics, same
-/// gate as the LM). Returns Some(decision) when the solve is computable (enough positive rows), else
-/// None -> fall back to the LM (preserves recall; e.g. negative-base integer-power cases).
+/// gate as the LM). Returns `Some((decision, c))` with the solved constant `c` when the solve is
+/// computable (enough positive rows), else `None` -> fall back to the LM (e.g. negative-base
+/// integer-power cases). The log-space fit is UNWEIGHTED, so on a heavy-tailed X its ~1e-10 base
+/// error is amplified by large exponents past rtol; the caller therefore treats `Some((false, c))`
+/// as an LM SEED, not a verdict, and only `Some((true, _))` short-circuits (2026-07-11 recall fix).
 fn try_log_linear_fit(
     form: LogLinForm,
     g_tape: &Tape,
@@ -455,7 +458,7 @@ fn try_log_linear_fit(
     y: &[f64],
     rtol: f64,
     atol: f64,
-) -> Option<bool> {
+) -> Option<(bool, f64)> {
     let g = g_tape.eval_columns(cols, &[], n_rows);
     let (mut num, mut den, mut nvalid) = (0.0f64, 0.0f64, 0usize);
     let c = match form {
@@ -492,7 +495,7 @@ fn try_log_linear_fit(
         }
     };
     let fitted = cand_tape.eval_columns(cols, &[c], n_rows);
-    Some(allclose_extends(y, &fitted, rtol, atol))
+    Some((allclose_extends(y, &fitted, rtol, atol), c))
 }
 
 /// The COMPLETE native `exist_constants_that_fit` (M3): affine candidates -> the closed-form path
@@ -561,16 +564,23 @@ pub(crate) fn exist_constants_fit_prepared(
     if lin == Linearity::Affine {
         return fit_affine_check(tape, cols, y_target, n_rows, rtol, atol);
     }
-    // Improvement 2: log-linearizable power forms -> closed-form (deterministic, no LM). The accept
-    // gate stays `allclose`; an uncomputable solve (None) falls through to the LM (preserves recall).
+    // Improvement 2: log-linearizable power forms -> closed-form (deterministic). Only a closed-form
+    // ACCEPT short-circuits; a `Some((false, c))` is imprecise (unweighted log-space fit, ~1e-10 base
+    // error amplified past rtol by large exponents on the heavy-tailed X), so `c` becomes the LM's
+    // first seed rather than a verdict, and `None` (uncomputable) falls through unseeded. This keeps
+    // the declared const-bearing policy ("accept iff constants EXIST that fit") -- 2026-07-11 recall fix.
+    let mut loglin_seed: Option<f64> = None;
     if let Some((form, g_tape)) = loglin {
-        if let Some(dec) =
+        if let Some((dec, c)) =
             try_log_linear_fit(form, g_tape, tape, cols, n_rows, y_target, rtol, atol)
         {
-            return dec;
+            if dec {
+                return true;
+            }
+            loglin_seed = Some(c);
         }
     }
-    // Nonlinear-in-params: LM with random restarts.
+    // Nonlinear-in-params: LM with random restarts (first seeded by the closed-form constant if any).
     let k = tape.n_params;
     let valid: Vec<usize> = (0..n_rows)
         .filter(|&r| y_target[r].is_finite() && cols.iter().all(|c| c[r].is_finite()))
@@ -586,8 +596,13 @@ pub(crate) fn exist_constants_fit_prepared(
     let yv: Vec<f64> = valid.iter().map(|&r| y_target[r]).collect();
 
     let mut rng = Rng::new(seed);
-    for _ in 0..n_restarts.max(1) {
-        let p0: Vec<f64> = (0..k).map(|_| rng.normal(0.0, 5.0)).collect();
+    for restart in 0..n_restarts.max(1) {
+        // Seed restart 0 with the closed-form constant (k==1 for the recognized loglin forms) so the
+        // LM refines it in the ORIGINAL space against the rtol gate; other restarts are random.
+        let p0: Vec<f64> = match loglin_seed {
+            Some(c0) if restart == 0 && k == 1 => vec![c0],
+            _ => (0..k).map(|_| rng.normal(0.0, 5.0)).collect(),
+        };
         let c = lm_fit(tape, &xv, &yv, m, k, &p0, rtol, atol);
         let fitted = tape.eval_columns(cols, &c, n_rows);
         if allclose_extends(y_target, &fitted, rtol, atol) {
