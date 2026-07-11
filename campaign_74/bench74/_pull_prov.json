@@ -1,0 +1,128 @@
+{
+  "created": "2026-07-11 14:31:03 +0000",
+  "host": "solomon",
+  "simplipy_version": "0.5.0",
+  "core_build": "0.5.0",
+  "params": {
+    "max_source_pattern_length": 5,
+    "max_target_pattern_length": 4,
+    "dummy_variables": [
+      "x0",
+      "x1",
+      "x2",
+      "x3"
+    ],
+    "extra_internal_terms": [
+      "<constant>",
+      "0",
+      "1",
+      "(-1)",
+      "np.e",
+      "np.pi",
+      "float(\"inf\")",
+      "float(\"-inf\")",
+      "float(\"nan\")"
+    ],
+    "constants_fit_challenges": 16,
+    "constants_fit_retries": 16,
+    "rtol": 1e-09,
+    "atol": 1e-12,
+    "min_informative": 128,
+    "seed": 42,
+    "mine_seed": 347997867922653165,
+    "confirm_seed": 293852171782533585,
+    "confirm": true,
+    "candidate_fold_filter": true,
+    "prune": false,
+    "reset_rules": true,
+    "source_sample_per_length": {}
+  },
+  "X": {
+    "rows": 1024,
+    "cols": 4,
+    "source": "seeded_mixture (_mining_sample_x from `seed`)"
+  },
+  "universe": {
+    "1": {
+      "complete_count": 13,
+      "used": 13,
+      "coverage": 1.0,
+      "sampled": false
+    },
+    "2": {
+      "complete_count": 429,
+      "used": 429,
+      "coverage": 1.0,
+      "sampled": false
+    },
+    "3": {
+      "complete_count": 15002,
+      "used": 15002,
+      "coverage": 1.0,
+      "sampled": false
+    },
+    "4": {
+      "complete_count": 550836,
+      "used": 550836,
+      "coverage": 1.0,
+      "sampled": false
+    },
+    "5": {
+      "complete_count": 21048053,
+      "used": 21048053,
+      "coverage": 1.0,
+      "sampled": false
+    }
+  },
+  "operators": [
+    "*",
+    "+",
+    "-",
+    "/",
+    "abs",
+    "acos",
+    "acosh",
+    "asin",
+    "asinh",
+    "atan",
+    "atanh",
+    "cos",
+    "cosh",
+    "div2",
+    "div3",
+    "div4",
+    "div5",
+    "exp",
+    "inv",
+    "log",
+    "mult2",
+    "mult3",
+    "mult4",
+    "mult5",
+    "neg",
+    "pow",
+    "pow1_2",
+    "pow1_3",
+    "pow1_4",
+    "pow1_5",
+    "pow2",
+    "pow3",
+    "pow4",
+    "pow5",
+    "sin",
+    "sinh",
+    "tan",
+    "tanh"
+  ],
+  "progress": {
+    "updated": "2026-07-11 14:31:49 +0000",
+    "last_completed_source_length": 4,
+    "final": false,
+    "rules_total": 6849,
+    "rules_by_lhs_length": {
+      "2": 35,
+      "3": 309,
+      "4": 6505
+    }
+  }
+}

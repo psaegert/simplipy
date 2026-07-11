@@ -1,0 +1,11838 @@
+[
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x0",
+   "+",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "binomial square expansion x^2+(2xy+y^2), right-nested",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "binomial square expansion (x^2+2xy)+y^2, left-nested",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "mult2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "binomial square expansion (x^2+y^2)+2xy, squares grouped first",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "+",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "binomial square expansion 2xy+(x^2+y^2), cross term first",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x1",
+   "+",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x0"
+  ],
+  "why": "binomial square expansion y^2+(2xy+x^2), variables swapped ordering",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "*",
+   "mult2",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "binomial square expansion with cross term written (2x)*y",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "mult2",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "binomial square expansion with cross term written x*(2y)",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x0",
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "binomial square with 2xy split as xy+xy, right chain (13 tok)",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x1",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "binomial square with 2xy split as xy+yx, left chain (13 tok)",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "mult2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "square of difference (x^2+y^2)-2xy",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "pow2",
+   "x0",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "square of difference (x^2-2xy)+y^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x1",
+   "-",
+   "pow2",
+   "x0",
+   "mult2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "square of difference y^2+(x^2-2xy)",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "x0",
+   "-",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "square of difference x^2-(2xy-y^2)",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "-",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "square of difference with 2xy split as xy+xy (13 tok)",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "pow2",
+   "x1",
+   "pow2",
+   "x0",
+   "mult2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "square of difference (y^2+x^2)-2xy, swapped squares",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "x0",
+   "+",
+   "x0",
+   "mult2",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "partial factoring x(x+2y)+y^2 = (x+y)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "x1",
+   "+",
+   "x1",
+   "mult2",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "partial factoring y(y+2x)+x^2 = (x+y)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "x0",
+   "-",
+   "x0",
+   "mult2",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "partial factoring x(x-2y)+y^2 = (x-y)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "x1",
+   "-",
+   "x1",
+   "mult2",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "partial factoring y(y-2x)+x^2 = (y-x)^2 = (x-y)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x1",
+   "*",
+   "x0",
+   "+",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "partial factoring y^2+x(x+2y), summand order swapped",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "+",
+   "x0",
+   "mult2",
+   "x1",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "partial factoring (x+2y)x+y^2, product operand order swapped",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "x0",
+   "x1",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "(x+y)*(y+x) collapses to (x+y)^2, commuted second factor",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow2",
+   "-",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "(-x-y)^2 = (x+y)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "+",
+   "pow2",
+   "x0",
+   "+",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "abs of expanded perfect square x^2+2xy+y^2 (nonnegative) drops abs",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "+",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "sqrt of expanded x^2+2xy+y^2 = |x+y|",
+  "family": 0,
+  "target": [
+   "abs",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "-",
+   "+",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "mult2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "sqrt of expanded x^2-2xy+y^2 = |x-y|",
+  "family": 0,
+  "target": [
+   "abs",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt of x^2+2x+1 = |x+1|",
+  "family": 0,
+  "target": [
+   "abs",
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "pow1_3",
+   "+",
+   "+",
+   "+",
+   "pow3",
+   "x0",
+   "mult3",
+   "pow2",
+   "x0",
+   "mult3",
+   "x0",
+   "1"
+  ],
+  "why": "cbrt of expanded (x+1)^3 = x+1",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "x^2+2x+1 = (x+1)^2, left-nested",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x0",
+   "+",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "x^2+(2x+1) = (x+1)^2, right-nested",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "pow2",
+   "x0",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "x^2-2x+1 = (x-1)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "pow2",
+   "x0",
+   "1",
+   "mult2",
+   "x0"
+  ],
+  "why": "(x^2+1)-2x = (x-1)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "1",
+   "mult2",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "1+2x+x^2 = (x+1)^2, ascending order",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "1",
+   "mult2",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "1-2x+x^2 = (1-x)^2 = (x-1)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^2-y^2)/(x+y) = x-y",
+  "family": 0,
+  "target": [
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "(x^2-y^2)/(y+x) = x-y, commuted denominator",
+  "family": 0,
+  "target": [
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^2-y^2)/(x-y) = x+y",
+  "family": 0,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x1",
+   "pow2",
+   "x0",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(y^2-x^2)/(x+y) = y-x",
+  "family": 0,
+  "target": [
+   "-",
+   "x1",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "(x^2-y^2)/(y-x) = -(x+y)",
+  "family": 0,
+  "target": [
+   "-",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "x0",
+   "x1",
+   "-",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "(x+y)/(x^2-y^2) = 1/(x-y)",
+  "family": 0,
+  "target": [
+   "inv",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "x0",
+   "x1",
+   "-",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "(x-y)/(x^2-y^2) = 1/(x+y)",
+  "family": 0,
+  "target": [
+   "inv",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "x0",
+   "1",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "(x+1)(x-1) = x^2-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "-",
+   "x0",
+   "1",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x-1)(x+1) = x^2-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "-",
+   "1",
+   "x0",
+   "+",
+   "1",
+   "x0"
+  ],
+  "why": "(1-x)(1+x) = 1-x^2",
+  "family": 0,
+  "target": [
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "1",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2-1)/(x+1) = x-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "1",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2-1)/(x-1) = x+1",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "pow2",
+   "x0",
+   "+",
+   "1",
+   "x0"
+  ],
+  "why": "(1-x^2)/(1+x) = 1-x",
+  "family": 0,
+  "target": [
+   "-",
+   "1",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "pow2",
+   "x0",
+   "-",
+   "1",
+   "x0"
+  ],
+  "why": "(1-x^2)/(1-x) = 1+x",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "x0",
+   "1",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x+1)/(x^2-1) = 1/(x-1)",
+  "family": 0,
+  "target": [
+   "inv",
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "x0",
+   "1",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x-1)/(x^2-1) = 1/(x+1)",
+  "family": 0,
+  "target": [
+   "inv",
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "+",
+   "x0",
+   "1",
+   "-",
+   "x0",
+   "1",
+   "1"
+  ],
+  "why": "(x+1)(x-1)+1 = x^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "x0",
+   "np.pi",
+   "-",
+   "x0",
+   "np.pi"
+  ],
+  "why": "(x+pi)(x-pi) = x^2-pi^2; constant part may fold, borderline",
+  "family": 0,
+  "target": [
+   "+",
+   "<constant>",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "(x+y)^2-(x-y)^2 = 4xy, polarization identity",
+  "family": 0,
+  "target": [
+   "*",
+   "mult4",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "div4",
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "((x+y)^2-(x-y)^2)/4 = xy",
+  "family": 0,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x0",
+   "x1",
+   "x0"
+  ],
+  "why": "((x+y)^2-(x-y)^2)/x = 4y, removable singularity",
+  "family": 0,
+  "target": [
+   "mult4",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x0",
+   "x1",
+   "x1"
+  ],
+  "why": "((x+y)^2-(x-y)^2)/y = 4x",
+  "family": 0,
+  "target": [
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "((x+y)^2-(x-y)^2)/(xy) = 4, constant residue (13 tok)",
+  "family": 0,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "(x+y)^2-x^2-y^2 = 2xy",
+  "family": 0,
+  "target": [
+   "*",
+   "mult2",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "+",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "(x+y)^2-(x^2+y^2) = 2xy, grouped subtrahend",
+  "family": 0,
+  "target": [
+   "*",
+   "mult2",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "x^2+y^2-(x-y)^2 = 2xy",
+  "family": 0,
+  "target": [
+   "*",
+   "mult2",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "-",
+   "x0",
+   "x1",
+   "mult4",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "(x-y)^2+4xy = (x+y)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult4",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "4xy+(x-y)^2 = (x+y)^2, commuted",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "mult4",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "(x+y)^2-4xy = (x-y)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "+",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "((x+y)^2-(x^2+y^2))/2 = xy",
+  "family": 0,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "+",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "((x^2+y^2)-(x-y)^2)/2 = xy",
+  "family": 0,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "+",
+   "pow3",
+   "x0",
+   "mult3",
+   "pow2",
+   "x0",
+   "mult3",
+   "x0",
+   "1"
+  ],
+  "why": "x^3+3x^2+3x+1 = (x+1)^3",
+  "family": 0,
+  "target": [
+   "pow3",
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "-",
+   "pow3",
+   "x0",
+   "mult3",
+   "pow2",
+   "x0",
+   "mult3",
+   "x0",
+   "1"
+  ],
+  "why": "x^3-3x^2+3x-1 = (x-1)^3",
+  "family": 0,
+  "target": [
+   "pow3",
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "pow3",
+   "x0",
+   "1",
+   "mult3",
+   "*",
+   "x0",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "partial-factored cube x^3+1+3x(x+1) = (x+1)^3",
+  "family": 0,
+  "target": [
+   "pow3",
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "x0",
+   "1",
+   "+",
+   "-",
+   "pow2",
+   "x0",
+   "x0",
+   "1"
+  ],
+  "why": "sum of cubes factorization (x+1)(x^2-x+1) = x^3+1",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "-",
+   "x0",
+   "1",
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "x0",
+   "1"
+  ],
+  "why": "difference of cubes (x-1)(x^2+x+1) = x^3-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow3",
+   "x0",
+   "1",
+   "+",
+   "-",
+   "pow2",
+   "x0",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3+1)/(x^2-x+1) = x+1",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow3",
+   "x0",
+   "1",
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3-1)/(x^2+x+1) = x-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow3",
+   "x0",
+   "x0",
+   "x0"
+  ],
+  "why": "(x^3-x)/x = x^2-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow3",
+   "x0",
+   "x0",
+   "x0"
+  ],
+  "why": "(x^3+x)/x = x^2+1",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow3",
+   "x0",
+   "x0",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3-x)/(x^2-1) = x",
+  "family": 0,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow3",
+   "x0",
+   "x0",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3+x)/(x^2+1) = x",
+  "family": 0,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow3",
+   "x0",
+   "x0",
+   "*",
+   "x0",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3-x)/(x(x-1)) = x+1",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow3",
+   "x0",
+   "x0",
+   "*",
+   "x0",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3-x)/(x(x+1)) = x-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow4",
+   "x0",
+   "1",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^4-1)/(x^2+1) = x^2-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow4",
+   "x0",
+   "1",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^4-1)/(x^2-1) = x^2+1",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "-",
+   "pow2",
+   "x0",
+   "1",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2-1)(x^2+1) = x^4-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "pow4",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "*",
+   "-",
+   "x0",
+   "1",
+   "+",
+   "x0",
+   "1",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x-1)(x+1)(x^2+1) = x^4-1, fully factored (12 tok)",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "pow4",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "/",
+   "-",
+   "pow4",
+   "x0",
+   "1",
+   "-",
+   "x0",
+   "1",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x^4-1)/(x-1)/(x+1) = x^2+1 (13 tok)",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow4",
+   "x0",
+   "1",
+   "*",
+   "-",
+   "x0",
+   "1",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x^4-1)/((x-1)(x+1)) = x^2+1 (13 tok)",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow4",
+   "x0",
+   "1",
+   "*",
+   "+",
+   "pow2",
+   "x0",
+   "1",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x^4-1)/((x^2+1)(x+1)) = x-1 (13 tok)",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow4",
+   "x0",
+   "1",
+   "*",
+   "+",
+   "pow2",
+   "x0",
+   "1",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "(x^4-1)/((x^2+1)(x-1)) = x+1 (13 tok)",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow4",
+   "x0",
+   "pow2",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "(x^4-x^2)/x^2 = x^2-1",
+  "family": 0,
+  "target": [
+   "+",
+   "(-1)",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow4",
+   "x0",
+   "pow2",
+   "x0",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^4-x^2)/(x^2-1) = x^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "pow4",
+   "x0",
+   "mult2",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "x^4+2x^2+1 = (x^2+1)^2, borderline 5-token target",
+  "family": 0,
+  "target": [
+   "pow4",
+   "cosh",
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "+",
+   "pow4",
+   "x0",
+   "mult2",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt(x^4+2x^2+1) = x^2+1 (always positive, no abs)",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "pow2",
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2+2x+1)^2 = (x+1)^4",
+  "family": 0,
+  "target": [
+   "pow4",
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "pow2",
+   "+",
+   "-",
+   "pow2",
+   "x0",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2-2x+1)^2 = (x-1)^4",
+  "family": 0,
+  "target": [
+   "pow4",
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "pow2",
+   "+",
+   "pow2",
+   "x0",
+   "+",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "(x^2+2xy+y^2)^2 = (x+y)^4",
+  "family": 0,
+  "target": [
+   "pow4",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "pow2",
+   "x0",
+   "1",
+   "pow2",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2+1)^2-(x^2-1)^2 = 4x^2",
+  "family": 0,
+  "target": [
+   "mult4",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow3",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(x+y)^3/(x+y)^2 = x+y",
+  "family": 0,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow4",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(x+y)^4/(x+y)^2 = (x+y)^2",
+  "family": 0,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "mult2",
+   "x0",
+   "1",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2+2x+1)/(x+1) = x+1, expanded numerator",
+  "family": 0,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "-",
+   "pow2",
+   "x0",
+   "mult2",
+   "x0",
+   "1",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2-2x+1)/(x-1) = x-1",
+  "family": 0,
+  "target": [
+   "+",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "x1",
+   "x0"
+  ],
+  "why": "(x^2+xy)/x = x+y",
+  "family": 0,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "x1",
+   "x0"
+  ],
+  "why": "(x^2-xy)/x = x-y",
+  "family": 0,
+  "target": [
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^2+xy)/(x+y) = x",
+  "family": 0,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(xy+y^2)/(x+y) = y",
+  "family": 0,
+  "target": [
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult2",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "2x+2y = 2(x+y)",
+  "family": 0,
+  "target": [
+   "mult2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "2x-2y = 2(x-y)",
+  "family": 0,
+  "target": [
+   "mult2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult3",
+   "x0",
+   "mult3",
+   "x1"
+  ],
+  "why": "3x+3y = 3(x+y)",
+  "family": 0,
+  "target": [
+   "mult3",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "div2",
+   "x0",
+   "div2",
+   "x1"
+  ],
+  "why": "x/2+y/2 = (x+y)/2",
+  "family": 0,
+  "target": [
+   "div2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "sin",
+   "x0",
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "why": "Pythagorean: sin^2+cos^2=1",
+  "family": 1,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "cos",
+   "x0",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "why": "Pythagorean, operand order swapped",
+  "family": 1,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "why": "1-sin^2=cos^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "why": "1-cos^2=sin^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "-",
+   "1",
+   "sin",
+   "x0",
+   "+",
+   "1",
+   "sin",
+   "x0"
+  ],
+  "why": "factored (1-sin)(1+sin)=cos^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "-",
+   "1",
+   "cos",
+   "x0",
+   "+",
+   "1",
+   "cos",
+   "x0"
+  ],
+  "why": "factored (1-cos)(1+cos)=sin^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "1+tan^2=sec^2",
+  "family": 1,
+  "target": [
+   "inv",
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "inv",
+   "pow2",
+   "cos",
+   "x0",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "sec^2-tan^2=1",
+  "family": 1,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "1",
+   "inv",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "1+cot^2=csc^2",
+  "family": 1,
+  "target": [
+   "inv",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "inv",
+   "pow2",
+   "cos",
+   "x0",
+   "1"
+  ],
+  "why": "sec^2-1=tan^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "inv",
+   "cos",
+   "x0",
+   "pow2",
+   "/",
+   "sin",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "sec^2-tan^2=1 with tan spelled sin/cos",
+  "family": 1,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "why": "sqrt(1-sin^2)=|cos|",
+  "family": 1,
+  "target": [
+   "abs",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "why": "sqrt(1-cos^2)=|sin|",
+  "family": 1,
+  "target": [
+   "abs",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "sqrt(1+tan^2)=1/|cos|",
+  "family": 1,
+  "target": [
+   "abs",
+   "inv",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "sin/cos=tan",
+  "family": 1,
+  "target": [
+   "tan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "cos",
+   "x0",
+   "sin",
+   "x0"
+  ],
+  "why": "cos/sin=cot=1/tan",
+  "family": 1,
+  "target": [
+   "inv",
+   "tan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "tan",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "tan*cos=sin",
+  "family": 1,
+  "target": [
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "x0",
+   "tan",
+   "x0"
+  ],
+  "why": "sin/tan=cos",
+  "family": 1,
+  "target": [
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "tan",
+   "x0",
+   "sin",
+   "x0"
+  ],
+  "why": "tan/sin=sec",
+  "family": 1,
+  "target": [
+   "inv",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "*",
+   "sin",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "2 sin cos = sin(2x)",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "mult2",
+   "sin",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "(2sin)*cos nesting variant",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "sin",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "sin cos = sin(2x)/2",
+  "family": 1,
+  "target": [
+   "div2",
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "sin",
+   "x0",
+   "cos",
+   "x0",
+   "*",
+   "cos",
+   "x0",
+   "sin",
+   "x0"
+  ],
+  "why": "sin cos + cos sin = sin 2x (addition-formula shape at y=x)",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "cos",
+   "x0",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "why": "cos^2-sin^2=cos2x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "sin",
+   "x0",
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "why": "sin^2-cos^2=-cos2x",
+  "family": 1,
+  "target": [
+   "neg",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "pow2",
+   "cos",
+   "x0",
+   "1"
+  ],
+  "why": "2cos^2-1=cos2x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "mult2",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "why": "1-2sin^2=cos2x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "-",
+   "cos",
+   "x0",
+   "sin",
+   "x0",
+   "+",
+   "cos",
+   "x0",
+   "sin",
+   "x0"
+  ],
+  "why": "factored (cos-sin)(cos+sin)=cos2x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "sin",
+   "x0",
+   "cos",
+   "x0",
+   "-",
+   "sin",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "(sin+cos)(sin-cos)=-cos2x",
+  "family": 1,
+  "target": [
+   "neg",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "tan",
+   "x0",
+   "-",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "tan double angle 2t/(1-t^2)",
+  "family": 1,
+  "target": [
+   "tan",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "tan",
+   "mult2",
+   "x0",
+   "-",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "tan2x*(1-tan^2 x)=2tan x",
+  "family": 1,
+  "target": [
+   "mult2",
+   "tan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "mult2",
+   "x0",
+   "mult2",
+   "sin",
+   "x0"
+  ],
+  "why": "sin2x/(2sin x)=cos x (domain ext at sin=0)",
+  "family": 1,
+  "target": [
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "mult2",
+   "x0",
+   "mult2",
+   "cos",
+   "x0"
+  ],
+  "why": "sin2x/(2cos x)=sin x",
+  "family": 1,
+  "target": [
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "mult2",
+   "x0",
+   "sin",
+   "x0"
+  ],
+  "why": "sin2x/sin x=2cos x",
+  "family": 1,
+  "target": [
+   "mult2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "mult2",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "sin2x/cos x=2sin x",
+  "family": 1,
+  "target": [
+   "mult2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow4",
+   "cos",
+   "x0",
+   "pow4",
+   "sin",
+   "x0"
+  ],
+  "why": "cos^4-sin^4=cos2x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow4",
+   "sin",
+   "x0",
+   "pow4",
+   "cos",
+   "x0"
+  ],
+  "why": "sin^4-cos^4=-cos2x",
+  "family": 1,
+  "target": [
+   "neg",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "cos",
+   "mult2",
+   "x0",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "why": "cos2x+sin^2=cos^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "cos",
+   "x0",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "cos^2-cos2x=sin^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "pow2",
+   "tan",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "cos2x rational-in-tan form",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "tan",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "sin2x rational-in-tan form",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "tan",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "tan/(1+tan^2)=sin x cos x=sin2x/2",
+  "family": 1,
+  "target": [
+   "div2",
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "tan",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "tan^2/(1+tan^2)=sin^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "inv",
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "why": "1/(1+tan^2)=cos^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "sin",
+   "mult2",
+   "x0",
+   "tan",
+   "x0"
+  ],
+  "why": "sin2x*tan=2sin^2",
+  "family": 1,
+  "target": [
+   "mult2",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "mult2",
+   "x0",
+   "tan",
+   "x0"
+  ],
+  "why": "sin2x/tan=2cos^2",
+  "family": 1,
+  "target": [
+   "mult2",
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "tan",
+   "x0",
+   "+",
+   "1",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "tan*(1+cos2x)=sin2x",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "1-cos2x=2sin^2 (power reduction)",
+  "family": 1,
+  "target": [
+   "mult2",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "1",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "1+cos2x=2cos^2",
+  "family": 1,
+  "target": [
+   "mult2",
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "1",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "(1-cos2x)/2=sin^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "+",
+   "1",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "(1+cos2x)/2=cos^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "cos",
+   "mult2",
+   "x0",
+   "+",
+   "1",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "(1-cos2x)/(1+cos2x)=tan^2",
+  "family": 1,
+  "target": [
+   "pow2",
+   "tan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "mult2",
+   "x0",
+   "+",
+   "1",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "sin2x/(1+cos2x)=tan",
+  "family": 1,
+  "target": [
+   "tan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "cos",
+   "mult2",
+   "x0",
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "why": "(1-cos2x)/sin2x=tan",
+  "family": 1,
+  "target": [
+   "tan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "inv",
+   "+",
+   "1",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "2/(1+cos2x)=sec^2",
+  "family": 1,
+  "target": [
+   "inv",
+   "pow2",
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "x0",
+   "+",
+   "1",
+   "cos",
+   "x0"
+  ],
+  "why": "tan(x/2)=sin/(1+cos)",
+  "family": 1,
+  "target": [
+   "tan",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "cos",
+   "x0",
+   "sin",
+   "x0"
+  ],
+  "why": "tan(x/2)=(1-cos)/sin",
+  "family": 1,
+  "target": [
+   "tan",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "1",
+   "cos",
+   "x0"
+  ],
+  "why": "(1-cos)/2=sin^2(x/2)",
+  "family": 1,
+  "target": [
+   "pow2",
+   "sin",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "+",
+   "1",
+   "cos",
+   "x0"
+  ],
+  "why": "(1+cos)/2=cos^2(x/2)",
+  "family": 1,
+  "target": [
+   "pow2",
+   "cos",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "*",
+   "sin",
+   "div2",
+   "x0",
+   "cos",
+   "div2",
+   "x0"
+  ],
+  "why": "2 sin(x/2)cos(x/2)=sin x",
+  "family": 1,
+  "target": [
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "cos",
+   "div2",
+   "x0",
+   "pow2",
+   "sin",
+   "div2",
+   "x0"
+  ],
+  "why": "cos^2(x/2)-sin^2(x/2)=cos x",
+  "family": 1,
+  "target": [
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "mult2",
+   "pow2",
+   "sin",
+   "div2",
+   "x0"
+  ],
+  "why": "1-2sin^2(x/2)=cos x",
+  "family": 1,
+  "target": [
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "cos",
+   "x0",
+   "+",
+   "1",
+   "cos",
+   "x0"
+  ],
+  "why": "(1-cos)/(1+cos)=tan^2(x/2)",
+  "family": 1,
+  "target": [
+   "pow2",
+   "tan",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "1",
+   "cos",
+   "x0",
+   "sin",
+   "x0"
+  ],
+  "why": "(1+cos)/sin=cot(x/2)",
+  "family": 1,
+  "target": [
+   "inv",
+   "tan",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "cos",
+   "x0",
+   "+",
+   "1",
+   "sin",
+   "x0"
+  ],
+  "why": "cos^2/(1+sin)=1-sin",
+  "family": 1,
+  "target": [
+   "-",
+   "1",
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "tan",
+   "div2",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "div2",
+   "x0"
+  ],
+  "why": "Weierstrass: 2t/(1+t^2)=sin x, t=tan(x/2)",
+  "family": 1,
+  "target": [
+   "sin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "pow2",
+   "tan",
+   "div2",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "tan",
+   "div2",
+   "x0"
+  ],
+  "why": "Weierstrass: (1-t^2)/(1+t^2)=cos x",
+  "family": 1,
+  "target": [
+   "cos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "tan",
+   "div2",
+   "x0",
+   "-",
+   "1",
+   "pow2",
+   "tan",
+   "div2",
+   "x0"
+  ],
+  "why": "Weierstrass: 2t/(1-t^2)=tan x",
+  "family": 1,
+  "target": [
+   "tan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "2x/(1+x^2)=sin(2 atan x)",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult2",
+   "atan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "pow2",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "(1-x^2)/(1+x^2)=cos(2 atan x)",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult2",
+   "atan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "2x/(1-x^2)=tan(2 atan x)",
+  "family": 1,
+  "target": [
+   "tan",
+   "mult2",
+   "atan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "asin",
+   "x0",
+   "acos",
+   "x0"
+  ],
+  "why": "asin+acos=pi/2",
+  "family": 1,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "atan",
+   "x0",
+   "atan",
+   "neg",
+   "x0"
+  ],
+  "why": "atan odd: atan(x)+atan(-x)=0",
+  "family": 1,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "asin",
+   "neg",
+   "x0",
+   "asin",
+   "x0"
+  ],
+  "why": "asin odd",
+  "family": 1,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "acos",
+   "neg",
+   "x0",
+   "acos",
+   "x0"
+  ],
+  "why": "acos(-x)+acos(x)=pi",
+  "family": 1,
+  "target": [
+   "np.pi"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "atan",
+   "x0",
+   "atan",
+   "inv",
+   "x0"
+  ],
+  "why": "BORDERLINE: atan(x)+atan(1/x)=sign(x)*pi/2; only pi/2 for x>0; minimal global form needs sign",
+  "family": 1,
+  "target": [
+   "atan",
+   "/",
+   "float(\"inf\")",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "sqrt(1-x^2)=cos(asin x)=sin(acos x)",
+  "family": 1,
+  "target": [
+   "cos",
+   "asin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "x/sqrt(1-x^2)=tan(asin x)",
+  "family": 1,
+  "target": [
+   "sinh",
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "x0",
+   "x0"
+  ],
+  "why": "sqrt(1-x^2)/x=tan(acos x)",
+  "family": 1,
+  "target": [
+   "tan",
+   "acos",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "pow1_2",
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "x/sqrt(1+x^2)=sin(atan x)",
+  "family": 1,
+  "target": [
+   "sin",
+   "atan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "inv",
+   "pow1_2",
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "1/sqrt(1+x^2)=cos(atan x)",
+  "family": 1,
+  "target": [
+   "cos",
+   "atan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "atan",
+   "/",
+   "x0",
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "atan(x/sqrt(1-x^2))=asin x",
+  "family": 1,
+  "target": [
+   "asin",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "asin",
+   "/",
+   "x0",
+   "pow1_2",
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "asin(x/sqrt(1+x^2))=atan x",
+  "family": 1,
+  "target": [
+   "atan",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "*",
+   "x0",
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "BORDERLINE: 2x sqrt(1-x^2)=sin(2 asin x); source also nan outside |x|<=1 so domains match - may certify",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult2",
+   "acos",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "sin",
+   "neg",
+   "x0",
+   "sin",
+   "x0"
+  ],
+  "why": "sin odd: sin(-x)+sin(x)=0",
+  "family": 1,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "sin",
+   "x0",
+   "cos",
+   "x1",
+   "*",
+   "cos",
+   "x0",
+   "sin",
+   "x1"
+  ],
+  "why": "sin addition formula collapses",
+  "family": 1,
+  "target": [
+   "sin",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "cos",
+   "x1",
+   "sin",
+   "x0",
+   "*",
+   "sin",
+   "x1",
+   "cos",
+   "x0"
+  ],
+  "why": "sin addition, factors reordered",
+  "family": 1,
+  "target": [
+   "sin",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "*",
+   "sin",
+   "x0",
+   "cos",
+   "x1",
+   "*",
+   "cos",
+   "x0",
+   "sin",
+   "x1"
+  ],
+  "why": "sin subtraction formula",
+  "family": 1,
+  "target": [
+   "sin",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "*",
+   "cos",
+   "x0",
+   "cos",
+   "x1",
+   "*",
+   "sin",
+   "x0",
+   "sin",
+   "x1"
+  ],
+  "why": "cos addition formula",
+  "family": 1,
+  "target": [
+   "cos",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "cos",
+   "x0",
+   "cos",
+   "x1",
+   "*",
+   "sin",
+   "x0",
+   "sin",
+   "x1"
+  ],
+  "why": "cos subtraction formula",
+  "family": 1,
+  "target": [
+   "cos",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "sin",
+   "x0",
+   "sin",
+   "x1",
+   "*",
+   "cos",
+   "x0",
+   "cos",
+   "x1"
+  ],
+  "why": "cos subtraction, terms swapped",
+  "family": 1,
+  "target": [
+   "cos",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "tan",
+   "x0",
+   "tan",
+   "x1",
+   "-",
+   "1",
+   "*",
+   "tan",
+   "x0",
+   "tan",
+   "x1"
+  ],
+  "why": "tan sum formula (t0+t1)/(1-t0 t1)",
+  "family": 1,
+  "target": [
+   "tan",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "tan",
+   "x0",
+   "tan",
+   "x1",
+   "+",
+   "1",
+   "*",
+   "tan",
+   "x0",
+   "tan",
+   "x1"
+  ],
+  "why": "tan difference formula",
+  "family": 1,
+  "target": [
+   "tan",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult3",
+   "sin",
+   "x0",
+   "mult4",
+   "pow3",
+   "sin",
+   "x0"
+  ],
+  "why": "3sin-4sin^3=sin3x",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult4",
+   "pow3",
+   "cos",
+   "x0",
+   "mult3",
+   "cos",
+   "x0"
+  ],
+  "why": "4cos^3-3cos=cos3x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "sin",
+   "x0",
+   "+",
+   "mult2",
+   "cos",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "sin x(2cos2x+1)=sin3x",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "cos",
+   "x0",
+   "-",
+   "mult2",
+   "cos",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "cos x(2cos2x-1)=cos3x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "sin",
+   "mult2",
+   "x0",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "sin2x cos2x=sin4x/2",
+  "family": 1,
+  "target": [
+   "div2",
+   "sin",
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "*",
+   "sin",
+   "mult2",
+   "x0",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "2 sin2x cos2x=sin4x",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "cos",
+   "mult2",
+   "x0",
+   "pow2",
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "why": "cos^2(2x)-sin^2(2x)=cos4x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "mult2",
+   "pow2",
+   "sin",
+   "mult2",
+   "x0"
+  ],
+  "why": "1-2sin^2(2x)=cos4x",
+  "family": 1,
+  "target": [
+   "cos",
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult4",
+   "*",
+   "*",
+   "sin",
+   "x0",
+   "cos",
+   "x0",
+   "cos",
+   "mult2",
+   "x0"
+  ],
+  "why": "4 sin cos cos2x=sin4x",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "mult4",
+   "*",
+   "sin",
+   "x0",
+   "cos",
+   "x0",
+   "-",
+   "1",
+   "mult2",
+   "pow2",
+   "sin",
+   "x0"
+  ],
+  "why": "4 sin cos (1-2sin^2)=sin4x",
+  "family": 1,
+  "target": [
+   "sin",
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "+",
+   "sin",
+   "x0",
+   "cos",
+   "x0",
+   "pow2",
+   "-",
+   "sin",
+   "x0",
+   "cos",
+   "x0"
+  ],
+  "why": "(sin+cos)^2+(sin-cos)^2=2",
+  "family": 1,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow2",
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh+sinh)^2 = exp(2x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow2",
+   "+",
+   "sinh",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "(sinh+cosh)^2 = exp(2x) (operand order)",
+  "family": 2,
+  "target": [
+   "exp",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow3",
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh+sinh)^3 = exp(3x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow4",
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh+sinh)^4 = exp(4x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow5",
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh+sinh)^5 = exp(5x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "mult5",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow2",
+   "-",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh-sinh)^2 = exp(-2x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "mult2",
+   "neg",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "pow3",
+   "-",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh-sinh)^3 = exp(-3x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "mult3",
+   "neg",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "exp",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "exp x - sinh x = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "exp",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "exp x - cosh x = sinh x",
+  "family": 2,
+  "target": [
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "cosh",
+   "x0",
+   "exp",
+   "x0"
+  ],
+  "why": "cosh x - exp x = -sinh x",
+  "family": 2,
+  "target": [
+   "neg",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "sinh",
+   "x0",
+   "exp",
+   "x0"
+  ],
+  "why": "sinh x - exp x = -cosh x",
+  "family": 2,
+  "target": [
+   "neg",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "exp",
+   "neg",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "exp(-x) + sinh x = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "sinh",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "sinh x + exp(-x) = cosh x (operand order)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "cosh",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "cosh x - exp(-x) = sinh x",
+  "family": 2,
+  "target": [
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "exp",
+   "neg",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "exp(-x) - cosh x = -sinh x",
+  "family": 2,
+  "target": [
+   "neg",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "exp x - exp(-x) = 2 sinh x",
+  "family": 2,
+  "target": [
+   "mult2",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "exp x + exp(-x) = 2 cosh x",
+  "family": 2,
+  "target": [
+   "mult2",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "exp",
+   "neg",
+   "x0",
+   "exp",
+   "x0"
+  ],
+  "why": "exp(-x) + exp x = 2 cosh x (operand order)",
+  "family": 2,
+  "target": [
+   "mult2",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "exp",
+   "neg",
+   "x0",
+   "exp",
+   "x0"
+  ],
+  "why": "exp(-x) - exp x = -2 sinh x",
+  "family": 2,
+  "target": [
+   "mult2",
+   "neg",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "(exp x - exp(-x))/2 = sinh x",
+  "family": 2,
+  "target": [
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "+",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "(exp x + exp(-x))/2 = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "+",
+   "exp",
+   "neg",
+   "x0",
+   "exp",
+   "x0"
+  ],
+  "why": "(exp(-x) + exp x)/2 = cosh x (operand order)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "exp",
+   "mult2",
+   "x0",
+   "1",
+   "mult2",
+   "exp",
+   "x0"
+  ],
+  "why": "(exp(2x)-1)/(2 exp x) = sinh x",
+  "family": 2,
+  "target": [
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "exp",
+   "mult2",
+   "x0",
+   "1",
+   "mult2",
+   "exp",
+   "x0"
+  ],
+  "why": "(exp(2x)+1)/(2 exp x) = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "exp",
+   "mult2",
+   "x0",
+   "1",
+   "exp",
+   "x0"
+  ],
+  "why": "(exp(2x)-1)/exp x = 2 sinh x",
+  "family": 2,
+  "target": [
+   "mult2",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "exp",
+   "mult2",
+   "x0",
+   "1",
+   "exp",
+   "x0"
+  ],
+  "why": "(exp(2x)+1)/exp x = 2 cosh x",
+  "family": 2,
+  "target": [
+   "mult2",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "exp",
+   "mult2",
+   "x0",
+   "1",
+   "+",
+   "exp",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "(exp2x-1)/(exp2x+1) = tanh x",
+  "family": 2,
+  "target": [
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0",
+   "+",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "(e^x-e^-x)/(e^x+e^-x) = tanh x, 13-token binomial",
+  "family": 2,
+  "target": [
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "exp",
+   "x0",
+   "1",
+   "+",
+   "exp",
+   "x0",
+   "1"
+  ],
+  "why": "(e^x-1)/(e^x+1) = tanh(x/2), half-argument",
+  "family": 2,
+  "target": [
+   "tanh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "1",
+   "exp",
+   "neg",
+   "x0",
+   "+",
+   "1",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "(1-e^-x)/(1+e^-x) = tanh(x/2), half-argument",
+  "family": 2,
+  "target": [
+   "tanh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "mult2",
+   "inv",
+   "+",
+   "exp",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "1 - 2/(exp(2x)+1) = tanh x, logistic shape",
+  "family": 2,
+  "target": [
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "inv",
+   "+",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "2/(e^x+e^-x) = sech = 1/cosh",
+  "family": 2,
+  "target": [
+   "inv",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "inv",
+   "-",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "2/(e^x-e^-x) = csch = 1/sinh",
+  "family": 2,
+  "target": [
+   "inv",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "1",
+   "pow2",
+   "sinh",
+   "x0"
+  ],
+  "why": "1 + sinh^2 = cosh^2",
+  "family": 2,
+  "target": [
+   "pow2",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "sinh",
+   "x0",
+   "1"
+  ],
+  "why": "sinh^2 + 1 = cosh^2 (operand order)",
+  "family": 2,
+  "target": [
+   "pow2",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "cosh^2 - 1 = sinh^2",
+  "family": 2,
+  "target": [
+   "pow2",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "1",
+   "pow2",
+   "sinh",
+   "x0"
+  ],
+  "why": "sqrt(1+sinh^2) = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "pow2",
+   "sinh",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt(sinh^2+1) = cosh x (operand order)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "pow2",
+   "tanh",
+   "x0"
+  ],
+  "why": "1 - tanh^2 = sech^2 = 1/cosh^2",
+  "family": 2,
+  "target": [
+   "inv",
+   "pow2",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "1",
+   "inv",
+   "pow2",
+   "cosh",
+   "x0"
+  ],
+  "why": "1 - 1/cosh^2 = tanh^2",
+  "family": 2,
+  "target": [
+   "pow2",
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "inv",
+   "pow2",
+   "tanh",
+   "x0",
+   "1"
+  ],
+  "why": "coth^2 - 1 = csch^2 = 1/sinh^2",
+  "family": 2,
+  "target": [
+   "inv",
+   "pow2",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "1",
+   "inv",
+   "pow2",
+   "sinh",
+   "x0"
+  ],
+  "why": "1 + 1/sinh^2 = coth^2 = 1/tanh^2",
+  "family": 2,
+  "target": [
+   "inv",
+   "pow2",
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "tanh",
+   "x0"
+  ],
+  "why": "sqrt(1-tanh^2) = sech = 1/cosh",
+  "family": 2,
+  "target": [
+   "cos",
+   "asin",
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "sinh/cosh = tanh",
+  "family": 2,
+  "target": [
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "cosh/sinh = coth = 1/tanh",
+  "family": 2,
+  "target": [
+   "inv",
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "tanh",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "tanh * cosh = sinh",
+  "family": 2,
+  "target": [
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "cosh",
+   "x0",
+   "tanh",
+   "x0"
+  ],
+  "why": "cosh * tanh = sinh (operand order)",
+  "family": 2,
+  "target": [
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "x0",
+   "tanh",
+   "x0"
+  ],
+  "why": "sinh/tanh = cosh",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "tanh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "tanh/sinh = sech = 1/cosh",
+  "family": 2,
+  "target": [
+   "inv",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "tanh",
+   "neg",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "tanh(-x) cosh(x) = -sinh x",
+  "family": 2,
+  "target": [
+   "neg",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "exp",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "exp(x)/cosh(x) = 1 + tanh x",
+  "family": 2,
+  "target": [
+   "+",
+   "1",
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "exp",
+   "neg",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "exp(-x)/cosh(x) = 1 - tanh x",
+  "family": 2,
+  "target": [
+   "-",
+   "1",
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "*",
+   "sinh",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "2 sinh cosh = sinh 2x",
+  "family": 2,
+  "target": [
+   "sinh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "*",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "2 cosh sinh = sinh 2x (operand order)",
+  "family": 2,
+  "target": [
+   "sinh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "sinh",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "sinh cosh = sinh(2x)/2",
+  "family": 2,
+  "target": [
+   "div2",
+   "sinh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "cosh sinh = sinh(2x)/2 (operand order)",
+  "family": 2,
+  "target": [
+   "div2",
+   "sinh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "cosh",
+   "x0",
+   "pow2",
+   "sinh",
+   "x0"
+  ],
+  "why": "cosh^2 + sinh^2 = cosh 2x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "sinh",
+   "x0",
+   "pow2",
+   "cosh",
+   "x0"
+  ],
+  "why": "sinh^2 + cosh^2 = cosh 2x (operand order)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "pow2",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "2cosh^2 - 1 = cosh 2x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "1",
+   "mult2",
+   "pow2",
+   "sinh",
+   "x0"
+  ],
+  "why": "1 + 2sinh^2 = cosh 2x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult2",
+   "pow2",
+   "sinh",
+   "x0",
+   "1"
+  ],
+  "why": "2sinh^2 + 1 = cosh 2x (operand order)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "tanh",
+   "x0",
+   "+",
+   "1",
+   "pow2",
+   "tanh",
+   "x0"
+  ],
+  "why": "2tanh/(1+tanh^2) = tanh 2x",
+  "family": 2,
+  "target": [
+   "tanh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "mult2",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "sinh2x/sinh x = 2 cosh x",
+  "family": 2,
+  "target": [
+   "mult2",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "mult2",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "sinh2x/cosh x = 2 sinh x",
+  "family": 2,
+  "target": [
+   "mult2",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "/",
+   "sinh",
+   "mult2",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "sinh2x/(2 sinh x) = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "/",
+   "sinh",
+   "mult2",
+   "x0",
+   "cosh",
+   "x0"
+  ],
+  "why": "sinh2x/(2 cosh x) = sinh x",
+  "family": 2,
+  "target": [
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "cosh",
+   "x0",
+   "tanh",
+   "x0"
+  ],
+  "why": "cosh^2 tanh = sinh cosh = sinh(2x)/2",
+  "family": 2,
+  "target": [
+   "div2",
+   "sinh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "+",
+   "cosh",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "(cosh2x+1)/2 = cosh^2 x, power reduction",
+  "family": 2,
+  "target": [
+   "pow2",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "cosh",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "(cosh2x-1)/2 = sinh^2 x, power reduction",
+  "family": 2,
+  "target": [
+   "pow2",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "cosh",
+   "mult2",
+   "x0",
+   "1",
+   "+",
+   "cosh",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "(cosh2x-1)/(cosh2x+1) = tanh^2 x",
+  "family": 2,
+  "target": [
+   "pow2",
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "cosh",
+   "mult2",
+   "x0",
+   "1",
+   "sinh",
+   "mult2",
+   "x0"
+  ],
+  "why": "(cosh2x-1)/sinh2x = tanh x",
+  "family": 2,
+  "target": [
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "mult2",
+   "x0",
+   "+",
+   "cosh",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "sinh2x/(cosh2x+1) = tanh x",
+  "family": 2,
+  "target": [
+   "tanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "div2",
+   "+",
+   "cosh",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt((cosh2x+1)/2) = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "div2",
+   "-",
+   "cosh",
+   "mult2",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt((cosh2x-1)/2) = |sinh x|",
+  "family": 2,
+  "target": [
+   "abs",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult3",
+   "sinh",
+   "x0",
+   "mult4",
+   "pow3",
+   "sinh",
+   "x0"
+  ],
+  "why": "3sinh + 4sinh^3 = sinh 3x, triple argument",
+  "family": 2,
+  "target": [
+   "sinh",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult4",
+   "pow3",
+   "cosh",
+   "x0",
+   "mult3",
+   "cosh",
+   "x0"
+  ],
+  "why": "4cosh^3 - 3cosh = cosh 3x, triple argument",
+  "family": 2,
+  "target": [
+   "cosh",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div4",
+   "-",
+   "sinh",
+   "mult3",
+   "x0",
+   "mult3",
+   "sinh",
+   "x0"
+  ],
+  "why": "(sinh3x - 3sinh)/4 = sinh^3, power reduction",
+  "family": 2,
+  "target": [
+   "pow3",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div4",
+   "+",
+   "cosh",
+   "mult3",
+   "x0",
+   "mult3",
+   "cosh",
+   "x0"
+  ],
+  "why": "(cosh3x + 3cosh)/4 = cosh^3, power reduction",
+  "family": 2,
+  "target": [
+   "pow3",
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "+",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "(cosh x+1)/2 = cosh^2(x/2), half argument",
+  "family": 2,
+  "target": [
+   "pow2",
+   "cosh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "(cosh x-1)/2 = sinh^2(x/2), half argument",
+  "family": 2,
+  "target": [
+   "pow2",
+   "sinh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "div2",
+   "+",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt((cosh x+1)/2) = cosh(x/2)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "div2",
+   "-",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt((cosh x-1)/2) = |sinh(x/2)|",
+  "family": 2,
+  "target": [
+   "abs",
+   "sinh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "/",
+   "-",
+   "cosh",
+   "x0",
+   "1",
+   "+",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt((cosh-1)/(cosh+1)) = |tanh(x/2)|",
+  "family": 2,
+  "target": [
+   "abs",
+   "tanh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "x0",
+   "+",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "sinh/(cosh+1) = tanh(x/2)",
+  "family": 2,
+  "target": [
+   "tanh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "x0",
+   "+",
+   "1",
+   "cosh",
+   "x0"
+  ],
+  "why": "sinh/(1+cosh) = tanh(x/2) (operand order)",
+  "family": 2,
+  "target": [
+   "tanh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "cosh",
+   "x0",
+   "1",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh+1)/sinh = coth(x/2)",
+  "family": 2,
+  "target": [
+   "inv",
+   "tanh",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "sinh",
+   "div2",
+   "x0",
+   "cosh",
+   "div2",
+   "x0"
+  ],
+  "why": "sinh(x/2)cosh(x/2) = sinh(x)/2",
+  "family": 2,
+  "target": [
+   "div2",
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "*",
+   "sinh",
+   "div2",
+   "x0",
+   "cosh",
+   "div2",
+   "x0"
+  ],
+  "why": "2 sinh(x/2)cosh(x/2) = sinh x",
+  "family": 2,
+  "target": [
+   "sinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "cosh",
+   "div2",
+   "x0",
+   "pow2",
+   "sinh",
+   "div2",
+   "x0"
+  ],
+  "why": "cosh^2(x/2)+sinh^2(x/2) = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow2",
+   "+",
+   "cosh",
+   "div2",
+   "x0",
+   "sinh",
+   "div2",
+   "x0"
+  ],
+  "why": "(cosh(x/2)+sinh(x/2))^2 = exp x",
+  "family": 2,
+  "target": [
+   "exp",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "pow2",
+   "cosh",
+   "div2",
+   "x0",
+   "1"
+  ],
+  "why": "2cosh^2(x/2)-1 = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "1",
+   "mult2",
+   "pow2",
+   "sinh",
+   "div2",
+   "x0"
+  ],
+  "why": "1+2sinh^2(x/2) = cosh x",
+  "family": 2,
+  "target": [
+   "cosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0",
+   "pow2",
+   "-",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh+sinh)^2+(cosh-sinh)^2 = 2cosh 2x, 13-token binomial",
+  "family": 2,
+  "target": [
+   "mult2",
+   "cosh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0",
+   "pow2",
+   "-",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh+sinh)^2-(cosh-sinh)^2 = 2sinh 2x, 13-token binomial",
+  "family": 2,
+  "target": [
+   "mult2",
+   "sinh",
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "+",
+   "x0",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "log(x+sqrt(x^2+1)) = asinh x, the canonical 8-token reduction",
+  "family": 2,
+  "target": [
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "+",
+   "x0",
+   "pow1_2",
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "log(x+sqrt(1+x^2)) = asinh x (inner operand order)",
+  "family": 2,
+  "target": [
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "+",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1",
+   "x0"
+  ],
+  "why": "log(sqrt(x^2+1)+x) = asinh x (outer operand order)",
+  "family": 2,
+  "target": [
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "-",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1",
+   "x0"
+  ],
+  "why": "log(sqrt(x^2+1)-x) = -asinh x",
+  "family": 2,
+  "target": [
+   "asinh",
+   "neg",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "neg",
+   "log",
+   "-",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1",
+   "x0"
+  ],
+  "why": "-log(sqrt(x^2+1)-x) = asinh x",
+  "family": 2,
+  "target": [
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "inv",
+   "+",
+   "x0",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "1/(x+sqrt(x^2+1)) = exp(-asinh x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "asinh",
+   "neg",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "log",
+   "+",
+   "x0",
+   "pow1_2",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "log(x+sqrt(x^2-1)) = acosh x (domains match: both nan for x<1)",
+  "family": 2,
+  "target": [
+   "acosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "-",
+   "x0",
+   "pow1_2",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "log(x-sqrt(x^2-1)) = -acosh x",
+  "family": 2,
+  "target": [
+   "neg",
+   "acosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "+",
+   "x0",
+   "*",
+   "pow1_2",
+   "-",
+   "x0",
+   "1",
+   "pow1_2",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "log(x+sqrt(x-1)sqrt(x+1)) = acosh x, 12 tokens",
+  "family": 2,
+  "target": [
+   "acosh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "log",
+   "/",
+   "+",
+   "1",
+   "x0",
+   "-",
+   "1",
+   "x0"
+  ],
+  "why": "log((1+x)/(1-x))/2 = atanh x",
+  "family": 2,
+  "target": [
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "pow1_2",
+   "/",
+   "+",
+   "1",
+   "x0",
+   "-",
+   "1",
+   "x0"
+  ],
+  "why": "log(sqrt((1+x)/(1-x))) = atanh x",
+  "family": 2,
+  "target": [
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "log",
+   "+",
+   "1",
+   "x0",
+   "log",
+   "-",
+   "1",
+   "x0"
+  ],
+  "why": "(log(1+x)-log(1-x))/2 = atanh x, expanded-log variant",
+  "family": 2,
+  "target": [
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "log",
+   "/",
+   "+",
+   "x0",
+   "1",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "log((x+1)/(x-1))/2 = acoth x = atanh(1/x)",
+  "family": 2,
+  "target": [
+   "atanh",
+   "inv",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "atanh",
+   "/",
+   "x0",
+   "pow1_2",
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "atanh(x/sqrt(1+x^2)) = asinh x",
+  "family": 2,
+  "target": [
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "asinh",
+   "/",
+   "x0",
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "asinh(x/sqrt(1-x^2)) = atanh x",
+  "family": 2,
+  "target": [
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "asinh",
+   "pow1_2",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "asinh(sqrt(x^2-1)) = acosh|x| (abs needed for x<=-1 branch)",
+  "family": 2,
+  "target": [
+   "acosh",
+   "abs",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "asinh",
+   "mult2",
+   "*",
+   "x0",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "asinh(2x sqrt(x^2+1)) = 2 asinh x, double-argument of asinh",
+  "family": 2,
+  "target": [
+   "mult2",
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "sqrt(1+x^2) = cosh(asinh x)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt(x^2+1) = cosh(asinh x) (operand order)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt(x^2-1) = sinh(acosh|x|)",
+  "family": 2,
+  "target": [
+   "sinh",
+   "acosh",
+   "abs",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "x/sqrt(x^2+1) = tanh(asinh x) (operand order)",
+  "family": 2,
+  "target": [
+   "sin",
+   "atan",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "inv",
+   "pow1_2",
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "1/sqrt(1-x^2) = cosh(atanh x)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "inv",
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "why": "sqrt(1/(1-x^2)) = cosh(atanh x) (inv inside sqrt variant)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "x+sqrt(x^2+1) = exp(asinh x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1",
+   "x0"
+  ],
+  "why": "sqrt(x^2+1)+x = exp(asinh x) (operand order)",
+  "family": 2,
+  "target": [
+   "exp",
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "abs",
+   "x0",
+   "pow1_2",
+   "-",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "|x|+sqrt(x^2-1) = exp(acosh|x|)",
+  "family": 2,
+  "target": [
+   "exp",
+   "acosh",
+   "abs",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "/",
+   "+",
+   "1",
+   "x0",
+   "-",
+   "1",
+   "x0"
+  ],
+  "why": "sqrt((1+x)/(1-x)) = exp(atanh x)",
+  "family": 2,
+  "target": [
+   "exp",
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "mult2",
+   "*",
+   "x0",
+   "pow1_2",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "2x sqrt(x^2+1) = sinh(2 asinh x)",
+  "family": 2,
+  "target": [
+   "sinh",
+   "mult2",
+   "asinh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "-",
+   "abs",
+   "x0",
+   "inv",
+   "abs",
+   "x0"
+  ],
+  "why": "(|x|-1/|x|)/2 = sinh(log|x|)",
+  "family": 2,
+  "target": [
+   "sinh",
+   "log",
+   "abs",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div2",
+   "+",
+   "abs",
+   "x0",
+   "inv",
+   "abs",
+   "x0"
+  ],
+  "why": "(|x|+1/|x|)/2 = cosh(log|x|)",
+  "family": 2,
+  "target": [
+   "cosh",
+   "log",
+   "abs",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "1",
+   "+",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2-1)/(x^2+1) = tanh(log|x|), holds even at x=0 (tanh(-inf)=-1)",
+  "family": 2,
+  "target": [
+   "tanh",
+   "log",
+   "abs",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "sinh",
+   "x0",
+   "sinh",
+   "neg",
+   "x0"
+  ],
+  "why": "sinh x + sinh(-x) = 0, odd parity",
+  "family": 2,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "tanh",
+   "x0",
+   "tanh",
+   "neg",
+   "x0"
+  ],
+  "why": "tanh x + tanh(-x) = 0, odd parity",
+  "family": 2,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "asinh",
+   "x0",
+   "asinh",
+   "neg",
+   "x0"
+  ],
+  "why": "asinh x + asinh(-x) = 0, odd parity",
+  "family": 2,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "atanh",
+   "x0",
+   "atanh",
+   "neg",
+   "x0"
+  ],
+  "why": "atanh x + atanh(-x) = 0, odd parity",
+  "family": 2,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "neg",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "sinh(-x)/sinh(x) = -1",
+  "family": 2,
+  "target": [
+   "(-1)"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "tanh",
+   "neg",
+   "x0",
+   "tanh",
+   "x0"
+  ],
+  "why": "tanh(-x)/tanh(x) = -1",
+  "family": 2,
+  "target": [
+   "(-1)"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "exp",
+   "+",
+   "log",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "exp(log x + log y) = x*y",
+  "family": 3,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "exp",
+   "-",
+   "log",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "exp(log x - log y) = x/y",
+  "family": 3,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "exp",
+   "+",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "exp(x + log y) = y*exp(x)",
+  "family": 3,
+  "target": [
+   "*",
+   "exp",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "exp",
+   "-",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "exp(x - log y) = exp(x)/y",
+  "family": 3,
+  "target": [
+   "/",
+   "exp",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "exp",
+   "mult2",
+   "+",
+   "log",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "exp(2(log x + log y)) = (xy)^2",
+  "family": 3,
+  "target": [
+   "pow2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "exp",
+   "div2",
+   "+",
+   "log",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "exp((log x + log y)/2) = sqrt(xy)",
+  "family": 3,
+  "target": [
+   "pow1_2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "exp",
+   "*",
+   "x1",
+   "log",
+   "x0"
+  ],
+  "why": "exp(y log x) = x^y",
+  "family": 3,
+  "target": [
+   "pow",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "exp",
+   "/",
+   "log",
+   "x0",
+   "x1"
+  ],
+  "why": "exp(log(x)/y) = x^(1/y)",
+  "family": 3,
+  "target": [
+   "pow",
+   "x0",
+   "inv",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "*",
+   "pow2",
+   "x0",
+   "pow3",
+   "x0"
+  ],
+  "why": "log(x^2*x^3) = 5 log x",
+  "family": 3,
+  "target": [
+   "log",
+   "pow5",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "log x + log y = log(xy)",
+  "family": 3,
+  "target": [
+   "log",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "log",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "log x - log y = log(x/y)",
+  "family": 3,
+  "target": [
+   "log",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult2",
+   "log",
+   "x0",
+   "mult3",
+   "log",
+   "x0"
+  ],
+  "why": "2 log x + 3 log x = 5 log x",
+  "family": 3,
+  "target": [
+   "log",
+   "pow5",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "pow2",
+   "x0",
+   "log",
+   "pow3",
+   "x0"
+  ],
+  "why": "log x^2 + log x^3 = 5 log x",
+  "family": 3,
+  "target": [
+   "log",
+   "pow5",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "x0",
+   "log",
+   "pow2",
+   "x0"
+  ],
+  "why": "log x + log x^2 = 3 log x",
+  "family": 3,
+  "target": [
+   "log",
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "log",
+   "pow3",
+   "x0",
+   "log",
+   "x0"
+  ],
+  "why": "log x^3 - log x = 2 log x",
+  "family": 3,
+  "target": [
+   "log",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "log",
+   "pow2",
+   "x0",
+   "log",
+   "x0"
+  ],
+  "why": "log x^2 - log x = log x",
+  "family": 3,
+  "target": [
+   "log",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "/",
+   "x0",
+   "x1",
+   "log",
+   "x1"
+  ],
+  "why": "log(x/y) + log y = log x",
+  "family": 3,
+  "target": [
+   "log",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "x0",
+   "log",
+   "/",
+   "x1",
+   "x0"
+  ],
+  "why": "log x + log(y/x) = log y",
+  "family": 3,
+  "target": [
+   "log",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "log",
+   "*",
+   "x0",
+   "x1",
+   "log",
+   "x0"
+  ],
+  "why": "log(xy) - log x = log y",
+  "family": 3,
+  "target": [
+   "log",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "/",
+   "x0",
+   "x1",
+   "log",
+   "/",
+   "x1",
+   "x0"
+  ],
+  "why": "log(x/y) + log(y/x) = 0 (9 tokens)",
+  "family": 3,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "x0",
+   "log",
+   "inv",
+   "x0"
+  ],
+  "why": "log x + log(1/x) = 0",
+  "family": 3,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "log",
+   "*",
+   "x0",
+   "x1",
+   "+",
+   "log",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "log(xy) - (log x + log y) = 0 (10 tokens)",
+  "family": 3,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "log",
+   "x0",
+   "log",
+   "x1",
+   "log",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "(log x + log y)/log(xy) = 1 (10 tokens)",
+  "family": 3,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "/",
+   "x0",
+   "x1",
+   "log",
+   "/",
+   "x1",
+   "x2"
+  ],
+  "why": "telescoping log(x/y)+log(y/z) = log(x/z) (9 tokens)",
+  "family": 3,
+  "target": [
+   "log",
+   "/",
+   "x0",
+   "x2"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "exp",
+   "x0",
+   "exp",
+   "x1"
+  ],
+  "why": "e^x * e^y = e^(x+y)",
+  "family": 3,
+  "target": [
+   "exp",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "exp",
+   "x0",
+   "exp",
+   "x1"
+  ],
+  "why": "e^x / e^y = e^(x-y)",
+  "family": 3,
+  "target": [
+   "exp",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "e^x * e^-x = 1",
+  "family": 3,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "exp",
+   "+",
+   "x0",
+   "x1",
+   "exp",
+   "x0"
+  ],
+  "why": "e^(x+y)/e^x = e^y",
+  "family": 3,
+  "target": [
+   "exp",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "exp",
+   "x0",
+   "exp",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "e^x/e^(x+y) = e^-y",
+  "family": 3,
+  "target": [
+   "exp",
+   "neg",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "exp",
+   "x0",
+   "exp",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "e^x * e^(y-x) = e^y",
+  "family": 3,
+  "target": [
+   "exp",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "exp",
+   "+",
+   "x0",
+   "x1",
+   "*",
+   "exp",
+   "x0",
+   "exp",
+   "x1"
+  ],
+  "why": "e^(x+y)/(e^x e^y) = 1 (9 tokens)",
+  "family": 3,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "exp",
+   "x0",
+   "*",
+   "exp",
+   "x1",
+   "exp",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "e^x e^y e^-(x+y) = 1 (11 tokens)",
+  "family": 3,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "*",
+   "exp",
+   "x0",
+   "exp",
+   "x1"
+  ],
+  "why": "log(e^x * e^y) = x+y",
+  "family": 3,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "/",
+   "exp",
+   "x0",
+   "exp",
+   "x0"
+  ],
+  "why": "log(e^x/e^x) = 0",
+  "family": 3,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "exp",
+   "+",
+   "1",
+   "log",
+   "x0"
+  ],
+  "why": "exp(1 + log x) = e*x",
+  "family": 3,
+  "target": [
+   "*",
+   "np.e",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow",
+   "exp",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "(e^x)^(log y) = y^x",
+  "family": 3,
+  "target": [
+   "pow",
+   "x1",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "log",
+   "pow",
+   "x0",
+   "x1",
+   "x1"
+  ],
+  "why": "log(x^y)/y = log x",
+  "family": 3,
+  "target": [
+   "log",
+   "abs",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "log",
+   "pow",
+   "x0",
+   "x1",
+   "log",
+   "x0"
+  ],
+  "why": "log(x^y)/log(x) = y",
+  "family": 3,
+  "target": [
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "log",
+   "pow",
+   "x0",
+   "x1",
+   "*",
+   "x1",
+   "log",
+   "x0"
+  ],
+  "why": "log(x^y)/(y log x) = 1 (9 tokens)",
+  "family": 3,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "log",
+   "pow2",
+   "x0",
+   "log",
+   "x0"
+  ],
+  "why": "log(x^2)/log(x) = 2",
+  "family": 3,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "exp",
+   "*",
+   "<constant>",
+   "log",
+   "x0"
+  ],
+  "why": "exp(C log x) = x^C",
+  "family": 3,
+  "target": [
+   "pow",
+   "x0",
+   "<constant>"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "log",
+   "pow",
+   "<constant>",
+   "mult2",
+   "x0"
+  ],
+  "why": "log(C^(2x)) = (2 ln C) x",
+  "family": 3,
+  "target": [
+   "log",
+   "pow",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "log",
+   "/",
+   "+",
+   "1",
+   "x0",
+   "-",
+   "1",
+   "x0"
+  ],
+  "why": "log((1+x)/(1-x)) = 2 atanh (9 tokens)",
+  "family": 3,
+  "target": [
+   "mult2",
+   "atanh",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow3",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "x^3/x^2 -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow4",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "x^4/x^2 -> x^2",
+  "family": 4,
+  "target": [
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow4",
+   "x0",
+   "pow3",
+   "x0"
+  ],
+  "why": "x^4/x^3 -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow5",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "x^5/x^2 -> x^3",
+  "family": 4,
+  "target": [
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow5",
+   "x0",
+   "pow3",
+   "x0"
+  ],
+  "why": "x^5/x^3 -> x^2",
+  "family": 4,
+  "target": [
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow5",
+   "x0",
+   "pow4",
+   "x0"
+  ],
+  "why": "x^5/x^4 -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "x0",
+   "pow3",
+   "x0"
+  ],
+  "why": "x^2/x^3 -> 1/x",
+  "family": 4,
+  "target": [
+   "inv",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "x0",
+   "pow4",
+   "x0"
+  ],
+  "why": "x^2/x^4 -> 1/x^2",
+  "family": 4,
+  "target": [
+   "inv",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "x0",
+   "pow5",
+   "x0"
+  ],
+  "why": "x^2/x^5 -> 1/x^3",
+  "family": 4,
+  "target": [
+   "inv",
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow3",
+   "x0",
+   "pow4",
+   "x0"
+  ],
+  "why": "x^3/x^4 -> 1/x",
+  "family": 4,
+  "target": [
+   "inv",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow3",
+   "x0",
+   "pow5",
+   "x0"
+  ],
+  "why": "x^3/x^5 -> 1/x^2",
+  "family": 4,
+  "target": [
+   "inv",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow4",
+   "x0",
+   "pow5",
+   "x0"
+  ],
+  "why": "x^4/x^5 -> 1/x",
+  "family": 4,
+  "target": [
+   "inv",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "x0",
+   "pow3",
+   "x0"
+  ],
+  "why": "x^2*x^3 -> x^5",
+  "family": 4,
+  "target": [
+   "pow5",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "x^2/y^2 -> (x/y)^2",
+  "family": 4,
+  "target": [
+   "pow2",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow3",
+   "x0",
+   "pow3",
+   "x1"
+  ],
+  "why": "x^3/y^3 -> (x/y)^3",
+  "family": 4,
+  "target": [
+   "pow3",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow4",
+   "x0",
+   "pow4",
+   "x1"
+  ],
+  "why": "x^4/y^4 -> (x/y)^4",
+  "family": 4,
+  "target": [
+   "pow4",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow5",
+   "x0",
+   "pow5",
+   "x1"
+  ],
+  "why": "x^5/y^5 -> (x/y)^5",
+  "family": 4,
+  "target": [
+   "pow5",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "x^2*y^2 -> (xy)^2",
+  "family": 4,
+  "target": [
+   "pow2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow3",
+   "x0",
+   "pow3",
+   "x1"
+  ],
+  "why": "x^3*y^3 -> (xy)^3",
+  "family": 4,
+  "target": [
+   "pow3",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "/",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "(x/y)^2 * y^2 -> x^2",
+  "family": 4,
+  "target": [
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow3",
+   "/",
+   "x0",
+   "x1",
+   "pow3",
+   "x1"
+  ],
+  "why": "(x/y)^3 * y^3 -> x^3",
+  "family": 4,
+  "target": [
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "/",
+   "x0",
+   "x1",
+   "pow2",
+   "/",
+   "x1",
+   "x0"
+  ],
+  "why": "(x/y)^2 * (y/x)^2 -> 1",
+  "family": 4,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "x2",
+   "x0"
+  ],
+  "why": "(xy+xz)/x -> y+z",
+  "family": 4,
+  "target": [
+   "+",
+   "x1",
+   "x2"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x2",
+   "x0",
+   "x0"
+  ],
+  "why": "operand-order variant (xy+zx)/x -> y+z",
+  "family": 4,
+  "target": [
+   "+",
+   "x1",
+   "x2"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "x2",
+   "x0"
+  ],
+  "why": "(xy-xz)/x -> y-z",
+  "family": 4,
+  "target": [
+   "-",
+   "x1",
+   "x2"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "x2",
+   "+",
+   "x1",
+   "x2"
+  ],
+  "why": "(xy+xz)/(y+z) -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "x0",
+   "+",
+   "x1",
+   "x2",
+   "+",
+   "x1",
+   "x2"
+  ],
+  "why": "x(y+z)/(y+z) -> x, factored variant",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "+",
+   "/",
+   "x1",
+   "x0",
+   "/",
+   "x2",
+   "x0"
+  ],
+  "why": "x*(y/x + z/x) -> y+z",
+  "family": 4,
+  "target": [
+   "+",
+   "x1",
+   "x2"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x0",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "numerator-order variant (xy+x^2)/(x+y) -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "x1",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "denominator-order variant (x^2+xy)/(y+x) -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "x1",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^2-xy)/(x-y) -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "(xy-y^2)/(x-y) -> y",
+  "family": 4,
+  "target": [
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "+",
+   "pow2",
+   "x0",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "x/(x^2+xy) -> 1/(x+y), denominator-side collapse",
+  "family": 4,
+  "target": [
+   "inv",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "x1",
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "y/(xy+y^2) -> 1/(x+y)",
+  "family": 4,
+  "target": [
+   "inv",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "+",
+   "x0",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "x/(x+xy) -> 1/(1+y)",
+  "family": 4,
+  "target": [
+   "inv",
+   "+",
+   "1",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "*",
+   "pow2",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "pow2",
+   "x1",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^2 y + x y^2)/(xy) -> x+y, 13-token binomial class",
+  "family": 4,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "*",
+   "pow2",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "pow2",
+   "x1",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^2 y - x y^2)/(xy) -> x-y",
+  "family": 4,
+  "target": [
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "*",
+   "pow2",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "pow2",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^2 y + x y^2)/(x+y) -> xy",
+  "family": 4,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow2",
+   "x0",
+   "x0",
+   "x0"
+  ],
+  "why": "(x^2+x)/x -> x+1",
+  "family": 4,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "x0",
+   "x0"
+  ],
+  "why": "(x^2-x)/x -> x-1",
+  "family": 4,
+  "target": [
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow3",
+   "x0",
+   "pow2",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "(x^3+x^2)/x^2 -> x+1",
+  "family": 4,
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow3",
+   "x0",
+   "pow2",
+   "x0",
+   "x0"
+  ],
+  "why": "(x^3+x^2)/x -> x^2+x",
+  "family": 4,
+  "target": [
+   "+",
+   "pow2",
+   "x0",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow2",
+   "x0",
+   "x0",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2+x)/(x+1) -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x0",
+   "x0",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "(x^2-x)/(x-1) -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "x0",
+   "+",
+   "x0",
+   "1",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "factored variant x(x+1)/(x+1) -> x",
+  "family": 4,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow3",
+   "x0",
+   "*",
+   "pow2",
+   "x0",
+   "x1",
+   "pow2",
+   "x0"
+  ],
+  "why": "(x^3+x^2 y)/x^2 -> x+y",
+  "family": 4,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow3",
+   "x0",
+   "*",
+   "pow2",
+   "x0",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^3+x^2 y)/(x+y) -> x^2",
+  "family": 4,
+  "target": [
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow3",
+   "x0",
+   "*",
+   "pow2",
+   "x0",
+   "x1",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "(x^3-x^2 y)/(x-y) -> x^2",
+  "family": 4,
+  "target": [
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow2",
+   "x1",
+   "pow2",
+   "x0",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "variable-swapped variant (y^2-x^2)/(y-x) -> x+y",
+  "family": 4,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "+",
+   "x0",
+   "x1",
+   "-",
+   "x0",
+   "x1",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "factored variant ((x+y)(x-y))/(x-y) -> x+y",
+  "family": 4,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "+",
+   "x0",
+   "x1",
+   "-",
+   "x0",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "factored variant ((x+y)(x-y))/(x+y) -> x-y",
+  "family": 4,
+  "target": [
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "-",
+   "x0",
+   "x1",
+   "+",
+   "x0",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "factor-order variant ((x-y)(x+y))/(x+y) -> x-y",
+  "family": 4,
+  "target": [
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "1",
+   "pow2",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "(x+1)^2 - (x-1)^2 -> 4x",
+  "family": 4,
+  "target": [
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "1",
+   "pow2",
+   "x0",
+   "mult2",
+   "x0"
+  ],
+  "why": "(x+1)^2 - x^2 - 2x -> 1",
+  "family": 4,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow3",
+   "x0",
+   "x0",
+   "-",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3-x)/(x-1) -> x^2+x",
+  "family": 4,
+  "target": [
+   "+",
+   "pow2",
+   "x0",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "pow3",
+   "x0",
+   "x0",
+   "+",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3-x)/(x+1) -> x^2-x",
+  "family": 4,
+  "target": [
+   "-",
+   "pow2",
+   "x0",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "/",
+   "neg",
+   "x0",
+   "x1",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "why": "(-x)/y + x/y -> 0",
+  "family": 4,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "/",
+   "x0",
+   "x1",
+   "/",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "x/y + x/(-y) -> 0",
+  "family": 4,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "/",
+   "-",
+   "x1",
+   "x0",
+   "-",
+   "x0",
+   "x1",
+   "1"
+  ],
+  "why": "(y-x)/(x-y) + 1 -> 0",
+  "family": 4,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x1",
+   "x0",
+   "x2"
+  ],
+  "why": "(xy - yx)/z -> 0, commutativity zero at depth",
+  "family": 4,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "neg",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "(-x)/(-y) -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "neg",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "(-x)(-y) -> xy",
+  "family": 4,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "x0",
+   "x1",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "(x-y)/(y-x) -> -1",
+  "family": 4,
+  "target": [
+   "(-1)"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "abs",
+   "x0",
+   "abs",
+   "x1"
+  ],
+  "why": "|x|/|y| -> |x/y|",
+  "family": 4,
+  "target": [
+   "abs",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "abs",
+   "x0",
+   "abs",
+   "x1"
+  ],
+  "why": "|x||y| -> |xy|",
+  "family": 4,
+  "target": [
+   "abs",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "2x/2y -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult3",
+   "x0",
+   "mult3",
+   "x1"
+  ],
+  "why": "3x/3y -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult4",
+   "x0",
+   "mult4",
+   "x1"
+  ],
+  "why": "4x/4y -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult5",
+   "x0",
+   "mult5",
+   "x1"
+  ],
+  "why": "5x/5y -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "div2",
+   "x0",
+   "div2",
+   "x1"
+  ],
+  "why": "(x/2)/(y/2) -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "div3",
+   "x0",
+   "div3",
+   "x1"
+  ],
+  "why": "(x/3)/(y/3) -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "div4",
+   "x0",
+   "div4",
+   "x1"
+  ],
+  "why": "(x/4)/(y/4) -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "div5",
+   "x0",
+   "div5",
+   "x1"
+  ],
+  "why": "(x/5)/(y/5) -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "mult4",
+   "x0"
+  ],
+  "why": "2x/4x -> 1/2",
+  "family": 4,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "mult4",
+   "x1"
+  ],
+  "why": "2x/4y -> (x/y)/2",
+  "family": 4,
+  "target": [
+   "/",
+   "div2",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "mult4",
+   "x0",
+   "mult2",
+   "x0"
+  ],
+  "why": "4x/2x -> 2",
+  "family": 4,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "div2",
+   "x0",
+   "div4",
+   "x0"
+  ],
+  "why": "(x/2)/(x/4) -> 2",
+  "family": 4,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "div2",
+   "x0"
+  ],
+  "why": "2x/(x/2) -> 4",
+  "family": 4,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "div2",
+   "x1"
+  ],
+  "why": "2x/(y/2) -> 4x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "mult4",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "mult2",
+   "x0",
+   "div2",
+   "x1"
+  ],
+  "why": "2x * y/2 -> xy",
+  "family": 4,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "div2",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "operand-order variant x/2 * 2y -> xy",
+  "family": 4,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "mult3",
+   "x0",
+   "div3",
+   "x1"
+  ],
+  "why": "3x * y/3 -> xy",
+  "family": 4,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "mult4",
+   "x0",
+   "div4",
+   "x1"
+  ],
+  "why": "4x * y/4 -> xy",
+  "family": 4,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "mult5",
+   "x0",
+   "div5",
+   "x1"
+  ],
+  "why": "5x * y/5 -> xy",
+  "family": 4,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "mult2",
+   "x0",
+   "mult2",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "expanded variant (2x+2y)/(x+y) -> 2",
+  "family": 4,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "div2",
+   "+",
+   "mult2",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "(2x+2y)/2 -> x+y",
+  "family": 4,
+  "target": [
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "<constant>",
+   "+",
+   "x0",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "C(x+y)/(x+y) -> C, single-wildcard factored form",
+  "family": 4,
+  "target": [
+   "<constant>"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "<constant>",
+   "pow2",
+   "x0",
+   "x0"
+  ],
+  "why": "Cx^2/x -> Cx",
+  "family": 4,
+  "target": [
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "pow2",
+   "x0",
+   "*",
+   "<constant>",
+   "x0",
+   "x0"
+  ],
+  "why": "(x^2+Cx)/x -> x+C",
+  "family": 4,
+  "target": [
+   "+",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "/",
+   "x0",
+   "+",
+   "x0",
+   "x1",
+   "/",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "x/(x+y) + y/(x+y) -> 1",
+  "family": 4,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "/",
+   "+",
+   "x0",
+   "x1",
+   "x1",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "why": "(x+y)/y - x/y -> 1",
+  "family": 4,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "/",
+   "+",
+   "x0",
+   "x1",
+   "x1",
+   "1"
+  ],
+  "why": "(x+y)/y - 1 -> x/y",
+  "family": 4,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "x0",
+   "x1",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "(x+y)/(y+x) -> 1, commuted quotient at depth",
+  "family": 4,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow4",
+   "x0",
+   "pow4",
+   "x1"
+  ],
+  "why": "x^4*y^4=(xy)^4",
+  "family": 5,
+  "target": [
+   "pow4",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow5",
+   "x0",
+   "pow5",
+   "x1"
+  ],
+  "why": "x^5*y^5=(xy)^5",
+  "family": 5,
+  "target": [
+   "pow5",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow1_2",
+   "x0",
+   "pow1_2",
+   "x1"
+  ],
+  "why": "sqrt(x)sqrt(y)=sqrt(xy); domain extension where x,y<0 but xy>0",
+  "family": 5,
+  "target": [
+   "pow1_2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow1_3",
+   "x0",
+   "pow1_3",
+   "x1"
+  ],
+  "why": "cbrt multiplicative on all reals (if cbrt-style pow1_3)",
+  "family": 5,
+  "target": [
+   "pow1_3",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow1_4",
+   "x0",
+   "pow1_4",
+   "x1"
+  ],
+  "why": "4th roots multiply; domain extension for xy>0 with x,y<0",
+  "family": 5,
+  "target": [
+   "pow1_4",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow1_5",
+   "x0",
+   "pow1_5",
+   "x1"
+  ],
+  "why": "odd 5th root multiplicative",
+  "family": 5,
+  "target": [
+   "pow1_5",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow1_2",
+   "x0",
+   "pow1_2",
+   "x1"
+  ],
+  "why": "sqrt(x)/sqrt(y)=sqrt(x/y); domain extension",
+  "family": 5,
+  "target": [
+   "pow1_2",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow1_3",
+   "x0",
+   "pow1_3",
+   "x1"
+  ],
+  "why": "cbrt(x)/cbrt(y)=cbrt(x/y)",
+  "family": 5,
+  "target": [
+   "pow1_3",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow3",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "operand-order variant of x^2*x^3",
+  "family": 5,
+  "target": [
+   "pow5",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "x0",
+   "pow4",
+   "x0"
+  ],
+  "why": "x^2*x^4=x^6=(x^3)^2",
+  "family": 5,
+  "target": [
+   "pow2",
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow3",
+   "x0",
+   "pow5",
+   "x0"
+  ],
+  "why": "x^3*x^5=x^8",
+  "family": 5,
+  "target": [
+   "pow2",
+   "pow4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow3",
+   "x0",
+   "pow3",
+   "pow2",
+   "x0"
+  ],
+  "why": "x^3*(x^2)^3=x^9",
+  "family": 5,
+  "target": [
+   "pow3",
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "*",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "sqrt(x^2*y^2)=|xy| distributed form",
+  "family": 5,
+  "target": [
+   "abs",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "/",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "sqrt(x^2/y^2)=|x/y|",
+  "family": 5,
+  "target": [
+   "abs",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_3",
+   "*",
+   "pow3",
+   "x0",
+   "pow3",
+   "x1"
+  ],
+  "why": "cbrt(x^3*y^3)=xy",
+  "family": 5,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow2",
+   "*",
+   "pow1_2",
+   "x0",
+   "pow1_2",
+   "x1"
+  ],
+  "why": "(sqrt(x)sqrt(y))^2=xy; domain extension",
+  "family": 5,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x1",
+   "+",
+   "pow2",
+   "x0",
+   "mult2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "binomial, operand-order variant y^2+(x^2+2xy)",
+  "family": 5,
+  "target": [
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "+",
+   "pow2",
+   "x0",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "sqrt(x^2+2xy+y^2)=|x+y|",
+  "family": 5,
+  "target": [
+   "abs",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "+",
+   "-",
+   "pow2",
+   "x0",
+   "mult2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "x1"
+  ],
+  "why": "sqrt(x^2-2xy+y^2)=|x-y|",
+  "family": 5,
+  "target": [
+   "abs",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "1",
+   "x0",
+   "-",
+   "1",
+   "x0"
+  ],
+  "why": "(1+x)(1-x)=1-x^2",
+  "family": 5,
+  "target": [
+   "-",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "1",
+   "mult2",
+   "x0"
+  ],
+  "why": "(x+1)^2-2x=x^2+1",
+  "family": 5,
+  "target": [
+   "+",
+   "1",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "pow3",
+   "x0",
+   "mult3",
+   "x0",
+   "+",
+   "mult3",
+   "pow2",
+   "x0",
+   "1"
+  ],
+  "why": "(x^3+3x)-(3x^2+1)=(x-1)^3",
+  "family": 5,
+  "target": [
+   "pow3",
+   "+",
+   "(-1)",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "pow",
+   "x0",
+   "<constant>",
+   "pow",
+   "x0",
+   "<constant>"
+  ],
+  "why": "x^a*x^b=x^(a+b) parameterized ladder",
+  "family": 5,
+  "target": [
+   "pow",
+   "x0",
+   "<constant>"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "pow",
+   "x0",
+   "<constant>",
+   "x0"
+  ],
+  "why": "x^c*x=x^(c+1)",
+  "family": 5,
+  "target": [
+   "pow",
+   "x0",
+   "<constant>"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow",
+   "x0",
+   "<constant>",
+   "x0"
+  ],
+  "why": "x^c/x=x^(c-1)",
+  "family": 5,
+  "target": [
+   "pow",
+   "x0",
+   "<constant>"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "pow",
+   "x0",
+   "<constant>"
+  ],
+  "why": "x/x^c=x^(1-c)",
+  "family": 5,
+  "target": [
+   "pow",
+   "x0",
+   "<constant>"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "pow1_2",
+   "*",
+   "<constant>",
+   "pow2",
+   "x0"
+  ],
+  "why": "sqrt(c x^2)=sqrt(c)|x| for fitted c>=0",
+  "family": 5,
+  "target": [
+   "abs",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "pow2",
+   "*",
+   "<constant>",
+   "pow1_2",
+   "x0"
+  ],
+  "why": "(c sqrt(x))^2=c^2 x; domain extension x<0",
+  "family": 5,
+  "target": [
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "abs",
+   "x0",
+   "abs",
+   "x0"
+  ],
+  "why": "|x|/|x| = 1 (domain extension at 0)",
+  "family": 6,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "*",
+   "abs",
+   "x0",
+   "x1"
+  ],
+  "why": "inner abs redundant under outer abs",
+  "family": 6,
+  "target": [
+   "abs",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "*",
+   "x0",
+   "abs",
+   "x1"
+  ],
+  "why": "inner abs redundant, other operand",
+  "family": 6,
+  "target": [
+   "abs",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "*",
+   "abs",
+   "x0",
+   "abs",
+   "x1"
+  ],
+  "why": "both inner abs redundant",
+  "family": 6,
+  "target": [
+   "abs",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "/",
+   "abs",
+   "x0",
+   "x1"
+  ],
+  "why": "numerator abs redundant under abs",
+  "family": 6,
+  "target": [
+   "abs",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "/",
+   "x0",
+   "abs",
+   "x1"
+  ],
+  "why": "denominator abs redundant under abs",
+  "family": 6,
+  "target": [
+   "abs",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "*",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "|(-x)y| = |xy|",
+  "family": 6,
+  "target": [
+   "abs",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "*",
+   "neg",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "|(-x)(-y)| = |xy|",
+  "family": 6,
+  "target": [
+   "abs",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "/",
+   "neg",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "|(-x)/(-y)| = |x/y|",
+  "family": 6,
+  "target": [
+   "abs",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "abs",
+   "inv",
+   "x0",
+   "abs",
+   "x1"
+  ],
+  "why": "(1/|x|)|y| = |y/x|",
+  "family": 6,
+  "target": [
+   "abs",
+   "/",
+   "x1",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "neg",
+   "*",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "-((-x)y) = xy",
+  "family": 6,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "neg",
+   "*",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "-(x(-y)) = xy",
+  "family": 6,
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "neg",
+   "/",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "-((-x)/y) = x/y",
+  "family": 6,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "neg",
+   "/",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "-(x/(-y)) = x/y",
+  "family": 6,
+  "target": [
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "inv",
+   "pow3",
+   "neg",
+   "x0"
+  ],
+  "why": "|1/(-x)^3| = 1/|x^3|",
+  "family": 6,
+  "target": [
+   "abs",
+   "inv",
+   "pow3",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "neg",
+   "tan",
+   "/",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "-tan(-x/y) = tan(x/y)",
+  "family": 6,
+  "target": [
+   "tan",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "neg",
+   "sin",
+   "/",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "-sin(-x/y) = sin(x/y)",
+  "family": 6,
+  "target": [
+   "sin",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "neg",
+   "sin",
+   "*",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "-sin(-xy) = sin(xy)",
+  "family": 6,
+  "target": [
+   "sin",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "neg",
+   "sinh",
+   "*",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "-sinh(-xy) = sinh(xy)",
+  "family": 6,
+  "target": [
+   "sinh",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "neg",
+   "tanh",
+   "*",
+   "neg",
+   "x0",
+   "x1"
+  ],
+  "why": "-tanh(-xy) = tanh(xy)",
+  "family": 6,
+  "target": [
+   "tanh",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "*",
+   "<constant>",
+   "abs",
+   "x0"
+  ],
+  "why": "|c|x|| = |c||x|; wildcard absorbs |c|",
+  "family": 6,
+  "target": [
+   "*",
+   "<constant>",
+   "abs",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "abs",
+   "*",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "|x^2 y^2| = (xy)^2",
+  "family": 6,
+  "target": [
+   "pow2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult2",
+   "x0",
+   "mult3",
+   "x0"
+  ],
+  "why": "constant-ladder: 2x + 3x = 5x",
+  "family": 7,
+  "target": [
+   "mult5",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult3",
+   "x0",
+   "mult2",
+   "x0"
+  ],
+  "why": "constant-ladder: 3x - 2x = x",
+  "family": 7,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult5",
+   "x0",
+   "mult2",
+   "x0"
+  ],
+  "why": "constant-ladder: 5x - 2x = 3x",
+  "family": 7,
+  "target": [
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult5",
+   "x0",
+   "mult3",
+   "x0"
+  ],
+  "why": "constant-ladder: 5x - 3x = 2x",
+  "family": 7,
+  "target": [
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult4",
+   "x0",
+   "mult3",
+   "x0"
+  ],
+  "why": "constant-ladder: 4x - 3x = x",
+  "family": 7,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "x0",
+   "mult3",
+   "x0"
+  ],
+  "why": "constant-ladder: 2x - 3x = -x",
+  "family": 7,
+  "target": [
+   "neg",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "x0",
+   "mult4",
+   "x0"
+  ],
+  "why": "constant-ladder: 2x - 4x = -2x",
+  "family": 7,
+  "target": [
+   "mult2",
+   "neg",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "x0",
+   "div2",
+   "x0"
+  ],
+  "why": "constant-ladder: 2x - x/2 = 3x/2",
+  "family": 7,
+  "target": [
+   "div2",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "div2",
+   "x0",
+   "div4",
+   "x0"
+  ],
+  "why": "constant-ladder: x/2 + x/4 = 3x/4",
+  "family": 7,
+  "target": [
+   "div4",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "div2",
+   "x0",
+   "div3",
+   "x0"
+  ],
+  "why": "constant-ladder: x/2 - x/3 = x/6",
+  "family": 7,
+  "target": [
+   "div2",
+   "div3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "div3",
+   "x0",
+   "div4",
+   "x0"
+  ],
+  "why": "constant-ladder: x/3 - x/4 = x/12",
+  "family": 7,
+  "target": [
+   "div3",
+   "div4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "div2",
+   "x0",
+   "div3",
+   "x0",
+   "div2",
+   "div3",
+   "x0"
+  ],
+  "why": "constant-ladder: telescoping 1/2 + 1/3 + 1/6 = 1 (9-token sum ladder)",
+  "family": 7,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult5",
+   "x0",
+   "mult5",
+   "x1"
+  ],
+  "why": "constant-ladder: 5x + 5y = 5(x+y)",
+  "family": 7,
+  "target": [
+   "mult5",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "div2",
+   "x0",
+   "div2",
+   "x1"
+  ],
+  "why": "constant-ladder: x/2 - y/2 = (x-y)/2",
+  "family": 7,
+  "target": [
+   "div2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "div5",
+   "x0",
+   "div5",
+   "x1"
+  ],
+  "why": "constant-ladder: x/5 + y/5 = (x+y)/5",
+  "family": 7,
+  "target": [
+   "div5",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult4",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "constant-ladder: 4x/(2y) = 2(x/y)",
+  "family": 7,
+  "target": [
+   "/",
+   "mult2",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "mult2",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "constant-ladder: 2x * 2y = 4xy, constants combine across product",
+  "family": 7,
+  "target": [
+   "*",
+   "mult4",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "*",
+   "mult4",
+   "x0",
+   "div2",
+   "x1"
+  ],
+  "why": "constant-ladder: 4x * (y/2) = 2xy",
+  "family": 7,
+  "target": [
+   "*",
+   "mult2",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "<constant>",
+   "x0",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "constant-ladder: C1*x + C2*x = C3*x, parameterized like-term collection",
+  "family": 7,
+  "target": [
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "<constant>",
+   "x0",
+   "x0"
+  ],
+  "why": "constant-ladder: C*x + x = (C+1)*x",
+  "family": 7,
+  "target": [
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "*",
+   "<constant>",
+   "x0",
+   "x0"
+  ],
+  "why": "constant-ladder: C*x - x = (C-1)*x",
+  "family": 7,
+  "target": [
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "mult2",
+   "x0",
+   "+",
+   "mult3",
+   "x0",
+   "mult4",
+   "x0"
+  ],
+  "why": "constant-ladder: 2x+3x+4x = 9x = 3*3x (8-token sum ladder)",
+  "family": 7,
+  "target": [
+   "mult3",
+   "mult3",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "mult3",
+   "x0",
+   "mult4",
+   "x0",
+   "mult2",
+   "x0"
+  ],
+  "why": "constant-ladder: (3x+4x) - 2x = 5x",
+  "family": 7,
+  "target": [
+   "mult5",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "mult5",
+   "x0",
+   "mult2",
+   "x0",
+   "-",
+   "mult4",
+   "x0",
+   "mult3",
+   "x0"
+  ],
+  "why": "constant-ladder: (5x-2x)+(4x-3x) = 4x, 11-token binomial-class ladder",
+  "family": 7,
+  "target": [
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "mult2",
+   "x0",
+   "mult2",
+   "x1",
+   "mult2",
+   "x1"
+  ],
+  "why": "constant-ladder: (2x+2y)-2y = 2x, cross-variable cancel",
+  "family": 7,
+  "target": [
+   "mult2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "div5",
+   "+",
+   "mult2",
+   "x0",
+   "mult3",
+   "x0"
+  ],
+  "why": "constant-ladder: (2x+3x)/5 = x",
+  "family": 7,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "inv",
+   "div2",
+   "pow2",
+   "inv",
+   "x0"
+  ],
+  "why": "constant-ladder: 1/((1/x)^2/2) = 2x^2",
+  "family": 7,
+  "target": [
+   "mult2",
+   "pow2",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "mult2",
+   "x0",
+   "x0"
+  ],
+  "why": "constant-ladder: (2x)^2/x = 4x",
+  "family": 7,
+  "target": [
+   "mult4",
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "constant-ladder: 2x/x^2 = 2/x",
+  "family": 7,
+  "target": [
+   "inv",
+   "div2",
+   "x0"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "/",
+   "mult2",
+   "x0",
+   "mult2",
+   "x0"
+  ],
+  "why": "constant-ladder: 2x/(2x) = 1 (x/x domain extension explicitly allowed)",
+  "family": 7,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "x0",
+   "mult2",
+   "x0"
+  ],
+  "why": "constant-ladder: 2x - 2x = 0",
+  "family": 7,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "x0",
+   "1",
+   "(-1)"
+  ],
+  "why": "constant-ladder: (x+1)+(-1) = x",
+  "family": 7,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "div2",
+   "x0",
+   "div2",
+   "x1"
+  ],
+  "why": "constant-ladder: (x/2)*(y/2) = xy/4",
+  "family": 7,
+  "target": [
+   "*",
+   "div4",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0*x1)-(x1*x0) -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "x0",
+   "x1",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(x0+x1)/(x0+x1) -> 1: u/u with symmetric u",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x1",
+   "x0"
+  ],
+  "why": "x0*x1 + x1*x0 -> 2*x0*x1",
+  "family": 8,
+  "target": [
+   "*",
+   "mult2",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "div2",
+   "+",
+   "x0",
+   "x1",
+   "div2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "(x0+x1)/2+(x0-x1)/2 -> x0",
+  "family": 8,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "div2",
+   "+",
+   "x0",
+   "x1",
+   "div2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "(x0+x1)/2-(x0-x1)/2 -> x1",
+  "family": 8,
+  "target": [
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult2",
+   "+",
+   "x0",
+   "x1",
+   "mult2",
+   "x0"
+  ],
+  "why": "2(x0+x1)-2x0 -> 2x1",
+  "family": 8,
+  "target": [
+   "mult2",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "mult4",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "mult2",
+   "x0",
+   "mult2",
+   "x1"
+  ],
+  "why": "4x0x1 - (2x0)(2x1) -> 0: scalar-distribution witness",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "x0",
+   "neg",
+   "x1",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "x0*(-x1)+x0*x1 -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "*",
+   "neg",
+   "x0",
+   "neg",
+   "x1",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "(-x0)(-x1)-x0x1 -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1"
+  ],
+  "why": "(x0x1)^2 / (x0^2x1^2) -> 1",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "x1",
+   "x0",
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "polarization, commuted sum",
+  "family": 8,
+  "target": [
+   "*",
+   "mult4",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "polarization, flipped difference (square is even)",
+  "family": 8,
+  "target": [
+   "*",
+   "mult4",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": false
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "pow2",
+   "x0",
+   "pow2",
+   "x1",
+   "-",
+   "pow2",
+   "x1",
+   "pow2",
+   "x0"
+  ],
+  "why": "(x0^2-x1^2)+(x1^2-x0^2) -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow3",
+   "-",
+   "x0",
+   "x1",
+   "pow3",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0-x1)^3+(x1-x0)^3 -> 0: odd power antisymmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "/",
+   "x1",
+   "+",
+   "x0",
+   "x1",
+   "/",
+   "x0",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "terms swapped variant",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "/",
+   "x0",
+   "+",
+   "x0",
+   "x1",
+   "/",
+   "x1",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "denominator commuted variant",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "/",
+   "x0",
+   "-",
+   "x0",
+   "x1",
+   "/",
+   "x1",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "x0/(x0-x1)-x1/(x0-x1) -> 1",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "/",
+   "x0",
+   "-",
+   "x0",
+   "x1",
+   "/",
+   "x1",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "x0/(x0-x1)+x1/(x1-x0) -> 1: antisymmetric denominators",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "/",
+   "+",
+   "x0",
+   "x1",
+   "x2",
+   "/",
+   "x0",
+   "x2"
+  ],
+  "why": "(x0+x1)/x2 - x0/x2 -> x1/x2: split fraction",
+  "family": 8,
+  "target": [
+   "/",
+   "x1",
+   "x2"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "/",
+   "-",
+   "x0",
+   "x1",
+   "x2",
+   "/",
+   "x1",
+   "x2"
+  ],
+  "why": "(x0-x1)/x2 + x1/x2 -> x0/x2",
+  "family": 8,
+  "target": [
+   "/",
+   "x0",
+   "x2"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "*",
+   "+",
+   "x0",
+   "x1",
+   "x2",
+   "*",
+   "x2",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0+x1)x2 - x2(x1+x0) -> 0: commutativity at two levels",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "/",
+   "x0",
+   "+",
+   "x1",
+   "x2",
+   "+",
+   "x1",
+   "x2"
+  ],
+  "why": "(x0/(x1+x2))*(x1+x2) -> x0: cancel compound denominator",
+  "family": 8,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "x1",
+   "x2",
+   "/",
+   "x0",
+   "+",
+   "x1",
+   "x2"
+  ],
+  "why": "commuted variant",
+  "family": 8,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "+",
+   "x0",
+   "x1",
+   "x2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "((x0+x1)*x2)/(x0+x1) -> x2",
+  "family": 8,
+  "target": [
+   "x2"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0+x1)^2/(x1+x0)^2 -> 1",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0+x1)^2-(x1+x0)^2 -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "sin",
+   "-",
+   "x0",
+   "x1",
+   "sin",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "sin(x0-x1)+sin(x1-x0) -> 0: odd function antisymmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "sinh",
+   "-",
+   "x0",
+   "x1",
+   "sinh",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "sinh(x0-x1)+sinh(x1-x0) -> 0: odd function antisymmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "tanh",
+   "-",
+   "x0",
+   "x1",
+   "tanh",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "tanh(x0-x1)+tanh(x1-x0) -> 0: odd function antisymmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "atan",
+   "-",
+   "x0",
+   "x1",
+   "atan",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "atan(x0-x1)+atan(x1-x0) -> 0: odd function antisymmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "asinh",
+   "-",
+   "x0",
+   "x1",
+   "asinh",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "asinh(x0-x1)+asinh(x1-x0) -> 0: odd function antisymmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow5",
+   "-",
+   "x0",
+   "x1",
+   "pow5",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "pow5(x0-x1)+pow5(x1-x0) -> 0: odd power antisymmetry (exact; float rounding only at extreme magnitudes)",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "inv",
+   "-",
+   "x0",
+   "x1",
+   "inv",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "1/(x0-x1)+1/(x1-x0) -> 0 (nan only at x0=x1, domain extension)",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "cos",
+   "-",
+   "x0",
+   "x1",
+   "cos",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "cos(x0-x1)-cos(x1-x0) -> 0: even function symmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "cosh",
+   "-",
+   "x0",
+   "x1",
+   "cosh",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "cosh(x0-x1)-cosh(x1-x0) -> 0: even function symmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "abs",
+   "-",
+   "x0",
+   "x1",
+   "abs",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "abs(x0-x1)-abs(x1-x0) -> 0: even function symmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "-",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "pow2(x0-x1)-pow2(x1-x0) -> 0: even function symmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow4",
+   "-",
+   "x0",
+   "x1",
+   "pow4",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "pow4(x0-x1)-pow4(x1-x0) -> 0: even function symmetry",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "cosh",
+   "-",
+   "x0",
+   "x1",
+   "cosh",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "cosh(x0-x1)/cosh(x1-x0) -> 1 (cosh>=1, division safe)",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "pow2",
+   "-",
+   "x0",
+   "x1",
+   "pow2",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0-x1)^2/(x1-x0)^2 -> 1",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "sin",
+   "+",
+   "x0",
+   "x1",
+   "sin",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "sin(x0+x1)-sin(x1+x0) -> 0: commutativity under unary",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "exp",
+   "+",
+   "x0",
+   "x1",
+   "exp",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "exp(x0+x1)-exp(x1+x0) -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "abs",
+   "+",
+   "x0",
+   "x1",
+   "abs",
+   "+",
+   "x1",
+   "x0"
+  ],
+  "why": "|x0+x1|-|x1+x0| -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "sin",
+   "*",
+   "x0",
+   "x1",
+   "sin",
+   "*",
+   "x1",
+   "x0"
+  ],
+  "why": "sin(x0x1)-sin(x1x0) -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "-",
+   "pow2",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "*",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0x1)^2-(x1x0)^2 -> 0",
+  "family": 8,
+  "target": [
+   "0"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sinh",
+   "+",
+   "x0",
+   "x1",
+   "cosh",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "sinh(u)/cosh(u) -> tanh(u) with symmetric u",
+  "family": 8,
+  "target": [
+   "tanh",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "/",
+   "sin",
+   "+",
+   "x0",
+   "x1",
+   "cos",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "sin(u)/cos(u) -> tan(u) with symmetric u",
+  "family": 8,
+  "target": [
+   "tan",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "sin",
+   "+",
+   "x0",
+   "x1",
+   "pow2",
+   "cos",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "sin^2(u)+cos^2(u) -> 1 with u=x0+x1",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "sin",
+   "*",
+   "x0",
+   "x1",
+   "pow2",
+   "cos",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "sin^2+cos^2 -> 1 with u=x0*x1",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "sin",
+   "-",
+   "x0",
+   "x1",
+   "pow2",
+   "cos",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "sin^2+cos^2 -> 1 with u=x0-x1",
+  "family": 8,
+  "target": [
+   "1"
+  ],
+  "hint_matched": true
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "*",
+   "x1",
+   "-",
+   "exp",
+   "x2",
+   "exp",
+   "x2"
+  ],
+  "why": "x1*(exp(x2)-exp(x2))=0 dead addend",
+  "family": 9,
+  "target": [
+   "x0"
+  ],
+  "hint_matched": true
+ }
+]

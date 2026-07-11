@@ -1,0 +1,111 @@
+{
+  "meta": {
+    "n_per_stratum": 300,
+    "threads": 28,
+    "library_full": 192249,
+    "library_cf_arm": 188248,
+    "n_l4_rules": 6849
+  },
+  "L5_cf": {
+    "n": 300,
+    "survivors": 123,
+    "survivor_frac": 0.41,
+    "full": {
+      "cpu_s_per_survivor": 1.3301,
+      "rules_found": 3,
+      "wall_median": 0.3457,
+      "wall_p90": 3.757
+    },
+    "cf_arm": {
+      "cpu_s_per_survivor": 0.0068,
+      "rules_found": 3,
+      "wall_median": 0.0024,
+      "wall_p90": 0.037
+    }
+  },
+  "L5_cb": {
+    "n": 300,
+    "survivors": 28,
+    "survivor_frac": 0.0933,
+    "full": {
+      "cpu_s_per_survivor": 1.1856,
+      "rules_found": 0,
+      "wall_median": 0.9579,
+      "wall_p90": 2.6849
+    },
+    "cf_arm": {
+      "cpu_s_per_survivor": 0.003,
+      "rules_found": 0,
+      "wall_median": 0.0032,
+      "wall_p90": 0.0041
+    }
+  },
+  "L6_cf": {
+    "n": 300,
+    "survivors": 104,
+    "survivor_frac": 0.3467,
+    "full": {
+      "cpu_s_per_survivor": 1.1252,
+      "rules_found": 3,
+      "wall_median": 0.1671,
+      "wall_p90": 3.8928
+    },
+    "cf_arm": {
+      "cpu_s_per_survivor": 0.0057,
+      "rules_found": 2,
+      "wall_median": 0.0023,
+      "wall_p90": 0.0157
+    }
+  },
+  "L6_cb": {
+    "n": 300,
+    "survivors": 21,
+    "survivor_frac": 0.07,
+    "full": {
+      "cpu_s_per_survivor": 1.0874,
+      "rules_found": 1,
+      "wall_median": 0.6024,
+      "wall_p90": 2.3723
+    },
+    "cf_arm": {
+      "cpu_s_per_survivor": 0.0035,
+      "rules_found": 1,
+      "wall_median": 0.0032,
+      "wall_p90": 0.0045
+    }
+  },
+  "L7_cf": {
+    "n": 300,
+    "survivors": 100,
+    "survivor_frac": 0.3333,
+    "full": {
+      "cpu_s_per_survivor": 1.0349,
+      "rules_found": 2,
+      "wall_median": 0.0626,
+      "wall_p90": 3.601
+    },
+    "cf_arm": {
+      "cpu_s_per_survivor": 0.0094,
+      "rules_found": 1,
+      "wall_median": 0.0024,
+      "wall_p90": 0.039
+    }
+  },
+  "L7_cb": {
+    "n": 300,
+    "survivors": 31,
+    "survivor_frac": 0.1033,
+    "full": {
+      "cpu_s_per_survivor": 0.5374,
+      "rules_found": 3,
+      "wall_median": 0.0017,
+      "wall_p90": 1.6017
+    },
+    "cf_arm": {
+      "cpu_s_per_survivor": 0.0916,
+      "rules_found": 2,
+      "wall_median": 0.0018,
+      "wall_p90": 0.0041
+    }
+  }
+}

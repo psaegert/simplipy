@@ -1,0 +1,79 @@
+{
+  "meta": {
+    "host": "solomon",
+    "started": "2026-07-11 12:17:48 +0000",
+    "simplipy_sha": "357c795eac6b48f0ae65aff14860c594b747f833",
+    "smoke": false,
+    "rayon_threads": "30",
+    "config": {
+      "max_source": 4,
+      "max_target": 4,
+      "dummies": [
+        "x0",
+        "x1",
+        "x2",
+        "x3"
+      ],
+      "extra": [
+        "<constant>",
+        "0",
+        "1",
+        "(-1)",
+        "np.e",
+        "np.pi",
+        "float(\"inf\")",
+        "float(\"-inf\")",
+        "float(\"nan\")"
+      ],
+      "x_rows": 1024,
+      "challenges": 16,
+      "retries": 16,
+      "rtol": 1e-09,
+      "atol": 1e-12,
+      "mine_seed": 42,
+      "sample_seed": 7,
+      "n_parity_l4": 1000,
+      "n_parity_l5": 500,
+      "n_cost": 2000
+    },
+    "finished": "2026-07-11 12:42:00 +0000"
+  },
+  "phase1": {
+    "wall_s": 39.5,
+    "cpu_s": 969.0,
+    "n_rules": 6849,
+    "rules_by_lhs_len": {
+      "2": 35,
+      "3": 309,
+      "4": 6505
+    }
+  },
+  "library": {
+    "total": 566280,
+    "kept_filtered": 192249,
+    "dropped_var_free": 374031
+  },
+  "phase2": {
+    "n_sampled": 1500,
+    "n_survivors": 655,
+    "wall_s": 1360.7,
+    "n_mismatches": 0,
+    "mismatches": [],
+    "parity": "EXACT"
+  },
+  "phase3": {
+    "n_sampled": 2000,
+    "n_survivors": 778,
+    "survivor_frac": 0.389,
+    "n_rules_found": 22,
+    "wall_s": 39.6,
+    "cpu_s": 1071.1,
+    "per_source_cpu_s_mean": 1.377,
+    "per_call_wall_s": {
+      "median": 0.337,
+      "p90": 3.997,
+      "max": 8.931
+    },
+    "note": "per_source_cpu_s_mean is the readiness decision number (<=~2 commit A+C offer B; >~5 tier A + sampled-6/7 only); per_call_wall_s under thread contention is indicative only"
+  }
+}

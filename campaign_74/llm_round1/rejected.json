@@ -1,0 +1,4830 @@
+[
+ {
+  "source": [
+   "-",
+   "pow2",
+   "sinh",
+   "x0",
+   "pow2",
+   "cosh",
+   "x0"
+  ],
+  "why": "sinh^2 - cosh^2 = -1 (mirror of the known cosh^2-sinh^2=1)",
+  "family": 0,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "/",
+   "-",
+   "cosh",
+   "x0",
+   "1",
+   "sinh",
+   "x0"
+  ],
+  "why": "(cosh x - 1)/sinh x = tanh(x/2)",
+  "family": 0,
+  "verdict": "confirm_rejected",
+  "target": [
+   "tanh",
+   "div2",
+   "x0"
+  ]
+ },
+ {
+  "source": [
+   "sin",
+   "+",
+   "x0",
+   "div2",
+   "np.pi"
+  ],
+  "why": "phase shift: sin(x + pi/2) = cos x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "sin",
+   "-",
+   "x0",
+   "div2",
+   "np.pi"
+  ],
+  "why": "phase shift: sin(x - pi/2) = -cos x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cos",
+   "-",
+   "x0",
+   "div2",
+   "np.pi"
+  ],
+  "why": "phase shift: cos(x - pi/2) = sin x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cos",
+   "+",
+   "x0",
+   "div2",
+   "np.pi"
+  ],
+  "why": "phase shift: cos(x + pi/2) = -sin x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "sin",
+   "-",
+   "div2",
+   "np.pi",
+   "x0"
+  ],
+  "why": "cofunction: sin(pi/2 - x) = cos x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cos",
+   "-",
+   "div2",
+   "np.pi",
+   "x0"
+  ],
+  "why": "cofunction: cos(pi/2 - x) = sin x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "sin",
+   "+",
+   "np.pi",
+   "neg",
+   "x0"
+  ],
+  "why": "reflection: sin(pi - x) = sin x (5-token spelling)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "cos",
+   "+",
+   "np.pi",
+   "neg",
+   "x0"
+  ],
+  "why": "reflection: cos(pi - x) = -cos x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "sin",
+   "+",
+   "mult2",
+   "x0",
+   "np.pi"
+  ],
+  "why": "period-half shift: sin(2x + pi) = -sin(2x)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cos",
+   "+",
+   "mult2",
+   "x0",
+   "np.pi"
+  ],
+  "why": "period-half shift: cos(2x + pi) = -cos(2x)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "neg",
+   "sin",
+   "neg",
+   "mult2",
+   "x0"
+  ],
+  "why": "odd parity: -sin(-2x) = sin(2x)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "neg",
+   "sin",
+   "neg",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "parameterized odd parity: -sin(-c x) = sin(c x)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cos",
+   "neg",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "parameterized even parity: cos(-c x) = cos(c x)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cos",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "even parity over a sum: cos(-(x0+x1)) = cos(x0+x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cos",
+   "abs",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "even parity absorbs abs: cos|x0+x1| = cos(x0+x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "neg",
+   "sin",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "odd parity over a sum: -sin(-(x0+x1)) = sin(x0+x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cos",
+   "neg",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "even parity: cos(-(x0-x1)) = cos(x0-x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "+",
+   "cos",
+   "x0",
+   "cos",
+   "neg",
+   "x0"
+  ],
+  "why": "cos x + cos(-x) = 2 cos x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "cos",
+   "x0",
+   "cos",
+   "neg",
+   "x0"
+  ],
+  "why": "cos x * cos(-x) = cos^2 x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "neg",
+   "sinh",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "odd parity: -sinh(-(x0+x1)) = sinh(x0+x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "neg",
+   "tanh",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "odd parity: -tanh(-(x0+x1)) = tanh(x0+x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cosh",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "even parity: cosh(-(x0+x1)) = cosh(x0+x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "tan",
+   "atan",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "tan(atan(s)) = s exactly for all real s",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "tan",
+   "atan",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "tan(atan(s)) = s, product argument",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "tan",
+   "atan",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "parameterized tan(atan(c x)) = c x",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "sin",
+   "asin",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "sin(asin(s)) = s on [-1,1], nan outside (domain-extension like x/x)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "sin",
+   "asin",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "parameterized sin(asin(c x)) = c x, domain-extension",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "sinh",
+   "asinh",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "sinh(asinh(s)) = s exactly for all real s",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "tanh",
+   "atanh",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "tanh(atanh(s)) = s on (-1,1), domain-extension outside",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow2",
+   "sin",
+   "acos",
+   "neg",
+   "x0"
+  ],
+  "why": "sin^2(acos(-x)) = 1 - x^2 (target length 4)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow2",
+   "cos",
+   "asin",
+   "neg",
+   "x0"
+  ],
+  "why": "cos^2(asin(-x)) = 1 - x^2",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "neg",
+   "asin",
+   "neg",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "odd arc parity: -asin(-(x0 x1)) = asin(x0 x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "neg",
+   "atan",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "odd arc parity: -atan(-(x0+x1)) = atan(x0+x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "neg",
+   "asinh",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "odd arc parity: -asinh(-(x0+x1)) = asinh(x0+x1)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "atan",
+   "tan",
+   "atan",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "atan output lies in the principal branch, so atan(tan(atan(s))) = atan(s)",
+  "family": 0,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "cosh + sinh = e^x",
+  "family": 0,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "-",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "cosh - sinh = e^(-x)",
+  "family": 0,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "+",
+   "cosh",
+   "neg",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "cosh even: cosh(-x)+sinh x = e^x",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 5
+ },
+ {
+  "source": [
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "neg",
+   "x0"
+  ],
+  "why": "sinh odd: cosh x + sinh(-x) = e^-x",
+  "family": 1,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "log",
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "log(cosh+sinh) = log(e^x) = x",
+  "family": 1,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "log",
+   "-",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "log(cosh-sinh) = -x",
+  "family": 1,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "inv",
+   "+",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "1/(cosh+sinh) = e^-x",
+  "family": 1,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "inv",
+   "-",
+   "cosh",
+   "x0",
+   "sinh",
+   "x0"
+  ],
+  "why": "1/(cosh-sinh) = e^x",
+  "family": 1,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "-",
+   "exp",
+   "x0",
+   "mult2",
+   "sinh",
+   "x0"
+  ],
+  "why": "e^x - 2 sinh x = e^-x",
+  "family": 1,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "+",
+   "mult2",
+   "sinh",
+   "x0",
+   "exp",
+   "neg",
+   "x0"
+  ],
+  "why": "2 sinh x + e^-x = e^x",
+  "family": 1,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "pow1_2",
+   "-",
+   "pow2",
+   "cosh",
+   "x0",
+   "1"
+  ],
+  "why": "sqrt(cosh^2-1) = |sinh|",
+  "family": 1,
+  "verdict": "confirm_rejected",
+  "target": [
+   "abs",
+   "sinh",
+   "x0"
+  ]
+ },
+ {
+  "source": [
+   "-",
+   "pow4",
+   "cosh",
+   "x0",
+   "pow4",
+   "sinh",
+   "x0"
+  ],
+  "why": "cosh^4 - sinh^4 = (cosh^2+sinh^2)(cosh^2-sinh^2) = cosh 2x",
+  "family": 1,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "-",
+   "cosh",
+   "x0",
+   "cosh",
+   "neg",
+   "x0"
+  ],
+  "why": "cosh even: cosh(x)-cosh(-x) = 0",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 5
+ },
+ {
+  "source": [
+   "+",
+   "cosh",
+   "x0",
+   "cosh",
+   "neg",
+   "x0"
+  ],
+  "why": "cosh even: cosh(x)+cosh(-x) = 2 cosh",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "cosh",
+   "abs",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "cosh even absorbs abs of a compound argument",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "abs",
+   "cosh",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "cosh >= 1 > 0 so outer abs is identity",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "cosh",
+   "neg",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "parameterized cosh parity: cosh(-cx) = cosh(cx)",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "asinh",
+   "sinh",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "asinh(sinh s) = s on a compound argument",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "asinh",
+   "sinh",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "asinh(sinh s) = s",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "asinh",
+   "sinh",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "asinh(sinh s) = s",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "tanh",
+   "atanh",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "tanh(atanh s) = s; nan outside (-1,1) is x/x-style domain extension",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "acosh",
+   "cosh",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "acosh(cosh s) = |s|",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "acosh",
+   "cosh",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "acosh(cosh s) = |s|",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "acosh",
+   "cosh",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "acosh(cosh s) = |s|",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "asinh",
+   "sinh",
+   "+",
+   "x0",
+   "<constant>"
+  ],
+  "why": "parameterized asinh(sinh(x+c)) = x+c",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "acosh",
+   "cosh",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "parameterized acosh(cosh(cx)) = |cx|",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "asinh",
+   "sinh",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "asinh(sinh(-s)) = -s",
+  "family": 1,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "log",
+   "/",
+   "exp",
+   "x0",
+   "exp",
+   "x1"
+  ],
+  "why": "log(e^a/e^b) = a-b",
+  "family": 2,
+  "verdict": "confirm_rejected",
+  "target": [
+   "-",
+   "x0",
+   "x1"
+  ]
+ },
+ {
+  "source": [
+   "*",
+   "exp",
+   "x0",
+   "exp",
+   "x0"
+  ],
+  "why": "e^x e^x = e^(2x)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "log",
+   "x0",
+   "log",
+   "x0"
+  ],
+  "why": "log x + log x = 2 log x",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "log",
+   "*",
+   "exp",
+   "x0",
+   "exp",
+   "neg",
+   "x1"
+  ],
+  "why": "log(e^a e^(-b)) = a-b",
+  "family": 2,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "exp",
+   "neg",
+   "-",
+   "log",
+   "x0",
+   "log",
+   "x1"
+  ],
+  "why": "e^(-(log a - log b)) = b/a",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 6
+ },
+ {
+  "source": [
+   "exp",
+   "+",
+   "x0",
+   "log",
+   "<constant>"
+  ],
+  "why": "e^(x + log C) = C e^x",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "log",
+   "*",
+   "<constant>",
+   "exp",
+   "x0"
+  ],
+  "why": "log(C e^x) = x + log C = x + C'",
+  "family": 2,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "log",
+   "/",
+   "exp",
+   "x0",
+   "<constant>"
+  ],
+  "why": "log(e^x / C) = x - log C = x + C'",
+  "family": 2,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "log",
+   "/",
+   "<constant>",
+   "exp",
+   "x0"
+  ],
+  "why": "log(C / e^x) = log C - x = C' - x",
+  "family": 2,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "log",
+   "inv",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "log(1/(Cx)) = -log C - log x = C' - log x",
+  "family": 2,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "log",
+   "*",
+   "<constant>",
+   "inv",
+   "x0"
+  ],
+  "why": "log(C/x) = log C - log x = C' - log x",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "-",
+   "log",
+   "<constant>",
+   "log",
+   "x0"
+  ],
+  "why": "log C - log x = log(C/x)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "log",
+   "pow",
+   "exp",
+   "x0",
+   "x1"
+  ],
+  "why": "log((e^a)^b) = ab",
+  "family": 2,
+  "verdict": "confirm_rejected",
+  "target": [
+   "*",
+   "x0",
+   "x1"
+  ]
+ },
+ {
+  "source": [
+   "log",
+   "pow",
+   "exp",
+   "x0",
+   "<constant>"
+  ],
+  "why": "log((e^x)^C) = Cx",
+  "family": 2,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "log",
+   "pow",
+   "exp",
+   "x0",
+   "x0"
+  ],
+  "why": "log((e^x)^x) = x^2",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "e-leaf power: e^(a+b) = exp(a+b)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "e-leaf power: e^(a-b) = exp(a-b)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "e-leaf power: e^(ab) = exp(ab)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "why": "e-leaf power: e^(a/b) = exp(a/b)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "e-leaf power: e^(Cx) = exp(Cx)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "neg",
+   "log",
+   "x0"
+  ],
+  "why": "e^(-log x) = 1/x",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "mult2",
+   "log",
+   "x0"
+  ],
+  "why": "e^(2 log x) = x^2",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "mult3",
+   "log",
+   "x0"
+  ],
+  "why": "e^(3 log x) = x^3",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "mult4",
+   "log",
+   "x0"
+  ],
+  "why": "e^(4 log x) = x^4",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "mult5",
+   "log",
+   "x0"
+  ],
+  "why": "e^(5 log x) = x^5",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "div2",
+   "log",
+   "x0"
+  ],
+  "why": "e^(log x / 2) = sqrt(x)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "div3",
+   "log",
+   "x0"
+  ],
+  "why": "e^(log x / 3) = x^(1/3)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "div4",
+   "log",
+   "x0"
+  ],
+  "why": "e^(log x / 4) = x^(1/4)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "div5",
+   "log",
+   "x0"
+  ],
+  "why": "e^(log x / 5) = x^(1/5)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "pow",
+   "np.e",
+   "x0",
+   "x1"
+  ],
+  "why": "(e^a)^b = e^(ab)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "log",
+   "pow",
+   "np.e",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "log(e^(a+b)) = a+b (e leaf)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "log",
+   "pow",
+   "np.e",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "log(e^(ab)) = ab (e leaf)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "log",
+   "*",
+   "np.e",
+   "exp",
+   "x0"
+  ],
+  "why": "log(e * e^x) = 1 + x",
+  "family": 2,
+  "verdict": "confirm_rejected",
+  "target": [
+   "+",
+   "1",
+   "x0"
+  ]
+ },
+ {
+  "source": [
+   "log",
+   "/",
+   "exp",
+   "x0",
+   "np.e"
+  ],
+  "why": "log(e^x / e) = x - 1",
+  "family": 2,
+  "verdict": "confirm_rejected",
+  "target": [
+   "+",
+   "(-1)",
+   "x0"
+  ]
+ },
+ {
+  "source": [
+   "exp",
+   "neg",
+   "mult2",
+   "log",
+   "x0"
+  ],
+  "why": "e^(-2 log x) = 1/x^2",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "exp",
+   "neg",
+   "div2",
+   "log",
+   "x0"
+  ],
+  "why": "e^(-log x / 2) = 1/sqrt(x)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "log",
+   "inv",
+   "exp",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "log(1/e^(a+b)) = -(a+b)",
+  "family": 2,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow",
+   "<constant>",
+   "neg",
+   "log",
+   "x0"
+  ],
+  "why": "C^(-log x) = x^(-log C) = x^C'",
+  "family": 2,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "log",
+   "pow",
+   "<constant>",
+   "mult2",
+   "x0"
+  ],
+  "why": "log(C^(2x)) = 2x log C = C' x",
+  "family": 2,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "/",
+   "exp",
+   "x0",
+   "exp",
+   "mult2",
+   "x0"
+  ],
+  "why": "e^x/e^(2x) = e^(-x)",
+  "family": 2,
+  "verdict": "confirm_rejected",
+  "target": [
+   "exp",
+   "neg",
+   "x0"
+  ]
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "x0",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0*x1)/x0 -> x1, multiplicative cancellation",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "x1",
+   "x0",
+   "x0"
+  ],
+  "why": "(x1*x0)/x0 -> x1, operand-order variant",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "x0/(x0*x1) -> 1/x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "*",
+   "x1",
+   "x0"
+  ],
+  "why": "x0/(x1*x0) -> 1/x1, order variant",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "*",
+   "/",
+   "x0",
+   "x1",
+   "x1"
+  ],
+  "why": "(x0/x1)*x1 -> x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x1",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "why": "x1*(x0/x1) -> x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "*",
+   "x0",
+   "x1",
+   "inv",
+   "x1"
+  ],
+  "why": "(x0*x1)*inv(x1) -> x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "inv",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "x0*inv(x0*x1) -> 1/x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "*",
+   "inv",
+   "x1",
+   "*",
+   "x1",
+   "x0"
+  ],
+  "why": "inv(x1)*(x1*x0) -> x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x0",
+   "x2"
+  ],
+  "why": "(x0*x1)/(x0*x2) -> x1/x2, shared-factor cancellation",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0*x1)/(x1*x0) -> 1, commuted A/A",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "/",
+   "x0",
+   "x1",
+   "/",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0/x1)*(x1/x0) -> 1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "/",
+   "x0",
+   "x1",
+   "/",
+   "x1",
+   "x2"
+  ],
+  "why": "(x0/x1)*(x1/x2) -> x0/x2, telescoping ratio",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "/",
+   "x0",
+   "x1",
+   "*",
+   "x1",
+   "x2"
+  ],
+  "why": "(x0/x1)*(x1*x2) -> x0*x2",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "/",
+   "x0",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0/x1)/x0 -> 1/x1, div-of-div",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "why": "x0/(x0/x1) -> x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "/",
+   "/",
+   "x0",
+   "x0",
+   "x1"
+  ],
+  "why": "(x0/x0)/x1 -> 1/x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "/",
+   "x1",
+   "x0"
+  ],
+  "why": "x0/(x1/x0) -> x0^2/x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "/",
+   "/",
+   "x0",
+   "x1",
+   "x1"
+  ],
+  "why": "(x0/x1)/x1 -> x0/x1^2",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "/",
+   "/",
+   "x0",
+   "x1",
+   "/",
+   "x0",
+   "x2"
+  ],
+  "why": "(x0/x1)/(x0/x2) -> x2/x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "/",
+   "x0",
+   "x1",
+   "/",
+   "x2",
+   "x1"
+  ],
+  "why": "(x0/x1)/(x2/x1) -> x0/x2",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "/",
+   "x0",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "inv(x0/(x0*x1)) -> x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "inv",
+   "/",
+   "*",
+   "x0",
+   "x1",
+   "x1"
+  ],
+  "why": "inv((x0*x1)/x1) -> 1/x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "*",
+   "inv",
+   "x0",
+   "x1"
+  ],
+  "why": "inv(x1/x0) -> x0/x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "*",
+   "x0",
+   "inv",
+   "x1"
+  ],
+  "why": "inv(x0/x1) -> x1/x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "/",
+   "inv",
+   "x0",
+   "x1"
+  ],
+  "why": "inv(1/(x0*x1)) -> x0*x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "/",
+   "x0",
+   "inv",
+   "x1"
+  ],
+  "why": "inv(x0*x1 form) -> 1/(x0*x1)",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "/",
+   "inv",
+   "x0",
+   "inv",
+   "x1"
+  ],
+  "why": "(1/x0)/(1/x1) -> x1/x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "inv",
+   "x0",
+   "inv",
+   "x1"
+  ],
+  "why": "(1/x0)*(1/x1) -> 1/(x0*x1)",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "x0",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0+x1)-x0 -> x1, additive cancellation",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "x0",
+   "x1",
+   "x1"
+  ],
+  "why": "(x0+x1)-x1 -> x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "x1",
+   "x0",
+   "x0"
+  ],
+  "why": "(x1-x0)+x0 -> x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "-",
+   "x1",
+   "x0"
+  ],
+  "why": "x0+(x1-x0) -> x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "-",
+   "x0",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "x0-(x0-x1) -> x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "-",
+   "x0",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "x0-(x0+x1) -> -x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "-",
+   "-",
+   "x0",
+   "x1",
+   "x0"
+  ],
+  "why": "(x0-x1)-x0 -> -x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "x0",
+   "x1",
+   "+",
+   "x0",
+   "x2"
+  ],
+  "why": "(x0+x1)-(x0+x2) -> x1-x2",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "x0",
+   "x1",
+   "-",
+   "x1",
+   "x2"
+  ],
+  "why": "(x0-x1)+(x1-x2) -> x0-x2, telescoping sum",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "-",
+   "x0",
+   "x1",
+   "+",
+   "x1",
+   "x2"
+  ],
+  "why": "(x0-x1)+(x1+x2) -> x0+x2",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "-",
+   "-",
+   "x0",
+   "x1",
+   "-",
+   "x0",
+   "x2"
+  ],
+  "why": "(x0-x1)-(x0-x2) -> x2-x1",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "neg",
+   "neg",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "double-neg over product; probe whether short neg-neg rule generalizes to subtrees",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "neg",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "(-x0)+(-x1) -> -(x0+x1)",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "-",
+   "neg",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "(-x0)-(-x1) -> x1-x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "neg",
+   "-",
+   "x0",
+   "neg",
+   "x1"
+  ],
+  "why": "-(x0-(-x1)) -> -(x0+x1)",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "inv",
+   "neg",
+   "inv",
+   "neg",
+   "x0"
+  ],
+  "why": "inv/neg alternating chain collapses to identity",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "inv",
+   "neg",
+   "inv",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "inv(-(1/(x0+x1))) -> -(x0+x1)",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "mult2",
+   "mult2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "mult2 mult2 -> mult4 ladder fusion",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "div2",
+   "div2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "div2 div2 -> div4 ladder fusion",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "mult4",
+   "div2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "mult4 div2 -> mult2 ladder collapse",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "div4",
+   "mult2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "div4 mult2 -> div2 ladder collapse",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "mult2",
+   "mult2",
+   "div2",
+   "div2",
+   "x0"
+  ],
+  "why": "full mult/div ladder cancels to identity",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "mult4",
+   "div2",
+   "div2",
+   "div2",
+   "x0"
+  ],
+  "why": "4x/8 -> x/2 ladder collapse",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "div4",
+   "mult2",
+   "mult2",
+   "mult2",
+   "x0"
+  ],
+  "why": "8x/4 -> 2x ladder collapse",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "mult2",
+   "mult2",
+   "mult2",
+   "mult2",
+   "x0"
+  ],
+  "why": "16x folds into a single fitted-constant multiply",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "div2",
+   "div2",
+   "div2",
+   "div2",
+   "x0"
+  ],
+  "why": "x/16 folds into a single fitted-constant multiply",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "mult2",
+   "div2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "mult2 div2 over a subtree; probe of pattern generalization",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "<constant>",
+   "+",
+   "x0",
+   "<constant>"
+  ],
+  "why": "C1+(x0+C2) -> x0+C, constant absorption",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "x0",
+   "<constant>",
+   "<constant>"
+  ],
+  "why": "(x0+C1)+C2 -> x0+C",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "-",
+   "-",
+   "x0",
+   "<constant>",
+   "<constant>"
+  ],
+  "why": "(x0-C1)-C2 -> x0+C",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "-",
+   "<constant>",
+   "-",
+   "<constant>",
+   "x0"
+  ],
+  "why": "C1-(C2-x0) -> x0+C",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "-",
+   "<constant>",
+   "+",
+   "x0",
+   "<constant>"
+  ],
+  "why": "C1-(x0+C2) -> C-x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "-",
+   "-",
+   "<constant>",
+   "x0",
+   "<constant>"
+  ],
+  "why": "(C1-x0)-C2 -> C-x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "<constant>",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "C1*(C2*x0) -> C*x0, multiplicative absorption",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "*",
+   "x0",
+   "<constant>",
+   "<constant>"
+  ],
+  "why": "(x0*C1)*C2 -> C*x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "<constant>",
+   "/",
+   "x0",
+   "<constant>"
+  ],
+  "why": "C1*(x0/C2) -> C*x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "<constant>",
+   "x0",
+   "<constant>"
+  ],
+  "why": "(C1*x0)/C2 -> C*x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "/",
+   "x0",
+   "<constant>",
+   "<constant>"
+  ],
+  "why": "(x0/C1)/C2 -> C*x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "<constant>",
+   "/",
+   "x0",
+   "<constant>"
+  ],
+  "why": "C1/(x0/C2) -> C/x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "<constant>",
+   "/",
+   "<constant>",
+   "x0"
+  ],
+  "why": "C1/(C2/x0) -> C*x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "<constant>",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "C1/(C2*x0) -> C/x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "<constant>",
+   "x0",
+   "x0"
+  ],
+  "why": "(C*x0)/x0 -> C, ratio collapses to a bare constant",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "x0/(C*x0) -> 1/C, a bare constant",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "/",
+   "*",
+   "<constant>",
+   "x0",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "(C1*x0)/(C2*x0) -> C1/C2, a bare constant",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "<constant>",
+   "neg",
+   "*",
+   "<constant>",
+   "x0"
+  ],
+  "why": "C1*(-(C2*x0)) -> C*x0, neg absorbed into constant",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "<constant>",
+   "neg",
+   "+",
+   "x0",
+   "<constant>"
+  ],
+  "why": "C1+(-(x0+C2)) -> C-x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "/",
+   "+",
+   "x0",
+   "x0",
+   "x0"
+  ],
+  "why": "(x0+x0)/x0 -> 2, variable ratio to bare constant",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "+",
+   "x0",
+   "x0"
+  ],
+  "why": "x0+x0+x0 -> 3*x0 via mult3",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "x0",
+   "x0",
+   "x0"
+  ],
+  "why": "left-nested triple sum -> mult3",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "+",
+   "+",
+   "x0",
+   "x0",
+   "+",
+   "x0",
+   "x0"
+  ],
+  "why": "four-fold sum -> mult4",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "+",
+   "mult2",
+   "x0",
+   "mult2",
+   "x0"
+  ],
+  "why": "2x0+2x0 -> 4x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "+",
+   "div2",
+   "x0",
+   "div2",
+   "x0"
+  ],
+  "why": "x0/2+x0/2 -> x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "div4",
+   "x0",
+   "div4",
+   "x0"
+  ],
+  "why": "x0/4+x0/4 -> x0/2",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "+",
+   "div3",
+   "x0",
+   "div3",
+   "x0"
+  ],
+  "why": "x0/3+x0/3 -> 2x0/3",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "-",
+   "+",
+   "x0",
+   "x0",
+   "x0"
+  ],
+  "why": "(x0+x0)-x0 -> x0",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "*",
+   "x0",
+   "x0"
+  ],
+  "why": "x0*x0*x0 -> x0^3",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "*",
+   "*",
+   "x0",
+   "x0",
+   "x0"
+  ],
+  "why": "left-nested triple product -> pow3",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "*",
+   "x0",
+   "*",
+   "x0",
+   "x0"
+  ],
+  "why": "four-fold product -> pow4",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "x0^2*x0^2 -> x0^4",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "inv",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "inv inv over a subtree; probe of pattern generalization",
+  "family": 3,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow2",
+   "neg",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "(-(-x)^2)^2 = x^4",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow2",
+   "neg",
+   "abs",
+   "x0"
+  ],
+  "why": "sqrt((-|x|)^2) = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow2",
+   "pow1_2",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "(sqrt((-x)^2))^2 = x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "pow2",
+   "inv",
+   "neg",
+   "x0"
+  ],
+  "why": "1/((1/(-x))^2) = x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "pow2",
+   "pow1_2",
+   "inv",
+   "x0"
+  ],
+  "why": "1/(sqrt(1/x)^2) = x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow1_2",
+   "pow2",
+   "pow2",
+   "x0"
+  ],
+  "why": "(x^4)^(1/4) = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow2",
+   "pow1_2",
+   "pow1_2",
+   "pow2",
+   "x0"
+  ],
+  "why": "((x^2)^(1/4))^2 = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow1_2",
+   "*",
+   "x0",
+   "inv",
+   "x0"
+  ],
+  "why": "sqrt(x/x) = 1 (dom ext at 0)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow2",
+   "pow1_2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "sqrt(uv)^2 = uv (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "pow2",
+   "inv",
+   "pow2",
+   "x0"
+  ],
+  "why": "1/((1/x^2)^2) = x^4",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "pow3",
+   "inv",
+   "neg",
+   "x0"
+  ],
+  "why": "1/((1/(-x))^3) = -x^3",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "pow4",
+   "inv",
+   "neg",
+   "x0"
+  ],
+  "why": "1/((1/(-x))^4) = x^4",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "pow5",
+   "inv",
+   "neg",
+   "x0"
+  ],
+  "why": "1/((1/(-x))^5) = -x^5",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow1_2",
+   "inv",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "sqrt(1/x^2) = 1/|x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "pow1_2",
+   "inv",
+   "pow2",
+   "x0"
+  ],
+  "why": "1/sqrt(1/x^2) = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "pow1_2",
+   "inv",
+   "pow4",
+   "x0"
+  ],
+  "why": "1/sqrt(1/x^4) = x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "pow1_3",
+   "inv",
+   "pow3",
+   "x0"
+  ],
+  "why": "1/cbrt(1/x^3) = x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "inv",
+   "pow1_2",
+   "inv",
+   "neg",
+   "x0"
+  ],
+  "why": "1/sqrt(1/(-x)) = sqrt(-x)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "pow2",
+   "pow1_4",
+   "inv",
+   "x0"
+  ],
+  "why": "1/(((1/x)^(1/4))^2) = sqrt(x)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "neg",
+   "pow3",
+   "neg",
+   "pow2",
+   "x0"
+  ],
+  "why": "-((-x^2)^3) = x^6",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "neg",
+   "pow5",
+   "neg",
+   "abs",
+   "x0"
+  ],
+  "why": "-((-|x|)^5) = |x|^5",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "neg",
+   "inv",
+   "neg",
+   "pow2",
+   "x0"
+  ],
+  "why": "-(1/(-x^2)) = 1/x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "abs",
+   "neg",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "|-((-x)^2)| = x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "abs",
+   "pow3",
+   "neg",
+   "abs",
+   "x0"
+  ],
+  "why": "|(-|x|)^3| = |x|^3",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "abs",
+   "inv",
+   "neg",
+   "abs",
+   "x0"
+  ],
+  "why": "|1/(-|x|)| = 1/|x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "abs",
+   "pow1_2",
+   "abs",
+   "neg",
+   "x0"
+  ],
+  "why": "|sqrt(|x|)| = sqrt(|x|)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "abs",
+   "pow4",
+   "neg",
+   "abs",
+   "x0"
+  ],
+  "why": "|(-|x|)^4| = x^4",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "abs",
+   "pow2",
+   "abs",
+   "neg",
+   "x0"
+  ],
+  "why": "||-x||^2 = x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "abs",
+   "/",
+   "pow2",
+   "x0",
+   "x0"
+  ],
+  "why": "|x^2/x| = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "abs",
+   "abs",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "abs(abs) collapse over product",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "abs",
+   "abs",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "abs(abs) collapse over difference",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "abs",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "|-(a+b)| = |a+b|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "abs",
+   "neg",
+   "pow",
+   "np.e",
+   "x0"
+  ],
+  "why": "|-e^x| = e^x",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "abs",
+   "mult2",
+   "neg",
+   "abs",
+   "x0"
+  ],
+  "why": "|2(-|x|)| = 2|x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "sqrt((a+b)^2) = |a+b|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow2",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "sqrt((a-b)^2) = |a-b|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow1_4",
+   "pow4",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "((a+b)^4)^(1/4) = |a+b|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow2",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "sqrt((ab)^2) = |ab|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow1_2",
+   "*",
+   "x0",
+   "pow3",
+   "x0"
+  ],
+  "why": "sqrt(x^4) = x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow1_2",
+   "*",
+   "x0",
+   "mult4",
+   "x0"
+  ],
+  "why": "sqrt(4x^2) = 2|x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow1_2",
+   "mult4",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "sqrt(4x^2) = 2|x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow1_2",
+   "div4",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "sqrt(x^2/4) = |x|/2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow2",
+   "mult3",
+   "neg",
+   "x0"
+  ],
+  "why": "sqrt(9x^2) = 3|x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "pow1_2",
+   "x0",
+   "pow1_2",
+   "x0"
+  ],
+  "why": "sqrt(x) sqrt(x) = x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "pow1_4",
+   "x0",
+   "pow1_4",
+   "x0"
+  ],
+  "why": "x^(1/4) x^(1/4) = sqrt(x)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "*",
+   "pow1_3",
+   "x0",
+   "pow1_3",
+   "x0"
+  ],
+  "why": "x^(1/3) x^(1/3) = x^(2/3) = cbrt(x^2)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow1_2",
+   "*",
+   "pow2",
+   "x0",
+   "inv",
+   "pow2",
+   "x0"
+  ],
+  "why": "sqrt(x^2/x^2) = 1",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "*",
+   "x0",
+   "pow3",
+   "x0"
+  ],
+  "why": "x x x^3 = x^5",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 5
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "x0",
+   "inv",
+   "x0"
+  ],
+  "why": "x^2 (1/x) = x",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "pow4",
+   "x0",
+   "inv",
+   "x0"
+  ],
+  "why": "x^4 (1/x) = x^3",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "*",
+   "inv",
+   "x0",
+   "inv",
+   "x0"
+  ],
+  "why": "(1/x)(1/x) = 1/x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "*",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "1/(x x^2) = 1/x^3",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "inv",
+   "/",
+   "pow2",
+   "x0",
+   "x1"
+  ],
+  "why": "1/(x^2/y) = y/x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow2",
+   "pow2",
+   "pow2",
+   "pow1_4",
+   "x0"
+  ],
+  "why": "(x^(1/4))^8 = x^2 (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow2",
+   "pow1_2",
+   "pow2",
+   "pow1_2",
+   "x0"
+  ],
+  "why": "double sqrt-square roundtrip = x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow2",
+   "pow2",
+   "pow1_2",
+   "abs",
+   "x0"
+  ],
+  "why": "(|x|^(1/2))^4 = x^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow2",
+   "pow2",
+   "pow2",
+   "exp",
+   "x0"
+  ],
+  "why": "(e^x)^8 = e^(8x), 8 = 2*4 via mult chain",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow2",
+   "pow2",
+   "pow3",
+   "exp",
+   "x0"
+  ],
+  "why": "(e^x)^12 = e^(12x) = exp(3*4 x)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow2",
+   "pow2",
+   "pow2",
+   "pow2",
+   "x0"
+  ],
+  "why": "x^16 = (x^4)^4",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow1_2",
+   "pow1_2",
+   "pow1_2",
+   "x0"
+  ],
+  "why": "x^(1/16) = (x^(1/4))^(1/4)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow5",
+   "pow2",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "((-x)^4)^5 = x^20 = (x^5)^4",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow2",
+   "pow1_2",
+   "pow2",
+   "x0"
+  ],
+  "why": "nested sqrt-square = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow2",
+   "neg",
+   "pow1_2",
+   "abs",
+   "x0"
+  ],
+  "why": "(-sqrt(|x|))^2 = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow2",
+   "neg",
+   "pow1_2",
+   "neg",
+   "x0"
+  ],
+  "why": "(-sqrt(-x))^2 = -x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow1_2",
+   "pow4",
+   "neg",
+   "x0"
+  ],
+  "why": "((-x)^4)^(1/4) = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow1_4",
+   "pow2",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "(x^4)^(1/4) = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow2",
+   "pow1_4",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "((x^2)^(1/4))^2 = |x|",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow1_3",
+   "neg",
+   "pow3",
+   "neg",
+   "x0"
+  ],
+  "why": "cbrt(-(-x)^3) = cbrt(x^3) = x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow1_5",
+   "neg",
+   "pow5",
+   "neg",
+   "x0"
+  ],
+  "why": "(-(-x)^5)^(1/5) = x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "neg",
+   "pow5",
+   "pow1_5",
+   "neg",
+   "x0"
+  ],
+  "why": "-(((-x)^(1/5))^5) = x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow3",
+   "pow1_3",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "cbrt(x^2)^3 = x^2 (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow5",
+   "pow1_5",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "((x^2)^(1/5))^5 = x^2 (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "inv",
+   "pow",
+   "x0",
+   "neg",
+   "<constant>"
+  ],
+  "why": "1/(x^(-c)) = x^c",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow",
+   "inv",
+   "x0",
+   "neg",
+   "<constant>"
+  ],
+  "why": "(1/x)^(-c) = x^c",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow",
+   "pow2",
+   "x0",
+   "div2",
+   "<constant>"
+  ],
+  "why": "(x^2)^(c/2) = |x|^c",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow1_2",
+   "pow",
+   "pow2",
+   "x0",
+   "<constant>"
+  ],
+  "why": "sqrt((x^2)^c) = |x|^c",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow2",
+   "pow",
+   "abs",
+   "x0",
+   "<constant>"
+  ],
+  "why": "(|x|^c)^2 = (x^2)^c",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow",
+   "*",
+   "x0",
+   "x0",
+   "div2",
+   "x1"
+  ],
+  "why": "(x*x)^(y/2) = |x|^y",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 5
+ },
+ {
+  "source": [
+   "inv",
+   "pow",
+   "np.e",
+   "neg",
+   "x0"
+  ],
+  "why": "1/e^(-x) = e^x",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow",
+   "x0",
+   "pow",
+   "x1",
+   "0"
+  ],
+  "why": "x^(y^0) = x^1 = x",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow2",
+   "pow1_2",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "why": "sqrt(a/b)^2 = a/b (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow2",
+   "pow1_2",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "sqrt(a+b)^2 = a+b (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow3",
+   "pow1_3",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "cbrt(ab)^3 = ab (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow2",
+   "neg",
+   "*",
+   "x0",
+   "x1"
+  ],
+  "why": "(-(ab))^2 = (ab)^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow2",
+   "neg",
+   "-",
+   "x0",
+   "x1"
+  ],
+  "why": "(b-a)^2 = (a-b)^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow4",
+   "neg",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "(-(a+b))^4 = (a+b)^4",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow2",
+   "neg",
+   "/",
+   "x0",
+   "x1"
+  ],
+  "why": "(-(a/b))^2 = (a/b)^2",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "mult2",
+   "pow2",
+   "pow1_2",
+   "div2",
+   "x0"
+  ],
+  "why": "2 (sqrt(x/2))^2 = x (dom ext)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow1_2",
+   "*",
+   "x0",
+   "*",
+   "x0",
+   "pow2",
+   "x0"
+  ],
+  "why": "sqrt(x^4) = x^2 (7-token product form)",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "pow2",
+   "mult2",
+   "pow2",
+   "neg",
+   "x0"
+  ],
+  "why": "(2x^2)^2 = 4x^4",
+  "family": 4,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "*",
+   "0",
+   "x1"
+  ],
+  "why": "x + 0*y dead subtree collapses to x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "-",
+   "x1",
+   "x1"
+  ],
+  "why": "x + (y-y) = x, exact for all finite y",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow",
+   "x1",
+   "0"
+  ],
+  "why": "x * y^0 = x*1 = x (numpy 0^0=1 too)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow",
+   "x0",
+   "*",
+   "0",
+   "x1"
+  ],
+  "why": "x^(0*y) = x^0 = 1 everywhere (numpy 0^0=1)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow",
+   "x0",
+   "-",
+   "x1",
+   "x1"
+  ],
+  "why": "x^(y-y) = x^0 = 1",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow",
+   "1",
+   "x1"
+  ],
+  "why": "x * 1^y = x, pow(1,y)=1 for any y",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "pow",
+   "x0",
+   "pow",
+   "1",
+   "x1"
+  ],
+  "why": "x^(1^y) = x^1 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "log",
+   "pow",
+   "1",
+   "x1"
+  ],
+  "why": "x + log(1^y) = x + log(1) = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "*",
+   "0",
+   "sin",
+   "x1"
+  ],
+  "why": "x + 0*sin(y) = x, sin bounded so no 0*inf",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "*",
+   "0",
+   "tanh",
+   "x1"
+  ],
+  "why": "x + 0*tanh(y) = x, tanh bounded",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "*",
+   "0",
+   "*",
+   "x1",
+   "x2"
+  ],
+  "why": "x + 0*(y*z) dead subtree, length-7 shape",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "*",
+   "x0",
+   "x1",
+   "*",
+   "0",
+   "x2"
+  ],
+  "why": "x*y + 0*z = x*y",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "*",
+   "x1",
+   "-",
+   "x2",
+   "x2"
+  ],
+  "why": "x + y*(z-z) = x + y*0 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow",
+   "x1",
+   "-",
+   "x2",
+   "x2"
+  ],
+  "why": "x * y^(z-z) = x * y^0 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "pow",
+   "x1",
+   "*",
+   "0",
+   "x2"
+  ],
+  "why": "x + y^(0*z) = x + y^0 = x+1",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "exp",
+   "-",
+   "x1",
+   "x1"
+  ],
+  "why": "x * e^(y-y) = x * e^0 = x, y-y exactly 0 for finite y",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "/",
+   "x0",
+   "pow",
+   "x1",
+   "0"
+  ],
+  "why": "x / y^0 = x/1 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow",
+   "x1",
+   "log",
+   "1"
+  ],
+  "why": "x * y^log(1) = x * y^0 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "exp",
+   "sin",
+   "0"
+  ],
+  "why": "exp(sin(0)) = e^0 = 1 folds exactly",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "log",
+   "exp",
+   "0"
+  ],
+  "why": "log(e^0) = log(1) = 0 folds exactly",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "log",
+   "cosh",
+   "0"
+  ],
+  "why": "log(cosh(0)) = log(1) = 0",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "acos",
+   "cosh",
+   "0"
+  ],
+  "why": "acos(cosh(0)) = acos(1) = 0",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "acos",
+   "cos",
+   "np.pi"
+  ],
+  "why": "cos(pi) = -1.0 exact, acos(-1) = pi",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow2",
+   "cos",
+   "np.pi"
+  ],
+  "why": "cos(pi)^2 = (-1)^2 = 1 exactly",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow3",
+   "cos",
+   "np.pi"
+  ],
+  "why": "cos(pi)^3 = -1, so x*(-1) = -x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "neg",
+   "cos",
+   "np.pi"
+  ],
+  "why": "-cos(pi) = 1, x*1 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "inv",
+   "cos",
+   "np.pi"
+  ],
+  "why": "1/cos(pi) = -1, so -x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "*",
+   "x0",
+   "x1",
+   "cos",
+   "np.pi"
+  ],
+  "why": "(x*y)*cos(pi) = -(x*y)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 5
+ },
+ {
+  "source": [
+   "pow",
+   "+",
+   "x0",
+   "x1",
+   "cos",
+   "np.pi"
+  ],
+  "why": "(x+y)^cos(pi) = (x+y)^-1 = inv, consistent at 0 (both inf)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 5
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "exp",
+   "cos",
+   "np.pi"
+  ],
+  "why": "e^(-1) folds to a constant times x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "sin",
+   "div2",
+   "np.pi"
+  ],
+  "why": "sin(pi/2) = 1.0 exact in float64",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "sin",
+   "div2",
+   "np.pi"
+  ],
+  "why": "x * sin(pi/2) = x * 1.0 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "cos",
+   "mult2",
+   "np.pi"
+  ],
+  "why": "cos(2pi) = 1.0 exact (cos flat near 2pi)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "cos",
+   "mult2",
+   "np.pi"
+  ],
+  "why": "x * cos(2pi) = x * 1.0 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "tan",
+   "div4",
+   "np.pi"
+  ],
+  "why": "tan(pi/4) folds to a constant (~1, fitted exactly)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "atanh",
+   "tanh",
+   "0"
+  ],
+  "why": "atanh(tanh(0)) = 0 exact fold at 0",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "atan",
+   "tan",
+   "0"
+  ],
+  "why": "atan(tan(0)) = 0 exact fold",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "asinh",
+   "sinh",
+   "0"
+  ],
+  "why": "asinh(sinh(0)) = 0 exact fold",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "acosh",
+   "cosh",
+   "0"
+  ],
+  "why": "acosh(cosh(0)) = acosh(1) = 0",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "cosh",
+   "sin",
+   "0"
+  ],
+  "why": "cosh(sin(0)) = cosh(0) = 1",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow",
+   "np.e",
+   "0"
+  ],
+  "why": "e^0 = 1 folds inside product",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow",
+   "0",
+   "0"
+  ],
+  "why": "numpy 0^0 = 1, so x*1 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "cos",
+   "sin",
+   "np.pi"
+  ],
+  "why": "cos(sin(pi)) = cos(1.2e-16) = 1.0 exact",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow",
+   "*",
+   "x0",
+   "x1",
+   "log",
+   "np.e"
+  ],
+  "why": "(xy)^log(e) = (xy)^1, log(np.e)=1.0 exact",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 5
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "x0",
+   "x1",
+   "log",
+   "np.e"
+  ],
+  "why": "(x+y)*log(e) = (x+y)*1",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 5
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "log",
+   "pow",
+   "np.e",
+   "x1"
+  ],
+  "why": "log(e^y) = y inside a sum (same overflow shape as endorsed example)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "log",
+   "pow",
+   "np.e",
+   "pow2",
+   "x0"
+  ],
+  "why": "log(e^(x^2)) = x^2",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "log",
+   "*",
+   "np.e",
+   "*",
+   "np.e",
+   "x0"
+  ],
+  "why": "log(e*e*x) = 2 + log(x), both nan for x<0",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "pow",
+   "np.e",
+   "*",
+   "x0",
+   "<constant>"
+  ],
+  "why": "e^(Cx) rewrites to shorter exp form",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "exp",
+   "exp",
+   "<constant>"
+  ],
+  "why": "constant tower e^(e^C) folds to one constant",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "+",
+   "1",
+   "<constant>"
+  ],
+  "why": "(1+C) folds to one constant",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "*",
+   "<constant>",
+   "np.pi"
+  ],
+  "why": "C*pi folds to one constant",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "*",
+   "np.pi",
+   "<constant>"
+  ],
+  "why": "pi*C folds to one additive constant",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "log",
+   "pow2",
+   "<constant>"
+  ],
+  "why": "log(C^2) = constant, defined for any C != 0",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow",
+   "<constant>",
+   "<constant>"
+  ],
+  "why": "C1^C2 folds to one constant (fitter picks positive base)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "pow2",
+   "x0",
+   "pow2",
+   "<constant>"
+  ],
+  "why": "x^2 * C^2 = C' * x^2, one fewer token",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "*",
+   "sin",
+   "x0",
+   "pow2",
+   "<constant>"
+  ],
+  "why": "sin(x) * C^2 = C' * sin(x)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "mult2",
+   "mult3",
+   "mult4",
+   "mult5",
+   "x0"
+  ],
+  "why": "2*3*4*5 tower folds to 120x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "div2",
+   "div3",
+   "div4",
+   "div5",
+   "x0"
+  ],
+  "why": "divide-by-120 tower folds to one constant multiply",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "mult2",
+   "mult3",
+   "div3",
+   "div2",
+   "x0"
+  ],
+  "why": "2*3/(3*2) tower cancels to identity",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "mult4",
+   "div2",
+   "div2",
+   "sin",
+   "x0"
+  ],
+  "why": "4/2/2 = 1 exactly (binary halving), leaves sin(x)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 2
+ },
+ {
+  "source": [
+   "mult5",
+   "div5",
+   "+",
+   "x0",
+   "x1"
+  ],
+  "why": "5*(z/5) cancels around a sum",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "+",
+   "x1",
+   "float(\"inf\")"
+  ],
+  "why": "finite + inf = inf everywhere",
+  "family": 5,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "-",
+   "x0",
+   "+",
+   "x1",
+   "float(\"inf\")"
+  ],
+  "why": "finite - inf = -inf everywhere",
+  "family": 5,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "/",
+   "x1",
+   "float(\"inf\")"
+  ],
+  "why": "x + y/inf = x + 0 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "inv",
+   "pow2",
+   "float(\"inf\")"
+  ],
+  "why": "1/inf^2 = 0 dead subtree",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "inv",
+   "neg",
+   "float(\"inf\")"
+  ],
+  "why": "1/(-inf) = -0.0, x + -0 = x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "exp",
+   "neg",
+   "float(\"inf\")"
+  ],
+  "why": "exp(-inf) = 0 dead subtree",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "exp",
+   "neg",
+   "float(\"inf\")"
+  ],
+  "why": "x * exp(-inf) = x * 0 = 0 for finite x",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "pow",
+   "np.e",
+   "float(\"-inf\")"
+  ],
+  "why": "e^(-inf) = 0 via pow",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "+",
+   "x0",
+   "x1",
+   "tanh",
+   "float(\"inf\")"
+  ],
+  "why": "tanh(inf) = 1.0 exact, multiplies away",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "pow",
+   "*",
+   "x0",
+   "x1",
+   "tanh",
+   "float(\"inf\")"
+  ],
+  "why": "z^tanh(inf) = z^1 = z, exponent exactly 1.0",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 3
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "*",
+   "x1",
+   "tanh",
+   "float(\"-inf\")"
+  ],
+  "why": "tanh(-inf) = -1.0 exact, gives -(xy)",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 4
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "pow2",
+   "tanh",
+   "float(\"inf\")"
+  ],
+  "why": "tanh(inf)^2 = 1",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "tanh",
+   "+",
+   "pow2",
+   "x0",
+   "float(\"inf\")"
+  ],
+  "why": "x^2 + inf = inf, tanh(inf) = 1 everywhere",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "atan",
+   "+",
+   "pow2",
+   "x0",
+   "float(\"inf\")"
+  ],
+  "why": "atan(inf) = pi/2 everywhere",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x0",
+   "exp",
+   "float(\"inf\")"
+  ],
+  "why": "exp(inf) = inf dominates any finite square",
+  "family": 5,
+  "verdict": "no_rule_found"
+ },
+ {
+  "source": [
+   "+",
+   "x0",
+   "-",
+   "float(\"inf\")",
+   "float(\"inf\")"
+  ],
+  "why": "inf - inf = nan propagates everywhere",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "*",
+   "x0",
+   "*",
+   "0",
+   "float(\"inf\")"
+  ],
+  "why": "0 * inf = nan propagates through product",
+  "family": 5,
+  "verdict": "already_reducible",
+  "reduces_to_len": 1
+ },
+ {
+  "source": [
+   "+",
+   "pow2",
+   "x0",
+   "sin",
+   "float(\"inf\")"
+  ],
+  "why": "sin(inf) = nan propagates through sum",
+  "family": 5,
+  "verdict": "no_rule_found"
+ }
+]

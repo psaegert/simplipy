@@ -1,0 +1,10 @@
+{
+ "total": 1863,
+ "invalid_syntax": 0,
+ "duplicate": 184,
+ "already_reducible": 900,
+ "no_rule_found": 161,
+ "confirm_rejected": 7,
+ "already_known_lhs": 0,
+ "certified": 611
+}
