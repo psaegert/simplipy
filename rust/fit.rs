@@ -198,33 +198,85 @@ fn fit_affine_check(
     if k > valid.len() {
         return false; // underdetermined -> scipy bails -> False
     }
-    // normal equations A^T A c = A^T t over valid rows, t = y_target - b.
-    let mut ata = vec![vec![0.0f64; k]; k];
-    let mut att = vec![0.0f64; k];
-    for &r in &valid {
-        let t = y_target[r] - b[r];
-        for i in 0..k {
-            let ai = a[i][r];
-            att[i] += ai * t;
-            for j in 0..k {
-                ata[i][j] += ai * a[j][r];
-            }
-        }
-    }
-    // tiny Tikhonov ridge for a stable solve on rank-deficient/collinear bases (the fitted PROJECTION
-    // -- hence the allclose decision -- is unchanged for well-conditioned accept cases).
-    let tr: f64 = (0..k).map(|i| ata[i][i]).sum();
-    let lambda = if tr > 0.0 { tr * 1e-12 } else { 1e-12 };
-    for (i, row) in ata.iter_mut().enumerate() {
-        row[i] += lambda;
-    }
-    let Some(c) = solve(ata, att) else {
-        return false;
+    // Solve the least-squares system A c ~= t over the valid rows by HOUSEHOLDER QR (2026-07-11).
+    // The former path formed the NORMAL equations A^T A and solved those; on a wide-magnitude X that
+    // SQUARES the condition number (cond(A^T A) = cond(A)^2), losing ~2x the digits, so the intercept
+    // of an EXACT affine relationship came out ~5e-9 off -- past rtol -- and the whole C0*f(x)+C1
+    // family spuriously rejected. QR works on A directly (cond(A), not its square) and is rank-
+    // revealing, so it needs no conditioning-dependent Tikhonov ridge (whose trace scaling biased the
+    // small column). A_valid is m x k; solve min ||A_valid c - t_valid||.
+    let m = valid.len();
+    let mut qr: Vec<Vec<f64>> = (0..k)
+        .map(|j| valid.iter().map(|&r| a[j][r]).collect::<Vec<f64>>())
+        .collect(); // column-major: qr[j][row]
+    let mut t: Vec<f64> = valid.iter().map(|&r| y_target[r] - b[r]).collect();
+    let Some(c) = householder_lstsq(&mut qr, &mut t, m, k) else {
+        return false; // rank-deficient with an inconsistent RHS -> no exact fit
     };
     // fitted on ALL rows = eval at the solved constants (exact for an affine model).
     // GENERIC EQUIVALENCE (2026-07-11): source-nonfinite rows are extendable, source-finite bind.
     let fitted = tape.eval_columns(x_cols, &c, n_rows);
     allclose_extends(y_target, &fitted, rtol, atol)
+}
+
+/// Householder QR least-squares: solve min ||A c - t|| for the m x k column-major `qr` (`qr[j][row]`)
+/// and length-m `t`, both consumed in place. Returns the length-k solution, or `None` if a column is
+/// rank-deficient (zero pivot). Never forms A^T A, so the working conditioning is cond(A), not its
+/// square -- the whole reason for QR over the normal equations here. Standard for a tall skinny LS.
+fn householder_lstsq(qr: &mut [Vec<f64>], t: &mut [f64], m: usize, k: usize) -> Option<Vec<f64>> {
+    let mut r_diag = vec![0.0f64; k];
+    for j in 0..k {
+        // Householder reflector zeroing qr[j][j+1..m].
+        let mut norm = 0.0f64;
+        for row in j..m {
+            norm = norm.hypot(qr[j][row]);
+        }
+        if norm == 0.0 {
+            return None; // zero column -> rank-deficient
+        }
+        // pick the sign that avoids cancellation
+        if qr[j][j] > 0.0 {
+            norm = -norm;
+        }
+        for row in j..m {
+            qr[j][row] /= norm;
+        }
+        qr[j][j] += 1.0;
+        // apply the reflector to the remaining columns and to t
+        for c in (j + 1)..k {
+            let mut s = 0.0f64;
+            for row in j..m {
+                s += qr[j][row] * qr[c][row];
+            }
+            let s = -s / qr[j][j];
+            for row in j..m {
+                qr[c][row] += s * qr[j][row];
+            }
+        }
+        let mut s = 0.0f64;
+        for row in j..m {
+            s += qr[j][row] * t[row];
+        }
+        let s = -s / qr[j][j];
+        for row in j..m {
+            t[row] += s * qr[j][row];
+        }
+        // the reflector maps column j to -sigma*e_j (sigma = `norm`), so R[j][j] = -norm.
+        r_diag[j] = -norm;
+    }
+    // back-substitute R x = (Q^T t)[..k], with R upper-triangular: diag in r_diag, above-diag in qr.
+    let mut x = vec![0.0f64; k];
+    for j in (0..k).rev() {
+        if r_diag[j] == 0.0 {
+            return None;
+        }
+        let mut s = t[j];
+        for c in (j + 1)..k {
+            s -= qr[c][j] * x[c];
+        }
+        x[j] = s / r_diag[j];
+    }
+    Some(x)
 }
 
 /// Native `exist_constants_that_fit` for the AFFINE case (M3a). Returns `Some(decision)` if the
@@ -678,6 +730,29 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn householder_lstsq_recovers_exact_solution() {
+        // overdetermined well-conditioned system with an EXACT solution; pins the R[j][j] = -norm
+        // sign convention (a +norm bug returns an inconsistent, wrong solution).
+        let m = 50usize;
+        let mut col0: Vec<f64> = (0..m).map(|r| (r as f64) * 0.1 - 2.5).collect();
+        let mut col1: Vec<f64> = vec![1.0; m];
+        // t = 3.0*col0 - 1.7*col1 exactly
+        let mut t: Vec<f64> = (0..m).map(|r| 3.0 * col0[r] - 1.7).collect();
+        let mut qr = vec![std::mem::take(&mut col0), std::mem::take(&mut col1)];
+        let c = super::householder_lstsq(&mut qr, &mut t, m, 2).unwrap();
+        assert!((c[0] - 3.0).abs() < 1e-12, "slope {} != 3.0", c[0]);
+        assert!((c[1] + 1.7).abs() < 1e-12, "intercept {} != -1.7", c[1]);
+        // wide-magnitude column (the conditioning case): still exact via QR
+        let mut big0: Vec<f64> = (0..m).map(|r| ((r as f64) - 25.0) * 40.0).collect();
+        let mut big1: Vec<f64> = vec![1.0; m];
+        let mut bt: Vec<f64> = (0..m).map(|r| 7.0 * big0[r]).collect(); // intercept exactly 0
+        let mut bqr = vec![std::mem::take(&mut big0), std::mem::take(&mut big1)];
+        let bc = super::householder_lstsq(&mut bqr, &mut bt, m, 2).unwrap();
+        assert!((bc[0] - 7.0).abs() < 1e-12);
+        assert!(bc[1].abs() < 1e-9, "intercept {} not ~0", bc[1]);
     }
 
     #[test]

@@ -44,6 +44,15 @@ rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard 
   5 -> 16 end to end (the old find_rules passed 5 against an FFI default of 16; measured fit-path
   completeness at 5/5 was ~24%).
 
+- **Affine-fit conditioning fix**: the whole `C0*f(x)+C1` family silently REJECTED before. Two
+  causes, both from the audit's own hardening: a GLOBAL trace-scaled Tikhonov ridge biased the
+  intercept, and the normal-equations solve squared the condition number on the wide-magnitude X
+  so an exact affine relationship's intercept came out ~5e-9 off (past rtol). Now the affine path
+  solves by Householder-QR least-squares (no `A^T A`, no ridge -- works at cond(A), not its square),
+  and the mine X's log-uniform tier is capped at 1e3 (from 1e6): 1e3 still exercises every
+  saturation and f64 overflow the tier is FOR, but 1e6 wrecked the fit conditioning. Found by the
+  generic-equivalence adversarial verification (a CONTESTED finding, confirmed by probe: 0/30 ->
+  64/72 affine cases certify, 0 false-accepts; the residual misses have constants spanning >1e6).
 - **Log-linear recall fix**: for `pow(<constant>, g)` candidates, only a closed-form log-space
   ACCEPT short-circuits; an imprecise `Some(false)` solve (its ~1e-10 base error amplified past
   rtol by large exponents on the heavy-tailed X) now SEEDS the LM restart instead of rejecting,

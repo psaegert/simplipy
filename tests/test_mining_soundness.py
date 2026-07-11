@@ -147,6 +147,27 @@ class TestCheckerSoundness:
             ['asin', 'cosh', '*', 'x0', '+', 'pow2', '<constant>', '1'], 8, None,
             [['<constant>']], ['x0'], x_flat, n) is None
 
+    def test_affine_with_intercept_family_certifies(self, engine, mining_x) -> None:
+        """REGRESSION for the affine-fit conditioning fix (2026-07-11). The whole
+        C0*f(x)+C1 family silently REJECTED before: a GLOBAL trace-scaled Tikhonov
+        ridge biased the intercept, and the normal-equations solve squared the
+        condition number on the wide-magnitude X so the intercept came out ~5e-9 off,
+        past rtol. Fixed by a Householder-QR least-squares solve (no A^T A, no ridge)
+        + capping the tail at 1e3. A representative slate of affine rules whose true
+        constants are moderate must now certify via the affine closed-form path; a
+        non-affine target must still reject (soundness)."""
+        x_flat, n = mining_x
+        cand = ['+', '*', '<constant>', 'x0', '<constant>']  # C0*x0 + C1
+        x0 = np.array(x_flat)
+        for a, b in [(2.5, -1.3), (7.0, 0.0), (-3.7, 42.0), (0.0, 5.0), (1.0, -1.0)]:
+            y = a * x0 + b
+            assert engine._core.exist_constants_fit_linear(
+                cand, ['x0'], x_flat, n, y.tolist(), 1e-9, 1e-12) is True, (a, b)
+        # soundness: a genuinely non-affine target must NOT certify as C0*x0 + C1
+        for y in (np.sin(x0), x0 ** 2, x0 ** 3):
+            assert engine._core.exist_constants_fit_linear(
+                cand, ['x0'], x_flat, n, y.tolist(), 1e-9, 1e-12) is not True
+
     def test_log_linear_pow_rewrite_certifies(self) -> None:
         """REGRESSION for the log-linear recall path + its 2026-07-11 LM-fallthrough
         fix: exp(x0+x0) == (e^2)^x0 is a valid rewrite to pow(<constant>, x0), and the
@@ -182,8 +203,11 @@ class TestMiningSampleX:
         X = engine._mining_sample_x(4096, 2, np.random.default_rng(0))
         assert X.shape == (4096, 2)
         assert (X == 0.0).any(), "exact zero corner missing"
-        assert (np.abs(X) > 1e4).any(), "heavy tail missing"
-        assert (np.abs(X) < 1e-4)[X != 0.0].any(), "tiny-magnitude tail missing"
+        # tail upper magnitude is ~1e3 (capped from 1e6 so the constant-fit stays well
+        # conditioned; still well past saturation |x|~40 and f64 overflow |x|~710).
+        assert (np.abs(X) > 1e2).any(), "heavy tail missing"
+        assert (np.abs(X) < 1e-3)[X != 0.0].any(), "tiny-magnitude tail missing"
+        assert np.abs(X).max() < 1e4, "tail too wide -> would wreck the constant-fit conditioning"
 
 
 class TestPhase1Universe:

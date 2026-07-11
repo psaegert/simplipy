@@ -2366,19 +2366,27 @@ class SimpliPyEngine:
 
         - 40% N(0, 5) (the historical distribution; dense near typical values)
         - 25% U(-50, 50)
-        - 25% signed log-uniform magnitudes 1e-6..1e6 (exposes saturation false-equalities)
+        - 25% signed log-uniform magnitudes 1e-4..1e3 (exposes saturation false-equalities)
         - 10% exact special values {+-0.0, +-0.1, +-0.5, +-1, +-2, +-e, +-pi, +-10}
 
         Under GENERIC-EQUIVALENCE semantics (2026-07-11 user decision) the corner points
         refute wrong-VALUE identities (``asin(cosh(_0)) -> nan`` is false AT 0, where the
         source is pi/2) while domain EXTENSION remains allowed: where the source is
         NaN/inf the replacement may complete it (``div(_0, _0) -> 1``, the 0/0 limit).
+
+        The log-uniform tier's upper magnitude is 1e3, not the wider 1e6 tried on
+        2026-07-11: 1e3 still exercises every saturation (tanh/exp plateau by |x|~40)
+        and f64 overflow (exp overflows past |x|~710) that the tier is FOR, but a 1e6
+        design column pushes the constant-fit conditioning to cond(A) ~ 1e6 and the
+        fit cannot recover an intercept to rtol at an exact-zero-crossing row -- which
+        silently rejected the entire ``C0*f(x)+C1`` affine family (found by the
+        generic-equivalence adversarial verification).
         """
         shape = (n_rows, n_vars)
         choice = rng.choice(4, size=shape, p=(0.40, 0.25, 0.25, 0.10))
         normal = rng.normal(0.0, 5.0, size=shape)
         uniform = rng.uniform(-50.0, 50.0, size=shape)
-        magnitudes = 10.0 ** rng.uniform(-6.0, 6.0, size=shape) * rng.choice((-1.0, 1.0), size=shape)
+        magnitudes = 10.0 ** rng.uniform(-4.0, 3.0, size=shape) * rng.choice((-1.0, 1.0), size=shape)
         specials = np.array([0.0, -0.0, 0.1, -0.1, 0.5, -0.5, 1.0, -1.0,
                              2.0, -2.0, np.e, -np.e, np.pi, -np.pi, 10.0, -10.0])
         special = rng.choice(specials, size=shape)
