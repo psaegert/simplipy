@@ -169,8 +169,9 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
 
 /// AFFINE closed-form fit + accept/reject (the M3a path). The candidate is affine in its k constants,
 /// so `y(C) = b(X) + sum_j C_j a_j(X)` with `b = eval(C=0)` and `a_j = eval(C=e_j) - b`. We solve the
-/// (ridge-regularized) normal equations on the FINITE-row mask (mirroring scipy's `is_valid` mask and
-/// its `n_const > n_valid` bail), evaluate the fitted candidate on ALL rows, and return
+/// least-squares system by HOUSEHOLDER QR on the FINITE-row mask (mirroring scipy's `is_valid` mask and
+/// its `n_const > n_valid` bail; QR avoids the normal-equations conditioning squaring, see
+/// `householder_lstsq`), evaluate the fitted candidate on ALL rows, and return
 /// `allclose_extends(y_target, fitted)` -- source-finite rows bind, source-nonfinite rows are
 /// domain-extendable (generic equivalence, 2026-07-11).
 fn fit_affine_check(
