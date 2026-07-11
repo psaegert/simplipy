@@ -112,6 +112,27 @@ class TestCheckerSoundness:
         assert engine._core.find_rule(
             ['asin', 'cosh', 'x0'], 3, None, [['<constant>']], ['x0'], x_flat, n) is None
 
+    def test_generically_constant_source_certifies(self, engine, mining_x) -> None:
+        """POLICY EDGE (documented, deliberate): asin(cosh(C*x0)) -> <constant> DOES
+        certify under generic equivalence. The C=0 sign-combo instance equals pi/2 on
+        every row (full evidence), and every defined point of every other instance is
+        also pi/2 (x0=0 corners) -- the source is generically the constant pi/2.
+        Evidence still counts UNIQUE defined rows (not (row, instance) repetitions),
+        so this passes on the C=0 instance's 1024 rows, not by challenge repetition."""
+        x_flat, n = mining_x
+        assert engine._core.find_rule(
+            ['asin', 'cosh', '*', '<constant>', 'x0'], 5, None, [['<constant>']],
+            ['x0'], x_flat, n) == ['<constant>']
+
+    def test_all_undefined_instance_rejects(self, engine, mining_x) -> None:
+        """A const-bearing source with an instance that is defined NOWHERE (here
+        asin(cosh(x0) + C^2) for C != 0) is rejected conservatively: the fit has zero
+        valid rows for that instance and bails, whatever the other instances say."""
+        x_flat, n = mining_x
+        assert engine._core.find_rule(
+            ['asin', '+', 'cosh', 'x0', 'pow2', '<constant>'], 6, None,
+            [['<constant>']], ['x0'], x_flat, n) is None
+
     def test_confirm_primitive_rejects_shipped_defect(self, engine, mining_x) -> None:
         """The exact dev_7-3 defect asin(cosh(_0)) -> nan, via the stage-2 confirm
         primitive (find_rule with the single paired candidate)."""

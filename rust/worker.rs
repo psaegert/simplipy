@@ -78,15 +78,17 @@ fn equivalent_no_const(
     let combos = sign_combos(n_src_const);
     // A const-free source has exactly one distinct instance (see `source_instances`).
     let eff_challenges = if n_src_const == 0 { 1 } else { challenges };
-    let n_instances = eff_challenges * combos.len();
-    // Fast NECESSARY-condition gate (2026-07-10 audit, generic-equivalence form): evidence rows
-    // are source-finite rows, on which the candidate must itself be finite, so the accumulated
-    // evidence is bounded by n_instances * finite(y_cand). Kills all-NaN/all-inf candidates
-    // (e.g. the shipped asin(cosh(_0)) -> nan family) outright.
-    if crate::eval::count_finite(&y_cand) * n_instances < min_informative {
+    // Fast NECESSARY-condition gate: every evidence row needs the candidate finite on it, and
+    // evidence rows are UNIQUE rows, so finite(y_cand) bounds the evidence from above. Kills
+    // all-NaN/all-inf candidates (the shipped asin(cosh(_0)) -> nan family) outright.
+    if crate::eval::count_finite(&y_cand) < min_informative {
         return false;
     }
-    let mut informative: usize = 0;
+    // EVIDENCE = UNIQUE rows where SOME instance's source is finite. Unique, NOT accumulated
+    // with multiplicity: 16 challenges x sign-combos over the same ~7 defined rows must count
+    // as 7 evidence points, else an almost-nowhere-defined const-bearing source (e.g.
+    // asin(cosh(C*_0)), finite only at 0 for every C) would clear the gate by repetition.
+    let mut evidence = vec![false; n_rows];
     for _ in 0..eff_challenges {
         let rc: Vec<f64> = (0..n_src_const)
             .map(|_| rng.normal(0.0, 5.0).abs())
@@ -99,12 +101,14 @@ fn equivalent_no_const(
             if !allclose_extends(&y, &y_cand, rtol, atol) {
                 return false;
             }
-            informative += crate::eval::count_finite(&y);
+            for (e, v) in evidence.iter_mut().zip(&y) {
+                *e |= v.is_finite();
+            }
         }
     }
-    // EVIDENCE GATE: enough source-finite (row, instance) points must back the certification,
-    // else an (almost-)nowhere-defined source would be rewritten by its corner values alone.
-    informative >= min_informative
+    // EVIDENCE GATE: enough distinct defined points must back the certification, else an
+    // (almost-)nowhere-defined source would be rewritten from its corner rows alone.
+    evidence.iter().filter(|&&e| e).count() >= min_informative
 }
 
 /// FFI-facing wrapper: compile both expressions and run the no-constant equivalence test. The
@@ -223,14 +227,14 @@ fn candidate_matches(
     min_informative: usize,
     rng: &mut Rng,
 ) -> bool {
-    // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): accumulated
-    // source-finite evidence is bounded by n_instances * finite(y_cand).
-    if cand.n_const == 0 && cand.finite_y * y_src.len() < min_informative {
+    // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
+    // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
+    if cand.n_const == 0 && cand.finite_y < min_informative {
         return false;
     }
-    // EVIDENCE: accumulate source-finite rows over passing instances (BOTH arms); vacuous
-    // instances (all-NaN/overflowed sources) contribute none.
-    let mut total_informative: usize = 0;
+    // EVIDENCE = UNIQUE rows where SOME instance's source is finite (BOTH arms; see
+    // `equivalent_no_const` for why repetition across instances must not count).
+    let mut evidence = vec![false; n_rows];
     for y in y_src {
         let ok = if cand.n_const == 0 {
             // GENERIC EQUIVALENCE (2026-07-11): source-finite rows must match; source-nonfinite
@@ -254,9 +258,11 @@ fn candidate_matches(
         if !ok {
             return false;
         }
-        total_informative += crate::eval::count_finite(y);
+        for (e, v) in evidence.iter_mut().zip(y) {
+            *e |= v.is_finite();
+        }
     }
-    total_informative >= min_informative
+    evidence.iter().filter(|&&e| e).count() >= min_informative
 }
 
 /// The source-side challenge instances, evaluated ONCE PER SOURCE and shared across every candidate
