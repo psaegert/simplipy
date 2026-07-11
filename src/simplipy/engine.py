@@ -2445,7 +2445,8 @@ class SimpliPyEngine:
             mine_seed: int = 42,
             confirm_seed: int = 43,
             X_confirm: np.ndarray | None = None,
-            candidate_fold_filter: bool = True) -> None:
+            candidate_fold_filter: bool = True,
+            provenance: dict | None = None) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
@@ -2514,6 +2515,7 @@ class SimpliPyEngine:
             if output_file is not None:
                 with open(output_file, 'w') as file:
                     json.dump(rules, file, indent=4)
+                self._write_provenance(output_file, provenance, rules, completed_length=length)
 
         self.simplification_rules = list(rules)
         self.compile_rules()
@@ -2523,6 +2525,35 @@ class SimpliPyEngine:
         if output_file is not None:
             with open(output_file, 'w') as file:
                 json.dump(self.simplification_rules, file, indent=4)
+            self._write_provenance(output_file, provenance, self.simplification_rules, final=True)
+
+    @staticmethod
+    def _write_provenance(output_file: str, provenance: dict | None, rules: list,
+                          completed_length: int | None = None, final: bool = False) -> None:
+        """Write/refresh the mined artifact's PROVENANCE sidecar (`<output>.provenance.json`).
+
+        The rules.json format is a bare list (the engine loads it directly), so provenance
+        lives beside it: parameters, seeds, X spec, universe coverage (filled by
+        :meth:`find_rules`) plus rolling progress and the final rule census. A mine is
+        reproducible from the sidecar alone unless X was passed as an explicit array
+        (recorded by content hash in that case).
+        """
+        if provenance is None:
+            return
+        import time as _time
+        by_len: dict[str, int] = {}
+        for lhs, _ in rules:
+            by_len[str(len(lhs))] = by_len.get(str(len(lhs)), 0) + 1
+        provenance['progress'] = {
+            'updated': _time.strftime('%Y-%m-%d %H:%M:%S %z'),
+            'last_completed_source_length': completed_length if not final
+            else provenance.get('progress', {}).get('last_completed_source_length'),
+            'final': final,
+            'rules_total': len(rules),
+            'rules_by_lhs_length': dict(sorted(by_len.items(), key=lambda x: int(x[0]))),
+        }
+        with open(output_file + '.provenance.json', 'w') as file:
+            json.dump(provenance, file, indent=2)
 
     def find_rules(
             self,
@@ -2744,6 +2775,14 @@ class SimpliPyEngine:
             while len(draws) < target and attempts < 20 * target:
                 draws.add(sample_expression(length, leaf_nodes, non_leaf_nodes, counts, _rng))
                 attempts += 1
+            # Per-run sampler cross-check (readiness item 6): the count-DP assertion above
+            # guards ENUMERATED lengths only, so validate every draw's membership in the
+            # intended universe (exact length, known tokens, well-formed arity).
+            vocabulary = set(leaf_nodes) | set(self.operator_arity)
+            for expression in draws:
+                if (len(expression) != length or not set(expression) <= vocabulary
+                        or not self.is_valid(list(expression))):
+                    raise AssertionError(f'sampler produced a non-member at length {length}: {expression}')
             expressions_of_length[length] = draws
             # NO silent caps: always state the achieved coverage.
             print(f'Phase 1: length {length} SAMPLED: {len(draws):,} of {counts[length]:,} '
@@ -2755,6 +2794,56 @@ class SimpliPyEngine:
             print(f"Finished generating expressions up to size {max_source_pattern_length}. Total expressions: {total_expressions:,}")
             for length, expressions in sorted(expressions_of_length.items()):
                 print(f"Size {length}: {len(expressions):,} expressions")
+
+        # PROVENANCE (readiness item 5): the mined artifact must be reproducible from its
+        # sidecar alone. Everything that determines the mine is recorded: parameters, seeds,
+        # the X specification (seed-derived, or content-hashed when an explicit array was
+        # passed -- the one case a seed cannot reproduce), universe counts and coverage.
+        import hashlib
+        import platform
+        import time as _time
+        from simplipy import __version__ as _simplipy_version
+        try:
+            from simplipy import _core as _core_mod
+            _core_build = getattr(_core_mod, '__build__', None)
+        except ImportError:
+            _core_build = None
+        if X is None or isinstance(X, int):
+            x_spec: dict = {'rows': int(X_data.shape[0]), 'cols': int(X_data.shape[1]),
+                            'source': 'seeded_mixture (_mining_sample_x from `seed`)'}
+        else:
+            x_spec = {'rows': int(X_data.shape[0]), 'cols': int(X_data.shape[1]),
+                      'source': 'explicit_array (NOT reproducible from `seed`)',
+                      'sha256': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest()}
+        provenance = {
+            'created': _time.strftime('%Y-%m-%d %H:%M:%S %z'),
+            'host': platform.node(),
+            'simplipy_version': _simplipy_version,
+            'core_build': _core_build,
+            'params': {
+                'max_source_pattern_length': max_source_pattern_length,
+                'max_target_pattern_length': max_target_pattern_length,
+                'dummy_variables': list(dummy_variables),
+                'extra_internal_terms': list(extra_internal_terms),
+                'constants_fit_challenges': constants_fit_challenges,
+                'constants_fit_retries': constants_fit_retries,
+                'rtol': rtol, 'atol': atol, 'min_informative': min_informative,
+                'seed': seed, 'mine_seed': mine_seed, 'confirm_seed': confirm_seed,
+                'confirm': confirm, 'candidate_fold_filter': candidate_fold_filter,
+                'prune': prune, 'reset_rules': reset_rules,
+                'source_sample_per_length': {str(k): int(v) for k, v in source_sample_per_length.items()},
+            },
+            'X': x_spec,
+            'universe': {
+                str(length): {
+                    'complete_count': int(counts[length]),
+                    'used': len(expressions_of_length[length]),
+                    'coverage': len(expressions_of_length[length]) / counts[length],
+                    'sampled': length in source_sample_per_length,
+                } for length in sorted(expressions_of_length)
+            },
+            'operators': sorted(self.operator_arity),
+        }
 
         # --- Phase 2: mine natively on the Rust engine (the only mining path since 0.5.0) ---
         try:
@@ -2777,6 +2866,7 @@ class SimpliPyEngine:
                 confirm_seed=confirm_seed,
                 X_confirm=X_confirm,
                 candidate_fold_filter=candidate_fold_filter,
+                provenance=provenance,
             )
         finally:
             signal.signal(signal.SIGINT, old_handler)

@@ -415,6 +415,35 @@ class TestFoldFilter:
         assert len(rulesets[0]) > 0
 
 
+class TestProvenance:
+    """Readiness item 5: the mined artifact must carry a reproducibility sidecar; item 6:
+    sampled sources are validated as universe members per run (exercised via the sampled
+    length below -- a violation raises inside find_rules)."""
+
+    def test_sidecar_written_with_reproducibility_fields(self, tmp_path) -> None:
+        (tmp_path / "rules.json").write_text(json.dumps([]))
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(yaml.safe_dump({"operators": _OPERATORS, "rules": "rules.json"}))
+        eng = SimpliPyEngine.from_config(str(cfg))
+        out = str(tmp_path / "mined.json")
+        eng.find_rules(max_source_pattern_length=3, dummy_variables=1,
+                       extra_internal_terms=["0", "1", "<constant>"], X=256, seed=7,
+                       verbose=False, output_file=out,
+                       source_sample_per_length={3: 500})
+        side = json.load(open(out + ".provenance.json"))
+        assert side["params"]["seed"] == 7
+        assert side["params"]["mine_seed"] and side["params"]["confirm_seed"]
+        assert side["params"]["candidate_fold_filter"] is True
+        assert side["params"]["source_sample_per_length"] == {"3": 500}
+        assert side["X"]["source"].startswith("seeded_mixture")
+        assert side["universe"]["3"]["sampled"] is True
+        assert 0 < side["universe"]["3"]["coverage"] <= 1
+        assert side["universe"]["2"]["coverage"] == 1.0
+        assert side["progress"]["final"] is True
+        assert side["progress"]["rules_total"] == len(json.load(open(out)))
+        assert side["simplipy_version"]
+
+
 class TestStageTwoConfirmation:
     """The stage-2 confirmation (confirm=True) must actually filter, not pass through."""
 
