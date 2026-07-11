@@ -13,7 +13,7 @@
 //! closed-form, nonlinear -> LM). The accept/reject gate stays `allclose` (crate::eval), so soundness
 //! is identical to scipy's: the optimizer only PROPOSES constants, `allclose` DISPOSES.
 
-use crate::eval::{allclose, columns_from_row_major, Tape};
+use crate::eval::{allclose_extends, columns_from_row_major, Tape};
 use crate::operators::Operators;
 
 /// Degree of an expression in its `<constant>` placeholders.
@@ -171,7 +171,8 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
 /// so `y(C) = b(X) + sum_j C_j a_j(X)` with `b = eval(C=0)` and `a_j = eval(C=e_j) - b`. We solve the
 /// (ridge-regularized) normal equations on the FINITE-row mask (mirroring scipy's `is_valid` mask and
 /// its `n_const > n_valid` bail), evaluate the fitted candidate on ALL rows, and return
-/// `allclose(y_target, fitted)` -- the exact same decision gate scipy's path uses.
+/// `allclose_extends(y_target, fitted)` -- source-finite rows bind, source-nonfinite rows are
+/// domain-extendable (generic equivalence, 2026-07-11).
 fn fit_affine_check(
     tape: &Tape,
     x_cols: &[Vec<f64>],
@@ -221,8 +222,9 @@ fn fit_affine_check(
         return false;
     };
     // fitted on ALL rows = eval at the solved constants (exact for an affine model).
+    // GENERIC EQUIVALENCE (2026-07-11): source-nonfinite rows are extendable, source-finite bind.
     let fitted = tape.eval_columns(x_cols, &c, n_rows);
-    allclose(y_target, &fitted, rtol, atol)
+    allclose_extends(y_target, &fitted, rtol, atol)
 }
 
 /// Native `exist_constants_that_fit` for the AFFINE case (M3a). Returns `Some(decision)` if the
@@ -490,13 +492,13 @@ fn try_log_linear_fit(
         }
     };
     let fitted = cand_tape.eval_columns(cols, &[c], n_rows);
-    Some(allclose(y, &fitted, rtol, atol))
+    Some(allclose_extends(y, &fitted, rtol, atol))
 }
 
 /// The COMPLETE native `exist_constants_that_fit` (M3): affine candidates -> the closed-form path
 /// (deterministic, no restarts); nonlinear-in-params candidates -> `n_restarts` LM solves from random
-/// N(0,5) starts (mirroring the worker's retry loop), accept iff any makes `allclose(y_target,
-/// fitted)` pass on ALL rows. The accept/reject GATE is identical to scipy's (allclose); only the
+/// N(0,5) starts (mirroring the worker's retry loop), accept iff any makes `allclose_extends(
+/// y_target, fitted)` pass (source-finite rows bind; generic equivalence). Only the
 /// optimizer that proposes constants differs. `seed` makes the restarts reproducible.
 #[allow(clippy::too_many_arguments)]
 pub fn exist_constants_fit(
@@ -554,7 +556,7 @@ pub(crate) fn exist_constants_fit_prepared(
 ) -> bool {
     if lin == Linearity::ConstFree {
         let fitted = tape.eval_columns(cols, &[], n_rows);
-        return allclose(y_target, &fitted, rtol, atol);
+        return allclose_extends(y_target, &fitted, rtol, atol);
     }
     if lin == Linearity::Affine {
         return fit_affine_check(tape, cols, y_target, n_rows, rtol, atol);
@@ -588,7 +590,7 @@ pub(crate) fn exist_constants_fit_prepared(
         let p0: Vec<f64> = (0..k).map(|_| rng.normal(0.0, 5.0)).collect();
         let c = lm_fit(tape, &xv, &yv, m, k, &p0, rtol, atol);
         let fitted = tape.eval_columns(cols, &c, n_rows);
-        if allclose(y_target, &fitted, rtol, atol) {
+        if allclose_extends(y_target, &fitted, rtol, atol) {
             return true;
         }
     }

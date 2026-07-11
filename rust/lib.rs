@@ -382,8 +382,10 @@ impl PyEngine {
     /// candidate must be constant-free; the source's constants are resampled over `challenges` rounds
     /// and every sign combination, requiring `allclose(source, candidate)` every time.
     /// Tolerances tightened + informativeness gate added by the 2026-07-10 equivalence audit:
-    /// `min_informative=None` resolves to `n_rows / 8` (certification requires that many rows
-    /// where both sides are FINITE -- kills vacuous all-NaN/inf acceptance).
+    /// `min_informative=None` resolves to `n_rows / 8`: certification requires that many
+    /// SOURCE-FINITE evidence rows (accumulated across challenge instances), killing vacuous
+    /// all-NaN/inf acceptance. Generic-equivalence semantics (2026-07-11): source-finite rows
+    /// bind; where the source is NaN/inf the replacement may EXTEND the domain (x/x -> 1).
     #[pyo3(signature = (source, candidate, var_names, x_flat, n_rows, challenges=16, rtol=1e-9, atol=1e-12, min_informative=None, seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn equivalent_no_const(

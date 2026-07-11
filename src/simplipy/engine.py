@@ -2369,9 +2369,10 @@ class SimpliPyEngine:
         - 25% signed log-uniform magnitudes 1e-6..1e6 (exposes saturation false-equalities)
         - 10% exact special values {+-0.0, +-0.1, +-0.5, +-1, +-2, +-e, +-pi, +-10}
 
-        NOTE the exact corner points make the checker STRICT: an identity that fails on a
-        measure-zero set (e.g. ``mul(_0, inv(_0)) -> 1``, false at 0) is now rejected,
-        which matches deployment (benchmark data contains exact zeros/integers).
+        Under GENERIC-EQUIVALENCE semantics (2026-07-11 user decision) the corner points
+        refute wrong-VALUE identities (``asin(cosh(_0)) -> nan`` is false AT 0, where the
+        source is pi/2) while domain EXTENSION remains allowed: where the source is
+        NaN/inf the replacement may complete it (``div(_0, _0) -> 1``, the 0/0 limit).
         """
         shape = (n_rows, n_vars)
         choice = rng.choice(4, size=shape, p=(0.40, 0.25, 0.25, 0.10))
@@ -2582,10 +2583,18 @@ class SimpliPyEngine:
         atol : float, optional
             Absolute tolerance of the numerical equivalence check (default 1e-12).
         min_informative : int or None, optional
-            Minimum number of rows on which the accepted replacement evaluates FINITE.
-            Defaults to ``X.shape[0] // 8``. This is the vacuous-acceptance gate: with
-            ``equal_nan=True``, an all-NaN candidate trivially "agrees" with an almost
-            -everywhere-NaN source (e.g. ``asin(cosh(_0)) -> nan``, false at 0).
+            Minimum number of SOURCE-FINITE evidence rows (accumulated across challenge
+            instances) required to certify a rule. Defaults to ``X.shape[0] // 8``. This
+            is the vacuous-acceptance gate: an almost-everywhere-NaN source (e.g.
+            ``asin(cosh(_0))``) has no evidence and cannot be rewritten by its corner
+            values alone.
+
+            Equivalence is GENERIC (with domain extension): rows where the source is
+            finite bind (the replacement must be finite and equal within tolerance);
+            rows where the source is NaN/inf are extendable (``div(_0, _0) -> 1``
+            certifies -- the 0/0 limit -- and ``log(exp(_0)) -> _0`` certifies under
+            f64 overflow). The reverse stays rejected: a replacement that is NaN where
+            the source is finite loses a defined value.
         seed : int or None, optional
             Seed for the evaluation matrix, constant challenges and per-source RNG
             streams. The default (42) makes the mine REPRODUCIBLE run-to-run; pass

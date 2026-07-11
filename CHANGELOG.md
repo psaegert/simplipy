@@ -7,16 +7,24 @@ rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard 
 `asin(cosh(_0)) -> nan` (false at 0, where the source is pi/2).
 
 ### Fixed (checker soundness)
-- **Vacuous equal_nan acceptance closed.** An accepted replacement must now evaluate FINITE on at
-  least `min_informative` rows (default `n_rows / 8`). Const-free candidates gate once on their
-  precomputed finite count (provably equivalent to per-instance gating); const-bearing candidates
-  accumulate finite source rows across passing fit instances.
+- **Vacuous equal_nan acceptance closed.** Certification now requires at least `min_informative`
+  (default `n_rows / 8`) SOURCE-FINITE evidence rows, accumulated across challenge instances; a
+  precomputed candidate-finite count serves as a fast necessary-condition gate for const-free
+  candidates.
 - **Tolerances tightened** `rtol` 1e-5 -> 1e-9, `atol` 1e-8 -> 1e-12 (0 borderline rules in the
   840-rule audit sample; tanh/exp saturation towers are no longer "equal" to constants).
 - **Heavy-tailed, seeded evaluation matrix** (`_mining_sample_x`): 40% N(0,5) + 25% U(-50,50) +
   25% signed log-uniform magnitudes 1e-6..1e6 + 10% exact corner points ({+-0.0, +-0.1, +-0.5,
-  +-1, +-2, +-e, +-pi, +-10}). The corner points make the checker STRICT about measure-zero
-  counterexamples (e.g. `mul(_0, inv(_0)) -> 1` is now rejected: false at exactly 0).
+  +-1, +-2, +-e, +-pi, +-10}).
+- **GENERIC-EQUIVALENCE semantics with domain extension** (`allclose_extends`, the single accept
+  gate everywhere: const-free compare, affine/log-linear/LM fit accepts). Rows where the SOURCE is
+  finite bind: the replacement must be finite and equal within tolerance -- the exact corner points
+  refute wrong-VALUE identities (`asin(cosh(_0)) -> nan` is false AT 0, where the source is pi/2).
+  Rows where the source is NaN/inf are extendable: the replacement may complete them with the
+  generic/limit value (`div(_0, _0) -> 1` certifies; `log(exp(_0)) -> _0` certifies under f64
+  overflow). The evidence gate (`min_informative`) counts SOURCE-FINITE rows accumulated across
+  challenge instances, so an (almost-)nowhere-defined source can never be rewritten from its
+  corner rows alone.
 - **Stage-2 confirmation** (`confirm=True`): every mined pair is re-verified on an independent,
   twice-as-wide X with fresh constant draws and seeds before it can enter the Kruskal cascade.
 - **IEEE inv/div semantics** aligned across the Rust kernels, the scalar Python operators and the

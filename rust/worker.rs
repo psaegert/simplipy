@@ -1,12 +1,12 @@
 //! The no-constant equivalence test + rule selection for the OFFLINE miner (Phase B, Milestone 2).
 //!
 //! This is the constant-FREE candidate branch of `find_rule_worker` (engine.py:2433-2452) plus the
-//! winner-selection (engine.py:2489-2510). It adds NO new numerics -- the only math is `allclose`
+//! winner-selection (engine.py:2489-2510). It adds NO new numerics -- the only math is `allclose_extends`
 //! (already bit-exact vs numpy from M1) -- so it is a pure control-flow port. Together with M3 (the
 //! constant-fit branch) these are the two halves of the per-candidate decision; M4 assembles them
 //! over the candidate library + generation + Kruskal prune into the full native miner.
 
-use crate::eval::{allclose, columns_from_row_major, Tape};
+use crate::eval::{allclose_extends, columns_from_row_major, Tape};
 use crate::fit::Rng;
 use crate::operators::Operators;
 
@@ -58,7 +58,8 @@ fn sign_combos(n: usize) -> Vec<Vec<f64>> {
 /// The NO-CONSTANT equivalence test (engine.py:2433-2452): the candidate has no `<constant>`, so it is
 /// a fixed function -- evaluate it once. The SOURCE may carry `n_src_const` constants, and the rule
 /// must hold for ALL of them, so we resample the source's constants over `challenges` rounds and every
-/// sign combination `abs(N(0,5)) * {-1,0,1}` and require `allclose(source, candidate)` EVERY time.
+/// sign combination `abs(N(0,5)) * {-1,0,1}` and require `allclose_extends(source, candidate)` EVERY
+/// time (generic equivalence: source-finite rows bind, source-nonfinite rows are extendable).
 /// Rejects on the first mismatch (the guard against a coincidental single-value match).
 #[allow(clippy::too_many_arguments)]
 fn equivalent_no_const(
@@ -74,29 +75,36 @@ fn equivalent_no_const(
     rng: &mut Rng,
 ) -> bool {
     let y_cand = candidate.eval_columns(x_cols, &[], n_rows);
-    // INFORMATIVENESS GATE (2026-07-10 audit): the candidate is const-free, so its y is FIXED.
-    // Any source instance passing allclose against it is finite exactly where y_cand is (a
-    // finite-vs-NaN/inf row fails allclose), so gating the CANDIDATE's finite count once is
-    // equivalent to gating every passing instance -- and kills the vacuous all-NaN/all-inf
-    // acceptance class (e.g. the shipped asin(cosh(_0)) -> nan family) outright.
-    if crate::eval::count_finite(&y_cand) < min_informative {
+    let combos = sign_combos(n_src_const);
+    // A const-free source has exactly one distinct instance (see `source_instances`).
+    let eff_challenges = if n_src_const == 0 { 1 } else { challenges };
+    let n_instances = eff_challenges * combos.len();
+    // Fast NECESSARY-condition gate (2026-07-10 audit, generic-equivalence form): evidence rows
+    // are source-finite rows, on which the candidate must itself be finite, so the accumulated
+    // evidence is bounded by n_instances * finite(y_cand). Kills all-NaN/all-inf candidates
+    // (e.g. the shipped asin(cosh(_0)) -> nan family) outright.
+    if crate::eval::count_finite(&y_cand) * n_instances < min_informative {
         return false;
     }
-    let combos = sign_combos(n_src_const);
-    for _ in 0..challenges {
+    let mut informative: usize = 0;
+    for _ in 0..eff_challenges {
         let rc: Vec<f64> = (0..n_src_const)
             .map(|_| rng.normal(0.0, 5.0).abs())
             .collect();
         for combo in &combos {
             let params: Vec<f64> = rc.iter().zip(combo).map(|(r, c)| r * c).collect();
             let y = source.eval_columns(x_cols, &params, n_rows);
-            // engine.py:2446: np.allclose(y, y_candidate) -> a = source, b = candidate.
-            if !allclose(&y, &y_cand, rtol, atol) {
+            // GENERIC EQUIVALENCE (2026-07-11): source-finite rows must match; source-nonfinite
+            // rows may be domain-EXTENDED by the candidate (x/x -> 1). a = source, b = candidate.
+            if !allclose_extends(&y, &y_cand, rtol, atol) {
                 return false;
             }
+            informative += crate::eval::count_finite(&y);
         }
     }
-    true
+    // EVIDENCE GATE: enough source-finite (row, instance) points must back the certification,
+    // else an (almost-)nowhere-defined source would be rewritten by its corner values alone.
+    informative >= min_informative
 }
 
 /// FFI-facing wrapper: compile both expressions and run the no-constant equivalence test. The
@@ -215,18 +223,19 @@ fn candidate_matches(
     min_informative: usize,
     rng: &mut Rng,
 ) -> bool {
-    // INFORMATIVENESS GATE (2026-07-10 audit), const-free arm: y is fixed, so gating its finite
-    // count once == gating every passing instance (finite-vs-NaN rows fail allclose).
-    if cand.n_const == 0 && cand.finite_y < min_informative {
+    // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): accumulated
+    // source-finite evidence is bounded by n_instances * finite(y_cand).
+    if cand.n_const == 0 && cand.finite_y * y_src.len() < min_informative {
         return false;
     }
-    // Const-bearing arm: accumulate finite SOURCE rows over passing instances; vacuous instances
-    // (e.g. an all-NaN zero-constant combo matched vacuously by the fit) contribute no evidence.
+    // EVIDENCE: accumulate source-finite rows over passing instances (BOTH arms); vacuous
+    // instances (all-NaN/overflowed sources) contribute none.
     let mut total_informative: usize = 0;
     for y in y_src {
         let ok = if cand.n_const == 0 {
-            // engine.py (historical find_rule_worker): allclose(source, candidate)
-            allclose(y, cand.y_const_free.as_ref().unwrap(), rtol, atol)
+            // GENERIC EQUIVALENCE (2026-07-11): source-finite rows must match; source-nonfinite
+            // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate.
+            allclose_extends(y, cand.y_const_free.as_ref().unwrap(), rtol, atol)
         } else {
             let s = rng.next_u64();
             crate::fit::exist_constants_fit_prepared(
@@ -245,14 +254,9 @@ fn candidate_matches(
         if !ok {
             return false;
         }
-        if cand.n_const > 0 {
-            total_informative += crate::eval::count_finite(y);
-        }
+        total_informative += crate::eval::count_finite(y);
     }
-    if cand.n_const > 0 && total_informative < min_informative {
-        return false;
-    }
-    true
+    total_informative >= min_informative
 }
 
 /// The source-side challenge instances, evaluated ONCE PER SOURCE and shared across every candidate

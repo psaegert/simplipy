@@ -251,12 +251,55 @@ pub fn allclose(a: &[f64], b: &[f64], rtol: f64, atol: f64) -> bool {
     true
 }
 
+/// GENERIC-EQUIVALENCE accept gate (2026-07-11 user decision: domain EXTENSION is allowed).
+/// Rows where the SOURCE (`a`) is non-finite (NaN/+-inf: undefined, or an f64 overflow artifact)
+/// impose NO constraint -- the replacement may complete them (`x/x -> 1` at 0, the 0/0 limit;
+/// `log(exp(x)) -> x` where exp overflows). Rows where the source IS finite are hard constraints:
+/// the candidate (`b`) must be finite and within `atol + rtol*|b|` (numpy orientation, b =
+/// candidate = reference). The reverse direction stays REJECTED: a candidate that is NaN/inf where
+/// the source is finite loses a defined value (the audited `asin(cosh(_0)) -> nan` class).
+/// With ZERO source-finite rows this is vacuously true -- callers MUST separately require
+/// >= min_informative source-finite evidence rows (accumulated across challenge instances).
+pub fn allclose_extends(a: &[f64], b: &[f64], rtol: f64, atol: f64) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        if !x.is_finite() {
+            continue; // source undefined/overflowed: the replacement may extend the domain
+        }
+        if !y.is_finite() {
+            return false; // source defined, candidate not: loses a value
+        }
+        if (x - y).abs() > atol + rtol * y.abs() {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn allclose_extends_semantics() {
+        let (r, a) = (1e-9, 1e-12);
+        // source-nonfinite rows are don't-care (domain extension)
+        assert!(allclose_extends(&[f64::NAN, 1.0], &[1.0, 1.0], r, a)); // x/x -> 1 shape
+        assert!(allclose_extends(&[f64::INFINITY, 2.0], &[5.0, 2.0], r, a)); // overflow row
+        // source-finite rows are hard constraints
+        assert!(!allclose_extends(&[1.0], &[f64::NAN], r, a)); // asin(cosh)->nan shape
+        assert!(!allclose_extends(&[1.0], &[f64::INFINITY], r, a));
+        assert!(!allclose_extends(&[1.0], &[1.1], r, a));
+        assert!(allclose_extends(&[1.0, 2.0], &[1.0, 2.0 + 1e-13], r, a));
+        // all-nonfinite source: vacuously true -> the caller's evidence gate must reject
+        assert!(allclose_extends(&[f64::NAN, f64::NAN], &[f64::NAN, 3.0], r, a));
+        assert!(!allclose_extends(&[1.0, 2.0], &[1.0], r, a)); // length mismatch
     }
 
     #[test]

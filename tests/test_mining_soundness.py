@@ -5,7 +5,9 @@ certification; together they gate the checker against regressions of:
 
 1. vacuous equal_nan acceptance (an (almost-)everywhere-NaN pair "agreeing" on NaN rows),
 2. saturation false-accepts at loose tolerances (tanh/exp towers within 1e-5 of a constant),
-3. measure-zero corner blindness (identities false at exactly 0 accepted under continuous X),
+3. corner blindness (wrong-VALUE identities like asin(cosh(_0)) -> nan are false AT 0; the
+   exact corner points in the mixture X refute them -- while domain EXTENSION at points where
+   the SOURCE is undefined stays allowed: div(_0,_0) -> 1, the generic-equivalence policy),
 4. Phase-1 non-exhaustiveness (enumeration stopping at max length REACHED, not SATURATED),
 5. non-reproducibility (unseeded X / hash-order iteration),
 6. end-to-end: a small mine on operators that CAN express the vacuous pair must not ship it.
@@ -26,6 +28,7 @@ _OPERATORS = {
     "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
     "neg": {"realization": "simplipy.operators.neg", "alias": [], "inverse": "neg", "arity": 1, "precedence": 2.5, "commutative": False},
     "inv": {"realization": "simplipy.operators.inv", "alias": ["inverse"], "inverse": "inv", "arity": 1, "precedence": 4, "commutative": False},
+    "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
     "pow2": {"realization": "simplipy.operators.pow2", "alias": [], "inverse": "sqrt", "arity": 1, "precedence": 3, "commutative": False},
     "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
     "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
@@ -74,12 +77,40 @@ class TestCheckerSoundness:
         assert engine._core.equivalent_no_const(
             ['tanh', 'exp', 'exp', 'x0'], ['1'], ['x0'], x_flat, n) is False
 
-    def test_measure_zero_corner_rejected(self, engine, mining_x) -> None:
-        """mul(x0, inv(x0)) == 1 is false at exactly 0 (nan vs 1). Continuous-only X
-        never sampled the corner; the exact special values in the mixture must."""
+    def test_domain_extension_accepted(self, engine, mining_x) -> None:
+        """GENERIC EQUIVALENCE (2026-07-11 user decision): where the SOURCE is undefined
+        (0/0 at exactly 0), the replacement may complete it with the limit value --
+        x/x -> 1 and x*inv(x) -> 1 certify despite the corner rows in the mixture X."""
         x_flat, n = mining_x
         assert engine._core.equivalent_no_const(
-            ['*', 'x0', 'inv', 'x0'], ['1'], ['x0'], x_flat, n) is False
+            ['/', 'x0', 'x0'], ['1'], ['x0'], x_flat, n) is True
+        assert engine._core.equivalent_no_const(
+            ['*', 'x0', 'inv', 'x0'], ['1'], ['x0'], x_flat, n) is True
+
+    def test_overflow_extension_accepted(self, engine, mining_x) -> None:
+        """log(exp(x0)) == x0 must certify although exp overflows to +inf on the
+        mixture's heavy tail (source-nonfinite rows are extendable f64 artifacts)."""
+        x_flat, n = mining_x
+        assert engine._core.equivalent_no_const(
+            ['log', 'exp', 'x0'], ['x0'], ['x0'], x_flat, n) is True
+
+    def test_extension_is_asymmetric(self, engine, mining_x) -> None:
+        """The reverse direction stays rejected: a replacement that is NaN where the
+        source is FINITE loses a defined value (the audited defect class)."""
+        x_flat, n = mining_x
+        # source finite everywhere; candidate NaN almost everywhere
+        assert engine._core.equivalent_no_const(
+            ['+', 'x0', '0'], ['log', 'neg', 'pow2', 'x0'], ['x0'], x_flat, n) is False
+
+    def test_no_evidence_rejected(self, engine, mining_x) -> None:
+        """An (almost-)nowhere-defined source cannot be rewritten by its corner values
+        alone: asin(cosh(x0)) is finite ONLY at exactly 0 (a handful of mixture rows),
+        far below the evidence gate, so even a corner-consistent replacement fails."""
+        x_flat, n = mining_x
+        # 'pi/2-ish constant' replacement matches the source AT its only defined point,
+        # but evidence (source-finite rows) is ~7 of 1024 < n/8.
+        assert engine._core.find_rule(
+            ['asin', 'cosh', 'x0'], 3, None, [['<constant>']], ['x0'], x_flat, n) is None
 
     def test_confirm_primitive_rejects_shipped_defect(self, engine, mining_x) -> None:
         """The exact dev_7-3 defect asin(cosh(_0)) -> nan, via the stage-2 confirm
