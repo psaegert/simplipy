@@ -2,7 +2,7 @@
 
 ## Unreleased — 7-4 re-mine readiness: candidate fold-filter + growing-basis affine recall
 
-The two launch blockers from `MINE_7_4_READINESS_2026-07-11.md` (blockers 1 and 2). Mining-path
+The two launch blockers from the internal readiness review (blockers 1 and 2). Mining-path
 only; the inline `simplify` engine and the shipped `dev_7-3` asset are untouched.
 
 ### Added (BLOCKER 1 — candidate library minimization, the "fold-filter")
@@ -14,7 +14,7 @@ only; the inline `simplify` engine and the shipped `dev_7-3` asset are untouched
   candidate also matches at a strictly shorter length, preempting it in the shortest-first scan;
   the filter is gated on the bare `<constant>` candidate being present (inert otherwise).
   This removes the bulk of the constant-bearing (LM-fit) candidate arm -- the dominant per-source
-  cost for const-free sources (see `MINE_7_4_FEASIBILITY_2026-07-11.md`). Measured on the real
+  cost for const-free sources. Measured on the real
   13-leaf dev config (complete len<=4 library = 566,280 candidates): the filter drops 374,031
   var-free candidates (66%), and hard const-free non-reducing probe sources (len 5-8) go from
   374-474 s/source to 5.0-8.5 s/source -- a 55-88x per-source speedup at identical decisions.
@@ -80,7 +80,7 @@ tested (cargo 35, pytest 253):
 
 ## 0.5.0 — 2026-07-11 — sound rule-mine checker (2026-07-10 audit) + Python mining mirror removed
 
-Full audit report: `EQUIVALENCE_AUDIT_2026-07-10.md`. The pre-0.5.0 checker shipped ~8.3% defective
+The pre-0.5.0 checker shipped ~8.3% defective
 rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard rules such as
 `asin(cosh(_0)) -> nan` (false at 0, where the source is pi/2).
 
