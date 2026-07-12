@@ -92,6 +92,10 @@ def main(argv: str = None) -> None:
                 min_informative=rule_finding_config.get('min_informative', None),
                 seed=rule_finding_config.get('seed', 42),
                 confirm=rule_finding_config.get('confirm', True),
+                source_sample_per_length={
+                    int(k): int(v) for k, v in
+                    (rule_finding_config.get('source_sample_per_length') or {}).items()},
+                candidate_fold_filter=rule_finding_config.get('candidate_fold_filter', True),
                 output_file=args.output_file,
                 save_every=args.save_every,
                 reset_rules=args.reset_rules,
