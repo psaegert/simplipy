@@ -120,6 +120,88 @@ their sample sizes. Progress, per-length rule counts, and universe coverage are 
 as the mine advances, and the output file plus its provenance sidecar are updated after
 every completed length.
 
+## LLM-proposed rules
+
+Mining guarantees completeness where enumeration or sampling reaches, but the source
+universe grows so fast with expression length (billions at length 7, and worse beyond)
+that uniform sampling essentially never draws the *mathematically salient* long
+identities — `sin²x + cos²x → 1` is a length-7 source with a ~0.03% chance of appearing
+in a million-draw sample. A language model, by contrast, can name such identities
+directly. SimpliPy therefore supports a complementary channel:
+
+**an LLM proposes candidate source expressions; the engine certifies them with the
+exact same gates as mined rules.** Proposals only ever *add* source expressions, so a
+certified proposal is precisely as sound as a mined rule — the model's correctness is
+never trusted, only its taste in candidates. Wrong proposals cost about a CPU-second
+each and are rejected.
+
+```python
+import simplipy as sp
+from simplipy.utils import deduplicate_rules
+
+engine = sp.SimpliPyEngine.load("dev_7-3")
+
+proposals = [
+    ["+", "pow2", "sin", "x0", "pow2", "cos", "x0"],   # sin^2 + cos^2
+    ["mult2", "*", "sin", "x0", "cos", "x0"],          # 2 sin cos
+    ["*", "-", "x0", "x1", "-", "x1", "x0"],           # (x-y)(y-x)
+]
+hints = [None, None, ["neg", "pow2", "-", "x0", "x1"]]  # optional target suggestions
+
+extra_terms = ['<constant>', '0', '1', '(-1)', 'np.pi', 'np.e']  # target vocabulary
+certified = engine.certify_rules(proposals, hints,
+                                 extra_internal_terms=extra_terms, verbose=True)
+# -> [(source, target, 'minimal' | 'verified'), ...]
+
+dummies = ["x0", "x1"]
+engine.simplification_rules = deduplicate_rules(
+    engine.simplification_rules + [(s, t) for s, t, _ in certified], dummies)
+engine.compile_rules()
+```
+
+For each proposal, `certify_rules` checks validity, skips sources the engine already
+reduces, searches the complete candidate library for a certified-**minimal** target,
+and re-verifies the winning pair on an independent evaluation matrix. If no
+library-sized target exists, an optional per-proposal **hint** is verified instead —
+sound, but marked `'verified'` rather than `'minimal'` since no shorter form was ruled
+out. Targets certified this way may have any length, as long as they are shorter than
+the source.
+
+### How we use this (and what to expect)
+
+The rule packs for the upcoming engine asset were proposed by Claude, prompted with the
+exact grammar (the operator inventory, the leaf symbols including the `<constant>`
+wildcard, prefix arity rules, and a source-length window) and split across identity
+families — trigonometric, hyperbolic, exponential/logarithmic, algebraic cancellations,
+powers and roots, constant arithmetic, multi-variable symmetry, and special values —
+with each family asked to enumerate systematically and to include operand-order and
+factored variants as separate entries (rule matching is syntactic, so distinct tree
+spellings of one identity are distinct rules).
+
+Observed over ~2,400 proposals: generating a wave takes minutes; certification runs at
+roughly 1–2 seconds per proposal; about half of all proposals are true identities the
+engine already covers (rejected as redundant); under 1% fail numerical verification
+outright; and roughly a third certify — the majority at source lengths that uniform
+sampling would never reach, with the model's own target suggestion matching the
+certified-minimal target about 85–90% of the time.
+
+## Replicating a large ruleset end to end
+
+1. **Mine** with the configuration above (`simplipy find-rules ...`). Complete
+   enumeration through length 5 plus one-million-source samples at lengths 6 and 7 is
+   roughly a week on a modern 16-core CPU; the provenance sidecar records everything
+   needed to reproduce the run from its seed.
+2. **Propose** long identities with an LLM of your choice, prompting with your engine's
+   grammar; ask for systematic family-by-family enumeration and tree-spelling variants.
+3. **Certify** the proposals with `certify_rules` against the freshly mined engine
+   (minutes per thousand proposals), and merge the accepted pairs with
+   `deduplicate_rules`, which keeps the shortest target per source.
+4. **Post-process** (optional): `prune-rules` / `resolve-rules`, below.
+
+Steps 1 and 3–4 are deterministic given the seed; step 2 is inherently not, so keep the
+accepted proposal list under version control — the certified pairs, not the model
+transcript, are the reproducible artifact.
+
 # Post-processing Rules
 
 Two commands refine an existing rule set loaded from an engine and write the

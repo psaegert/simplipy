@@ -458,3 +458,27 @@ class TestStageTwoConfirmation:
             ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 123)
         assert (('asin', 'cosh', 'x0'), ('nan',)) not in kept
         assert (('+', 'x0', '0'), ('x0',)) in kept
+
+
+class TestCertifyRules:
+    """The public certification API for externally proposed rules (LLM/human proposals)."""
+
+    def test_certifies_true_identity_rejects_false_and_verifies_hint(self, engine) -> None:
+        proposals = [
+            ["log", "*", "exp", "x0", "exp", "x1"],                  # log(e^a e^b) -> a+b (true, L6)
+            ["+", "exp", "x0", "cosh", "x1"],                        # no shorter equivalent -> reject
+            ["*", "exp", "x0", "*", "exp", "x1", "exp", "x2"],       # minimal form is 6 tokens
+        ]
+        hints = [None, None, ["exp", "+", "x0", "+", "x1", "x2"]]
+        out = engine.certify_rules(proposals, hints, dummy_variables=3, X=256, seed=7)
+        by_src = {tuple(s): (t, c) for s, t, c in out}
+        assert by_src[tuple(proposals[0])] == (("+", "x0", "x1"), "minimal")
+        assert tuple(proposals[1]) not in by_src
+        assert by_src[tuple(proposals[2])] == (("exp", "+", "x0", "+", "x1", "x2"), "verified")
+
+    def test_skips_sources_the_engine_already_reduces(self, engine) -> None:
+        engine.find_rules(max_source_pattern_length=3, dummy_variables=1,
+                          extra_internal_terms=["0", "1", "<constant>"], X=256,
+                          seed=7, verbose=False)
+        out = engine.certify_rules([["+", "x0", "0"]], X=256, seed=7)
+        assert out == []

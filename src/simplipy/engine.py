@@ -33,7 +33,7 @@ from simplipy.utils import (
     get_used_modules, numbers_to_constant, flatten_nested_list, is_prime,
     deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
     enumerate_expressions, count_expressions, sample_expression,
-    apply_mapping, match_pattern, remove_pow1,
+    apply_mapping, match_pattern, remove_pow1, violates_wildcard_multiplicity,
     _WILDCARD_RE)
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
@@ -2554,6 +2554,120 @@ class SimpliPyEngine:
         }
         with open(output_file + '.provenance.json', 'w') as file:
             json.dump(provenance, file, indent=2)
+
+    def certify_rules(
+            self,
+            sources: list,
+            targets: list | None = None,
+            max_target_pattern_length: int = 4,
+            dummy_variables: int | list[str] | None = None,
+            extra_internal_terms: list[str] | None = None,
+            X: int | None = None,
+            constants_fit_challenges: int = 16,
+            constants_fit_retries: int = 16,
+            rtol: float = 1e-9,
+            atol: float = 1e-12,
+            min_informative: int | None = None,
+            seed: int | None = 42,
+            verbose: bool = False) -> list[tuple[tuple[str, ...], tuple[str, ...], str]]:
+        """Certify externally proposed simplification rules with the mining gates.
+
+        For each proposed ``source`` expression this runs the exact certification chain
+        the miner uses: validity check, pruning against the engine's current rules
+        (already-reducible sources are skipped), a shortest-first scan of the complete
+        candidate library up to ``max_target_pattern_length`` (yielding a certified
+        MINIMAL target), and re-verification on an independent, twice-as-wide evaluation
+        matrix. If no library target exists and a parallel ``targets`` hint is given,
+        the specific (source, target) pair is verified instead -- sound, but without a
+        minimality certificate.
+
+        Intended for LLM- or human-proposed identities: proposals only ever ADD source
+        expressions, so certified output is exactly as sound as mined rules.
+
+        Parameters mirror :meth:`find_rules`. The engine is not modified; returns a list
+        of ``(source, target, certificate)`` tuples with certificate ``'minimal'`` or
+        ``'verified'``. Merge accepted pairs explicitly, e.g.::
+
+            pairs = engine.certify_rules(proposals, hints)
+            engine.simplification_rules = deduplicate_rules(
+                engine.simplification_rules + [(s, t) for s, t, _ in pairs], dummies)
+            engine.compile_rules()
+        """
+        if self._core is None:
+            raise RuntimeError('certify_rules requires the compiled simplipy._core backend')
+        sources = [tuple(str(t) for t in s) for s in sources]
+        hint_list: list = list(targets) if targets is not None else [None] * len(sources)
+        if len(hint_list) != len(sources):
+            raise ValueError('targets must parallel sources')
+        if dummy_variables is None:
+            found = sorted({t for s in sources for t in s
+                            if t.startswith('x') and t[1:].isdigit()},
+                           key=lambda v: int(v[1:]))
+            dummy_variables = found or ['x0']
+        elif isinstance(dummy_variables, int):
+            dummy_variables = [f'x{i}' for i in range(dummy_variables)]
+        extra_internal_terms = extra_internal_terms or []
+
+        _rng = np.random.default_rng(seed)
+        X_data = self._mining_sample_x(X or 1024, len(dummy_variables), _rng)
+        X_confirm = self._mining_sample_x(2 * X_data.shape[0], len(dummy_variables), _rng)
+        mine_seed = int(_rng.integers(2 ** 62))
+        confirm_seed = int(_rng.integers(2 ** 62))
+        if min_informative is None:
+            min_informative = X_data.shape[0] // 8
+
+        leaf_nodes = list(dummy_variables) + [t for t in extra_internal_terms
+                                              if t not in dummy_variables]
+        if '<constant>' not in leaf_nodes:
+            leaf_nodes.append('<constant>')
+        non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
+        expressions = enumerate_expressions(leaf_nodes, non_leaf_nodes, max_target_pattern_length)
+        candidates = [list(expression)
+                      for length in sorted(expressions)
+                      for expression in sorted(expressions[length])]
+        library = self._core.build_candidate_library(
+            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(),
+            X_data.shape[0], fold_filter=True)
+        if verbose:
+            print(f'Candidate library: {library.n_candidates:,} candidates '
+                  f'({library.n_filtered:,} var-free filtered)')
+
+        vocabulary = set(leaf_nodes) | set(self.operator_arity)
+        certified: list = []
+        confirm_min = max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
+        for index, (source, hint) in enumerate(zip(sources, hint_list)):
+            if not set(source) <= vocabulary or not self.is_valid(list(source)):
+                continue
+            simplified_length = len(self.simplify(list(source)))
+            if simplified_length < len(source):
+                continue  # the current rules already reduce it
+            target = self._core.find_rule_lib(
+                list(source), simplified_length, max_target_pattern_length, library,
+                challenges=constants_fit_challenges, retries=constants_fit_retries,
+                seed=mine_seed + (len(source) << 40) + index, rtol=rtol, atol=atol,
+                min_informative=min_informative)
+            certificate = 'minimal'
+            if target is None and hint is not None:
+                hint = [str(t) for t in hint]
+                if (set(hint) <= vocabulary and len(hint) < len(source)
+                        and self.is_valid(list(hint))
+                        and not violates_wildcard_multiplicity(list(source), list(hint))
+                        and self._confirm_mined_rules(
+                            [(source, tuple(hint))], dummy_variables, X_data,
+                            constants_fit_challenges, constants_fit_retries, rtol, atol,
+                            min_informative, mine_seed + (len(source) << 40) + index)):
+                    target = hint
+                    certificate = 'verified'
+            if target is None:
+                continue
+            if self._confirm_mined_rules(
+                    [(source, tuple(target))], dummy_variables, X_confirm,
+                    constants_fit_challenges, constants_fit_retries, rtol, atol,
+                    confirm_min, confirm_seed + (len(source) << 40) + index):
+                certified.append((source, tuple(target), certificate))
+                if verbose:
+                    print(f'certified ({certificate}): {list(source)} -> {list(target)}')
+        return certified
 
     def find_rules(
             self,
