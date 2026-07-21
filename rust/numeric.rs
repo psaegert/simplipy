@@ -1,8 +1,8 @@
 //! Numeric constant folding (the `numeric` engine line): a native f64 evaluator + a CPython-exact
-//! `str(float)` formatter, replacing the Python `_evaluate_constant_subtree` (engine.py:1073) which
+//! `str(float)` formatter, replacing the Python `_evaluate_constant_subtree` (engine.py@0.2.15:1073) which
 //! went through `operators_to_realizations` -> `prefix_to_infix` -> `codify` -> `code_to_lambda`.
 //!
-//! Parity policy (user decision: "numerically correct"): the evaluator uses the SAME primitives as
+//! Parity policy ("numerically correct"): the evaluator uses the SAME primitives as
 //! Python -- libm (`powf`/`sin`/...) and exact f64 arithmetic, with the engine's custom operator
 //! semantics (the `div`/`inv` zero handling, the real cube/fifth roots, `pow1_2`/`pow1_4` of a
 //! negative base yielding a COMPLEX result -> no fold, binary `pow` via `np.power` -> NaN). This is
@@ -51,7 +51,7 @@ fn cpow(x: f64, y: f64) -> f64 {
     unsafe { cmath::pow(std::hint::black_box(x), std::hint::black_box(y)) }
 }
 
-/// Faithful port of `_evaluate_constant_subtree` (engine.py:1073): evaluate an all-numeric prefix
+/// Faithful port of `_evaluate_constant_subtree` (engine.py@0.2.15:1073): evaluate an all-numeric prefix
 /// subtree to a single result token, or `None` if it cannot be folded (matches Python's `None`).
 pub fn evaluate_constant_subtree(tokens: &[String], ops: &Operators) -> Option<String> {
     let mut idx = 0;
@@ -82,10 +82,14 @@ fn eval_node(tokens: &[String], idx: &mut usize, ops: &Operators) -> Option<f64>
             }
             apply_op(&tok, &args[..arity])
         }
-        // Leaf: Python `float(token)`. Rust `parse::<f64>` agrees on every `is_numeric_string`-true
-        // token the grammar emits (the `1.`/`.5`/`1e3` forms); a non-parseable leaf -> None (Python
-        // would raise inside the eval -> None).
-        None => parse_pyfloat(&tok),
+        // Leaf: any token `leaf_value` resolves -- numeric literals (Python `float(token)`; Rust
+        // `parse::<f64>` agrees on every `is_numeric_string`-true form the grammar emits), the
+        // special constants (`np.pi`, `np.e`, the `float("...")` tokens) and parenthesized
+        // literals (`(-1)`). ONE leaf table with the tape evaluator (the previous
+        // `parse_pyfloat`-only leaf made `cosh(np.pi)` unfoldable HERE while the OFFLINE tape
+        // resolved it, so the miner and the folder disagreed about which subtrees are constant).
+        // An unresolvable leaf -> None (Python would raise inside the eval -> None).
+        None => leaf_value(&tok),
     }
 }
 
@@ -136,8 +140,8 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
     Some(match name {
         "neg" => |x| -x,
         // inv: plain IEEE 1/x (1/+0 -> +inf, 1/-0 -> -inf) == the deployed numpy ARRAY branch.
-        // The old +inf-for-any-zero special case was the python SCALAR quirk; the 2026-07-10
-        // equivalence audit showed the miner must match deployment (numpy) semantics.
+        // The old +inf-for-any-zero special case was the python SCALAR quirk; the miner
+        // must match deployment (numpy) semantics.
         "inv" => |x| 1.0 / x,
         "abs" => |x: f64| x.abs(),
         "mult2" => |x| 2.0 * x,
@@ -205,8 +209,8 @@ pub(crate) fn apply_op(name: &str, a: &[f64]) -> Option<f64> {
 
 /// Division: plain IEEE `x / y` == the deployed numpy ARRAY branch (sign of a ZERO DIVISOR
 /// participates: 1/-0.0 = -inf; 0/0 = nan). The old sign-of-numerator-only special case was the
-/// python SCALAR quirk; the 2026-07-10 equivalence audit showed rules certified under it can be
-/// false under deployment (numpy) semantics.
+/// python SCALAR quirk; rules certified under it can be false under deployment (numpy)
+/// semantics.
 fn op_div(x: f64, y: f64) -> f64 {
     x / y
 }
@@ -220,7 +224,7 @@ fn real_odd_root(x: f64, r: f64) -> f64 {
     }
 }
 
-/// CPython-exact `str(float)` as the result formatter uses it (engine.py:1085-1093):
+/// CPython-exact `str(float)` as the result formatter uses it (engine.py@0.2.15:1085-1093):
 /// nan/inf -> `float("...")` tokens; integer-valued -> `str(int(x))`; else `str(float)`.
 pub fn py_float_repr(x: f64) -> String {
     if x.is_nan() {

@@ -1,4 +1,4 @@
-//! Vectorized "tape" evaluator for the OFFLINE rule miner (Phase B, Milestone 1).
+//! Vectorized "tape" evaluator for the OFFLINE rule miner.
 //!
 //! The Python miner re-runs `operators_to_realizations -> explicit_constant_placeholders ->
 //! prefix_to_infix -> codify -> code_to_lambda` per candidate and evaluates with numpy over a
@@ -219,9 +219,9 @@ pub fn evaluate_batch(
 /// numpy's special handling -- two NaNs are equal; infinities are close iff equal (same sign), never
 /// close to a finite or opposite-sign inf. `b` is the asymmetric reference (second arg), matching the
 /// miner's call order. Empty inputs -> True.
-/// Rows where the value is FINITE (not nan, not +-inf) -- the "informative evidence" measure of
-/// the 2026-07-10 equivalence audit: both-NaN / both-inf agreement is vacuous, so certification
-/// requires a minimum number of finite rows.
+/// Rows where the value is FINITE (not nan, not +-inf) -- the "informative evidence" measure:
+/// both-NaN / both-inf agreement is vacuous, so certification requires a minimum number of
+/// finite rows.
 pub fn count_finite(a: &[f64]) -> usize {
     a.iter().filter(|v| v.is_finite()).count()
 }
@@ -251,25 +251,36 @@ pub fn allclose(a: &[f64], b: &[f64], rtol: f64, atol: f64) -> bool {
     true
 }
 
-/// GENERIC-EQUIVALENCE accept gate (2026-07-11 user decision: domain EXTENSION is allowed).
+/// GENERIC-EQUIVALENCE accept gate: domain EXTENSION is allowed.
 /// Rows where the SOURCE (`a`) is non-finite (NaN/+-inf: undefined, or an f64 overflow artifact)
 /// impose NO constraint -- the replacement may complete them (`x/x -> 1` at 0, the 0/0 limit;
 /// `log(exp(x)) -> x` where exp overflows). Rows where the source IS finite are hard constraints:
 /// the candidate (`b`) must be finite and within `atol + rtol*|b|` (numpy orientation, b =
 /// candidate = reference). The reverse direction stays REJECTED: a candidate that is NaN/inf where
-/// the source is finite loses a defined value (the audited `asin(cosh(_0)) -> nan` class).
+/// the source is finite loses a defined value (the `asin(cosh(_0)) -> nan` class).
 /// With ZERO source-finite rows this is vacuously true -- callers MUST separately require
 /// >= min_informative source-finite evidence rows (accumulated across challenge instances).
+/// NaN source is undefined -> domain-extendable (`x/x -> 1`). An INF source row
+/// is only accepted at f64 if the candidate already reproduces the SAME infinity; otherwise the
+/// row fails here and the near-miss rescue re-judges it by ESCALATION -- a genuine pole/literal
+/// stays inf (must-match, reject `pow(x,inf)->0` / `pow(0,cos x)->0`), a saturation inf resolves
+/// to a finite value and is judged there (keeps the tanh rescue). See `hiprec::judge_row`.
 pub fn allclose_extends(a: &[f64], b: &[f64], rtol: f64, atol: f64) -> bool {
     if a.len() != b.len() {
         return false;
     }
     for (&x, &y) in a.iter().zip(b.iter()) {
-        if !x.is_finite() {
-            continue; // source undefined/overflowed: the replacement may extend the domain
+        if x.is_nan() {
+            continue; // undefined -> domain-extendable (`x/x -> 1`)
+        }
+        if x.is_infinite() {
+            if y == x {
+                continue; // candidate already reproduces this infinity (same sign)
+            }
+            return false; // inf mismatch -> the near-miss rescue escalates it (pole vs saturation)
         }
         if !y.is_finite() {
-            return false; // source defined, candidate not: loses a value
+            return false; // source defined finite, candidate not: loses a value
         }
         if (x - y).abs() > atol + rtol * y.abs() {
             return false;
@@ -289,10 +300,24 @@ mod tests {
     #[test]
     fn allclose_extends_semantics() {
         let (r, a) = (1e-9, 1e-12);
-        // source-nonfinite rows are don't-care (domain extension)
-        assert!(allclose_extends(&[f64::NAN, 1.0], &[1.0, 1.0], r, a)); // x/x -> 1 shape
-        assert!(allclose_extends(&[f64::INFINITY, 2.0], &[5.0, 2.0], r, a)); // overflow row
-                                                                             // source-finite rows are hard constraints
+        // NaN source is undefined -> domain-extendable (`x/x -> 1`)
+        assert!(allclose_extends(&[f64::NAN, 1.0], &[1.0, 1.0], r, a));
+        // an inf source row passes f64 ONLY if the candidate reproduces the same inf
+        assert!(allclose_extends(
+            &[f64::INFINITY, 2.0],
+            &[f64::INFINITY, 2.0],
+            r,
+            a
+        ));
+        // ...else it fails here (the rescue then escalates: pole vs saturation)
+        assert!(!allclose_extends(&[f64::INFINITY, 2.0], &[5.0, 2.0], r, a));
+        assert!(!allclose_extends(
+            &[f64::INFINITY],
+            &[f64::NEG_INFINITY],
+            r,
+            a
+        )); // wrong-sign
+            // source-finite rows are hard constraints
         assert!(!allclose_extends(&[1.0], &[f64::NAN], r, a)); // asin(cosh)->nan shape
         assert!(!allclose_extends(&[1.0], &[f64::INFINITY], r, a));
         assert!(!allclose_extends(&[1.0], &[1.1], r, a));

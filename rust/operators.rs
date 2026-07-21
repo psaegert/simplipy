@@ -30,36 +30,34 @@ pub struct OperatorSpec {
 pub struct Operators {
     pub arity: FxHashMap<String, u8>,
     pub commutative: Vec<String>,
-    /// `operator_inverses` (engine.py:145): `{k: v["inverse"]}` for operators with a declared
+    /// `operator_inverses` (engine.py@0.2.15:145): `{k: v["inverse"]}` for operators with a declared
     /// inverse. `cancel_terms` reads `operator_inverses["+"]` / `["*"]` to decide parity flips.
     pub operator_inverses: FxHashMap<String, String>,
-    /// `max_power` (engine.py:166): `max(int(op[3:]) for op in operator_tokens if op matches
+    /// `max_power` (engine.py@0.2.15:166): `max(int(op[3:]) for op in operator_tokens if op matches
     /// `^pow\d+` NOT followed by `_`)`, else 0. The factor ceiling for `cancel_terms`' factorization.
     pub max_power: i64,
-    /// `max_fractional_power` (engine.py:167): `max(int(op[5:]) for op in operator_tokens if op
+    /// `max_fractional_power` (engine.py@0.2.15:167): `max(int(op[5:]) for op in operator_tokens if op
     /// matches `^pow1_\d+`)`, else 0. The factor ceiling for `convert_expression`'s fractional-power
     /// chain combining (dev_7-3: pow1_2..pow1_5 -> 5).
     pub max_fractional_power: i64,
-    /// `operator_precedence_compat` (engine.py:157-159): `{name: spec.precedence if present else
+    /// `operator_precedence_compat` (engine.py@0.2.15:157-159): `{name: spec.precedence if present else
     /// ENUMERATION-INDEX i}` in config order, THEN `['**'] = 3` and `['sqrt'] = 3` overlaid. Consumed
     /// by `prefix_to_infix` (paren decisions) and `infix_to_prefix` (shunting-yard precedence pops).
     /// f64 because `neg` declares the float precedence 2.5. The enum-index default never fires for
     /// dev_7-3 (all 38 ops declare a precedence) but is ported faithfully for config-robustness.
     pub operator_precedence_compat: FxHashMap<String, f64>,
-    /// `operator_arity_compat` (engine.py:162-163): `deepcopy(operator_arity)` + `'**' -> 2`. The
+    /// `operator_arity_compat` (engine.py@0.2.15:162-163): `deepcopy(operator_arity)` + `'**' -> 2`. The
     /// arity table `sort_operands` consults (it adds the Python-style `**` power token).
     pub operator_arity_compat: FxHashMap<String, u8>,
-    /// `operator_aliases` (engine.py:144): `{alias: operator}` over every operator's `alias` list.
+    /// `operator_aliases` (engine.py@0.2.15:144): `{alias: operator}` over every operator's `alias` list.
     /// `sort_operands` resolves an input token to its canonical operator through this map.
     pub operator_aliases: FxHashMap<String, String>,
-    /// `operator_realizations` (engine.py:154): `{name: realization}` (e.g. `sin` ->
+    /// `operator_realizations` (engine.py@0.2.15:154): `{name: realization}` (e.g. `sin` ->
     /// `simplipy.operators.sin`, `+` -> `+`). Used by `operators_to_realizations`.
     pub operator_realizations: FxHashMap<String, String>,
-    /// `realization_to_operator` (engine.py:155): the inverse, built in config order so a (here
+    /// `realization_to_operator` (engine.py@0.2.15:155): the inverse, built in config order so a (here
     /// absent) realization collision would resolve last-wins exactly as Python's dict comprehension.
     pub realization_to_operator: FxHashMap<String, String>,
-    // TODO(port): inverse_base / inverse_unary / inverse_binary, connection_classes,
-    // operator_to_class, binary_connectable_operators, max_fractional_power.
 }
 
 impl Operators {
@@ -82,7 +80,7 @@ impl Operators {
             .max()
             .unwrap_or(0);
         // operator_precedence_compat: declared precedence, else the config enumeration index, then
-        // overlay '**' = 3 and 'sqrt' = 3 (engine.py:157-159).
+        // overlay '**' = 3 and 'sqrt' = 3 (engine.py@0.2.15:157-159).
         let mut operator_precedence_compat: FxHashMap<String, f64> = FxHashMap::default();
         for (i, name) in order.iter().enumerate() {
             let prec = specs
@@ -106,7 +104,7 @@ impl Operators {
             })
             .collect();
         let mut operator_arity_compat: FxHashMap<String, u8> = arity.clone();
-        operator_arity_compat.insert("**".to_string(), 2); // engine.py:163
+        operator_arity_compat.insert("**".to_string(), 2); // engine.py@0.2.15:163
                                                            // Build the realization maps in config (`order`) order so the inverse resolves last-wins.
         let mut operator_realizations: FxHashMap<String, String> = FxHashMap::default();
         let mut realization_to_operator: FxHashMap<String, String> = FxHashMap::default();
@@ -142,19 +140,19 @@ impl Operators {
         self.arity.contains_key(token)
     }
 
-    /// `operator_inverses.get(token)` (engine.py:145). `None` if the operator declares no inverse.
+    /// `operator_inverses.get(token)` (engine.py@0.2.15:145). `None` if the operator declares no inverse.
     #[inline]
     pub fn operator_inverse(&self, token: &str) -> Option<&str> {
         self.operator_inverses.get(token).map(|s| s.as_str())
     }
 
-    /// `operator in self.commutative_operators` (engine.py:152). dev_7-3: `{'+', '*'}`.
+    /// `operator in self.commutative_operators` (engine.py@0.2.15:152). dev_7-3: `{'+', '*'}`.
     #[inline]
     pub fn is_commutative(&self, token: &str) -> bool {
         self.commutative.iter().any(|c| c == token)
     }
 
-    /// `operator_precedence_compat.get(token)` (engine.py:157-159). `None` if the token is unknown;
+    /// `operator_precedence_compat.get(token)` (engine.py@0.2.15:157-159). `None` if the token is unknown;
     /// call sites apply their own default (`.get(t, 0)` in `infix_to_prefix`, the `pow`/inf fallback
     /// in `prefix_to_infix`).
     #[inline]
@@ -162,7 +160,7 @@ impl Operators {
         self.operator_precedence_compat.get(token).copied()
     }
 
-    /// `token in self.operator_tokens` (the 38 config operator names; engine.py:143). Equivalent to
+    /// `token in self.operator_tokens` (the 38 config operator names; engine.py@0.2.15:143). Equivalent to
     /// `arity.contains_key` since `arity` is built from exactly those keys (excludes the synthetic
     /// `**` that only `operator_arity_compat` carries). Used by `prefix_to_infix`'s operator test.
     #[inline]
@@ -170,7 +168,7 @@ impl Operators {
         self.arity.contains_key(token)
     }
 
-    /// The `sort_operands` operator test (engine.py:1660-1662): `token in operator_arity_compat or
+    /// The `sort_operands` operator test (engine.py@0.2.15:1660-1662): `token in operator_arity_compat or
     /// token in operator_aliases`. Returns the resolved `(canonical_operator, arity)`, else `None`
     /// (a leaf). `operator = operator_aliases.get(token, token)`; `arity = operator_arity_compat[operator]`.
     pub fn sort_resolve(&self, token: &str) -> Option<(String, usize)> {
@@ -215,7 +213,7 @@ pub(crate) fn pow_power(token: &str) -> Option<i64> {
 /// Match the Python regex `^pow1_\d+` and return `int(token[5:])` if it matches, else `None`.
 /// `pow1_2` -> Some(2); `pow1_5` -> Some(5); `pow2` -> None (no `1_` infix); `pow1_` -> None
 /// (`\d+` needs at least one digit). `int(op[5:])` reads ALL chars after `pow1_`; for dev_7-3
-/// (`pow1_2..pow1_5`) that is exactly the digit run. Mirrors engine.py:167.
+/// (`pow1_2..pow1_5`) that is exactly the digit run. Mirrors engine.py@0.2.15:167.
 pub(crate) fn pow1_power(token: &str) -> Option<i64> {
     let rest = token.strip_prefix("pow1_")?;
     // `\d+`: require at least one leading digit, then `int(op[5:])` parses the whole tail.

@@ -35,6 +35,14 @@ As of `0.3.0` the inline phase (`simplify`, conversions, validation) runs in a c
 extension (`simplipy._core`), a large speed-up over the previous pure-Python engine at identical
 simplification behaviour.
 
+0.6.0 reworks the match-time economics at byte-identical outputs: `!`-sort certificates
+are evaluated only after a completed syntactic match (instead of per candidate
+attempt), memoized per call and in a generational per-engine cache that never stops
+memoizing, the fixpoint loop memoizes whole passes and rule-normal subtrees, and the
+hot path runs on interned token ids (~20× fewer allocations per call). On a
+65,536-expression training-prior benchmark, large certificate-bearing rulesets run
+~59× faster than 0.5.0; certificate-free rulesets run ~2.3× faster.
+
 ![Simplification time and ratio ECDFs: SymPy vs SimpliPy Python 0.2.15 vs SimpliPy Rust 0.3.0](https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplification_comparison_sympy_python_rust.svg)
 
 ECDFs of simplification wall-clock time (left) and simplification ratio (right) across maximum
@@ -48,24 +56,64 @@ of magnitude faster than SymPy, while producing near-identical simplification ra
 
 ```text
 function simplify(expr, max_iter=5):
-    tokens = parse(expr)  # infix→prefix or validate existing prefix
-    tokens = normalize(tokens)  # power folding, unary handling
+    tokens = parse(expr)               # infix→prefix, or validate existing prefix
 
-    for _ in range(max_iter):
-        tokens = cancel_terms(tokens)  # additive/multiplicative multiplicities
-        tokens = apply_rules(tokens)   # compiled rewrite patterns
-        tokens = sort_operands(tokens) # canonical order for commutative ops
-        tokens = mask_literals(tokens) # collapse trivial numerics to <constant>
+    for _ in range(max_iter):          # fixpoint loop
+        tokens = cancel_terms(tokens)  # one additive/multiplicative cancellation per pass
+        tokens = apply_rules(tokens)   # indexed rewrite patterns, top-down, first match wins
+        if unchanged_vs_previous_pass:
+            break                      # converged
 
-        if converged(tokens):
-            break
-
-    return finalize(tokens)  # prefix list or infix string, caller's choice
+    tokens = mask_literals(tokens)     # collapse trivial numerics to <constant> (before sort)
+    tokens = sort_operands(tokens)     # canonical order for commutative ops
+    return tokens if len(tokens) <= len(input) else input   # longer results are rejected
 ```
 
-This loop is intentionally lightweight: each pass performs a handful of pure
-list transformations, giving you predictable performance even on nested or noisy
-expressions.
+Masking runs before sorting (so the canonical operand order is computed on the masked
+tokens and the mask/sort pair is a fixpoint), both run once after the loop, and a
+result longer than the input is rejected in favor of the input. Since 0.6.0 the loop
+memoizes whole passes and rule-normal subtrees per call, so the convergence-confirming
+iteration and unchanged subexpressions cost hash lookups instead of re-scans — with
+byte-identical outputs.
+
+The same call as a flowchart, with the memo state each stage touches drawn as
+cylinders (dotted links are lookups/inserts, not data flow):
+
+```mermaid
+flowchart TD
+    IN["input tokens"] --> INTERN["intern to token ids"]
+    INTERN --> CANCEL
+    subgraph LOOP["fixpoint loop (up to max_iter passes)"]
+        CANCEL["cancel_terms"] --> RULES["apply_rules"]
+        RULES --> CONV{"changed vs<br/>previous pass?"}
+        CONV -- yes --> CANCEL
+    end
+    CONV -- "no (converged)" --> MASK["mask elementary literals"]
+    MASK --> SORT["sort operands"]
+    SORT --> GUARD{"result longer<br/>than input?"}
+    GUARD -- yes --> ORIG["return original input"]
+    GUARD -- no --> OUT["output tokens"]
+
+    subgraph WALK["inside apply_rules: per subtree, top-down"]
+        EXACT["exact rule lookup"] -- miss --> PATT["pattern scan,<br/>first match wins"]
+        PATT -- "match completed" --> CERT["certify !-bindings"]
+        PATT -- "no match" --> REC["recurse into operands,<br/>re-check the rebuilt node"]
+    end
+    RULES -.- WALK
+
+    STORE[("token store:<br/>engine table +<br/>per-call overlay")] -.- INTERN
+    PMEMO[("pass memos<br/>(cancel / rules)")] -.- CANCEL
+    PMEMO -.- RULES
+    NF[("rule-normal<br/>subtree set")] -.- WALK
+    CCACHE[("certificate caches:<br/>per-call + per-engine")] -.- CERT
+```
+
+The compiled core implements two *engine lines*, selected per call via its `fold`
+parameter. The **faithful** line (`fold=False`, plain conversions) is byte-identical to
+the frozen 0.2.15 pure-Python reference, kept so results produced against that engine
+stay reproducible; the **numeric** line (`fold=True`, fixed conversions) adds numeric
+constant folding and the conversion bug fixes, and is what the shipped Python API
+routes.
 
 
 ## Key Components
@@ -73,19 +121,19 @@ expressions.
 - **Parsing & normalization** – `SimpliPyEngine.parse` and
 	`SimpliPyEngine.convert_expression` convert infix input, harmonize power
 	operators, and propagate unary negation without losing prefix fidelity.
-- **Term cancellation** – `SimpliPyEngine.collect_multiplicities` and
-	`SimpliPyEngine.cancel_terms` identify subtrees that appear with opposite
-	parity or redundant factors, pruning them before any rules run.
-- **Rule execution** – `SimpliPyEngine.compile_rules` turns machine-discovered or
-	human-authored simplifications into tree patterns.
-	`SimpliPyEngine.apply_simplifcation_rules` then performs fast top-down matching
-	in each iteration.
-- **Canonical ordering** – `SimpliPyEngine.sort_operands` imposes a stable
-	ordering for commutative operators, ensuring identical expressions share
-	identical token layouts.
+- **Term cancellation** – each fixpoint pass identifies subtrees that appear
+	with opposite parity or redundant factors and prunes them before any rules
+	run (the compiled core's cancellation stage).
+- **Rule execution** – `SimpliPyEngine.compile_rules` syncs machine-discovered or
+	human-authored simplifications into the compiled core, which performs fast
+	top-down, first-match-wins rewriting in each iteration.
+- **Canonical ordering** – the final sorting stage imposes a stable ordering for
+	commutative operators, ensuring identical expressions share identical token
+	layouts.
 - **Rule discovery workflow** – `SimpliPyEngine.find_rules` explores expression
-	space in parallel worker processes, confirms identities with numeric sampling,
-	and writes back deduplicated rulesets that future engines can load instantly.
+	space natively on the compiled core (parallelized across all cores via rayon),
+	confirms identities with numeric sampling, and writes back deduplicated
+	rulesets that future engines can load instantly.
 
 
 ## Quickstart

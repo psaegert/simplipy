@@ -1,11 +1,63 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (unreleased)
 
-Rule-mining improvements only; the inline `simplify` engine and the shipped `dev_7-3`
-asset are unchanged.
+A performance overhaul of the simplify hot path (byte-identical outputs), sorted rule
+placeholders with match-time certificates, ruleset pruning and observability tools, and
+a round of rule-mining improvements and constant-folding coherence fixes. The shipped
+`dev_7-3` asset is unchanged.
 
 ### Added
+- **Sorted rule placeholders** (`_` / `?` / `!`): every placeholder in a rule carries a
+  *sort* — the binding claim its sigil encodes, enforced by the matcher at apply time.
+  `_i` binds any subtree; `?i` binds only a bare variable leaf; `!i` binds a variable
+  leaf freely, but a composite subtree only when a match-time certificate proves it
+  defined and finite almost everywhere (an adaptive interval analysis over the reals;
+  fail-closed — what cannot be certified is not bound). Sorts let a rule that is
+  value-sound only for certified operands make the wider claim without giving up
+  soundness. Newly mined rulesets emit sorted patterns; existing assets (explicit and
+  `_`-wildcard rules) behave exactly as before. See the rule-authoring guide
+  (`docs/rules.md`) for details.
+- **Covered-rule pruning** (`SimpliPyEngine.prune_covered_rules`, CLI
+  `simplipy prune-covered-rules`): removes any rule — wildcard-pattern rules included —
+  whose effect the remaining rules already achieve compositionally. A rule is covered
+  only if every instantiation variant of its source (distinct variable leaves, literal
+  `<constant>`, composite probes for wide placeholder slots) still simplifies to at
+  most the length of the corresponding target without it. Deterministic batch
+  remove-and-repair, longest sources first; greedy (the result is valid, not
+  necessarily minimal). Complementary to `prune_redundant_rules`, which removes only
+  explicit rules shadowed by pattern rules under an equality criterion. `find_rules`
+  gains `prune='covered'` to run this prune after discovery instead of the
+  redundant-rule prune.
+- **Simplify observability**: `SimpliPyEngine.simplify_counters()` /
+  `reset_simplify_counters()` expose the process-global simplify hot-path counters
+  (calls, iterations, pattern attempts/fires, certificate calls/hits, and coarse
+  per-stage nanosecond accounting) for profiling a batch.
+- **Formal mining-algorithm documentation**: a formally typeset specification of
+  `find_rules` (the discovery loop and the equivalence certification), with PDF/LaTeX
+  downloads, an algorithm-line-to-configuration reading guide, and the determinism
+  contract (`docs/algorithm.md`).
+- **Relaxed Kruskal search** (`mine_one_length(..., relaxed_kruskal=...)`): with
+  `True`, a source the current rules already shorten is still searched, with the
+  candidate bound tightened to its simplified length (only targets strictly shorter
+  than what `simplify` reaches are accepted). Relaxed rules are one-step shortcuts that
+  are capability-redundant wherever the reduct's own rule exists; for sampled
+  universes, re-mining the simplify-fixpoints of skipped sources generalizes better (a
+  fixpoint rule covers every source that reduces to it). The Rust-level parameter
+  defaults to the strict skip, but `find_rules(relaxed_kruskal=True)` is the
+  Python-side production default (a capability comparison across four mined corpora,
+  ~780k expressions total, found the relaxed mine strictly shorter on 735 of them and
+  never longer, at ~+6% mine cost).
+- **High-precision rescue for const-free equivalence** (`astro-float`, pure Rust, 1024-bit):
+  f64 remains the fast pre-filter, but a const-free candidate that fails the tolerance on
+  only a small fraction of its binding rows (<= 25%, <= 256 rows) is re-evaluated on
+  exactly those rows at 1024 bits and re-judged under the same generic-equivalence
+  semantics. True identities whose f64 round-trip loses precision now certify --
+  `atanh(tanh(x)) -> x` (f64 error reaches 2e-1 for |x| in [10, 19.6]) and, via domain
+  extension, `tanh(atanh(x)) -> x`, both previously unminable at the strict rtol=1e-9.
+  Every f64 accept is unchanged; plateau falsities keep failing their near-corner rows and
+  never reach the escalation. Applies to the mine scan and (through the same code path)
+  stage-2 confirmation and `certify_rules`.
 - **Candidate library minimization** (`find_rules(candidate_fold_filter=True)`, default on):
   variable-free candidates of length >= 2 are excluded from the mining candidate library.
   This is provably behavior-preserving (any source they could match is already matched by
@@ -19,7 +71,86 @@ asset are unchanged.
 - **Per-run sampler validation**: sampled sources are checked for universe membership
   (length, vocabulary, well-formedness) on every run.
 
+### Changed
+- **NaN literals propagate through constant folding**: a subtree with a
+  `float("nan")` operand now folds directly to `float("nan")` (every operator maps a
+  NaN operand to NaN; the IEEE `pow` edge cases whose value does not depend on the NaN
+  operand are excluded), and `inf`/`nan` literals are never absorbed into a fittable
+  `<constant>` — a `<constant>` claims a finite value exists to fit, and NaN is not
+  one. This is operator-table knowledge, not sampling: it also keeps the miner from
+  certifying rules that rewrite an everywhere-NaN expression, for which no finite
+  evidence can exist.
+- **Constant-fit restart seeds are order-independent** (a pure function of the source seed,
+  candidate, and challenge instance). Mines remain byte-reproducible for a fixed seed; the
+  output of a given seed may differ from 0.5.0 on marginal nonlinear fits.
+
+### Performance
+- **Certificate economics**: `!`-sort certificates are evaluated only after a
+  *completed* syntactic match (instead of during every candidate attempt), memoized
+  per call and in a generational per-engine cache that never stops memoizing. This
+  replaces the old hard-capped certificate cache, which silently stopped memoizing
+  once full and degraded at scale (measured on a 65,536-expression training-prior
+  benchmark: hit rate falling from 99.3% to 36.6% and per-expression engine cost from
+  ~600 µs to ~7,400 µs once the cap was hit). Certificate verdicts are unchanged.
+- **Fixpoint memoization**: the simplify fixpoint memoizes whole cancel/rules passes
+  and rule-normal subtrees per call, so the convergence-confirming iteration and
+  unchanged subexpressions cost hash lookups instead of re-scans.
+- **Interned token representation**: the hot path runs on interned token ids with a
+  per-engine property table (and a per-call overlay for unknown tokens), reducing
+  allocations per simplify call by ~20×.
+- Net effect on a 65,536-expression training-prior benchmark: large
+  certificate-bearing rulesets simplify ~59× faster than 0.5.0, with byte-identical
+  outputs; certificate-free rulesets run ~2.3× faster.
+- **Mining**: the source expression is evaluated once per source (per challenge
+  instance) and shared across the whole candidate scan, instead of per
+  (candidate, challenge, sign-combo); a const-free source collapses to a single
+  challenge instance (identical targets add no evidence and only multiplied fit
+  flakiness).
+
+### Removed
+- The `scipy` runtime dependency: dead since the 0.5.0 native constant-fit cutover
+  (no `scipy` import remained anywhere in the package).
+- 14 dead `SimpliPyEngine` attributes left over from the removed pure-Python simplify
+  engine, each verified to have no remaining consumers: `operator_inverses`,
+  `inverse_base`, `inverse_unary`, `inverse_binary`, `unary_mult_div_operators`,
+  `commutative_operators`, `realization_to_operator`, `operator_precedence_compat`,
+  `max_power`, `max_fractional_power`, `connection_classes`, `operator_to_class`,
+  `connection_classes_inverse`, `connection_classes_hyper`,
+  `binary_connectable_operators`.
+- `simplipy.utils.leaf_value`: unused Python duplicate of the engine's single
+  leaf-value table.
+- Two undocumented, dev-only methods on the compiled core (`eval_bench_resident`,
+  `classify_linearity`) and, on the Rust side, the unused `match_pattern` wrapper and
+  the unused `criterion` dev-dependency.
+
 ### Fixed
+- **Term cancellation respects non-finite algebra**: with an empty ruleset (or rule
+  application disabled), `0/0`, `nan/nan`, and `inf/inf` previously canceled to `1`,
+  and `inf - inf` / `nan - nan` to `0` — all wrong answers (the true value is NaN).
+  Cancellation assumes the group axioms, so a leaf now registers as cancellable only
+  in the connection classes where they hold: nonzero finite literals in both, `0` in
+  the additive class only, `nan`/`±inf` in neither. Variables and nonzero-finite
+  literals cancel exactly as before.
+- **One leaf-value table everywhere**: constant folding (`_try_fold_constants` /
+  `evaluate_constant_subtree`), the miner's all-constant short-circuit, and the offline
+  tape evaluator now share a single leaf resolution (Rust `numeric::leaf_value`):
+  numeric literals, `np.pi`, `np.e`, parenthesized literals such
+  as `(-1)`, and the `float("...")` tokens. Previously the folder and short-circuit used
+  the numeric-string predicate only, so e.g. `cosh(np.pi)` never folded exactly and
+  `(-1)/cosh(np.pi)` simplified no further than `(-1)/<constant>` even though every leaf
+  has a known value. The `<constant>` absorption collapse now admits any FINITE-valued
+  leaf (still never inf/nan literals: non-finite algebra remains the explicit rules'
+  domain).
+- **Generic-equivalence vacuity in the constant-bearing fit arm**: an equivalence-check
+  instance whose source evaluates nowhere finite (e.g. the sign-combo `C = 0`
+  instantiation of a constant-denominator source, `y = k/0`) binds no rows and is now
+  treated as domain-extendable — matching the declared semantics and the const-free arm —
+  instead of falling into the underdetermined-fit bail that returned `False` and vetoed
+  the candidate. This single instance previously killed every constant-denominator rule:
+  `x0*<constant>/<constant> -> x0*<constant>` was unminable, and (with the short-circuit
+  gap above) so was the whole `k/<constant> -> <constant>` absorption family. Evidence
+  accounting is unchanged: vacuous instances contribute zero rows toward
+  `min_informative`.
 - **Affine constant-fit recall with fast-growing bases**: fits of the form `C0*f(x)+C1`
   and `f(x)+C1` for `f` in `exp`/`cosh`/`sinh`/`pow3`-`pow5` were spuriously rejected at
   exactly-true constants. The closed-form solver now uses row weights matched to the
@@ -30,16 +161,11 @@ asset are unchanged.
 - Fold-filter variable detection is correct for configurations with more than 32 variables.
 - `min_informative` defaults are floored at 1 for very small evaluation matrices.
 
-### Changed
-- **Constant-fit restart seeds are order-independent** (a pure function of the source seed,
-  candidate, and challenge instance). Mines remain byte-reproducible for a fixed seed; the
-  output of a given seed may differ from 0.5.0 on marginal nonlinear fits.
-
 ### Docs
 - 0.5.0 entry corrected: the mine evaluation matrix's log-uniform tier is 1e-4..1e3, not
   1e-6..1e6.
 
-## 0.5.0 — 2026-07-11 — sound rule-mine checker (2026-07-10 audit) + Python mining mirror removed
+## 0.5.0 — 2026-07-11 — sound rule-mine checker + Python mining mirror removed
 
 The pre-0.5.0 checker shipped ~8.3% defective
 rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard rules such as
@@ -50,8 +176,8 @@ rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard 
   (default `n_rows / 8`) SOURCE-FINITE evidence rows, accumulated across challenge instances; a
   precomputed candidate-finite count serves as a fast necessary-condition gate for const-free
   candidates.
-- **Tolerances tightened** `rtol` 1e-5 -> 1e-9, `atol` 1e-8 -> 1e-12 (0 borderline rules in the
-  840-rule audit sample; tanh/exp saturation towers are no longer "equal" to constants).
+- **Tolerances tightened** `rtol` 1e-5 -> 1e-9, `atol` 1e-8 -> 1e-12 (0 borderline rules in an
+  840-rule review sample; tanh/exp saturation towers are no longer "equal" to constants).
 - **Heavy-tailed, seeded evaluation matrix** (`_mining_sample_x`): 40% N(0,5) + 25% U(-50,50) +
   25% signed log-uniform magnitudes 1e-4..1e3 + 10% exact corner points ({+-0.0, +-0.1, +-0.5,
   +-1, +-2, +-e, +-pi, +-10}). (This entry mis-stated the tier as 1e-6..1e6 until 2026-07-11;
@@ -86,19 +212,19 @@ rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard 
   completeness at 5/5 was ~24%).
 
 - **Affine-fit conditioning fix**: the whole `C0*f(x)+C1` family silently REJECTED before. Two
-  causes, both from the audit's own hardening: a GLOBAL trace-scaled Tikhonov ridge biased the
+  causes, both introduced by earlier hardening of the same path: a GLOBAL trace-scaled Tikhonov ridge biased the
   intercept, and the normal-equations solve squared the condition number on the wide-magnitude X
   so an exact affine relationship's intercept came out ~5e-9 off (past rtol). Now the affine path
   solves by Householder-QR least-squares (no `A^T A`, no ridge -- works at cond(A), not its square),
   and the mine X's log-uniform tier is capped at 1e3 (from 1e6): 1e3 still exercises every
-  saturation and f64 overflow the tier is FOR, but 1e6 wrecked the fit conditioning. Found by the
-  generic-equivalence adversarial verification (a CONTESTED finding, confirmed by probe: 0/30 ->
-  64/72 affine cases certify, 0 false-accepts; the residual misses have constants spanning >1e6).
+  saturation and f64 overflow the tier is FOR, but 1e6 wrecked the fit conditioning. Confirmed by
+  probe: 0/30 -> 64/72 affine cases certify, 0 false-accepts; the residual misses have constants
+  spanning >1e6.
 - **Log-linear recall fix**: for `pow(<constant>, g)` candidates, only a closed-form log-space
   ACCEPT short-circuits; an imprecise `Some(false)` solve (its ~1e-10 base error amplified past
   rtol by large exponents on the heavy-tailed X) now SEEDS the LM restart instead of rejecting,
   restoring the declared const-bearing policy ("accept iff constants EXIST that fit"). Surfaced by
-  a 20-agent adversarial verification of the generic-equivalence change (which found NO soundness
+  extensive adversarial re-verification of the generic-equivalence change (which found NO soundness
   defects).
 
 ### Changed
@@ -110,13 +236,14 @@ rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard 
 ### Removed (BREAKING)
 - **The pure-Python mining mirror is gone**: `find_rule_worker`, `exist_constants_that_fit` and the
   fork/SharedMemory pool (with the `n_workers` parameter). It duplicated `rust/worker.rs`/`fit.rs`
-  and repeatedly desynced from them (the audit's IEEE inv/div fork). `find_rules` now requires the
+  and repeatedly desynced from them (e.g. diverging IEEE inv/div semantics). `find_rules` now requires the
   compiled core and raises `RuntimeError` on a bare engine; parallelism is rayon's
   (`RAYON_NUM_THREADS`).
 
 ### Compatibility
-- Shipped rule assets (`dev_7-3` etc.) are unchanged by this release; they remain the v23 anchor.
-  A re-mine with the hardened checker is a separate, explicitly-versioned artifact.
+- Shipped rule assets (`dev_7-3` etc.) are unchanged by this release; they remain the frozen
+  reference that downstream training pipelines pin for reproducibility. A re-mine with the
+  hardened checker is a separate, explicitly-versioned artifact.
 
 
 ## 0.4.1 — 2026-07-02 — find_rules works with the Rust core + safe concurrent asset installs
@@ -136,8 +263,8 @@ rules in the dev_7-3 sample (52/840), including ~5,125 vacuous all-NaN wildcard 
   so a partially-downloaded asset is correctly treated as not installed. New dependency: `filelock`.
 
 ### Changed
-- Offline-mining research artifacts (the Phase-B plan, the capability-gap analysis, and the mine
-  grid/validation drivers) moved out of the released repo into the research archive.
+- Internal offline-mining scaffolding (mine grid and validation drivers) moved out of the
+  released repo.
 
 ## 0.4.0 — 2026-07-01 — native offline rule-miner + simplify fixes + CLI fix
 
@@ -204,7 +331,7 @@ length 3; the `rules.json` asset is byte-identical). What changed is the engine 
 > `dev_7-3` under SimpliPy 0.2.x), pin `simplipy<0.3`. The 0.2.x behavior is the frozen anchor; 0.3 is a
 > deliberate, documented quality improvement, not a silent drift.
 
-### Robustness (review-driven)
+### Robustness
 
 - **ndarray return no longer truncates folded tokens.** `simplify(np.array([...]))` re-infers the result
   string width (keeping the input dtype *kind*); previously a fold that emitted a token wider than the

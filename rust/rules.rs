@@ -1,38 +1,48 @@
 //! Rule storage, compilation, matching + the (length, root_operator) bucket index with the
 //! first-operand-symbol FILTER.
 //!
-//! Mirrors `compile_rules` (engine.py:189), `construct_rule_patterns` (engine.py:936),
-//! `apply_rules_top_down` (engine.py:1025), `match_pattern` (utils.py:800), `apply_mapping`
-//! (utils.py:762).
+//! Mirrors `compile_rules` (engine.py@0.2.15:189), `construct_rule_patterns` (engine.py@0.2.15:936),
+//! `apply_rules_top_down` (engine.py@0.2.15:1025), the pattern matcher `match_pattern_with_cert`
+//! (port of utils.py@0.2.15:800), `apply_mapping` (utils.py@0.2.15:762).
 //!
 //! `deduplicate_rules` is a VERIFIED NO-OP on the dev_7-3 rules.json (114k -> 114k, identical
 //! order + tokens), so the rules are consumed directly; no remap/dedup port is needed. The
-//! first-operand index (ported from the Python P0 work) is OUTPUT-IDENTICAL to the linear scan:
+//! first-operand index (ported from the Python implementation) is OUTPUT-IDENTICAL to the linear scan:
 //! it filters provable fast-fails while preserving first-match-wins (asset-order merge of the
 //! concrete-head subset and the wildcard residual).
+//!
+//! Rules compile to interned [`Tok`] sequences/trees. Every rule token is
+//! interned into the per-Engine [`TokenTable`] at compile, so rule keys/heads are always TABLE
+//! ids -- a query token that only exists in a per-call overlay can, by injectivity, never equal
+//! any rule token (the lookups fail exactly as the string comparisons did).
 
 use rustc_hash::FxHashMap;
 
+use crate::operators::Operators;
 use crate::parse::{parse_subtree, Node};
+use crate::tokens::{Tok, TokenTable};
 
-/// A compiled rule: prefix lhs/rhs tokens plus their pre-parsed trees. The trees are built once at
-/// compile time via `parse_subtree` (faithful to `construct_rule_patterns` calling `prefix_to_tree`;
-/// for dev_7-3 the two parsers agree -- no arity-0 operators, no aliases in the rules).
+/// A compiled rule: prefix lhs/rhs token ids plus their pre-parsed trees. The trees are built once
+/// at compile time via `parse_subtree` (faithful to `construct_rule_patterns` calling
+/// `prefix_to_tree`; for dev_7-3 the two parsers agree -- no arity-0 operators, no aliases in the
+/// rules).
 #[derive(Debug, Clone)]
 pub struct Rule {
-    pub lhs: Vec<String>,
-    pub rhs: Vec<String>,
+    pub lhs: Vec<Tok>,
+    #[allow(dead_code)] // read by the stage-(a) parity tests only (crate-internal since the
+    // `Engine::rules()` accessor became pub(crate))
+    pub rhs: Vec<Tok>,
     pub lhs_tree: Node,
     pub rhs_tree: Node,
 }
 
-/// The first-operand-head index for ONE (pattern_length, root_operator) bucket (the P0 index). The
+/// The first-operand-head index for ONE (pattern_length, root_operator) bucket. The
 /// values are POSITIONS into the bucket's `Vec<Rule>` (no rule/tree duplication). `by_head[H]` is the
 /// asset-ORDER-preserving merge of the concrete-operand[0]-head==H positions and the wildcard
 /// residual positions; `wild_only` is the residual alone (for query heads absent from `by_head`).
 #[derive(Debug, Default, Clone)]
 pub struct OperandIndex {
-    pub by_head: FxHashMap<String, Vec<usize>>,
+    pub by_head: FxHashMap<Tok, Vec<usize>>,
     pub wild_only: Vec<usize>,
 }
 
@@ -41,48 +51,54 @@ pub struct OperandIndex {
 #[derive(Debug, Default)]
 pub struct CompiledRules {
     /// `simplification_rules_no_patterns`: exact lhs token-seq -> rhs.
-    pub no_patterns: FxHashMap<Vec<String>, Vec<String>>,
+    pub exact_rules: FxHashMap<Vec<Tok>, Vec<Tok>>,
     /// `simplification_rules_patterns`: (len, root_op) -> ordered rules (asset order preserved).
-    pub patterns: FxHashMap<(usize, String), Vec<Rule>>,
+    pub patterns: FxHashMap<(usize, Tok), Vec<Rule>>,
     /// Per-bucket first-operand-head index (positions into the bucket). Output-identical to the scan.
-    pub operand_index: FxHashMap<(usize, String), OperandIndex>,
+    pub operand_index: FxHashMap<(usize, Tok), OperandIndex>,
     pub max_pattern_length: usize,
 }
 
-/// Mirror of `_WILDCARD_RE = re.compile(r'^_\d+$')` (utils.py:935): a metavariable token is `_`
-/// followed by one or more ASCII digits.
+/// Mirror of `_WILDCARD_RE = re.compile(r'^[_?]\d+$')` (utils.py): a slot token is a SORT SIGIL
+/// followed by one or more ASCII digits. Two sorts: `_N` binds an arbitrary SUBTREE (the
+/// pointwise-certified sort); `?N` binds a
+/// VARIABLE LEAF only (the sort the miner's certification actually establishes). The sort rides
+/// in the token, so a sorted rule set is just a rules.json with different spellings -- no schema
+/// change anywhere. (String form; the per-id `is_wildcard` property is computed from this at intern.)
 #[inline]
 pub fn is_wildcard(token: &str) -> bool {
     let b = token.as_bytes();
-    b.len() >= 2 && b[0] == b'_' && b[1..].iter().all(u8::is_ascii_digit)
+    b.len() >= 2
+        && (b[0] == b'_' || b[0] == b'?' || b[0] == b'!')
+        && b[1..].iter().all(u8::is_ascii_digit)
 }
 
 /// Classify a pattern rule by the head of its operand[0]. In flat prefix the root operator is
 /// `lhs[0]` and operand[0]'s root token is `lhs[1]`. `Some(head)` = concrete (only matches a query
 /// whose operand[0] head == head); `None` = wildcard/degenerate (tried for every query head).
 #[inline]
-pub fn operand0_head(lhs: &[String]) -> Option<&str> {
+pub fn operand0_head(lhs: &[Tok], table: &TokenTable) -> Option<Tok> {
     if lhs.len() < 2 {
         return None;
     }
-    let h = &lhs[1];
-    if is_wildcard(h) {
+    let h = lhs[1];
+    if table.is_wildcard_tok(h) {
         None
     } else {
-        Some(h.as_str())
+        Some(h)
     }
 }
 
-fn build_operand_index(bucket: &[Rule]) -> OperandIndex {
+fn build_operand_index(bucket: &[Rule], table: &TokenTable) -> OperandIndex {
     let mut wild_only: Vec<usize> = Vec::new();
-    let mut concrete: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+    let mut concrete: FxHashMap<Tok, Vec<usize>> = FxHashMap::default();
     for (pos, r) in bucket.iter().enumerate() {
-        match operand0_head(&r.lhs) {
-            Some(h) => concrete.entry(h.to_string()).or_default().push(pos),
+        match operand0_head(&r.lhs, table) {
+            Some(h) => concrete.entry(h).or_default().push(pos),
             None => wild_only.push(pos),
         }
     }
-    let mut by_head: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+    let mut by_head: FxHashMap<Tok, Vec<usize>> = FxHashMap::default();
     for (h, cpos) in concrete {
         // Asset-order merge of {concrete-h} U {wildcard residual}. Positions within a bucket are
         // distinct, so ascending sort reproduces the original bucket subsequence exactly.
@@ -94,53 +110,52 @@ fn build_operand_index(bucket: &[Rule]) -> OperandIndex {
 }
 
 impl CompiledRules {
-    /// Faithful port of `compile_rules` + `construct_rule_patterns` (engine.py:189/936). Consumes the
+    /// Faithful port of `compile_rules` + `construct_rule_patterns` (engine.py@0.2.15:189/936). Consumes the
     /// raw (lhs, rhs) prefix pairs from rules.json (dedup is a verified no-op). A rule is a pattern
     /// iff any lhs token matches `^_\d+$`; pattern rules bucket by (len(lhs), lhs[0]) in asset order
     /// (Python's group-by-op + stable-sort-by-len nets to the same per-bucket order). Each pattern
-    /// rule's lhs/rhs is pre-parsed to a tree via `arity_of`.
+    /// rule's lhs/rhs is pre-parsed to a tree over interned ids; every rule token is interned into
+    /// the (per-Engine, `&mut` here) token table.
     pub fn compile(
         raw: Vec<(Vec<String>, Vec<String>)>,
-        arity_of: &dyn Fn(&str) -> Option<u8>,
+        table: &mut TokenTable,
+        ops: &Operators,
     ) -> Self {
-        let mut no_patterns: FxHashMap<Vec<String>, Vec<String>> = FxHashMap::default();
-        let mut patterns: FxHashMap<(usize, String), Vec<Rule>> = FxHashMap::default();
+        let mut exact_rules: FxHashMap<Vec<Tok>, Vec<Tok>> = FxHashMap::default();
+        let mut patterns: FxHashMap<(usize, Tok), Vec<Rule>> = FxHashMap::default();
         let mut max_pattern_length = 0usize;
         for (lhs, rhs) in raw {
+            let lhs_t: Vec<Tok> = lhs.iter().map(|s| table.intern(s, ops)).collect();
+            let rhs_t: Vec<Tok> = rhs.iter().map(|s| table.intern(s, ops)).collect();
             if lhs.iter().any(|t| is_wildcard(t)) {
-                let plen = lhs.len();
+                let plen = lhs_t.len();
                 if plen > max_pattern_length {
                     max_pattern_length = plen;
                 }
-                let key = (plen, lhs[0].clone());
-                let (lhs_tree, _) = parse_subtree(&lhs, 0, arity_of);
-                let (rhs_tree, _) = parse_subtree(&rhs, 0, arity_of);
+                let key = (plen, lhs_t[0]);
+                let arity_of = |t: Tok| table.arity(t);
+                let (lhs_tree, _) = parse_subtree(&lhs_t, 0, &arity_of);
+                let (rhs_tree, _) = parse_subtree(&rhs_t, 0, &arity_of);
                 patterns.entry(key).or_default().push(Rule {
-                    lhs,
-                    rhs,
+                    lhs: lhs_t,
+                    rhs: rhs_t,
                     lhs_tree,
                     rhs_tree,
                 });
             } else {
-                no_patterns.insert(lhs, rhs);
+                exact_rules.insert(lhs_t, rhs_t);
             }
         }
         let operand_index = patterns
             .iter()
-            .map(|(k, bucket)| (k.clone(), build_operand_index(bucket)))
+            .map(|(k, bucket)| (*k, build_operand_index(bucket, table)))
             .collect();
         Self {
-            no_patterns,
+            exact_rules,
             patterns,
             operand_index,
             max_pattern_length,
         }
-    }
-
-    /// The pattern bucket for a node's (pattern_length, operator), if any.
-    #[inline]
-    pub fn bucket(&self, plen: usize, op: &str) -> Option<&Vec<Rule>> {
-        self.patterns.get(&(plen, op.to_string()))
     }
 
     /// Candidate rules for a node at (pattern_length, operator) whose operand[0] head is `head`, in
@@ -149,15 +164,15 @@ impl CompiledRules {
     pub fn candidates<'a>(
         &'a self,
         plen: usize,
-        op: &str,
-        head: &str,
+        op: Tok,
+        head: Tok,
     ) -> impl Iterator<Item = &'a Rule> + 'a {
-        let key = (plen, op.to_string());
+        let key = (plen, op);
         let bucket = self.patterns.get(&key);
         let positions: &'a [usize] = match self.operand_index.get(&key) {
             Some(idx) => idx
                 .by_head
-                .get(head)
+                .get(&head)
                 .map(Vec::as_slice)
                 .unwrap_or(idx.wild_only.as_slice()),
             None => &[],
@@ -210,12 +225,16 @@ mod tests {
         }
         let Some(eng) = engine() else { return };
         let c = eng.rules();
+        let tt = eng.token_table();
         let gt = ground_truth();
+        let resolve = |toks: &[Tok]| -> Vec<String> {
+            toks.iter().map(|&t| tt.resolve(t).to_string()).collect()
+        };
 
         let rust_pattern_rules: usize = c.patterns.values().map(Vec::len).sum();
         assert_eq!(rust_pattern_rules, gt.n_pattern_rules, "pattern-rule count");
         assert_eq!(
-            c.no_patterns.len(),
+            c.exact_rules.len(),
             gt.n_no_pattern_rules,
             "no_pattern count"
         );
@@ -224,18 +243,27 @@ mod tests {
         for (key, gt_rules) in &gt.buckets {
             let (lstr, op) = key.split_once(',').unwrap();
             let plen: usize = lstr.parse().unwrap();
+            let op_tok = tt.lookup(op).unwrap_or_else(|| panic!("op {op} interned"));
             let rust_bucket = c
                 .patterns
-                .get(&(plen, op.to_string()))
+                .get(&(plen, op_tok))
                 .unwrap_or_else(|| panic!("rust missing bucket {key}"));
             assert_eq!(rust_bucket.len(), gt_rules.len(), "bucket {key} size");
             for (i, (gl, gr)) in gt_rules.iter().enumerate() {
-                assert_eq!(&rust_bucket[i].lhs, gl, "bucket {key} idx {i} lhs");
-                assert_eq!(&rust_bucket[i].rhs, gr, "bucket {key} idx {i} rhs");
+                assert_eq!(
+                    &resolve(&rust_bucket[i].lhs),
+                    gl,
+                    "bucket {key} idx {i} lhs"
+                );
+                assert_eq!(
+                    &resolve(&rust_bucket[i].rhs),
+                    gr,
+                    "bucket {key} idx {i} rhs"
+                );
             }
         }
         for key in c.patterns.keys() {
-            let k = format!("{},{}", key.0, key.1);
+            let k = format!("{},{}", key.0, tt.resolve(key.1));
             assert!(gt.buckets.contains_key(&k), "rust has extra bucket {k}");
         }
     }
@@ -246,20 +274,22 @@ mod tests {
     fn operand_index_invariant_holds() {
         let Some(eng) = engine() else { return };
         let c = eng.rules();
-        const ABSENT: &str = "\0__absent_head__\0";
+        let tt = eng.token_table();
+        // An id no table token has: by injectivity it can never equal a concrete head.
+        let absent: Tok = Tok(u32::MAX);
         let mut checks = 0usize;
         for (key, bucket) in &c.patterns {
-            let (plen, op) = (key.0, key.1.as_str());
-            let mut heads: Vec<&str> = bucket
+            let (plen, op) = (key.0, key.1);
+            let mut heads: Vec<Tok> = bucket
                 .iter()
-                .filter_map(|r| operand0_head(&r.lhs))
+                .filter_map(|r| operand0_head(&r.lhs, tt))
                 .collect();
             heads.sort();
             heads.dedup();
-            for qh in heads.iter().copied().chain(std::iter::once(ABSENT)) {
+            for qh in heads.iter().copied().chain(std::iter::once(absent)) {
                 let expected: Vec<&Rule> = bucket
                     .iter()
-                    .filter(|r| match operand0_head(&r.lhs) {
+                    .filter(|r| match operand0_head(&r.lhs, tt) {
                         None => true,
                         Some(h) => h == qh,
                     })

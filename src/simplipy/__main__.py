@@ -34,6 +34,15 @@ def main(argv: str = None) -> None:
     prune_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned rules json file')
     prune_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
+    # Prune-covered-rules command
+    prune_covered_rules_parser = subparsers.add_parser("prune-covered-rules", help="Remove rules that the remaining rules cover behaviorally")
+    prune_covered_rules_parser.add_argument(
+        '-e', '--engine', type=str, required=True,
+        help='Name of an official engine (e.g., dev_7-3) or a local path to an engine configuration file'
+    )
+    prune_covered_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned rules json file')
+    prune_covered_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
+
     # Resolve-rules command
     resolve_rules_parser = subparsers.add_parser("resolve-rules", help="Replace <constant> with actual numeric values in all-numeric rules")
     resolve_rules_parser.add_argument(
@@ -121,6 +130,27 @@ def main(argv: str = None) -> None:
                 json.dump(engine.simplification_rules, f, indent=4)
 
             print(f'Pruned {n_pruned} redundant rules ({n_before} -> {len(engine.simplification_rules)})')
+            print(f'Saved to {args.output_file}')
+
+        case 'prune-covered-rules':
+            try:
+                engine_config_path = get_path(args.engine)
+            except (FileNotFoundError, ValueError, RuntimeError) as e:
+                print(f'Error: {e}', file=sys.stderr)
+                sys.exit(1)
+
+            engine = SimpliPyEngine.from_config(engine_config_path)
+            n_before = len(engine.simplification_rules)
+            n_pruned = engine.prune_covered_rules(verbose=args.verbose)
+
+            output_dir = os.path.dirname(args.output_file)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+
+            with open(args.output_file, 'w') as f:
+                json.dump(engine.simplification_rules, f, indent=4)
+
+            print(f'Pruned {n_pruned} covered rules ({n_before} -> {len(engine.simplification_rules)})')
             print(f'Saved to {args.output_file}')
 
         case 'resolve-rules':

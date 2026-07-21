@@ -39,7 +39,11 @@ markdown_extensions:
       anchor_linenums: True
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.arithmatex:
       generic: true
 
@@ -47,6 +51,7 @@ nav:
   - Home: index.md
   - API-Reference: api.md
   - Creating Rulesets: rules.md
+  - The Mining Algorithm (Formal): algorithm.md
 
 # Plugin configurations
 plugins:
