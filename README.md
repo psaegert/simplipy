@@ -27,12 +27,13 @@
 pip install simplipy
 ```
 
-> As of 0.3.0 the inline phase (`simplify`, conversions, validation) is a compiled Rust extension
-> (`simplipy._core`). Prebuilt wheels are published for Linux (x86_64/aarch64), macOS (x86_64/arm64)
-> and Windows (x64) on CPython ≥ 3.11, so `pip install simplipy` does not compile anything for most
-> users. Installing from the **source distribution** (an unsupported platform, or `--no-binary`)
-> requires a Rust toolchain (`rustup`, MSRV 1.83). If the extension is unavailable at runtime, the
-> package transparently falls back to a slower pure-Python implementation.
+> The compiled Rust extension (`simplipy._core`) is **required**: the inline phase (`simplify`,
+> conversions, validation) runs on it exclusively, and there is no pure-Python fallback. Prebuilt
+> wheels are published for Linux (x86_64/aarch64), macOS (x86_64/arm64) and Windows (x64) on
+> CPython ≥ 3.11, so `pip install simplipy` does not compile anything for most users. Installing
+> from the **source distribution** (an unsupported platform, or `--no-binary`) requires a Rust
+> toolchain (`rustup`, MSRV 1.83). If the extension is missing at runtime, constructing an engine
+> raises `ImportError`.
 
 ```python
 import simplipy as sp
@@ -78,6 +79,14 @@ sp.normalize_variable_token('sin')
 More examples can be found in the [documentation](https://simplipy.readthedocs.io/).
 
 # Performance
+
+As of 0.6.0 the simplify hot path defers match-time certificates to completed matches
+(memoized generationally, never stopping memoization), memoizes whole fixpoint passes and
+rule-normal subtrees, and runs on interned token ids (~20× fewer allocations per call) —
+all at byte-identical outputs. On a 65,536-expression training-prior benchmark, large
+certificate-bearing rulesets simplify ~59× faster than 0.5.0 and certificate-free
+rulesets ~2.3× faster; see the [CHANGELOG](https://github.com/psaegert/simplipy/blob/main/CHANGELOG.md)
+for details. The comparison below dates from the 0.3.0 Rust cutover:
 
 <table>
   <tr>
@@ -129,9 +138,9 @@ pytest tests --cov src --cov-report html -m "not integration"
 @software{simplipy-2025,
     author = {Paul Saegert},
     title = {Efficient Simplification of Mathematical Expressions},
-    year = 2025,
+    year = 2026,
     publisher = {GitHub},
-    version = {0.3.1},
+    version = {0.6.0},
     url = {https://github.com/psaegert/simplipy}
 }
 ```

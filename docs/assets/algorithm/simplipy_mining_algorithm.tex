@@ -1,0 +1,122 @@
+\documentclass[10pt]{article}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{float}
+
+\newcommand{\Simplipy}{\textsc{SimpliPy}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\R}{\mathcal{R}}
+\newcommand{\ttau}{\bm{\tau}}
+
+\title{\Simplipy{} Rule Discovery: the current algorithm (0.6.x)}
+\author{The formal companion to \texttt{docs/rules.md}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\paragraph{Overview.} Rules are mined, not hand-written: every valid source expression up
+to $L_{\max}$ tokens is enumerated (or sampled from the complete universe, per length),
+and each source is certified against a complete library of shorter candidates. A rule
+$\ttau \to \ttau'$ ships only if $\ttau'$ reproduces $\ttau$'s values on a heavy-tailed,
+seeded evaluation matrix, survives an independent second verification, and is the
+\emph{minimal} such target. The whole procedure is deterministic: one master seed
+reproduces the ruleset byte-for-byte, and a provenance sidecar records every parameter.
+
+\begin{algorithm}[H]
+\caption{\Simplipy{} Rule Discovery}
+\begin{algorithmic}[1]
+\State \textbf{Input:} operators $\mathcal{O}$, variables $\mathcal{V}$, literals
+$\mathcal{C}$; limits $L_{\max}$, $L_{\mathrm{rep}}$; master seed $s$: one
+\texttt{default\_rng} derives $X$, $X_{\mathrm{confirm}}$ ($2\times$ rows), and all
+mine/confirm seeds --- byte-reproducible cross-machine; challenges $K{=}16$, retries
+$R{=}16$; tolerances $\mathrm{rtol}=10^{-9}$, $\mathrm{atol}=10^{-12}$
+\State $X \gets$ heavy-tailed mixture: 40\% $\mathcal{N}(0,5)$, 25\%
+$\mathcal{U}(-50,50)$, 25\% signed log-uniform $10^{-4}..10^{3}$, 10\% exact specials
+$\{\pm0,\pm0.1,\pm0.5,\pm1,\pm2,\pm e,\pm\pi,\pm10\}$; evidence floor
+$m_{\min}=\mathrm{rows}/8$
+\State Pre-compute $\E_L$ by bottom-up per-length dynamic programming (complete by
+construction); \textbf{assert} $|\E_L|$ equals the exact counting recurrence for every
+$L$, else \textbf{abort} the mine
+\State Universe policy per length: COMPLETE, an EXHAUSTIVE class slice, or SAMPLED
+(count-weighted uniform draws, validated; coverage always reported), with an optional
+saturation stop and a fixpoint re-mine of skipped draws' reducts
+\For{length $L$ ascending (chunked with per-chunk checkpoints; per-source seed $=$
+length-seed $+$ index, so chunking is bit-identical to one monolithic call)}
+    \State $\R_{\mathrm{new}} \gets \emptyset$; candidate library built once,
+    deterministically sorted, with the fold filter: variable-free candidates of length
+    $\ge2$ dropped (the bare $\diamond$ candidate preempts them; behavior-preserving)
+    \For{each $\ttau \in \E_L$ (parallel, per-source seeds; the rule set is FIXED within
+         a length and refreshed between lengths)}
+        \State $\ttau^* \gets \Simplipy_{\R}(\ttau)$
+        \If{$|\ttau^*| < |\ttau|$}
+            \State \textbf{relaxed Kruskal:} still search, with the target bound
+            tightened to $|\ttau^*|-1$ (strictly better targets only)
+        \EndIf
+        \State All-constant sources: one shared exact leaf-value table (numeric literals
+        \emph{and} $\pi, e, -1$); variable-free sources collapse by exact interval
+        value-class; interval reachability gate for variable-free candidates
+        \For{length $j = 1$ to $\min(|\ttau^*|-1, L_{\mathrm{rep}})$, candidates with
+             $\mathrm{Vars}(\ttau') \subseteq \mathrm{Vars}(\ttau)$}
+            \If{$\mathrm{Equivalent}^{+}(\ttau,\ttau')$ \Comment{Algorithm~2}}
+                \State track $\ttau'_{\mathrm{best}}$ by fewest $\diamond$;\ found
+                       $\gets$ True
+            \EndIf
+        \EndFor
+        \State on found (wildcard-multiplicity check): add
+               $\ttau \to \ttau'_{\mathrm{best}}$ to $\R_{\mathrm{new}}$
+    \EndFor
+    \State \textbf{Stage-2 confirm:} re-verify every mined pair on the independent
+    $X_{\mathrm{confirm}}$ with fresh constants and a per-rule content-derived seed
+    (order-independent verdicts); rejects are dropped
+    \State $\R \gets \R \cup \textsc{Deduplicate}(\R_{\mathrm{new}})$
+    \Comment{canonical wildcard patterns; shortest target per source}
+    \State Checkpoint rules $+$ provenance sidecar (all parameters, derived seeds, $X$
+    specification, per-length universe counts/coverage) and update the completeness
+    marker --- a mine is complete only when the marker equals the target length
+\EndFor
+\State \textbf{return} $\R$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{Expression Equivalence Check ($\mathrm{Equivalent}^{+}$)}
+\begin{algorithmic}[1]
+\State \textbf{Input:} $\ttau$, $\ttau'$, $X$; $K{=}16$ challenges, $R{=}16$ retries;
+$\mathrm{rtol}=10^{-9}$, $\mathrm{atol}=10^{-12}$; evidence floor $m_{\min}$
+\State Source instances hoisted once per source: per-constant pole-grid sweep
+($0.02..500$, including integers) $+$ random magnitude rounds, sign combinations
+$s \in \{-1,+1\}^{|C|}$
+\For{each challenge instance}
+    \State \textbf{Generic equivalence with domain extension:} rows where the source is
+    finite must match within rtol/atol; rows where it is NaN/$\pm\infty$ may be completed
+    by the target; the reverse (domain restriction) rejects; a per-instance interval
+    domain-preservation gate rejects rewrites inventing a function off the source's
+    domain
+    \State \textbf{Evidence gate:} require $\ge m_{\min}$ unique source-finite rows
+    (no certification without evidence)
+    \State constant-free: f64 comparison is a pre-filter; near-misses are re-judged on
+    exactly the failing rows at 1024-bit precision
+    \State constant-bearing: order-independent fit seed (source seed $+$ content hash
+    $+$ instance); closed-form affine/log-linear fits (Householder QR) then
+    Levenberg--Marquardt restarts; near-miss escalates through a robust median-trimmed
+    refit, then high-precision re-judgment at the refit constants
+    \If{$\neg$match} \State \textbf{return} False \EndIf
+\EndFor
+\State \textbf{return} True
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Historical note (the 0.5.0 enumeration fix).} The published algorithm assumes
+complete enumeration of $\E_L$. Versions $\le 0.4$.x instead grew the universe by
+whole-set composition passes that exited as soon as \emph{one} maximal-length expression
+existed --- silently enumerating only a fraction of the longer strata (with a 7-operator
+configuration: $6.4\%$ of $\E_4$, $2.1\%$ of $\E_5$, $0.085\%$ of $\E_6$,
+$0.00089\%$ of $\E_7$). This was a \emph{coverage} defect, not a soundness defect: nothing
+wrong was certified, but most long sources were never examined. 0.5.0 replaced it with
+the bottom-up per-length DP above, asserted against the exact counting recurrence on
+every run.
+\end{document}

@@ -18,8 +18,11 @@ reported, and the drawn sample is validated per run.
 
 **Phase 2 — certifying rules, shortest sources first.** For each source expression:
 
-1. **Prune**: if the rules found so far already shorten the source, it is skipped.
-2. **Scan**: otherwise the source is compared against every candidate replacement, in
+1. **Prune**: if the rules found so far already shorten the source, the search is
+   *tightened* rather than skipped — only targets strictly shorter than what `simplify`
+   already reaches are accepted (`relaxed_kruskal`, the default; pass
+   `relaxed_kruskal=False` to skip already-shortened sources entirely).
+2. **Scan**: the source is compared against every candidate replacement, in
    order of increasing length, so the first match is a *minimal* target. The candidate
    library is built once per mine; variable-free candidates of length ≥ 2 are excluded
    (`candidate_fold_filter`, default on) — a provably behavior-preserving optimization,
@@ -37,11 +40,74 @@ reported, and the drawn sample is validated per run.
 5. **Deduplicate**: rules are canonicalized into wildcard patterns, keeping the shortest
    target per source.
 
+The same pipeline as one picture (Algorithm 1 in
+[the formal specification](algorithm.md) is the line-by-line version):
+
+```mermaid
+flowchart TD
+    UNI["Phase 1: enumerate universe per length<br/>(complete / exhaustive slice / sampled)"] --> CNT{"enumeration matches<br/>counting recurrence?"}
+    CNT -- no --> AB["abort the mine"]
+    CNT -- yes --> LIB["build candidate library once<br/>(variable-free candidates filtered)"]
+    LIB --> L["next source length, ascending"]
+    L --> S1
+    subgraph P2["Phase 2: one length (sources in parallel, per-source seeds)"]
+        S1["simplify under the rules so far"] --> S2["target bound = simplified length<br/>(relaxed Kruskal)"]
+        S2 --> S3["scan candidates,<br/>shortest first"]
+        S3 --> S4{"Equivalent+ certifies?<br/>(constant challenges, evidence gate,<br/>high-precision rescue)"}
+        S4 -- "no: next candidate" --> S3
+        S4 -- yes --> S5["minimal source-target pair"]
+    end
+    S5 --> C1["stage-2 confirm: independent,<br/>twice-as-wide matrix, fresh seeds"]
+    C1 --> C2["deduplicate: canonical wildcard patterns,<br/>shortest target per source"]
+    C2 --> C3["checkpoint: rules +<br/>provenance sidecar"]
+    C3 -- "next length" --> L
+    C3 -- "all lengths done" --> PR["optional prune<br/>(redundant / covered)"]
+```
+
 The whole procedure is **deterministic**: a fixed `seed` reproduces the ruleset
 byte-for-byte, independent of process, hash randomization, or thread count. Alongside the
 output, a **provenance sidecar** (`<output>.provenance.json`) records every parameter,
 derived seed, the evaluation-matrix specification, and per-length universe coverage, so a
 published ruleset is reproducible from its artifact alone.
+
+## Rule sorts: `_`, `?`, and `!`
+
+Every placeholder in a shipped rule carries a *sort* — the binding claim its sigil
+encodes, enforced by the matcher at apply time:
+
+- **`_i` — any subtree.** The widest claim: the slot binds an arbitrary expression.
+- **`?i` — variable leaf only.** The narrowest claim: the slot binds a bare variable,
+  never a composite subtree, a literal, or `<constant>`.
+- **`!i` — certified subtree.** Binds a variable leaf freely; a composite subtree binds
+  only when a match-time certificate proves it defined and finite almost everywhere
+  (an adaptive interval analysis over the reals). Fail-closed: what cannot be
+  certified is not bound.
+
+The three claims nest — everything a narrower sort binds, the wider sorts bind too:
+
+```mermaid
+flowchart TB
+    subgraph ANY["_i — any subtree (widest claim)"]
+        subgraph BANG["!i — subtree certified finite almost everywhere"]
+            Q["?i — bare variable leaf only (narrowest claim)"]
+        end
+    end
+```
+
+Sorts exist because a rewrite can be value-sound when a slot holds a variable yet
+unsound when it holds a composite carrying poles or infinities into the pattern — the
+certificate is what lets a rule make the wider claim without giving up soundness.
+Since 0.6.0 the certificate is evaluated once per *completed* syntactic match rather
+than during every candidate attempt, and memoized (per call, plus a generational
+per-engine cache), which makes `!`-bearing rulesets fast at scale with identical
+verdicts.
+
+### Diagnostics
+
+Setting the environment variable `SIMPLIPY_LEAF_WILDCARDS=1` makes every `_i`
+placeholder bind variable leaves only (demoting all wildcards to `?`-sort semantics),
+which isolates whether a behavior difference comes from composite wildcard bindings;
+default off restores the deployed subtree semantics.
 
 ## Running a mine
 
@@ -196,7 +262,8 @@ certified-minimal target about 85–90% of the time.
 3. **Certify** the proposals with `certify_rules` against the freshly mined engine
    (minutes per thousand proposals), and merge the accepted pairs with
    `deduplicate_rules`, which keeps the shortest target per source.
-4. **Post-process** (optional): `prune-rules` / `resolve-rules`, below.
+4. **Post-process** (optional): `prune-rules` / `prune-covered-rules` /
+   `resolve-rules`, below.
 
 Steps 1 and 3–4 are deterministic given the seed; step 2 is inherently not, so keep the
 accepted proposal list under version control — the certified pairs, not the model
@@ -204,12 +271,15 @@ transcript, are the reproducible artifact.
 
 # Post-processing Rules
 
-Two commands refine an existing rule set loaded from an engine and write the
+Three commands refine an existing rule set loaded from an engine and write the
 result to a JSON file (they do not modify the installed asset in place):
 
 ```sh
 # Remove explicit rules that are already subsumed by wildcard-pattern rules
 simplipy prune-rules -e "dev_7-3" -o "path/to/pruned_rules.json" -v
+
+# Remove rules that the remaining rules already cover compositionally
+simplipy prune-covered-rules -e "dev_7-3" -o "path/to/pruned_rules.json" -v
 
 # Replace <constant> placeholders with concrete numeric values in all-numeric rules
 simplipy resolve-rules -e "dev_7-3" -o "path/to/resolved_rules.json" -v
@@ -218,6 +288,40 @@ simplipy resolve-rules -e "dev_7-3" -o "path/to/resolved_rules.json" -v
 - `-e` is the engine name (e.g. `dev_7-3`) or a path to an engine configuration file
 - `-o` is the output path for the post-processed rules
 - `-v` enables verbose progress output
+
+## Pruning rulesets
+
+Two prunes shrink a ruleset without changing what the engine can simplify, under
+different criteria:
+
+- **`SimpliPyEngine.prune_redundant_rules`** (CLI: `prune-rules`) removes *explicit*
+  rules (no placeholders) that are shadowed by wildcard-pattern rules: an explicit rule
+  is dropped only if the engine without it still simplifies the rule's source to
+  **exactly** the same target (an *equality* criterion — constant folding and term
+  cancellation count toward coverage). Rules are tested and removed serially, so two
+  rules that are each redundant only in the other's presence are never both dropped.
+- **`SimpliPyEngine.prune_covered_rules`** (CLI: `prune-covered-rules`) is the
+  stronger, compositional prune: it removes **any** rule — pattern rules included —
+  whose effect the remaining rules achieve on their own. A rule is covered only if
+  every instantiation variant of its source still simplifies to **at most** the length
+  of the corresponding target (a *≤-length* criterion): each slot is instantiated as a
+  distinct variable leaf, `<constant>` is kept literal so native constant folding
+  cannot fake coverage, and wide slots (`_`/`!` sigils) are additionally probed with
+  composite subtrees, since leaf-only instantiation under-tests wide-sort claims.
+  Rules are processed in source-length waves, longest first; each wave is tentatively
+  removed and then repaired to a fixpoint against an engine rebuilt from the kept
+  rules, so the result is **deterministic** for a given rule list — and greedy: valid,
+  not necessarily minimal.
+
+Both are also available at the end of a mine through the `prune` parameter:
+`find_rules(prune=True)` runs the redundant-rule prune after discovery, and
+`find_rules(prune='covered')` runs the covered-rule prune instead.
+
+Note that the covered prune trades ruleset size against one-step reachability: a
+covered rule's source still simplifies at least as short, but possibly through
+intermediate rewrites inside the same `simplify` call. When set-level closure
+guarantees matter, re-verify the pruned engine on a benchmark corpus and check that no
+meaningful fraction of outputs got longer.
 
 # Managing Engine Assets
 
