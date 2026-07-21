@@ -1,7 +1,7 @@
-"""Regression tests for the 2026-07-10 equivalence-checker audit (EQUIVALENCE_AUDIT_2026-07-10.md).
+"""Regression tests for the rule-mine's numerical equivalence certification.
 
-Each test encodes one audited failure mode of the rule-mine's numerical equivalence
-certification; together they gate the checker against regressions of:
+Each test encodes one known failure mode of the equivalence checker; together they
+gate the checker against regressions of:
 
 1. vacuous equal_nan acceptance (an (almost-)everywhere-NaN pair "agreeing" on NaN rows),
 2. saturation false-accepts at loose tolerances (tanh/exp towers within 1e-5 of a constant),
@@ -22,7 +22,7 @@ import yaml
 from simplipy import SimpliPyEngine
 from simplipy.utils import compositions, count_expressions, enumerate_expressions, sample_expression
 
-# Arithmetic + the transcendental operators needed to express the audited defects
+# Arithmetic + the transcendental operators needed to express the known defect cases
 # (asin(cosh(_0)) is NaN except at 0; tanh(exp(exp(_0))) saturates to 1).
 _OPERATORS = {
     "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
@@ -56,12 +56,13 @@ def mining_x(engine):
 
 
 class TestCheckerSoundness:
-    """Direct probes of the core equivalence checker on the audit's failure modes."""
+    """Direct probes of the core equivalence checker on the known failure modes."""
 
     def test_vacuous_nan_pair_rejected(self, engine, mining_x) -> None:
         """asin(cosh(x0)) vs log(neg(pow2(x0))): both NaN almost everywhere, DIFFERENT
-        at 0 (pi/2 vs -inf). The pre-audit checker accepted this via equal_nan; the
-        informativeness gate must reject it (dev_7-3 shipped ~5,125 such rules)."""
+        at 0 (pi/2 vs -inf). A checker comparing with equal_nan alone accepts this
+        vacuously; the informativeness gate must reject it (the dev_7-3 ruleset
+        contained ~5,125 such rules)."""
         x_flat, n = mining_x
         assert engine._core.equivalent_no_const(
             ['asin', 'cosh', 'x0'], ['log', 'neg', 'pow2', 'x0'], ['x0'], x_flat, n) is False
@@ -79,7 +80,7 @@ class TestCheckerSoundness:
             ['tanh', 'exp', 'exp', 'x0'], ['1'], ['x0'], x_flat, n) is False
 
     def test_domain_extension_accepted(self, engine, mining_x) -> None:
-        """GENERIC EQUIVALENCE (2026-07-11 user decision): where the SOURCE is undefined
+        """GENERIC-EQUIVALENCE POLICY: where the SOURCE is undefined
         (0/0 at exactly 0), the replacement may complete it with the limit value --
         x/x -> 1 and x*inv(x) -> 1 certify despite the corner rows in the mixture X."""
         x_flat, n = mining_x
@@ -97,7 +98,7 @@ class TestCheckerSoundness:
 
     def test_extension_is_asymmetric(self, engine, mining_x) -> None:
         """The reverse direction stays rejected: a replacement that is NaN where the
-        source is FINITE loses a defined value (the audited defect class)."""
+        source is FINITE loses a defined value."""
         x_flat, n = mining_x
         # source finite everywhere; candidate NaN almost everywhere
         assert engine._core.equivalent_no_const(
@@ -113,17 +114,21 @@ class TestCheckerSoundness:
         assert engine._core.find_rule(
             ['asin', 'cosh', 'x0'], 3, None, [['<constant>']], ['x0'], x_flat, n) is None
 
-    def test_generically_constant_source_certifies(self, engine, mining_x) -> None:
-        """POLICY EDGE (documented, deliberate): asin(cosh(C*x0)) -> <constant> DOES
-        certify under generic equivalence. The C=0 sign-combo instance equals pi/2 on
-        every row (full evidence), and every defined point of every other instance is
-        also pi/2 (x0=0 corners) -- the source is generically the constant pi/2.
-        Evidence still counts UNIQUE defined rows (not (row, instance) repetitions),
-        so this passes on the C=0 instance's 1024 rows, not by challenge repetition."""
+    def test_generically_constant_source_rejects(self, engine, mining_x) -> None:
+        """Two checker policies combine to reject certifying asin(cosh(C*x0)) ->
+        <constant>, even though the C=0 instance evaluates to pi/2 on every row.
+        First, the constant-challenge sweep is measure-consistent: the measure-zero
+        C=0 null slice is excluded, so a rule certifiable ONLY via such a slice has
+        no generic evidence. Second, the domain-preservation gate rejects rewrites
+        that invent a LIVE function off a dead source's domain -- for every C != 0
+        the source is defined only at x0=0 while pi/2 is defined everywhere.
+        Undefined expressions must not be rewritten to invented values (compare
+        pow(C, nan), which cannot be simplified), so the source must NOT certify
+        to <constant>."""
         x_flat, n = mining_x
         assert engine._core.find_rule(
             ['asin', 'cosh', '*', '<constant>', 'x0'], 5, None, [['<constant>']],
-            ['x0'], x_flat, n) == ['<constant>']
+            ['x0'], x_flat, n) is None
 
     def test_all_undefined_instance_rejects(self, engine, mining_x) -> None:
         """A const-bearing source with an instance that is defined NOWHERE (here
@@ -135,20 +140,20 @@ class TestCheckerSoundness:
             [['<constant>']], ['x0'], x_flat, n) is None
 
     def test_evidence_counts_unique_rows_not_repetitions(self, engine, mining_x) -> None:
-        """DISCRIMINATING test for commit a99c12e (unique rows, not (row, instance)
-        multiplicity). Source asin(cosh(x0 * (C^2 + 1))): the multiplier C^2+1 is
+        """DISCRIMINATING test that evidence counts unique rows, not (row, instance)
+        multiplicity. Source asin(cosh(x0 * (C^2 + 1))): the multiplier C^2+1 is
         never zero, so EVERY challenge instance is finite only at x0=0 (~9 corner
         rows). Unique source-finite rows across all ~48 instances = ~9 < 128, so this
         must REJECT -- but a reverted multiplicity-sum gate would see ~48*9 = ~432 and
-        wrongly ACCEPT. (Contrast test_generically_constant_source_certifies, where the
-        C=0 instance is finite on ALL rows -> genuine full evidence.)"""
+        wrongly ACCEPT. (In contrast, a family with an instance finite on ALL rows
+        would have genuine full evidence.)"""
         x_flat, n = mining_x
         assert engine._core.find_rule(
             ['asin', 'cosh', '*', 'x0', '+', 'pow2', '<constant>', '1'], 8, None,
             [['<constant>']], ['x0'], x_flat, n) is None
 
     def test_affine_with_intercept_family_certifies(self, engine, mining_x) -> None:
-        """REGRESSION for the affine-fit conditioning fix (2026-07-11). The whole
+        """REGRESSION for the affine-fit conditioning fix. The whole
         C0*f(x)+C1 family silently REJECTED before: a GLOBAL trace-scaled Tikhonov
         ridge biased the intercept, and the normal-equations solve squared the
         condition number on the wide-magnitude X so the intercept came out ~5e-9 off,
@@ -169,8 +174,8 @@ class TestCheckerSoundness:
                 cand, ['x0'], x_flat, n, y.tolist(), 1e-9, 1e-12) is not True
 
     def test_affine_growing_basis_family_certifies(self, engine, mining_x) -> None:
-        """REGRESSION for the growing-basis affine recall gap (2026-07-11, readiness
-        BLOCKER 2). With a fast-growing basis f (exp/cosh/pow3+), rows where |y| ~ 1e21
+        """REGRESSION for the growing-basis affine recall gap.
+        With a fast-growing basis f (exp/cosh/pow3+), rows where |y| ~ 1e21
         dominate an UNWEIGHTED least-squares solve in absolute terms, and y's own f64
         rounding there (eps*|y|) exceeds an O(1) intercept -- so C0*f(x)+C1 and f(x)+C1
         rejected on exactly-true constants (0/4) while interceptless C0*f(x) passed.
@@ -200,7 +205,7 @@ class TestCheckerSoundness:
             ["x0"], x_flat, n, y_neg.tolist(), 1e-9, 1e-12) is not True
 
     def test_log_linear_pow_rewrite_certifies(self) -> None:
-        """REGRESSION for the log-linear recall path + its 2026-07-11 LM-fallthrough
+        """REGRESSION for the log-linear recall path + its LM-fallthrough
         fix: exp(x0+x0) == (e^2)^x0 is a valid rewrite to pow(<constant>, x0), and the
         const-bearing fit (closed-form log-space, or the LM restart seeded by it when
         the closed-form is imprecise on a heavy tail) must certify it. Uses the dev
@@ -242,8 +247,8 @@ class TestMiningSampleX:
 
 
 class TestPhase1Universe:
-    """The saturating DP enumerator + count DP + uniform sampler (audit: the old
-    pass-based closure missed 93.6% of length-4 in the dev_7-3 mine)."""
+    """The saturating DP enumerator + count DP + uniform sampler (regression: an
+    older pass-based closure missed 93.6% of length-4 in the dev_7-3 mine)."""
 
     OPS = {"u": 1, "b": 2}
 
@@ -254,13 +259,13 @@ class TestPhase1Universe:
             assert len(enumerated[length]) == expected
 
     def test_triple_unary_chains_present(self) -> None:
-        """The EXACT audit miss: unary(unary(unary(leaf))) at length 4 was absent
+        """The exact regression case: unary(unary(unary(leaf))) at length 4 was absent
         because the old loop exited once any length-max expression appeared."""
         enumerated = enumerate_expressions(["x"], self.OPS, 4)
         assert ("u", "u", "u", "x") in enumerated[4]
 
     def test_dev_universe_sizes(self) -> None:
-        """The audit's independently-computed dev-config universe sizes (5 leaves,
+        """Independently computed dev-config universe sizes (5 leaves,
         38 operators: 33 unary + 5 binary as of dev_7-3)."""
         arities = {f"u{i}": 1 for i in range(33)} | {f"b{i}": 2 for i in range(5)}
         counts = count_expressions(5, arities, 7)
@@ -297,7 +302,7 @@ class TestEndToEndMineGate:
         )
         assert len(engine.simplification_rules) > 0
         # The real gate: no rule whose LHS is the vacuous asin(cosh(.)) family (which
-        # the pre-audit checker mined as -> nan). A blanket rhs != ['nan'] check would be
+        # an equal_nan-only checker mined as -> nan). A blanket rhs != ['nan'] check would be
         # inert here (nan is not a candidate token in this leaf set), so we assert on the
         # LHS family that actually reaches the checker.
         for lhs, rhs in engine.simplification_rules:
@@ -337,7 +342,7 @@ class TestEndToEndMineGate:
 
 
 class TestFoldFilter:
-    """BLOCKER 1 (7-4 readiness): variable-free candidate minimization. Var-free candidates
+    """Variable-free candidate minimization. Var-free candidates
     of length >= 2 are dominated by the length-1 <constant> candidate (a var-free candidate
     is a constant function of X per constant-assignment; the scan is shortest-first), so
     dropping them must not change ANY mined rule -- while removing the bulk of the
@@ -358,7 +363,7 @@ class TestFoldFilter:
         assert lib2.n_filtered == 0
 
     def test_dominance_holds_at_the_band_edge(self, engine) -> None:
-        """ADVERSARIAL regression (2026-07-11 verification workflow). The dominance lemma
+        """Adversarial regression at the acceptance-band edge. The dominance lemma
         REQUIRES the length-1 <constant> to accept whenever ANY feasible constant exists.
         The least-squares mean solve violated that on skewed near-constant sources (63 rows
         at e-2.4e-9, one at e+2.4e-9: v = e is feasible on EVERY row's band but the mean
@@ -380,7 +385,7 @@ class TestFoldFilter:
         assert engine._core.exist_constants_fit_linear(
             ["<constant>"], ["x0"], [float(r) for r in range(n)], n, y_bad.tolist(),
             1e-9, 1e-12) is not True
-        # (2) END-TO-END: the verification probe's exact divergence case. Crafted X (63 rows
+        # (2) END-TO-END: the exact divergence case. Crafted X (63 rows
         # x0 = -1, one row x0 = +1); source exp(1) + 2.4e-9*x0 evaluates to the skewed y.
         x_flat = [-1.0] * (n - 1) + [1.0]
         src = ["+", "exp", "1", "*", "2.4e-9", "x0"]
@@ -395,7 +400,7 @@ class TestFoldFilter:
         assert results[0] is not None, "the feasible near-constant source must match"
 
     def test_mine_parity_filtered_vs_unfiltered(self, tmp_path) -> None:
-        """THE PARITY GATE (readiness doc / feasibility Doc A): an end-to-end mine with and
+        """THE PARITY GATE: an end-to-end mine with and
         without the fold-filter must produce the IDENTICAL ruleset. Fit seeds are a pure
         function of (source seed, candidate tokens, instance) -- order-independent -- so the
         two runs draw identical randomness for every shared candidate and can differ ONLY
@@ -416,9 +421,9 @@ class TestFoldFilter:
 
 
 class TestProvenance:
-    """Readiness item 5: the mined artifact must carry a reproducibility sidecar; item 6:
-    sampled sources are validated as universe members per run (exercised via the sampled
-    length below -- a violation raises inside find_rules)."""
+    """The mined artifact must carry a reproducibility sidecar, and sampled sources are
+    validated as universe members per run (exercised via the sampled length below -- a
+    violation raises inside find_rules)."""
 
     def test_sidecar_written_with_reproducibility_fields(self, tmp_path) -> None:
         (tmp_path / "rules.json").write_text(json.dumps([]))

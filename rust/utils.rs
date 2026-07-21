@@ -1,111 +1,16 @@
-//! Pure helpers mirroring `simplipy/utils.py`: match_pattern, apply_mapping, the operand sort key
-//! (`engine.operand_key`, engine.py:2564), mask_elementary_literals, is_numeric_string.
-//!
-//! ## Sort-determinism parity trap (called out in HARNESS_SPEC)
-//! Python's `sort_operands` uses `operand_key` -> a tuple key and Timsort STABILITY. The Rust port
-//! MUST replicate BOTH the tuple-key comparison semantics AND stable tie-breaking:
-//!   - Use a STABLE sort (`slice::sort_by`, not `sort_unstable_by`).
-//!   - Reproduce Python's leaf key `(1, float(token))` ordering, including NaN / -0.0 / float
-//!     precision edge cases (the `sort_determinism` adversarial corpus category exercises this).
-//!   - Equal keys MUST preserve input order to match Timsort.
+//! Pure string/number helpers mirroring `simplipy/utils.py`: mask_elementary_literals,
+//! is_numeric_string, numbers_to_constant, remove_pow1, is_prime, factorize_to_at_most.
+//! (The pattern matcher lives in `crate::matcher`; the operand sort key and its Timsort-parity
+//! contract in `crate::sort`.)
+//! The per-token predicates (`is_numeric_string`, ...) are PRECOMPUTED per interned id and
+//! consulted through the [`TokenView`] -- same functions, evaluated once at intern.
 
-use rustc_hash::FxHashMap;
-
-use crate::parse::Node;
-
-/// Does this subtree contain a `<constant>` token anywhere? Mirrors
-/// `"<constant>" in flatten_nested_list(existing)` in `match_pattern`'s placeholder-rebind guard.
-pub fn contains_constant(node: &Node) -> bool {
-    match node {
-        Node::Leaf(t) => t == "<constant>",
-        Node::Op { token, operands } => {
-            token == "<constant>" || operands.iter().any(contains_constant)
-        }
-    }
-}
-
-/// Faithful port of `match_pattern` (utils.py:800). Matches a query subtree `tree` against a rule
-/// LHS `pattern`; on success `mapping` binds each placeholder name to the matched query subtree
-/// (borrowed from `tree`). The bare-string-operand early-return branch in the Python source is DEAD
-/// for `prefix_to_tree`-built patterns (operands are always subtrees), so it is intentionally omitted.
-pub fn match_pattern<'a>(
-    tree: &'a Node,
-    pattern: &Node,
-    mapping: &mut FxHashMap<String, &'a Node>,
-) -> bool {
-    match pattern {
-        // Elementary (leaf) pattern.
-        Node::Leaf(pkey) => {
-            if pkey.starts_with('_') {
-                // Placeholder. Python keys on startswith('_'), not the ^_\d+$ regex.
-                match mapping.get(pkey.as_str()) {
-                    None => {
-                        mapping.insert(pkey.clone(), tree);
-                        true
-                    }
-                    Some(existing) => {
-                        // Cannot rebind a subtree that contains an (independent) <constant>.
-                        if contains_constant(existing) {
-                            false
-                        } else {
-                            *existing == tree
-                        }
-                    }
-                }
-            } else {
-                // Concrete literal leaf: structural equality (Python `tree == pattern`).
-                tree == pattern
-            }
-        }
-        // Tree-structured pattern.
-        Node::Op {
-            token: p_op,
-            operands: p_operands,
-        } => match tree {
-            // Leaf tree vs non-leaf pattern -> mismatch (Python len(tree)==1 & pattern_length!=1).
-            Node::Leaf(_) => false,
-            Node::Op {
-                token: t_op,
-                operands: t_operands,
-            } => {
-                if t_op != p_op {
-                    return false;
-                }
-                for (t_operand, p_operand) in t_operands.iter().zip(p_operands.iter()) {
-                    if !match_pattern(t_operand, p_operand, mapping) {
-                        return false;
-                    }
-                }
-                true
-            }
-        },
-    }
-}
-
-/// Faithful port of `apply_mapping` (utils.py:762): substitute each placeholder leaf (`_N`) in the
-/// replacement template with its bound subtree, returning a fresh tree. Concrete leaves and operator
-/// structure are copied. A placeholder with no binding panics (mirrors Python's `KeyError`); the
-/// wildcard-multiplicity invariant guarantees RHS placeholders are a subset of bound LHS ones.
-pub fn apply_mapping(template: &Node, mapping: &FxHashMap<String, &Node>) -> Node {
-    match template {
-        Node::Leaf(t) => {
-            if t.starts_with('_') {
-                (*mapping.get(t.as_str()).expect("rhs placeholder is bound")).clone()
-            } else {
-                template.clone()
-            }
-        }
-        Node::Op { token, operands } => Node::Op {
-            token: token.clone(),
-            operands: operands.iter().map(|o| apply_mapping(o, mapping)).collect(),
-        },
-    }
-}
+use crate::tokens::{Tok, TokenView};
 
 // `operand_key` + its ordered key type are ported in `src/sort.rs` (co-located with `sort_operands`,
 // their only consumer).
 
-/// Faithful port of `is_numeric_string` (utils.py:552), the predicate `mask_elementary_literals`
+/// Faithful port of `is_numeric_string` (utils.py@0.2.15:552), the predicate `mask_elementary_literals`
 /// uses. It is a string-munging check, NOT `float()`:
 /// `s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e', '', 1).isdigit()`.
 /// Order matters (`.` then `e-` then `e`); each `replace(..., 1)` is first-occurrence-only;
@@ -129,23 +34,24 @@ fn replace_first(s: &str, pat: &str) -> String {
     }
 }
 
-/// Faithful port of `mask_elementary_literals` (utils.py:679): replace every token for which
+/// Faithful port of `mask_elementary_literals` (utils.py@0.2.15:679): replace every token for which
 /// [`is_numeric_string`] holds (e.g. `0`, `1`, `14`, `3.14`) with `<constant>`. The final step of
 /// `simplify` (after sort), abstracting the literal coefficients/neutrals that cancellation emits.
-pub fn mask_elementary_literals(expression: &[String]) -> Vec<String> {
+/// Per-id predicate via the view (same `is_numeric_string`, computed at intern).
+pub fn mask_elementary_literals(expression: &[Tok], view: &TokenView) -> Vec<Tok> {
     expression
         .iter()
-        .map(|t| {
-            if is_numeric_string(t) {
-                "<constant>".to_string()
+        .map(|&t| {
+            if view.is_num_str(t) {
+                view.table.constant
             } else {
-                t.clone()
+                t
             }
         })
         .collect()
 }
 
-/// Faithful port of `numbers_to_constant` (utils.py:259): replace every token for which Python's
+/// Faithful port of `numbers_to_constant` (utils.py@0.2.15:259): replace every token for which Python's
 /// `float(token)` SUCCEEDS with `<constant>`. NOTE this uses `float()` (try/except), NOT
 /// `is_numeric_string` -- so it is a DIFFERENT predicate from [`mask_elementary_literals`]
 /// (e.g. `float('1e3')` succeeds, `float('inf')`/`float('nan')` succeed). `parse` calls this when
@@ -166,7 +72,7 @@ pub fn numbers_to_constant(prefix_expression: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Faithful port of `remove_pow1` (utils.py:898): drop every `pow1` token (raising-to-1 identity)
+/// Faithful port of `remove_pow1` (utils.py@0.2.15:898): drop every `pow1` token (raising-to-1 identity)
 /// and rewrite `pow_1` (raising-to-(-1)) as `inv`; all other tokens pass through. The final cleanup
 /// step of `parse`.
 pub fn remove_pow1(prefix_expression: &[String]) -> Vec<String> {
@@ -184,7 +90,7 @@ pub fn remove_pow1(prefix_expression: &[String]) -> Vec<String> {
     out
 }
 
-/// Faithful port of `utils.is_prime` (utils.py:396). NOTE: this mirrors the SOURCE exactly,
+/// Faithful port of `utils.is_prime` (utils.py@0.2.15:396). NOTE: this mirrors the SOURCE exactly,
 /// quirks included -- it is only ever invoked from `cancel_terms` with `abs(sum) > 5`, but the
 /// faithful contract is exact replication, not a "correct" primality test. Python:
 /// ```python
@@ -208,7 +114,7 @@ pub fn is_prime(n: i64) -> bool {
     true
 }
 
-/// Faithful port of `utils.factorize_to_at_most` (utils.py:583). Decomposes `p` into factors
+/// Faithful port of `utils.factorize_to_at_most` (utils.py@0.2.15:583). Decomposes `p` into factors
 /// each `<= max_factor` whose product is `p`, in discovery order (NOT sorted). Returns `Err(())`
 /// where Python raises `ValueError` -- the caller (`cancel_terms`) branches on the raise to a
 /// `*`/`pow`-coefficient fallback, so the raise conditions are CONTROL FLOW and must match exactly:

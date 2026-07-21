@@ -1,19 +1,18 @@
-//! The M2 "drop-in engine" conversion surface: `prefix_to_infix`, `infix_to_prefix`,
+//! The "drop-in engine" conversion surface: `prefix_to_infix`, `infix_to_prefix`,
 //! `convert_expression`, `parse`. These let flash-ansr swap the whole `simplipy_engine` object for
 //! the Rust port (it calls `is_valid` / `prefix_to_infix` / `infix_to_prefix` / `parse` on the engine
 //! OBJECT), not just route `.simplify`.
 //!
 //! Faithful target: dev_7-3 @ simplipy 0.2.15 / tag c84741f. Every function is byte-identical
-//! tag<->HEAD (it sits outside the P0 operand-index regions), so the tag IS the parity reference.
+//! tag<->HEAD (it sits outside the operand-index regions), so the tag IS the parity reference.
 //!
-//! Characterization provenance: the trap maps + ~111 Python-validated adversarial inputs come from
-//! the 4-agent characterization workflow (wf_5221177a-a5b); see `benchmarks/results/` and
-//! `corpus/_m2_adversarial.json`. Trap ids (T1..) below reference that analysis.
+//! Characterization provenance: the trap maps + the Python-validated adversarial inputs live in
+//! `benchmarks/results/` and `corpus/_m2_adversarial.json`. Trap ids (T1..) below reference them.
 
 use crate::operators::{pow1_power, pow_power, Operators};
 use crate::utils::is_numeric_string;
 
-/// How `prefix_to_infix` renders power operators (engine.py:409 `power` param).
+/// How `prefix_to_infix` renders power operators (engine.py@0.2.15:409 `power` param).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Power {
     /// `'func'`: keep engine names (`pow(a, b)`, `pow2(x)`). The DEFAULT and dominant deployment mode.
@@ -22,7 +21,7 @@ pub enum Power {
     StarStar,
 }
 
-/// `op_associativity` (engine.py:442-449): a LOCAL hardcoded map, NOT from config. Absent operators
+/// `op_associativity` (engine.py@0.2.15:442-449): a LOCAL hardcoded map, NOT from config. Absent operators
 /// default to `'left'`. Only `+,-,*,/` (left) and `**,pow` (right) appear.
 fn associativity(op: &str) -> &'static str {
     match op {
@@ -31,7 +30,7 @@ fn associativity(op: &str) -> &'static str {
     }
 }
 
-/// `right_allows_flatten` (engine.py:457-466): a right operand of EQUAL precedence may omit parens
+/// `right_allows_flatten` (engine.py@0.2.15:457-466): a right operand of EQUAL precedence may omit parens
 /// only when `child_root` is in `flatten_map[parent_op]` (`{'+':{'+','-'}, '*':{'*','/'}}`). A `None`
 /// child root (a terminal) trivially allows flatten (459-460), though that path is unreachable in the
 /// equal-precedence test (a terminal has precedence inf, never == a finite parent precedence).
@@ -52,10 +51,10 @@ fn right_allows_flatten(parent_op: &str, child_root: Option<&str>, fixed: bool) 
     }
 }
 
-/// A render-stack element (engine.py:455): `(rendered_str, precedence, root_operator)`.
+/// A render-stack element (engine.py@0.2.15:455): `(rendered_str, precedence, root_operator)`.
 type Item = (String, f64, Option<String>);
 
-/// Faithful port of `prefix_to_infix` (engine.py:409-579). Renders a prefix token list to an infix
+/// Faithful port of `prefix_to_infix` (engine.py@0.2.15:409-579). Renders a prefix token list to an infix
 /// string with minimal parentheses. Returns `Err` where Python raises `ValueError` (malformed prefix:
 /// too few / too many operands) -- the FFI maps that to a Python `ValueError`; the differential checks
 /// failure-PARITY, not message text.
@@ -77,7 +76,7 @@ pub fn prefix_to_infix(
     fixed: bool,
 ) -> Result<String, String> {
     if tokens.is_empty() {
-        return Ok(String::new()); // engine.py:436-437
+        return Ok(String::new()); // engine.py@0.2.15:436-437
     }
 
     const INF: f64 = f64::INFINITY; // FUNC_PRECEDENCE = TERMINAL_PRECEDENCE (451-452)
@@ -270,7 +269,7 @@ pub fn prefix_to_infix(
     Ok(stack.into_iter().next().unwrap().0)
 }
 
-/// `', '.join(op_str for op_str, _, _ in operands_data)` (engine.py:492,568): join the rendered
+/// `', '.join(op_str for op_str, _, _ in operands_data)` (engine.py@0.2.15:492,568): join the rendered
 /// strings of the popped operands in pop order ([0]=left, ..).
 fn join_operands(operands_data: &[Item]) -> String {
     operands_data
@@ -280,7 +279,7 @@ fn join_operands(operands_data: &[Item]) -> String {
         .join(", ")
 }
 
-// ---- infix_to_prefix (engine.py:581) -------------------------------------------------------------
+// ---- infix_to_prefix (engine.py@0.2.15:581) -------------------------------------------------------------
 
 /// Tokenize the (space-stripped) infix string, faithfully to the Python regex
 /// `<constant>|number|[A-Za-z_][\w.]*|\*\*|[-+*/^()]` under `re.findall` semantics: scan left to
@@ -405,13 +404,13 @@ fn match_ident(s: &[char], i: usize) -> Option<usize> {
     Some(j)
 }
 
-/// `re.fullmatch(number_pattern, token)` (engine.py:620): does the WHOLE token parse as a number?
+/// `re.fullmatch(number_pattern, token)` (engine.py@0.2.15:620): does the WHOLE token parse as a number?
 fn is_number_fullmatch(token: &str) -> bool {
     let chars: Vec<char> = token.chars().collect();
     !chars.is_empty() && match_number(&chars, 0) == Some(chars.len())
 }
 
-/// `re.match(r'[A-Za-z_][\w.]*', token)` (engine.py:622, unanchored): the token STARTS with an
+/// `re.match(r'[A-Za-z_][\w.]*', token)` (engine.py@0.2.15:622, unanchored): the token STARTS with an
 /// identifier char. (Since the classifier only ever sees tokenizer outputs, "starts with" suffices.)
 fn is_ident_start(token: &str) -> bool {
     token
@@ -420,7 +419,7 @@ fn is_ident_start(token: &str) -> bool {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
 }
 
-/// Faithful port of `infix_to_prefix` (engine.py:581-653): a RIGHT-to-LEFT shunting-yard. Never
+/// Faithful port of `infix_to_prefix` (engine.py@0.2.15:581-653): a RIGHT-to-LEFT shunting-yard. Never
 /// raises (degenerate/malformed inputs produce structurally-degenerate prefix lists, matching Python).
 ///
 /// `fixed` selects the corrected behavior of the deliberate-improvement line (conversion-quirk #4: the
@@ -515,7 +514,7 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators, fixed: bool) -> 
     prefix_expr
 }
 
-// ---- convert_expression (engine.py:655) ----------------------------------------------------------
+// ---- convert_expression (engine.py@0.2.15:655) ----------------------------------------------------------
 
 /// The nested-list intermediate representation `convert_expression` builds: an arbitrarily-nested
 /// list of strings, exactly as Python (`[token]` leaves, `[op, [children]]` nodes, plus the quirky
@@ -526,7 +525,7 @@ enum Ir {
     L(Vec<Ir>),
 }
 
-/// `flatten_nested_list(list_of_items)[::-1]` (utils.py:362 + the `[::-1]` at engine.py:775,849):
+/// `flatten_nested_list(list_of_items)[::-1]` (utils.py@0.2.15:362 + the `[::-1]` at engine.py@0.2.15:775,849):
 /// a LIFO reverse-DFS over the items, then reversed -> a prefix token list. (Nesting depth is
 /// irrelevant: any list is linearized, so the `[base]` quirk flattens away harmlessly.)
 fn flatten_list(items: &[Ir]) -> Vec<String> {
@@ -554,7 +553,7 @@ fn first_str(ir: &Ir) -> Option<&str> {
     }
 }
 
-/// Replace `node[0]` (a string leaf) in place: `stack[-1][0] = new` (engine.py:690).
+/// Replace `node[0]` (a string leaf) in place: `stack[-1][0] = new` (engine.py@0.2.15:690).
 fn set_first(ir: &mut Ir, new: String) {
     if let Ir::L(v) = ir {
         if let Some(Ir::S(s)) = v.first_mut() {
@@ -563,26 +562,26 @@ fn set_first(ir: &mut Ir, new: String) {
     }
 }
 
-/// `re.match(r'-?\d+$', s)` (engine.py:708,737): optional leading `-`, then >=1 digits, whole string.
+/// `re.match(r'-?\d+$', s)` (engine.py@0.2.15:708,737): optional leading `-`, then >=1 digits, whole string.
 fn is_int_string(s: &str) -> bool {
     let t = s.strip_prefix('-').unwrap_or(s);
     !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// `re.match(r'pow\d+', s)` (engine.py:794, NO negative lookahead): starts with `pow` + >=1 digit.
+/// `re.match(r'pow\d+', s)` (engine.py@0.2.15:794, NO negative lookahead): starts with `pow` + >=1 digit.
 /// This DELIBERATELY matches `pow1_3` (sees the `pow1` prefix) -- the faithful chain-absorption bug (T3).
 fn matches_int_pow(s: &str) -> bool {
     s.strip_prefix("pow")
         .is_some_and(|r| r.bytes().next().is_some_and(|b| b.is_ascii_digit()))
 }
 
-/// `re.match(r'pow1_\d+', s)` (engine.py:794): starts with `pow1_` + >=1 digit.
+/// `re.match(r'pow1_\d+', s)` (engine.py@0.2.15:794): starts with `pow1_` + >=1 digit.
 fn matches_frac_pow(s: &str) -> bool {
     s.strip_prefix("pow1_")
         .is_some_and(|r| r.bytes().next().is_some_and(|b| b.is_ascii_digit()))
 }
 
-/// `int(re.match(r'pow(\d+)', op).group(1))` (engine.py:810): the leading digit-run right after `pow`.
+/// `int(re.match(r'pow(\d+)', op).group(1))` (engine.py@0.2.15:810): the leading digit-run right after `pow`.
 /// For `pow1_3` this is `1` (the chain-absorption bug drops the `_3`).
 fn int_chain_exp(op: &str) -> Option<i128> {
     let rest = op.strip_prefix("pow")?;
@@ -594,7 +593,7 @@ fn int_chain_exp(op: &str) -> Option<i128> {
     rest[..end].parse::<i128>().ok()
 }
 
-/// `Fraction(x).as_integer_ratio()` reduced (engine.py:719 `Fraction(abs(float(s)))`): the EXACT
+/// `Fraction(x).as_integer_ratio()` reduced (engine.py@0.2.15:719 `Fraction(abs(float(s)))`): the EXACT
 /// dyadic ratio of the f64 (NOT a decimal parse of the source string). `None` if the exact ratio
 /// exceeds the i128 domain (pathological subnormals / huge magnitudes -- documented out-of-domain;
 /// they never occur on the deployment distribution, which doesn't reach this branch at all).
@@ -677,7 +676,7 @@ fn gcd_i128(mut a: i128, mut b: i128) -> i128 {
     a
 }
 
-/// `Fraction(abs(float(s))).limit_denominator()` reduced (engine.py:719). `None` only on the
+/// `Fraction(abs(float(s))).limit_denominator()` reduced (engine.py@0.2.15:719). `None` only on the
 /// documented out-of-i128-domain pathological inputs (never on the deployment distribution).
 fn fraction_limit_denominator(x: f64) -> Option<(i128, i128)> {
     let (num, den) = exact_ratio(x)?;
@@ -689,7 +688,7 @@ fn pow_keep(base: Ir, exponent: Ir) -> Ir {
     Ir::L(vec![Ir::S("pow".into()), Ir::L(vec![base, exponent])])
 }
 
-/// `**` handling (engine.py:702-763): integer / float / integer-fraction exponent. `Err` mirrors the
+/// `**` handling (engine.py@0.2.15:702-763): integer / float / integer-fraction exponent. `Err` mirrors the
 /// dead len==2 float-division branch's `int()` `ValueError` (failure-parity).
 fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir, String> {
     let ev = match &exponent {
@@ -753,7 +752,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
             Ok(pow_keep(base, exponent)) // non-numeric exponent -> KEEP
         }
     } else if ev.len() == 2 {
-        // exponent[0][0] == '/' and both operands numeric strings (engine.py:735).
+        // exponent[0][0] == '/' and both operands numeric strings (engine.py@0.2.15:735).
         let op0_is_div = matches!(&ev[0], Ir::S(s) if s.starts_with('/'));
         let (num_tok, den_tok) = match &ev[1] {
             Ir::L(operands) if operands.len() == 2 => {
@@ -807,7 +806,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
     }
 }
 
-/// Faithful port of `convert_expression` (engine.py:655-849): normalize a prefix expression into the
+/// Faithful port of `convert_expression` (engine.py@0.2.15:655-849): normalize a prefix expression into the
 /// engine's internal form (`**` -> `pow{N}`, chained powers combined, unary negation folded into
 /// numeric literals). `Err` mirrors a Python raise (raw unconfigured `powN` token KeyError -- T2; the
 /// dead float-division `int()` ValueError -- T5).
@@ -986,7 +985,7 @@ fn pop_operands(stack: &mut Vec<Ir>, arity: usize) -> Result<Vec<Ir>, String> {
     Ok(out)
 }
 
-/// `list(reversed(stack[-arity:]))` (engine.py:786,838): the last `arity` items, reversed (NOT popped).
+/// `list(reversed(stack[-arity:]))` (engine.py@0.2.15:786,838): the last `arity` items, reversed (NOT popped).
 fn take_reversed_tail(stack: &[Ir], arity: usize) -> Result<Vec<Ir>, String> {
     if stack.len() < arity {
         return Err("pass-2: not enough operands".into());
@@ -995,7 +994,7 @@ fn take_reversed_tail(stack: &[Ir], arity: usize) -> Result<Vec<Ir>, String> {
 }
 
 /// Build the nested pow chain from a list of operator names around `current_operand`
-/// (engine.py:818-828): `[ops[-1], [current]]` innermost, wrapped outward by `ops[-2::-1]`. Empty
+/// (engine.py@0.2.15:818-828): `[ops[-1], [current]]` innermost, wrapped outward by `ops[-2::-1]`. Empty
 /// ops -> `current_operand` itself (the pow1-vanishes case).
 fn build_chain(ops_list: &[String], current_operand: Ir) -> Ir {
     if ops_list.is_empty() {
@@ -1011,9 +1010,9 @@ fn build_chain(ops_list: &[String], current_operand: Ir) -> Ir {
     nc
 }
 
-// ---- parse (engine.py:852) -----------------------------------------------------------------------
+// ---- parse (engine.py@0.2.15:852) -----------------------------------------------------------------------
 
-/// Faithful port of `parse` (engine.py:852): `infix_to_prefix` -> (if `convert`) `convert_expression`
+/// Faithful port of `parse` (engine.py@0.2.15:852): `infix_to_prefix` -> (if `convert`) `convert_expression`
 /// -> (if `mask_numbers`) `numbers_to_constant` -> ALWAYS `remove_pow1`. The high-level entry that
 /// closes `simplify(str)` and the flash-ansr canonicalization path. `Err` propagates a
 /// `convert_expression` raise.

@@ -2,176 +2,88 @@
 
 Defines :class:`SimpliPyEngine`, which parses, converts, evaluates, and simplifies
 mathematical expressions given as prefix token lists using a configurable set of
-operators and rewrite rules, and :class:`SimplificationStatistics`, a dataclass that
-records per-run metrics of a simplification pass. When available, the engine dispatches
-the inline simplification/conversion/validation core to the compiled Rust extension
-(``simplipy._core``) and otherwise falls back to an equivalent pure-Python implementation.
+operators and rewrite rules. The engine dispatches all simplification, conversion,
+validation, and mining work to the compiled Rust extension (``simplipy._core``);
+the compiled core is REQUIRED; there is no pure-Python fallback.
 """
-import re
+import hashlib
 import importlib
-import fractions
 import os
 import warnings
-import time
 import signal
-import pprint
-from dataclasses import dataclass, field
+from itertools import product
 from types import CodeType, FunctionType
 from typing import Callable
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from copy import deepcopy
-from math import prod
-from collections import defaultdict
 
 import numpy as np
 import json
-from tqdm import tqdm
+import yaml
 
 from simplipy.utils import (
-    factorize_to_at_most, is_numeric_string,
-    get_used_modules, numbers_to_constant, flatten_nested_list, is_prime,
-    deduplicate_rules, mask_elementary_literals as mask_elementary_literals_fn,
+    is_numeric_string,
+    get_used_modules,
+    deduplicate_rules,
     enumerate_expressions, count_expressions, sample_expression,
-    apply_mapping, match_pattern, remove_pow1, violates_wildcard_multiplicity,
+    violates_wildcard_multiplicity,
     _WILDCARD_RE)
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
 try:
-    # The compiled INLINE core: the Rust `simplify` + conversions + validation (the simplipy._core
-    # extension). OPTIONAL by design -- if the extension is missing/unbuilt, the pure-Python methods
-    # below are a faithful fallback (correct, just slower). Attached by from_config/load (path-based
-    # construction); absent for in-memory `SimpliPyEngine(operators=...)`.
+    # The compiled INLINE core (the simplipy._core extension): simplify + conversions + validation
+    # + the offline miner. REQUIRED (see the module docstring): a missing/unbuilt extension is a
+    # hard error at engine construction.
     from simplipy._core import Engine as _RustEngine  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover  (missing/unbuilt extension -> pure-Python fallback)
+    _CORE_IMPORT_ERROR: Exception | None = None
+except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
     _RustEngine = None  # type: ignore[assignment, misc]
+    _CORE_IMPORT_ERROR = _exc
 
 
-def _load_c_pow() -> 'Callable[[float, float], float] | None':
-    """Bind the raw system C ``pow`` (the IEEE-754 special-case table), the SAME symbol the Rust
-    ``_core`` folder calls. Constant folding (``_apply_numeric_op``) routes ``pow`` through this so the
-    pure-Python and Rust-backed engines fold bit-identically on a given platform's libm.
+def _is_slot_token(token: str) -> bool:
+    """A sorted-rule slot token: a sort sigil (``_`` / ``?`` / ``!``) followed by digits."""
+    return bool(token) and token[0] in '_?!' and token[1:].isdigit()
 
-    Neither of Python's built-in powers is usable here: ``x ** y`` promotes a negative base with a
-    non-integer exponent to a *complex* and raises ``OverflowError`` on magnitude overflow (losing the
-    sign), while ``math.pow`` adds its own domain checks that raise where C ``pow`` returns ``nan``/
-    ``inf``. ctypes gives the unguarded C function. Returns ``None`` if libm cannot be located (then
-    folding falls back to the pure-Python approximation in ``_apply_numeric_op``).
+
+def _coverage_variants(
+        lhs: tuple[str, ...],
+        rhs: tuple[str, ...]) -> list[tuple[list[str], list[str]]]:
+    """Instantiation variants a rule must survive to count as covered.
+
+    Every slot in ``lhs`` is instantiated as a distinct variable leaf ``x{i}``;
+    ``<constant>`` stays LITERAL (substituting a numeral would let native constant
+    folding fake coverage). Additionally, every subset of up to 3 wide slots
+    (``_``/``!`` sigils) is probed with the composite ``sin(x{i})``: leaf-only
+    instantiation under-tests what a wide slot claims to match.
     """
-    import ctypes
-    import ctypes.util
-    import math
-    for name in (ctypes.util.find_library('m'), 'libm.so.6', 'libm.so',
-                 ctypes.util.find_library('c'), 'msvcrt'):
-        if not name:
-            continue
-        try:
-            fn = ctypes.CDLL(name).pow
-        except (OSError, AttributeError):
-            continue
-        fn.restype = ctypes.c_double
-        fn.argtypes = (ctypes.c_double, ctypes.c_double)
-        # Validate that this symbol really is the IEEE-754 C `pow` before trusting it (a wrong binding
-        # -- e.g. a Windows runtime symbol named `pow` with different semantics -- would silently diverge;
-        # better to fall through to the `**` fallback). Check a few special cases libm `pow` defines.
-        try:
-            if (fn(-0.0, -1.0) == -math.inf and fn(2.0, 3.0) == 8.0
-                    and math.isnan(fn(-1.0, 0.5)) and fn(-2.0, 3.0) == -8.0):
-                return fn
-        except Exception:
-            pass
-    return None
+    slots = list(dict.fromkeys(t for t in lhs if _is_slot_token(t)))
+    wide = [s for s in slots if s[0] in '_!'][:3]
+    variants = []
+    for mask in product((0, 1), repeat=len(wide)):
+        bindings = {s: ['x' + s[1:]] for s in slots}
+        for slot, composite in zip(wide, mask):
+            if composite:
+                bindings[slot] = ['sin', 'x' + slot[1:]]
 
+        def substitute(tokens: tuple[str, ...]) -> list[str]:
+            return [out for t in tokens for out in bindings.get(t, [t])]
 
-try:
-    _C_POW = _load_c_pow()
-except Exception:  # pragma: no cover  (e.g. `ctypes` unavailable / sandboxed Python)
-    # Hardening: a binding failure must NEVER break `import simplipy`. `_apply_numeric_op` already
-    # falls back to Python `**` when `_C_POW is None` (constant folding stays correct, just not via
-    # the raw C symbol on this platform).
-    _C_POW = None
+        variants.append((substitute(lhs), substitute(rhs)))
+    return variants
 
 
 def _validate_ndarray_input(expression: 'np.ndarray', inplace: bool) -> None:
     """The ndarray input contract for ``simplify`` (engine.py): 1-D, string-like dtype, no ``inplace``.
-    Shared by the Rust-routed fast path and the pure-Python path so the two cannot drift."""
+    Validated BEFORE the core call so malformed inputs fail with a clean ValueError."""
     if expression.ndim != 1:
         raise ValueError('`simplify` expects a one-dimensional numpy array of tokens')
     if expression.dtype.kind not in {'U', 'S', 'O'}:
         raise ValueError('`simplify` expects a numpy array of string-like tokens')
     if inplace:
         raise ValueError('`inplace=True` is not supported when the expression is a numpy array')
-
-
-@dataclass
-class SimplificationStatistics:
-    """Collects detailed statistics about a simplification run.
-
-    This dataclass is populated by :meth:`SimpliPyEngine.simplify` when
-    ``collect_statistics=True``.  It replaces the former
-    ``rule_application_statistics`` dict with a richer set of metrics that
-    cover every stage of the simplification pipeline.
-
-    Attributes
-    ----------
-    rule_application_counts : defaultdict[tuple, int]
-        How many times each ``(rule_index, pattern, replacement)`` rule fired.
-        ``rule_index`` is the position of the rule in the original
-        ``simplification_rules`` list (``-1`` for rules not found in the list).
-    explicit_rule_applications : int
-        Total number of explicit (no-wildcard) rule applications.
-    pattern_rule_applications : int
-        Total number of wildcard-pattern rule applications.
-    post_operand_rule_applications : int
-        Rules that fired only after children were simplified first.
-    constant_folding_count : int
-        How often constant folding fired in rule application, including both
-        fully numeric operand folds and mixed
-        ``<constant>``/numeric/named-constant leaf folds.
-    rule_match_attempts : int
-        Total ``match_pattern`` calls made.
-    rule_match_hits : int
-        How many of those attempts succeeded.
-    cancellation_events : list[dict[str, Any]]
-        One entry per term cancellation with keys ``'class'`` (``'add'``/
-        ``'mult'``), ``'subtree'``, ``'multiplicity_sum'``, and
-        ``'neutral_insertions'``.
-    iterations_used : int
-        Number of simplification iterations that were executed.
-    converged : bool
-        Whether the loop stopped before reaching ``max_iter``.
-    result_rejected : bool
-        Whether the simplified result was longer than the input and
-        therefore discarded.
-    per_iteration_lengths : list[dict[str, int]]
-        For each iteration, a dict with keys
-        ``'after_cancel'`` and ``'after_rules'`` holding the expression
-        length at that point.
-    stage_timings : dict[str, float]
-        Cumulative wall-clock seconds keyed by stage name:
-        ``'cancel_terms'``, ``'apply_rules'``, ``'sort_operands'``,
-        ``'mask_literals'``.
-    """
-
-    rule_application_counts: defaultdict[tuple, int] = field(default_factory=lambda: defaultdict(int))
-    explicit_rule_applications: int = 0
-    pattern_rule_applications: int = 0
-    post_operand_rule_applications: int = 0
-    constant_folding_count: int = 0
-    rule_match_attempts: int = 0
-    rule_match_hits: int = 0
-    cancellation_events: list[dict[str, Any]] = field(default_factory=list)
-    iterations_used: int = 0
-    converged: bool = False
-    result_rejected: bool = False
-    per_iteration_lengths: list[dict[str, int]] = field(default_factory=list)
-    stage_timings: dict[str, float] = field(default_factory=lambda: {
-        'cancel_terms': 0.0,
-        'apply_rules': 0.0,
-        'sort_operands': 0.0,
-        'mask_literals': 0.0,
-    })
 
 
 class SimpliPyEngine:
@@ -202,53 +114,23 @@ class SimpliPyEngine:
     operator_arity : dict[str, int]
         A mapping from operator names to their arity (number of arguments).
     simplification_rules : list[tuple]
-        The list of simplification rules loaded into the engine.
-    simplification_rules_patterns : dict
-        A compiled version of rules that involve pattern variables (e.g., _0),
-        organized for efficient matching.
-    simplification_rules_no_patterns : dict
-        A compiled version of explicit rules without pattern variables.
+        The list of simplification rules loaded into the engine (mirrored into the
+        compiled core by :meth:`compile_rules`).
     """
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None) -> None:
-        # The compiled inline core (simplipy._core), attached by from_config/load when the engine is
-        # built from on-disk assets. Stays None for in-memory construction or a missing extension, in
-        # which case the inline methods fall back to their pure-Python implementations.
-        self._core = None
         # Cache operator metadata for quick access during parsing and evaluation.
         self.operator_tokens = list(operators.keys())
         self.operator_aliases = {alias: operator for operator, properties in operators.items() for alias in properties['alias']}
-        self.operator_inverses = {k: v["inverse"] for k, v in operators.items() if v.get("inverse") is not None}
-
-        self.inverse_base = {'*': ['inv', '/', '1'], '+': ['neg', '-', '0']}
-        self.inverse_unary = {v[0]: [k, v[1], v[2]] for k, v in self.inverse_base.items()}
-        self.inverse_binary = {v[1]: [k, v[0], v[2]] for k, v in self.inverse_base.items()}
-
-        self.unary_mult_div_operators = {k: v["inverse"] for k, v in operators.items() if k.startswith('mult') or k.startswith('div')}
-        self.commutative_operators = [k for k, v in operators.items() if v.get("commutative", False)]
 
         self.operator_realizations = {k: v["realization"] for k, v in operators.items()}
-        self.realization_to_operator = {v: k for k, v in self.operator_realizations.items()}
-
-        self.operator_precedence_compat = {k: v.get("precedence", i) for i, (k, v) in enumerate(operators.items())}
-        self.operator_precedence_compat['**'] = 3
-        self.operator_precedence_compat['sqrt'] = 3
 
         self.operator_arity = {k: v["arity"] for k, v in operators.items()}
         self.operator_arity_compat = deepcopy(self.operator_arity)
         self.operator_arity_compat['**'] = 2
         self.operators = list(self.operator_arity.keys())
 
-        self.max_power = max([int(op[3:]) for op in self.operator_tokens if re.match(r'pow\d+(?!\_)', op)] + [0])
-        self.max_fractional_power = max([int(op[5:]) for op in self.operator_tokens if re.match(r'pow1_\d+', op)] + [0])
-
         self.modules = get_used_modules(''.join(f"{op}(" for op in self.operator_realizations.values()))
         self.import_modules()
-
-        self.connection_classes = {'add': (['+', '-'], "0"), 'mult': (['*', '/'], "1")}
-        self.operator_to_class = {'+': 'add', '-': 'add', '*': 'mult', '/': 'mult'}
-        self.connection_classes_inverse = {'add': "neg", 'mult': "inv"}
-        self.connection_classes_hyper = {'add': "mult", 'mult': "pow"}
-        self.binary_connectable_operators = {'+', '-', '*', '/'}
 
         # Normalize the incoming rule list and eliminate duplicate patterns.
         dummy_variables = [f'x{i}' for i in range(100)]
@@ -257,31 +139,50 @@ class SimpliPyEngine:
         else:
             self.simplification_rules = deduplicate_rules(rules, dummy_variables=dummy_variables)
 
-        # Build the compiled lookup tables that power rule application.
-        self.compile_rules()
-        self.simplification_statistics: SimplificationStatistics | None = None
+        # The raw operator config, kept for core (re)construction.
+        self._operators_config = deepcopy(operators)
+        # Build the compiled core (REQUIRED; see the module docstring): every
+        # construction path (from_config/load AND direct in-memory construction) attaches it
+        # here, from the SAME in-memory state, so no path can exist without a core.
+        self._core = self._build_core(self._operators_config, self.simplification_rules)
+
+    @staticmethod
+    def _build_core(operators: dict[str, dict[str, Any]], rules: list[tuple]) -> Any:
+        """Build the compiled core (``simplipy._core``) from in-memory config + rules.
+
+        The core is REQUIRED: a missing extension or a load failure is a hard error --
+        the pure-Python engine was removed.
+        """
+        if _RustEngine is None:
+            raise ImportError(
+                'simplipy._core is required (the pure-Python engine was removed): the compiled '
+                f'extension failed to import ({_CORE_IMPORT_ERROR!r})')
+        config_text = yaml.safe_dump({'operators': operators}, sort_keys=False)
+        rules_text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules])
+        return _RustEngine.from_strs(config_text, rules_text)
 
     def compile_rules(self) -> None:
-        """Compiles the text-based rules into an efficient internal format.
+        """Sync the compiled core's rule set from ``self.simplification_rules``.
 
-        This method processes the `self.simplification_rules` list,
-        separating them into rules with patterns (like '_0', '_1') and
-        explicit rules. It then converts the patterns into a tree-based
-        structure optimized for fast matching against expression subtrees.
+        Public contract (unchanged since the pure-Python engine): after mutating
+        ``self.simplification_rules``, call this so ``simplify`` sees the new rules.
+        With the Rust-only engine this is a straight ``set_rules`` push to the core.
         """
-        simplification_rules_patterns = []
-        simplification_rules_no_patterns = []
-        self._rule_index_lookup: dict[tuple[tuple, tuple], int] = {}
-        for idx, r in enumerate(self.simplification_rules):
-            key = (tuple(r[0]), tuple(r[1]))
-            self._rule_index_lookup[key] = idx
-            if any(_WILDCARD_RE.match(t) for t in r[0]):
-                simplification_rules_patterns.append(r)
-            else:
-                simplification_rules_no_patterns.append(r)
-        self.max_pattern_length = 0
-        self.simplification_rules_patterns: dict[tuple, list[tuple[list, list]]] = self.construct_rule_patterns(simplification_rules_patterns)
-        self.simplification_rules_no_patterns: dict[tuple, tuple] = {tuple(r[0]): tuple(r[1]) for r in simplification_rules_no_patterns}
+        self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules])
+
+    def simplify_counters(self) -> dict[str, int]:
+        """Snapshot of the process-global simplify hot-path counters.
+
+        Counts (calls, iterations, exact hits, pattern attempts/fires, certificate
+        calls/hits) plus coarse nanosecond accounting (cancel / rules / cert /
+        mask+sort). Aggregates across all engines and threads in the process; pair
+        with :meth:`reset_simplify_counters` around a batch to profile it.
+        """
+        return self._core.simplify_counters()
+
+    def reset_simplify_counters(self) -> None:
+        """Zero all :meth:`simplify_counters` counters."""
+        self._core.reset_simplify_counters()
 
     def prune_redundant_rules(self, verbose: bool = False) -> int:
         """Remove explicit rules that are subsumed by wildcard-pattern rules.
@@ -308,70 +209,121 @@ class SimpliPyEngine:
         int
             The number of rules that were pruned.
         """
-        # FAST + CORRECT path: with the Rust core, the redundancy test must remove the rule from the
-        # RUST rule set (the immutable compiled rules `simplify` actually uses) -- not from the Python
-        # `simplification_rules_no_patterns` dict, which the core ignores (doing so over-prunes ~94%
-        # because every rule still "applies via itself"). `_core.prune_explicit` removes each explicit
-        # `lhs` from the Rust `no_patterns` map, re-`simplify`s, and keeps it removed iff still
-        # derivable -- mirroring this method's serial semantics, in the deployed config (fold=True,
-        # mask_elementary_literals=False).
-        if self._core is not None:
-            explicit_lhs = [
-                list(lhs) for lhs, _rhs in self.simplification_rules
-                if not any(_WILDCARD_RE.match(t) for t in lhs)
-            ]
-            pruned_lhs = self._core.prune_explicit(explicit_lhs, False, True)
-            pruned_set = {tuple(lhs) for lhs in pruned_lhs}
-            if pruned_set:
-                self.simplification_rules = [
-                    rule for rule in self.simplification_rules
-                    if tuple(rule[0]) not in pruned_set
-                ]
-                self.compile_rules()
-            if verbose:
-                print(f'Pruned {len(pruned_set)} redundant explicit rules '
-                      f'({len(self.simplification_rules)} rules remaining)')
-            return len(pruned_set)
-
-        # Pure-Python path (no compiled core): the original in-place dict prune is correct here because
-        # `simplify` uses `simplification_rules_no_patterns` directly.
-        # Collect indices of explicit (non-pattern) rules
-        explicit_indices = [
-            i for i, (lhs, _rhs) in enumerate(self.simplification_rules)
+        # The redundancy test removes each explicit `lhs` from the RUST rule set (the compiled
+        # rules `simplify` actually uses): `_core.prune_explicit` re-simplifies with the single
+        # rule removed and keeps it removed iff the transformation is still derivable, serially,
+        # in the deployed config (fold=True, mask_elementary_literals=False).
+        explicit_lhs = [
+            list(lhs) for lhs, _rhs in self.simplification_rules
             if not any(_WILDCARD_RE.match(t) for t in lhs)
         ]
-
-        n_pruned = 0
-        pruned_indices: set[int] = set()
-
-        for idx in tqdm(explicit_indices, desc='Pruning redundant rules', disable=not verbose):
-            lhs, rhs = self.simplification_rules[idx]
-            lhs_key = tuple(lhs)
-
-            # Remove this explicit rule from the compiled dict
-            saved = self.simplification_rules_no_patterns.pop(lhs_key, None)
-
-            result = self.simplify(list(lhs), mask_elementary_literals=False)
-            if tuple(result) == tuple(rhs):
-                # Rule is redundant — keep it removed
-                pruned_indices.add(idx)
-                n_pruned += 1
-            else:
-                # Rule is needed — restore it
-                if saved is not None:
-                    self.simplification_rules_no_patterns[lhs_key] = saved
-
-        if pruned_indices:
+        pruned_lhs = self._core.prune_explicit(explicit_lhs, False, True)
+        pruned_set = {tuple(lhs) for lhs in pruned_lhs}
+        if pruned_set:
             self.simplification_rules = [
-                rule for i, rule in enumerate(self.simplification_rules)
-                if i not in pruned_indices
+                rule for rule in self.simplification_rules
+                if tuple(rule[0]) not in pruned_set
             ]
             self.compile_rules()
-
         if verbose:
-            print(f'Pruned {n_pruned} redundant explicit rules '
+            print(f'Pruned {len(pruned_set)} redundant explicit rules '
                   f'({len(self.simplification_rules)} rules remaining)')
+        return len(pruned_set)
 
+    def prune_covered_rules(self, verbose: bool = False) -> int:
+        """Remove rules that the remaining rules already cover behaviorally.
+
+        A rule ``(lhs, rhs)`` is *covered* if the engine WITHOUT it still
+        simplifies every instantiation variant of its ``lhs`` to at most
+        ``len(rhs-variant)`` tokens. Variants: each slot instantiated as a
+        distinct variable leaf ``x{i}``, with ``<constant>`` kept LITERAL
+        (native constant folding must not fake coverage), plus every subset of
+        up to 3 wide slots (``_``/``!`` sigils) probed with the composite
+        ``sin(x{i})`` -- leaf-only instantiation under-tests wide-sort claims.
+        A rule is covered only if ALL variants pass.
+
+        Batch remove-and-repair, longest sources first: rules are processed in
+        source-length waves DESCENDING (down to length 3). Per wave, the whole
+        wave is tentatively removed, then repaired to a fixpoint: a probe
+        engine is built from the kept rules in ORIGINAL rule-list order
+        (first-match-wins makes rule order behavioral, so set iteration order
+        must never leak into the build), every still-removed rule is
+        re-verified against it, failures are re-added; capped at 12 repair
+        rounds per wave, and on cap the wave's remaining removals are
+        abandoned (re-added), so every removal stands verified against the
+        final rule set. Greedy: the result is valid, not necessarily minimal.
+
+        Complementary to :meth:`prune_redundant_rules`: that method removes
+        explicit rules shadowed by wildcard-pattern rules under an EQUALITY
+        criterion; this one removes ANY rule (pattern rules included) that the
+        other rules cover compositionally under a <=-length criterion.
+
+        Pruning is intentionally corpus-free. Pair it with a closure-quality
+        check on a benchmark corpus of your own (verify outputs do not
+        lengthen, e.g. fail if more than 0.5% of expressions get LONGER
+        outputs than with the unpruned engine) before deploying a pruned
+        ruleset; that check needs a benchmark corpus and stays OUTSIDE this
+        method.
+
+        Parameters
+        ----------
+        verbose : bool, optional
+            If True, prints per-wave progress and a summary. Defaults to False.
+
+        Returns
+        -------
+        int
+            The number of rules that were pruned.
+        """
+        full = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.simplification_rules]
+        if not full:
+            return 0
+
+        def covered(core: Any, lhs: tuple[str, ...], rhs: tuple[str, ...]) -> bool:
+            return all(
+                len(core.simplify(variant_lhs, 5, None, True, True, fold=True)) <= len(variant_rhs)
+                for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
+
+        kept = set(full)
+        for wave_length in range(max(len(lhs) for lhs, _ in full), 2, -1):
+            wave = [rule for rule in full if rule in kept and len(rule[0]) == wave_length]
+            if not wave:
+                continue
+            kept -= set(wave)
+            pending = set(wave)
+            rounds = 0
+            while True:
+                rounds += 1
+                core = self._build_core(self._operators_config, [rule for rule in full if rule in kept])
+                readd = [rule for rule in pending if not covered(core, *rule)]
+                if not readd:
+                    if verbose:
+                        print(f'Wave length {wave_length}: removed {len(pending)} / {len(wave)} '
+                              f'rules (round {rounds}, stable)')
+                    break
+                kept |= set(readd)
+                pending -= set(readd)
+                if verbose:
+                    print(f'Wave length {wave_length} round {rounds}: re-added {len(readd)}, '
+                          f'still removed {len(pending)}')
+                if rounds >= 12:
+                    # Fail-safe on the repair-round cap: the still-pending removals were
+                    # last verified against a now-superseded kept set, so abandon them
+                    # (re-add) rather than ship a removal that was never verified against
+                    # the final rule set.
+                    if verbose and pending:
+                        print(f'Wave length {wave_length}: repair-round cap reached; '
+                              f're-added {len(pending)} unverified removals')
+                    kept |= pending
+                    pending = set()
+                    break
+
+        self.simplification_rules = [rule for rule in full if rule in kept]
+        self.compile_rules()
+        n_pruned = len(full) - len(self.simplification_rules)
+        if verbose:
+            print(f'Pruned {n_pruned} covered rules '
+                  f'({len(self.simplification_rules)} rules remaining)')
         return n_pruned
 
     def resolve_constant_rules(self, verbose: bool = False) -> int:
@@ -407,7 +359,7 @@ class SimpliPyEngine:
             leaves = [t for t in lhs if t not in self.operator_arity]
             if not leaves or not all(is_numeric_string(t) for t in leaves):
                 continue
-            result_token = self._evaluate_constant_subtree(list(lhs))
+            result_token = self._core.evaluate_constant_subtree(list(lhs))
             if result_token is not None:
                 if verbose:
                     print(f'Resolved: {list(lhs)} -> ["{result_token}"] (was ["<constant>"])')
@@ -467,32 +419,8 @@ class SimpliPyEngine:
                 warnings.warn(f"Rules file '{rules_path}' specified in config not found.", UserWarning)
                 rules_path = None
         engine = cls(operators=config['operators'], rules=rules)
-        # Attach the compiled inline core from the SAME resolved assets (single source of truth).
-        if rules_path is not None:
-            engine._attach_core(config_path, rules_path)
+        # (The compiled core self-attaches in __init__ from the SAME in-memory state.)
         return engine
-
-    def _attach_core(self, config_path: str, rules_path: str) -> None:
-        """Build the compiled inline core (`simplipy._core`) from the resolved config + rules files.
-
-        The improved engine routes the inline hot path (simplify + conversions + validation) through
-        it. Best-effort: a missing extension or load failure leaves ``self._core = None`` and the
-        pure-Python methods below remain a faithful fallback.
-        """
-        if _RustEngine is None:
-            return
-        try:
-            self._core = _RustEngine.from_paths(config_path, rules_path)
-        except Exception as exc:  # pragma: no cover  (corrupt/incompatible asset -> Python fallback)
-            # The extension is built but failed to load this asset (version skew / corrupt file): warn
-            # so the silent degradation to the much slower pure-Python engine is observable.
-            warnings.warn(
-                f"simplipy._core failed to load the engine ({exc!r}); falling back to the slower "
-                f"pure-Python implementation.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            self._core = None
 
     @classmethod
     def load(cls, path: str, install: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> "SimpliPyEngine":
@@ -541,47 +469,36 @@ class SimpliPyEngine:
         bool
             True if the expression is valid, False otherwise.
         """
-        # The Rust core returns the same bool but cannot print the per-token `verbose` diagnostics;
-        # route the (rare) verbose call to the pure-Python path to preserve full parity.
-        if self._core is not None and not verbose:
-            return self._core.is_valid(list(prefix_expression))
+        # The verdict ALWAYS comes from the compiled core (single implementation); the pure-Python
+        # loop below only survives as a DIAGNOSTIC printer for the (rare) verbose call, and only
+        # runs when the core has already rejected the expression.
+        valid = self._core.is_valid(list(prefix_expression))
+        if verbose and not valid:
+            self._explain_invalid(prefix_expression)
+        return valid
 
+    def _explain_invalid(self, prefix_expression: list[str]) -> None:
+        """Print WHY an expression failed :meth:`is_valid` (diagnostics only, no verdict)."""
         stack: list[str] = []
-
         if len(prefix_expression) > 1 and prefix_expression[0] not in self.operator_arity:
-            if verbose:
-                print(f'Invalid expression {prefix_expression}: Variable must be leaf node')
-            return False
-
+            print(f'Invalid expression {prefix_expression}: Variable must be leaf node')
+            return
         for token in reversed(prefix_expression):
-            # Check if token is not a constant and numeric
             if token != '<constant>' and is_numeric_string(token):
                 try:
                     float(token)
                 except ValueError:
-                    if verbose:
-                        print(f'Invalid token {token} in expression {prefix_expression}')
-                    return False
-
+                    print(f'Invalid token {token} in expression {prefix_expression}')
+                    return
             if token in self.operator_arity:
                 if len(stack) < self.operator_arity[token]:
-                    if verbose:
-                        print(f'Not enough operands for operator {token} in expression {prefix_expression}')
-                    return False
-
-                # Consume the operands based on the arity of the operator
+                    print(f'Not enough operands for operator {token} in expression {prefix_expression}')
+                    return
                 for _ in range(self.operator_arity[token]):
                     stack.pop()
-
-            # Add the token to the stack
             stack.append(token)
-
         if len(stack) != 1:
-            if verbose:
-                print(f'Stack is not empty after parsing the expression {prefix_expression}')
-            return False
-
-        return True
+            print(f'Stack is not empty after parsing the expression {prefix_expression}')
 
     def prefix_to_infix(self, tokens: list[str], power: Literal['func', '**'] = 'func', realization: bool = False) -> str:
         """Converts a prefix expression to an infix string with minimal parentheses.
@@ -609,159 +526,7 @@ class SimpliPyEngine:
         ValueError
             If the provided tokens do not form a well-formed prefix expression.
         """
-
-        if self._core is not None:
-            return self._core.prefix_to_infix_fixed(list(tokens), power, realization)
-
-        if not tokens:
-            return ''
-
-        # Use the configured operator precedence as a baseline for deciding
-        # when parentheses are necessary. Higher numbers mean higher precedence.
-        op_precedence = self.operator_precedence_compat
-        op_associativity = {
-            '+': 'left',
-            '-': 'left',
-            '*': 'left',
-            '/': 'left',
-            '**': 'right',
-            'pow': 'right',
-        }
-
-        FUNC_PRECEDENCE = float('inf')
-        TERMINAL_PRECEDENCE = float('inf')
-
-        # Stack elements are tuples of (rendered_str, precedence_value, root_operator)
-        stack: list[tuple[str, float, str | None]] = []
-
-        def right_allows_flatten(parent_op: str, child_root: str | None) -> bool:
-            """Return True if a right operand with the same precedence can omit parentheses.
-
-            FIX (conversion-quirk #5, render half): the original flattened equal-precedence right
-            operands of `+`/`*` (e.g. `a + (b + c)` rendered as `a + b + c`), which round-trips ONLY
-            with a right-leaning parse. Paired with the left-associative `infix_to_prefix` parse (the
-            parse half of the #5 fix), a right operand at equal precedence MUST keep its parentheses so
-            the structure is recoverable. Flattening is therefore disabled (empty map) so that
-            `prefix_to_infix` and `infix_to_prefix` stay round-trip inverses under standard associativity.
-            """
-            if child_root is None:
-                return True
-
-            flatten_map: dict[str, set[str]] = {}
-            return child_root in flatten_map.get(parent_op, set())
-
-        for token in reversed(tokens):
-            operator = self.realization_to_operator.get(token, token)
-            canonical_operator = self.operator_aliases.get(operator, operator)
-
-            if (
-                canonical_operator in self.operator_tokens
-                or operator in self.operator_aliases
-                or canonical_operator in self.operator_arity_compat
-            ):
-                arity = self.operator_arity_compat.get(canonical_operator, 1)
-
-                if len(stack) < arity:
-                    raise ValueError(f"Invalid prefix expression: Not enough operands for operator '{operator}'")
-
-                operands_data = [stack.pop() for _ in range(arity)]
-
-                write_operator = (
-                    self.operator_realizations.get(canonical_operator, canonical_operator)
-                    if realization
-                    else canonical_operator
-                )
-
-                # Render realization strings that look like fully qualified callables
-                if realization and ('.' in write_operator or self.operator_arity_compat.get(canonical_operator, 0) > 2):
-                    rendered = f"{write_operator}({', '.join(op_str for op_str, _, _ in operands_data)})"
-                    stack.append((rendered, FUNC_PRECEDENCE, canonical_operator))
-                    continue
-
-                current_precedence = op_precedence.get(canonical_operator, op_precedence.get('pow', FUNC_PRECEDENCE))
-                current_assoc = op_associativity.get(canonical_operator, 'left')
-
-                if arity == 2:
-                    left_str, left_prec, left_root = operands_data[0]
-                    right_str, right_prec, right_root = operands_data[1]
-
-                    if canonical_operator == 'pow' and power == 'func':
-                        rendered = f'{write_operator}({left_str}, {right_str})'
-                        stack.append((rendered, FUNC_PRECEDENCE, canonical_operator))
-                        continue
-
-                    if canonical_operator == 'pow' and power == '**':
-                        write_operator = '**'
-                        current_precedence = op_precedence.get('**', current_precedence)
-                        current_assoc = 'right'
-
-                    if left_prec < current_precedence or (
-                        left_prec == current_precedence and current_assoc == 'right'
-                    ):
-                        left_str = f'({left_str})'
-
-                    if right_prec < current_precedence or (
-                        right_prec == current_precedence and current_assoc == 'left'
-                        and not right_allows_flatten(canonical_operator, right_root)
-                    ):
-                        right_str = f'({right_str})'
-
-                    rendered = f'{left_str} {write_operator} {right_str}'
-                    stack.append((rendered, current_precedence, canonical_operator))
-                    continue
-
-                if arity == 1:
-                    operand_str, operand_prec, operand_root = operands_data[0]
-                    is_pow_op = re.match(r'pow\d+(?!_)', canonical_operator)
-                    is_frac_pow_op = re.match(r'pow1_\d+', canonical_operator)
-
-                    if canonical_operator == 'neg':
-                        if operand_prec < current_precedence:
-                            operand_str = f'({operand_str})'
-                        rendered = f'-{operand_str}'
-                        stack.append((rendered, current_precedence, canonical_operator))
-                        continue
-
-                    if canonical_operator == 'inv':
-                        if operand_prec <= current_precedence:
-                            operand_str = f'({operand_str})'
-                        rendered = f'1/{operand_str}'
-                        inv_precedence = op_precedence.get('/', current_precedence)
-                        stack.append((rendered, inv_precedence, canonical_operator))
-                        continue
-
-                    if power == '**' and (is_pow_op or is_frac_pow_op):
-                        power_precedence = op_precedence.get('**', current_precedence)
-                        if operand_prec <= power_precedence:
-                            operand_str = f'({operand_str})'
-
-                        if is_pow_op:
-                            exponent = int(canonical_operator[3:])
-                            rendered = f'{operand_str}**{exponent}'
-                        else:
-                            denominator = int(canonical_operator[5:])
-                            rendered = f'{operand_str}**(1/{denominator})'
-
-                        stack.append((rendered, power_precedence, canonical_operator))
-                        continue
-
-                    rendered = f'{write_operator}({operand_str})'
-                    stack.append((rendered, FUNC_PRECEDENCE, canonical_operator))
-                    continue
-
-                # Fallback for nullary or higher arity operators
-                rendered = f"{write_operator}({', '.join(op_str for op_str, _, _ in operands_data)})"
-                stack.append((rendered, FUNC_PRECEDENCE, canonical_operator))
-            else:
-                stack.append((token, TERMINAL_PRECEDENCE, None))
-
-        if len(stack) != 1:
-            raise ValueError(
-                "Malformed prefix expression: too many operands remain after processing. "
-                f"Stack: {[part for part, _, _ in stack]}"
-            )
-
-        return stack[0][0]
+        return self._core.prefix_to_infix_fixed(list(tokens), power, realization)
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
         """Converts an infix expression string to prefix notation.
@@ -780,87 +545,7 @@ class SimpliPyEngine:
             A list of tokens representing the expression in prefix notation.
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
-        if self._core is not None:
-            return self._core.infix_to_prefix_fixed(infix_expression)
-
-        number_pattern = r'(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
-        # The numeric folder's inf/nan result tokens (`float("inf")` / `float("-inf")` / `float("nan")`)
-        # are kept ATOMIC so a folded constant round-trips through prefix<->infix; otherwise the
-        # tokenizer splits them on the '(' / '"'. Must LEAD the alternation so it wins over the bare
-        # `float` ident prefix; the token is then classified as a leaf by the ident branch below.
-        float_special = r'float\("(?:-?inf|nan)"\)'
-        # Include caret '^' as a distinct power token so users can write x ^ 3
-        token_pattern = re.compile(rf'{float_special}|<constant>|{number_pattern}|[A-Za-z_][\w.]*|\*\*|[-+*/^()]')
-
-        # Tokenize the infix expression
-        tokens = token_pattern.findall(infix_expression.replace(' ', ''))
-
-        stack: list[str] = []
-        prefix_expr: list[str] = []
-
-        # Reverse the tokens for right-to-left parsing
-        tokens = tokens[::-1]
-
-        i = 0
-        while i < len(tokens):
-            token = tokens[i]
-
-            # Normalize alternative power symbol '^' to the canonical '**'
-            if token == '^':
-                token = '**'
-
-            # Handle numbers (integers, floats, or scientific notation)
-            if re.fullmatch(number_pattern, token):
-                prefix_expr.append(token)
-            elif re.match(r'[A-Za-z_][\w.]*', token) or token == '<constant>':  # Match functions and variables
-                prefix_expr.append(token)
-            elif token == ')':
-                stack.append(token)
-            elif token == '(':
-                while stack and stack[-1] != ')':
-                    prefix_expr.append(stack.pop())
-                if stack and stack[-1] == ')':
-                    stack.pop()  # Pop the ')'
-            else:
-                # Handle binary and unary operators
-                # FIX (conversion-quirk #4): the '^'->'**' normalization (applied to the current token
-                # above) must ALSO apply to the unary-minus lookahead, else `x ^ -y` parses '-' as
-                # binary while the equivalent `x ** -y` parses it as unary.
-                next_token = tokens[i + 1] if i + 1 < len(tokens) else None
-                next_token = '**' if next_token == '^' else next_token
-                if token == '-' and (i == len(tokens) - 1 or next_token == '(' or next_token in self.operator_precedence_compat):
-                    # Handle unary negation (not part of a number)
-                    token = 'neg'
-
-                if stack and stack[-1] != ')' and token != ')':
-                    # FIX (conversion-quirk #5, parse half): respect operator associativity. The
-                    # original `>=` pop on this right-to-left scan right-leaned LEFT-assoc chains,
-                    # misparsing un-parenthesized infix (`1/2 * m * v**2` -> 1/(2*m*v**2)). Pop on strict
-                    # `>` for left-assoc operators; `>=` only for the right-assoc power operators
-                    # ('**'/'pow'). Coordinated with the render half (`right_allows_flatten` disabled)
-                    # so prefix<->infix round-trip identity is preserved.
-                    cur_prec = self.operator_precedence_compat.get(token, 0)
-                    right_assoc = token in ('**', 'pow')
-                    while stack and stack[-1] != ')':
-                        top_prec = self.operator_precedence_compat.get(stack[-1], 0)
-                        if top_prec > cur_prec or (top_prec == cur_prec and right_assoc):
-                            prefix_expr.append(stack.pop())
-                        else:
-                            break
-                    stack.append(token)
-                else:
-
-                    if (token == 'neg' and not stack) or (stack and stack[-1] != ')'):
-                        stack.insert(-1, token)
-                    else:
-                        stack.append(token)
-
-            i += 1
-
-        while stack:
-            prefix_expr.append(stack.pop())
-
-        return prefix_expr[::-1]
+        return self._core.infix_to_prefix_fixed(infix_expression)
 
     def convert_expression(self, prefix_expr: list[str]) -> list[str]:
         """Normalizes an expression into the engine's standard internal format.
@@ -883,222 +568,8 @@ class SimpliPyEngine:
         list[str]
             The normalized prefix expression.
         """
-        if self._core is not None:
-            return self._core.convert_expression_fixed(list(prefix_expr))
+        return self._core.convert_expression_fixed(list(prefix_expr))
 
-        stack: list = []
-        i = len(prefix_expr) - 1
-
-        while i >= 0:
-            token = prefix_expr[i]
-
-            if token in self.operator_arity_compat or token in self.operator_aliases or re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
-                operator = self.operator_aliases.get(token, token)
-                # FIX (conversion-quirk #6): use .get (as pass-2 already does) so a raw unconfigured
-                # powN token (constructible as a node but not a config operator) is handled like a
-                # unary power instead of raising KeyError -- the construct-vs-dispatch asymmetry.
-                arity = self.operator_arity_compat.get(operator, 1)
-
-                if operator == 'neg':
-                    # If the operand of neg is a number, combine them
-                    if isinstance(stack[-1][0], str) and is_numeric_string(stack[-1][0]):
-                        # FIX (conversion-quirk #3): negating a numeric literal toggles ONE leading
-                        # '-' (strip if already negative, else prepend). The original strip branch was
-                        # dead (its `elif` repeated the `if` guard), so neg(-5) produced the literal
-                        # token '--5' instead of '5'.
-                        if stack[-1][0].startswith('-'):
-                            stack[-1][0] = stack[-1][0][1:]
-                        else:
-                            stack[-1][0] = f'-{stack[-1][0]}'
-                    else:
-                        # General case: assemble operator and its operands
-                        operands = [stack.pop() for _ in range(arity)]
-                        stack.append([operator, operands])
-
-                elif operator == '**':
-                    # Check for floating-point exponent
-                    base = stack.pop()
-                    exponent = stack.pop()
-
-                    if len(exponent) == 1:
-                        if re.match(r'-?\d+$', exponent[0]):  # Integer exponent
-                            exponent_value: int | float = int(exponent[0])
-                            if exponent_value == 0:
-                                # FIX (conversion-quirk #2): x**0 -> 1 (not the invalid token 'pow0').
-                                stack.append(['1'])
-                            else:
-                                try:
-                                    # Only exponents decomposable into the unary pow2..pow{max_power}
-                                    # vocabulary may become powN tokens; non-smooth exponents (7, 11,
-                                    # 14, ...) previously produced phantom operators like `pow7` with
-                                    # no realization, corrupting arity downstream. Keep binary pow.
-                                    factorize_to_at_most(abs(exponent_value), self.max_power)
-                                except ValueError:
-                                    stack.append(['pow', [base, exponent]])
-                                else:
-                                    pow_operator = f'pow{abs(exponent_value)}'
-                                    if exponent_value < 0:
-                                        stack.append(['inv', [[pow_operator, [base]]]])
-                                    else:
-                                        stack.append([pow_operator, [base]])
-                        elif is_numeric_string(exponent[0]):  # Floating-point exponent
-                            exponent_value = float(exponent[0])
-
-                            # Try to convert the exponent into a fraction
-                            abs_exponent_fraction = fractions.Fraction(abs(float(exponent[0]))).limit_denominator()
-                            if abs_exponent_fraction.numerator == 0:
-                                # FIX (conversion-quirk #2): x**0.0 -> 1 (not 'pow0').
-                                stack.append(['1'])
-                            elif abs_exponent_fraction.numerator <= 5 and abs_exponent_fraction.denominator <= 5:
-                                # Format the fraction as a combination of power operators, i.e. "x**(2/3)" -> "pow1_3(pow2(x))"
-                                new_expression = [base]
-                                if abs_exponent_fraction.numerator != 1:
-                                    new_expression = [f'pow{abs_exponent_fraction.numerator}', new_expression]
-                                if abs_exponent_fraction.denominator != 1:
-                                    new_expression = [f'pow1_{abs_exponent_fraction.denominator}', new_expression]
-                                if exponent_value < 0:
-                                    new_expression = ['inv', new_expression]
-                                stack.append(new_expression)
-                            else:
-                                stack.append(['pow', [base, exponent]])
-                        else:
-                            stack.append(['pow', [base, exponent]])
-
-                    elif len(exponent) == 2 and exponent[0][0] == '/' and is_numeric_string(exponent[1][0][0]) and is_numeric_string(exponent[1][1][0]):
-                        # Handle fractional exponent, e.g. "x**(2/3)"
-                        if re.match(r'-?\d+$', exponent[1][0][0]) and re.match(r'-?\d+$', exponent[1][1][0]):
-                            # Integer fraction exponent
-                            numerator = int(exponent[1][0][0])
-                            denominator = int(exponent[1][1][0])
-                            if numerator == 0:
-                                # FIX (conversion-quirk #2): x**(0/N) -> 1 (not 'pow0').
-                                stack.append(['1'])
-                            else:
-                                try:
-                                    # Same decomposability gate as the integer branch, for both the
-                                    # power (pow{num}) and the root (pow1_{den}) halves.
-                                    factorize_to_at_most(abs(numerator), self.max_power)
-                                    factorize_to_at_most(abs(denominator), self.max_fractional_power)
-                                except ValueError:
-                                    stack.append(['pow', [base, exponent]])
-                                else:
-                                    numerator_power = f'pow{abs(numerator)}'
-                                    denominator_power = f'pow1_{abs(denominator)}'
-                                    if numerator * denominator < 0:
-                                        stack.append(['inv', [[denominator_power, [[numerator_power, [base]]]]]])
-                                    else:
-                                        stack.append([denominator_power, [[numerator_power, [base]]]])
-                        else:
-                            exponent_value = int(exponent[1][0][0]) / int(exponent[1][1][0])
-                            abs_exponent_fraction = fractions.Fraction(abs(exponent_value)).limit_denominator()
-                            if abs_exponent_fraction.numerator <= 5 and abs_exponent_fraction.denominator <= 5:
-                                # Format the fraction as a combination of power operators, i.e. "x**(2/3)" -> "pow1_3(pow2(x))"
-                                new_expression = [base]
-                                if abs_exponent_fraction.numerator != 1:
-                                    new_expression = [f'pow{abs_exponent_fraction.numerator}', new_expression]
-                                if abs_exponent_fraction.denominator != 1:
-                                    new_expression = [f'pow1_{abs_exponent_fraction.denominator}', new_expression]
-                                if exponent_value < 0:
-                                    new_expression = ['inv', new_expression]
-                                stack.append(new_expression)
-                            else:
-                                stack.append(['pow', [base, exponent]])
-                    else:
-                        stack.append(['pow', [base, exponent]])
-
-                else:
-                    # General case: assemble operator and its operands
-                    operands = [stack.pop() for _ in range(arity)]
-                    stack.append([operator, operands])
-            else:
-                # Non-operator token (operand)
-                stack.append([token])
-
-            i -= 1
-
-        need_to_convert_powers_expression = flatten_nested_list(stack)[::-1]
-
-        stack = []
-        i = len(need_to_convert_powers_expression) - 1
-
-        while i >= 0:
-            token = need_to_convert_powers_expression[i]
-
-            if re.match(r'pow\d+(?!\_)', token) or re.match(r'pow1_\d+', token):
-                operator = self.operator_aliases.get(token, token)
-                arity = self.operator_arity_compat.get(operator, 1)
-                operands = list(reversed(stack[-arity:]))
-
-                # Identify chains of pow<i> xor pow1_<i> operators
-                # Mixed chains are ignored
-                operator_chain = [operator]
-                current_operand = operands[0]
-
-                operator_bases = ['pow1_', 'pow']
-                # FIX (conversion-quirk #1): the integer-pow chain pattern needs the SAME negative
-                # lookahead as the outer dispatch (r'pow\d+(?!_)'). Without it, the chain-extension
-                # match below (`re.match(operator_pattern, current_operand[0])`) matches a child
-                # 'pow1_M' (it sees the 'pow1' prefix), absorbs it, multiplies the exponent by 1
-                # (re.match(r'pow(\d+)','pow1_M').group(1)=='1'), and SILENTLY DROPS the _M
-                # denominator: pow2(pow1_3(x)) -> pow2(x). The lookahead stops the absorption.
-                operator_patterns = [r'pow1_\d+', r'pow\d+(?!_)']
-                operator_patterns_grouped = [r'pow1_(\d+)', r'pow(\d+)']
-                max_powers = [self.max_fractional_power, self.max_power]
-                for base, pattern, pattern_grouped, p in zip(operator_bases, operator_patterns, operator_patterns_grouped, max_powers):
-                    if re.match(pattern, operator):
-                        operator_base = base
-                        operator_pattern = pattern
-                        operator_pattern_grouped = pattern_grouped
-                        max_power = p
-                        break
-
-                while len(current_operand) == 2 and re.match(operator_pattern, current_operand[0]):
-                    operator_chain.append(current_operand[0])
-                    current_operand = current_operand[1]
-
-                if len(operator_chain) > 0:
-                    p = prod(int(re.match(operator_pattern_grouped, op).group(1)) for op in operator_chain)  # type: ignore
-
-                    try:
-                        p_factors = factorize_to_at_most(p, max_power)
-                        new_operators = [f'{operator_base}{factor}' for factor in p_factors]
-
-                        if len(new_operators) == 0:
-                            new_chain = current_operand
-                        else:
-                            new_chain = [new_operators[-1], [current_operand]]
-                            for op in new_operators[-2::-1]:
-                                new_chain = [op, [new_chain]]
-                    except ValueError:
-                        # Fall back to the original chain of operators when the
-                        # exponent cannot be expressed using the configured
-                        # unary power operators.
-                        new_chain = [operator_chain[-1], [current_operand]]
-                        for op in operator_chain[-2::-1]:
-                            new_chain = [op, [new_chain]]
-
-                    _ = [stack.pop() for _ in range(arity)]
-                    stack.append(new_chain)
-                    i -= 1
-                    continue
-
-            elif token in self.operator_arity_compat or token in self.operator_aliases:
-                operator = self.operator_aliases.get(token, token)
-                arity = self.operator_arity_compat[operator]
-                operands = list(reversed(stack[-arity:]))
-
-                _ = [stack.pop() for _ in range(arity)]
-                stack.append([operator, operands])
-                i -= 1
-                continue
-
-            else:
-                stack.append([token])
-                i -= 1
-
-        return flatten_nested_list(stack)[::-1]
-
-    # PARSING
     def parse(
             self,
             infix_expression: str,
@@ -1129,1004 +600,7 @@ class SimpliPyEngine:
             enabled), and `remove_pow1` cleanup.
         """
 
-        if self._core is not None:
-            return self._core.parse_fixed(infix_expression, convert_expression, mask_numbers)
-
-        parsed_expression = self.infix_to_prefix(infix_expression)
-
-        if convert_expression:
-            parsed_expression = self.convert_expression(parsed_expression)
-        if mask_numbers:
-            parsed_expression = numbers_to_constant(parsed_expression, inplace=True)
-
-        return remove_pow1(parsed_expression)  # HACK: Find a better place to put this
-
-    def prefix_to_tree(self, expression: list[str]) -> list:
-        """Converts a flat prefix expression into a nested tree structure.
-
-        The tree is represented as a nested list, where each subtree is a
-        list of the form `[operator, [operand1, operand2, ...]]` and leaves
-        are lists of the form `[variable]`.
-
-        Parameters
-        ----------
-        expression : list[str]
-            The expression in prefix notation.
-
-        Returns
-        -------
-        list
-            The nested list representing the expression tree.
-        """
-        def build_tree(index: int) -> tuple[list | None, int]:
-            if index >= len(expression):
-                return None, index
-
-            token = expression[index]
-
-            # If token is not an operator or is an operator with arity 0
-            if isinstance(token, dict) or token not in self.operator_arity or self.operator_arity[token] == 0:
-                return [token], index + 1
-
-            # If token is an operator
-            operands = []
-            current_index = index + 1
-
-            # Process operands based on the operator's arity
-            for _ in range(self.operator_arity[token]):
-                if current_index >= len(expression):
-                    break
-
-                subtree, current_index = build_tree(current_index)
-                if subtree:
-                    operands.append(subtree)
-
-            return [token, operands], current_index
-
-        result, _ = build_tree(0)
-
-        if result is None:
-            raise ValueError(f'Failed to build tree from expression {expression}')
-
-        return result
-
-    def construct_rule_patterns(self, rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], verbose: bool = False) -> dict[tuple, list[tuple[list, list]]]:
-        """Transforms a list of rules into a structured dictionary of pattern trees.
-
-        This pre-processes rules for efficient matching. It groups rules by the
-        length and root operator of their patterns and converts the flat
-        prefix patterns into tree structures using `prefix_to_tree`.
-
-        Parameters
-        ----------
-        rules_list : list[tuple]
-            A list of simplification rules to process.
-        verbose : bool, optional
-            If True, displays a progress bar. Defaults to False.
-
-        Returns
-        -------
-        dict
-            A dictionary mapping `(pattern_length, root_operator)` tuples to a
-            list of `(pattern_tree, replacement_tree)` tuples.
-        """
-        # Group the rules by arity
-        rules_list_of_operator: defaultdict[str, list] = defaultdict(list)
-        for rule in rules_list:
-            rules_list_of_operator[rule[0][0]].append(rule)
-        rules_list_of_operator = dict(rules_list_of_operator)  # type: ignore
-
-        # Sort the rules by length of the left-hand side to make matching more efficient
-        for operator, rules_list_of_operator_list in rules_list_of_operator.items():
-            rules_list_of_operator[operator] = sorted(rules_list_of_operator_list, key=lambda x: len(x[0]))
-
-        # Construct the trees for pattern matching
-        rules_trees = {operator: [
-            (
-                self.prefix_to_tree(list(rule[0])),
-                self.prefix_to_tree(list(rule[1]))
-            )
-            for rule in rules_list_of_operator_a] for operator, rules_list_of_operator_a in tqdm(rules_list_of_operator.items(), desc='Constructing patterns', disable=not verbose)}
-
-        rules_trees_organized: defaultdict[tuple, list] = defaultdict(list)
-        for operator, rules in rules_trees.items():
-            for (pattern, replacement) in rules:
-                pattern_length = len(flatten_nested_list(pattern))
-                rules_trees_organized[(pattern_length, operator,)].append((pattern, replacement))
-
-                if pattern_length > self.max_pattern_length:
-                    self.max_pattern_length = pattern_length
-
-        return rules_trees_organized
-
-    def parse_subtree(self, tokens: list[str] | tuple[str, ...], start_idx: int) -> tuple[list, int]:
-        """Parses a complete subtree from a token list starting at a given index.
-
-        Recursively consumes tokens corresponding to an operator and its
-        operands to build a single expression tree.
-
-        Parameters
-        ----------
-        tokens : list[str] or tuple[str, ...]
-            A sequence of tokens in prefix notation.
-        start_idx : int
-            The index in `tokens` where the subtree is assumed to start.
-
-        Returns
-        -------
-        subtree : list
-            The parsed subtree as a nested list.
-        next_idx : int
-            The index of the token immediately following the parsed subtree.
-        """
-        if start_idx >= len(tokens):
-            raise ValueError(f"Start index {start_idx} is out of bounds for tokens {tokens}")
-
-        token = tokens[start_idx]
-
-        if token in self.operator_arity_compat or token in self.operator_aliases:
-            operator = self.operator_aliases.get(token, token)
-            arity = self.operator_arity_compat[operator]
-            operands = []
-            idx = start_idx + 1
-
-            for _ in range(arity):
-                operand, idx = self.parse_subtree(tokens, idx)
-                operands.append(operand)
-
-            return [operator, operands], idx
-        else:
-            # It's a terminal (constant or variable)
-            return [token], start_idx + 1
-
-    def _evaluate_constant_subtree(self, flat_expression: list[str]) -> str | None:
-        """Evaluate a fully numeric prefix expression to a single value (token).
-
-        Deterministic IEEE-754 ``f64`` + ``libm`` folding (the ``numeric`` engine line): the subtree is
-        evaluated with Python floats (``math`` -> the platform libm), folding to the f64 result --
-        including ``inf``/``nan`` (``1/0 -> float("inf")``, ``sqrt(-1) -> float("nan")``). An unparseable
-        leaf returns ``None``. This is deterministic (no numpy version/SIMD variance) and matches the
-        Rust ``_core`` folder byte-for-byte on a given build (same libm), so the pure-Python and
-        Rust-backed engines fold identically.
-
-        Parameters
-        ----------
-        flat_expression : list[str]
-            A prefix expression where every leaf is a numeric literal.
-
-        Returns
-        -------
-        str or None
-            The result token: ``str(int)`` if integer-valued, ``float("inf")`` / ``float("-inf")`` /
-            ``float("nan")`` for a non-finite result, else ``str(float)``. ``None`` if a leaf cannot be
-            parsed as a number or the expression is malformed (extra/missing tokens).
-        """
-        import math
-
-        pos = 0
-
-        def ev() -> float:
-            nonlocal pos
-            tok = flat_expression[pos]
-            pos += 1
-            arity = self.operator_arity_compat.get(tok)
-            if arity is None:
-                return float(tok)  # leaf; ValueError propagates -> None (no alias resolution -- matches Rust)
-            args = [ev() for _ in range(arity)]
-            return self._apply_numeric_op(tok, args)
-
-        try:
-            result = ev()
-            if pos != len(flat_expression):
-                return None  # extra tokens (malformed)
-        except (ValueError, IndexError, OverflowError, ZeroDivisionError):
-            return None
-
-        if math.isnan(result):
-            return 'float("nan")'
-        if math.isinf(result):
-            return 'float("-inf")' if result < 0 else 'float("inf")'
-        if result == int(result):
-            return str(int(result))
-        return str(result)
-
-    def _apply_numeric_op(self, name: str, a: list[float]) -> float:
-        """One canonical operator on float operands, as IEEE-754 f64 + libm (mirrors the Rust
-        ``apply_op``). Reproduces libm's inf/nan exactly (``math`` raises where libm returns inf/nan),
-        so intermediate non-finite values propagate identically before the finiteness gate."""
-        import math
-
-        if _C_POW is not None:
-            fp = _C_POW  # raw C `pow` -> bit-identical to the Rust `_core` folder, IEEE-754 special cases
-        else:
-            def fp(x: float, y: float) -> float:
-                # Fallback when libm can't be located: approximate C `pow` with Python's `**`. A negative
-                # base with a non-integer exponent is NaN (C `pow`), not complex/Overflow -- check first,
-                # since `**` would raise OverflowError on a huge magnitude or return a complex.
-                if x < 0.0 and math.isfinite(y) and y != math.floor(y):
-                    return math.nan
-                try:
-                    r = x ** y
-                except OverflowError:
-                    # correctly-signed inf: negative iff a negative base raised to an ODD integer exponent.
-                    neg = x < 0.0 and y == math.floor(y) and int(y) % 2 != 0
-                    return -math.inf if neg else math.inf
-                except ZeroDivisionError:
-                    return math.inf  # 0 ** negative -> +inf (f64 powf), not a ValueError
-                except ValueError:
-                    return math.nan
-                return math.nan if isinstance(r, complex) else r
-
-        x = a[0]
-        if name == '+':
-            return x + a[1]
-        if name == '-':
-            return x - a[1]
-        if name == '*':
-            return x * a[1]
-        if name == '/':
-            # IEEE like the deployed numpy array branch: zero-DIVISOR sign participates
-            # (1/-0.0 -> -inf); 0/0 and nan/0 -> nan (2026-07-10 equivalence audit).
-            if a[1] == 0.0:
-                if x == 0.0 or math.isnan(x):
-                    return math.nan
-                return math.copysign(math.inf, x) * math.copysign(1.0, a[1])
-            return x / a[1]
-        if name == 'pow':
-            return fp(x, a[1])
-        if name == 'neg':
-            return -x
-        if name == 'inv':
-            # IEEE: 1/+0 -> +inf, 1/-0 -> -inf (matches numpy; 2026-07-10 equivalence audit)
-            return math.copysign(math.inf, x) if x == 0.0 else 1.0 / x
-        if name == 'abs':
-            return math.fabs(x)
-        if name in ('mult2', 'mult3', 'mult4', 'mult5'):
-            return float(name[4:]) * x
-        if name in ('div2', 'div3', 'div4', 'div5'):
-            return x / float(name[3:])
-        if name in ('pow2', 'pow3', 'pow4', 'pow5'):
-            return fp(x, float(name[3:]))
-        if name == 'pow1_2':
-            return fp(x, 0.5)
-        if name == 'pow1_4':
-            return fp(x, 0.25)
-        if name == 'pow1_3':
-            return -fp(-x, 1.0 / 3.0) if x < 0 else fp(x, 1.0 / 3.0)
-        if name == 'pow1_5':
-            return -fp(-x, 1.0 / 5.0) if x < 0 else fp(x, 1.0 / 5.0)
-        # sin/cos/tan: Python's math RAISES on a non-finite argument; the C functions (-> Rust) return
-        # NaN. Match C so an inf intermediate (e.g. from `1/0`) propagates to NaN, not an exception.
-        if name == 'sin':
-            return math.sin(x) if math.isfinite(x) else math.nan
-        if name == 'cos':
-            return math.cos(x) if math.isfinite(x) else math.nan
-        if name == 'tan':
-            return math.tan(x) if math.isfinite(x) else math.nan
-        if name == 'asin':
-            return math.asin(x) if -1.0 <= x <= 1.0 else math.nan
-        if name == 'acos':
-            return math.acos(x) if -1.0 <= x <= 1.0 else math.nan
-        if name == 'atan':
-            return math.atan(x)
-        if name == 'sinh':
-            try:
-                return math.sinh(x)
-            except OverflowError:
-                return math.inf if x > 0 else -math.inf
-        if name == 'cosh':
-            try:
-                return math.cosh(x)
-            except OverflowError:
-                return math.inf
-        if name == 'tanh':
-            return math.tanh(x)
-        if name == 'asinh':
-            return math.asinh(x)
-        if name == 'acosh':
-            return math.acosh(x) if x >= 1.0 else math.nan
-        if name == 'atanh':
-            if -1.0 < x < 1.0:
-                return math.atanh(x)
-            if x == 1.0:
-                return math.inf
-            if x == -1.0:
-                return -math.inf
-            return math.nan
-        if name == 'exp':
-            try:
-                return math.exp(x)
-            except OverflowError:
-                return math.inf
-        if name == 'log':
-            if x > 0.0:
-                return math.log(x)
-            return -math.inf if x == 0.0 else math.nan
-        raise ValueError(f"unknown numeric operator {name!r}")
-
-    def _try_fold_constants(self, operator: str, operands: list[list], stats: 'SimplificationStatistics | None') -> list | None:
-        """Attempt constant folding on a subtree whose operands are leaves.
-
-        Returns the folded result as a tree node, or ``None`` when folding is
-        not applicable.
-        """
-        all_leaves = all(len(op) == 1 for op in operands)
-        if not all_leaves:
-            return None
-
-        _NAMED_CONSTANTS = frozenset({'np.e', 'np.pi'})
-        values = [op[0] for op in operands]
-        all_numeric = all(is_numeric_string(v) for v in values)
-        all_constant_or_numeric = all(
-            is_numeric_string(v) or v == '<constant>' or v in _NAMED_CONSTANTS
-            for v in values
-        )
-
-        if all_numeric:
-            flat = [operator] + values
-            result_token = self._evaluate_constant_subtree(flat)
-            if result_token is not None:
-                if stats is not None:
-                    stats.constant_folding_count += 1
-                return [result_token]
-        elif all_constant_or_numeric:
-            if stats is not None:
-                stats.constant_folding_count += 1
-            return ['<constant>']
-
-        return None
-
-    def apply_rules_top_down(self, subtree: list, max_pattern_length: int | None = None, collect_statistics: bool = False, verbose: bool = False) -> list:
-        """Recursively applies simplification rules to an expression tree.
-
-        It attempts to match rules at the current node (top-down). If no rule
-        matches, it recursively calls itself on the node's children. After
-        the children are simplified, it re-checks for matching rules at the
-        current node, in case a child's simplification enables a new rule.
-
-        Parameters
-        ----------
-        subtree : list
-            The expression tree (nested list) to simplify.
-        max_pattern_length : int or None, optional
-            The maximum length of a rule pattern to consider. Defaults to None.
-        collect_statistics : bool, optional
-            If True, records which rules are successfully applied. Defaults to False.
-        verbose : bool, optional
-            If True, prints detailed information about rule applications. Defaults to False.
-
-        Returns
-        -------
-        list
-            The simplified expression tree.
-        """
-        if len(subtree) == 1:
-            # Terminal node, no rules to apply
-            return subtree
-
-        stats = self.simplification_statistics if collect_statistics else None
-
-        operator = subtree[0]
-        operands = subtree[1]
-
-        # Convert subtree to flat form for rule matching
-        flat_subtree = tuple(flatten_nested_list(subtree)[::-1])
-        subtree_length = len(flat_subtree)
-
-        if verbose:
-            print(f'Checking if explicit rule applies to subtree: {flat_subtree} with length {subtree_length}')
-
-        # Check explicit rules first
-        replacement = self.simplification_rules_no_patterns.get(flat_subtree, None)
-        if verbose:
-            print(f'Explicit rule found: {flat_subtree} -> {replacement}' if replacement else 'No explicit rule found')
-        if replacement is not None:
-            if stats is not None:
-                rule_idx = self._rule_index_lookup.get((flat_subtree, replacement), -1)
-                stats.rule_application_counts[(rule_idx, flat_subtree, replacement)] += 1
-                stats.explicit_rule_applications += 1
-            if verbose:
-                print(f'Applied explicit rule\t{flat_subtree} ->\n\t\t{replacement}\nto subtree\t{subtree}\n')
-            # Parse and recursively simplify the replacement
-            parsed_replacement, _ = self.parse_subtree(list(replacement), 0)
-            return self.apply_rules_top_down(parsed_replacement, max_pattern_length, collect_statistics, verbose)
-
-        # Check pattern rules, starting with the largest patterns
-        if max_pattern_length is None:
-            subtree_max_pattern_length = min(subtree_length, self.max_pattern_length)
-        else:
-            subtree_max_pattern_length = min(max_pattern_length, subtree_length, self.max_pattern_length)
-
-        for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):
-            if verbose:
-                print(f'Checking pattern rules for operator {operator} with subtree length {pattern_length}')
-            for rule in self.simplification_rules_patterns.get((pattern_length, operator,), []):
-                if stats is not None:
-                    stats.rule_match_attempts += 1
-                does_match, mapping = match_pattern(subtree, rule[0], mapping=None)
-                if does_match:
-                    if stats is not None:
-                        stats.rule_match_hits += 1
-                    # Apply the mapping to get the replacement
-                    replacement_tree = apply_mapping(deepcopy(rule[1]), mapping)
-                    if stats is not None:
-                        rule_key = (
-                            tuple(flatten_nested_list(rule[0])[::-1]),
-                            tuple(flatten_nested_list(rule[1])[::-1]))
-                        rule_idx = self._rule_index_lookup.get(rule_key, -1)
-                        stats.rule_application_counts[(rule_idx, *rule_key)] += 1
-                        stats.pattern_rule_applications += 1
-                    if verbose:
-                        print(f'Applied pattern rule\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{subtree}\nwith mapping\t{mapping}\n')
-                    # Recursively simplify the replacement
-                    return self.apply_rules_top_down(replacement_tree, max_pattern_length, collect_statistics, verbose)
-
-        # No rule matched — try constant folding as fallback
-        folded = self._try_fold_constants(operator, operands, stats)
-        if folded is not None:
-            return folded
-
-        # No rule applied at this level, recursively simplify operands
-        simplified_operands = [self.apply_rules_top_down(operand, max_pattern_length, collect_statistics, verbose) for operand in operands]
-        simplified_subtree = [operator, simplified_operands]
-
-        # After simplifying operands, check again if a rule now applies
-        # (This handles cases where simplification of operands enables a rule)
-        flat_simplified = tuple(flatten_nested_list(simplified_subtree)[::-1])
-
-        # Check explicit rules again
-        replacement = self.simplification_rules_no_patterns.get(flat_simplified, None)
-        if replacement is not None:
-            if stats is not None:
-                rule_idx = self._rule_index_lookup.get((flat_simplified, replacement), -1)
-                stats.rule_application_counts[(rule_idx, flat_simplified, replacement)] += 1
-                stats.explicit_rule_applications += 1
-                stats.post_operand_rule_applications += 1
-            if verbose:
-                print(f'Applied explicit rule (after operand simplification)\t{flat_simplified} ->\n\t\t{replacement}\nto subtree\t{simplified_subtree}\n')
-            parsed_replacement, _ = self.parse_subtree(list(replacement), 0)
-            return self.apply_rules_top_down(parsed_replacement, max_pattern_length, collect_statistics, verbose)
-
-        # Check pattern rules again
-        for pattern_length in reversed(range(1, subtree_max_pattern_length + 1)):
-            for rule in self.simplification_rules_patterns.get((pattern_length, operator,), []):
-                if stats is not None:
-                    stats.rule_match_attempts += 1
-                does_match, mapping = match_pattern(simplified_subtree, rule[0], mapping=None)
-                if does_match:
-                    if stats is not None:
-                        stats.rule_match_hits += 1
-                    replacement_tree = apply_mapping(deepcopy(rule[1]), mapping)
-                    if stats is not None:
-                        rule_key = (
-                            tuple(flatten_nested_list(rule[0])[::-1]),
-                            tuple(flatten_nested_list(rule[1])[::-1]))
-                        rule_idx = self._rule_index_lookup.get(rule_key, -1)
-                        stats.rule_application_counts[(rule_idx, *rule_key)] += 1
-                        stats.pattern_rule_applications += 1
-                        stats.post_operand_rule_applications += 1
-                    if verbose:
-                        print(f'Applied pattern rule (after operand simplification)\t{rule[0]} ->\n\t\t{rule[1]}\nto subtree\t{simplified_subtree}\nwith mapping\t{mapping}\n')
-                    return self.apply_rules_top_down(replacement_tree, max_pattern_length, collect_statistics, verbose)
-
-        # No rule matched after operand simplification — try constant folding as fallback
-        folded = self._try_fold_constants(operator, simplified_operands, stats)
-        if folded is not None:
-            return folded
-
-        return simplified_subtree
-
-    def apply_simplifcation_rules(self, expression: list[str] | tuple[str, ...], max_pattern_length: int | None = None, collect_statistics: bool = False, verbose: bool = False) -> list[str]:
-        """Applies all loaded simplification rules to a prefix expression.
-
-        This method serves as a wrapper around `apply_rules_top_down`. It
-        first converts the flat prefix expression into a tree, applies the
-        rules recursively, and then flattens the resulting tree back into
-        prefix notation.
-
-        Parameters
-        ----------
-        expression : list[str] or tuple[str, ...]
-            The expression in prefix notation.
-        max_pattern_length : int or None, optional
-            The maximum length of rule patterns to attempt to match.
-        collect_statistics : bool, optional
-            If True, updates statistics on rule application counts.
-        verbose : bool, optional
-            If True, enables detailed logging of the simplification process.
-
-        Returns
-        -------
-        list[str]
-            The simplified expression in prefix notation.
-        """
-        if all(t == '<constant>' or t in self.operator_arity for t in expression):
-            return ['<constant>']
-
-        # Parse the entire expression into a tree
-        tree, _ = self.parse_subtree(expression, 0)
-        if tree is None:
-            return list(expression)
-
-        # Apply rules top-down
-        simplified_tree = self.apply_rules_top_down(tree, max_pattern_length, collect_statistics, verbose)
-
-        # Flatten back to prefix notation
-        return flatten_nested_list(simplified_tree)[::-1]
-
-    def collect_multiplicities(self, expression: list[str] | tuple[str, ...], verbose: bool = False) -> tuple[list, list, list]:
-        """Traverses an expression tree to find subtrees that can be cancelled.
-
-        This method performs a bottom-up traversal of the expression, counting
-        the occurrences of each unique subtree within additive (`+`, `-`) and
-        multiplicative (`*`, `/`) contexts. For example, in `(a*b) + (a*b)`,
-        it identifies that the subtree `(a*b)` appears twice in an additive
-        context.
-
-        Parameters
-        ----------
-        expression : list[str] or tuple[str, ...]
-            The expression in prefix notation.
-        verbose : bool, optional
-            If True, prints detailed debugging information. Defaults to False.
-
-        Returns
-        -------
-        expression_tree : list
-            A stack-based representation of the expression tree. Each entry is a
-            nested list of the form ``[operator, operands]`` mirroring the
-            structure consumed by `cancel_terms`.
-        annotations_tree : list
-            A parallel stack holding multiplicity annotations for each subtree,
-            organized by connection class.
-        labels_tree : list
-            A parallel stack containing stable identifiers for every subtree,
-            used to detect duplicates during cancellation.
-        """
-        stack: list = []
-        stack_annotations: list = []
-        stack_labels: list = []
-
-        i = len(expression) - 1
-
-        # Traverse the expression from right to left
-        while i >= 0:
-            token = expression[i]
-
-            if token in self.binary_connectable_operators:
-                operator = token
-                arity = 2
-                operands = list(reversed(stack[-arity:]))
-                operands_annotations_dicts = list(reversed(stack_annotations[-arity:]))
-                operands_labels = list(reversed(stack_labels[-arity:]))
-
-                operator_annotation_dict: dict[str, dict[tuple[str, ...], list[int]]] = {cc: {} for cc in self.connection_classes}
-
-                cc = self.operator_to_class[operator]
-
-                # Carry over annotations from operand nodes
-                if verbose:
-                    print(f'---- {token} ----')
-
-                for branch, operand_annotations_dict in enumerate(operands_annotations_dicts):  # One dict for left and right branch
-                    if verbose:
-                        print(branch)
-                        pprint.pprint(operand_annotations_dict)
-                    for subtree_hash in operand_annotations_dict[0][cc]:  # All subtrees appearing in either branch (0 gets root node of the branch)
-                        # Add to operator dict if not already present
-                        if subtree_hash not in operator_annotation_dict[cc]:
-                            if verbose:
-                                print(f'Initializing {subtree_hash} for {cc}')
-                            operator_annotation_dict[cc][subtree_hash] = [0, 0]
-
-                        if operator in {'-', '/'} and branch == 1:
-                            for p in range(2):
-                                if verbose:
-                                    print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][1 - p]} at {1 - p} of {subtree_hash} (reversed)')
-                                operator_annotation_dict[cc][subtree_hash][1 - p] += operand_annotations_dict[0][cc][subtree_hash][p]
-                        else:
-                            for p in range(2):
-                                if verbose:
-                                    print(f'Adding {operand_annotations_dict[0][cc][subtree_hash][p]} to {operator_annotation_dict[cc][subtree_hash][p]} at {p} of {subtree_hash}')
-                                operator_annotation_dict[cc][subtree_hash][p] += operand_annotations_dict[0][cc][subtree_hash][p]
-
-                if verbose:
-                    print(f'/---- {token} ----')
-                    print()
-
-                # Label each subtree with its own hash to know which to cancel later
-                _ = [stack.pop() for _ in range(arity)]
-                _ = [stack_annotations.pop() for _ in range(arity)]
-                _ = [stack_labels.pop() for _ in range(arity)]
-                stack.append([operator, operands])
-                stack_annotations.append([operator_annotation_dict, operands_annotations_dicts])
-                new_label = tuple(flatten_nested_list([operator, operands])[::-1])
-                stack_labels.append([new_label, operands_labels])
-                i -= 1
-                continue
-
-            if token in self.operator_arity:
-                operator = token
-                arity = self.operator_arity[token]
-                operands = list(reversed(stack[-arity:]))
-                operands_annotations_dicts = list(reversed(stack_annotations[-arity:]))
-                operands_labels = list(reversed(stack_labels[-arity:]))
-
-                # Label each subtree with its own hash to know which to cancel later
-                _ = [stack.pop() for _ in range(arity)]
-                _ = [stack_annotations.pop() for _ in range(arity)]
-                _ = [stack_labels.pop() for _ in range(arity)]
-                stack.append([operator, operands])
-                stack_annotations.append([{cc: {} for cc in self.connection_classes}, operands_annotations_dicts])
-                new_label = tuple(flatten_nested_list([operator, operands])[::-1])
-                stack_labels.append([new_label, operands_labels])
-                i -= 1
-                continue
-
-            stack.append([token])
-            stack_annotations.append([{cc: {tuple([token]): [1, 0]} for cc in self.connection_classes}])
-            stack_labels.append([tuple([token])])
-            i -= 1
-
-        if verbose:
-            pprint.pprint(stack_annotations)
-            print()
-
-        return stack, stack_annotations, stack_labels
-
-    def cancel_terms(self, expression_tree: list, expression_annotations_tree: list, stack_labels: list, collect_statistics: bool = False, verbose: bool = False) -> list[str]:
-        """Reconstructs an expression, cancelling terms based on multiplicity counts.
-
-        Using the annotated tree from `collect_multiplicities`, this method
-        identifies the best candidate for cancellation (e.g., a term that appears
-        with both positive and negative signs). It then rebuilds the expression
-        while replacing the cancelled terms with the appropriate neutral element
-        ('0' for addition, '1' for multiplication) or a simplified form (e.g.,
-        `x + x` becomes `2 * x`).
-
-        Parameters
-        ----------
-        expression_tree : list
-            The stack produced by `collect_multiplicities`, containing the
-            nested expression structure.
-        expression_annotations_tree : list
-            The parallel stack of multiplicity annotations returned by
-            `collect_multiplicities`.
-        stack_labels : list
-            The parallel stack of subtree labels returned by
-            `collect_multiplicities`.
-        collect_statistics : bool, optional
-            If True, records cancellation events in
-            ``self.simplification_statistics``. Defaults to False.
-        verbose : bool, optional
-            If True, prints detailed debugging information. Defaults to False.
-
-        Returns
-        -------
-        list[str]
-            A simplified prefix expression with the detected duplicates merged
-            or removed.
-        """
-        stats = self.simplification_statistics if collect_statistics else None
-
-        stack = expression_tree
-        stack_annotations = expression_annotations_tree
-        stack_parity = [{cc: 1 for cc in self.connection_classes} for _ in range(len(stack_labels))]
-        stack_still_connected = [False]
-
-        expression: list[str] = []
-
-        cancellation_candidate = None
-        n_replaced = 0
-        still_connected = False
-
-        while len(stack) > 0:
-            subtree = stack.pop()
-            subtree_annotation = stack_annotations.pop()
-            subtree_labels = stack_labels.pop()
-            subtree_parities = stack_parity.pop()
-            still_connected = stack_still_connected.pop()
-
-            if cancellation_candidate is not None:
-                argmax_class, cancelled_subtree, cancelled_multiplicity_sum = cancellation_candidate
-                still_connected = still_connected and (subtree[0] in self.connection_classes[argmax_class][0] or subtree[0] not in self.operator_arity)
-
-                if still_connected:
-                    if cancelled_subtree == subtree_labels[0]:
-                        neutral_element = self.connection_classes[argmax_class][1]
-
-                        if cancelled_subtree == ('<constant>',):
-                            first_replacement = ('<constant>',)
-                            other_replacements: str | tuple[str, ...] = neutral_element
-                        else:
-                            current_parity = subtree_parities[argmax_class]
-                            inverse_operator = self.connection_classes_inverse[argmax_class]
-
-                            if verbose:
-                                print()
-                                print(f'Processing subtree {subtree_labels[0]} with current parity {current_parity} and total multiplicity sum {cancelled_multiplicity_sum}')
-
-                            # FIXME
-                            if current_parity * cancelled_multiplicity_sum >= 0:  # Negative parity and negative multiplicity cancel out
-                                inverse_operator_prefix: tuple[str, ...] = ()
-                                double_inverse_operator_prefix: tuple[str, ...] = (inverse_operator,)
-                            else:
-                                inverse_operator_prefix = (inverse_operator,)
-                                double_inverse_operator_prefix = ()
-
-                            if verbose:
-                                print(f'Inverse operator prefix: {inverse_operator_prefix}, double inverse operator prefix: {double_inverse_operator_prefix}')
-
-                            if cancelled_multiplicity_sum == 0:
-                                # Term is cancelled entirely. Replace all occurences with the neutral element
-                                first_replacement = (neutral_element,)
-                                other_replacements = neutral_element
-                                if verbose:
-                                    print(f'Cancelled term {cancelled_subtree} entirely: first replacement {first_replacement}, other replacements {other_replacements}')
-
-                            if abs(cancelled_multiplicity_sum) == 1:
-                                # Term occurs once. Replace every occurence after the first one with the neutral element
-                                first_replacement = inverse_operator_prefix + cancelled_subtree
-                                other_replacements = (neutral_element,)
-                                if verbose:
-                                    print(f'Cancelled term {cancelled_subtree} once: first replacement {first_replacement}, other replacements {other_replacements}')
-
-                            if abs(cancelled_multiplicity_sum) > 1:
-                                # Term occurs multiple times. Replace the first occurence with a multiplication or power of the term. Replace every occurence after the first one with the neutral element
-                                hyper_operator = self.connection_classes_hyper[argmax_class]
-                                operator = self.connection_classes[argmax_class][0][0]  # Positive multiplicity
-                                try:
-                                    if cancelled_multiplicity_sum > 5 and is_prime(abs(cancelled_multiplicity_sum)):
-                                        powers = factorize_to_at_most(abs(cancelled_multiplicity_sum) - 1, self.max_power)
-                                        first_replacement = inverse_operator_prefix + (operator,) + tuple(f'{hyper_operator}{p}' for p in powers) + cancelled_subtree + cancelled_subtree
-                                    else:
-                                        powers = factorize_to_at_most(abs(cancelled_multiplicity_sum), self.max_power)
-                                        first_replacement = inverse_operator_prefix + tuple(f'{hyper_operator}{p}' for p in powers) + cancelled_subtree
-                                except ValueError:
-                                    # Fall back to a representation that stays within the
-                                    # available operator set. For additive contexts we use
-                                    # a binary multiplication with an explicit integer
-                                    # coefficient; for multiplicative contexts we use the
-                                    # binary ``pow`` operator with a numeric exponent.
-                                    magnitude = abs(cancelled_multiplicity_sum)
-                                    coefficient_token = str(magnitude)
-
-                                    if argmax_class == 'add':
-                                        fallback_prefix = inverse_operator_prefix + ('*', coefficient_token)
-                                        first_replacement = fallback_prefix + cancelled_subtree
-                                    else:
-                                        # Multiplicative class
-                                        fallback_prefix = inverse_operator_prefix + ('pow',)
-                                        first_replacement = fallback_prefix + cancelled_subtree + (coefficient_token,)
-
-                                other_replacements = (neutral_element,)
-
-                                if verbose:
-                                    print(f'Cancelled term {cancelled_subtree} multiple times: first replacement {first_replacement}, other replacements {other_replacements}')
-
-                                if verbose:
-                                    print(f'Cancelled term {cancelled_subtree} multiple times inverted: first replacement {first_replacement}, other replacements {other_replacements}')
-
-                        if n_replaced == 0:
-                            expression.extend(first_replacement)
-                            if verbose:
-                                print(f'{n_replaced}: Added first replacement {first_replacement} to expression')
-                        else:
-                            expression.extend(other_replacements)
-                            if verbose:
-                                print(f'{n_replaced}: Added other replacements {other_replacements} to expression')
-                        n_replaced += 1
-                        continue
-
-            # Leaf node
-            if len(subtree) == 1:
-                expression.append(subtree[0])
-                continue
-
-            # Non-leaf node
-            operator, operands = subtree
-            _, operands_annotations_sets = subtree_annotation
-            _, operands_labels = subtree_labels
-            operator_parity = subtree_parities  # No operand parity information yet
-
-            # TODO: Propagate parities of unary inverse operators
-
-            if verbose:
-                print(f'Operator {operator} with operands {operands} is still connected: {still_connected}')
-                print(f'Operator parities: {operator_parity}')
-
-            if operator in self.binary_connectable_operators:
-                propagated_operand_parities: list[dict[str, int]] = [{}, {}]
-                if still_connected:
-                    for cc, (operator_set, _) in self.connection_classes.items():
-                        propagated_operand_parities[0][cc] = operator_parity[cc]
-                        propagated_operand_parities[1][cc] = operator_parity[cc] * (-1 if operator == self.operator_inverses[operator_set[0]] else 1)
-                    if verbose:
-                        print(f'Propagated operand parities: {propagated_operand_parities}')
-                else:
-                    for cc, (operator_set, _) in self.connection_classes.items():
-                        propagated_operand_parities[0][cc] = 1
-                        propagated_operand_parities[1][cc] = (-1 if operator == self.operator_inverses[operator_set[0]] else 1)
-                    if verbose:
-                        print(f'Reset parities to {propagated_operand_parities}')
-
-                # If no cancellation candidate has been identified yet, try to find one in the current subtree
-                if cancellation_candidate is None:
-                    for cc in self.connection_classes:
-                        for subtree_hash, multiplicity in subtree_annotation[0][cc].items():
-                            # Consider candidates where
-                            # 1. there is something to cancel (i.e. the sum of the absolute multiplicities is greater than 1)
-                            # 2. constants are allowed to be cancelled:
-                            #   a. single constants <constant> can be cancelled
-                            #   b. composite terms with constants cannot be cancelled with the current method (one <constant> needs to survive)
-                            if sum(abs(m) for m in multiplicity) > 1 and ('<constant>' not in subtree_hash or len(subtree_hash) == 1):  # Cannot cancel terms with arbitrary constants
-                                cancellation_candidate = (cc, subtree_hash, multiplicity[0] - multiplicity[1])
-                                still_connected = True
-                                if stats is not None:
-                                    neutral_insertions = sum(abs(m) for m in multiplicity) - max(1, abs(multiplicity[0] - multiplicity[1]))
-                                    stats.cancellation_events.append({
-                                        'class': cc,
-                                        'subtree': subtree_hash,
-                                        'multiplicity_sum': multiplicity[0] - multiplicity[1],
-                                        'neutral_insertions': neutral_insertions,
-                                    })
-
-                # Add the operator to the expression
-                expression.append(operator)
-
-                # Add the children to the stack
-                for operand, operand_an, operand_label, propagated_operand_parity in zip(
-                        reversed(operands),
-                        reversed(operands_annotations_sets),
-                        reversed(operands_labels),
-                        reversed(propagated_operand_parities)):
-                    stack.append(operand)
-                    stack_annotations.append(operand_an)
-                    stack_labels.append(operand_label)
-                    stack_parity.append(propagated_operand_parity)
-                    stack_still_connected.append(still_connected)
-
-            else:
-                # Add the operator to the expression
-                expression.append(operator)
-
-                # Add the children to the stack
-                for operand, operand_an, operand_label in zip(reversed(operands), reversed(operands_annotations_sets), reversed(operands_labels)):
-                    stack.append(operand)
-                    stack_annotations.append(operand_an)
-                    stack_labels.append(operand_label)
-                    stack_parity.append({cc: 1 for cc in self.connection_classes})
-                    stack_still_connected.append(still_connected)
-
-        return expression
-
-    def sort_operands(self, expression: list[str] | tuple[str, ...]) -> list[str]:
-        """Sort commutative operands into a canonical order (IDEMPOTENT).
-
-        Iterates :meth:`_sort_operands_once` to a fixpoint. A single pass leaves left-nested
-        commutative chains only partially sorted -- the rotation special case rebalances the nesting
-        but skips the sort that pass -- so this wrapper re-runs until the result stabilises. Converges
-        in ``<= depth`` passes (the rotation monotonically right-nests; once right-nested the sort is
-        idempotent under the total-order key); the ``len + 1`` bound is a safety net. Ensures ``b + a``
-        and ``a + b`` -- and every associativity variant of ``a + b + c`` -- reach the same form.
-
-        Parameters
-        ----------
-        expression : list[str] or tuple[str, ...]
-            The expression in prefix notation.
-
-        Returns
-        -------
-        list[str]
-            The expression with sorted operands, in prefix notation.
-        """
-        prev = list(expression)
-        for _ in range(len(prev) + 1):
-            result = self._sort_operands_once(prev)
-            if result == prev:
-                return result
-            prev = result
-        return prev
-
-    def _sort_operands_once(self, expression: list[str] | tuple[str, ...]) -> list[str]:
-        """One pass of the commutative-operand sort (see :meth:`sort_operands`, which iterates it).
-
-        This method traverses the expression and, for any commutative operator
-        (like `+` or `*`), it sorts its operands based on a consistent key.
-        This ensures that expressions like `b + a` and `a + b` are treated as
-        identical.
-
-        Parameters
-        ----------
-        expression : list[str] or tuple[str, ...]
-            The expression in prefix notation.
-
-        Returns
-        -------
-        list[str]
-            The expression with sorted operands, in prefix notation.
-        """
-        stack: list = []
-        i = len(expression) - 1
-
-        while i >= 0:
-            token = expression[i]
-
-            if token in self.operator_arity_compat or token in self.operator_aliases:
-                operator = self.operator_aliases.get(token, token)
-                arity = self.operator_arity_compat[operator]
-                operands = list(reversed(stack[-arity:]))
-
-                if operator in self.commutative_operators:
-                    # Check for the pattern [*, *, A, B, C] -> [*, A, *, B, C] or [+, +, A, B, C] -> [+, A, +, B, C]
-                    if len(operands[0]) == 2 and operator == operands[0][0]:
-                        _ = [stack.pop() for _ in range(arity)]
-                        stack.append([operator, [operands[0][1][0], [operator, [operands[0][1][1], operands[1]]]]])
-                        i -= 1
-                        continue
-
-                    subtree = [operator, operands]
-
-                    # Traverse through the tree in breadth-first order
-                    queue = [subtree]
-                    commutative_paths: list[tuple] = [tuple()]
-                    commutative_positions = []
-                    while queue:
-                        node = queue.pop(0)
-                        current_path = commutative_paths.pop(0)
-                        for child_index, child in enumerate(node[1]):  # I conclude that using `i` as a variable name here is not very clever
-                            if len(child) > 1:
-                                if child[0] == node[0]:
-                                    # Continue: Same commutative perator
-                                    queue.append(child)
-                                    commutative_paths.append(current_path + (child_index,))
-                                else:
-                                    # Stop: Different operator
-                                    commutative_positions.append(current_path + (child_index,))
-                            else:
-                                # Stop: Leaf
-                                commutative_positions.append(current_path + (child_index,))
-
-                    # Sort the positions
-                    sorted_indices = sorted(range(len(commutative_positions)), key=lambda x: commutative_positions[x])
-
-                    commutative_paths = [commutative_positions[i] for i in sorted_indices]
-                    commutative_positions = [commutative_positions[i] for i in sorted_indices]
-
-                    operands_to_sort = []
-                    for position in commutative_positions:
-                        node = subtree
-                        for position_index in position:
-                            node = node[1][position_index]
-                        operands_to_sort.append(node)
-
-                    sorted_operands = sorted(operands_to_sort, key=self.operand_key)
-
-                    # Replace the operands in the tree
-                    new_subtree: list = deepcopy(subtree)
-
-                    for position, operand in zip(commutative_positions, sorted_operands):
-                        node = new_subtree
-                        for position_index in position:
-                            node = node[1][position_index]
-                        node[:] = operand
-
-                    operands = new_subtree[1]
-
-                    _ = [stack.pop() for _ in range(arity)]
-                    stack.append([operator, operands])
-                    i -= 1
-                    continue
-
-                _ = [stack.pop() for _ in range(arity)]
-                stack.append([operator, operands])
-
-            else:
-                stack.append([token])
-
-            i -= 1
-
-        return flatten_nested_list(stack)[::-1]
+        return self._core.parse_fixed(infix_expression, convert_expression, mask_numbers)
 
     def simplify(
             self,
@@ -2135,14 +609,12 @@ class SimpliPyEngine:
             max_pattern_length: int | None = None,
             mask_elementary_literals: bool = True,
             apply_simplification_rules: bool = True,
-            inplace: bool = False,
-            collect_statistics: bool = False,
-            verbose: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
+            inplace: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Performs a full simplification of a mathematical expression.
 
-        This is the main public method for simplification. It iteratively
-        applies term cancellation, rule-based simplification, and operand
-        sorting until the expression stops changing or `max_iter` is reached.
+        This is the main public method for simplification. The whole fixpoint
+        (term cancellation, rule application, constant folding, operand sorting,
+        the longer-result guard) runs in the compiled core as ONE call.
 
         Parameters
         ----------
@@ -2160,19 +632,13 @@ class SimpliPyEngine:
             If False, skips the rule-based simplification step. Defaults to True.
         inplace : bool, optional
             If the input is a list, this modifies it directly. Defaults to False.
-        collect_statistics : bool, optional
-            If True, populates ``self.simplification_statistics`` with a fresh
-            :class:`SimplificationStatistics` instance containing detailed
-            metrics about the simplification run.  Defaults to False.
-        verbose : bool, optional
-            If True, prints the expression after each simplification step.
 
         Returns
         -------
         str or list[str] or tuple[str, ...] or np.ndarray
             The simplified expression, in the same format as the input. If the
             simplification results in a longer expression, the original
-            expression is returned.
+            expression is returned (for a str input, the re-rendered original).
 
         Notes
         -----
@@ -2181,181 +647,40 @@ class SimpliPyEngine:
         (``1/0`` -> ``float("inf")``, ``sqrt(-1)`` -> ``float("nan")``). The
         resulting ``float("inf")`` / ``float("-inf")`` / ``float("nan")`` tokens
         are atomic and round-trip through the prefix/infix conversions.
+
+        The ``collect_statistics`` and ``verbose`` debugging parameters of the removed
+        pure-Python engine are gone.
         """
-        # INLINE CORE (improved, fold=True): the deployed list/tuple/ndarray prefix-token path runs
-        # in Rust as one FFI unit. `collect_statistics` / `verbose` / a str input fall through to the
-        # pure-Python path below (which is the improved Python engine: it folds + uses the core for
-        # `parse`). Marshalling mirrors the upstream input contract exactly (validated by the suite's
-        # numpy-rejection test + the differential).
-        if self._core is not None and not collect_statistics and not verbose and not isinstance(expression, str):
-            # Match the Python path's state contract: a non-collecting call clears any prior stats.
-            self.simplification_statistics = None
-            if isinstance(expression, np.ndarray):
-                _validate_ndarray_input(expression, inplace)
-                out = self._core.simplify(expression.tolist(), max_iter, max_pattern_length,
-                                          mask_elementary_literals, apply_simplification_rules, True)
-                # Re-infer the string WIDTH from the result, keeping only the input dtype KIND: a fold
-                # can emit a token wider than any input token (e.g. `1/0 -> float("inf")`), and a fixed
-                # `dtype=expression.dtype` (whose width numpy sized to the inputs) would silently truncate.
-                return np.array(out).astype(expression.dtype.kind)
-            if isinstance(expression, tuple):
-                return tuple(self._core.simplify(list(expression), max_iter, max_pattern_length,
-                                                 mask_elementary_literals, apply_simplification_rules, True))
-            out = self._core.simplify(list(expression), max_iter, max_pattern_length,
-                                      mask_elementary_literals, apply_simplification_rules, True)
-            if inplace:
-                expression[:] = out
-                return expression
-            return out
-
-        if collect_statistics:
-            self.simplification_statistics = SimplificationStatistics()
-        else:
-            self.simplification_statistics = None
-
-        list_expression_ref: list[str] | None = None
-        original_expression: str | list[str] | tuple[str, ...] | np.ndarray
-        current_expression: list[str]
-
+        # Normalize the input to a prefix token list (per type), then ONE core call, then
+        # denormalize back to the input type. `fold=True` selects the numeric engine line
+        # (constant folding as a post-rule fallback), the shipped default.
         if isinstance(expression, str):
-            return_type = 'str'
-            original_expression = "" + expression  # Create a copy
-            current_expression = self.parse(expression, convert_expression=True, mask_numbers=False)
-        elif isinstance(expression, tuple):
-            return_type = 'tuple'
-            original_expression = expression  # No need to copy immutable tuple
-            current_expression = list(expression)
+            tokens = self._core.parse_fixed(expression, True, False)
         elif isinstance(expression, np.ndarray):
             _validate_ndarray_input(expression, inplace)
-            return_type = 'np_array'
-            original_expression = expression.copy()
-            current_expression = cast(list[str], expression.tolist())
+            tokens = expression.tolist()
         else:
-            return_type = 'list'
-            list_expression_ref = expression
-            original_expression = expression.copy()
-            current_expression = expression.copy()
+            tokens = list(expression)
 
-        new_expression: list[str] = current_expression.copy()
+        out = self._core.simplify(tokens, max_iter, max_pattern_length,
+                                  mask_elementary_literals, apply_simplification_rules, fold=True)
 
-        length_before = len(current_expression)
-
-        if verbose:
-            print(f'Initial expression: {new_expression}')
-
-        # # Apply simplification rules and sort operands to get started
-        # if apply_simplification_rules:
-        #     new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_statistics=collect_statistics, verbose=verbose)
-
-        # if verbose:
-        #     print(f'_apply_simplifcation_rules: {new_expression}')
-
-        iterations_used = 0
-        converged = False
-
-        for i in range(max_iter):
-            iterations_used = i + 1
-
-            # Cancel any terms
-            t0 = time.perf_counter() if collect_statistics else 0.0
-            expression_tree, annotated_expression_tree, stack_labels = self.collect_multiplicities(new_expression, verbose=verbose)
-            new_expression = self.cancel_terms(expression_tree, annotated_expression_tree, stack_labels, collect_statistics=collect_statistics, verbose=verbose)
-            if collect_statistics:
-                self.simplification_statistics.stage_timings['cancel_terms'] += time.perf_counter() - t0  # type: ignore[union-attr]
-
-            if verbose:
-                print(f'{i}: cancel_terms: {new_expression}')
-
-            iteration_lengths: dict[str, int] = {}
-            if collect_statistics:
-                iteration_lengths['after_cancel'] = len(new_expression)
-
-            # Apply simplification rules
-            if apply_simplification_rules:
-                t0 = time.perf_counter() if collect_statistics else 0.0
-                new_expression = self.apply_simplifcation_rules(new_expression, max_pattern_length, collect_statistics=collect_statistics, verbose=verbose)
-                if collect_statistics:
-                    self.simplification_statistics.stage_timings['apply_rules'] += time.perf_counter() - t0  # type: ignore[union-attr]
-
-            if verbose:
-                print(f'{i}: _apply_simplifcation_rules: {new_expression}')
-
-            if collect_statistics:
-                iteration_lengths['after_rules'] = len(new_expression)
-                self.simplification_statistics.per_iteration_lengths.append(iteration_lengths)  # type: ignore[union-attr]
-
-            if new_expression == current_expression:
-                converged = True
-                break
-            current_expression = new_expression
-
-        # Mask elementary literals BEFORE sorting, so the final operand order is computed on the
-        # canonical (masked) tokens -> sort/mask is a fixpoint (idempotent). Masking still runs
-        # AFTER the rule loop, so which rules fire is unchanged; only the operand order of
-        # masked-literal cases changes. (Mirrors the Rust kernel; see engine.rs simplify.)
-        if mask_elementary_literals:
-            t0 = time.perf_counter() if collect_statistics else 0.0
-            new_expression = mask_elementary_literals_fn(new_expression, inplace=inplace)
-            if collect_statistics:
-                self.simplification_statistics.stage_timings['mask_literals'] += time.perf_counter() - t0  # type: ignore[union-attr]
-
-            if verbose:
-                print(f'{i}: mask_elementary_literals: {new_expression}')
-
-        # Sort operands (after masking)
-        t0 = time.perf_counter() if collect_statistics else 0.0
-        new_expression = self.sort_operands(new_expression)
-        if collect_statistics:
-            self.simplification_statistics.stage_timings['sort_operands'] += time.perf_counter() - t0  # type: ignore[union-attr]
-
-        if verbose:
-            print(f'{i}: sort_operands: {new_expression}')
-
-        result_rejected = len(new_expression) > length_before
-
-        if collect_statistics:
-            self.simplification_statistics.iterations_used = iterations_used  # type: ignore[union-attr]
-            self.simplification_statistics.converged = converged  # type: ignore[union-attr]
-            self.simplification_statistics.result_rejected = result_rejected  # type: ignore[union-attr]
-
-        if result_rejected:
-            # The expression has grown, which is not a simplification
-            match return_type:
-                case 'str':
-                    return original_expression
-                case 'tuple':
-                    return tuple(original_expression)
-                case 'np_array':
-                    original_np_expression = cast(np.ndarray, original_expression)
-                    return original_np_expression.copy()
-                case 'list':
-                    if inplace and list_expression_ref is not None:
-                        list_expression_ref[:] = original_expression
-                        return list_expression_ref
-                    return original_expression
-            return original_expression
-
-        match return_type:
-            case 'str':
-                return self.prefix_to_infix(new_expression, realization=False, power='**')
-            case 'tuple':
-                return tuple(new_expression)
-            case 'np_array':
-                original_np_expression = cast(np.ndarray, original_expression)
-                # Re-infer the result width, keep the input dtype KIND (see the routed path above):
-                # constant folding can emit a token wider than any input token, which a fixed
-                # input-width dtype would silently truncate.
-                return np.array(new_expression).astype(original_np_expression.dtype.kind)
-            case 'list':
-                if inplace and list_expression_ref is not None:
-                    list_expression_ref[:] = new_expression
-                    return list_expression_ref
-                return new_expression
-
-        return new_expression
+        if isinstance(expression, str):
+            return self._core.prefix_to_infix_fixed(out, '**', False)
+        if isinstance(expression, np.ndarray):
+            # Re-infer the string WIDTH from the result, keeping only the input dtype KIND: a fold
+            # can emit a token wider than any input token (e.g. `1/0 -> float("inf")`), and a fixed
+            # `dtype=expression.dtype` (whose width numpy sized to the inputs) would silently truncate.
+            return np.array(out).astype(expression.dtype.kind)
+        if isinstance(expression, tuple):
+            return tuple(out)
+        if inplace:
+            expression[:] = out
+            return expression
+        return out
 
     def _mining_sample_x(self, n_rows: int, n_vars: int, rng: np.random.Generator) -> np.ndarray:
-        """Sample the mine's numerical evaluation matrix X (2026-07-10 audit).
+        """Sample the mine's numerical evaluation matrix X.
 
         Heavy-tailed MIXTURE instead of the historical pure N(0, 5): a mined pattern's
         wildcards bind arbitrary SUBTREE values at application time, so equivalence
@@ -2369,18 +694,17 @@ class SimpliPyEngine:
         - 25% signed log-uniform magnitudes 1e-4..1e3 (exposes saturation false-equalities)
         - 10% exact special values {+-0.0, +-0.1, +-0.5, +-1, +-2, +-e, +-pi, +-10}
 
-        Under GENERIC-EQUIVALENCE semantics (2026-07-11 user decision) the corner points
+        Under GENERIC-EQUIVALENCE semantics the corner points
         refute wrong-VALUE identities (``asin(cosh(_0)) -> nan`` is false AT 0, where the
         source is pi/2) while domain EXTENSION remains allowed: where the source is
         NaN/inf the replacement may complete it (``div(_0, _0) -> 1``, the 0/0 limit).
 
-        The log-uniform tier's upper magnitude is 1e3, not the wider 1e6 tried on
-        2026-07-11: 1e3 still exercises every saturation (tanh/exp plateau by |x|~40)
-        and f64 overflow (exp overflows past |x|~710) that the tier is FOR, but a 1e6
-        design column pushes the constant-fit conditioning to cond(A) ~ 1e6 and the
-        fit cannot recover an intercept to rtol at an exact-zero-crossing row -- which
-        silently rejected the entire ``C0*f(x)+C1`` affine family (found by the
-        generic-equivalence adversarial verification).
+        The log-uniform tier's upper magnitude is 1e3, deliberately not wider: 1e3
+        still exercises every saturation (tanh/exp plateau by |x|~40) and f64 overflow
+        (exp overflows past |x|~710) that the tier is FOR, while a 1e6 design column
+        pushes the constant-fit conditioning to cond(A) ~ 1e6 and the fit cannot
+        recover an intercept to rtol at an exact-zero-crossing row -- silently
+        rejecting the entire ``C0*f(x)+C1`` affine family.
         """
         shape = (n_rows, n_vars)
         choice = rng.choice(4, size=shape, p=(0.40, 0.25, 0.25, 0.10))
@@ -2405,23 +729,34 @@ class SimpliPyEngine:
             atol: float,
             min_informative: int,
             seed: int) -> list:
-        """STAGE-2 CONFIRMATION (2026-07-10 audit): re-verify each mined (source -> target)
+        """STAGE-2 CONFIRMATION: re-verify each mined (source -> target)
         pair on an INDEPENDENT, wider X before it may enter the rule set.
 
         Same checker, fresh data, fresh constant draws and seeds: this kills data-luck
         accepts (agreement within tolerance only on the mine X, saturation plateaus,
         lucky constant draws) without a second implementation to keep in sync. The
         caller scales ``min_informative`` to the confirm matrix's row count.
+
+        ORDER-INDEPENDENT confirm seed: the seed is a pure function of (confirm seed,
+        THIS rule's tokens), never of the rule's POSITION in ``found`` -- position-derived
+        seeds reroll every later rule whenever an earlier rule appears or disappears,
+        flipping the fit-flaky ones and drowning A/B rule-set diffs in noise. Same rule ->
+        same seed, no matter what else was mined; the same policy as the candidate fit
+        seed (``worker.rs``).
         """
         assert self._core is not None
         n_rows = X_confirm.shape[0]
         x_flat = X_confirm.flatten(order='C').tolist()
         confirmed = []
-        for idx, (source, target) in enumerate(found):
+        for source, target in found:
+            # blake2b, not hash(): PYTHONHASHSEED randomises str hashing per process, which
+            # would make the confirm stage irreproducible across runs.
+            key = f'{" ".join(source)}->{" ".join(target)}'.encode()
+            rule_seed = seed + int.from_bytes(hashlib.blake2b(key, digest_size=7).digest(), 'little')
             result = self._core.find_rule(
                 list(source), len(source), None, [list(target)], list(dummy_variables),
                 x_flat, n_rows, constants_fit_challenges, constants_fit_retries,
-                seed + idx, rtol, atol, min_informative)
+                rule_seed, rtol, atol, min_informative)
             if result is not None:
                 confirmed.append((source, target))
         return confirmed
@@ -2436,7 +771,7 @@ class SimpliPyEngine:
             constants_fit_challenges: int,
             constants_fit_retries: int,
             output_file: str | None,
-            prune: bool,
+            prune: bool | str,
             verbose: bool,
             interrupted: Callable[[], bool],
             rtol: float = 1e-9,
@@ -2446,6 +781,7 @@ class SimpliPyEngine:
             confirm_seed: int = 43,
             X_confirm: np.ndarray | None = None,
             candidate_fold_filter: bool = True,
+            relaxed_kruskal: bool = True,
             provenance: dict | None = None) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
 
@@ -2465,8 +801,8 @@ class SimpliPyEngine:
             max_candidate_length = max_target_pattern_length
 
         # `sorted` inner iteration: set order is PYTHONHASHSEED-dependent, and the checker
-        # accepts the FIRST passing candidate -- unsorted iteration made the mined rule set
-        # non-reproducible run-to-run (2026-07-10 audit).
+        # accepts the FIRST passing candidate -- unsorted iteration makes the mined rule set
+        # non-reproducible run-to-run.
         candidates = [
             list(expression)
             for length in sorted(expressions_of_length)
@@ -2496,7 +832,8 @@ class SimpliPyEngine:
             found = self._core.mine_one_length(
                 sources, library, max_target_pattern_length,
                 constants_fit_challenges, constants_fit_retries,
-                mine_seed + (length << 40), rtol, atol, min_informative)
+                mine_seed + (length << 40), rtol, atol, min_informative,
+                relaxed_kruskal)
             if found and X_confirm is not None:
                 n_mined = len(found)
                 found = self._confirm_mined_rules(
@@ -2520,7 +857,9 @@ class SimpliPyEngine:
         self.simplification_rules = list(rules)
         self.compile_rules()
         self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
-        if prune:
+        if prune == 'covered':
+            self.prune_covered_rules(verbose=verbose)
+        elif prune:
             self.prune_redundant_rules(verbose=verbose)
         if output_file is not None:
             with open(output_file, 'w') as file:
@@ -2554,6 +893,167 @@ class SimpliPyEngine:
         }
         with open(output_file + '.provenance.json', 'w') as file:
             json.dump(provenance, file, indent=2)
+
+    def _build_source_universe(
+            self,
+            leaf_nodes: list[str],
+            non_leaf_nodes: dict[str, int],
+            max_source_pattern_length: int,
+            max_target_pattern_length: int | None,
+            source_sample_per_length: dict[int, int],
+            rng: np.random.Generator,
+            verbose: bool) -> tuple[dict[int, set[tuple[str, ...]]], dict[int, int]]:
+        """Phase 1 of :meth:`find_rules`: build the per-length source/candidate universe.
+
+        COMPLETE bottom-up DP enumeration per length: enumeration must SATURATE each
+        length, not merely reach it (a pass-based closure that stops once
+        ``max_source_pattern_length`` is reached silently misses whole expression
+        families). Lengths whose complete universe is infeasible are drawn as a seeded
+        uniform sample from the complete universe instead
+        (``source_sample_per_length``).
+
+        Returns ``(expressions_of_length, counts)``: the enumerated-or-sampled universe
+        per length, and the complete-universe count DP.
+        """
+        counts = count_expressions(len(leaf_nodes), non_leaf_nodes, max_source_pattern_length)
+        enumerate_max = max(
+            (length for length in range(1, max_source_pattern_length + 1)
+             if length not in source_sample_per_length),
+            default=1)
+        if verbose:
+            print(f"Phase 1: enumerating all expressions up to length {enumerate_max}"
+                  + (f", sampling lengths {sorted(source_sample_per_length)}" if source_sample_per_length else ""))
+
+        expressions_of_length = enumerate_expressions(leaf_nodes, non_leaf_nodes, enumerate_max)
+        # Two paths, one truth: the enumerated universe must match the count DP exactly.
+        for length, expressions in expressions_of_length.items():
+            if len(expressions) != counts[length]:
+                raise AssertionError(
+                    f'enumeration incomplete at length {length}: {len(expressions):,} != {counts[length]:,}')
+
+        max_candidate_length = (max_source_pattern_length - 1 if max_target_pattern_length is None
+                                else max_target_pattern_length)
+        for length in sorted(source_sample_per_length):
+            if not 1 < length <= max_source_pattern_length:
+                raise ValueError(f'source_sample_per_length length {length} outside 2..{max_source_pattern_length}')
+            if length <= max_candidate_length:
+                warnings.warn(
+                    f'length {length} is SAMPLED but lies inside the candidate/replacement range '
+                    f'(<= {max_candidate_length}): the candidate library will be INCOMPLETE and '
+                    f'shorter equivalents can be missed', UserWarning)
+            target = min(source_sample_per_length[length], counts[length])
+            draws: set[tuple[str, ...]] = set()
+            attempts = 0
+            while len(draws) < target and attempts < 20 * target:
+                draws.add(sample_expression(length, leaf_nodes, non_leaf_nodes, counts, rng))
+                attempts += 1
+            # Per-run sampler cross-check: the count-DP assertion above
+            # guards ENUMERATED lengths only, so validate every draw's membership in the
+            # intended universe (exact length, known tokens, well-formed arity).
+            vocabulary = set(leaf_nodes) | set(self.operator_arity)
+            for expression in draws:
+                if (len(expression) != length or not set(expression) <= vocabulary
+                        or not self.is_valid(list(expression))):
+                    raise AssertionError(f'sampler produced a non-member at length {length}: {expression}')
+            expressions_of_length[length] = draws
+            # NO silent caps: always state the achieved coverage.
+            print(f'Phase 1: length {length} SAMPLED: {len(draws):,} of {counts[length]:,} '
+                  f'({len(draws) / counts[length]:.3%} of the complete universe)')
+
+        return expressions_of_length, counts
+
+    def _build_mine_provenance(
+            self, *,
+            X: np.ndarray | int | None,
+            X_data: np.ndarray,
+            counts: dict[int, int],
+            expressions_of_length: dict[int, set[tuple[str, ...]]],
+            source_sample_per_length: dict[int, int],
+            max_source_pattern_length: int,
+            max_target_pattern_length: int | None,
+            dummy_variables: list[str],
+            extra_internal_terms: list[str],
+            constants_fit_challenges: int,
+            constants_fit_retries: int,
+            rtol: float,
+            atol: float,
+            min_informative: int,
+            seed: int | None,
+            mine_seed: int,
+            confirm_seed: int,
+            confirm: bool,
+            candidate_fold_filter: bool,
+            prune: bool | str,
+            reset_rules: bool) -> dict:
+        """Assemble the mined artifact's PROVENANCE record: the mine must
+        be reproducible from its sidecar alone. Everything that determines the mine is
+        recorded: parameters, seeds, the X specification (seed-derived, or content-hashed
+        when an explicit array was passed -- the one case a seed cannot reproduce), universe
+        counts and coverage. Written beside the rules by :meth:`_write_provenance`.
+        """
+        import hashlib
+        import platform
+        import time as _time
+        from simplipy import __version__ as _simplipy_version
+        try:
+            from simplipy import _core as _core_mod
+            _core_build = getattr(_core_mod, '__build__', None)
+        except ImportError:
+            _core_build = None
+        if X is None or isinstance(X, int):
+            x_spec: dict = {'rows': int(X_data.shape[0]), 'cols': int(X_data.shape[1]),
+                            'source': 'seeded_mixture (_mining_sample_x from `seed`)'}
+        else:
+            x_spec = {'rows': int(X_data.shape[0]), 'cols': int(X_data.shape[1]),
+                      'source': 'explicit_array (NOT reproducible from `seed`)',
+                      'sha256': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest()}
+        return {
+            'created': _time.strftime('%Y-%m-%d %H:%M:%S %z'),
+            'host': platform.node(),
+            'simplipy_version': _simplipy_version,
+            'core_build': _core_build,
+            'params': {
+                'max_source_pattern_length': max_source_pattern_length,
+                'max_target_pattern_length': max_target_pattern_length,
+                'dummy_variables': list(dummy_variables),
+                'extra_internal_terms': list(extra_internal_terms),
+                'constants_fit_challenges': constants_fit_challenges,
+                'constants_fit_retries': constants_fit_retries,
+                'rtol': rtol, 'atol': atol, 'min_informative': min_informative,
+                'seed': seed, 'mine_seed': mine_seed, 'confirm_seed': confirm_seed,
+                'confirm': confirm, 'candidate_fold_filter': candidate_fold_filter,
+                'prune': prune, 'reset_rules': reset_rules,
+                'source_sample_per_length': {str(k): int(v) for k, v in source_sample_per_length.items()},
+            },
+            'X': x_spec,
+            'universe': {
+                str(length): {
+                    'complete_count': int(counts[length]),
+                    'used': len(expressions_of_length[length]),
+                    'coverage': len(expressions_of_length[length]) / counts[length],
+                    'sampled': length in source_sample_per_length,
+                } for length in sorted(expressions_of_length)
+            },
+            'operators': sorted(self.operator_arity),
+        }
+
+    @staticmethod
+    def _resolve_dummy_variables(
+            dummy_variables: int | list[str] | None,
+            *,
+            default: Callable[[], list[str]]) -> list[str]:
+        """Normalize a ``dummy_variables`` argument to a concrete variable-name list.
+
+        ``None`` -> ``default()`` (each caller supplies its own policy: :meth:`find_rules`
+        derives the count from ``max_source_pattern_length``, :meth:`certify_rules` collects
+        the variables named in the proposed sources); an ``int`` -> ``['x0', ...]`` of that
+        length; a list is passed through unchanged.
+        """
+        if dummy_variables is None:
+            return default()
+        if isinstance(dummy_variables, int):
+            return [f'x{i}' for i in range(dummy_variables)]
+        return dummy_variables
 
     def certify_rules(
             self,
@@ -2593,19 +1093,15 @@ class SimpliPyEngine:
                 engine.simplification_rules + [(s, t) for s, t, _ in pairs], dummies)
             engine.compile_rules()
         """
-        if self._core is None:
-            raise RuntimeError('certify_rules requires the compiled simplipy._core backend')
         sources = [tuple(str(t) for t in s) for s in sources]
         hint_list: list = list(targets) if targets is not None else [None] * len(sources)
         if len(hint_list) != len(sources):
             raise ValueError('targets must parallel sources')
-        if dummy_variables is None:
-            found = sorted({t for s in sources for t in s
-                            if t.startswith('x') and t[1:].isdigit()},
-                           key=lambda v: int(v[1:]))
-            dummy_variables = found or ['x0']
-        elif isinstance(dummy_variables, int):
-            dummy_variables = [f'x{i}' for i in range(dummy_variables)]
+        dummy_variables = self._resolve_dummy_variables(
+            dummy_variables,
+            default=lambda: (sorted({t for s in sources for t in s
+                                     if t.startswith('x') and t[1:].isdigit()},
+                                    key=lambda v: int(v[1:])) or ['x0']))
         extra_internal_terms = extra_internal_terms or []
 
         _rng = np.random.default_rng(seed)
@@ -2681,7 +1177,7 @@ class SimpliPyEngine:
             output_file: str | None = None,
             save_every: int = 100,
             reset_rules: bool = True,
-            prune: bool = False,
+            prune: bool | str = False,
             verbose: bool = False,
             rtol: float = 1e-9,
             atol: float = 1e-12,
@@ -2689,17 +1185,18 @@ class SimpliPyEngine:
             seed: int | None = 42,
             confirm: bool = True,
             source_sample_per_length: dict[int, int] | None = None,
-            candidate_fold_filter: bool = True) -> None:
+            candidate_fold_filter: bool = True,
+            relaxed_kruskal: bool = True) -> None:
         """Systematically discovers new simplification rules.
 
         This powerful method automates the discovery of simplification rules.
         It operates in two phases:
         1.  **Generation**: It combinatorially generates all possible valid
             expressions up to `max_source_pattern_length`.
-        2.  **Verification**: It uses a pool of worker processes to test each
-            generated expression for equivalence with any shorter expression.
-            Equivalences are found by evaluating both expressions on random
-            numerical data.
+        2.  **Verification**: It tests each generated expression for equivalence
+            with any shorter expression, natively on the compiled Rust core
+            (rayon-parallel across all cores; see Notes). Equivalences are found
+            by evaluating both expressions on random numerical data.
 
         Discovered rules are deduplicated, compiled into the running engine, and
         can optionally be saved to disk.
@@ -2728,17 +1225,20 @@ class SimpliPyEngine:
             How often to save the rules to the output file.
         reset_rules : bool, optional
             If True, clears existing rules before starting.
-        prune : bool, optional
+        prune : bool or str, optional
             If True, runs :meth:`prune_redundant_rules` after discovery to
             remove explicit rules that are subsumed by wildcard-pattern rules.
-            This can be expensive for large rule sets. Defaults to False.
+            If ``'covered'``, runs :meth:`prune_covered_rules` INSTEAD after
+            the length loop, removing any rule the remaining rules cover
+            behaviorally (a strictly more aggressive, compositional prune).
+            Either can be expensive for large rule sets. Defaults to False.
         verbose : bool, optional
             If True, shows progress bars and status updates.
         rtol : float, optional
             Relative tolerance of the numerical equivalence check. The default (1e-9)
-            is deliberately strict: at the old 1e-5, saturation plateaus (tanh/exp
-            towers within 1e-5 of 1 or 0 over the whole sample) were accepted as
-            identities (2026-07-10 audit).
+            is deliberately strict: looser tolerances (e.g. 1e-5) accept saturation
+            plateaus (tanh/exp towers within tolerance of 1 or 0 over the whole
+            sample) as identities.
         atol : float, optional
             Absolute tolerance of the numerical equivalence check (default 1e-12).
         min_informative : int or None, optional
@@ -2768,8 +1268,7 @@ class SimpliPyEngine:
             expressions drawn UNIFORMLY from its complete universe (seeded top-down
             count-weighted sampler; see :func:`simplipy.utils.sample_expression`)
             instead of exhaustive enumeration. All other lengths are enumerated
-            COMPLETELY (the pre-0.5.0 enumerator was silently incomplete: it stopped
-            when the maximum length was reached, not saturated -- 2026-07-10 audit).
+            COMPLETELY (enumeration must saturate a length, not merely reach it).
             Coverage is always logged; sampling a length inside the candidate/
             replacement range additionally warns, because the candidate library then
             no longer certifies "no shorter equivalent exists". The dev operator set
@@ -2784,6 +1283,16 @@ class SimpliPyEngine:
             (LM-fit) candidate arm -- the dominant per-source cost for const-free
             sources -- without changing any mined rule. Set False only for a
             reference mine (e.g. the filtered-vs-unfiltered parity gate).
+        relaxed_kruskal : bool, optional
+            If True (the default), a source the current rules
+            already shorten is STILL searched, with the target bound tightened to
+            its simplified length -- only targets strictly shorter than what
+            ``simplify`` already reaches are accepted. False restores strict
+            Kruskal pruning (skip such sources entirely). The relaxed mine finds
+            one-step shortcut rules the strict mine provably cannot (degenerate
+            constant collapses like ``C * acos(np.e) -> <constant>`` and
+            value-specific structural rewrites like ``pow(_0, mult5(1)) ->
+            pow5(_0)``).
 
         Notes
         -----
@@ -2792,13 +1301,10 @@ class SimpliPyEngine:
         environment variable. The engine must therefore be constructed via
         :meth:`from_config` or :meth:`load`. The pure-Python mining mirror was removed
         in 0.5.0: it duplicated the Rust checker (``rust/worker.rs``/``fit.rs``) and
-        repeatedly desynced from it (IEEE inv/div semantics fork, 2026-07-10 audit).
+        repeatedly desynced from it.
         """
-        if self._core is None:
-            raise RuntimeError(
-                'find_rules requires the compiled core (simplipy._core): construct the engine '
-                'via SimpliPyEngine.from_config or SimpliPyEngine.load. The pure-Python mining '
-                'mirror was removed in 0.5.0.')
+        if not isinstance(prune, bool) and prune != 'covered':
+            raise ValueError(f"prune must be a bool or 'covered', got {prune!r}")
 
         # Signal handler for main process
         interrupted = False
@@ -2814,21 +1320,22 @@ class SimpliPyEngine:
         # All the initialization from the sequential version
         extra_internal_terms = extra_internal_terms or []
 
-        if dummy_variables is None:
+        def _default_dummy_variables() -> list[str]:
             max_leaf_nodes_if_operators_binary = int(max_source_pattern_length - (max_source_pattern_length - 1) / 2)
-            dummy_variables = [f"x{i}" for i in range(max_leaf_nodes_if_operators_binary)]
+            dummies = [f"x{i}" for i in range(max_leaf_nodes_if_operators_binary)]
             if verbose:
-                print(f"Using {len(dummy_variables)} dummy variables: {dummy_variables}")
-        elif isinstance(dummy_variables, int):
-            dummy_variables = [f"x{i}" for i in range(dummy_variables)]
+                print(f"Using {len(dummies)} dummy variables: {dummies}")
+            return dummies
+
+        dummy_variables = self._resolve_dummy_variables(dummy_variables, default=_default_dummy_variables)
 
         if reset_rules:
             self.simplification_rules = []
             self.compile_rules()
 
-        # 2026-07-10 audit: the mine's X is SEEDED (reproducibility) and defaults to a
-        # heavy-tailed MIXTURE (N(0,5) + wide uniform + signed log-uniform magnitudes + special
-        # values) instead of pure N(0,5), so equivalence certification sees the value ranges that
+        # The mine's X is SEEDED (reproducibility) and defaults to a heavy-tailed MIXTURE
+        # (N(0,5) + wide uniform + signed log-uniform magnitudes + special values, see
+        # _mining_sample_x), so equivalence certification sees the value ranges that
         # rule APPLICATION will see (wildcards bind arbitrary subtree values).
         _rng = np.random.default_rng(seed)
         if X is None:
@@ -2849,58 +1356,11 @@ class SimpliPyEngine:
         leaf_nodes = dummy_variables + extra_internal_terms
         non_leaf_nodes = dict(sorted(self.operator_arity.items(), key=lambda x: x[1]))
 
-        # --- Phase 1: build the source/candidate universe ---
-        # COMPLETE bottom-up DP enumeration per length (2026-07-10 audit: the old
-        # pass-based closure stopped once max_source_pattern_length was REACHED, not
-        # SATURATED -- the dev_7-3 mine saw 444,865 of the 9.0e9 length<=7 expressions
-        # and missed e.g. ALL 179,685 triple-unary chains at length 4). Lengths whose
-        # complete universe is infeasible are drawn as a seeded uniform sample from the
-        # complete universe instead (`source_sample_per_length`).
+        # --- Phase 1: build the source/candidate universe (see _build_source_universe) ---
         source_sample_per_length = dict(source_sample_per_length or {})
-        counts = count_expressions(len(leaf_nodes), non_leaf_nodes, max_source_pattern_length)
-        enumerate_max = max(
-            (length for length in range(1, max_source_pattern_length + 1)
-             if length not in source_sample_per_length),
-            default=1)
-        if verbose:
-            print(f"Phase 1: enumerating all expressions up to length {enumerate_max}"
-                  + (f", sampling lengths {sorted(source_sample_per_length)}" if source_sample_per_length else ""))
-
-        expressions_of_length = enumerate_expressions(leaf_nodes, non_leaf_nodes, enumerate_max)
-        # Two paths, one truth: the enumerated universe must match the count DP exactly.
-        for length, expressions in expressions_of_length.items():
-            if len(expressions) != counts[length]:
-                raise AssertionError(
-                    f'enumeration incomplete at length {length}: {len(expressions):,} != {counts[length]:,}')
-
-        max_candidate_length = (max_source_pattern_length - 1 if max_target_pattern_length is None
-                                else max_target_pattern_length)
-        for length in sorted(source_sample_per_length):
-            if not 1 < length <= max_source_pattern_length:
-                raise ValueError(f'source_sample_per_length length {length} outside 2..{max_source_pattern_length}')
-            if length <= max_candidate_length:
-                warnings.warn(
-                    f'length {length} is SAMPLED but lies inside the candidate/replacement range '
-                    f'(<= {max_candidate_length}): the candidate library will be INCOMPLETE and '
-                    f'shorter equivalents can be missed', UserWarning)
-            target = min(source_sample_per_length[length], counts[length])
-            draws: set[tuple[str, ...]] = set()
-            attempts = 0
-            while len(draws) < target and attempts < 20 * target:
-                draws.add(sample_expression(length, leaf_nodes, non_leaf_nodes, counts, _rng))
-                attempts += 1
-            # Per-run sampler cross-check (readiness item 6): the count-DP assertion above
-            # guards ENUMERATED lengths only, so validate every draw's membership in the
-            # intended universe (exact length, known tokens, well-formed arity).
-            vocabulary = set(leaf_nodes) | set(self.operator_arity)
-            for expression in draws:
-                if (len(expression) != length or not set(expression) <= vocabulary
-                        or not self.is_valid(list(expression))):
-                    raise AssertionError(f'sampler produced a non-member at length {length}: {expression}')
-            expressions_of_length[length] = draws
-            # NO silent caps: always state the achieved coverage.
-            print(f'Phase 1: length {length} SAMPLED: {len(draws):,} of {counts[length]:,} '
-                  f'({len(draws) / counts[length]:.3%} of the complete universe)')
+        expressions_of_length, counts = self._build_source_universe(
+            leaf_nodes, non_leaf_nodes, max_source_pattern_length, max_target_pattern_length,
+            source_sample_per_length, _rng, verbose)
 
         total_expressions = sum(len(v) for v in expressions_of_length.values())
 
@@ -2909,55 +1369,21 @@ class SimpliPyEngine:
             for length, expressions in sorted(expressions_of_length.items()):
                 print(f"Size {length}: {len(expressions):,} expressions")
 
-        # PROVENANCE (readiness item 5): the mined artifact must be reproducible from its
-        # sidecar alone. Everything that determines the mine is recorded: parameters, seeds,
-        # the X specification (seed-derived, or content-hashed when an explicit array was
-        # passed -- the one case a seed cannot reproduce), universe counts and coverage.
-        import hashlib
-        import platform
-        import time as _time
-        from simplipy import __version__ as _simplipy_version
-        try:
-            from simplipy import _core as _core_mod
-            _core_build = getattr(_core_mod, '__build__', None)
-        except ImportError:
-            _core_build = None
-        if X is None or isinstance(X, int):
-            x_spec: dict = {'rows': int(X_data.shape[0]), 'cols': int(X_data.shape[1]),
-                            'source': 'seeded_mixture (_mining_sample_x from `seed`)'}
-        else:
-            x_spec = {'rows': int(X_data.shape[0]), 'cols': int(X_data.shape[1]),
-                      'source': 'explicit_array (NOT reproducible from `seed`)',
-                      'sha256': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest()}
-        provenance = {
-            'created': _time.strftime('%Y-%m-%d %H:%M:%S %z'),
-            'host': platform.node(),
-            'simplipy_version': _simplipy_version,
-            'core_build': _core_build,
-            'params': {
-                'max_source_pattern_length': max_source_pattern_length,
-                'max_target_pattern_length': max_target_pattern_length,
-                'dummy_variables': list(dummy_variables),
-                'extra_internal_terms': list(extra_internal_terms),
-                'constants_fit_challenges': constants_fit_challenges,
-                'constants_fit_retries': constants_fit_retries,
-                'rtol': rtol, 'atol': atol, 'min_informative': min_informative,
-                'seed': seed, 'mine_seed': mine_seed, 'confirm_seed': confirm_seed,
-                'confirm': confirm, 'candidate_fold_filter': candidate_fold_filter,
-                'prune': prune, 'reset_rules': reset_rules,
-                'source_sample_per_length': {str(k): int(v) for k, v in source_sample_per_length.items()},
-            },
-            'X': x_spec,
-            'universe': {
-                str(length): {
-                    'complete_count': int(counts[length]),
-                    'used': len(expressions_of_length[length]),
-                    'coverage': len(expressions_of_length[length]) / counts[length],
-                    'sampled': length in source_sample_per_length,
-                } for length in sorted(expressions_of_length)
-            },
-            'operators': sorted(self.operator_arity),
-        }
+        # PROVENANCE (see _build_mine_provenance).
+        provenance = self._build_mine_provenance(
+            X=X, X_data=X_data, counts=counts,
+            expressions_of_length=expressions_of_length,
+            source_sample_per_length=source_sample_per_length,
+            max_source_pattern_length=max_source_pattern_length,
+            max_target_pattern_length=max_target_pattern_length,
+            dummy_variables=dummy_variables,
+            extra_internal_terms=extra_internal_terms,
+            constants_fit_challenges=constants_fit_challenges,
+            constants_fit_retries=constants_fit_retries,
+            rtol=rtol, atol=atol, min_informative=min_informative,
+            seed=seed, mine_seed=mine_seed, confirm_seed=confirm_seed,
+            confirm=confirm, candidate_fold_filter=candidate_fold_filter,
+            prune=prune, reset_rules=reset_rules)
 
         # --- Phase 2: mine natively on the Rust engine (the only mining path since 0.5.0) ---
         try:
@@ -2980,86 +1406,19 @@ class SimpliPyEngine:
                 confirm_seed=confirm_seed,
                 X_confirm=X_confirm,
                 candidate_fold_filter=candidate_fold_filter,
+                relaxed_kruskal=relaxed_kruskal,
                 provenance=provenance,
             )
         finally:
             signal.signal(signal.SIGINT, old_handler)
 
-    def operand_key(self, operands: list) -> tuple:
-        """Generates a key for sorting operands of a commutative operator.
-
-        The key is a tuple designed to produce a consistent, canonical ordering.
-        It prioritizes variables, then numbers, and finally complex subtrees.
-        Subtrees are sorted by length and then recursively by their contents.
-
-        Parameters
-        ----------
-        operands : list
-            The operand to generate a key for, represented as a tree node.
-
-        Returns
-        -------
-        tuple
-            A sortable key.
-        """
-        if len(operands) > 1 and isinstance(operands[0], str):
-            # if operands[0] in self.operator_arity_compat or operands[0] in self.operator_aliases:
-            # Node
-            operand_keys = tuple(self.operand_key(op) for op in operands[1])
-            return (2, len(flatten_nested_list(operands)), operand_keys, operands[0])
-
-        # Leaf
-        if len(operands) == 1 and isinstance(operands[0], str):
-            try:
-                return (1, float(operands[0]))
-            except ValueError:
-                return (0, operands[0])
-
-        if isinstance(operands, str):
-            return (0, operands)
-
-        raise ValueError(f'None of the criteria matched for operands {operands}:\n1. ({len(operands) > 1}, {isinstance(operands[0], str)}, {operands[0] in self.operator_arity_compat or operands[0] in self.operator_aliases})\n2. ({len(operands) == 1}, {isinstance(operands[0], str)})\n3. ({isinstance(operands, str)})')
-
     def operators_to_realizations(self, prefix_expression: list[str] | tuple[str, ...]) -> list[str]:
-        """Converts operator names in an expression to their Python realizations.
-
-        This method replaces tokens like 'add' or 'sin' with their executable
-        counterparts like '+' or 'np.sin', making the expression ready for
-        evaluation.
-
-        Parameters
-        ----------
-        prefix_expression : list[str] or tuple[str, ...]
-            The prefix expression with canonical operator names.
-
-        Returns
-        -------
-        list[str] or tuple[str, ...]
-            The prefix expression with Python-executable operator realizations.
-        """
-        if self._core is not None:
-            return self._core.operators_to_realizations(list(prefix_expression))
-        return [self.operator_realizations.get(token, token) for token in prefix_expression]
+        """Convert canonical operator names to their runtime realizations (e.g. ``'sin'`` -> ``'np.sin'``)."""
+        return self._core.operators_to_realizations(list(prefix_expression))
 
     def realizations_to_operators(self, prefix_expression: list[str]) -> list[str]:
-        """Converts Python realizations in an expression back to operator names.
-
-        This is the inverse of `operators_to_realizations`, replacing tokens
-        like '+' or 'np.sin' with their canonical engine names like 'add' or 'sin'.
-
-        Parameters
-        ----------
-        prefix_expression : list[str]
-            The prefix expression with Python-executable realizations.
-
-        Returns
-        -------
-        list[str]
-            The prefix expression with canonical operator names.
-        """
-        if self._core is not None:
-            return self._core.realizations_to_operators(list(prefix_expression))
-        return [self.realization_to_operator.get(token, token) for token in prefix_expression]
+        """Convert realization tokens (e.g. ``'np.sin'``) back to canonical operator names."""
+        return self._core.realizations_to_operators(list(prefix_expression))
 
     @staticmethod
     def code_to_lambda(code: CodeType) -> Callable[..., float]:

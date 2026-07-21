@@ -5,20 +5,24 @@
 //! prefix token list and returns the simplified token list. Inside Rust, the whole recursion runs
 //! with NO boundary crossings:
 //!   cancel_terms -> apply_simplification_rules (parse_subtree + apply_rules_top_down +
-//!   match_pattern + apply_mapping + the constant fold) -> sort_operands ->
+//!   match_pattern_with_cert + apply_mapping + the constant fold) -> sort_operands ->
 //!   mask_elementary_literals -> longer-result guard, iterated to a fixpoint (<= max_iter).
 //! ~1.8 boundary crossings/expr; FFI marshalling stays <1% of wall time.
-//! Porting `match_pattern` alone is a TRAP (millions of crossings -> the speedup evaporates).
+//! Porting the pattern matcher alone is a TRAP (millions of crossings -> the speedup evaporates).
 //! Therefore the PyO3 layer here is deliberately THIN: marshal `list[str]` <-> `Vec<String>`,
 //! hold the compiled engine, and delegate the whole unit to `engine::Engine::simplify`.
 //!
 //! ## Two engine lines (selected per call, NOT per build)
 //! `Engine::simplify(fold)` and the `*_fixed` conversions select the line:
 //!   * `fold = false` + the plain conversions = FAITHFUL `dev_7-3` (byte-identical to the deployed
-//!     simplipy 0.2.15 / git 1fe9b7e; the v23.0 reproducibility anchor).
+//!     simplipy 0.2.15 / git 1fe9b7e; the frozen reference build that downstream training
+//!     pipelines pin for reproducibility).
 //!   * `fold = true` + the `*_fixed` conversions = the IMPROVED ("numeric") line: numeric constant
 //!     folding (incl. `1/0 -> float("inf")`, via the `numeric` module's f64 + libm evaluator) + the
 //!     six conversion-quirk fixes + atomic inf/nan tokens. This is what the shipped package routes.
+//!
+//! Anchors of the form `engine.py@0.2.15:NNNN` cite the removed pure-Python reference
+//! implementation at tag 0.2.15 (commit 1fe9b7e), the faithful-port ground truth.
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -53,18 +57,26 @@ fn ensure_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<()>
 
 mod cancel;
 mod convert;
-mod engine;
+pub mod engine;
 mod eval;
 mod fit;
+mod hiprec;
+mod interval;
+mod matcher;
 mod numeric;
 mod operators;
 mod parse;
 mod rules;
 mod sort;
+mod tokens;
 mod utils;
 mod worker;
 
+// The curated rlib surface (Cargo.toml: integration tests / examples link the core directly):
+// the engine handle plus the types its pub methods take/return from otherwise-private modules.
+pub use convert::Power;
 pub use engine::Engine;
+pub use worker::CandidateLibrary;
 
 /// Test helper: load the `dev_7-3` engine, or `None` if its HF asset is not staged in the local
 /// cache (e.g. a CI job or fresh checkout that did not download it). The asset-dependent parity
@@ -83,7 +95,8 @@ pub(crate) fn test_engine() -> Option<Engine> {
 }
 
 /// Engine-id this build faithfully reproduces. Bump (new engine-id) on any quality-shifting
-/// change so prior training results (v23.0) stay reproducible against the old id.
+/// change so prior training results produced against the frozen reference build stay
+/// reproducible against the old id.
 pub const FAITHFUL_ENGINE_ID: &str = "dev_7-3";
 /// simplipy reference the faithful port targets (provenance, surfaced to Python).
 pub const REFERENCE_SIMPLIPY_VERSION: &str = "0.2.15";
@@ -97,7 +110,7 @@ struct PyEngine {
     inner: engine::Engine,
 }
 
-/// OFFLINE miner (Phase B, M4b): a resident candidate library (built once per mine), passed back to
+/// OFFLINE miner: a resident candidate library (built once per mine), passed back to
 /// `find_rule_lib`. Opaque handle; all compute is Rust.
 #[pyclass(name = "CandidateLibrary", module = "simplipy._core")]
 struct PyCandidateLibrary {
@@ -131,9 +144,19 @@ impl PyEngine {
         Ok(Self { inner })
     }
 
+    /// Build from in-memory config YAML + rules JSON text: the shim's direct
+    /// `SimpliPyEngine(operators=..., rules=...)` construction serializes its state and
+    /// attaches a core here, filesystem-free (there is no pure-Python fallback).
+    #[staticmethod]
+    fn from_strs(config_yaml: &str, rules_json: &str) -> PyResult<Self> {
+        let inner = engine::Engine::from_strs(config_yaml, rules_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
     /// THE hot path and the whole FFI unit. `tokens` is a prefix token list; returns the
     /// simplified prefix token list. Defaults mirror the deployed call
-    /// (`simplify(skeleton, inplace=True, max_pattern_length=4)`); `inplace` is a Python-shim
+    /// (`simplify(skeleton, inplace=True, max_pattern_length=None)`); `inplace` is a Python-shim
     /// concern (the shim mutates the caller's list), so it is NOT a kernel parameter here.
     /// `fold` selects the engine line: `false` (default) = faithful `dev_7-3`; `true` = the numeric
     /// line (constant folding woven into the rule recursion, the published improved engine-id). The
@@ -166,7 +189,7 @@ impl PyEngine {
     }
 
     /// Validation entry (NOT the shipped surface): the rule-application sub-unit only. `fold=false`
-    /// = faithful `apply_simplifcation_rules`; `fold=true` = the numeric line (used by the improved
+    /// = faithful `apply_simplification_rules`; `fold=true` = the numeric line (used by the improved
     /// differential). Used by the stage-(b) differential vs fresh Python.
     #[pyo3(signature = (tokens, max_pattern_length=None, fold=false))]
     fn apply_rules(
@@ -202,16 +225,16 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `is_valid` (engine.py:354): is the prefix expression syntactically valid?
-    /// Part of M2 (the drop-in-engine surface); the most-called simplipy method on the per-candidate
+    /// Faithful port of `is_valid` (engine.py@0.2.15:354): is the prefix expression syntactically valid?
+    /// Part of the drop-in-engine surface; the most-called simplipy method on the per-candidate
     /// inference path.
     fn is_valid(&self, py: Python<'_>, tokens: Vec<String>) -> bool {
         py.detach(|| self.inner.is_valid(&tokens))
     }
 
-    /// Faithful port of `prefix_to_infix` (engine.py:409). `power` in {'func','**'} (default 'func');
+    /// Faithful port of `prefix_to_infix` (engine.py@0.2.15:409). `power` in {'func','**'} (default 'func');
     /// `realization` toggles realization-name rendering. Raises `ValueError` on a malformed prefix
-    /// (mirrors Python). Part of M2 (the drop-in-engine surface).
+    /// (mirrors Python). Part of the drop-in-engine surface.
     #[pyo3(signature = (tokens, power="func", realization=false))]
     fn prefix_to_infix(
         &self,
@@ -233,14 +256,14 @@ impl PyEngine {
             .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
-    /// Faithful port of `infix_to_prefix` (engine.py:581). Part of M2 (the drop-in-engine surface).
+    /// Faithful port of `infix_to_prefix` (engine.py@0.2.15:581). Part of the drop-in-engine surface.
     fn infix_to_prefix(&self, py: Python<'_>, infix_expression: &str) -> PyResult<Py<PyList>> {
         let out = py.detach(|| self.inner.infix_to_prefix(infix_expression));
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `convert_expression` (engine.py:655). Raises `ValueError` where Python raises
-    /// (the exact exception kind differs -- the differential checks failure-parity). Part of M2.
+    /// Faithful port of `convert_expression` (engine.py@0.2.15:655). Raises `ValueError` where Python raises
+    /// (the exact exception kind differs -- the differential checks failure-parity).
     fn convert_expression(&self, py: Python<'_>, prefix_expr: Vec<String>) -> PyResult<Py<PyList>> {
         let out = py
             .detach(|| self.inner.convert_expression(&prefix_expr))
@@ -248,8 +271,8 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `parse` (engine.py:852). `convert_expression`/`mask_numbers` match the Python
-    /// defaults (True/False). Closes the `simplify(str)` + canonicalization path. Part of M2.
+    /// Faithful port of `parse` (engine.py@0.2.15:852). `convert_expression`/`mask_numbers` match the Python
+    /// defaults (True/False). Closes the `simplify(str)` + canonicalization path.
     #[pyo3(signature = (infix_expression, convert_expression=true, mask_numbers=false))]
     fn parse(
         &self,
@@ -330,7 +353,7 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `operators_to_realizations` (engine.py:2547).
+    /// Faithful port of `operators_to_realizations` (engine.py@0.2.15:2547).
     fn operators_to_realizations(
         &self,
         py: Python<'_>,
@@ -340,7 +363,7 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `realizations_to_operators` (engine.py:2566).
+    /// Faithful port of `realizations_to_operators` (engine.py@0.2.15:2566).
     fn realizations_to_operators(
         &self,
         py: Python<'_>,
@@ -364,7 +387,7 @@ impl PyEngine {
         crate::numeric::py_float_repr(x)
     }
 
-    /// OFFLINE miner kernel (Phase B, Milestone 1): vectorized evaluation of a prefix expression over
+    /// OFFLINE miner kernel: vectorized evaluation of a prefix expression over
     /// `n_rows` rows of row-major `x_flat` (shape `n_rows x len(var_names)`); `<constant>` slots bind
     /// to `params` left-to-right; numeric/special literals fold to their value. Returns the length-
     /// `n_rows` result column. NOT part of the inline (online) surface; replaces the Python
@@ -393,14 +416,13 @@ impl PyEngine {
         crate::eval::allclose(&a, &b, rtol, atol)
     }
 
-    /// OFFLINE miner (Phase B, M2): the no-constant equivalence test (engine.py:2433-2452). The
-    /// candidate must be constant-free; the source's constants are resampled over `challenges` rounds
+    /// OFFLINE miner: the no-constant equivalence test (engine.py@0.2.15:2433-2452). The candidate
+    /// must be constant-free; the source's constants are resampled over `challenges` rounds
     /// and every sign combination, requiring `allclose(source, candidate)` every time.
-    /// Tolerances tightened + informativeness gate added by the 2026-07-10 equivalence audit:
     /// `min_informative=None` resolves to `n_rows / 8`: certification requires that many
     /// SOURCE-FINITE evidence rows (accumulated across challenge instances), killing vacuous
-    /// all-NaN/inf acceptance. Generic-equivalence semantics (2026-07-11): source-finite rows
-    /// bind; where the source is NaN/inf the replacement may EXTEND the domain (x/x -> 1).
+    /// all-NaN/inf acceptance. Generic-equivalence semantics: source-finite rows bind; where
+    /// the source is NaN/inf the replacement may EXTEND the domain (x/x -> 1).
     #[pyo3(signature = (source, candidate, var_names, x_flat, n_rows, challenges=16, rtol=1e-9, atol=1e-12, min_informative=None, seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn equivalent_no_const(
@@ -426,16 +448,133 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
-    /// OFFLINE miner (Phase B, M2): the wildcard-multiplicity rule guard (utils.py:938).
+    /// OFFLINE: the `!`-sort certificate -- is the expression DEFINED AND FINITE a.e. over its
+    /// variables (within the standalone horizon box)? Fail-closed: every undecided path is
+    /// `false`. The same predicate the engine's `!` pattern matching runs behind its cache.
+    fn interval_finite_ae(&self, tokens: Vec<String>) -> bool {
+        crate::interval::finite_ae(&tokens, self.inner.operators_ref())
+    }
+
+    /// OFFLINE: EXACT value-class of an expression by interval analysis (`rust/interval.rs`) --
+    /// the deterministic replacement for the sampled pole grid / classify probe. Returns one of
+    /// FINITE / POSINF / NEGINF / NAN / MIXED / EMPTY, or ERROR if unevaluable.
+    fn interval_class(&self, tokens: Vec<String>) -> String {
+        match crate::interval::value_class(&tokens, self.inner.operators_ref()) {
+            Some(c) => format!("{:?}", c).to_uppercase(),
+            None => "ERROR".to_string(),
+        }
+    }
+
+    /// OFFLINE: the raw positive-measure value COMPONENTS of an expression over free constants,
+    /// as `(has_finite, pos_inf, neg_inf, nan)` -- the reachability gate's inputs, before `Class`
+    /// collapses them. `None` if unevaluable.
+    fn interval_value_components(&self, tokens: Vec<String>) -> Option<(bool, bool, bool, bool)> {
+        crate::interval::value_set(
+            &tokens,
+            self.inner.operators_ref(),
+            &crate::interval::Vs::reals(),
+        )
+        .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan))
+    }
+
+    /// OFFLINE: how many gate calls fell OUTSIDE the box horizon and were therefore decided by
+    /// default (= accepted). The gate is a dyadic witness search over a BOUNDED box; when an
+    /// expression's own constants push the interesting region past the cap, it does not know. This
+    /// counter is the exposure -- read it after a mine instead of assuming the number is zero.
+    fn interval_horizon_misses(&self) -> u64 {
+        crate::interval::HORIZON_MISSES.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// OFFLINE: how many subdivision searches exhausted their node budget. Exhaustion returns the
+    /// incumbent witness, indistinguishable from a completed "no witness" -- the SECOND fail-open
+    /// (the horizon cap is the first). Read after a mine, next to `interval_horizon_misses`.
+    fn interval_node_budget_misses(&self) -> u64 {
+        crate::interval::NODE_BUDGET_MISSES.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// ONLINE observability: snapshot of the process-global simplify hot-path
+    /// counters (calls / iterations / exact hits / pattern attempts+fires / cert calls+hits)
+    /// plus coarse nanosecond accounting (cancel / rules / cert / mask+sort). Relaxed atomics,
+    /// zero behavior change. Aggregates across engines and threads; pair with
+    /// `reset_simplify_counters` around a batch to profile it.
+    fn simplify_counters(&self) -> std::collections::HashMap<String, u64> {
+        crate::engine::stats::snapshot()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+
+    /// ONLINE observability: zero all `simplify_counters` counters.
+    fn reset_simplify_counters(&self) {
+        crate::engine::stats::reset();
+    }
+
+    /// OFFLINE / TEST HOOK: the value set of `tokens` over an explicit per-variable BOX --
+    /// variable `i` ranges over `[los[i], his[i]]`. Returns
+    /// `(has_finite, pos_inf, neg_inf, nan, fin_lo, fin_hi)`, or `None` if unevaluable.
+    ///
+    /// Exists so the box path can be validated against an external oracle. The property the whole
+    /// domain gate rests on is that this OVER-approximates: every value the expression really takes
+    /// on the box must be inside the returned set. Over-approximation is what makes
+    /// "no defined value anywhere on this box" conservative, hence a witness always TRUE, hence
+    /// the gate unable to reject a sound rule. If this ever under-reports, that proof is void.
+    fn interval_value_set_box(
+        &self,
+        tokens: Vec<String>,
+        los: Vec<f64>,
+        his: Vec<f64>,
+    ) -> Option<(bool, bool, bool, bool, f64, f64)> {
+        if los.len() != his.len() || los.is_empty() {
+            return None;
+        }
+        let doms: Vec<crate::interval::Vs> = los
+            .iter()
+            .zip(his.iter())
+            .map(|(lo, hi)| crate::interval::Vs::interval(*lo, *hi, false, false))
+            .collect();
+        crate::interval::value_set_p(&tokens, self.inner.operators_ref(), &doms, &[])
+            .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan, v.lo, v.hi))
+    }
+
+    /// OFFLINE: witness WIDTH of a positive-measure region where `source` is NaN but `target`
+    /// defines a value (0.0 = no domain extension). This is the exact domain-preservation
+    /// gate: a rule must never be grossly domain dependent. `None` = UNDECIDED (horizon past
+    /// R_MAX, or node budget exhausted with no witness) -- the gate fails closed on it; a
+    /// consumer must treat `None` as "extension not ruled out", never as 0.0.
+    fn interval_domain_extension(&self, source: Vec<String>, target: Vec<String>) -> Option<f64> {
+        crate::interval::domain_extension(&source, &target, self.inner.operators_ref())
+    }
+
+    /// OFFLINE: `interval_domain_extension` with both sides' `<constant>` leaves BOUND to concrete
+    /// values (k-th `<constant>` in prefix order -> `params[k]`). This is the form the miner uses:
+    /// the gate runs per instance at the source's drawn constants and the constants the fit chose.
+    /// `None` = UNDECIDED (fail-closed), as in `interval_domain_extension`.
+    fn interval_domain_extension_p(
+        &self,
+        source: Vec<String>,
+        src_params: Vec<f64>,
+        target: Vec<String>,
+        tgt_params: Vec<f64>,
+    ) -> Option<f64> {
+        crate::interval::domain_extension_p(
+            &source,
+            &src_params,
+            &target,
+            &tgt_params,
+            self.inner.operators_ref(),
+        )
+    }
+
+    /// OFFLINE miner: the wildcard-multiplicity rule guard (utils.py@0.2.15:938).
     #[staticmethod]
     fn violates_wildcard_multiplicity(lhs: Vec<String>, rhs: Vec<String>) -> bool {
         crate::worker::violates_wildcard_multiplicity(&lhs, &rhs)
     }
 
-    /// OFFLINE miner (Phase B, M4): the full native `find_rule_worker` decision for one source --
-    /// short-circuit + candidate scan (const-free -> M2, constant-bearing -> M3) + selection. Returns
-    /// the chosen target token list, or None. `candidates` = the candidate library (expressions up to
-    /// max_target); indexed by length internally (M4b will make a resident CandidateLibrary).
+    /// OFFLINE miner: the full native `find_rule_worker` decision for one source --
+    /// short-circuit + candidate scan (no-constant test / constant fit) + selection. Returns
+    /// the chosen target token list, or None. `candidates` = the candidate library (expressions
+    /// up to max_target); for the resident path see `build_candidate_library`/`find_rule_lib`.
     #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, fold_filter=true))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule(
@@ -478,10 +617,10 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
-    /// OFFLINE miner (Phase B, M4b): build a RESIDENT candidate library once per mine (precompiles
-    /// every candidate's tape + precomputes const-free `y`). Pass the returned handle to `find_rule_lib`.
-    /// `fold_filter` (default on) drops var-free candidates of length >= 2 -- the sound "candidate
-    /// minimization" lever (7-4 readiness BLOCKER 1); see `worker::CandidateLibrary::build`.
+    /// OFFLINE miner: build a RESIDENT candidate library once per mine (precompiles every
+    /// candidate's tape + precomputes const-free `y`). Pass the returned handle to
+    /// `find_rule_lib`. `fold_filter` (default on) drops var-free candidates of length >= 2 --
+    /// the sound "candidate minimization" lever; see `worker::CandidateLibrary::build`.
     #[pyo3(signature = (candidates, var_names, x_flat, n_rows, fold_filter=true))]
     fn build_candidate_library(
         &self,
@@ -506,7 +645,7 @@ impl PyEngine {
         Ok(PyCandidateLibrary { inner })
     }
 
-    /// OFFLINE miner (Phase B, M4b): `find_rule_worker` decision over a resident `CandidateLibrary`
+    /// OFFLINE miner: `find_rule_worker` decision over a resident `CandidateLibrary`
     /// (no per-source rebuild, no per-call X marshaling). Returns the chosen target, or None.
     #[pyo3(signature = (source, simplified_length, max_target, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
     #[allow(clippy::too_many_arguments)]
@@ -543,17 +682,21 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
-    /// OFFLINE (Phase B, M4 driver): replace the engine's rules (recompile) -- grows the Kruskal-prune
+    /// OFFLINE (mine driver): replace the engine's rules (recompile) -- grows the Kruskal-prune
     /// rule set length-by-length during a mine. `rules` = the canonicalized (wildcard) rule list.
     fn set_rules(&mut self, rules: Vec<(Vec<String>, Vec<String>)>) {
         self.inner.set_rules(rules);
     }
 
-    /// OFFLINE (Phase B, M4 driver): mine ONE source-length IN PARALLEL (rayon, all cores) -- Kruskal-
+    /// OFFLINE (mine driver): mine ONE source-length IN PARALLEL (rayon, all cores) -- Kruskal-
     /// prune each source with the current rules, then `find_rule` on survivors. Returns the found
     /// (source -> target) rules. The Python driver loops lengths, dedups/canonicalizes, and `set_rules`
     /// between them (the order-dependent barrier). GIL released for the parallel work.
-    #[pyo3(signature = (sources, library, max_target, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
+    /// `relaxed_kruskal=True` (the default) still searches sources the current rules already
+    /// shorten, with the bound tightened to the simplified length (targets must beat what
+    /// `simplify` already reaches); `False` skips them (strict Kruskal). See
+    /// `Engine::mine_one_length`.
+    #[pyo3(signature = (sources, library, max_target, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true))]
     #[allow(clippy::too_many_arguments)]
     fn mine_one_length(
         &self,
@@ -567,20 +710,30 @@ impl PyEngine {
         rtol: f64,
         atol: f64,
         min_informative: Option<usize>,
+        relaxed_kruskal: bool,
     ) -> Vec<(Vec<String>, Vec<String>)> {
         let lib = &library.inner;
         let mi = min_informative.unwrap_or((lib.n_rows() / 8).max(1));
         py.detach(|| {
             self.inner.mine_one_length(
-                &sources, lib, max_target, challenges, retries, seed, rtol, atol, mi,
+                &sources,
+                lib,
+                max_target,
+                challenges,
+                retries,
+                seed,
+                rtol,
+                atol,
+                mi,
+                relaxed_kruskal,
             )
         })
     }
 
-    /// OFFLINE (Phase B): CORRECT `prune_redundant_rules` with the Rust core. Tests each explicit
-    /// `lhs` (in the given asset order) by removing it from the Rust rule map + re-simplifying; returns
-    /// the pruned `lhs` list. Replaces the Python prune, which over-pruned (~94%) because it removed
-    /// from a Python dict while `simplify` used the immutable Rust rules. Takes `&mut self`.
+    /// OFFLINE: prune redundant explicit rules with the Rust core. Tests each explicit `lhs`
+    /// (in the given asset order) by removing it from the Rust rule map + re-simplifying;
+    /// returns the pruned `lhs` list. Must run against the compiled rules `simplify` actually
+    /// uses (pruning a divergent rule store over-prunes). Takes `&mut self`.
     #[pyo3(signature = (ordered_lhs, mask_elementary_literals=false, fold=true))]
     fn prune_explicit(
         &mut self,
@@ -592,17 +745,10 @@ impl PyEngine {
             .prune_explicit(&ordered_lhs, mask_elementary_literals, fold)
     }
 
-    /// OFFLINE miner (Phase B, M3): classify a candidate's degree in its `<constant>`s --
-    /// "constfree" | "affine" | "nonlinear". Affine candidates are fittable in closed form (no LM).
-    fn classify_linearity(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<String> {
-        py.detach(|| self.inner.classify_linearity(&tokens))
-            .map_err(PyValueError::new_err)
-    }
-
-    /// OFFLINE miner (Phase B, M3a): native `exist_constants_that_fit` for AFFINE-in-params
-    /// candidates -- a closed-form least-squares solve + the `allclose` decision gate (no optimizer,
-    /// deterministic). Returns `Some(decision)` for affine candidates, `None` for nonlinear-in-params
-    /// ones (deferred to the M3b native LM). Same accept/reject gate as scipy's path.
+    /// OFFLINE miner: native `exist_constants_that_fit` for AFFINE-in-params candidates -- a
+    /// closed-form least-squares solve + the `allclose` decision gate (no optimizer,
+    /// deterministic). Returns `Some(decision)` for affine candidates, `None` for
+    /// nonlinear-in-params ones (the native-LM path). Same accept/reject gate as scipy's path.
     #[pyo3(signature = (candidate, var_names, x_flat, n_rows, y_target, rtol=1e-5, atol=1e-8))]
     fn exist_constants_fit_linear(
         &self,
@@ -623,7 +769,7 @@ impl PyEngine {
         .map_err(PyValueError::new_err)
     }
 
-    /// OFFLINE miner (Phase B, M3 complete): native `exist_constants_that_fit`. Affine candidates ->
+    /// OFFLINE miner: native `exist_constants_that_fit`. Affine candidates ->
     /// closed-form (deterministic); nonlinear-in-params -> `n_restarts` LM solves from random N(0,5)
     /// starts (seeded). Accept iff any makes `allclose(y_target, fitted)` pass -- scipy's exact gate.
     #[pyo3(signature = (candidate, var_names, x_flat, n_rows, y_target, rtol=1e-5, atol=1e-8, n_restarts=16, seed=0))]
@@ -645,26 +791,6 @@ impl PyEngine {
             self.inner.exist_constants_fit(
                 &candidate, &var_names, &x_flat, n_rows, &y_target, rtol, atol, n_restarts, seed,
             )
-        })
-        .map_err(PyValueError::new_err)
-    }
-
-    /// DEV micro-benchmark (not a shipped surface): marshal X + compile the tape ONCE, then run
-    /// `repeats` resident evaluations; returns elapsed seconds. Measures the M3 residual-loop cost
-    /// (X resident in Rust), excluding per-call FFI marshaling.
-    fn eval_bench_resident(
-        &self,
-        py: Python<'_>,
-        tokens: Vec<String>,
-        var_names: Vec<String>,
-        x_flat: Vec<f64>,
-        n_rows: usize,
-        params: Vec<f64>,
-        repeats: usize,
-    ) -> PyResult<f64> {
-        py.detach(|| {
-            self.inner
-                .eval_bench_resident(&tokens, &var_names, &x_flat, n_rows, &params, repeats)
         })
         .map_err(PyValueError::new_err)
     }

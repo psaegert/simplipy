@@ -1,5 +1,5 @@
-//! Faithful port of the term-cancellation unit: `collect_multiplicities` (engine.py:1290) feeding
-//! `cancel_terms` (engine.py:1410). In the `simplify` fixpoint these always run as a pair
+//! Faithful port of the term-cancellation unit: `collect_multiplicities` (engine.py@0.2.15:1290) feeding
+//! `cancel_terms` (engine.py@0.2.15:1410). In the `simplify` fixpoint these always run as a pair
 //! (`cancel_terms(*collect_multiplicities(expr))`), so the public entry here is the fused unit
 //! [`cancel_terms_unit`].
 //!
@@ -13,7 +13,7 @@
 //! subtrees do NOT register as cancellable hashes (only leaf `(token,)` hashes propagate), so the
 //! `(a*b)+(a*b)` docstring example is not what the code actually cancels.
 //!
-//! ## Faithfulness traps (verified against the source, flagged by the advisor)
+//! ## Faithfulness traps (verified against the source)
 //! * The annotation dicts are Python dicts iterated in **insertion order** -> replicated with an
 //!   insertion-ordered `Vec<(key,[i64;2])>`, NOT a hash map.
 //! * Candidate selection does **NOT break**: it runs the full `[add, mult] x dict.items()` nest, so
@@ -21,49 +21,79 @@
 //! * `factorize_to_at_most` raising `ValueError` is control flow -> the `Err` arm selects the
 //!   `*`/`pow`-coefficient fallback.
 //! * The `[::-1]` reversed-flatten label of a subtree is exactly its prefix-token sequence (leaves
-//!   are `(token,)`), so [`Node`]-style prefix tokens serve as the label directly.
+//!   are `(token,)`), so prefix token ids serve as the label directly.
+//!
+//! Labels/hashes are `Vec<Tok>` (interning is injective within a call, so
+//! `Vec<Tok>` equality == the old `Vec<String>` equality); the class operators/neutrals/inverses
+//! compare against the distinguished table ids; the emitted hyper/coefficient tokens are interned
+//! at emission (`view.intern`).
 
 use crate::operators::Operators;
+use crate::tokens::{Tok, TokenTable, TokenView};
 
-// Connection classes, hardcoded exactly as engine.py:172-176 (NOT config-derived). Iteration order
+// Connection classes, hardcoded exactly as engine.py@0.2.15:172-176 (NOT config-derived). Iteration order
 // of `self.connection_classes` is the dict insertion order [add, mult]; we index by these consts.
 const CC_ADD: usize = 0;
 const CC_MULT: usize = 1;
 const N_CC: usize = 2;
 
 /// `connection_classes[cc][0]` -- the operator set of each class (positive op first).
-const CONNECTION_OPS: [[&str; 2]; N_CC] = [["+", "-"], ["*", "/"]];
-/// `connection_classes[cc][1]` -- the neutral element of each class.
-const NEUTRAL: [&str; N_CC] = ["0", "1"];
-/// `connection_classes_inverse` (engine.py:174): the unary inverse operator of each class.
-const CC_INVERSE: [&str; N_CC] = ["neg", "inv"];
-/// `connection_classes_hyper` (engine.py:175): the hyper-operator of each class.
-const CC_HYPER: [&str; N_CC] = ["mult", "pow"];
-
-/// `token in self.binary_connectable_operators` (engine.py:176).
 #[inline]
-fn is_binary_connectable(token: &str) -> bool {
-    matches!(token, "+" | "-" | "*" | "/")
+fn connection_ops(cc: usize, tt: &TokenTable) -> [Tok; 2] {
+    match cc {
+        CC_ADD => [tt.plus, tt.minus],
+        _ => [tt.star, tt.slash],
+    }
 }
 
-/// `self.operator_to_class[operator]` (engine.py:173) for a binary-connectable operator.
+/// `connection_classes[cc][1]` -- the neutral element of each class (`0` / `1`).
 #[inline]
-fn operator_to_class(op: &str) -> usize {
-    match op {
-        "+" | "-" => CC_ADD,
-        "*" | "/" => CC_MULT,
-        _ => unreachable!("operator_to_class called on a non-connectable operator"),
+fn neutral(cc: usize, tt: &TokenTable) -> Tok {
+    match cc {
+        CC_ADD => tt.zero,
+        _ => tt.one,
+    }
+}
+
+/// `connection_classes_inverse` (engine.py@0.2.15:174): the unary inverse operator of each class.
+#[inline]
+fn cc_inverse(cc: usize, tt: &TokenTable) -> Tok {
+    match cc {
+        CC_ADD => tt.neg,
+        _ => tt.inv,
+    }
+}
+
+/// `connection_classes_hyper` (engine.py@0.2.15:175): the hyper-operator PREFIX of each class (the
+/// emitted token is `format!("{hyper}{k}")`, interned at emission).
+const CC_HYPER: [&str; N_CC] = ["mult", "pow"];
+
+/// `token in self.binary_connectable_operators` (engine.py@0.2.15:176).
+#[inline]
+fn is_binary_connectable(token: Tok, tt: &TokenTable) -> bool {
+    token == tt.plus || token == tt.minus || token == tt.star || token == tt.slash
+}
+
+/// `self.operator_to_class[operator]` (engine.py@0.2.15:173) for a binary-connectable operator.
+#[inline]
+fn operator_to_class(op: Tok, tt: &TokenTable) -> usize {
+    if op == tt.plus || op == tt.minus {
+        CC_ADD
+    } else if op == tt.star || op == tt.slash {
+        CC_MULT
+    } else {
+        unreachable!("operator_to_class called on a non-connectable operator")
     }
 }
 
 /// An insertion-ordered multiplicity dict: `{ token-tuple hash -> [pos, neg] }`. A `Vec` of pairs
 /// (not a hash map) so iteration order matches Python dict insertion order exactly (load-bearing for
 /// candidate selection). The dicts are tiny (a handful of leaf hashes), so linear lookup is cheap.
-type Ann = Vec<(Vec<String>, [i64; 2])>;
+type Ann = Vec<(Vec<Tok>, [i64; 2])>;
 
 /// `if hash not in dict: dict[hash] = [0,0]` then return a mutable handle to `dict[hash]`.
 /// Preserves insertion order (new keys appended at the end).
-fn ann_entry<'a>(dict: &'a mut Ann, hash: &[String]) -> &'a mut [i64; 2] {
+fn ann_entry<'a>(dict: &'a mut Ann, hash: &[Tok]) -> &'a mut [i64; 2] {
     if let Some(pos) = dict.iter().position(|(k, _)| k.as_slice() == hash) {
         &mut dict[pos].1
     } else {
@@ -76,36 +106,37 @@ fn ann_entry<'a>(dict: &'a mut Ann, hash: &[String]) -> &'a mut [i64; 2] {
 /// `stack_labels` entries. Bundling them removes the desync hazard of mirroring three `Vec`s.
 struct AnnNode {
     /// `None` for a leaf (`len(subtree) == 1`), `Some(operator)` for a composite node.
-    op: Option<String>,
+    op: Option<Tok>,
     /// Leaf token, or (for a composite) the operator token. Equals `subtree[0]`.
-    token: String,
+    token: Tok,
     /// Child subtrees, left-to-right (empty for a leaf).
     operands: Vec<AnnNode>,
     /// The node's OWN annotation dict per connection class (`subtree_annotation[0]`).
     own: [Ann; N_CC],
     /// `subtree_labels[0]`: the subtree's prefix-token sequence (`flatten([op,operands])[::-1]`).
-    label: Vec<String>,
+    label: Vec<Tok>,
 }
 
-/// Faithful port of `collect_multiplicities` (engine.py:1290). Right-to-left scan building a stack
+/// Faithful port of `collect_multiplicities` (engine.py@0.2.15:1290). Right-to-left scan building a stack
 /// of annotated subtrees; for a well-formed prefix expression the stack ends with a single root,
 /// which is returned. Mirrors the leaf / binary-connectable / general-operator branches exactly.
-fn collect_multiplicities(expression: &[String], ops: &Operators) -> Option<AnnNode> {
+fn collect_multiplicities(expression: &[Tok], view: &TokenView) -> Option<AnnNode> {
+    let tt = view.table;
     let mut stack: Vec<AnnNode> = Vec::new();
 
     let mut i = expression.len() as isize - 1;
     while i >= 0 {
-        let token = &expression[i as usize];
+        let token = expression[i as usize];
 
-        if is_binary_connectable(token) {
-            let operator = token.clone();
+        if is_binary_connectable(token, tt) {
+            let operator = token;
             let arity = 2usize;
             // operands = list(reversed(stack[-arity:])): pop the top `arity`, restore left->right.
             let mut operands: Vec<AnnNode> = stack.split_off(stack.len() - arity);
             operands.reverse();
 
-            let cc = operator_to_class(&operator);
-            let is_inverse_op = operator == "-" || operator == "/"; // operator in {'-','/'}
+            let cc = operator_to_class(operator, tt);
+            let is_inverse_op = operator == tt.minus || operator == tt.slash; // operator in {'-','/'}
 
             // Carry over annotations from operand nodes (only the operator's OWN class is populated).
             let mut own: [Ann; N_CC] = [Vec::new(), Vec::new()];
@@ -124,10 +155,10 @@ fn collect_multiplicities(expression: &[String], ops: &Operators) -> Option<AnnN
                 }
             }
 
-            let label = build_label(&operator, &operands);
+            let label = build_label(operator, &operands);
             stack.push(AnnNode {
                 op: Some(operator),
-                token: token.clone(),
+                token,
                 operands,
                 own,
                 label,
@@ -136,15 +167,15 @@ fn collect_multiplicities(expression: &[String], ops: &Operators) -> Option<AnnN
             continue;
         }
 
-        if let Some(arity) = ops.arity_of(token) {
+        if let Some(arity) = view.arity(token) {
             // General (non-connectable) operator: empty annotation in BOTH classes.
             let arity = arity as usize;
             let mut operands: Vec<AnnNode> = stack.split_off(stack.len() - arity);
             operands.reverse();
             let label = build_label(token, &operands);
             stack.push(AnnNode {
-                op: Some(token.clone()),
-                token: token.clone(),
+                op: Some(token),
+                token,
                 operands,
                 own: [Vec::new(), Vec::new()],
                 label,
@@ -153,15 +184,36 @@ fn collect_multiplicities(expression: &[String], ops: &Operators) -> Option<AnnN
             continue;
         }
 
-        // Leaf: registers itself with multiplicity [1,0] in BOTH connection classes.
-        let leaf_hash = vec![token.clone()];
+        // Leaf: registers itself with multiplicity [1,0]. Cancellation assumes the group
+        // axioms, so a leaf registers ONLY in the connection classes where they hold:
+        //   - VARIABLES in both classes (`x - x -> 0` is total; `x/x -> 1` fills a null hole);
+        //   - a LITERAL where its value is a group element: nonzero finite in both classes; 0 in
+        //     the ADDITIVE class only (`0/0 -> 1` and the sign-of-zero family are wrong answers);
+        //     nan/+-inf NOWHERE (`nan/nan -> 1`, `inf - inf -> 0`: truth nan in all four);
+        //   - `<constant>` keeps its historical registration.
+        // Not registering is the same state a composite subtree has always had (own = empty), so
+        // the cancel phase needs no other change; it also UN-SHADOWS the already-mined correct
+        // ground rules (`('/','0','0') -> float("nan")` et al.) that this pass pre-empted.
+        let leaf_hash = vec![token];
+        let lv = if token == tt.constant {
+            None
+        } else {
+            view.leaf_value(token)
+        };
+        let reg = |allowed: bool| {
+            if allowed {
+                vec![(leaf_hash.clone(), [1, 0])]
+            } else {
+                Vec::new()
+            }
+        };
         let own = [
-            vec![(leaf_hash.clone(), [1, 0])],
-            vec![(leaf_hash.clone(), [1, 0])],
+            reg(lv.map(|v| v.is_finite()).unwrap_or(true)),
+            reg(lv.map(|v| v.is_finite() && v != 0.0).unwrap_or(true)),
         ];
         stack.push(AnnNode {
             op: None,
-            token: token.clone(),
+            token,
             operands: Vec::new(),
             own,
             label: leaf_hash,
@@ -179,9 +231,9 @@ fn collect_multiplicities(expression: &[String], ops: &Operators) -> Option<AnnN
 
 /// `tuple(flatten_nested_list([operator, operands])[::-1])` -- the subtree's prefix token sequence:
 /// the operator followed by each operand's (already-prefix) label, left-to-right.
-fn build_label(operator: &str, operands: &[AnnNode]) -> Vec<String> {
+fn build_label(operator: Tok, operands: &[AnnNode]) -> Vec<Tok> {
     let mut label = Vec::with_capacity(1 + operands.iter().map(|o| o.label.len()).sum::<usize>());
-    label.push(operator.to_string());
+    label.push(operator);
     for operand in operands {
         label.extend_from_slice(&operand.label);
     }
@@ -196,12 +248,13 @@ struct Frame<'a> {
     still_connected: bool,
 }
 
-/// Faithful port of `cancel_terms` (engine.py:1410), the deployed `collect_statistics=False` path.
-fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
-    let mut expression: Vec<String> = Vec::new();
+/// Faithful port of `cancel_terms` (engine.py@0.2.15:1410), the deployed `collect_statistics=False` path.
+fn cancel_terms(root: &AnnNode, ops: &Operators, view: &TokenView) -> Vec<Tok> {
+    let tt = view.table;
+    let mut expression: Vec<Tok> = Vec::new();
 
     // (argmax_class, cancelled_subtree, cancelled_multiplicity_sum). Set at most once.
-    let mut cancellation_candidate: Option<(usize, Vec<String>, i64)> = None;
+    let mut cancellation_candidate: Option<(usize, Vec<Tok>, i64)> = None;
     let mut n_replaced: i64 = 0;
 
     // stack initialized to the single root; parity {add:1, mult:1}; still_connected = False.
@@ -222,56 +275,53 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
                 .map(|(a, s, m)| (*a, s.clone(), *m))
         {
             // still_connected stays true only along operators of the cancellation class (or leaves).
-            let st0 = subtree.token.as_str();
-            let in_class = CONNECTION_OPS[argmax_class].contains(&st0);
-            let not_operator = !ops.is_operator(st0);
+            let st0 = subtree.token;
+            let in_class = connection_ops(argmax_class, tt).contains(&st0);
+            let not_operator = !view.is_operator(st0);
             still_connected = still_connected && (in_class || not_operator);
 
             if still_connected && cancelled_subtree == subtree.label {
-                let neutral_element = NEUTRAL[argmax_class];
+                let neutral_element = neutral(argmax_class, tt);
 
-                let (first_replacement, other_replacements): (Vec<String>, Vec<String>) =
-                    if cancelled_subtree.as_slice() == ["<constant>"] {
+                let (first_replacement, other_replacements): (Vec<Tok>, Vec<Tok>) =
+                    if cancelled_subtree.as_slice() == [tt.constant] {
                         // A single <constant>: keep one, neutralize the rest.
-                        (
-                            vec!["<constant>".to_string()],
-                            vec![neutral_element.to_string()],
-                        )
+                        (vec![tt.constant], vec![neutral_element])
                     } else {
                         let current_parity = subtree_parities[argmax_class];
-                        let inverse_operator = CC_INVERSE[argmax_class];
+                        let inverse_operator = cc_inverse(argmax_class, tt);
 
-                        // Negative parity and negative multiplicity cancel out (engine.py:1483).
-                        let inverse_operator_prefix: Vec<String> =
+                        // Negative parity and negative multiplicity cancel out (engine.py@0.2.15:1483).
+                        let inverse_operator_prefix: Vec<Tok> =
                             if current_parity * cancelled_multiplicity_sum >= 0 {
                                 Vec::new()
                             } else {
-                                vec![inverse_operator.to_string()]
+                                vec![inverse_operator]
                             };
-                        // `double_inverse_operator_prefix` (engine.py:1485/1488) is computed in the
+                        // `double_inverse_operator_prefix` (engine.py@0.2.15:1485/1488) is computed in the
                         // source but never consumed -> intentionally omitted (verified dead).
 
-                        let mut fr: Vec<String> = Vec::new();
-                        let mut orr: Vec<String> = Vec::new();
+                        let mut fr: Vec<Tok> = Vec::new();
+                        let mut orr: Vec<Tok> = Vec::new();
 
                         if cancelled_multiplicity_sum == 0 {
                             // Cancelled entirely: every occurrence -> neutral element.
-                            fr = vec![neutral_element.to_string()];
-                            orr = vec![neutral_element.to_string()];
+                            fr = vec![neutral_element];
+                            orr = vec![neutral_element];
                         }
                         if cancelled_multiplicity_sum.abs() == 1 {
                             // Occurs once: first keeps the (possibly inverted) term, rest neutral.
                             fr = inverse_operator_prefix.clone();
-                            fr.extend(cancelled_subtree.iter().cloned());
-                            orr = vec![neutral_element.to_string()];
+                            fr.extend(cancelled_subtree.iter().copied());
+                            orr = vec![neutral_element];
                         }
                         if cancelled_multiplicity_sum.abs() > 1 {
                             // Occurs multiple times: first becomes a hyper-power of the term.
                             let hyper_operator = CC_HYPER[argmax_class];
-                            let pos_operator = CONNECTION_OPS[argmax_class][0]; // positive-multiplicity op
+                            let pos_operator = connection_ops(argmax_class, tt)[0]; // positive-multiplicity op
                             let magnitude = cancelled_multiplicity_sum.abs();
 
-                            let built: Result<Vec<String>, ()> = if cancelled_multiplicity_sum > 5
+                            let built: Result<Vec<Tok>, ()> = if cancelled_multiplicity_sum > 5
                                 && crate::utils::is_prime(magnitude)
                             {
                                 crate::utils::factorize_to_at_most(
@@ -281,12 +331,12 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
                                 )
                                 .map(|powers| {
                                     let mut r = inverse_operator_prefix.clone();
-                                    r.push(pos_operator.to_string());
+                                    r.push(pos_operator);
                                     for p in &powers {
-                                        r.push(format!("{hyper_operator}{p}"));
+                                        r.push(view.intern(&format!("{hyper_operator}{p}")));
                                     }
-                                    r.extend(cancelled_subtree.iter().cloned());
-                                    r.extend(cancelled_subtree.iter().cloned());
+                                    r.extend(cancelled_subtree.iter().copied());
+                                    r.extend(cancelled_subtree.iter().copied());
                                     r
                                 })
                             } else {
@@ -298,9 +348,9 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
                                 .map(|powers| {
                                     let mut r = inverse_operator_prefix.clone();
                                     for p in &powers {
-                                        r.push(format!("{hyper_operator}{p}"));
+                                        r.push(view.intern(&format!("{hyper_operator}{p}")));
                                     }
-                                    r.extend(cancelled_subtree.iter().cloned());
+                                    r.extend(cancelled_subtree.iter().copied());
                                     r
                                 })
                             };
@@ -309,21 +359,21 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
                                 Ok(r) => r,
                                 Err(()) => {
                                     // ValueError fallback: explicit integer coefficient.
-                                    let coefficient_token = magnitude.to_string();
+                                    let coefficient_token = view.intern(&magnitude.to_string());
                                     let mut r = inverse_operator_prefix.clone();
                                     if argmax_class == CC_ADD {
-                                        r.push("*".to_string());
+                                        r.push(tt.star);
                                         r.push(coefficient_token);
-                                        r.extend(cancelled_subtree.iter().cloned());
+                                        r.extend(cancelled_subtree.iter().copied());
                                     } else {
-                                        r.push("pow".to_string());
-                                        r.extend(cancelled_subtree.iter().cloned());
+                                        r.push(tt.pow);
+                                        r.extend(cancelled_subtree.iter().copied());
                                         r.push(coefficient_token);
                                     }
                                     r
                                 }
                             };
-                            orr = vec![neutral_element.to_string()];
+                            orr = vec![neutral_element];
                         }
 
                         (fr, orr)
@@ -341,19 +391,19 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
 
         // Leaf node (`len(subtree) == 1`).
         if subtree.op.is_none() {
-            expression.push(subtree.token.clone());
+            expression.push(subtree.token);
             continue;
         }
 
         // Non-leaf node.
-        let operator = subtree.token.clone();
+        let operator = subtree.token;
 
-        if is_binary_connectable(&operator) {
+        if is_binary_connectable(operator, tt) {
             // Propagate parities into the two operands.
             let mut prop: [[i64; N_CC]; 2] = [[0, 0], [0, 0]];
             for cc in [CC_ADD, CC_MULT] {
-                let operator_set0 = CONNECTION_OPS[cc][0]; // '+' or '*'
-                let flips = ops.operator_inverse(operator_set0) == Some(operator.as_str());
+                // `operator_inverses[operator_set0]` for '+' / '*', precomputed per class.
+                let flips = tt.cc_inverse_op[cc] == Some(operator);
                 let sign = if flips { -1 } else { 1 };
                 if still_connected {
                     prop[0][cc] = subtree_parities[cc];
@@ -370,7 +420,7 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
                 for cc in [CC_ADD, CC_MULT] {
                     for (subtree_hash, multiplicity) in &subtree.own[cc] {
                         let abs_sum = multiplicity[0].abs() + multiplicity[1].abs();
-                        let has_constant = subtree_hash.iter().any(|t| t == "<constant>");
+                        let has_constant = subtree_hash.iter().any(|&t| t == tt.constant);
                         if abs_sum > 1 && (!has_constant || subtree_hash.len() == 1) {
                             cancellation_candidate =
                                 Some((cc, subtree_hash.clone(), multiplicity[0] - multiplicity[1]));
@@ -414,9 +464,9 @@ fn cancel_terms(root: &AnnNode, ops: &Operators) -> Vec<String> {
 /// The fused public entry: `cancel_terms(*collect_multiplicities(expression))`. On a malformed
 /// expression (`collect_multiplicities` does not collapse to a single root) returns the input
 /// unchanged -- the deployed skeleton path only ever feeds well-formed prefix expressions.
-pub fn cancel_terms_unit(expression: &[String], ops: &Operators) -> Vec<String> {
-    match collect_multiplicities(expression, ops) {
-        Some(root) => cancel_terms(&root, ops),
+pub fn cancel_terms_unit(expression: &[Tok], ops: &Operators, view: &TokenView) -> Vec<Tok> {
+    match collect_multiplicities(expression, view) {
+        Some(root) => cancel_terms(&root, ops, view),
         None => expression.to_vec(),
     }
 }
@@ -466,6 +516,37 @@ mod tests {
             ),
         ];
         for (input, expected) in cases {
+            assert_eq!(
+                e.cancel_terms(&toks(input)),
+                toks(expected),
+                "input {input:?}"
+            );
+        }
+    }
+
+    /// Group-axiom gate: nan/inf leaves (and zero in the multiplicative class) must NOT cancel;
+    /// variables and nonzero-finite literals must keep cancelling exactly as before.
+    #[test]
+    fn cancel_r5_group_carve_out() {
+        let Some(e) = engine() else { return };
+        let untouched: &[&[&str]] = &[
+            &["/", "0", "0"],                           // was -> 1; truth nan
+            &["/", "float(\"nan\")", "float(\"nan\")"], // was -> 1; truth nan
+            &["/", "float(\"inf\")", "float(\"inf\")"], // was -> 1; truth nan
+            &["-", "float(\"inf\")", "float(\"inf\")"], // was -> 0; truth nan
+            &["-", "float(\"nan\")", "float(\"nan\")"], // was -> 0; truth nan
+            &["*", "0", "0"],                           // 0 forbidden in the mult class
+        ];
+        for input in untouched {
+            assert_eq!(e.cancel_terms(&toks(input)), toks(input), "input {input:?}");
+        }
+        let still_cancel: &[(&[&str], &[&str])] = &[
+            (&["-", "x1", "x1"], &["-", "0", "0"]), // variable: total identity
+            (&["/", "x1", "x1"], &["/", "1", "1"]), // variable: fills the null hole
+            (&["-", "0", "0"], &["-", "0", "0"]),   // additive 0 is a group element
+            (&["/", "2", "2"], &["/", "1", "1"]),   // nonzero finite literal
+        ];
+        for (input, expected) in still_cancel {
             assert_eq!(
                 e.cancel_terms(&toks(input)),
                 toks(expected),

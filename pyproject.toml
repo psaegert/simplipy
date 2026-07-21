@@ -6,7 +6,7 @@ authors = [
     ]
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.5.0"
+version = "0.6.0"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 keywords = ["symbolic-regression", "simplification", "expression", "prefix", "rewriting", "rust"]
@@ -26,7 +26,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 # The INLINE phase (simplify + conversions + validation) is the compiled Rust `simplipy._core`;
-# the OFFLINE phase (rule mining + curve_fit) stays pure Python. numpy/scipy are offline-only at
+# the OFFLINE phase (rule mining) stays pure Python. numpy is offline-only at
 # runtime, huggingface_hub powers asset resolution, platformdirs resolves the asset cache directory.
 dependencies = [
     "filelock",
@@ -34,7 +34,6 @@ dependencies = [
     "numpy",
     "platformdirs",
     "pyyaml",
-    "scipy",
     "tqdm",
 ]
 

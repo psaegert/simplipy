@@ -189,9 +189,10 @@ def test_deduplicate_rules():
 
     deduped = utils.deduplicate_rules(rules, dummy_vars)
 
-    # Canonical forms of the expected rules
+    # Canonical forms of the expected rules (?-sorted: the miner's default --
+    # dedup emits variable-leaf wildcards)
     expected_rules = [
-        (('+', '_0', '_1'), ('+', '_1', '_0')),
+        (('+', '?0', '?1'), ('+', '?1', '?0')),
     ]
 
     print(deduped)

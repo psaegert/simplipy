@@ -518,7 +518,7 @@ def remap_expression(source_expression: list[str], dummy_variables: list[str], v
     return source_expression, variable_mapping
 
 
-def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?') -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     """Deduplicate a list of simplification rules by canonicalizing variables.
 
     This function processes a list of (source, target) simplification rules. It
@@ -543,9 +543,16 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
     """
     deduplicated_rules: dict[tuple[str, ...], tuple[str, ...]] = {}
     for rule in tqdm(rules_list, desc='Deduplicating rules', disable=not verbose):
-        # Rename variables in the source expression
-        remapped_source, variable_mapping = remap_expression(list(rule[0]), dummy_variables=dummy_variables)
-        remapped_target, _ = remap_expression(list(rule[1]), dummy_variables, variable_mapping)
+        # Rename variables in the source expression.
+        #
+        # The prefix is the SORT: this remap canonicalises over VARIABLE NAMES, which
+        # certifies exactly the `?`-sort (variable-leaf) quantifier -- so that is the sort a
+        # freshly mined rule ships with. `_` (arbitrary subtree, pointwise-certified) is
+        # EARNED by the post-mine promotion pass, never emitted here. Already-sorted rule
+        # sets pass through untouched: `?N`/`_N` tokens are not dummy variables and are
+        # never remapped.
+        remapped_source, variable_mapping = remap_expression(list(rule[0]), dummy_variables=dummy_variables, variable_prefix=variable_prefix)
+        remapped_target, _ = remap_expression(list(rule[1]), dummy_variables, variable_mapping, variable_prefix=variable_prefix)
 
         remapped_source_key = tuple(remapped_source)
         remapped_target_value = tuple(remapped_target)
@@ -741,10 +748,9 @@ def enumerate_expressions(
 
     Every prefix expression of length L > 1 decomposes uniquely as a root operator
     plus child expressions of lengths >= 1 summing to L - 1, so filling lengths in
-    ascending order is exhaustive by induction -- in contrast to the pass-based
-    closure this replaces (2026-07-10 audit), which stopped when the maximum length
-    was REACHED rather than SATURATED and silently missed e.g. every triple-unary
-    chain at length 4 (93.6% of that length's universe in the dev_7-3 mine).
+    ascending order is exhaustive by induction -- in contrast to a pass-based
+    closure, which stops when the maximum length is REACHED rather than SATURATED
+    and silently misses whole expression families.
 
     The work and memory are exactly the universe size; check
     :func:`count_expressions` FIRST -- complete enumeration is infeasible beyond
@@ -892,8 +898,12 @@ def apply_mapping(tree: list, mapping: dict[str, Any]) -> list:
     """
     # If the tree is a leaf node, replace the placeholder with the actual subtree defined in the mapping
     if len(tree) == 1 and isinstance(tree[0], str):
-        if tree[0].startswith('_'):
-            return mapping[tree[0]]  # TODO: I put a bracket here. Find out why this is necessary
+        if tree[0].startswith(('_', '?', '!')):
+            # NOTE: mapping values are complete subtree nodes (lists) as bound by
+            # match_pattern, so the lookup is returned as-is: every node in this tree
+            # representation is a list (leaves are one-element lists), and wrapping or
+            # unwrapping here would break the tree invariant.
+            return mapping[tree[0]]
         return tree
 
     operator, operands = tree
@@ -943,8 +953,15 @@ def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = No
     # Elementary pattern
     pattern_key = pattern[0]
     if pattern_length == 1 and isinstance(pattern_key, str):
-        # Check if the pattern is a placeholder to be filled with the tree
-        if pattern_key.startswith('_'):
+        # Check if the pattern is a placeholder to be filled with the tree.
+        # `!` (third sort): this legacy Python path has no interval certifier, so `!` binds
+        # single variable leaves ONLY -- fail-closed (the compiled core certifies subtrees).
+        # (Known divergence, predating the sorts: this path does not enforce `?` leaf-only
+        # either; the deployed simplify line always runs the Rust core.)
+        if pattern_key.startswith('!') and not (
+                isinstance(tree, str) or (isinstance(tree, list) and len(tree) == 1)):
+            return False, mapping
+        if pattern_key.startswith(('_', '?', '!')):
             # Try to match the tree with the placeholder pattern
             existing_value = mapping.get(pattern_key)
             if existing_value is None:
@@ -1035,7 +1052,9 @@ def remove_pow1(prefix_expression: list[str]) -> list[str]:
     return filtered_expression
 
 
-_WILDCARD_RE = re.compile(r'^_\d+$')
+# three sorts: `_N` any subtree, `!N` a subtree the interval engine certifies
+# defined-and-finite a.e., `?N` a variable leaf.
+_WILDCARD_RE = re.compile(r'^[_?!]\d+$')
 
 
 def violates_wildcard_multiplicity(lhs: list[str] | tuple[str, ...], rhs: list[str] | tuple[str, ...]) -> bool:

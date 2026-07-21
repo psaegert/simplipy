@@ -1,6 +1,6 @@
 [package]
 name = "simplipy-core"
-version = "0.5.0"              # kept in lockstep with the Python package version (pyproject.toml)
+version = "0.6.0"              # kept in lockstep with the Python package version (pyproject.toml)
 edition = "2021"
 rust-version = "1.83"          # MSRV floor of the resolved tree (pyo3 0.29 requires Rust >= 1.83)
 description = "Rust inline-phase backend for the SimpliPy prefix-expression simplifier (PyO3, the simplipy._core extension)"
@@ -10,7 +10,7 @@ repository = "https://github.com/psaegert/simplipy"
 readme = "README.md"
 
 # cdylib = the Python extension module (`simplipy._core`) loaded over FFI.
-# rlib   = lets integration tests / criterion link the core directly with ZERO Python crossings.
+# rlib   = lets integration tests / examples link the core directly with ZERO Python crossings.
 [lib]
 name = "_core"
 path = "rust/lib.rs"
@@ -48,9 +48,7 @@ ryu = "1.0"
 # sources of a length, all cores). Not used by the inline (online) engine -- the online `simplify` is
 # one FFI unit per call and parallelism lives on the Python caller side.
 rayon = "1"
-
-[dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+astro-float = "0.9.5"
 
 [features]
 default = []

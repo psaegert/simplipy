@@ -153,19 +153,138 @@ class TestPruneRedundantRules:
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
         engine.prune_redundant_rules()
 
-        # Every remaining explicit rule must be necessary
-        for lhs, rhs in engine.simplification_rules:
+        # Every remaining explicit rule must be necessary: remove it from the live rule
+        # set (compile_rules syncs the core) and check the transformation is no longer
+        # derivable, then restore.
+        all_rules = list(engine.simplification_rules)
+        for lhs, rhs in all_rules:
             if any(is_wildcard.match(t) for t in lhs):
                 continue  # Skip pattern rules
-            saved = engine.simplification_rules_no_patterns.pop(tuple(lhs), None)
+            engine.simplification_rules = [r for r in all_rules if tuple(r[0]) != tuple(lhs)]
+            engine.compile_rules()
             try:
                 result = engine.simplify(list(lhs), mask_elementary_literals=False)
                 assert tuple(result) != tuple(rhs), (
                     f"Rule {lhs} -> {rhs} is still redundant after pruning"
                 )
             finally:
-                if saved is not None:
-                    engine.simplification_rules_no_patterns[tuple(lhs)] = saved
+                engine.simplification_rules = list(all_rules)
+                engine.compile_rules()
+
+
+class TestPruneCoveredRules:
+    """Tests for SimpliPyEngine.prune_covered_rules()."""
+
+    def test_composite_covered_rule_removed_needed_rule_kept(self) -> None:
+        """A rule the base rule covers compositionally is removed; the base rule survives."""
+        base = (("sin", "sin", "?0"), ("?0",))
+        # sin(sin(sin(x))) -> sin(x) is derivable from `base` applied to the inner pair
+        covered = (("sin", "sin", "sin", "?0"), ("sin", "?0"))
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[base, covered])
+
+        n_pruned = engine.prune_covered_rules()
+
+        assert n_pruned == 1
+        assert engine.simplification_rules == [base]
+        # The pruned set is live in the core: the covered rewrite still happens
+        assert engine.simplify(["sin", "sin", "sin", "x0"]) == ["sin", "x0"]
+
+    def test_composite_probe_keeps_wide_rule(self) -> None:
+        """Leaf-only probing would wrongly remove a `_`-rule whose cover is `?`-sorted.
+
+        The `?`-rule rewrites the wide rule's leaf-instantiated LHS variant, but
+        cannot bind the composite `sin(x{i})` probe, so the wide rule is kept.
+        """
+        leaf_cover = (("+", "?0", "1"), ("0",))
+        wide = (("sin", "+", "_0", "1"), ("0",))
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[leaf_cover, wide])
+
+        # Leaf-only coverage holds: without `wide`, the leaf variant collapses
+        probe = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[leaf_cover])
+        assert len(probe.simplify(["sin", "+", "x0", "1"])) <= 1
+        # ... but the composite variant does not
+        assert len(probe.simplify(["sin", "+", "sin", "x0", "1"])) > 1
+
+        n_pruned = engine.prune_covered_rules()
+
+        assert n_pruned == 0
+        assert engine.simplification_rules == [leaf_cover, wide]
+
+    def test_constant_stays_literal(self) -> None:
+        """An all-constant-foldable LHS must not count as covered via numeric folding.
+
+        With ``<constant>`` substituted by a numeral, native constant folding
+        collapses the LHS and the rule would be removed; the probe keeps
+        ``<constant>`` literal, so the rule survives.
+        """
+        ground = (("/", "<constant>", 'float("-inf")'), ("0",))
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[ground])
+
+        # Numeral instantiation IS natively folded (the trap the literal probe avoids)
+        no_rules = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        assert len(no_rules.simplify(["/", "7", 'float("-inf")'])) == 1
+        # The literal probe is not
+        assert no_rules.simplify(["/", "<constant>", 'float("-inf")']) == ["/", "<constant>", 'float("-inf")']
+
+        n_pruned = engine.prune_covered_rules()
+
+        assert n_pruned == 0
+        assert engine.simplification_rules == [ground]
+
+    def test_pruning_is_idempotent(self) -> None:
+        """A second prune removes nothing and leaves the rule list unchanged."""
+        rules = [
+            (("sin", "sin", "?0"), ("?0",)),
+            (("sin", "sin", "sin", "?0"), ("sin", "?0")),      # covered
+            (("sin", "sin", "sin", "sin", "?0"), ("?0",)),     # covered
+        ]
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
+        n_first = engine.prune_covered_rules()
+        rules_after_first = list(engine.simplification_rules)
+
+        n_second = engine.prune_covered_rules()
+
+        assert n_first == 2
+        assert n_second == 0
+        assert engine.simplification_rules == rules_after_first
+
+    def test_deterministic_across_hash_seeds(self) -> None:
+        """Two subprocess runs under different PYTHONHASHSEED values agree exactly.
+
+        First-match-wins makes rule order behavioral, so the prune must never
+        let set iteration order leak into the probe-engine build.
+        """
+        import json
+        import os
+        import subprocess
+        import sys
+
+        script = (
+            "import json, sys\n"
+            "from simplipy import SimpliPyEngine\n"
+            f"ops = json.loads({json.dumps(json.dumps(_MINIMAL_OPERATORS))})\n"
+            "rules = [\n"
+            "    (('sin', 'sin', '?0'), ('?0',)),\n"
+            "    (('sin', 'sin', 'sin', '?0'), ('sin', '?0')),\n"
+            "    (('sin', 'sin', 'sin', 'sin', '?0'), ('?0',)),\n"
+            "    (('+', '?0', '1'), ('0',)),\n"
+            "    (('sin', '+', '_0', '1'), ('0',)),\n"
+            "    (('/', '<constant>', 'float(\"-inf\")'), ('0',)),\n"
+            "]\n"
+            "engine = SimpliPyEngine(operators=ops, rules=rules)\n"
+            "engine.prune_covered_rules()\n"
+            "print(json.dumps(engine.simplification_rules))\n"
+        )
+        outputs = []
+        for hash_seed in ('0', '424242'):
+            env = dict(os.environ, PYTHONHASHSEED=hash_seed,
+                       PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+            result = subprocess.run([sys.executable, '-c', script], env=env,
+                                    capture_output=True, text=True, check=True)
+            outputs.append(result.stdout)
+        assert outputs[0] == outputs[1]
+        # Sanity: the run pruned the two covered sin-chain rules and kept the rest
+        assert len(json.loads(outputs[0])) == 4
 
 
 class TestIsValid:
@@ -201,7 +320,8 @@ class TestIsValid:
 
 
 class TestSortOperands:
-    """Tests for SimpliPyEngine.sort_operands()."""
+    """Tests for the core operand-sort sub-unit (`_core.sort_only`; the pure-Python
+    `sort_operands` was removed in the Rust-only cutover)."""
 
     def _engine(self) -> SimpliPyEngine:
         return SimpliPyEngine(operators=_MINIMAL_OPERATORS)
@@ -209,31 +329,33 @@ class TestSortOperands:
     def test_commutative_reorder(self) -> None:
         """Commutative operator sorts operands into canonical order."""
         engine = self._engine()
-        result = engine.sort_operands(["+", "b", "a"])
+        result = engine._core.sort_only(["+", "b", "a"])
         # After sorting, variables should be in canonical order
-        assert result == engine.sort_operands(["+", "a", "b"])
+        assert result == engine._core.sort_only(["+", "a", "b"])
 
     def test_non_commutative_unchanged(self) -> None:
         """Non-commutative operator preserves operand order."""
         engine = self._engine()
-        assert engine.sort_operands(["-", "b", "a"]) == ["-", "b", "a"]
+        assert engine._core.sort_only(["-", "b", "a"]) == ["-", "b", "a"]
 
     def test_idempotent(self) -> None:
         """Sorting an already-sorted expression is idempotent."""
         engine = self._engine()
-        first = engine.sort_operands(["+", "b", "a"])
-        second = engine.sort_operands(first)
+        first = engine._core.sort_only(["+", "b", "a"])
+        second = engine._core.sort_only(first)
         assert first == second
 
     def test_nested_commutative(self) -> None:
         """Nested commutative operators are sorted recursively."""
         engine = self._engine()
-        result = engine.sort_operands(["*", "z", "a"])
-        assert result == engine.sort_operands(["*", "a", "z"])
+        result = engine._core.sort_only(["*", "z", "a"])
+        assert result == engine._core.sort_only(["*", "a", "z"])
 
 
 class TestCancelTerms:
-    """Tests for collect_multiplicities + cancel_terms pipeline."""
+    """Tests for the core term-cancellation sub-unit (`_core.cancel_only`, a faithful
+    `cancel_terms(*collect_multiplicities(tokens))`; the pure-Python pipeline was removed
+    in the Rust-only cutover)."""
 
     def _engine(self) -> SimpliPyEngine:
         return SimpliPyEngine(operators=_MINIMAL_OPERATORS)
@@ -242,46 +364,44 @@ class TestCancelTerms:
         """x - x should cancel — both operands become neutral element 0."""
         engine = self._engine()
         expr = ["-", "x", "x"]
-        tree, annotations, labels = engine.collect_multiplicities(expr)
-        result = engine.cancel_terms(tree, annotations, labels)
+        result = engine._core.cancel_only(expr)
         assert result == ["-", "0", "0"]
 
     def test_cancel_x_div_x(self) -> None:
         """x / x should cancel — both operands become neutral element 1."""
         engine = self._engine()
         expr = ["/", "x", "x"]
-        tree, annotations, labels = engine.collect_multiplicities(expr)
-        result = engine.cancel_terms(tree, annotations, labels)
+        result = engine._core.cancel_only(expr)
         assert result == ["/", "1", "1"]
 
     def test_no_cancellation(self) -> None:
         """Expression with nothing to cancel is returned unchanged."""
         engine = self._engine()
         expr = ["+", "x", "y"]
-        tree, annotations, labels = engine.collect_multiplicities(expr)
-        result = engine.cancel_terms(tree, annotations, labels)
+        result = engine._core.cancel_only(expr)
         assert result == ["+", "x", "y"]
 
 
 class TestApplySimplificationRules:
-    """Tests for SimpliPyEngine.apply_simplifcation_rules()."""
+    """Tests for the core rule-application sub-unit (`_core.apply_rules`; the pure-Python
+    `apply_simplifcation_rules` was removed in the Rust-only cutover)."""
 
     def test_applies_matching_rule(self) -> None:
         rules = [(["+", "_0", "0"], ["_0"])]
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=rules)
-        result = engine.apply_simplifcation_rules(["+", "x", "0"])
+        result = engine._core.apply_rules(["+", "x", "0"])
         assert result == ["x"]
 
     def test_all_constants_returns_constant(self) -> None:
         """Expression of only operators and <constant> tokens reduces to <constant>."""
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS)
-        result = engine.apply_simplifcation_rules(["+", "<constant>", "<constant>"])
+        result = engine._core.apply_rules(["+", "<constant>", "<constant>"])
         assert result == ["<constant>"]
 
     def test_no_matching_rule_unchanged(self) -> None:
         """Expression that matches no rule is returned unchanged."""
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
-        result = engine.apply_simplifcation_rules(["+", "x", "y"])
+        result = engine._core.apply_rules(["+", "x", "y"])
         assert result == ["+", "x", "y"]
 
 
@@ -312,7 +432,7 @@ class TestOperatorConversions:
     engine = SimpliPyEngine.load("dev_7-3", install=True)
     expr = " + ".join(["x"] * 14)
 
-    simplified = engine.simplify(expr, max_iter=1, verbose=False)
+    simplified = engine.simplify(expr, max_iter=1)
     simplified_prefix = engine.parse(simplified)
 
     assert "mult7" not in simplified_prefix
@@ -323,7 +443,7 @@ def test_repeated_multiplication_avoids_unsupported_powers() -> None:
     engine = SimpliPyEngine.load("dev_7-3", install=True)
     expr = "x / (" + " * ".join(["x"] * 15) + ")"
 
-    simplified = engine.simplify(expr, max_iter=1, verbose=False)
+    simplified = engine.simplify(expr, max_iter=1)
     simplified_prefix = engine.parse(simplified)
 
     assert "pow7" not in simplified_prefix
@@ -430,26 +550,29 @@ class TestFindRules:
         engine.find_rules(**defaults)
         return engine
 
-    def test_requires_compiled_core(self) -> None:
-        """A bare engine (no core) must fail loudly: the Python mining mirror is gone."""
+    def test_construction_always_attaches_core(self) -> None:
+        """Rust-only engine: EVERY construction path (including in-memory) attaches the
+        compiled core, so mining (and everything else) is always available."""
         engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
-        with pytest.raises(RuntimeError, match="compiled core"):
-            engine.find_rules(max_source_pattern_length=3, dummy_variables=2, X=128)
+        assert engine._core is not None
 
     def test_discovers_basic_identities(self, tmp_path) -> None:
         """find_rules discovers well-known arithmetic identities (wildcard form)."""
         engine = self._run_find_rules(tmp_path)
         rules_lhs = {tuple(r[0]) for r in engine.simplification_rules}
 
-        # These should always be discovered at length <= 3
-        assert ("+", "_0", "0") in rules_lhs
-        assert ("*", "_0", "1") in rules_lhs
+        # These should always be discovered at length <= 3. The mine emits ?-sorted
+        # rules: the miner's measure tolerance certifies the variable-leaf sort only;
+        # `_`-subtree status needs the pointwise promotion stage.
+        assert ("+", "?0", "0") in rules_lhs
+        assert ("*", "?0", "1") in rules_lhs
         # x - x is handled natively by cancel_terms + constant folding,
         # so check for x - 0 instead.
-        assert ("-", "_0", "0") in rules_lhs
+        assert ("-", "?0", "0") in rules_lhs
 
     def test_deterministic_across_runs(self, tmp_path) -> None:
-        """Same seed => identical rule set (2026-07-10 audit: the mine was unseeded)."""
+        """Same seed => identical rule set (regression: the mine must be seeded --
+        unseeded evaluation matrices made rulesets irreproducible)."""
         rules_a = self._run_find_rules(tmp_path / "a", seed=7).simplification_rules
         rules_b = self._run_find_rules(tmp_path / "b", seed=7).simplification_rules
         assert rules_a == rules_b
@@ -520,10 +643,11 @@ class TestFindRulesWithCore:
             constants_fit_retries=1,
         )
         assert len(engine.simplification_rules) > 0
-        # The native path always dedups/canonicalizes: dummy variables become `_j` wildcards.
+        # The native path always dedups/canonicalizes: dummy variables become `?j`
+        # wildcards (variable-leaf sort -- the sort the mine's tolerance certifies).
         rules_lhs = {tuple(r[0]) for r in engine.simplification_rules}
-        assert ("+", "_0", "0") in rules_lhs
-        assert ("*", "_0", "1") in rules_lhs
+        assert ("+", "?0", "0") in rules_lhs
+        assert ("*", "?0", "1") in rules_lhs
 
     def test_native_mine_updates_the_live_core(self, tmp_path) -> None:
         """After the mine, `simplify` (which runs on the core) must apply the new rules."""
@@ -619,12 +743,11 @@ class TestConstantFolding:
         result = engine.simplify("1.23 + 4.56")
         assert result == "<constant>"
 
-    def test_constant_folding_statistics(self) -> None:
-        """constant_folding_count should increment on folding."""
+    def test_constant_folding_observable(self) -> None:
+        """Folding is observable through the simplify result itself (the pure-Python
+        SimplificationStatistics instrumentation was removed in the Rust-only cutover)."""
         engine = self._engine()
-        engine.simplify(["+", "1", "2"], collect_statistics=True)
-        assert engine.simplification_statistics is not None
-        assert engine.simplification_statistics.constant_folding_count >= 1
+        assert engine.simplify(["+", "1", "2"], mask_elementary_literals=False) == ["3"]
 
 
 class TestResolveConstantRules:
@@ -678,11 +801,13 @@ class TestResolveConstantRules:
             (["sin", "1"], ["<constant>"]),
         ])
         engine.resolve_constant_rules()
-        # The compiled explicit rules should have the resolved value
-        key = ("sin", "1")
-        assert key in engine.simplification_rules_no_patterns
-        rhs = engine.simplification_rules_no_patterns[key]
-        assert rhs != ("<constant>",)
+        # The resolved rule is live: the rule list holds the concrete value and the
+        # (core-synced) engine applies it.
+        rules = {tuple(lhs): tuple(rhs) for lhs, rhs in engine.simplification_rules}
+        assert ("sin", "1") in rules
+        assert rules[("sin", "1")] != ("<constant>",)
+        result = engine.simplify(["sin", "1"], mask_elementary_literals=False)
+        assert tuple(result) == rules[("sin", "1")]
 
     def test_multiple_rules_mixed(self) -> None:
         """Only the eligible rules should be resolved; others stay intact."""
@@ -702,3 +827,53 @@ class TestResolveConstantRules:
         assert tuple(engine.simplification_rules[2][1]) == ('1',)
         # neg(1) resolved to -1
         assert tuple(engine.simplification_rules[3][1]) == ('-1',)
+
+
+class TestBangSort:
+    """The `!` third sort: `!N` binds a variable leaf freely, or a
+    SUBTREE only when the interval engine certifies it defined-and-finite a.e. (`finite_ae`).
+    This is what recovers the E3 family (`exp(x) - exp(x) -> 0`) without resurrecting the
+    unsound `_`-subtree binding (`log(x) - log(x)` is nan on half the line and must not fire).
+    """
+
+    def _engine(self, tmp_path):
+        import json
+
+        import yaml
+
+        ops = {
+            "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+            "-": {"realization": "-", "alias": [], "inverse": "+", "arity": 2, "precedence": 1, "commutative": False},
+            "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
+            "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
+            "sinh": {"realization": "np.sinh", "alias": [], "inverse": "asinh", "arity": 1, "precedence": 3, "commutative": False},
+            "inv": {"realization": "simplipy.operators.inv", "alias": [], "inverse": "inv", "arity": 1, "precedence": 4, "commutative": False},
+            "pow": {"realization": "simplipy.operators.pow", "alias": [], "inverse": "pow", "arity": 2, "precedence": 3, "commutative": False},
+        }
+        (tmp_path / "rules.json").write_text(json.dumps([[["-", "!0", "!0"], ["0"]]]))
+        (tmp_path / "config.yaml").write_text(
+            yaml.safe_dump({"operators": ops, "rules": "rules.json"}))
+        engine = SimpliPyEngine.from_config(str(tmp_path / "config.yaml"))
+        assert engine._core is not None
+        return engine
+
+    def test_certified_subtrees_bind(self, tmp_path) -> None:
+        engine = self._engine(tmp_path)
+        # variable leaf: always binds (a leaf is trivially finite a.e.)
+        assert '<constant>' in engine.simplify(["-", "x0", "x0"]) or \
+               list(engine.simplify(["-", "x0", "x0"])) == ["0"]
+        # exp/sinh: certified finite a.e. -> the rule fires (E3 recovered)
+        for f in ("exp", "sinh"):
+            out = list(engine.simplify(["-", f, "x0", f, "x0"]))
+            assert out in (["0"], ["<constant>"]), (f, out)
+
+    def test_uncertified_subtrees_do_not_bind(self, tmp_path) -> None:
+        engine = self._engine(tmp_path)
+        # log: nan on half the line -- rewriting to 0 would invent a function
+        assert list(engine.simplify(["-", "log", "x0", "log", "x0"])) == ["-", "log", "x0", "log", "x0"]
+        # pow(x, inf): a.e. in {0, inf} -- inf - inf = nan on positive measure
+        expr = ["-", "pow", "x0", 'float("inf")', "pow", "x0", 'float("inf")']
+        assert list(engine.simplify(list(expr))) == expr
+        # inv: finite a.e. but pole-bearing -- OUT of the certificate's stated scope (needs
+        # inf_null); fail-closed means no binding, never unsoundness
+        assert list(engine.simplify(["-", "inv", "x0", "inv", "x0"])) == ["-", "inv", "x0", "inv", "x0"]
