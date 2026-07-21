@@ -22,7 +22,7 @@ def main(argv: str = None) -> None:
     find_simplifications_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to the output json file')
     find_simplifications_parser.add_argument('-s', '--save-every', type=int, default=100_000, help='Save the simplifications every n rules')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
-    find_simplifications_parser.add_argument('--prune', action='store_true', help='Prune redundant explicit rules after discovery (can be expensive)')
+    find_simplifications_parser.add_argument('--prune', action='store_true', help="Prune redundant explicit rules after discovery (can be expensive); a `prune:` key in the config takes precedence (false | true | 'covered')")
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
 
     # Prune-rules command
@@ -89,6 +89,21 @@ def main(argv: str = None) -> None:
 
             rule_finding_config = load_config(args.config, resolve_paths=True)
 
+            # FAIL-CLOSED config validation: a key the CLI does not forward would
+            # otherwise be ignored silently, and the mined artifact would not match
+            # what its config claims (this shipped once: `prune: covered` never ran).
+            known_keys = {
+                'max_source_pattern_length', 'max_target_pattern_length',
+                'dummy_variables', 'extra_internal_terms', 'n_samples',
+                'constants_fit_challenges', 'constants_fit_retries', 'rtol', 'atol',
+                'min_informative', 'seed', 'confirm', 'source_sample_per_length',
+                'candidate_fold_filter', 'relaxed_kruskal', 'prune', 'proposals'}
+            unknown_keys = sorted(set(rule_finding_config) - known_keys)
+            if unknown_keys:
+                print(f'Error: unknown key(s) in {args.config}: {", ".join(unknown_keys)}. '
+                      f'Known keys: {", ".join(sorted(known_keys))}', file=sys.stderr)
+                sys.exit(1)
+
             engine.find_rules(
                 max_source_pattern_length=rule_finding_config['max_source_pattern_length'],
                 max_target_pattern_length=rule_finding_config['max_target_pattern_length'],
@@ -106,11 +121,12 @@ def main(argv: str = None) -> None:
                     int(k): int(v) for k, v in
                     (rule_finding_config.get('source_sample_per_length') or {}).items()},
                 candidate_fold_filter=rule_finding_config.get('candidate_fold_filter', True),
+                relaxed_kruskal=rule_finding_config.get('relaxed_kruskal', True),
                 proposals=rule_finding_config.get('proposals', None),
                 output_file=args.output_file,
                 save_every=args.save_every,
                 reset_rules=args.reset_rules,
-                prune=args.prune,
+                prune=rule_finding_config.get('prune', args.prune),
                 verbose=args.verbose)
 
         case 'prune-rules':

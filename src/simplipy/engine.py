@@ -1059,6 +1059,7 @@ class SimpliPyEngine:
             confirm_seed: int,
             confirm: bool,
             candidate_fold_filter: bool,
+            relaxed_kruskal: bool,
             prune: bool | str,
             reset_rules: bool) -> dict:
         """Assemble the mined artifact's PROVENANCE record: the mine must
@@ -1098,6 +1099,7 @@ class SimpliPyEngine:
                 'rtol': rtol, 'atol': atol, 'min_informative': min_informative,
                 'seed': seed, 'mine_seed': mine_seed, 'confirm_seed': confirm_seed,
                 'confirm': confirm, 'candidate_fold_filter': candidate_fold_filter,
+                'relaxed_kruskal': relaxed_kruskal,
                 'prune': prune, 'reset_rules': reset_rules,
                 'source_sample_per_length': {str(k): int(v) for k, v in source_sample_per_length.items()},
             },
@@ -1614,7 +1616,7 @@ class SimpliPyEngine:
             rtol=rtol, atol=atol, min_informative=min_informative,
             seed=seed, mine_seed=mine_seed, confirm_seed=confirm_seed,
             confirm=confirm, candidate_fold_filter=candidate_fold_filter,
-            prune=prune, reset_rules=reset_rules)
+            relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules)
         if proposal_record is not None:
             # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
             # counts are filled in by the proposal pass itself (_find_rules_native).

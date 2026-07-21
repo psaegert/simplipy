@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.7.0 (unreleased)
+## 0.7.1 — 2026-07-21
+
+### Fixed
+- **CLI `find-rules` honors the full config**: the `prune` and `relaxed_kruskal` keys in a
+  find-rules YAML were silently ignored (`prune` fell back to the `--prune` CLI flag,
+  i.e. `False`; `relaxed_kruskal` to its default), so a config declaring
+  `prune: covered` produced an unpruned artifact that did not match its own claims.
+  Both keys are now forwarded (a config `prune:` key takes precedence over `--prune`),
+  and the CLI rejects unknown config keys fail-closed, naming the offending key — a
+  mis-spelled or unsupported key is an error, never a silent no-op (`confirm_rules:`
+  was such a silent no-op; the honored key is `confirm:`).
+- The provenance sidecar now records `relaxed_kruskal` alongside the other mine
+  parameters.
+
+## 0.7.0 — 2026-07-21
 
 Real-semantics pow alignment and the removal of the faithful dev_7-3 reproduction line:
 the package now ships ONE engine line.

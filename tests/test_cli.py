@@ -96,3 +96,50 @@ class TestCLI:
         assert sidecar["proposals"]["count"] == 1
         assert sidecar["proposals"]["outcomes"] == {
             "certified": 1, "already_covered": 0, "rejected": 0, "duplicate": 0}
+
+    def test_find_rules_config_prune_and_relaxed_kruskal_honored(self, tmp_path) -> None:
+        """The config is the single source of truth for the mine: `prune`,
+        `relaxed_kruskal` and `confirm` keys must reach find_rules and be recorded in
+        the provenance sidecar (a key the CLI silently dropped shipped an artifact
+        that did not match its config's claims)."""
+        (tmp_path / "rules.json").write_text("[]")
+        engine_cfg = tmp_path / "engine.yaml"
+        engine_cfg.write_text(yaml.safe_dump({"operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
+        mine_cfg = tmp_path / "find_rules.yaml"
+        mine_cfg.write_text(yaml.safe_dump({
+            "max_source_pattern_length": 3,
+            "max_target_pattern_length": 3,
+            "dummy_variables": 1,
+            "extra_internal_terms": ["0", "1", "<constant>"],
+            "n_samples": 256,
+            "constants_fit_retries": 16,
+            "seed": 7,
+            "confirm": False,
+            "relaxed_kruskal": False,
+            "prune": "covered",
+        }))
+        out = tmp_path / "mined.json"
+        main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out)])
+        params = json.load(open(str(out) + ".provenance.json"))["params"]
+        assert params["prune"] == "covered"
+        assert params["relaxed_kruskal"] is False
+        assert params["confirm"] is False
+
+    def test_find_rules_unknown_config_key_rejected(self, tmp_path, capsys) -> None:
+        """FAIL-CLOSED: an unknown find-rules config key is an error naming the key,
+        never a silent no-op."""
+        (tmp_path / "rules.json").write_text("[]")
+        engine_cfg = tmp_path / "engine.yaml"
+        engine_cfg.write_text(yaml.safe_dump({"operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
+        mine_cfg = tmp_path / "find_rules.yaml"
+        mine_cfg.write_text(yaml.safe_dump({
+            "max_source_pattern_length": 2,
+            "max_target_pattern_length": 1,
+            "n_samples": 256,
+            "constants_fit_retries": 16,
+            "confirm_rules": True,
+        }))
+        with pytest.raises(SystemExit, match="1"):
+            main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg),
+                  "-o", str(tmp_path / "mined.json")])
+        assert "confirm_rules" in capsys.readouterr().err
