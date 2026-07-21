@@ -47,11 +47,22 @@ def verify_ruleset(rules, *, report_path=None, build_path=None, judge_timeout_s=
     ``judge_timeout_s``: per-rule wall-clock cap (a rule that exceeds it is bucketed
     JUDGE-TIMEOUT rather than blocking the sweep).
 
-    Returns the report dict; ``report['buckets']`` maps each bucket name to the list of
-    rule indices in it. A rule set is clean iff only CERTIFIED / TOLERATED are non-empty.
+    Returns the report dict: ``report['buckets']`` maps each bucket name to the list of
+    rule indices in it, ``report['is_clean']`` is True iff only CERTIFIED / TOLERATED are
+    non-empty, and ``report['exit_code']`` is 0 iff clean.
     """
-    return _gate.sweep(_load(rules), report_path=report_path, build_path=build_path,
+    import tempfile
+    import os
+    tmp = report_path or os.path.join(tempfile.mkdtemp(), 'gate_report.json')
+    code = _gate.sweep(_load(rules), report_path=tmp, build_path=build_path,
                        judge_timeout_s=judge_timeout_s)
+    report = json.load(open(tmp))
+    dirty = any(report['buckets'].get(k) for k in
+                ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
+                 'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT'))
+    report['is_clean'] = not dirty
+    report['exit_code'] = code
+    return report
 
 
 def monitor_ruleset(rules, engine_config, *, corpus_n=6000, seed=20260718,
