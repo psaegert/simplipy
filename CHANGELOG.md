@@ -17,8 +17,27 @@ the package now ships ONE engine line.
   proposals file, its sha256, and per-outcome counts
   (`certified` / `already_covered` / `rejected` / `duplicate`). This makes a
   mined-plus-proposed ruleset reproducible from one config and one command.
+- **Special-point certification phase in the miner** (`rust/battery.rs`): rule
+  certification now additionally checks every accepted (source, candidate) pair at a
+  battery of symbolic special points (0, ±1/2, ±1, ..., ±π/2, π, e) per variable, sweeps a
+  battery of special source-constant values, and snaps fitted witness constants to nearby
+  integers / half-integers before the domain-preservation gate. This closes three gaps
+  where a rule could certify on random evaluation matrices yet be unsound at points
+  deployed expressions actually reach: a fitted exponent like `2.9999999999999996` is NaN
+  on the negative half-line and hides the positive-measure domain extension its snapped
+  witness `3.0` creates (`exp(log(pow3 x)) → pow(x, C)`); a rule can be false exactly at a
+  symbolic coincidence (`pow(sin x, inf) → 0` is 1 at x = π/2); and a pattern-bound
+  source constant reaches special values in deployment (`pow(cos C, inf) → 0` at C = 0).
+  Rows where deployed f64 evaluation diverges from contract semantics are re-judged at
+  three fixed precision rungs (50/120/250 decimal digits) with symbolic coordinates
+  rendered at each precision, so stable limit completions (`x/x → 1`) keep certifying
+  while precision-dependent cancellation seams are rejected fail-closed.
 
 ### Changed
+- **Stricter mining certification (see the special-point phase above)**: `find_rules`
+  rejects rule families that earlier versions could mine. Rulesets mined with
+  `simplipy <= 0.6.0` may therefore contain rules that 0.7.0 refuses to re-mine;
+  re-mining under 0.7.0 is the recommended migration.
 - **Pow alignment (real semantics)**: `pow` at a `-inf` base with a finite non-integer
   exponent now evaluates to NaN (real semantics) across the constant folder, the operator
   realizations, and the interval engine. Magnitude-step cells at infinite exponents are

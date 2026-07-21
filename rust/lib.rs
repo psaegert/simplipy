@@ -49,6 +49,7 @@ fn ensure_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<()>
     Ok(())
 }
 
+mod battery;
 mod cancel;
 mod convert;
 pub mod engine;

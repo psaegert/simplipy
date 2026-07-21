@@ -362,7 +362,7 @@ class TestFoldFilter:
         lib2 = engine._core.build_candidate_library(cands[2:], ["x0"], x_flat, n)
         assert lib2.n_filtered == 0
 
-    def test_dominance_holds_at_the_band_edge(self, engine) -> None:
+    def test_dominance_holds_at_the_band_edge(self, engine, tmp_path) -> None:
         """Adversarial regression at the acceptance-band edge. The dominance lemma
         REQUIRES the length-1 <constant> to accept whenever ANY feasible constant exists.
         The least-squares mean solve violated that on skewed near-constant sources (63 rows
@@ -387,6 +387,7 @@ class TestFoldFilter:
             1e-9, 1e-12) is not True
         # (2) END-TO-END: the exact divergence case. Crafted X (63 rows
         # x0 = -1, one row x0 = +1); source exp(1) + 2.4e-9*x0 evaluates to the skewed y.
+        # The filtered and unfiltered scans must AGREE whatever else gates the match.
         x_flat = [-1.0] * (n - 1) + [1.0]
         src = ["+", "exp", "1", "*", "2.4e-9", "x0"]
         cands = [["<constant>"], ["x0"], ["exp", "1"]]
@@ -397,7 +398,35 @@ class TestFoldFilter:
                 src, len(src), 2, lib, challenges=16, retries=16, seed=7,
                 rtol=1e-9, atol=1e-12))
         assert results[0] == results[1], f"filtered {results[0]} != unfiltered {results[1]}"
-        assert results[0] is not None, "the feasible near-constant source must match"
+        # The band-edge match itself is asserted with the special-point battery OFF (own
+        # subprocess: the switch is a process-lifetime OnceLock). The battery's fixed
+        # probe points (|x| up to pi) amplify the crafted 2.4e-9-per-x skew past the
+        # acceptance band (a 7.2e-9 real change at x = +-3): a value-soundness
+        # rejection orthogonal to the dominance property under test.
+        import subprocess
+        import sys
+        prog = (
+            "import json, sys;"
+            "from simplipy import SimpliPyEngine;"
+            "eng = SimpliPyEngine.from_config(sys.argv[1]);"
+            f"x_flat = {x_flat!r}; n = {n};"
+            f"cands = {cands!r};"
+            "outs = [];\n"
+            "for ff in (True, False):\n"
+            "    lib = eng._core.build_candidate_library(cands, ['x0'], x_flat, n, fold_filter=ff)\n"
+            f"    outs.append(eng._core.find_rule_lib({src!r}, {len(src)}, 2, lib,"
+            " challenges=16, retries=16, seed=7, rtol=1e-9, atol=1e-12))\n"
+            "assert outs[0] == outs[1], outs\n"
+            "assert outs[0] is not None, 'the feasible near-constant source must match'\n"
+        )
+        (tmp_path / "rules.json").write_text(json.dumps([]))
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(yaml.safe_dump({"operators": _OPERATORS, "rules": "rules.json"}))
+        res = subprocess.run(
+            [sys.executable, "-c", prog, str(cfg)],
+            env={**os.environ, "SIMPLIPY_SPECIAL_BATTERY": "0", "OMP_NUM_THREADS": "1"},
+            capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr
 
     def test_mine_parity_filtered_vs_unfiltered(self, tmp_path) -> None:
         """THE PARITY GATE: an end-to-end mine with and
@@ -487,6 +516,89 @@ class TestCertifyRules:
                           seed=7, verbose=False)
         out = engine.certify_rules([["+", "x0", "0"]], X=256, seed=7)
         assert out == []
+
+
+@pytest.fixture(scope="module")
+def dev():
+    return SimpliPyEngine.load('dev_7-3', install=True)
+
+
+@pytest.fixture(scope="module")
+def dev_x1(dev):
+    X = dev._mining_sample_x(1024, 1, np.random.default_rng(0))
+    return X.flatten(order='C').tolist(), X.shape[0]
+
+
+class TestSpecialPointCertification:
+    """The special-point battery + witness snapping (rust/battery.rs): the miner must
+    reject at the contract's special points -- fitted-witness snapping before the
+    domain gate, the per-variable battery (pi/2, ..., judged without the hiprec rescue),
+    the special source-constant sweep, and the transcendental nan-seam probe -- while
+    null-set completions and domain-preserving witnesses keep certifying.
+    Uses the dev_7-3 engine: the minimal test operator set has no pow/trig."""
+
+    def test_snapped_witness_domain_extension_rejected(self, dev, dev_x1) -> None:
+        """exp(log(x^3)) = x^3 only on x > 0. The raw fitted exponent
+        (2.9999999999999996) is NaN on x < 0 and blinds the interval domain gate; the
+        SNAPPED witness 3.0 is total on R -- a positive-measure domain extension
+        (a 37-rule family in (4,3) mining runs before this phase). The domain-PRESERVING
+        non-integer witness exp(log(x)/3) = x^(1/3) must keep certifying."""
+        x_flat, n = dev_x1
+        assert dev._core.find_rule(
+            ['exp', 'log', 'pow3', 'x0'], 4, 3, [['pow', 'x0', '<constant>']],
+            ['x0'], x_flat, n) is None
+        assert dev._core.find_rule(
+            ['exp', 'div3', 'log', 'x0'], 4, 3, [['pow', 'x0', '<constant>']],
+            ['x0'], x_flat, n) == ['pow', 'x0', '<constant>']
+
+    def test_contract_point_families_rejected(self, dev, dev_x1) -> None:
+        """Deployed-value consistency at the battery points:
+        pow(sin x, inf) = 1 at x = pi/2 (f64 sin(pi/2) is EXACTLY 1.0);
+        pow(cos c, inf) = 1 at the special source constant c = 0;
+        atanh(tanh(tan x)) diverges from tan x by ~3e-7 at x = +-1.5 in deployed f64
+        (a live (4,3) family). The flagship rescue identity atanh(tanh(x)) -> x
+        must keep certifying (the battery box never reaches its saturation zone)."""
+        x_flat, n = dev_x1
+        assert dev._core.find_rule(
+            ['pow', 'sin', 'x0', 'float("inf")'], 4, 1, [['0']], ['x0'], x_flat, n) is None
+        assert dev._core.find_rule(
+            ['pow', 'cos', '<constant>', 'float("inf")'], 4, 1, [['0']],
+            ['x0'], x_flat, n) is None
+        assert dev._core.find_rule(
+            ['atanh', 'tanh', 'tan', 'x0'], 4, 2, [['tan', 'x0']], ['x0'], x_flat, n) is None
+        assert dev._core.find_rule(
+            ['atanh', 'tanh', 'x0'], 3, 1, [['x0']], ['x0'], x_flat, n) == ['x0']
+
+    def test_null_set_completion_still_certifies(self, dev, dev_x1) -> None:
+        """The limit-completion doctrine survives every new gate: x/x -> 1
+        extends only at the exact (dyadic, precision-stable) point 0."""
+        x_flat, n = dev_x1
+        assert dev._core.find_rule(
+            ['/', 'x0', 'x0'], 3, 1, [['1']], ['x0'], x_flat, n) == ['1']
+
+    def test_proposals_path_rejects_seam_pair(self, dev) -> None:
+        """The LLM-proposal channel runs through the identical certification: the
+        hint pair (x^3 +- x^2 y)/(x +- y) -> x^2 evaluates 0/0 = nan at the exact f64
+        battery pair (pi/2, -+pi/2) but residue/0 = inf at the dps-50 precision rung
+        (the two spellings of x^3 round APART): a precision-UNSTABLE extension. Both
+        variants must be rejected on BOTH proposal arms (library scan and hint
+        verification), while the once-spelled cancellation (x^2 - y^2)/(x + y) -> x - y
+        (a certified live (2,1) rule) stays certifiable."""
+        seam_plus = ['/', '+', 'pow3', 'x0', '*', 'pow2', 'x0', 'x1', '+', 'x0', 'x1']
+        seam_minus = ['/', '-', 'pow3', 'x0', '*', 'pow2', 'x0', 'x1', '-', 'x0', 'x1']
+        stable = ['/', '-', 'pow2', 'x0', 'pow2', 'x1', '+', 'x0', 'x1']
+        # non-vacuity guard: none of these are already reduced by the dev rules
+        # (certify_rules skips already-covered sources without judging them)
+        for src in (seam_plus, seam_minus, stable):
+            assert len(dev.simplify(list(src))) >= len(src)
+        out = dev.certify_rules(
+            [seam_plus, seam_minus, stable],
+            [['pow2', 'x0'], ['pow2', 'x0'], ['-', 'x0', 'x1']],
+            dummy_variables=2, X=1024, seed=7)
+        by_src = {tuple(s): t for s, t, _ in out}
+        assert tuple(seam_plus) not in by_src
+        assert tuple(seam_minus) not in by_src
+        assert by_src[tuple(stable)] == ('-', 'x0', 'x1')
 
 
 class TestProposalChannel:

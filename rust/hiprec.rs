@@ -392,6 +392,705 @@ fn eval_node(
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Contract point verdict (the `battery` module's per-point referee).
+//
+// A faithful port of the contract's point machinery to arbitrary precision: the
+// contract evaluator (one-zero conventions, limit completion, the pow spike-step,
+// symbolic-cancellation snap floors, tan pole-proximity, boundary-honesty bands,
+// evaluation caps -> Unresolved), the class comparison, and the two/three-rung
+// confirmation at fixed precisions (50/120/250 decimal digits == 169/402/834 bits) with
+// every transcendental coordinate rendered AT the rung's precision (pi/2 rebuilt per
+// rung, the same way an mpmath evaluation at that dps would). Integer powers are
+// SINGLE-rounded (guard bits, one rounding) to mirror correctly-rounded `mp.power`:
+// `pow3(x)` and `pow2(x)*x` must round APART at a rung exactly where a correctly-rounded
+// evaluator makes them -- that residue over an exactly-cancelling denominator is the
+// unresolvable-seam class ((x^3 + x^2 y)/(x + y) at (pi/2, -pi/2): 0/0 = nan in f64,
+// residue/0 = -inf at rung 1), which no precision can settle and certification rejects.
+
+/// One coordinate of a special battery point: dyadic values are exact at every precision;
+/// the others are rendered per rung (`mp.pi/2` etc. rebuilt at the current precision, the
+/// per-precision battery builders).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ProbeAtom {
+    /// an exactly-representable f64 (dyadic rational): the same point at every precision
+    Val(f64),
+    /// `n * pi / d` rendered at the rung's precision (pi first, then the exact/rounded ops,
+    /// mirroring `mp.pi/d`)
+    PiFrac(i64, u64),
+    /// Euler's number at the rung's precision
+    E,
+    /// the non-dyadic decimal battery atom `-1.7` (rendered per rung)
+    Dec17Neg,
+}
+
+impl ProbeAtom {
+    /// The f64 rendering (what the deployed evaluator sees).
+    pub fn value(&self) -> f64 {
+        match self {
+            ProbeAtom::Val(v) => *v,
+            ProbeAtom::PiFrac(n, d) => *n as f64 * std::f64::consts::PI / *d as f64,
+            ProbeAtom::E => std::f64::consts::E,
+            ProbeAtom::Dec17Neg => -1.7,
+        }
+    }
+}
+
+/// The precision rungs: (binary precision, dps) -- 50/120/250 decimal digits at mpmath's
+/// dps->prec mapping. Rung 3 is consulted only to resolve a snapped-eq rung disagreement.
+const CONTRACT_RUNGS: [(usize, i32); 3] = [(169, 50), (402, 120), (834, 250)];
+
+fn render_atom(a: &ProbeAtom, p: usize, cc: &mut Consts) -> BigFloat {
+    match a {
+        ProbeAtom::Val(v) => BigFloat::from_f64(*v, p),
+        ProbeAtom::PiFrac(n, d) => {
+            let mut v = cc.pi(p, RM);
+            let na = n.unsigned_abs();
+            if na != 1 {
+                v = v.mul(&small_int(na, p), p, RM);
+            }
+            if *d != 1 {
+                v = v.div(&small_int(*d, p), p, RM);
+            }
+            if *n < 0 {
+                v = v.neg();
+            }
+            v
+        }
+        ProbeAtom::E => cc.e(p, RM),
+        ProbeAtom::Dec17Neg => small_int(17, p).div(&small_int(10, p), p, RM).neg(),
+    }
+}
+
+/// Round `v` to `p` bits (astro-float ops round their result to the requested precision).
+fn round_to(v: BigFloat, p: usize) -> BigFloat {
+    v.add(&small_int(0, p), p, RM)
+}
+
+/// SINGLE-rounded `x^k`: the product accumulates at `p + 128` guard bits and rounds ONCE to
+/// `p` -- mirroring mpmath's correctly-rounded `mp.power`.
+/// (The rescue path's `powi` may double-round; the probe's whole point is that `pow3(x)` and
+/// `pow2(x)*x` round APART at the rung, so its own powers must be single-rounded.)
+fn powi_sr(x: &BigFloat, k: u64, p: usize) -> BigFloat {
+    let g = p + 128;
+    let mut acc = x.clone();
+    for _ in 1..k {
+        acc = acc.mul(x, g, RM);
+    }
+    round_to(acc, p)
+}
+
+/// The point-comparison classes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PointCmp {
+    /// values agree (both nan, same infinity, or finite within tolerance)
+    Eq,
+    /// both finite, apart beyond tolerance: clause (a) -- kills at ANY measure
+    RealChange,
+    /// source nan, target defined: clause (b) extension event
+    Ext,
+    /// target nan where the source is defined: clause (b) shrink event
+    Shrink,
+    /// an infinity involved and the classes differ: clause (c) event
+    InfChange,
+}
+
+/// Per-rung evaluation context: precision, the dps-derived snap floors, and the snap /
+/// unresolved flags.
+struct CtCtx {
+    p: usize,
+    /// 10^(-dps+10): the symbolic-cancellation floor / boundary-honesty band
+    floor: BigFloat,
+    /// 10^(dps-10): the pole ceiling
+    ceil: BigFloat,
+    snapped: bool,
+    cc: Consts,
+}
+
+fn pow10(k: i32, p: usize) -> BigFloat {
+    let ten = small_int(10, p);
+    let mut acc = one(p);
+    for _ in 0..k.unsigned_abs() {
+        acc = acc.mul(&ten, p, RM);
+    }
+    if k < 0 {
+        one(p).div(&acc, p, RM)
+    } else {
+        acc
+    }
+}
+
+fn bf(v: f64, p: usize) -> BigFloat {
+    BigFloat::from_f64(v, p)
+}
+
+fn cmp_gt(a: &BigFloat, b: &BigFloat) -> bool {
+    a.cmp(b).is_some_and(|o| o > 0)
+}
+
+fn cmp_lt(a: &BigFloat, b: &BigFloat) -> bool {
+    a.cmp(b).is_some_and(|o| o < 0)
+}
+
+fn is_pos(x: &BigFloat) -> bool {
+    !x.is_negative() && !x.is_zero()
+}
+
+impl CtCtx {
+    fn new(p: usize, dps: i32) -> Option<CtCtx> {
+        Some(CtCtx {
+            p,
+            floor: pow10(-dps + 10, p),
+            ceil: pow10(dps - 10, p),
+            snapped: false,
+            cc: Consts::new().ok()?,
+        })
+    }
+
+    /// Symbolic-cancellation snap: a trig output below the noise floor is exact 0; above the pole
+    /// ceiling it is a pole (nan); both flag a symbolic-cancellation event.
+    fn snap_trig(&mut self, v: BigFloat) -> BigFloat {
+        if v.is_nan() || v.is_inf() || v.is_zero() {
+            return v;
+        }
+        let a = v.abs();
+        if cmp_lt(&a, &self.floor) {
+            self.snapped = true;
+            return small_int(0, self.p);
+        }
+        if cmp_gt(&a, &self.ceil) {
+            self.snapped = true;
+            return NAN;
+        }
+        v
+    }
+}
+
+/// Contract division (one zero; c/0 = sign(c)*inf; 0/0 undefined).
+fn ct_div(a: &BigFloat, b: &BigFloat, p: usize) -> BigFloat {
+    if a.is_nan() || b.is_nan() {
+        return NAN;
+    }
+    if b.is_zero() {
+        if a.is_zero() {
+            return NAN;
+        }
+        return if is_pos(a) { INF_POS } else { INF_NEG };
+    }
+    if a.is_inf() && b.is_inf() {
+        return NAN;
+    }
+    if b.is_inf() {
+        return small_int(0, p);
+    }
+    a.div(b, p, RM)
+}
+
+/// Integral exponent test within the integer cap: `None` for
+/// nan/inf/|b| > 1e15 or non-integral; else the parity of the integer.
+fn int_parity(b: &BigFloat, p: usize) -> Option<bool> {
+    if b.is_nan() || b.is_inf() || cmp_gt(&b.abs(), &bf(1e15, p)) {
+        return None;
+    }
+    if !b.is_int() {
+        return None;
+    }
+    let odd = b
+        .rem(&small_int(2, p))
+        .abs()
+        .cmp(&one(p))
+        .is_some_and(|o| o == 0);
+    Some(odd)
+}
+
+/// Contract pow (the spike-step for infinite exponents, negative-base integrality,
+/// x^0 = 1 including nan, one zero). `None` = Unresolved (evaluation caps). Finite powers
+/// are SINGLE-rounded (`powi_sr` / `pow_pos_base` guard bits) to mirror mp.power.
+fn ct_pow(a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<BigFloat> {
+    let p = ctx.p;
+    if !a.is_nan() && a.cmp(&one(p)).is_some_and(|o| o == 0) {
+        return Some(one(p));
+    }
+    if b.is_zero() {
+        return Some(one(p)); // x^0 = 1 incl nan^0 (ratified v2 SS2)
+    }
+    if a.is_nan() || b.is_nan() {
+        return Some(NAN);
+    }
+    if a.is_zero() {
+        return Some(if is_pos(b) { small_int(0, p) } else { INF_POS });
+    }
+    if !a.is_inf() && a.abs().cmp(&one(p)).is_some_and(|o| o == 0) && b.is_inf() {
+        return Some(one(p)); // pow(+-1, +-inf) = 1 (ratified)
+    }
+    if b.is_inf() {
+        // the RATIFIED SS9.4 spike-step semantics: magnitude limit incl negative bases
+        let aa = a.abs();
+        let big = cmp_gt(&aa, &one(p));
+        return Some(if is_pos(b) == big {
+            INF_POS
+        } else {
+            small_int(0, p)
+        });
+    }
+    if a.is_inf() {
+        if is_pos(a) {
+            return Some(if is_pos(b) { INF_POS } else { small_int(0, p) });
+        }
+        return Some(match int_parity(b, p) {
+            None => NAN, // SS9.7: pow(-inf, non-integer) undefined
+            Some(odd) => {
+                if is_pos(b) {
+                    if odd {
+                        INF_NEG
+                    } else {
+                        INF_POS
+                    }
+                } else {
+                    small_int(0, p) // one zero
+                }
+            }
+        });
+    }
+    if a.is_negative() {
+        if cmp_gt(&b.abs(), &bf(1e15, p)) {
+            return None; // integrality/parity unknowable beyond the cap
+        }
+        let Some(odd) = int_parity(b, p) else {
+            return Some(NAN); // SS9.7
+        };
+        let mag = pow_finite_pos(&a.abs(), b, p, &mut ctx.cc);
+        return Some(if odd { mag.neg() } else { mag });
+    }
+    if cmp_gt(&b.abs(), &bf(1e6, p)) {
+        return None;
+    }
+    Some(pow_finite_pos(a, b, p, &mut ctx.cc))
+}
+
+/// `a^b` for finite a > 0: single-rounded -- `powi_sr` on small integer exponents (keeps
+/// dyadic exactness: pow2(1/2) == 1/4 exactly), `pow_pos_base` guard-bit exp/ln otherwise.
+fn pow_finite_pos(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
+    if b.is_int() && !cmp_gt(&b.abs(), &bf(64.0, p)) {
+        let k = i64_of(b).unwrap_or(0);
+        if k > 0 {
+            return powi_sr(a, k as u64, p);
+        }
+        if k < 0 {
+            return round_to(
+                one(p + 128).div(&powi_sr_at(a, (-k) as u64, p + 128), p + 128, RM),
+                p,
+            );
+        }
+    }
+    pow_pos_base(a, b, p, cc)
+}
+
+fn i64_of(b: &BigFloat) -> Option<i64> {
+    // small integral BigFloat -> i64 via f64 (exact for |b| <= 64)
+    let s = format!("{b}");
+    s.parse::<f64>().ok().map(|v| v as i64)
+}
+
+/// `powi_sr` accumulating and REPORTING at `g` bits (no final rounding to a smaller p).
+fn powi_sr_at(x: &BigFloat, k: u64, g: usize) -> BigFloat {
+    let mut acc = x.clone();
+    for _ in 1..k {
+        acc = acc.mul(x, g, RM);
+    }
+    acc
+}
+
+/// Unary/binary OPS at contract semantics. `None` = Unresolved.
+fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat>> {
+    // outer None = unknown operator (caller falls back); inner None = Unresolved
+    let p = ctx.p;
+    if x.is_nan() && name != "pow2" && name != "pow3" && name != "pow4" && name != "pow5" {
+        // every contract op propagates nan (powk go through ct_pow, which handles nan^0 = n/a)
+        return Some(Some(NAN));
+    }
+    let v: Option<BigFloat> = match name {
+        "neg" => Some(x.neg()),
+        "abs" => Some(x.abs()),
+        "inv" => Some(ct_div(&one(p), x, p)),
+        "mult2" | "mult3" | "mult4" | "mult5" => {
+            let k = small_int(name.as_bytes()[4] as u64 - b'0' as u64, p);
+            Some(if x.is_inf() {
+                x.clone()
+            } else {
+                x.mul(&k, p, RM)
+            })
+        }
+        "div2" | "div3" | "div4" | "div5" => {
+            let k = small_int(name.as_bytes()[3] as u64 - b'0' as u64, p);
+            Some(ct_div(x, &k, p))
+        }
+        "pow2" => ct_pow(x, &small_int(2, p), ctx),
+        "pow3" => ct_pow(x, &small_int(3, p), ctx),
+        "pow4" => ct_pow(x, &small_int(4, p), ctx),
+        "pow5" => ct_pow(x, &small_int(5, p), ctx),
+        "pow1_2" => ct_pow(x, &bf(0.5, p), ctx),
+        "pow1_4" => ct_pow(x, &bf(0.25, p), ctx),
+        "pow1_3" | "pow1_5" => {
+            // odd real roots: sign-folded, total on R, +-inf fixed points
+            let k = small_int(name.as_bytes()[5] as u64 - b'0' as u64, p);
+            if x.is_inf() || x.is_zero() {
+                Some(x.clone())
+            } else {
+                let r = one(p).div(&k, p, RM);
+                let mag = pow_pos_base(&x.abs(), &r, p, &mut ctx.cc);
+                Some(if x.is_negative() { mag.neg() } else { mag })
+            }
+        }
+        "exp" => {
+            if x.is_inf() {
+                Some(if is_pos(x) { INF_POS } else { small_int(0, p) })
+            } else if !cmp_lt(&x.abs(), &bf(1e5, p)) {
+                None
+            } else {
+                Some(x.exp(p, RM, &mut ctx.cc))
+            }
+        }
+        "log" => {
+            if x.is_zero() {
+                Some(INF_NEG)
+            } else if x.is_negative() {
+                Some(NAN)
+            } else if x.is_inf() {
+                Some(INF_POS)
+            } else {
+                Some(x.ln(p, RM, &mut ctx.cc))
+            }
+        }
+        "sin" | "cos" | "tan" => {
+            if x.is_inf() {
+                Some(NAN)
+            } else if cmp_gt(&x.abs(), &bf(1e12, p)) {
+                None
+            } else if name == "tan" {
+                // pole PROXIMITY, not output magnitude
+                let c = x.cos(p, RM, &mut ctx.cc);
+                if cmp_lt(&c.abs(), &ctx.floor) {
+                    ctx.snapped = true;
+                    Some(NAN)
+                } else {
+                    let s = x.sin(p, RM, &mut ctx.cc);
+                    Some(ctx.snap_trig(s.div(&c, p, RM)))
+                }
+            } else if name == "sin" {
+                let v = x.sin(p, RM, &mut ctx.cc);
+                Some(ctx.snap_trig(v))
+            } else {
+                let v = x.cos(p, RM, &mut ctx.cc);
+                Some(ctx.snap_trig(v))
+            }
+        }
+        "asin" | "acos" => {
+            let a = x.abs();
+            if !x.is_inf() && cmp_gt(&a, &one(p)) {
+                let band = a.sub(&one(p), p, RM).abs();
+                if cmp_lt(&band, &ctx.floor) {
+                    None // boundary honesty: indistinguishable from the boundary
+                } else {
+                    Some(NAN)
+                }
+            } else if x.is_inf() {
+                Some(NAN)
+            } else if name == "asin" {
+                Some(x.asin(p, RM, &mut ctx.cc))
+            } else {
+                Some(x.acos(p, RM, &mut ctx.cc))
+            }
+        }
+        "atan" => {
+            if x.is_inf() {
+                let h = ctx.cc.pi(p, RM).div(&small_int(2, p), p, RM);
+                Some(if is_pos(x) { h } else { h.neg() })
+            } else {
+                Some(x.atan(p, RM, &mut ctx.cc))
+            }
+        }
+        "sinh" => {
+            if x.is_inf() {
+                Some(x.clone())
+            } else if !cmp_lt(&x.abs(), &bf(1e5, p)) {
+                None
+            } else {
+                Some(x.sinh(p, RM, &mut ctx.cc))
+            }
+        }
+        "cosh" => {
+            if x.is_inf() {
+                Some(INF_POS)
+            } else if !cmp_lt(&x.abs(), &bf(1e5, p)) {
+                None
+            } else {
+                Some(x.cosh(p, RM, &mut ctx.cc))
+            }
+        }
+        "tanh" => {
+            if x.is_inf() {
+                Some(if is_pos(x) { one(p) } else { one(p).neg() })
+            } else {
+                Some(x.tanh(p, RM, &mut ctx.cc))
+            }
+        }
+        "asinh" => {
+            if x.is_inf() {
+                Some(x.clone())
+            } else {
+                Some(x.asinh(p, RM, &mut ctx.cc))
+            }
+        }
+        "acosh" => {
+            if x.is_inf() {
+                if is_pos(x) {
+                    Some(INF_POS)
+                } else {
+                    Some(NAN)
+                }
+            } else {
+                let band = x.sub(&one(p), p, RM).abs();
+                if cmp_lt(&band, &ctx.floor) {
+                    None // boundary honesty
+                } else if cmp_lt(x, &one(p)) {
+                    Some(NAN)
+                } else {
+                    Some(x.acosh(p, RM, &mut ctx.cc))
+                }
+            }
+        }
+        "atanh" => {
+            if x.is_inf() {
+                Some(NAN)
+            } else {
+                let band = x.abs().sub(&one(p), p, RM).abs();
+                if cmp_lt(&band, &ctx.floor) {
+                    None // boundary honesty (incl written +-1: no literal provenance here
+                         // -- battery variables never bind literals)
+                } else if cmp_gt(&x.abs(), &one(p)) {
+                    Some(NAN)
+                } else {
+                    Some(x.atanh(p, RM, &mut ctx.cc))
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some(v)
+}
+
+fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat>> {
+    let p = ctx.p;
+    if (a.is_nan() || b.is_nan()) && name != "pow" {
+        return Some(Some(NAN));
+    }
+    let v: Option<BigFloat> = match name {
+        "+" => {
+            if a.is_inf() && b.is_inf() && (is_pos(a) != is_pos(b)) {
+                Some(NAN)
+            } else {
+                Some(a.add(b, p, RM))
+            }
+        }
+        "-" => {
+            if a.is_inf() && b.is_inf() && (is_pos(a) == is_pos(b)) {
+                Some(NAN)
+            } else {
+                Some(a.sub(b, p, RM))
+            }
+        }
+        "*" => {
+            if (a.is_zero() && b.is_inf()) || (b.is_zero() && a.is_inf()) {
+                Some(NAN)
+            } else {
+                Some(a.mul(b, p, RM))
+            }
+        }
+        "/" => Some(ct_div(a, b, p)),
+        "pow" => ct_pow(a, b, ctx),
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// Evaluate `tokens` under the CONTRACT semantics at the rung context. Outer `None` =
+/// unevaluable (unknown token: caller fails open); inner `None` = Unresolved at this rung
+/// (the point is skipped, never convicted).
+#[allow(clippy::too_many_arguments)]
+fn ct_node(
+    tokens: &[String],
+    idx: &mut usize,
+    ops: &Operators,
+    var_names: &[String],
+    vals: &[BigFloat],
+    params: &[f64],
+    next_param: &mut usize,
+    ctx: &mut CtCtx,
+) -> Option<Option<BigFloat>> {
+    let tok = tokens.get(*idx)?.clone();
+    *idx += 1;
+    if let Some(arity) = ops.arity_of(&tok) {
+        let Some(a) = ct_node(tokens, idx, ops, var_names, vals, params, next_param, ctx)? else {
+            // Unresolved below: still consume the rest of this operator's tokens so sibling
+            // parsing stays aligned -- simplest is to bail out the whole evaluation.
+            return Some(None);
+        };
+        if arity == 1 {
+            return ct_unary(&tok, &a, ctx);
+        }
+        let Some(b) = ct_node(tokens, idx, ops, var_names, vals, params, next_param, ctx)? else {
+            return Some(None);
+        };
+        return ct_binary(&tok, &a, &b, ctx);
+    }
+    let p = ctx.p;
+    if tok == "<constant>" {
+        let v = *params.get(*next_param)?;
+        *next_param += 1;
+        return Some(Some(BigFloat::from_f64(v, p)));
+    }
+    if let Some(c) = var_names.iter().position(|v| *v == tok) {
+        return Some(Some(vals.get(c)?.clone()));
+    }
+    match tok.as_str() {
+        "np.pi" => Some(Some(ctx.cc.pi(p, RM))),
+        "np.e" => Some(Some(ctx.cc.e(p, RM))),
+        _ => crate::numeric::leaf_value(&tok).map(|v| Some(BigFloat::from_f64(v, p))),
+    }
+}
+
+fn ct_eval(
+    tokens: &[String],
+    ops: &Operators,
+    var_names: &[String],
+    vals: &[BigFloat],
+    params: &[f64],
+    ctx: &mut CtCtx,
+) -> Option<Option<BigFloat>> {
+    let mut idx = 0usize;
+    let mut np = 0usize;
+    let v = ct_node(tokens, &mut idx, ops, var_names, vals, params, &mut np, ctx)?;
+    if v.is_some() && idx != tokens.len() {
+        return None;
+    }
+    Some(v)
+}
+
+/// The value class of one side, for rung-agreement: finite / +inf / -inf / nan. A point
+/// whose CLASS pattern shifts across rungs cannot be judged honestly -- for mpmath the
+/// slash-pair seam flips nan <-> inf between dps 50 and 120; astro-float's rounding leaves
+/// a residue at every rung but flips its SIGN, the same instability in a different suit.
+fn side_class(v: &BigFloat) -> i8 {
+    if v.is_nan() {
+        2
+    } else if v.is_inf() {
+        if is_pos(v) {
+            1
+        } else {
+            -1
+        }
+    } else {
+        0
+    }
+}
+
+/// Point comparison at the contract tolerance (rel 1e-25, floor 1).
+fn ct_compare(l: &BigFloat, r: &BigFloat, p: usize) -> PointCmp {
+    if l.is_nan() && r.is_nan() {
+        return PointCmp::Eq;
+    }
+    if l.is_nan() {
+        return PointCmp::Ext;
+    }
+    if r.is_nan() {
+        return PointCmp::Shrink;
+    }
+    if l.is_inf() || r.is_inf() {
+        let same = l.is_inf() && r.is_inf() && (is_pos(l) == is_pos(r));
+        return if same {
+            PointCmp::Eq
+        } else {
+            PointCmp::InfChange
+        };
+    }
+    let diff = l.sub(r, p, RM).abs();
+    let mut scale = l.abs();
+    if cmp_gt(&r.abs(), &scale) {
+        scale = r.abs();
+    }
+    if cmp_gt(&one(p), &scale) {
+        scale = one(p);
+    }
+    let tol = pow10(-25, p).mul(&scale, p, RM);
+    if cmp_gt(&diff, &tol) {
+        PointCmp::RealChange
+    } else {
+        PointCmp::Eq
+    }
+}
+
+/// The two/three-rung confirmed point verdict:
+/// `(None, snapped)` = the point cannot be judged honestly (Unresolved, or rung
+/// disagreement); otherwise the confirmed class. `snapped` is rung 1's flag. `atoms` is
+/// full-width (aligned with `var_names`); coordinates are re-rendered per rung. Unevaluable
+/// tokens fail OPEN as `(Some(Eq), false)` -- the f64 row comparison still binds upstream.
+pub fn contract_point_verdict(
+    source: &[String],
+    src_params: &[f64],
+    target: &[String],
+    tgt_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    atoms: &[ProbeAtom],
+) -> (Option<PointCmp>, bool) {
+    // A rung's finding = the verdict PLUS both sides' value classes (incl infinity signs):
+    // rung agreement must hold on the whole pattern. mpmath's seam flips nan <-> -inf
+    // between its rungs; astro-float's residue never cancels but flips SIGN across rungs --
+    // both are the same "cannot be judged honestly" instability, and only the full class
+    // pattern catches it under either rounding behaviour.
+    // (outer None = unevaluable; inner None = Unresolved at the rung; bool = snap flag)
+    type RungFinding = Option<(Option<(PointCmp, i8, i8)>, bool)>;
+    let once = |rung: (usize, i32)| -> RungFinding {
+        let (p, dps) = rung;
+        let mut ctx = CtCtx::new(p, dps)?;
+        let vals: Vec<BigFloat> = atoms
+            .iter()
+            .map(|a| render_atom(a, p, &mut ctx.cc))
+            .collect();
+        let l = ct_eval(source, ops, var_names, &vals, src_params, &mut ctx)?;
+        let r = ct_eval(target, ops, var_names, &vals, tgt_params, &mut ctx)?;
+        let v = match (l, r) {
+            (Some(l), Some(r)) => Some((ct_compare(&l, &r, p), side_class(&l), side_class(&r))),
+            _ => None, // Unresolved at this rung
+        };
+        Some((v, ctx.snapped))
+    };
+    let Some((v1, snap1)) = once(CONTRACT_RUNGS[0]) else {
+        return (Some(PointCmp::Eq), false); // unevaluable: fail open
+    };
+    let Some(v1v) = v1 else {
+        return (None, snap1); // rung-1 Unresolved: skip, never convict
+    };
+    if v1v.0 == PointCmp::Eq && !snap1 {
+        return (Some(PointCmp::Eq), false);
+    }
+    let Some((v2, _)) = once(CONTRACT_RUNGS[1]) else {
+        return (Some(PointCmp::Eq), false);
+    };
+    if v2 == Some(v1v) {
+        return (Some(v1v.0), snap1);
+    }
+    if v1v.0 == PointCmp::Eq {
+        // a snapped eq that changes class at rung 2 takes rung 3
+        let Some((v3, _)) = once(CONTRACT_RUNGS[2]) else {
+            return (Some(PointCmp::Eq), false);
+        };
+        return (if v2 == v3 { v2.map(|t| t.0) } else { None }, snap1);
+    }
+    (None, snap1)
+}
+
 fn small_int(n: u64, p: usize) -> BigFloat {
     BigFloat::from_u64(n, p)
 }
@@ -869,5 +1568,93 @@ mod magnitude_probe {
             };
             println!("{label:34} {dt:9.3}s -> {desc}");
         }
+    }
+
+    /// The contract point verdict (`contract_point_verdict`): a differently-spelled exact
+    /// cancellation at an irrational point is a precision ROULETTE (the dps-50 rung
+    /// resolves residue/0 = inf where f64 sees 0/0 = nan) and must come back UNRESOLVED
+    /// (`None` -> the caller rejects); a once-spelled
+    /// cancellation is exact at every precision and reads as a confirmed EXT event
+    /// (tolerated, the ratified null-set-completion class).
+    #[test]
+    fn contract_verdict_separates_seam_from_stable_null_completion() {
+        fn s(v: &[&str]) -> Vec<String> {
+            v.iter().map(|x| x.to_string()).collect()
+        }
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars: Vec<String> = vec!["x0".to_string(), "x1".to_string()];
+        let pt = [ProbeAtom::PiFrac(1, 2), ProbeAtom::PiFrac(-1, 2)];
+        let pow2x = s(&["pow2", "x0"]);
+        // (x^3 + x^2 y)/(x + y) at (pi/2, -pi/2): pow3(x) and pow2(x)*x round APART at the
+        // rungs -> residue/0 = +-inf vs nan: rung disagreement, unresolved.
+        let seam = s(&[
+            "/", "+", "pow3", "x0", "*", "pow2", "x0", "x1", "+", "x0", "x1",
+        ]);
+        let (v, _) = contract_point_verdict(&seam, &[], &pow2x, &[], ops, &vars, &pt);
+        assert_eq!(v, None, "seam must be unresolved");
+        // the minus variant at (pi/2, pi/2) (its own seam points)
+        let seam_minus = s(&[
+            "/", "-", "pow3", "x0", "*", "pow2", "x0", "x1", "-", "x0", "x1",
+        ]);
+        let pt_mm = [ProbeAtom::PiFrac(1, 2), ProbeAtom::PiFrac(1, 2)];
+        let (v, _) = contract_point_verdict(&seam_minus, &[], &pow2x, &[], ops, &vars, &pt_mm);
+        assert_eq!(v, None, "minus-variant seam must be unresolved");
+        // (x+y)^3/(x+y)^2 at the same point: spelled ONCE -> exact 0 at every precision ->
+        // 0/0 = nan stably: a confirmed EXT event (tolerated).
+        let stable = s(&["/", "pow3", "+", "x0", "x1", "pow2", "+", "x0", "x1"]);
+        let tgt = s(&["+", "x0", "x1"]);
+        let (v, _) = contract_point_verdict(&stable, &[], &tgt, &[], ops, &vars, &pt);
+        assert_eq!(v, Some(PointCmp::Ext));
+        // (x^2 - y^2)/(x + y) at (pi/2, -pi/2): pow2(x) and pow2(-x) are the SAME correctly-
+        // rounded square -> exact 0 at every precision -> EXT (a certified 2-1 artifact rule).
+        let even = s(&["/", "-", "pow2", "x0", "pow2", "x1", "+", "x0", "x1"]);
+        let tgt2 = s(&["-", "x0", "x1"]);
+        let (v, _) = contract_point_verdict(&even, &[], &tgt2, &[], ops, &vars, &pt);
+        assert_eq!(v, Some(PointCmp::Ext));
+        // x/x at the exact dyadic 0: 0/0 = nan at every precision -> EXT.
+        let xx = s(&["/", "x0", "x0"]);
+        let one_t = s(&["1"]);
+        let (v, _) = contract_point_verdict(
+            &xx,
+            &[],
+            &one_t,
+            &[],
+            ops,
+            &["x0".to_string()],
+            &[ProbeAtom::Val(0.0)],
+        );
+        assert_eq!(v, Some(PointCmp::Ext));
+        // pow-of-sin at the exact contract point: pow(sin(pi/2), inf) = 1 vs 0 is a confirmed
+        // REAL-CHANGE (clause a) -- sin(pi/2 at the rung) rounds to exactly 1.
+        let powsin = s(&["pow", "sin", "x0", "float(\"inf\")"]);
+        let zero_t = s(&["0"]);
+        let (v, _) = contract_point_verdict(
+            &powsin,
+            &[],
+            &zero_t,
+            &[],
+            ops,
+            &["x0".to_string()],
+            &[ProbeAtom::PiFrac(1, 2)],
+        );
+        assert_eq!(v, Some(PointCmp::RealChange));
+        // sec^2 - tan^2 = 1 at pi/2: the pole-proximity snap fires (the f64 algebra
+        // evaluates a DIFFERENT point there) -- the row must come back snapped, whatever
+        // the class, so the caller must tolerate it (a snapped point is measurement error).
+        let sec = s(&["-", "inv", "pow2", "cos", "x0", "pow2", "tan", "x0"]);
+        let (v, snapped) = contract_point_verdict(
+            &sec,
+            &[],
+            &one_t,
+            &[],
+            ops,
+            &["x0".to_string()],
+            &[ProbeAtom::PiFrac(1, 2)],
+        );
+        assert!(snapped, "pole proximity must flag the snap (got {v:?})");
+        assert_ne!(v, Some(PointCmp::RealChange));
     }
 }
