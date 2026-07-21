@@ -12,17 +12,11 @@
 //! Therefore the PyO3 layer here is deliberately THIN: marshal `list[str]` <-> `Vec<String>`,
 //! hold the compiled engine, and delegate the whole unit to `engine::Engine::simplify`.
 //!
-//! ## Two engine lines (selected per call, NOT per build)
-//! `Engine::simplify(fold)` and the `*_fixed` conversions select the line:
-//!   * `fold = false` + the plain conversions = FAITHFUL `dev_7-3` (byte-identical to the deployed
-//!     simplipy 0.2.15 / git 1fe9b7e; the frozen reference build that downstream training
-//!     pipelines pin for reproducibility).
-//!   * `fold = true` + the `*_fixed` conversions = the IMPROVED ("numeric") line: numeric constant
-//!     folding (incl. `1/0 -> float("inf")`, via the `numeric` module's f64 + libm evaluator) + the
-//!     six conversion-quirk fixes + atomic inf/nan tokens. This is what the shipped package routes.
-//!
-//! Anchors of the form `engine.py@0.2.15:NNNN` cite the removed pure-Python reference
-//! implementation at tag 0.2.15 (commit 1fe9b7e), the faithful-port ground truth.
+//! ## One engine line
+//! The core implements the contract semantics as a single engine line: numeric constant
+//! folding (incl. `1/0 -> float("inf")`, via the `numeric` module's f64 + libm evaluator),
+//! the corrected conversions, and atomic inf/nan tokens. Byte-exact reproduction of the
+//! historical dev_7-3 / v23.0-era behavior is served by installing `simplipy<=0.6.0`.
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -94,14 +88,6 @@ pub(crate) fn test_engine() -> Option<Engine> {
     Some(Engine::from_paths(&cfg, &rules).expect("engine loads"))
 }
 
-/// Engine-id this build faithfully reproduces. Bump (new engine-id) on any quality-shifting
-/// change so prior training results produced against the frozen reference build stay
-/// reproducible against the old id.
-pub const FAITHFUL_ENGINE_ID: &str = "dev_7-3";
-/// simplipy reference the faithful port targets (provenance, surfaced to Python).
-pub const REFERENCE_SIMPLIPY_VERSION: &str = "0.2.15";
-pub const REFERENCE_SIMPLIPY_COMMIT: &str = "1fe9b7e88563368c15063ab726d1468c6bee9869";
-
 /// Opaque, compiled engine handle held on the Python side. Construction (parse config.yaml +
 /// rules.json, build the bucket index + first-operand filter) happens ONCE; `simplify` is the
 /// hot path.
@@ -158,11 +144,8 @@ impl PyEngine {
     /// simplified prefix token list. Defaults mirror the deployed call
     /// (`simplify(skeleton, inplace=True, max_pattern_length=None)`); `inplace` is a Python-shim
     /// concern (the shim mutates the caller's list), so it is NOT a kernel parameter here.
-    /// `fold` selects the engine line: `false` (default) = faithful `dev_7-3`; `true` = the numeric
-    /// line (constant folding woven into the rule recursion, the published improved engine-id). The
-    /// faithful default keeps the frozen-reference parity untouched.
     #[pyo3(signature = (tokens, max_iter=5, max_pattern_length=None, mask_elementary_literals=true,
-                        apply_simplification_rules=true, fold=false))]
+                        apply_simplification_rules=true))]
     fn simplify(
         &self,
         py: Python<'_>,
@@ -171,7 +154,6 @@ impl PyEngine {
         max_pattern_length: Option<usize>,
         mask_elementary_literals: bool,
         apply_simplification_rules: bool,
-        fold: bool,
     ) -> PyResult<Py<PyList>> {
         ensure_well_formed(&self.inner, &tokens)?;
         // Release the GIL for the pure-Rust kernel (parallel callers are not serialized on Python's lock).
@@ -182,57 +164,52 @@ impl PyEngine {
                 max_pattern_length,
                 mask_elementary_literals,
                 apply_simplification_rules,
-                fold,
             )
         });
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Validation entry (NOT the shipped surface): the rule-application sub-unit only. `fold=false`
-    /// = faithful `apply_simplification_rules`; `fold=true` = the numeric line (used by the improved
-    /// differential). Used by the stage-(b) differential vs fresh Python.
-    #[pyo3(signature = (tokens, max_pattern_length=None, fold=false))]
+    /// Validation entry (NOT the shipped surface): the rule-application sub-unit only
+    /// (`apply_simplification_rules`).
+    #[pyo3(signature = (tokens, max_pattern_length=None))]
     fn apply_rules(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_pattern_length: Option<usize>,
-        fold: bool,
     ) -> PyResult<Py<PyList>> {
         ensure_well_formed(&self.inner, &tokens)?;
         let out = py.detach(|| {
             self.inner
-                .apply_simplification_rules(&tokens, max_pattern_length, fold)
+                .apply_simplification_rules(&tokens, max_pattern_length)
         });
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Validation entry (NOT the shipped surface): the term-cancellation sub-unit only -- a faithful
-    /// `cancel_terms(*collect_multiplicities(tokens))`. Used by the differential vs fresh Python
-    /// before the whole `simplify` fixpoint (sort + iterate) is ported. `mpl`-independent.
+    /// Validation entry (NOT the shipped surface): the term-cancellation sub-unit only --
+    /// `cancel_terms(*collect_multiplicities(tokens))`. `mpl`-independent.
     fn cancel_only(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
         ensure_well_formed(&self.inner, &tokens)?;
         let out = py.detach(|| self.inner.cancel_terms(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Validation entry (NOT the shipped surface): the operand-sort sub-unit only -- a faithful
-    /// `sort_operands`. Used by the differential vs fresh Python before the whole `simplify` fixpoint
-    /// compose.
+    /// Validation entry (NOT the shipped surface): the operand-sort sub-unit only --
+    /// `sort_operands`.
     fn sort_only(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
         ensure_well_formed(&self.inner, &tokens)?;
         let out = py.detach(|| self.inner.sort_operands(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `is_valid` (engine.py@0.2.15:354): is the prefix expression syntactically valid?
+    /// `is_valid`: is the prefix expression syntactically valid?
     /// Part of the drop-in-engine surface; the most-called simplipy method on the per-candidate
     /// inference path.
     fn is_valid(&self, py: Python<'_>, tokens: Vec<String>) -> bool {
         py.detach(|| self.inner.is_valid(&tokens))
     }
 
-    /// Faithful port of `prefix_to_infix` (engine.py@0.2.15:409). `power` in {'func','**'} (default 'func');
+    /// `prefix_to_infix`. `power` in {'func','**'} (default 'func');
     /// `realization` toggles realization-name rendering. Raises `ValueError` on a malformed prefix
     /// (mirrors Python). Part of the drop-in-engine surface.
     #[pyo3(signature = (tokens, power="func", realization=false))]
@@ -256,14 +233,14 @@ impl PyEngine {
             .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
-    /// Faithful port of `infix_to_prefix` (engine.py@0.2.15:581). Part of the drop-in-engine surface.
+    /// `infix_to_prefix`. Part of the drop-in-engine surface.
     fn infix_to_prefix(&self, py: Python<'_>, infix_expression: &str) -> PyResult<Py<PyList>> {
         let out = py.detach(|| self.inner.infix_to_prefix(infix_expression));
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `convert_expression` (engine.py@0.2.15:655). Raises `ValueError` where Python raises
-    /// (the exact exception kind differs -- the differential checks failure-parity).
+    /// `convert_expression`. Raises `ValueError` where Python raises
+    /// (the exact exception kind differs; failure-parity, not message text).
     fn convert_expression(&self, py: Python<'_>, prefix_expr: Vec<String>) -> PyResult<Py<PyList>> {
         let out = py
             .detach(|| self.inner.convert_expression(&prefix_expr))
@@ -271,7 +248,7 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `parse` (engine.py@0.2.15:852). `convert_expression`/`mask_numbers` match the Python
+    /// `parse`. `convert_expression`/`mask_numbers` match the Python
     /// defaults (True/False). Closes the `simplify(str)` + canonicalization path.
     #[pyo3(signature = (infix_expression, convert_expression=true, mask_numbers=false))]
     fn parse(
@@ -290,70 +267,7 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Corrected (deliberate-improvement) variants: the conversion-quirk fixes. NOT `dev_7-3`; these
-    /// mirror the Python `fix/conversion-quirks` branch and back a future fixed engine-id.
-    #[pyo3(signature = (tokens, power="func", realization=false))]
-    fn prefix_to_infix_fixed(
-        &self,
-        py: Python<'_>,
-        tokens: Vec<String>,
-        power: &str,
-        realization: bool,
-    ) -> PyResult<String> {
-        let power_mode = match power {
-            "func" => convert::Power::Func,
-            "**" => convert::Power::StarStar,
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "power must be 'func' or '**', got {other:?}"
-                )))
-            }
-        };
-        py.detach(|| {
-            self.inner
-                .prefix_to_infix_fixed(&tokens, power_mode, realization)
-        })
-        .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    fn infix_to_prefix_fixed(
-        &self,
-        py: Python<'_>,
-        infix_expression: &str,
-    ) -> PyResult<Py<PyList>> {
-        let out = py.detach(|| self.inner.infix_to_prefix_fixed(infix_expression));
-        Ok(PyList::new(py, out)?.into())
-    }
-
-    fn convert_expression_fixed(
-        &self,
-        py: Python<'_>,
-        prefix_expr: Vec<String>,
-    ) -> PyResult<Py<PyList>> {
-        let out = py
-            .detach(|| self.inner.convert_expression_fixed(&prefix_expr))
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        Ok(PyList::new(py, out)?.into())
-    }
-
-    #[pyo3(signature = (infix_expression, convert_expression=true, mask_numbers=false))]
-    fn parse_fixed(
-        &self,
-        py: Python<'_>,
-        infix_expression: &str,
-        convert_expression: bool,
-        mask_numbers: bool,
-    ) -> PyResult<Py<PyList>> {
-        let out = py
-            .detach(|| {
-                self.inner
-                    .parse_fixed(infix_expression, convert_expression, mask_numbers)
-            })
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        Ok(PyList::new(py, out)?.into())
-    }
-
-    /// Faithful port of `operators_to_realizations` (engine.py@0.2.15:2547).
+    /// `operators_to_realizations`.
     fn operators_to_realizations(
         &self,
         py: Python<'_>,
@@ -363,7 +277,7 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Faithful port of `realizations_to_operators` (engine.py@0.2.15:2566).
+    /// `realizations_to_operators`.
     fn realizations_to_operators(
         &self,
         py: Python<'_>,
@@ -373,7 +287,7 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// Native numeric constant folding (the `numeric` line). Returns the result token, or `None` if
+    /// Native numeric constant folding. Returns the result token, or `None` if
     /// the subtree cannot be folded (complex result / unparseable leaf / unknown operator) -- matching
     /// Python `_evaluate_constant_subtree`. Validation entry for the differential.
     fn evaluate_constant_subtree(&self, py: Python<'_>, tokens: Vec<String>) -> Option<String> {
@@ -416,7 +330,7 @@ impl PyEngine {
         crate::eval::allclose(&a, &b, rtol, atol)
     }
 
-    /// OFFLINE miner: the no-constant equivalence test (engine.py@0.2.15:2433-2452). The candidate
+    /// OFFLINE miner: the no-constant equivalence test. The candidate
     /// must be constant-free; the source's constants are resampled over `challenges` rounds
     /// and every sign combination, requiring `allclose(source, candidate)` every time.
     /// `min_informative=None` resolves to `n_rows / 8`: certification requires that many
@@ -565,7 +479,7 @@ impl PyEngine {
         )
     }
 
-    /// OFFLINE miner: the wildcard-multiplicity rule guard (utils.py@0.2.15:938).
+    /// OFFLINE miner: the wildcard-multiplicity rule guard.
     #[staticmethod]
     fn violates_wildcard_multiplicity(lhs: Vec<String>, rhs: Vec<String>) -> bool {
         crate::worker::violates_wildcard_multiplicity(&lhs, &rhs)
@@ -734,15 +648,14 @@ impl PyEngine {
     /// (in the given asset order) by removing it from the Rust rule map + re-simplifying;
     /// returns the pruned `lhs` list. Must run against the compiled rules `simplify` actually
     /// uses (pruning a divergent rule store over-prunes). Takes `&mut self`.
-    #[pyo3(signature = (ordered_lhs, mask_elementary_literals=false, fold=true))]
+    #[pyo3(signature = (ordered_lhs, mask_elementary_literals=false))]
     fn prune_explicit(
         &mut self,
         ordered_lhs: Vec<Vec<String>>,
         mask_elementary_literals: bool,
-        fold: bool,
     ) -> Vec<Vec<String>> {
         self.inner
-            .prune_explicit(&ordered_lhs, mask_elementary_literals, fold)
+            .prune_explicit(&ordered_lhs, mask_elementary_literals)
     }
 
     /// OFFLINE miner: native `exist_constants_that_fit` for AFFINE-in-params candidates -- a
@@ -805,9 +718,6 @@ impl PyEngine {
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
     m.add_class::<PyCandidateLibrary>()?;
-    m.add("FAITHFUL_ENGINE_ID", FAITHFUL_ENGINE_ID)?;
-    m.add("REFERENCE_SIMPLIPY_VERSION", REFERENCE_SIMPLIPY_VERSION)?;
-    m.add("REFERENCE_SIMPLIPY_COMMIT", REFERENCE_SIMPLIPY_COMMIT)?;
     m.add("__build__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

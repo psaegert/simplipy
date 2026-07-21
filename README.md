@@ -86,7 +86,9 @@ rule-normal subtrees, and runs on interned token ids (~20× fewer allocations pe
 all at byte-identical outputs. On a 65,536-expression training-prior benchmark, large
 certificate-bearing rulesets simplify ~59× faster than 0.5.0 and certificate-free
 rulesets ~2.3× faster; see the [CHANGELOG](https://github.com/psaegert/simplipy/blob/main/CHANGELOG.md)
-for details. The comparison below dates from the 0.3.0 Rust cutover:
+for details. As of 0.7.0 there is a single engine line; to reproduce the historical
+dev_7-3 / v23.0-era behavior byte-for-byte, install `simplipy<=0.6.0`. The comparison
+below dates from the 0.3.0 Rust cutover:
 
 <table>
   <tr>
@@ -140,7 +142,7 @@ pytest tests --cov src --cov-report html -m "not integration"
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2026,
     publisher = {GitHub},
-    version = {0.6.0},
+    version = {0.7.0},
     url = {https://github.com/psaegert/simplipy}
 }
 ```

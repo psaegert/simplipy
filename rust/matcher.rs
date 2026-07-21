@@ -41,7 +41,7 @@ fn is_variable_leaf(node: &Node, view: &TokenView) -> bool {
     }
 }
 
-/// `match_pattern_with_cert` is the faithful port of `match_pattern` (utils.py@0.2.15:800) plus a
+/// `match_pattern_with_cert` is the port of `match_pattern` plus a
 /// `!`-sort certifier: it matches a query subtree `tree` against a rule LHS `pattern`; on
 /// success `mapping` binds each placeholder id to the matched query subtree (borrowed from `tree`).
 /// The bare-string-operand early-return branch in the Python source is DEAD for
@@ -159,7 +159,7 @@ fn match_pattern_impl<'a>(
     }
 }
 
-/// Faithful port of `apply_mapping` (utils.py@0.2.15:762): substitute each placeholder leaf (`_N`) in the
+/// Port of `apply_mapping`: substitute each placeholder leaf (`_N`) in the
 /// replacement template with its bound subtree, returning a fresh tree. Concrete leaves and operator
 /// structure are copied. A placeholder with no binding panics (mirrors Python's `KeyError`); the
 /// wildcard-multiplicity invariant guarantees RHS placeholders are a subset of bound LHS ones.

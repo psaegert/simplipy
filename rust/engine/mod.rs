@@ -1,6 +1,5 @@
 //! The `Engine`: the whole-unit simplify kernel -- the Rust analogue of the removed pure-Python
-//! `SimpliPyEngine.simplify` (engine.py@0.2.15:1770) and its callees, ported as ONE FFI unit (see lib.rs).
-//! Faithful target: dev_7-3 @ simplipy 0.2.15 / 1fe9b7e, skeleton inputs, mpl in {4, 7}.
+//! `SimpliPyEngine.simplify` and its callees, ported as ONE FFI unit (see lib.rs).
 //! The kernel runs on interned `Tok` ids (see `crate::tokens`); the string boundary is the public
 //! `&[String]` methods (intern once at entry, resolve once at exit). Submodules: [`stats`]
 //! (hot-path counters), `memo` (cache/ctx state), `simplify` (the kernel), `miner` (the OFFLINE
@@ -107,7 +106,7 @@ impl Engine {
             operators,
             rules: compiled,
             tokens,
-            engine_id: crate::FAITHFUL_ENGINE_ID.to_string(),
+            engine_id: concat!("simplipy-", env!("CARGO_PKG_VERSION")).to_string(),
             bang_cache: std::sync::Mutex::new(BangCache::new()),
         })
     }
@@ -152,7 +151,7 @@ impl Engine {
         &self.tokens
     }
 
-    /// Faithful port of `is_valid` (engine.py@0.2.15:354): is the prefix expression syntactically valid
+    /// `is_valid`: is the prefix expression syntactically valid
     /// (every operator has exactly its arity of operands, a single root remains)? Uses the plain
     /// `operator_arity` (NOT the sort `_compat` map, so `**` is treated as a leaf here, as in Python).
     /// The reversed scan only ever needs the stack DEPTH (the pushed tokens are never inspected).
@@ -190,9 +189,8 @@ impl Engine {
         depth == 1
     }
 
-    /// Faithful port of the term-cancellation unit `cancel_terms(*collect_multiplicities(x))`
-    /// (engine.py@0.2.15:1290 + 1410), as invoked once per `simplify` fixpoint iteration. Validated in
-    /// isolation against fresh Python before the sort + fixpoint compose. Cancel is
+    /// The term-cancellation unit `cancel_terms(*collect_multiplicities(x))`,
+    /// as invoked once per `simplify` fixpoint iteration. Cancel is
     /// `max_pattern_length`-independent (no `mpl` argument).
     pub fn cancel_terms(&self, expression: &[String]) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len());
@@ -201,9 +199,9 @@ impl Engine {
         self.resolve_seq(&out, &ctx)
     }
 
-    /// Faithful port of `sort_operands` (engine.py@0.2.15:1636) + `operand_key` (2512): the canonical
+    /// `sort_operands` + `operand_key`: the canonical
     /// commutative-operand ordering, the final stage of the `simplify` fixpoint (runs once, after the
-    /// loop). Validated in isolation against fresh Python before the whole-unit compose.
+    /// loop).
     pub fn sort_operands(&self, expression: &[String]) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(expression, &ctx);
@@ -211,47 +209,37 @@ impl Engine {
         self.resolve_seq(&out, &ctx)
     }
 
-    /// Faithful port of `prefix_to_infix` (engine.py@0.2.15:409). `Err` mirrors Python's `ValueError` on a
-    /// malformed prefix (too few / too many operands).
+    /// `prefix_to_infix`: render a prefix token list to infix. `Err` mirrors Python's `ValueError`
+    /// on a malformed prefix (too few / too many operands). No equal-precedence right-operand
+    /// flattening, coordinated with `infix_to_prefix`/`parse` so prefix<->infix round-trips.
     pub fn prefix_to_infix(
         &self,
         tokens: &[String],
         power: crate::convert::Power,
         realization: bool,
     ) -> Result<String, String> {
-        crate::convert::prefix_to_infix(tokens, &self.operators, power, realization, false)
+        crate::convert::prefix_to_infix(tokens, &self.operators, power, realization)
     }
 
-    /// Corrected (`fixed`) render: the #5 render half (no equal-precedence right-operand flattening),
-    /// coordinated with `infix_to_prefix_fixed`/`parse_fixed` so prefix<->infix round-trips.
-    pub fn prefix_to_infix_fixed(
-        &self,
-        tokens: &[String],
-        power: crate::convert::Power,
-        realization: bool,
-    ) -> Result<String, String> {
-        crate::convert::prefix_to_infix(tokens, &self.operators, power, realization, true)
-    }
-
-    /// Faithful port of `infix_to_prefix` (engine.py@0.2.15:581): infix string -> prefix token list via a
+    /// `infix_to_prefix`: infix string -> prefix token list via a
     /// right-to-left shunting-yard. Never raises (matches Python on degenerate inputs).
     pub fn infix_to_prefix(&self, infix_expression: &str) -> Vec<String> {
-        crate::convert::infix_to_prefix(infix_expression, &self.operators, false)
+        crate::convert::infix_to_prefix(infix_expression, &self.operators)
     }
 
-    /// Faithful port of `convert_expression` (engine.py@0.2.15:655). `Err` mirrors a Python raise (raw
-    /// unconfigured `powN` KeyError; the dead float-division `int()` ValueError).
+    /// `convert_expression`: normalize into the engine's internal form. `Err` mirrors a Python
+    /// raise (the dead float-division `int()` ValueError).
     pub fn convert_expression(&self, prefix_expr: &[String]) -> Result<Vec<String>, String> {
-        crate::convert::convert_expression(prefix_expr, &self.operators, false)
+        crate::convert::convert_expression(prefix_expr, &self.operators)
     }
 
-    /// Native f64 numeric constant folding (the `numeric` line): evaluate an all-numeric prefix
+    /// Native f64 numeric constant folding: evaluate an all-numeric prefix
     /// subtree to a result token, or `None` if unfoldable. Mirrors `_evaluate_constant_subtree`.
     pub fn evaluate_constant_subtree(&self, tokens: &[String]) -> Option<String> {
         crate::numeric::evaluate_constant_subtree(tokens, &self.operators)
     }
 
-    /// Faithful port of `parse` (engine.py@0.2.15:852): infix string -> standardized prefix expression
+    /// `parse`: infix string -> standardized prefix expression
     /// (infix_to_prefix -> convert_expression -> numbers_to_constant -> remove_pow1).
     pub fn parse(
         &self,
@@ -259,43 +247,10 @@ impl Engine {
         convert: bool,
         mask_numbers: bool,
     ) -> Result<Vec<String>, String> {
-        crate::convert::parse(
-            infix_expression,
-            &self.operators,
-            convert,
-            mask_numbers,
-            false,
-        )
+        crate::convert::parse(infix_expression, &self.operators, convert, mask_numbers)
     }
 
-    /// Corrected (deliberate-improvement) variants of the conversion surface: the conversion-quirk
-    /// fixes (#1 fractional power preserved, #2 `x**0`->`1`, #3 neg-of-literal toggles one minus,
-    /// #4 `^` parses unary-minus like `**`, #6 raw `powN` no KeyError). NOT `dev_7-3` -- these back a
-    /// future fixed engine-id (mirror of the Python `fix/conversion-quirks` branch).
-    pub fn infix_to_prefix_fixed(&self, infix_expression: &str) -> Vec<String> {
-        crate::convert::infix_to_prefix(infix_expression, &self.operators, true)
-    }
-
-    pub fn convert_expression_fixed(&self, prefix_expr: &[String]) -> Result<Vec<String>, String> {
-        crate::convert::convert_expression(prefix_expr, &self.operators, true)
-    }
-
-    pub fn parse_fixed(
-        &self,
-        infix_expression: &str,
-        convert: bool,
-        mask_numbers: bool,
-    ) -> Result<Vec<String>, String> {
-        crate::convert::parse(
-            infix_expression,
-            &self.operators,
-            convert,
-            mask_numbers,
-            true,
-        )
-    }
-
-    /// Faithful port of `operators_to_realizations` (engine.py@0.2.15:2547): map each operator NAME to its
+    /// `operators_to_realizations`: map each operator NAME to its
     /// realization (`sin` -> `simplipy.operators.sin`, `+` -> `+`); non-operator tokens are kept.
     pub fn operators_to_realizations(&self, expression: &[String]) -> Vec<String> {
         expression
@@ -310,7 +265,7 @@ impl Engine {
             .collect()
     }
 
-    /// Faithful port of `realizations_to_operators` (engine.py@0.2.15:2566): the inverse map (realization ->
+    /// `realizations_to_operators`: the inverse map (realization ->
     /// operator name); tokens not in the map are kept.
     pub fn realizations_to_operators(&self, expression: &[String]) -> Vec<String> {
         expression

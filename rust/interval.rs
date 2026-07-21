@@ -1084,14 +1084,41 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
         z.merge_pt(1.0);
         return z;
     }
-    // base is a +-inf LITERAL: (+-inf)^y = +inf (y>0), 0 (y<0)
+    // base is a +-inf LITERAL. (+inf)^y = +inf (y>0), 0 (y<0). A -inf base follows the
+    // aligned real semantics: defined only at integer exponents -- a const integer k gives
+    // +-inf by parity (k>0) or 0 (k<0); a const non-integer gives nan; a CONTINUUM exponent
+    // is non-integer a.e. -> nan (null-lattice contributions dropped, the same convention as
+    // the negative-finite-const-base branch below). Infinite exponents keep the ratified
+    // magnitude-step rows handled in the b-infinite branches above.
     if (a.pinf || a.ninf) && !a.has_fin {
-        if b.has_fin {
-            if b.hi > 0.0 {
-                r.pinf = true;
+        if a.pinf {
+            if b.has_fin {
+                if b.hi > 0.0 {
+                    r.pinf = true;
+                }
+                if b.lo < 0.0 {
+                    r.merge_pt(0.0);
+                }
             }
-            if b.lo < 0.0 {
-                r.merge_pt(0.0);
+        }
+        if a.ninf {
+            if b.is_const() {
+                let k = b.lo;
+                if k.is_finite() && k.fract() == 0.0 {
+                    if k > 0.0 {
+                        if (k as i64) % 2 == 0 {
+                            r.pinf = true;
+                        } else {
+                            r.ninf = true;
+                        }
+                    } else if k < 0.0 {
+                        r.merge_pt(0.0);
+                    }
+                } else {
+                    r.nan = true;
+                }
+            } else if b.has_fin {
+                r.nan = true;
             }
         }
         if b.pinf {
@@ -2440,5 +2467,60 @@ mod tests {
             defined_measure_p(&s(&["pow1_2", "pow", "<constant>", "x0"]), &[2.0], ops).unwrap()
                 > 0.0
         );
+    }
+}
+
+#[cfg(test)]
+mod aligned_pow_interval_tests {
+    use super::*;
+
+    fn ninf_base() -> Vs {
+        let mut v = Vs::empty();
+        v.ninf = true;
+        v
+    }
+
+    fn pt(x: f64) -> Vs {
+        let mut v = Vs::empty();
+        v.merge_pt(x);
+        v
+    }
+
+    fn range(lo: f64, hi: f64) -> Vs {
+        let mut v = Vs::empty();
+        v.has_fin = true;
+        v.lo = lo;
+        v.hi = hi;
+        v
+    }
+
+    /// The aligned -inf-base rows: nan for non-integer / continuum exponents, parity for
+    /// const integers, magnitude-step for infinite exponents; +inf base unchanged.
+    #[test]
+    fn neg_inf_base_rows() {
+        let r = b_pow(&ninf_base(), &pt(0.25));
+        assert!(r.nan && !r.pinf && !r.ninf && !r.has_fin);
+        let r = b_pow(&ninf_base(), &pt(2.0));
+        assert!(r.pinf && !r.nan && !r.ninf);
+        let r = b_pow(&ninf_base(), &pt(3.0));
+        assert!(r.ninf && !r.nan && !r.pinf);
+        let r = b_pow(&ninf_base(), &pt(-2.0));
+        assert!(r.has_fin && r.lo == 0.0 && r.hi == 0.0 && !r.nan);
+        let r = b_pow(&ninf_base(), &range(0.1, 5.0));
+        assert!(r.nan && !r.pinf && !r.ninf);
+        // magnitude-step at infinite exponents (ratified): |t| > 1
+        let mut binf = Vs::empty();
+        binf.pinf = true;
+        let r = b_pow(&ninf_base(), &binf);
+        assert!(r.pinf && !r.nan);
+        let mut bninf = Vs::empty();
+        bninf.ninf = true;
+        let r = b_pow(&ninf_base(), &bninf);
+        assert!(r.has_fin && r.lo == 0.0 && r.hi == 0.0);
+        // +inf base: unchanged convention
+        let mut pinf_base = Vs::empty();
+        pinf_base.pinf = true;
+        let r = b_pow(&pinf_base, &pt(0.25));
+        assert!(r.pinf && !r.nan);
     }
 }

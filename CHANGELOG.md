@@ -1,6 +1,31 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.7.0 (unreleased)
+
+Real-semantics pow alignment and the removal of the faithful dev_7-3 reproduction line:
+the package now ships ONE engine line.
+
+### Changed
+- **Pow alignment (real semantics)**: `pow` at a `-inf` base with a finite non-integer
+  exponent now evaluates to NaN (real semantics) across the constant folder, the operator
+  realizations, and the interval engine. Magnitude-step cells at infinite exponents are
+  unchanged.
+- **`engine_id` now reports the package version** (e.g. `simplipy-0.7.0`) instead of the
+  frozen reference id `dev_7-3`, so provenance records identify the exact engine build.
+
+### Removed
+- **BREAKING: the faithful dev_7-3 reproduction line is removed.** The `fold` parameter of
+  `_core.Engine.simplify` / `apply_rules` / `prune_explicit` is gone (the numeric
+  constant-folding behavior is now the only one), the legacy quirk-preserving conversion
+  variants are gone (the corrected conversions are now exposed under the plain
+  `prefix_to_infix` / `infix_to_prefix` / `convert_expression` / `parse` names, which is
+  what the Python API always routed), and the frozen byte-identical-to-0.2.15 parity
+  fixtures and reference constants (`FAITHFUL_ENGINE_ID`, `REFERENCE_SIMPLIPY_VERSION`,
+  `REFERENCE_SIMPLIPY_COMMIT`) are gone. The parity regression test is re-baselined
+  against the 0.7.0 aligned engine line. To reproduce v23.0/dev_7-3-era behavior
+  byte-for-byte, install `simplipy<=0.6.0`.
+
+## 0.6.0
 
 A performance overhaul of the simplify hot path (byte-identical outputs), sorted rule
 placeholders with match-time certificates, ruleset pruning and observability tools, and

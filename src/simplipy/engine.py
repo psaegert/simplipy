@@ -212,12 +212,12 @@ class SimpliPyEngine:
         # The redundancy test removes each explicit `lhs` from the RUST rule set (the compiled
         # rules `simplify` actually uses): `_core.prune_explicit` re-simplifies with the single
         # rule removed and keeps it removed iff the transformation is still derivable, serially,
-        # in the deployed config (fold=True, mask_elementary_literals=False).
+        # in the deployed config (mask_elementary_literals=False).
         explicit_lhs = [
             list(lhs) for lhs, _rhs in self.simplification_rules
             if not any(_WILDCARD_RE.match(t) for t in lhs)
         ]
-        pruned_lhs = self._core.prune_explicit(explicit_lhs, False, True)
+        pruned_lhs = self._core.prune_explicit(explicit_lhs, False)
         pruned_set = {tuple(lhs) for lhs in pruned_lhs}
         if pruned_set:
             self.simplification_rules = [
@@ -281,7 +281,7 @@ class SimpliPyEngine:
 
         def covered(core: Any, lhs: tuple[str, ...], rhs: tuple[str, ...]) -> bool:
             return all(
-                len(core.simplify(variant_lhs, 5, None, True, True, fold=True)) <= len(variant_rhs)
+                len(core.simplify(variant_lhs, 5, None, True, True)) <= len(variant_rhs)
                 for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
 
         kept = set(full)
@@ -526,7 +526,7 @@ class SimpliPyEngine:
         ValueError
             If the provided tokens do not form a well-formed prefix expression.
         """
-        return self._core.prefix_to_infix_fixed(list(tokens), power, realization)
+        return self._core.prefix_to_infix(list(tokens), power, realization)
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
         """Converts an infix expression string to prefix notation.
@@ -545,7 +545,7 @@ class SimpliPyEngine:
             A list of tokens representing the expression in prefix notation.
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
-        return self._core.infix_to_prefix_fixed(infix_expression)
+        return self._core.infix_to_prefix(infix_expression)
 
     def convert_expression(self, prefix_expr: list[str]) -> list[str]:
         """Normalizes an expression into the engine's standard internal format.
@@ -568,7 +568,7 @@ class SimpliPyEngine:
         list[str]
             The normalized prefix expression.
         """
-        return self._core.convert_expression_fixed(list(prefix_expr))
+        return self._core.convert_expression(list(prefix_expr))
 
     def parse(
             self,
@@ -600,7 +600,7 @@ class SimpliPyEngine:
             enabled), and `remove_pow1` cleanup.
         """
 
-        return self._core.parse_fixed(infix_expression, convert_expression, mask_numbers)
+        return self._core.parse(infix_expression, convert_expression, mask_numbers)
 
     def simplify(
             self,
@@ -652,10 +652,9 @@ class SimpliPyEngine:
         pure-Python engine are gone.
         """
         # Normalize the input to a prefix token list (per type), then ONE core call, then
-        # denormalize back to the input type. `fold=True` selects the numeric engine line
-        # (constant folding as a post-rule fallback), the shipped default.
+        # denormalize back to the input type.
         if isinstance(expression, str):
-            tokens = self._core.parse_fixed(expression, True, False)
+            tokens = self._core.parse(expression, True, False)
         elif isinstance(expression, np.ndarray):
             _validate_ndarray_input(expression, inplace)
             tokens = expression.tolist()
@@ -663,10 +662,10 @@ class SimpliPyEngine:
             tokens = list(expression)
 
         out = self._core.simplify(tokens, max_iter, max_pattern_length,
-                                  mask_elementary_literals, apply_simplification_rules, fold=True)
+                                  mask_elementary_literals, apply_simplification_rules)
 
         if isinstance(expression, str):
-            return self._core.prefix_to_infix_fixed(out, '**', False)
+            return self._core.prefix_to_infix(out, '**', False)
         if isinstance(expression, np.ndarray):
             # Re-infer the string WIDTH from the result, keeping only the input dtype KIND: a fold
             # can emit a token wider than any input token (e.g. `1/0 -> float("inf")`), and a fixed

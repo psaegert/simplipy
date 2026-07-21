@@ -1,5 +1,5 @@
 //! Constant-fitting for the OFFLINE rule miner -- the native replacement for
-//! `exist_constants_that_fit` (engine.py@0.2.15:2272), which called `scipy.optimize.curve_fit` (whose
+//! `exist_constants_that_fit`, which called `scipy.optimize.curve_fit` (whose
 //! cost is dominated by scipy/MINPACK/Python overhead, not math). The key lever: many candidates
 //! are AFFINE in their `<constant>`s, for which the best fit is a single CLOSED-FORM
 //! least-squares solve -- no iteration, no random `p0`, no retries, and a DETERMINISTIC

@@ -1,9 +1,8 @@
 //! Rule storage, compilation, matching + the (length, root_operator) bucket index with the
 //! first-operand-symbol FILTER.
 //!
-//! Mirrors `compile_rules` (engine.py@0.2.15:189), `construct_rule_patterns` (engine.py@0.2.15:936),
-//! `apply_rules_top_down` (engine.py@0.2.15:1025), the pattern matcher `match_pattern_with_cert`
-//! (port of utils.py@0.2.15:800), `apply_mapping` (utils.py@0.2.15:762).
+//! Mirrors `compile_rules`, `construct_rule_patterns`, `apply_rules_top_down`, the pattern
+//! matcher `match_pattern_with_cert`, and `apply_mapping`.
 //!
 //! `deduplicate_rules` is a VERIFIED NO-OP on the dev_7-3 rules.json (114k -> 114k, identical
 //! order + tokens), so the rules are consumed directly; no remap/dedup port is needed. The
@@ -110,7 +109,7 @@ fn build_operand_index(bucket: &[Rule], table: &TokenTable) -> OperandIndex {
 }
 
 impl CompiledRules {
-    /// Faithful port of `compile_rules` + `construct_rule_patterns` (engine.py@0.2.15:189/936). Consumes the
+    /// Port of `compile_rules` + `construct_rule_patterns`. Consumes the
     /// raw (lhs, rhs) prefix pairs from rules.json (dedup is a verified no-op). A rule is a pattern
     /// iff any lhs token matches `^_\d+$`; pattern rules bucket by (len(lhs), lhs[0]) in asset order
     /// (Python's group-by-op + stable-sort-by-len nets to the same per-bucket order). Each pattern

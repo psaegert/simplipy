@@ -2,17 +2,11 @@
 //! `convert_expression`, `parse`. These let flash-ansr swap the whole `simplipy_engine` object for
 //! the Rust port (it calls `is_valid` / `prefix_to_infix` / `infix_to_prefix` / `parse` on the engine
 //! OBJECT), not just route `.simplify`.
-//!
-//! Faithful target: dev_7-3 @ simplipy 0.2.15 / tag c84741f. Every function is byte-identical
-//! tag<->HEAD (it sits outside the operand-index regions), so the tag IS the parity reference.
-//!
-//! Characterization provenance: the trap maps + the Python-validated adversarial inputs live in
-//! `benchmarks/results/` and `corpus/_m2_adversarial.json`. Trap ids (T1..) below reference them.
 
 use crate::operators::{pow1_power, pow_power, Operators};
 use crate::utils::is_numeric_string;
 
-/// How `prefix_to_infix` renders power operators (engine.py@0.2.15:409 `power` param).
+/// How `prefix_to_infix` renders power operators (the `power` parameter).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Power {
     /// `'func'`: keep engine names (`pow(a, b)`, `pow2(x)`). The DEFAULT and dominant deployment mode.
@@ -21,7 +15,7 @@ pub enum Power {
     StarStar,
 }
 
-/// `op_associativity` (engine.py@0.2.15:442-449): a LOCAL hardcoded map, NOT from config. Absent operators
+/// `op_associativity`: a LOCAL hardcoded map, NOT from config. Absent operators
 /// default to `'left'`. Only `+,-,*,/` (left) and `**,pow` (right) appear.
 fn associativity(op: &str) -> &'static str {
     match op {
@@ -30,99 +24,77 @@ fn associativity(op: &str) -> &'static str {
     }
 }
 
-/// `right_allows_flatten` (engine.py@0.2.15:457-466): a right operand of EQUAL precedence may omit parens
-/// only when `child_root` is in `flatten_map[parent_op]` (`{'+':{'+','-'}, '*':{'*','/'}}`). A `None`
-/// child root (a terminal) trivially allows flatten (459-460), though that path is unreachable in the
-/// equal-precedence test (a terminal has precedence inf, never == a finite parent precedence).
-fn right_allows_flatten(parent_op: &str, child_root: Option<&str>, fixed: bool) -> bool {
-    let child_root = match child_root {
-        None => return true,
-        Some(r) => r,
-    };
-    if fixed {
-        // FIX (#5, render half): disable flattening so equal-precedence right operands keep their
-        // parens; paired with the left-assoc parse this preserves prefix<->infix round-trip identity.
-        return false;
-    }
-    match parent_op {
-        "+" => child_root == "+" || child_root == "-",
-        "*" => child_root == "*" || child_root == "/",
-        _ => false, // '-' and '/' as PARENT are ABSENT -> never flatten the right operand (T5)
-    }
-}
-
-/// A render-stack element (engine.py@0.2.15:455): `(rendered_str, precedence, root_operator)`.
+/// A render-stack element: `(rendered_str, precedence, root_operator)`.
 type Item = (String, f64, Option<String>);
 
-/// Faithful port of `prefix_to_infix` (engine.py@0.2.15:409-579). Renders a prefix token list to an infix
+/// `prefix_to_infix`: renders a prefix token list to an infix
 /// string with minimal parentheses. Returns `Err` where Python raises `ValueError` (malformed prefix:
-/// too few / too many operands) -- the FFI maps that to a Python `ValueError`; the differential checks
-/// failure-PARITY, not message text.
+/// too few / too many operands) -- the FFI maps that to a Python `ValueError`.
 ///
-/// The trap-critical points (all from the characterization, all covered by `_m2_adversarial.json`):
-///  * precedence is f64 (`neg`=2.5 sits strictly between `*`=2 and `pow`=3) -- T3.
+/// The contract-critical points:
+///  * precedence is f64 (`neg`=2.5 sits strictly between `*`=2 and `pow`=3).
 ///  * THREE distinct unary comparison operators: `neg` strict `<`, `inv` `<=`, `pow{N}`-under-`**`
-///    `<=` -- T2. Do not unify them.
-///  * `inv` PUSHES `op_precedence['/']` (=2) as its node precedence, not its own 4 -- T4.
+///    `<=`. Do not unify them.
+///  * `inv` PUSHES `op_precedence['/']` (=2) as its node precedence, not its own 4.
 ///  * under `realization=True`, a realization containing `'.'` renders pure func-form and PREEMPTS the
-///    neg/inv/pow special-cases (so only `+,-,*` are ever infix) -- T1; checked BEFORE `power`.
-///  * `'-'`/`'/'` as a parent never flatten an equal-precedence right operand -- T5.
-///  * spacing is load-bearing: `a + b` (spaces) vs `x**2` / `-x` / `1/x` (no spaces) -- T7/T8.
+///    neg/inv/pow special-cases (so only `+,-,*` are ever infix); checked BEFORE `power`.
+///  * an equal-precedence right operand always keeps its parens (no flattening), coordinated with
+///    the associativity-respecting `infix_to_prefix` so prefix<->infix round-trips.
+///  * spacing is load-bearing: `a + b` (spaces) vs `x**2` / `-x` / `1/x` (no spaces).
 pub fn prefix_to_infix(
     tokens: &[String],
     ops: &Operators,
     power: Power,
     realization: bool,
-    fixed: bool,
 ) -> Result<String, String> {
     if tokens.is_empty() {
-        return Ok(String::new()); // engine.py@0.2.15:436-437
+        return Ok(String::new());
     }
 
-    const INF: f64 = f64::INFINITY; // FUNC_PRECEDENCE = TERMINAL_PRECEDENCE (451-452)
+    const INF: f64 = f64::INFINITY; // FUNC_PRECEDENCE = TERMINAL_PRECEDENCE
     let mut stack: Vec<Item> = Vec::with_capacity(tokens.len());
 
     for token in tokens.iter().rev() {
-        // operator = realization_to_operator.get(token, token) (469): an already-realized input token
-        // (e.g. 'simplipy.operators.sin') maps back to canonical first (T12).
+        // operator = realization_to_operator.get(token, token): an already-realized input token
+        // (e.g. 'simplipy.operators.sin') maps back to canonical first.
         let operator: &str = ops
             .realization_to_operator
             .get(token)
             .map(|s| s.as_str())
             .unwrap_or(token);
-        // canonical_operator = operator_aliases.get(operator, operator) (470).
+        // canonical_operator = operator_aliases.get(operator, operator).
         let canonical: &str = ops
             .operator_aliases
             .get(operator)
             .map(|s| s.as_str())
             .unwrap_or(operator);
 
-        // membership (472-476): 3-way OR.
+        // membership: 3-way OR.
         let is_op = ops.is_operator_token(canonical)
             || ops.operator_aliases.contains_key(operator)
             || ops.operator_arity_compat.contains_key(canonical);
 
         if !is_op {
-            stack.push((token.clone(), INF, None)); // terminal (570-571)
+            stack.push((token.clone(), INF, None)); // terminal
             continue;
         }
 
-        // arity = operator_arity_compat.get(canonical, 1) (477).
+        // arity = operator_arity_compat.get(canonical, 1).
         let arity = ops
             .operator_arity_compat
             .get(canonical)
             .copied()
             .unwrap_or(1) as usize;
         if stack.len() < arity {
-            // 479-480: ValueError with the RESOLVED operator var (pre-alias).
+            // ValueError with the RESOLVED operator var (pre-alias).
             return Err(format!(
                 "Invalid prefix expression: Not enough operands for operator '{operator}'"
             ));
         }
-        // operands_data = [stack.pop() for _ in range(arity)] -> [0]=left, [1]=right (T10).
+        // operands_data = [stack.pop() for _ in range(arity)] -> [0]=left, [1]=right.
         let operands_data: Vec<Item> = (0..arity).map(|_| stack.pop().unwrap()).collect();
 
-        // write_operator (484-488): realization ? realization_map[canonical] : canonical.
+        // write_operator: realization ? realization_map[canonical] : canonical.
         let write_operator: String = if realization {
             ops.operator_realizations
                 .get(canonical)
@@ -132,7 +104,7 @@ pub fn prefix_to_infix(
             canonical.to_string()
         };
 
-        // 491-494: realization '.'-in-name OR arity>2 -> pure func-form, PREEMPTS all special-cases (T1).
+        // realization '.'-in-name OR arity>2 -> pure func-form, PREEMPTS all special-cases.
         if realization && (write_operator.contains('.') || arity > 2) {
             let joined = join_operands(&operands_data);
             stack.push((
@@ -143,19 +115,19 @@ pub fn prefix_to_infix(
             continue;
         }
 
-        // current_precedence = op_precedence.get(canonical, op_precedence.get('pow', INF)) (496).
+        // current_precedence = op_precedence.get(canonical, op_precedence.get('pow', INF)).
         let mut current_precedence = ops
             .precedence_get(canonical)
             .unwrap_or_else(|| ops.precedence_get("pow").unwrap_or(INF));
-        // current_assoc = op_associativity.get(canonical, 'left') (497).
+        // current_assoc = op_associativity.get(canonical, 'left').
         let mut current_assoc = associativity(canonical);
 
         if arity == 2 {
             let (mut left_str, left_prec, _left_root) = operands_data[0].clone();
-            let (mut right_str, right_prec, right_root) = operands_data[1].clone();
+            let (mut right_str, right_prec, _right_root) = operands_data[1].clone();
             let mut write_operator = write_operator;
 
-            // pow under power='func' -> func-form (503-506).
+            // pow under power='func' -> func-form.
             if canonical == "pow" && power == Power::Func {
                 stack.push((
                     format!("{write_operator}({left_str}, {right_str})"),
@@ -164,24 +136,24 @@ pub fn prefix_to_infix(
                 ));
                 continue;
             }
-            // pow under power='**' -> switch to infix '**', right-assoc (508-511).
+            // pow under power='**' -> switch to infix '**', right-assoc.
             if canonical == "pow" && power == Power::StarStar {
                 write_operator = "**".to_string();
                 current_precedence = ops.precedence_get("**").unwrap_or(current_precedence);
                 current_assoc = "right";
             }
 
-            // left paren (513-516): left_prec < cur OR (== AND assoc right).
+            // left paren: left_prec < cur OR (== AND assoc right).
             if left_prec < current_precedence
                 || (left_prec == current_precedence && current_assoc == "right")
             {
                 left_str = format!("({left_str})");
             }
-            // right paren (518-522): right_prec < cur OR (== AND assoc left AND !flatten).
+            // right paren: right_prec < cur OR (== AND assoc left). An equal-precedence right
+            // operand always keeps its parens (no flattening) -- paired with the left-assoc parse
+            // in `infix_to_prefix`, this preserves prefix<->infix round-trip identity.
             if right_prec < current_precedence
-                || (right_prec == current_precedence
-                    && current_assoc == "left"
-                    && !right_allows_flatten(canonical, right_root.as_deref(), fixed))
+                || (right_prec == current_precedence && current_assoc == "left")
             {
                 right_str = format!("({right_str})");
             }
@@ -195,11 +167,11 @@ pub fn prefix_to_infix(
 
         if arity == 1 {
             let (mut operand_str, operand_prec, _operand_root) = operands_data[0].clone();
-            let is_pow_op = pow_power(canonical).is_some(); // r'pow\d+(?!_)' (530)
-            let is_frac_pow_op = pow1_power(canonical).is_some(); // r'pow1_\d+' (531)
+            let is_pow_op = pow_power(canonical).is_some(); // r'pow\d+(?!_)'
+            let is_frac_pow_op = pow1_power(canonical).is_some(); // r'pow1_\d+'
 
             if canonical == "neg" {
-                // 533-538: parens iff operand_prec STRICT-< current (T2).
+                // parens iff operand_prec STRICT-< current.
                 if operand_prec < current_precedence {
                     operand_str = format!("({operand_str})");
                 }
@@ -211,7 +183,7 @@ pub fn prefix_to_infix(
                 continue;
             }
             if canonical == "inv" {
-                // 540-546: parens iff operand_prec <= current; PUSH op_precedence['/'] (=2), not own (T4).
+                // parens iff operand_prec <= current; PUSH op_precedence['/'] (=2), not its own.
                 if operand_prec <= current_precedence {
                     operand_str = format!("({operand_str})");
                 }
@@ -224,7 +196,7 @@ pub fn prefix_to_infix(
                 continue;
             }
             if power == Power::StarStar && (is_pow_op || is_frac_pow_op) {
-                // 548-561: x**N / x**(1/N); operand parens iff operand_prec <= power_prec (T8).
+                // x**N / x**(1/N); operand parens iff operand_prec <= power_prec.
                 let power_precedence = ops.precedence_get("**").unwrap_or(current_precedence);
                 if operand_prec <= power_precedence {
                     operand_str = format!("({operand_str})");
@@ -239,7 +211,7 @@ pub fn prefix_to_infix(
                 stack.push((rendered, power_precedence, Some(canonical.to_string())));
                 continue;
             }
-            // func fallback (563-564).
+            // func fallback.
             stack.push((
                 format!("{write_operator}({operand_str})"),
                 INF,
@@ -248,7 +220,7 @@ pub fn prefix_to_infix(
             continue;
         }
 
-        // 567-569: nullary / arity>2 fallback (DEAD for dev_7-3; max arity 2, no nullary ops).
+        // nullary / arity>2 fallback (DEAD for the shipped asset; max arity 2, no nullary ops).
         let joined = join_operands(&operands_data);
         stack.push((
             format!("{write_operator}({joined})"),
@@ -258,7 +230,7 @@ pub fn prefix_to_infix(
     }
 
     if stack.len() != 1 {
-        // 573-576: too many operands. The Python message embeds a list-repr of the leftover rendered
+        // Too many operands. The Python message embeds a list-repr of the leftover rendered
         // parts (stack order, reversed vs input); we surface failure-parity, not the exact repr.
         let parts: Vec<String> = stack.iter().map(|(s, _, _)| format!("'{s}'")).collect();
         return Err(format!(
@@ -269,7 +241,7 @@ pub fn prefix_to_infix(
     Ok(stack.into_iter().next().unwrap().0)
 }
 
-/// `', '.join(op_str for op_str, _, _ in operands_data)` (engine.py@0.2.15:492,568): join the rendered
+/// `', '.join(op_str for op_str, _, _ in operands_data)`: join the rendered
 /// strings of the popped operands in pop order ([0]=left, ..).
 fn join_operands(operands_data: &[Item]) -> String {
     operands_data
@@ -279,29 +251,27 @@ fn join_operands(operands_data: &[Item]) -> String {
         .join(", ")
 }
 
-// ---- infix_to_prefix (engine.py@0.2.15:581) -------------------------------------------------------------
+// ---- infix_to_prefix ----------------------------------------------------------------------------
 
-/// Tokenize the (space-stripped) infix string, faithfully to the Python regex
-/// `<constant>|number|[A-Za-z_][\w.]*|\*\*|[-+*/^()]` under `re.findall` semantics: scan left to
-/// right, at each position take the FIRST alternative (in pattern order) that matches, and SILENTLY
-/// DROP any char that matches no alternative (T6). Numbers/identifiers are emitted as verbatim source
-/// substrings. (`\w` is treated as ASCII `[A-Za-z0-9_]`; the deployment corpus is ASCII -- a non-ASCII
-/// identifier is the documented out-of-domain boundary.)
-fn tokenize_infix(s: &str, fixed: bool) -> Vec<String> {
+/// Tokenize the (space-stripped) infix string, per the Python regex
+/// `float_special|<constant>|number|[A-Za-z_][\w.]*|\*\*|[-+*/^()]` under `re.findall` semantics:
+/// scan left to right, at each position take the FIRST alternative (in pattern order) that matches,
+/// and SILENTLY DROP any char that matches no alternative. Numbers/identifiers are emitted as
+/// verbatim source substrings. (`\w` is treated as ASCII `[A-Za-z0-9_]`; the deployment corpus is
+/// ASCII -- a non-ASCII identifier is the documented out-of-domain boundary.)
+fn tokenize_infix(s: &str) -> Vec<String> {
     let chars: Vec<char> = s.chars().filter(|&c| c != ' ').collect(); // `.replace(' ', '')`
     let n = chars.len();
     let mut tokens = Vec::new();
     let mut i = 0;
     while i < n {
-        // FIX (`fixed` only): the numeric folder's inf/nan tokens stay ATOMIC -- mirrors the Python
-        // `float_special` alternation -- else they split on the '(' / '"'. Leads the scan; the token
-        // is then classified as a leaf by `is_ident_start` in `infix_to_prefix`.
-        if fixed {
-            if let Some(j) = match_float_special(&chars, i) {
-                tokens.push(chars[i..j].iter().collect());
-                i = j;
-                continue;
-            }
+        // The numeric folder's inf/nan tokens stay ATOMIC -- mirrors the Python `float_special`
+        // alternation -- else they split on the '(' / '"'. Leads the scan; the token is then
+        // classified as a leaf by `is_ident_start` in `infix_to_prefix`.
+        if let Some(j) = match_float_special(&chars, i) {
+            tokens.push(chars[i..j].iter().collect());
+            i = j;
+            continue;
         }
         if let Some(j) = match_constant(&chars, i) {
             tokens.push(chars[i..j].iter().collect());
@@ -404,13 +374,13 @@ fn match_ident(s: &[char], i: usize) -> Option<usize> {
     Some(j)
 }
 
-/// `re.fullmatch(number_pattern, token)` (engine.py@0.2.15:620): does the WHOLE token parse as a number?
+/// `re.fullmatch(number_pattern, token)`: does the WHOLE token parse as a number?
 fn is_number_fullmatch(token: &str) -> bool {
     let chars: Vec<char> = token.chars().collect();
     !chars.is_empty() && match_number(&chars, 0) == Some(chars.len())
 }
 
-/// `re.match(r'[A-Za-z_][\w.]*', token)` (engine.py@0.2.15:622, unanchored): the token STARTS with an
+/// `re.match(r'[A-Za-z_][\w.]*', token)` (unanchored): the token STARTS with an
 /// identifier char. (Since the classifier only ever sees tokenizer outputs, "starts with" suffices.)
 fn is_ident_start(token: &str) -> bool {
     token
@@ -419,23 +389,19 @@ fn is_ident_start(token: &str) -> bool {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
 }
 
-/// Faithful port of `infix_to_prefix` (engine.py@0.2.15:581-653): a RIGHT-to-LEFT shunting-yard. Never
+/// `infix_to_prefix`: a RIGHT-to-LEFT shunting-yard. Never
 /// raises (degenerate/malformed inputs produce structurally-degenerate prefix lists, matching Python).
-///
-/// `fixed` selects the corrected behavior of the deliberate-improvement line (conversion-quirk #4: the
-/// `^`->`**` normalization also applies to the unary-minus lookahead). `fixed=false` is the faithful
-/// deployed-tag `dev_7-3` behavior.
-pub fn infix_to_prefix(infix_expression: &str, ops: &Operators, fixed: bool) -> Vec<String> {
-    let mut tokens = tokenize_infix(infix_expression, fixed);
-    tokens.reverse(); // 609: right-to-left parse
+pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
+    let mut tokens = tokenize_infix(infix_expression);
+    tokens.reverse(); // right-to-left parse
 
     let mut stack: Vec<String> = Vec::new();
     let mut prefix_expr: Vec<String> = Vec::new();
-    let prec = |t: &str| ops.precedence_get(t).unwrap_or(0.0); // `.get(t, 0)` (638)
+    let prec = |t: &str| ops.precedence_get(t).unwrap_or(0.0); // `.get(t, 0)`
 
     let mut i = 0;
     while i < tokens.len() {
-        // current token, with '^' normalized to '**' (616-617). The LOOKAHEAD reads the RAW token.
+        // current token, with '^' normalized to '**'.
         let mut token = tokens[i].clone();
         if token == "^" {
             token = "**".to_string();
@@ -455,14 +421,13 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators, fixed: bool) -> 
                 stack.pop();
             }
         } else {
-            // operator. Unary-minus detection (633): on the REVERSED stream, tokens[i+1] is the
-            // original LEFT neighbor; membership is the FULL precedence_compat keyset (raw '^' absent).
+            // operator. Unary-minus detection: on the REVERSED stream, tokens[i+1] is the
+            // original LEFT neighbor; membership is the FULL precedence_compat keyset.
             let next_raw = tokens.get(i + 1).map(|s| s.as_str());
-            // FIX (#4, `fixed` only): normalize '^'->'**' for the lookahead too, so `x ^ -y` parses
-            // the '-' as unary exactly like `x ** -y`. Faithful mode leaves the raw '^' (absent from
-            // the precedence map) so the '-' stays binary.
+            // '^' is normalized to '**' for the lookahead too, so `x ^ -y` parses the '-' as
+            // unary exactly like `x ** -y`.
             let next_norm = match next_raw {
-                Some("^") if fixed => Some("**"),
+                Some("^") => Some("**"),
                 other => other,
             };
             if token == "-"
@@ -474,12 +439,11 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators, fixed: bool) -> 
             {
                 token = "neg".to_string();
             }
-            // 637: `token != ')'` is always true here. The ELSE block (643-646) is provably a plain
-            // push (`stack.insert(-1)` only runs on an empty stack, where it == push) -- T1.
-            // Faithful: pop on `>=` (right-leans left-assoc chains -- #5). FIX (#5 parse half,
-            // `fixed`): respect associativity -- pop on strict `>` for left-assoc, `>=` only for
-            // right-assoc ('**'/'pow'). Coordinated with the render half (right_allows_flatten off)
-            // to preserve prefix<->infix round-trip identity.
+            // `token != ')'` is always true here. The ELSE block is provably a plain
+            // push (`stack.insert(-1)` only runs on an empty stack, where it == push).
+            // The pop rule respects associativity -- pop on strict `>` for left-assoc, `>=` only
+            // for right-assoc ('**'/'pow'). Coordinated with the render half (no equal-precedence
+            // right-operand flattening) to preserve prefix<->infix round-trip identity.
             if stack.last().is_some_and(|t| t != ")") {
                 let cur = prec(&token);
                 let right_assoc = token == "**" || token == "pow";
@@ -488,11 +452,7 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators, fixed: bool) -> 
                         break;
                     }
                     let tp = prec(top);
-                    let pop = if fixed {
-                        tp > cur || (tp == cur && right_assoc)
-                    } else {
-                        tp >= cur
-                    };
+                    let pop = tp > cur || (tp == cur && right_assoc);
                     if pop {
                         prefix_expr.push(stack.pop().unwrap());
                     } else {
@@ -508,13 +468,13 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators, fixed: bool) -> 
     }
 
     while let Some(op) = stack.pop() {
-        prefix_expr.push(op); // 650-651
+        prefix_expr.push(op);
     }
-    prefix_expr.reverse(); // 653: `[::-1]`
+    prefix_expr.reverse(); // `[::-1]`
     prefix_expr
 }
 
-// ---- convert_expression (engine.py@0.2.15:655) ----------------------------------------------------------
+// ---- convert_expression -------------------------------------------------------------------------
 
 /// The nested-list intermediate representation `convert_expression` builds: an arbitrarily-nested
 /// list of strings, exactly as Python (`[token]` leaves, `[op, [children]]` nodes, plus the quirky
@@ -525,7 +485,7 @@ enum Ir {
     L(Vec<Ir>),
 }
 
-/// `flatten_nested_list(list_of_items)[::-1]` (utils.py@0.2.15:362 + the `[::-1]` at engine.py@0.2.15:775,849):
+/// `flatten_nested_list(list_of_items)[::-1]`:
 /// a LIFO reverse-DFS over the items, then reversed -> a prefix token list. (Nesting depth is
 /// irrelevant: any list is linearized, so the `[base]` quirk flattens away harmlessly.)
 fn flatten_list(items: &[Ir]) -> Vec<String> {
@@ -553,7 +513,7 @@ fn first_str(ir: &Ir) -> Option<&str> {
     }
 }
 
-/// Replace `node[0]` (a string leaf) in place: `stack[-1][0] = new` (engine.py@0.2.15:690).
+/// Replace `node[0]` (a string leaf) in place: `stack[-1][0] = new`.
 fn set_first(ir: &mut Ir, new: String) {
     if let Ir::L(v) = ir {
         if let Some(Ir::S(s)) = v.first_mut() {
@@ -562,27 +522,19 @@ fn set_first(ir: &mut Ir, new: String) {
     }
 }
 
-/// `re.match(r'-?\d+$', s)` (engine.py@0.2.15:708,737): optional leading `-`, then >=1 digits, whole string.
+/// `re.match(r'-?\d+$', s)`: optional leading `-`, then >=1 digits, whole string.
 fn is_int_string(s: &str) -> bool {
     let t = s.strip_prefix('-').unwrap_or(s);
     !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// `re.match(r'pow\d+', s)` (engine.py@0.2.15:794, NO negative lookahead): starts with `pow` + >=1 digit.
-/// This DELIBERATELY matches `pow1_3` (sees the `pow1` prefix) -- the faithful chain-absorption bug (T3).
-fn matches_int_pow(s: &str) -> bool {
-    s.strip_prefix("pow")
-        .is_some_and(|r| r.bytes().next().is_some_and(|b| b.is_ascii_digit()))
-}
-
-/// `re.match(r'pow1_\d+', s)` (engine.py@0.2.15:794): starts with `pow1_` + >=1 digit.
+/// `re.match(r'pow1_\d+', s)`: starts with `pow1_` + >=1 digit.
 fn matches_frac_pow(s: &str) -> bool {
     s.strip_prefix("pow1_")
         .is_some_and(|r| r.bytes().next().is_some_and(|b| b.is_ascii_digit()))
 }
 
-/// `int(re.match(r'pow(\d+)', op).group(1))` (engine.py@0.2.15:810): the leading digit-run right after `pow`.
-/// For `pow1_3` this is `1` (the chain-absorption bug drops the `_3`).
+/// `int(re.match(r'pow(\d+)', op).group(1))`: the leading digit-run right after `pow`.
 fn int_chain_exp(op: &str) -> Option<i128> {
     let rest = op.strip_prefix("pow")?;
     let end = rest
@@ -593,7 +545,7 @@ fn int_chain_exp(op: &str) -> Option<i128> {
     rest[..end].parse::<i128>().ok()
 }
 
-/// `Fraction(x).as_integer_ratio()` reduced (engine.py@0.2.15:719 `Fraction(abs(float(s)))`): the EXACT
+/// `Fraction(x).as_integer_ratio()` reduced (`Fraction(abs(float(s)))`): the EXACT
 /// dyadic ratio of the f64 (NOT a decimal parse of the source string). `None` if the exact ratio
 /// exceeds the i128 domain (pathological subnormals / huge magnitudes -- documented out-of-domain;
 /// they never occur on the deployment distribution, which doesn't reach this branch at all).
@@ -676,7 +628,7 @@ fn gcd_i128(mut a: i128, mut b: i128) -> i128 {
     a
 }
 
-/// `Fraction(abs(float(s))).limit_denominator()` reduced (engine.py@0.2.15:719). `None` only on the
+/// `Fraction(abs(float(s))).limit_denominator()` reduced. `None` only on the
 /// documented out-of-i128-domain pathological inputs (never on the deployment distribution).
 fn fraction_limit_denominator(x: f64) -> Option<(i128, i128)> {
     let (num, den) = exact_ratio(x)?;
@@ -688,9 +640,9 @@ fn pow_keep(base: Ir, exponent: Ir) -> Ir {
     Ir::L(vec![Ir::S("pow".into()), Ir::L(vec![base, exponent])])
 }
 
-/// `**` handling (engine.py@0.2.15:702-763): integer / float / integer-fraction exponent. `Err` mirrors the
+/// `**` handling: integer / float / integer-fraction exponent. `Err` mirrors the
 /// dead len==2 float-division branch's `int()` `ValueError` (failure-parity).
-fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir, String> {
+fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
     let ev = match &exponent {
         Ir::L(v) => v,
         Ir::S(_) => return Ok(pow_keep(base, exponent)),
@@ -702,10 +654,10 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
         };
         if is_int_string(&tok) {
             let v: i128 = tok.parse().map_err(|_| "int overflow".to_string())?;
-            if fixed && v == 0 {
-                return Ok(Ir::L(vec![Ir::S("1".into())])); // FIX (#2): x**0 -> 1 (not 'pow0')
+            if v == 0 {
+                return Ok(Ir::L(vec![Ir::S("1".into())])); // x**0 -> 1 (not 'pow0')
             }
-            // Decomposability gate (FIX: phantom powN): only exponents factorizable into the
+            // Decomposability gate (phantom powN): only exponents factorizable into the
             // unary pow2..pow{max_power} vocabulary may become powN tokens; non-smooth
             // exponents (7, 11, 14, ...) previously emitted operators like `pow7` with no
             // realization, corrupting arity downstream. Keep binary pow instead.
@@ -731,8 +683,8 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
             };
             match fraction_limit_denominator(fv.abs()) {
                 Some((num, den)) if num <= 5 && den <= 5 => {
-                    if fixed && num == 0 {
-                        return Ok(Ir::L(vec![Ir::S("1".into())])); // FIX (#2): x**0.0 -> 1
+                    if num == 0 {
+                        return Ok(Ir::L(vec![Ir::S("1".into())])); // x**0.0 -> 1
                     }
                     let mut new_expr = Ir::L(vec![base]); // [base]
                     if num != 1 {
@@ -752,7 +704,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
             Ok(pow_keep(base, exponent)) // non-numeric exponent -> KEEP
         }
     } else if ev.len() == 2 {
-        // exponent[0][0] == '/' and both operands numeric strings (engine.py@0.2.15:735).
+        // exponent[0][0] == '/' and both operands numeric strings.
         let op0_is_div = matches!(&ev[0], Ir::S(s) if s.starts_with('/'));
         let (num_tok, den_tok) = match &ev[1] {
             Ir::L(operands) if operands.len() == 2 => {
@@ -765,8 +717,8 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
                 if is_int_string(nt) && is_int_string(dt) {
                     let numerator: i128 = nt.parse().map_err(|_| "int overflow".to_string())?;
                     let denominator: i128 = dt.parse().map_err(|_| "int overflow".to_string())?;
-                    if fixed && numerator == 0 {
-                        return Ok(Ir::L(vec![Ir::S("1".into())])); // FIX (#2): x**(0/N) -> 1
+                    if numerator == 0 {
+                        return Ok(Ir::L(vec![Ir::S("1".into())])); // x**(0/N) -> 1
                     }
                     // Same decomposability gate for the power (pow{num}) and root (pow1_{den}).
                     if crate::utils::factorize_to_at_most(
@@ -795,7 +747,7 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
                         Ok(dnode)
                     }
                 } else {
-                    // dead float-division branch: int('2.0') raises BEFORE limit_denominator (T5).
+                    // dead float-division branch: int('2.0') raises BEFORE limit_denominator.
                     Err("invalid literal for int()".into())
                 }
             }
@@ -806,19 +758,10 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators, fixed: bool) -> Result<Ir
     }
 }
 
-/// Faithful port of `convert_expression` (engine.py@0.2.15:655-849): normalize a prefix expression into the
+/// `convert_expression`: normalize a prefix expression into the
 /// engine's internal form (`**` -> `pow{N}`, chained powers combined, unary negation folded into
-/// numeric literals). `Err` mirrors a Python raise (raw unconfigured `powN` token KeyError -- T2; the
-/// dead float-division `int()` ValueError -- T5).
-///
-/// `fixed` selects the deliberate-improvement corrected behavior (conversion-quirks #1 fractional power
-/// no longer absorbed/dropped, #2 `x**0`->`1`, #3 neg-of-literal toggles one minus, #6 raw `powN` no
-/// longer KeyErrors). `fixed=false` is the faithful deployed-tag `dev_7-3` behavior.
-pub fn convert_expression(
-    prefix_expr: &[String],
-    ops: &Operators,
-    fixed: bool,
-) -> Result<Vec<String>, String> {
+/// numeric literals). `Err` mirrors a Python raise (the dead float-division `int()` ValueError).
+pub fn convert_expression(prefix_expr: &[String], ops: &Operators) -> Result<Vec<String>, String> {
     // ---- PASS 1: build the nested-list IR (right-to-left) ----
     let mut stack: Vec<Ir> = Vec::new();
     for token in prefix_expr.iter().rev() {
@@ -835,20 +778,19 @@ pub fn convert_expression(
             .get(token)
             .map(|s| s.as_str())
             .unwrap_or(token);
-        // arity = operator_arity_compat[operator] -- HARD index (KeyError on a raw unconfigured pow).
-        let arity = match ops.operator_arity_compat.get(operator) {
-            Some(a) => *a as usize,
-            None if fixed => 1, // FIX (#6): graceful default like pass-2's `.get`, instead of KeyError
-            None => return Err(format!("KeyError: '{operator}'")),
-        };
+        // arity: graceful default 1 for a raw unconfigured `powN` token, like pass-2's `.get`.
+        let arity = ops
+            .operator_arity_compat
+            .get(operator)
+            .map(|a| *a as usize)
+            .unwrap_or(1);
         if operator == "neg" {
             match stack.last().and_then(first_str) {
                 Some(s) if is_numeric_string(s) => {
                     let s = s.to_string();
                     let mut top = stack.pop().ok_or("neg: empty stack")?;
-                    // Faithful: always prepend '-' (the strip elif is DEAD -> '--5'). FIX (#3, `fixed`):
-                    // toggle ONE leading '-' (strip if already negative, else prepend).
-                    let new = if fixed && s.starts_with('-') {
+                    // Toggle ONE leading '-' (strip if already negative, else prepend).
+                    let new = if s.starts_with('-') {
                         s[1..].to_string()
                     } else {
                         format!("-{s}")
@@ -864,7 +806,7 @@ pub fn convert_expression(
         } else if operator == "**" {
             let base = stack.pop().ok_or("**: missing base")?;
             let exponent = stack.pop().ok_or("**: missing exponent")?;
-            stack.push(handle_pow(base, exponent, ops, fixed)?);
+            stack.push(handle_pow(base, exponent, ops)?);
         } else {
             let operands = pop_operands(&mut stack, arity)?;
             stack.push(Ir::L(vec![Ir::S(operator.into()), Ir::L(operands)]));
@@ -896,17 +838,11 @@ pub fn convert_expression(
             loop {
                 let next = match &current_operand {
                     Ir::L(v) if v.len() == 2 => match &v[0] {
-                        // Faithful: the integer chain uses `matches_int_pow` (no lookahead), which
-                        // absorbs a child `pow1_M` and drops the `_M` (#1). FIX (`fixed`): use
-                        // `pow_power` (the `(?!_)` lookahead) so a `pow1_M` is NOT absorbed.
+                        // The integer chain uses `pow_power` (the `(?!_)` lookahead), so a child
+                        // `pow1_M` is NOT absorbed into an integer-power chain.
                         Ir::S(op0)
                             if (is_frac && matches_frac_pow(op0))
-                                || (!is_frac
-                                    && if fixed {
-                                        pow_power(op0).is_some()
-                                    } else {
-                                        matches_int_pow(op0)
-                                    }) =>
+                                || (!is_frac && pow_power(op0).is_some()) =>
                         {
                             Some((op0.clone(), v[1].clone()))
                         }
@@ -923,7 +859,7 @@ pub fn convert_expression(
                 }
             }
 
-            // p = product of the chain's exponents (int family uses the bug-faithful leading-digit run).
+            // p = product of the chain's exponents.
             // i128: Python's `prod` is arbitrary-precision; i128 pushes the divergence boundary past
             // any reachable exponent (the frac family `pow1_M` stays tiny).
             let mut p: i128 = 1;
@@ -985,7 +921,7 @@ fn pop_operands(stack: &mut Vec<Ir>, arity: usize) -> Result<Vec<Ir>, String> {
     Ok(out)
 }
 
-/// `list(reversed(stack[-arity:]))` (engine.py@0.2.15:786,838): the last `arity` items, reversed (NOT popped).
+/// `list(reversed(stack[-arity:]))`: the last `arity` items, reversed (NOT popped).
 fn take_reversed_tail(stack: &[Ir], arity: usize) -> Result<Vec<Ir>, String> {
     if stack.len() < arity {
         return Err("pass-2: not enough operands".into());
@@ -993,8 +929,8 @@ fn take_reversed_tail(stack: &[Ir], arity: usize) -> Result<Vec<Ir>, String> {
     Ok(stack[stack.len() - arity..].iter().rev().cloned().collect())
 }
 
-/// Build the nested pow chain from a list of operator names around `current_operand`
-/// (engine.py@0.2.15:818-828): `[ops[-1], [current]]` innermost, wrapped outward by `ops[-2::-1]`. Empty
+/// Build the nested pow chain from a list of operator names around `current_operand`:
+/// `[ops[-1], [current]]` innermost, wrapped outward by `ops[-2::-1]`. Empty
 /// ops -> `current_operand` itself (the pow1-vanishes case).
 fn build_chain(ops_list: &[String], current_operand: Ir) -> Ir {
     if ops_list.is_empty() {
@@ -1010,9 +946,9 @@ fn build_chain(ops_list: &[String], current_operand: Ir) -> Ir {
     nc
 }
 
-// ---- parse (engine.py@0.2.15:852) -----------------------------------------------------------------------
+// ---- parse --------------------------------------------------------------------------------------
 
-/// Faithful port of `parse` (engine.py@0.2.15:852): `infix_to_prefix` -> (if `convert`) `convert_expression`
+/// `parse`: `infix_to_prefix` -> (if `convert`) `convert_expression`
 /// -> (if `mask_numbers`) `numbers_to_constant` -> ALWAYS `remove_pow1`. The high-level entry that
 /// closes `simplify(str)` and the flash-ansr canonicalization path. `Err` propagates a
 /// `convert_expression` raise.
@@ -1021,11 +957,10 @@ pub fn parse(
     ops: &Operators,
     convert: bool,
     mask_numbers: bool,
-    fixed: bool,
 ) -> Result<Vec<String>, String> {
-    let parsed = infix_to_prefix(infix_expression, ops, fixed);
+    let parsed = infix_to_prefix(infix_expression, ops);
     let parsed = if convert {
-        convert_expression(&parsed, ops, fixed)?
+        convert_expression(&parsed, ops)?
     } else {
         parsed
     };
@@ -1051,15 +986,13 @@ mod tests {
         e.prefix_to_infix(&t, power, realization)
     }
 
-    /// Branch-discriminating cases, all outputs verified verbatim against the tag Python
-    /// (corpus/_m2_adversarial.json). The full 40000-real + 35-adversarial 0-diff gate lives in
-    /// benchmarks/diff_prefix_to_infix.py; this pins the killer traps in CI.
+    /// Branch-discriminating cases pinning the render contract in CI.
     #[test]
     fn prefix_to_infix_traps() {
         let Some(e) = engine() else { return };
         let f = Power::Func;
         let s = Power::StarStar;
-        // T2 neg strict-< (equal-prec NO parens) vs T4 inv <= ; T1 realization preempt; T5 flatten.
+        // neg strict-< (equal-prec NO parens) vs inv <= ; realization preempt; paren-keeping.
         assert_eq!(p2i(&e, &["neg", "neg", "x1"], f, false).unwrap(), "--x1");
         assert_eq!(
             p2i(&e, &["inv", "inv", "x1"], f, false).unwrap(),
@@ -1077,11 +1010,17 @@ mod tests {
             p2i(&e, &["/", "/", "x1", "x2", "x3"], f, false).unwrap(),
             "x1 / x2 / x3"
         );
+        // An equal-precedence RIGHT operand keeps its parens (no flattening) -- the render half
+        // of the round-trip identity.
         assert_eq!(
             p2i(&e, &["*", "/", "x1", "x2", "/", "x3", "x4"], f, false).unwrap(),
-            "x1 / x2 * x3 / x4"
+            "x1 / x2 * (x3 / x4)"
         );
-        // T7/T8 pow rendering + spacing.
+        assert_eq!(
+            p2i(&e, &["+", "a", "+", "b", "c"], f, false).unwrap(),
+            "a + (b + c)"
+        );
+        // pow rendering + spacing.
         assert_eq!(
             p2i(&e, &["pow", "x1", "x2"], f, false).unwrap(),
             "pow(x1, x2)"
@@ -1100,7 +1039,7 @@ mod tests {
             "(-x1)**2"
         );
         assert_eq!(p2i(&e, &["sqrt", "x1"], s, false).unwrap(), "x1**(1/2)");
-        // T1 realization=True: only +,-,* infix; neg/div func-form; power ignored.
+        // realization=True: only +,-,* infix; neg/div func-form; power ignored.
         assert_eq!(
             p2i(&e, &["neg", "x1"], f, true).unwrap(),
             "simplipy.operators.neg(x1)"
@@ -1123,36 +1062,44 @@ mod tests {
         e.infix_to_prefix(s)
     }
 
-    /// infix_to_prefix traps (outputs verified verbatim vs tag Python). Full 0-diff gate (17030 real
-    /// infix + 25 adversarial, each direction) in benchmarks/diff_infix_to_prefix.py.
+    /// infix_to_prefix traps pinning the parse contract in CI.
     #[test]
     fn infix_to_prefix_traps() {
         let Some(e) = engine() else { return };
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
-        // T1 leading unary (only reachable insert(-1)==push path); T4 standalone '-'.
+        // leading unary (only reachable insert(-1)==push path); standalone '-'.
         assert_eq!(i2p(&e, "-x1"), v(&["neg", "x1"]));
         assert_eq!(i2p(&e, "-"), v(&["neg"]));
-        // T3 '^' lookahead asymmetry: '**' -> neg, raw '^' -> binary '-'.
+        // '^' normalizes to '**' in the unary-minus lookahead too.
         assert_eq!(i2p(&e, "x1 ** - x2"), v(&["neg", "**", "x1", "x2"]));
-        assert_eq!(i2p(&e, "x1 ^ - x2"), v(&["-", "**", "x1", "x2"]));
-        // T4 function-name left neighbor -> unary; T2 neg float precedence both ways.
+        assert_eq!(i2p(&e, "x1 ^ - x2"), v(&["neg", "**", "x1", "x2"]));
+        // function-name left neighbor -> unary; neg float precedence both ways.
         assert_eq!(i2p(&e, "sin - x1"), v(&["neg", "sin", "x1"]));
         assert_eq!(i2p(&e, "-x1 ** 2"), v(&["neg", "**", "x1", "2"]));
         assert_eq!(i2p(&e, "-x1 * x2"), v(&["*", "neg", "x1", "x2"]));
-        // T7 right-assoc via >= pop; T8 round-trip non-identity for inv.
+        // associativity-respecting pop: left-assoc chains parse left-assoc; '**' right-assoc.
         assert_eq!(
             i2p(&e, "a - b - c - d"),
-            v(&["-", "a", "-", "b", "-", "c", "d"])
+            v(&["-", "-", "-", "a", "b", "c", "d"])
         );
+        assert_eq!(
+            i2p(&e, "1/2 * m * v ** 2"),
+            v(&["*", "*", "/", "1", "2", "m", "**", "v", "2"])
+        );
+        assert_eq!(i2p(&e, "a ** b ** c"), v(&["**", "a", "**", "b", "c"]));
         assert_eq!(i2p(&e, "1/x1"), v(&["/", "1", "x1"]));
-        // T6 tokenizer: '**' before '*', drop unmatched, empty parens.
+        // tokenizer: '**' before '*', drop unmatched, empty parens.
         assert_eq!(i2p(&e, "x1***x2"), v(&["*", "**", "x1", "x2"]));
         assert_eq!(i2p(&e, "x1 $ x2"), v(&["x1", "x2"]));
         assert_eq!(i2p(&e, "()"), Vec::<String>::new());
         assert_eq!(i2p(&e, ""), Vec::<String>::new());
-        // T9 scientific notation single token.
+        // scientific notation single token.
         assert_eq!(i2p(&e, "1.5e-2 * x1"), v(&["*", "1.5e-2", "x1"]));
         assert_eq!(i2p(&e, "<constant> * x1"), v(&["*", "<constant>", "x1"]));
+        // round-trip identity (parse half; paired with the paren-keeping render).
+        let pre = v(&["*", "a", "*", "b", "c"]);
+        let inf = e.prefix_to_infix(&pre, Power::StarStar, false).unwrap();
+        assert_eq!(e.parse(&inf, false, false).unwrap(), pre);
     }
 
     fn conv(e: &Engine, toks: &[&str]) -> Result<Vec<String>, String> {
@@ -1160,8 +1107,7 @@ mod tests {
         e.convert_expression(&t)
     }
 
-    /// convert_expression traps (outputs verified verbatim vs tag Python). Full 0-diff gate (27030
-    /// real convert inputs + 51 adversarial, incl. crash-parity) in benchmarks/diff_convert_expression.py.
+    /// convert_expression traps pinning the normalization contract in CI.
     #[test]
     fn convert_expression_traps() {
         let Some(e) = engine() else { return };
@@ -1173,18 +1119,14 @@ mod tests {
             v(&["inv", "pow2", "x1"])
         );
         assert_eq!(conv(&e, &["**", "x1", "1"]).unwrap(), v(&["x1"]));
-        // 0.4.2 factorize gate: exponent 0 is not decomposable -> binary pow kept (pow0 was
-        // an INVALID token anyway, quirk #2); expectation updated from the pre-0.4.2 trap.
-        assert_eq!(
-            conv(&e, &["**", "x1", "0"]).unwrap(),
-            v(&["pow", "x1", "0"])
-        );
-        // chain factorize order + VE fallback + mixed-chain absorption bug (T3).
+        // x**0 -> 1 (never the invalid 'pow0' token).
+        assert_eq!(conv(&e, &["**", "x1", "0"]).unwrap(), v(&["1"]));
+        // chain factorize order + VE fallback.
         assert_eq!(
             conv(&e, &["**", "x1", "6"]).unwrap(),
             v(&["pow2", "pow3", "x1"])
         );
-        // 0.4.2 phantom-pow fix: 7 is non-5-smooth -> binary pow kept (was the corrupting pow7).
+        // phantom-pow gate: 7 is non-5-smooth -> binary pow kept (a bare pow7 would corrupt arity).
         assert_eq!(
             conv(&e, &["**", "x1", "7"]).unwrap(),
             v(&["pow", "x1", "7"])
@@ -1197,27 +1139,33 @@ mod tests {
             conv(&e, &["pow2", "pow2", "pow2", "x1"]).unwrap(),
             v(&["pow4", "pow2", "x1"])
         );
+        // A fractional power is NOT absorbed into an integer chain (and vice versa).
         assert_eq!(
             conv(&e, &["pow2", "pow1_3", "x1"]).unwrap(),
-            v(&["pow2", "x1"])
+            v(&["pow2", "pow1_3", "x1"])
         );
         assert_eq!(
             conv(&e, &["pow1_3", "pow2", "x1"]).unwrap(),
             v(&["pow1_3", "pow2", "x1"])
         );
-        // 0.4.2: inner non-smooth exponent stays binary; smooth outer still absorbs to pow2.
+        // Genuine same-family chains still combine.
+        assert_eq!(
+            conv(&e, &["pow1_2", "pow1_2", "x1"]).unwrap(),
+            v(&["pow1_4", "x1"])
+        );
+        // inner non-smooth exponent stays binary; smooth outer still absorbs to pow2.
         assert_eq!(
             conv(&e, &["**", "**", "x1", "7", "2"]).unwrap(),
             v(&["pow2", "pow", "x1", "7"])
         );
-        // neg-on-number double-minus (T7).
+        // neg-of-literal toggles ONE minus.
         assert_eq!(conv(&e, &["neg", "5"]).unwrap(), v(&["-5"]));
-        assert_eq!(conv(&e, &["neg", "-5"]).unwrap(), v(&["--5"]));
+        assert_eq!(conv(&e, &["neg", "-5"]).unwrap(), v(&["5"]));
         assert_eq!(
             conv(&e, &["+", "neg", "2", "x1"]).unwrap(),
             v(&["+", "-2", "x1"])
         );
-        // float branch (dead on real data) + integer-fraction (live: v^(3/2)).
+        // float branch + integer-fraction (live: v^(3/2)).
         assert_eq!(
             conv(&e, &["**", "x1", "0.5"]).unwrap(),
             v(&["pow1_2", "x1"])
@@ -1234,7 +1182,7 @@ mod tests {
             conv(&e, &["**", "x1", "0.1"]).unwrap(),
             v(&["pow", "x1", "0.1"])
         ); // gate-fail KEEP
-        assert_eq!(conv(&e, &["**", "x1", "0.0"]).unwrap(), v(&["pow0", "x1"]));
+        assert_eq!(conv(&e, &["**", "x1", "0.0"]).unwrap(), v(&["1"]));
         assert_eq!(
             conv(&e, &["**", "x1", "/", "3", "2"]).unwrap(),
             v(&["pow1_2", "pow3", "x1"])
@@ -1243,14 +1191,14 @@ mod tests {
             conv(&e, &["**", "x1", "/", "-2", "3"]).unwrap(),
             v(&["inv", "pow1_3", "pow2", "x1"])
         );
-        // crash-parity: raw unconfigured powN token (T2) + dead float-division (T5).
-        assert!(conv(&e, &["pow7", "x1"]).is_err());
-        assert!(conv(&e, &["pow1", "x1"]).is_err());
+        // Raw unconfigured powN tokens no longer KeyError: kept (pow7) / combined away (pow1).
+        assert_eq!(conv(&e, &["pow7", "x1"]).unwrap(), v(&["pow7", "x1"]));
+        assert_eq!(conv(&e, &["pow1", "x1"]).unwrap(), v(&["x1"]));
+        // crash-parity: the dead float-division branch still raises.
         assert!(conv(&e, &["**", "x1", "/", "2.0", "3.0"]).is_err());
     }
 
-    /// parse traps (verified vs tag Python). Full 0-diff gate (17030 real infix x deployment combos)
-    /// in benchmarks/diff_parse.py.
+    /// parse traps pinning the high-level parse contract in CI.
     #[test]
     fn parse_traps() {
         let Some(e) = engine() else { return };
@@ -1267,75 +1215,5 @@ mod tests {
         );
         // convert=False -> raw infix_to_prefix + remove_pow1 (no ** conversion).
         assert_eq!(p("x1 + x2", false, false), v(&["+", "x1", "x2"]));
-    }
-
-    /// The CORRECTED (deliberate-improvement) variants -- conversion-quirk fixes #1-#4,#6. Outputs
-    /// verified == the Python fix branch (benchmarks/diff_fixed.py, 269857 comparisons, 0 diffs). The
-    /// faithful (dev_7-3) variants keep the buggy behavior (pinned in the *_traps tests).
-    #[test]
-    fn fixed_quirk_behavior() {
-        let Some(e) = engine() else { return };
-        let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
-        let cf = |toks: &[&str]| {
-            e.convert_expression_fixed(&toks.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-        };
-        // #1 fractional power preserved (faithful drops it).
-        assert_eq!(
-            cf(&["pow2", "pow1_3", "x1"]).unwrap(),
-            v(&["pow2", "pow1_3", "x1"])
-        );
-        assert_eq!(
-            e.convert_expression(&v(&["pow2", "pow1_3", "x1"])).unwrap(),
-            v(&["pow2", "x1"])
-        ); // faithful still buggy
-           // #1 no over-fix: genuine chains still combine.
-        assert_eq!(cf(&["pow2", "pow2", "x1"]).unwrap(), v(&["pow4", "x1"]));
-        assert_eq!(
-            cf(&["pow1_2", "pow1_2", "x1"]).unwrap(),
-            v(&["pow1_4", "x1"])
-        );
-        // #2 x**0 -> 1 (faithful emits pow0).
-        assert_eq!(cf(&["**", "x1", "0"]).unwrap(), v(&["1"]));
-        assert_eq!(cf(&["**", "x1", "0.0"]).unwrap(), v(&["1"]));
-        // #3 neg-of-literal toggles one minus (faithful makes --5).
-        assert_eq!(cf(&["neg", "-5"]).unwrap(), v(&["5"]));
-        assert_eq!(cf(&["neg", "5"]).unwrap(), v(&["-5"]));
-        // #4 '^' parses unary-minus like '**'.
-        assert_eq!(
-            e.infix_to_prefix_fixed("x1 ^ - x2"),
-            v(&["neg", "**", "x1", "x2"])
-        );
-        // #6 raw powN no longer KeyErrors.
-        assert_eq!(cf(&["pow7", "x1"]).unwrap(), v(&["pow7", "x1"]));
-        // faithful infix_to_prefix unchanged ('^' keeps '-' binary; '/' right-leans -- #5 held there).
-        assert_eq!(e.infix_to_prefix("x1 ^ - x2"), v(&["-", "**", "x1", "x2"]));
-        assert_eq!(
-            e.infix_to_prefix("a - b - c"),
-            v(&["-", "a", "-", "b", "c"])
-        );
-        // #5 fixed = COORDINATED parse+render: left-assoc parse + no-flatten render, round-trip kept.
-        assert_eq!(
-            e.infix_to_prefix_fixed("1/2 * m * v ** 2"),
-            v(&["*", "*", "/", "1", "2", "m", "**", "v", "2"])
-        );
-        assert_eq!(
-            e.infix_to_prefix_fixed("a - b - c"),
-            v(&["-", "-", "a", "b", "c"])
-        );
-        assert_eq!(
-            e.infix_to_prefix_fixed("a ** b ** c"),
-            v(&["**", "a", "**", "b", "c"])
-        ); // right-assoc
-        assert_eq!(
-            e.prefix_to_infix_fixed(&v(&["+", "a", "+", "b", "c"]), Power::Func, false)
-                .unwrap(),
-            "a + (b + c)"
-        );
-        // round-trip identity in fixed mode (the invariant the coordinated fix preserves).
-        let pre = v(&["*", "a", "*", "b", "c"]);
-        let inf = e
-            .prefix_to_infix_fixed(&pre, Power::StarStar, false)
-            .unwrap();
-        assert_eq!(e.parse_fixed(&inf, false, false).unwrap(), pre);
     }
 }

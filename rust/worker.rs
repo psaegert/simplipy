@@ -1,7 +1,7 @@
 //! The no-constant equivalence test + rule selection for the OFFLINE miner.
 //!
-//! This is the constant-FREE candidate branch of `find_rule_worker` (engine.py@0.2.15:2433-2452) plus the
-//! winner-selection (engine.py@0.2.15:2489-2510). It adds NO new numerics -- the only math is
+//! This is the constant-FREE candidate branch of `find_rule_worker` plus the
+//! winner-selection. It adds NO new numerics -- the only math is
 //! `allclose_extends` (bit-exact vs numpy) -- so it is a pure control-flow port. Together with the
 //! constant-fit branch (`crate::fit`) these are the two halves of the per-candidate decision,
 //! assembled over the candidate library + generation + Kruskal prune into the full native miner.
@@ -10,7 +10,7 @@ use crate::eval::{allclose_extends, columns_from_row_major, Tape};
 use crate::fit::Rng;
 use crate::operators::Operators;
 
-/// The non-increasing wildcard-multiplicity condition (utils.py@0.2.15:938): a rule `lhs -> rhs` violates it
+/// The non-increasing wildcard-multiplicity condition: a rule `lhs -> rhs` violates it
 /// when any wildcard token (`^_\d+$`) occurs MORE times on the rhs than the lhs (it would duplicate a
 /// matched subtree). Faithfully matches `^_\d+$`, so on dummy-variable (`x0`..) mining expressions it
 /// is inert exactly as in Python -- selection then reduces to "fewest `<constant>` first".
@@ -154,7 +154,7 @@ fn ivl_reach_on() -> bool {
     *ON.get_or_init(|| std::env::var("SIMPLIPY_IVL_REACH").as_deref() != Ok("0"))
 }
 
-/// The NO-CONSTANT equivalence test (engine.py@0.2.15:2433-2452): the candidate has no `<constant>`, so it is
+/// The NO-CONSTANT equivalence test: the candidate has no `<constant>`, so it is
 /// a fixed function -- evaluate it once. The SOURCE may carry `n_src_const` constants, and the rule
 /// must hold for ALL of them, so we resample the source's constants over the `source_const_magnitudes`
 /// rounds and every sign combination and require `allclose_extends(source, candidate)` EVERY time
@@ -282,7 +282,7 @@ pub fn equivalent_no_const_check(
     ))
 }
 
-/// Winner selection (engine.py@0.2.15:2489-2510): among matched candidates prefer the FEWEST `<constant>`s
+/// Winner selection: among matched candidates prefer the FEWEST `<constant>`s
 /// (stable -> discovery-order tiebreak), skip any that violate wildcard multiplicity, and if the
 /// chosen target is bare `<constant>` while the source is all-numeric, fold to the literal value.
 #[allow(dead_code)] // rlib surface; exercised by tests
@@ -769,7 +769,7 @@ impl CandidateLibrary {
     }
 }
 
-/// The full native `find_rule_worker` decision (engine.py@0.2.15:2382-2510) over a RESIDENT library:
+/// The full native `find_rule_worker` decision over a RESIDENT library:
 /// guard -> all-numeric short-circuit -> scan candidates shortest-first (variable-subset filtered),
 /// dispatch const-free -> the no-constant test / const-bearing -> the constant fit, break on the
 /// first matching length, `select_best`.
@@ -787,7 +787,7 @@ pub fn find_rule_with_lib(
     atol: f64,
     min_informative: usize,
 ) -> Result<Option<Vec<String>>, String> {
-    // GUARD FIRST (engine.py@0.2.15:2384, BEFORE the short-circuit at :2390).
+    // GUARD FIRST (BEFORE the all-constant short-circuit).
     let max_cand_len = match max_target {
         Some(mt) => simplified_length.min(mt + 1),
         None => simplified_length,
@@ -795,7 +795,7 @@ pub fn find_rule_with_lib(
     if max_cand_len <= 1 {
         return Ok(None);
     }
-    // all-constant short-circuit (engine.py@0.2.15:2390-2400), reached only after the guard passes.
+    // all-constant short-circuit, reached only after the guard passes.
     // A leaf counts as constant when `leaf_value` resolves it to a FINITE value: numeric
     // literals AND the special constants (`np.pi`, `np.e`, `(-1)`). The previous
     // `is_numeric_string`-only gate sent e.g. `/ (-1) <constant>` to the library scan
