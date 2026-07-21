@@ -361,7 +361,11 @@ impl Engine {
             if apply_simplification_rules {
                 let t_rules = std::time::Instant::now();
                 new_expression = memoized_pass(&ctx.rules_memo, &new_expression, || {
-                    self.apply_simplification_rules_with_ctx(&new_expression, max_pattern_length, ctx)
+                    self.apply_simplification_rules_with_ctx(
+                        &new_expression,
+                        max_pattern_length,
+                        ctx,
+                    )
                 });
                 stats::add(&stats::NANOS_RULES, t_rules.elapsed().as_nanos() as u64);
             }

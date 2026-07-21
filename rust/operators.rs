@@ -105,7 +105,7 @@ impl Operators {
             .collect();
         let mut operator_arity_compat: FxHashMap<String, u8> = arity.clone();
         operator_arity_compat.insert("**".to_string(), 2);
-                                                           // Build the realization maps in config (`order`) order so the inverse resolves last-wins.
+        // Build the realization maps in config (`order`) order so the inverse resolves last-wins.
         let mut operator_realizations: FxHashMap<String, String> = FxHashMap::default();
         let mut realization_to_operator: FxHashMap<String, String> = FxHashMap::default();
         for name in &order {
