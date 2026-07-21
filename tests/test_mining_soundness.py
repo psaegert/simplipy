@@ -487,3 +487,100 @@ class TestCertifyRules:
                           seed=7, verbose=False)
         out = engine.certify_rules([["+", "x0", "0"]], X=256, seed=7)
         assert out == []
+
+
+class TestProposalChannel:
+    """find_rules(proposals=...): the LLM/human proposal channel. PLUMBING around the
+    certify machinery -- after the length loop, each proposal runs the exact
+    certify_rules chain against the just-mined state with the mine's own matrices and
+    master-derived seeds, joins through the same deduplicate_rules path, and lands in
+    the provenance sidecar with per-outcome counts."""
+
+    @staticmethod
+    def _mine(directory, proposals):
+        """One small mine (L<=3 sources, L<=3 targets, one dummy) with a proposal batch."""
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "rules.json"), "w") as fh:
+            fh.write("[]")
+        cfg = os.path.join(directory, "config.yaml")
+        with open(cfg, "w") as fh:
+            fh.write(yaml.safe_dump({"operators": _OPERATORS, "rules": "rules.json"}))
+        eng = SimpliPyEngine.from_config(cfg)
+        out = os.path.join(directory, "mined.json")
+        eng.find_rules(max_source_pattern_length=3, max_target_pattern_length=3,
+                       dummy_variables=1, extra_internal_terms=["0", "1", "<constant>"],
+                       X=256, seed=7, verbose=False, output_file=out, proposals=proposals)
+        with open(out + ".provenance.json") as fh:
+            sidecar = json.load(fh)
+        return eng, sidecar, out
+
+    def test_certifiable_proposal_joins_ruleset(self, tmp_path) -> None:
+        """A certifiable proposal joins the ruleset through deduplicate_rules: the
+        minimal path (library target) and the hint path ('verified') both land as
+        canonical rules in the engine AND the written artifact; an exact repeat of a
+        certified proposal counts as 'duplicate' and adds nothing."""
+        proposals = [
+            {"source": ["*", "exp", "x0", "exp", "x0"], "why": "extra keys ignored"},
+            {"source": ["+", "pow2", "x0", "pow2", "x0"],
+             "target": ["*", "<constant>", "pow2", "x0"]},                # hint honored
+            {"source": ["*", "exp", "x0", "exp", "x0"]},                  # duplicate of [0]
+        ]
+        eng, sidecar, out = self._mine(str(tmp_path), proposals)
+        rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules}
+        assert (("*", "exp", "?0", "exp", "?0"), ("pow2", "exp", "?0")) in rules
+        assert (("+", "pow2", "?0", "pow2", "?0"), ("*", "<constant>", "pow2", "?0")) in rules
+        saved = {tuple(tuple(side) for side in rule) for rule in json.load(open(out))}
+        assert rules == saved, "the artifact must contain the merged (mined + certified) ruleset"
+        assert sidecar["proposals"]["outcomes"] == {
+            "certified": 2, "already_covered": 0, "rejected": 0, "duplicate": 1}
+        assert sidecar["proposals"]["count"] == 3 and sidecar["proposals"]["sha256"]
+
+    def test_already_covered_proposal_is_skipped(self, tmp_path) -> None:
+        """A proposal the mined rules already shorten is skipped exactly like an
+        already-reducible source: counted 'already_covered', ruleset identical to a
+        proposal-free mine."""
+        eng_plain, _, _ = self._mine(str(tmp_path / "plain"), None)
+        eng, sidecar, _ = self._mine(str(tmp_path / "covered"), [{"source": ["+", "x0", "0"]}])
+        assert sidecar["proposals"]["outcomes"] == {
+            "certified": 0, "already_covered": 1, "rejected": 0, "duplicate": 0}
+        assert eng.simplification_rules == eng_plain.simplification_rules
+
+    def test_false_proposal_is_rejected(self, tmp_path) -> None:
+        """A numerically false proposal is rejected by the same gates as a mined rule:
+        the false hint exp(cosh(x)) for e^x + cosh(x) fails verification, and a
+        proposal outside the mine's vocabulary is rejected outright."""
+        proposals = [
+            {"source": ["+", "exp", "x0", "cosh", "x0"], "target": ["exp", "cosh", "x0"]},
+            {"source": ["sin", "x0"]},  # 'sin' is not in this operator set
+        ]
+        eng, sidecar, _ = self._mine(str(tmp_path), proposals)
+        assert sidecar["proposals"]["outcomes"] == {
+            "certified": 0, "already_covered": 0, "rejected": 2, "duplicate": 0}
+        assert all("sin" not in rule[0] for rule in eng.simplification_rules)
+        assert not any(tuple(lhs)[:1] == ("+",) and "cosh" in lhs
+                       for lhs, _ in eng.simplification_rules)
+
+    def test_proposal_channel_is_deterministic(self, tmp_path) -> None:
+        """Two runs from the same master seed and the same proposals FILE (bare-list
+        schema) produce byte-identical rulesets and identical provenance counts --
+        file order + content-derived per-proposal seeds, nothing position- or
+        entropy-derived."""
+        proposals_file = tmp_path / "proposals.json"
+        proposals_file.write_text(json.dumps([
+            {"source": ["*", "exp", "x0", "exp", "x0"]},
+            {"source": ["+", "pow2", "x0", "pow2", "x0"],
+             "target": ["*", "<constant>", "pow2", "x0"]},
+            {"source": ["+", "exp", "x0", "cosh", "x0"], "target": ["exp", "cosh", "x0"]},
+            {"source": ["+", "x0", "0"]},
+        ]))
+        results = []
+        for run in ("one", "two"):
+            eng, sidecar, out = self._mine(str(tmp_path / run), str(proposals_file))
+            results.append((eng.simplification_rules, sidecar["proposals"],
+                            open(out).read()))
+        assert results[0][0] == results[1][0], "rulesets differ between identical runs"
+        assert results[0][1] == results[1][1], "proposal provenance differs between identical runs"
+        assert results[0][2] == results[1][2], "written artifacts differ between identical runs"
+        assert results[0][1]["file"] == str(proposals_file)
+        assert results[0][1]["outcomes"] == {
+            "certified": 2, "already_covered": 1, "rejected": 1, "duplicate": 0}

@@ -5,6 +5,19 @@
 Real-semantics pow alignment and the removal of the faithful dev_7-3 reproduction line:
 the package now ships ONE engine line.
 
+### Added
+- **LLM-proposal channel in the miner**: `find_rules(..., proposals=...)` accepts a path
+  to a proposals JSON (consolidated `{"proposals": [...]}` artifact or a bare list of
+  `{source, target?}` objects) or the equivalent in-memory object. After the mining
+  length loop and before the optional prune, every proposal runs the exact
+  `certify_rules` chain against the just-mined rule state with the mine's evaluation
+  matrices, tolerances and master-seed-derived, content-derived per-proposal seeds;
+  certified proposals join the ruleset through the same `deduplicate_rules` path. The
+  find-rules YAML forwards a `proposals:` key, and the provenance sidecar records the
+  proposals file, its sha256, and per-outcome counts
+  (`certified` / `already_covered` / `rejected` / `duplicate`). This makes a
+  mined-plus-proposed ruleset reproducible from one config and one command.
+
 ### Changed
 - **Pow alignment (real semantics)**: `pow` at a `-inf` base with a finite non-integer
   exponent now evaluates to NaN (real semantics) across the constant folder, the operator

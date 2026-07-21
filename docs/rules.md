@@ -178,6 +178,11 @@ confirm: true
 
 # Exclude variable-free candidates from the library (behavior-preserving speedup)
 candidate_fold_filter: true
+
+# Optional: LLM/human-proposed rules, certified against the mined state at the
+# end of the run (see "LLM-proposed rules" below). Paths starting with ./ are
+# resolved relative to this config file; absolute paths are used as-is.
+proposals: ./llm_proposals.json
 ```
 
 Complete enumeration through length 5 covers tens of millions of sources and is a
@@ -200,6 +205,52 @@ exact same gates as mined rules.** Proposals only ever *add* source expressions,
 certified proposal is precisely as sound as a mined rule — the model's correctness is
 never trusted, only its taste in candidates. Wrong proposals cost about a CPU-second
 each and are rejected.
+
+### The reproduction path: `proposals:` in the find-rules config
+
+The channel is wired into the miner itself, so reproducing a mined-plus-proposed
+ruleset is **one config and one command**: add a `proposals:` key to the find-rules
+YAML and run `find-rules` as usual.
+
+```yaml
+# ... the mining configuration from above ...
+proposals: ./llm_proposals.json
+```
+
+```sh
+simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules.json" -v --reset-rules
+```
+
+After the mining length loop completes — and before the optional prune, so certified
+proposals face the same pruning as mined rules — every proposal is certified against
+the just-mined rule state with the exact machinery of the mine: the same evaluation
+matrices, constant challenges, tolerances, and seeds derived from the master `seed`.
+A proposal the mined rules already shorten is skipped exactly like an
+already-reducible source, and a certified proposal joins the ruleset through the same
+deduplication path (shortest target per canonical source).
+
+Two proposal-file schemas are accepted:
+
+- the **consolidated artifact format** — a JSON object with a `"proposals"` key whose
+  entries are objects with `"source"` (a prefix token list) and an optional
+  `"target"` (a prefix token list, used as the certification *hint*); any other keys
+  (`why`, `family`, `tier`, ...) are ignored;
+- a **bare list** of such `{source, target?}` objects.
+
+Each proposal ends in exactly one of four outcomes — `certified` (joined the
+ruleset), `already_covered` (the mined rules already shorten it), `rejected`
+(invalid, no shorter equivalent found, or failed numerical verification), or
+`duplicate` (certified, but canonically identical to an earlier certified proposal) —
+and the provenance sidecar records the proposals file, its sha256, and the
+per-outcome counts. The pass is deterministic: proposals are processed in file order
+with content-derived per-proposal seeds, so editing the file never rerolls the
+certification of untouched proposals, and two runs from the same seed and file are
+byte-identical.
+
+### Programmatic alternative: `certify_rules`
+
+To certify proposals against an already-built engine without re-mining, use the
+`certify_rules` API directly:
 
 ```python
 import simplipy as sp
@@ -231,7 +282,8 @@ and re-verifies the winning pair on an independent evaluation matrix. If no
 library-sized target exists, an optional per-proposal **hint** is verified instead —
 sound, but marked `'verified'` rather than `'minimal'` since no shorter form was ruled
 out. Targets certified this way may have any length, as long as they are shorter than
-the source.
+the source. The mining channel above runs this same chain per proposal; the only
+difference is bookkeeping (the mine's matrices and seeds, and the provenance record).
 
 ### How we use this (and what to expect)
 
@@ -253,21 +305,22 @@ certified-minimal target about 85–90% of the time.
 
 ## Replicating a large ruleset end to end
 
-1. **Mine** with the configuration above (`simplipy find-rules ...`). Complete
-   enumeration through length 5 plus one-million-source samples at lengths 6 and 7 is
-   roughly a week on a modern 16-core CPU; the provenance sidecar records everything
-   needed to reproduce the run from its seed.
-2. **Propose** long identities with an LLM of your choice, prompting with your engine's
+1. **Propose** long identities with an LLM of your choice, prompting with your engine's
    grammar; ask for systematic family-by-family enumeration and tree-spelling variants.
-3. **Certify** the proposals with `certify_rules` against the freshly mined engine
-   (minutes per thousand proposals), and merge the accepted pairs with
-   `deduplicate_rules`, which keeps the shortest target per source.
-4. **Post-process** (optional): `prune-rules` / `prune-covered-rules` /
+   Save the proposals as a JSON file (either schema above).
+2. **Mine + certify** with the configuration above, including its `proposals:` key —
+   one command (`simplipy find-rules ...`) runs the mine and then certifies every
+   proposal against the freshly mined state (roughly 1–2 seconds per proposal).
+   Complete enumeration through length 5 plus one-million-source samples at lengths 6
+   and 7 is roughly a week on a modern 16-core CPU; the provenance sidecar records
+   everything needed to reproduce the run from its seed, including the proposal file's
+   sha256 and per-outcome counts.
+3. **Post-process** (optional): `prune-rules` / `prune-covered-rules` /
    `resolve-rules`, below.
 
-Steps 1 and 3–4 are deterministic given the seed; step 2 is inherently not, so keep the
-accepted proposal list under version control — the certified pairs, not the model
-transcript, are the reproducible artifact.
+Steps 2–3 are deterministic given the seed and the proposals file; step 1 is
+inherently not, so keep the proposals file under version control — it, not the model
+transcript, is the reproducible artifact.
 
 # Post-processing Rules
 

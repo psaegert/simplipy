@@ -105,6 +105,7 @@ def main(argv: str = None) -> None:
                     int(k): int(v) for k, v in
                     (rule_finding_config.get('source_sample_per_length') or {}).items()},
                 candidate_fold_filter=rule_finding_config.get('candidate_fold_filter', True),
+                proposals=rule_finding_config.get('proposals', None),
                 output_file=args.output_file,
                 save_every=args.save_every,
                 reset_rules=args.reset_rules,
