@@ -6,7 +6,7 @@ authors = [
     ]
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.7.1"
+version = "0.8.0"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 keywords = ["symbolic-regression", "simplification", "expression", "prefix", "rewriting", "rust"]
@@ -26,14 +26,17 @@ classifiers = [
     "Typing :: Typed",
 ]
 # The INLINE phase (simplify + conversions + validation) is the compiled Rust `simplipy._core`;
-# the OFFLINE phase (rule mining) stays pure Python. numpy is offline-only at
-# runtime, huggingface_hub powers asset resolution, platformdirs resolves the asset cache directory.
+# the OFFLINE phase (rule mining) stays pure Python. numpy/mpmath/scipy are offline-only at
+# runtime (mining + sort promotion), huggingface_hub powers asset resolution, platformdirs
+# resolves the asset cache directory.
 dependencies = [
     "filelock",
     "huggingface_hub",
+    "mpmath",
     "numpy",
     "platformdirs",
     "pyyaml",
+    "scipy",
     "tqdm",
 ]
 
@@ -94,7 +97,13 @@ exclude = [
 	"env",
 	".env",
 ]
-per-file-ignores = "__init__.py:F401"
+# The promotion subpackage is a faithful, logic-exact port of an external ratified
+# soundness certifier; its numeric style (short names, inline statements) is preserved
+# verbatim so the port cannot drift from the reference. Only style codes are relaxed.
+per-file-ignores = [
+    "__init__.py:F401",
+    "src/simplipy/promotion/*:E741,E702,E731,E126,E127,E128,E131,E122,F401,F841",
+]
 
 
 [tool.mypy]
@@ -102,8 +111,17 @@ no_implicit_optional = false
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 explicit_package_bases = true
-exclude = "(.venv|tests/|dev/)"
+# The promotion subpackage is a verbatim port of external numeric code; annotating its
+# ~80 helper functions would edit ratified logic, so it is excluded from strict typing.
+exclude = "(.venv|tests/|dev/|src/simplipy/promotion/)"
 ignore_missing_imports = true
+
+# The promotion subpackage is a verbatim port of external numeric code; annotating its
+# ~80 helper functions would edit ratified logic, so its errors are ignored even when
+# reached via an import from the typed engine.
+[[tool.mypy.overrides]]
+module = "simplipy.promotion.*"
+ignore_errors = true
 
 
 [tool.pytest.ini_options]

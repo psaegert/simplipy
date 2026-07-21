@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.8.0 (unreleased)
+
+Makes the public package produce the BEST rule sets from one command: mining now natively
+promotes every rule to the strongest sound sort, and a public verification API can
+independently gate + monitor any rule set.
+
+### Added
+- **Native sort promotion** (`simplipy.promotion`; `find_rules(promote_sorts=True)`, CLI
+  config key `promote_sorts`). After mining and pruning, every rule (mined + proposed) is
+  re-certified at the stronger sorts and shipped at the strongest SOUND one: `_` (arbitrary
+  subtree), `!` (certified-finite subtree, enforced by a match-time defined-and-finite-a.e.
+  certificate), or `?` (variable-leaf, the fallback). Five stages: a pointwise exact bar on
+  an atom lattice, a const-bearing witness-map bar, an exact-arbiter overturn of finite-draw
+  demotions, a subsumption/derivability refund, and the `_`→`!`→`?` ladder with a
+  moving-spike structural refusal. Promotion is fail-safe: an uncertifiable rule stays `?`
+  and loses only composite-subtree recall, never soundness. This recovers the simplification
+  power that conservative `?`-only rulesets leave unrealized (a mined ruleset promoted this
+  way matches a far larger legacy engine's reduction at a fraction of the rules), because the
+  limiting factor was sort generality, not the number of rules.
+- **Independent verification API** (`simplipy.verify`): `verify_ruleset` gates a rule set by
+  judging every rule at its own symbolic trigger points under an arbitrary-precision contract
+  evaluator (eight-bucket classification, 100% coverage by construction); `monitor_ruleset`
+  runs the deployed engine over an adversarial+sampled corpus and attributes any
+  deployed-value violation to the responsible rule under an independent high-precision
+  evaluator; `verify_rule` gives a single-rule verdict. Deliberately implemented
+  independently of the compiled core so it cross-checks the miner rather than echoing it.
+  Both carry poison self-tests.
+
+### Changed
+- `mpmath` and `scipy` are now runtime dependencies (offline mining + verification only; the
+  inline simplify path remains the compiled core).
+
 ## 0.7.1 — 2026-07-21
 
 ### Fixed
