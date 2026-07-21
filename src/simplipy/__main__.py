@@ -83,8 +83,9 @@ def main(argv: str = None) -> None:
             # SimpliPyEngine.from_config now receives a guaranteed valid path
             engine = SimpliPyEngine.from_config(engine_config_path)
 
-            if not os.path.exists(os.path.dirname(args.output_file)):
-                os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
+            output_dir = os.path.dirname(args.output_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
 
             rule_finding_config = load_config(args.config, resolve_paths=True)
 
