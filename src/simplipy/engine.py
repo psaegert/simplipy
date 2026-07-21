@@ -837,7 +837,8 @@ class SimpliPyEngine:
             relaxed_kruskal: bool = True,
             provenance: dict | None = None,
             proposal_entries: list[tuple[tuple[str, ...], tuple[str, ...] | None]] | None = None,
-            leaf_nodes: list[str] | None = None) -> None:
+            leaf_nodes: list[str] | None = None,
+            promote_sorts: bool = False) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
@@ -937,6 +938,21 @@ class SimpliPyEngine:
             self.prune_covered_rules(verbose=verbose)
         elif prune:
             self.prune_redundant_rules(verbose=verbose)
+        # Sort promotion: re-certify every rule (mined + proposed) at the stronger `_`/`!`
+        # sorts and ship it at the strongest sound one (see `simplipy.promotion`). Runs AFTER
+        # the prune so promotion works on the already-reduced rule set (the promotion carries
+        # its own subsumption/derivability refund for the instances a promoted rule newly
+        # covers). Emits the deployment-strength ruleset directly.
+        if promote_sorts and not interrupted():
+            from .promotion import promote
+            kept, promotion_report = promote(self.simplification_rules, self)
+            self.simplification_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept]
+            self.compile_rules()
+            self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules])
+            if verbose:
+                print(f'Sort promotion: {promotion_report.get("stage_counts")}')
+            if provenance is not None:
+                provenance['sort_promotion'] = promotion_report.get('stage_counts')
         if output_file is not None:
             with open(output_file, 'w') as file:
                 json.dump(self.simplification_rules, file, indent=4)
@@ -1390,7 +1406,8 @@ class SimpliPyEngine:
             source_sample_per_length: dict[int, int] | None = None,
             candidate_fold_filter: bool = True,
             relaxed_kruskal: bool = True,
-            proposals: str | list | dict | None = None) -> None:
+            proposals: str | list | dict | None = None,
+            promote_sorts: bool = False) -> None:
         """Systematically discovers new simplification rules.
 
         This powerful method automates the discovery of simplification rules.
@@ -1647,6 +1664,7 @@ class SimpliPyEngine:
                 provenance=provenance,
                 proposal_entries=proposal_entries,
                 leaf_nodes=leaf_nodes,
+                promote_sorts=promote_sorts,
             )
         finally:
             signal.signal(signal.SIGINT, old_handler)

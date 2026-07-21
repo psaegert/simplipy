@@ -97,7 +97,8 @@ def main(argv: str = None) -> None:
                 'dummy_variables', 'extra_internal_terms', 'n_samples',
                 'constants_fit_challenges', 'constants_fit_retries', 'rtol', 'atol',
                 'min_informative', 'seed', 'confirm', 'source_sample_per_length',
-                'candidate_fold_filter', 'relaxed_kruskal', 'prune', 'proposals'}
+                'candidate_fold_filter', 'relaxed_kruskal', 'prune', 'proposals',
+                'promote_sorts'}
             unknown_keys = sorted(set(rule_finding_config) - known_keys)
             if unknown_keys:
                 print(f'Error: unknown key(s) in {args.config}: {", ".join(unknown_keys)}. '
@@ -123,6 +124,7 @@ def main(argv: str = None) -> None:
                 candidate_fold_filter=rule_finding_config.get('candidate_fold_filter', True),
                 relaxed_kruskal=rule_finding_config.get('relaxed_kruskal', True),
                 proposals=rule_finding_config.get('proposals', None),
+                promote_sorts=rule_finding_config.get('promote_sorts', False),
                 output_file=args.output_file,
                 save_every=args.save_every,
                 reset_rules=args.reset_rules,
