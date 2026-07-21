@@ -125,7 +125,12 @@ def pow5(x: float) -> float:
 
 
 def pow1_2(x: float) -> float:
-    """Return the square root of x."""
+    """Return the square root of x (NaN for a -inf base: contract-aligned real semantics)."""
+    if isinstance(x, np.ndarray):
+        with np.errstate(invalid='ignore'):
+            return np.where(np.isneginf(x), np.nan, x ** 0.5)
+    if isinstance(x, float) and np.isneginf(x):
+        return float('nan')
     return x ** 0.5
 
 
@@ -168,7 +173,12 @@ def pow1_3(x: float) -> float:
 
 
 def pow1_4(x: float) -> float:
-    """Return the fourth root of x."""
+    """Return the fourth root of x (NaN for a -inf base: contract-aligned real semantics)."""
+    if isinstance(x, np.ndarray):
+        with np.errstate(invalid='ignore'):
+            return np.where(np.isneginf(x), np.nan, x ** 0.25)
+    if isinstance(x, float) and np.isneginf(x):
+        return float('nan')
     return x ** 0.25
 
 
@@ -573,13 +583,22 @@ def log(x: float) -> float:
     return np.log(x)  # Use numpy for scalar logarithm calculation
 
 
+def _neginf_nonint_pow_mask(x: 'np.ndarray | float', y: 'np.ndarray | float') -> 'np.ndarray':
+    """Cells where pow is contract-undefined: -inf base with a finite non-integer exponent.
+    (Finite negative bases already yield NaN from np.power; infinite exponents keep the
+    magnitude-step semantics.)"""
+    yf = np.asarray(y, dtype=float)
+    return np.isneginf(np.asarray(x, dtype=float)) & np.isfinite(yf) & (np.mod(yf, 1.0) != 0.0)
+
+
 def pow(x: float, y: float) -> float:
-    """Return x raised to the power of y, element-wise."""
+    """Return x raised to the power of y, element-wise (NaN at -inf base with finite
+    non-integer exponent: contract-aligned real semantics)."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray) or isinstance(y, np.ndarray):
         # Handle numpy arrays
         with np.errstate(invalid='ignore'):
-            return np.power(x, y)
+            return np.where(_neginf_nonint_pow_mask(x, y), np.nan, np.power(x, y))
     if type(x).__module__ == 'torch' and type(x).__name__ == 'Tensor':
         if not _torch_checked:
             try:
@@ -600,4 +619,6 @@ def pow(x: float, y: float) -> float:
             x = float(x)
         if isinstance(y, int):
             y = float(y)
+        if bool(_neginf_nonint_pow_mask(x, y)):
+            return float('nan')
         return np.power(x, y)  # Use numpy for scalar power calculation

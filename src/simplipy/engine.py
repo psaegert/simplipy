@@ -27,6 +27,7 @@ from simplipy.utils import (
     get_used_modules,
     deduplicate_rules,
     enumerate_expressions, count_expressions, sample_expression,
+    remap_expression,
     violates_wildcard_multiplicity,
     _WILDCARD_RE)
 from simplipy.io import load_config
@@ -84,6 +85,59 @@ def _validate_ndarray_input(expression: 'np.ndarray', inplace: bool) -> None:
         raise ValueError('`simplify` expects a numpy array of string-like tokens')
     if inplace:
         raise ValueError('`inplace=True` is not supported when the expression is a numpy array')
+
+
+def _load_proposals(
+        proposals: 'str | list | dict') -> tuple[list[tuple[tuple[str, ...], tuple[str, ...] | None]], dict]:
+    """Load and normalize a :meth:`SimpliPyEngine.find_rules` proposal batch.
+
+    Accepts a path to a proposals JSON file, or the equivalent in-memory object.
+    TWO schemas are accepted (both reduce to a list of ``{source, target?}`` objects):
+
+    (a) the consolidated artifact format -- a dict with key ``"proposals"`` whose
+        entries are objects with ``"source"`` (a prefix token list) and an optional
+        ``"target"`` (a prefix token list, used as the certification HINT); every
+        other key (``why``, ``family``, ``tier``, ...) is ignored;
+    (b) a bare list of such ``{source, target?}`` objects.
+
+    Returns ``(entries, record)``: entries as ``(source_tuple, hint_tuple_or_None)``
+    in FILE ORDER (the batch's processing order is the file's order -- part of the
+    determinism contract), and the provenance record pinning WHAT was proposed:
+    ``file`` (absolute path, or None for in-memory input) and ``sha256`` (of the raw
+    file bytes, or of the normalized entries when no file exists -- the sidecar must
+    pin the batch either way) plus ``count``. Malformed batches raise ``ValueError``
+    HERE, before any mining compute is spent.
+    """
+    if isinstance(proposals, str):
+        with open(proposals, 'rb') as file:
+            raw = file.read()
+        data = json.loads(raw)
+        record: dict = {'file': os.path.abspath(proposals),
+                        'sha256': hashlib.sha256(raw).hexdigest()}
+    else:
+        data = proposals
+        record = {'file': None, 'sha256': None}
+    if isinstance(data, dict):
+        if 'proposals' not in data:
+            raise ValueError("consolidated proposals object must carry a 'proposals' key")
+        items = data['proposals']
+    else:
+        items = data
+    if not isinstance(items, list):
+        raise ValueError(f'proposals must be a list of {{source, target?}} objects, got {type(items).__name__}')
+    entries: list[tuple[tuple[str, ...], tuple[str, ...] | None]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict) or 'source' not in item:
+            raise ValueError(f'proposal {index}: expected an object with a "source" token list, got {item!r}')
+        source = tuple(str(token) for token in item['source'])
+        target = item.get('target')
+        hint = tuple(str(token) for token in target) if target else None
+        entries.append((source, hint))
+    if record['sha256'] is None:
+        normalized = json.dumps([[list(source), list(hint) if hint else None] for source, hint in entries])
+        record['sha256'] = hashlib.sha256(normalized.encode()).hexdigest()
+    record['count'] = len(entries)
+    return entries, record
 
 
 class SimpliPyEngine:
@@ -212,12 +266,12 @@ class SimpliPyEngine:
         # The redundancy test removes each explicit `lhs` from the RUST rule set (the compiled
         # rules `simplify` actually uses): `_core.prune_explicit` re-simplifies with the single
         # rule removed and keeps it removed iff the transformation is still derivable, serially,
-        # in the deployed config (fold=True, mask_elementary_literals=False).
+        # in the deployed config (mask_elementary_literals=False).
         explicit_lhs = [
             list(lhs) for lhs, _rhs in self.simplification_rules
             if not any(_WILDCARD_RE.match(t) for t in lhs)
         ]
-        pruned_lhs = self._core.prune_explicit(explicit_lhs, False, True)
+        pruned_lhs = self._core.prune_explicit(explicit_lhs, False)
         pruned_set = {tuple(lhs) for lhs in pruned_lhs}
         if pruned_set:
             self.simplification_rules = [
@@ -281,7 +335,7 @@ class SimpliPyEngine:
 
         def covered(core: Any, lhs: tuple[str, ...], rhs: tuple[str, ...]) -> bool:
             return all(
-                len(core.simplify(variant_lhs, 5, None, True, True, fold=True)) <= len(variant_rhs)
+                len(core.simplify(variant_lhs, 5, None, True, True)) <= len(variant_rhs)
                 for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
 
         kept = set(full)
@@ -526,7 +580,7 @@ class SimpliPyEngine:
         ValueError
             If the provided tokens do not form a well-formed prefix expression.
         """
-        return self._core.prefix_to_infix_fixed(list(tokens), power, realization)
+        return self._core.prefix_to_infix(list(tokens), power, realization)
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
         """Converts an infix expression string to prefix notation.
@@ -545,7 +599,7 @@ class SimpliPyEngine:
             A list of tokens representing the expression in prefix notation.
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
-        return self._core.infix_to_prefix_fixed(infix_expression)
+        return self._core.infix_to_prefix(infix_expression)
 
     def convert_expression(self, prefix_expr: list[str]) -> list[str]:
         """Normalizes an expression into the engine's standard internal format.
@@ -568,7 +622,7 @@ class SimpliPyEngine:
         list[str]
             The normalized prefix expression.
         """
-        return self._core.convert_expression_fixed(list(prefix_expr))
+        return self._core.convert_expression(list(prefix_expr))
 
     def parse(
             self,
@@ -600,7 +654,7 @@ class SimpliPyEngine:
             enabled), and `remove_pow1` cleanup.
         """
 
-        return self._core.parse_fixed(infix_expression, convert_expression, mask_numbers)
+        return self._core.parse(infix_expression, convert_expression, mask_numbers)
 
     def simplify(
             self,
@@ -652,10 +706,9 @@ class SimpliPyEngine:
         pure-Python engine are gone.
         """
         # Normalize the input to a prefix token list (per type), then ONE core call, then
-        # denormalize back to the input type. `fold=True` selects the numeric engine line
-        # (constant folding as a post-rule fallback), the shipped default.
+        # denormalize back to the input type.
         if isinstance(expression, str):
-            tokens = self._core.parse_fixed(expression, True, False)
+            tokens = self._core.parse(expression, True, False)
         elif isinstance(expression, np.ndarray):
             _validate_ndarray_input(expression, inplace)
             tokens = expression.tolist()
@@ -663,10 +716,10 @@ class SimpliPyEngine:
             tokens = list(expression)
 
         out = self._core.simplify(tokens, max_iter, max_pattern_length,
-                                  mask_elementary_literals, apply_simplification_rules, fold=True)
+                                  mask_elementary_literals, apply_simplification_rules)
 
         if isinstance(expression, str):
-            return self._core.prefix_to_infix_fixed(out, '**', False)
+            return self._core.prefix_to_infix(out, '**', False)
         if isinstance(expression, np.ndarray):
             # Re-infer the string WIDTH from the result, keeping only the input dtype KIND: a fold
             # can emit a token wider than any input token (e.g. `1/0 -> float("inf")`), and a fixed
@@ -782,7 +835,9 @@ class SimpliPyEngine:
             X_confirm: np.ndarray | None = None,
             candidate_fold_filter: bool = True,
             relaxed_kruskal: bool = True,
-            provenance: dict | None = None) -> None:
+            provenance: dict | None = None,
+            proposal_entries: list[tuple[tuple[str, ...], tuple[str, ...] | None]] | None = None,
+            leaf_nodes: list[str] | None = None) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
@@ -791,6 +846,13 @@ class SimpliPyEngine:
         pushed into the core between lengths (``set_rules``), which the Python pool cannot
         do (the core is immutable from forked workers, so it would mine nothing).
         Parallelism is rayon over all cores; cap it with ``RAYON_NUM_THREADS``.
+
+        ``proposal_entries`` (with its token universe ``leaf_nodes``) is the optional
+        proposal channel: after the length loop completes and BEFORE the optional prune
+        (a certified proposal is a rule like any other and must survive or fall in the
+        same prune), each proposal is certified against the just-mined state via
+        :meth:`_certify_proposals`, reusing this mine's candidate library, evaluation
+        matrices and seeds.
         """
         assert self._core is not None
 
@@ -857,6 +919,20 @@ class SimpliPyEngine:
         self.simplification_rules = list(rules)
         self.compile_rules()
         self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
+        # Proposal channel: certify externally proposed rules against the just-mined
+        # state, BEFORE the optional prune. Skipped on interrupt: a partial mine is not
+        # the rule state the proposals were aimed at, and a clean abort must stay cheap.
+        # An explicitly-given EMPTY batch still runs (and records all-zero outcome
+        # counts): the sidecar must show the channel ran, not silently omit it.
+        if proposal_entries is not None and not interrupted():
+            outcomes = self._certify_proposals(
+                proposal_entries, library,
+                leaf_nodes if leaf_nodes is not None else list(dummy_variables),
+                dummy_variables, X_data, X_confirm, max_target_pattern_length,
+                constants_fit_challenges, constants_fit_retries, rtol, atol,
+                min_informative, mine_seed, confirm_seed, verbose)
+            if provenance is not None and 'proposals' in provenance:
+                provenance['proposals']['outcomes'] = outcomes
         if prune == 'covered':
             self.prune_covered_rules(verbose=verbose)
         elif prune:
@@ -1165,6 +1241,131 @@ class SimpliPyEngine:
                     print(f'certified ({certificate}): {list(source)} -> {list(target)}')
         return certified
 
+    def _certify_proposals(
+            self,
+            proposal_entries: list[tuple[tuple[str, ...], tuple[str, ...] | None]],
+            library: Any,
+            leaf_nodes: list[str],
+            dummy_variables: list[str],
+            X_data: np.ndarray,
+            X_confirm: np.ndarray | None,
+            max_target_pattern_length: int | None,
+            constants_fit_challenges: int,
+            constants_fit_retries: int,
+            rtol: float,
+            atol: float,
+            min_informative: int,
+            mine_seed: int,
+            confirm_seed: int,
+            verbose: bool) -> dict[str, int]:
+        """The proposal channel of :meth:`find_rules`: certify externally proposed rules
+        against the just-mined rule state and merge the survivors.
+
+        PLUMBING ONLY -- no new certification semantics. Each proposal runs the exact
+        chain of :meth:`certify_rules` (vocabulary/validity check; already-covered skip
+        when the mined rules shorten the source, exactly like an already-reducible mined
+        source; shortest-first scan of THIS mine's candidate library for a minimal
+        target; hint verification as the fallback; independent stage-2 confirmation)
+        with THIS mine's evaluation matrices, challenge counts and tolerances, so a
+        certified proposal is precisely as sound as a mined rule. ``X_confirm`` is None
+        exactly when the mine ran with ``confirm=False``; proposals then skip stage-2
+        like every mined rule of the same run.
+
+        DETERMINISM: proposals are processed in file order against the FIXED just-mined
+        state (:meth:`certify_rules` likewise never mutates the engine mid-batch), and
+        per-proposal seeds are CONTENT-derived (blake2b of the source tokens on top of
+        the master-derived ``mine_seed``/``confirm_seed``, the stage-2-confirm policy)
+        -- never position-derived, so editing the proposals file cannot reroll the
+        certification of untouched proposals.
+
+        The certified pairs then join the ruleset through the same
+        :func:`~simplipy.utils.deduplicate_rules` path as mined rules (shortest target
+        per canonical source). Mutates the engine in place (rules, compiled state, core
+        rules) and returns the per-outcome counts for the provenance sidecar:
+        ``certified`` / ``already_covered`` / ``rejected`` / ``duplicate`` (certified,
+        but canonically identical to an earlier certified proposal and not shorter).
+        """
+        assert self._core is not None
+        counts = {'certified': 0, 'already_covered': 0, 'rejected': 0, 'duplicate': 0}
+        vocabulary = set(leaf_nodes) | set(self.operator_arity)
+        confirm_min = (max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
+                       if X_confirm is not None else None)
+        certified_pairs: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+        for source, hint in proposal_entries:
+            if not set(source) <= vocabulary or not self.is_valid(list(source)):
+                counts['rejected'] += 1
+                continue
+            simplified_length = len(self.simplify(list(source)))
+            if simplified_length < len(source):
+                counts['already_covered'] += 1
+                continue
+            # Content-derived per-proposal seed offset (blake2b, not hash(): PYTHONHASHSEED
+            # randomises str hashing per process; same policy as _confirm_mined_rules).
+            offset = int.from_bytes(
+                hashlib.blake2b(' '.join(source).encode(), digest_size=7).digest(), 'little')
+            target = self._core.find_rule_lib(
+                list(source), simplified_length, max_target_pattern_length, library,
+                challenges=constants_fit_challenges, retries=constants_fit_retries,
+                seed=mine_seed + offset, rtol=rtol, atol=atol,
+                min_informative=min_informative)
+            certificate = 'minimal'
+            if target is None and hint is not None:
+                hint_tokens = [str(token) for token in hint]
+                if (set(hint_tokens) <= vocabulary and len(hint_tokens) < len(source)
+                        and self.is_valid(list(hint_tokens))
+                        and not violates_wildcard_multiplicity(list(source), list(hint_tokens))
+                        and self._confirm_mined_rules(
+                            [(source, tuple(hint_tokens))], dummy_variables, X_data,
+                            constants_fit_challenges, constants_fit_retries, rtol, atol,
+                            min_informative, mine_seed)):
+                    target = hint_tokens
+                    certificate = 'verified'
+            if target is None:
+                counts['rejected'] += 1
+                continue
+            if X_confirm is not None and not self._confirm_mined_rules(
+                    [(source, tuple(target))], dummy_variables, X_confirm,
+                    constants_fit_challenges, constants_fit_retries, rtol, atol,
+                    int(confirm_min if confirm_min is not None else max(1, X_confirm.shape[0] // 8)),
+                    confirm_seed):
+                counts['rejected'] += 1
+                continue
+            certified_pairs.append((tuple(source), tuple(target)))
+            if verbose:
+                print(f'Proposal certified ({certificate}): {list(source)} -> {list(target)}')
+
+        # Per-proposal accounting that mirrors the deduplicate_rules fold EXACTLY (keep
+        # first canonical source unless a strictly shorter target arrives): a certified
+        # pair that would not change the merged set is a 'duplicate', not a 'certified'.
+        before = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.simplification_rules]
+        seen: dict[tuple[str, ...], int] = {}
+        for lhs, rhs in before:
+            canon_source, mapping = remap_expression(list(lhs), dummy_variables, variable_prefix='?')
+            canon_target, _ = remap_expression(list(rhs), dummy_variables, mapping, variable_prefix='?')
+            key = tuple(canon_source)
+            if key not in seen or len(canon_target) < seen[key]:
+                seen[key] = len(canon_target)
+        for source, target in certified_pairs:
+            canon_source, mapping = remap_expression(list(source), dummy_variables, variable_prefix='?')
+            canon_target, _ = remap_expression(list(target), dummy_variables, mapping, variable_prefix='?')
+            key = tuple(canon_source)
+            if key in seen and len(canon_target) >= seen[key]:
+                counts['duplicate'] += 1
+            else:
+                counts['certified'] += 1
+                seen[key] = len(canon_target)
+        if certified_pairs:
+            # The SAME merge path as mined rules: shortest target per canonical source.
+            self.simplification_rules = deduplicate_rules(
+                before + certified_pairs, dummy_variables, verbose=verbose)
+            self.compile_rules()
+            self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules])
+        if verbose:
+            print(f"Proposals: {len(proposal_entries)} processed -> "
+                  f"{counts['certified']} certified, {counts['already_covered']} already covered, "
+                  f"{counts['rejected']} rejected, {counts['duplicate']} duplicate")
+        return counts
+
     def find_rules(
             self,
             max_source_pattern_length: int = 7,
@@ -1186,7 +1387,8 @@ class SimpliPyEngine:
             confirm: bool = True,
             source_sample_per_length: dict[int, int] | None = None,
             candidate_fold_filter: bool = True,
-            relaxed_kruskal: bool = True) -> None:
+            relaxed_kruskal: bool = True,
+            proposals: str | list | dict | None = None) -> None:
         """Systematically discovers new simplification rules.
 
         This powerful method automates the discovery of simplification rules.
@@ -1293,6 +1495,24 @@ class SimpliPyEngine:
             constant collapses like ``C * acos(np.e) -> <constant>`` and
             value-specific structural rewrites like ``pow(_0, mult5(1)) ->
             pow5(_0)``).
+        proposals : str or list or dict or None, optional
+            The PROPOSAL CHANNEL (LLM- or human-proposed identities): a path to a
+            proposals JSON file, or the equivalent in-memory object. Two schemas are
+            accepted -- the consolidated artifact format (a dict with key
+            ``"proposals"``) and a bare list, both holding ``{source, target?}``
+            objects with prefix token lists (``target`` is used as the certification
+            HINT; extra keys are ignored). After the mining length loop completes and
+            BEFORE the optional prune, every proposal runs the exact certification
+            chain of :meth:`certify_rules` against the just-mined rule state, with
+            this mine's evaluation matrices, challenges, tolerances and
+            master-seed-derived seeds: a proposal the mined rules already shorten is
+            skipped exactly like an already-reducible source, and a certified
+            proposal joins the ruleset through the same
+            :func:`~simplipy.utils.deduplicate_rules` path. Deterministic: file
+            order, content-derived per-proposal seeds (the stage-2-confirm policy).
+            The provenance sidecar records the proposals file, its sha256, and the
+            per-outcome counts (``certified`` / ``already_covered`` / ``rejected``
+            / ``duplicate``). Config key ``proposals:`` in the find-rules YAML.
 
         Notes
         -----
@@ -1305,6 +1525,17 @@ class SimpliPyEngine:
         """
         if not isinstance(prune, bool) and prune != 'covered':
             raise ValueError(f"prune must be a bool or 'covered', got {prune!r}")
+
+        # Proposal channel: load + normalize FIRST (a malformed proposals file must fail
+        # here, before any mining compute is spent). None stays None: only an explicitly
+        # given batch (even an empty one) activates the pass in _find_rules_native.
+        proposal_entries: list[tuple[tuple[str, ...], tuple[str, ...] | None]] | None = None
+        proposal_record: dict | None = None
+        if proposals is not None:
+            proposal_entries, proposal_record = _load_proposals(proposals)
+            if verbose:
+                print(f'Loaded {len(proposal_entries):,} proposals'
+                      + (f' from {proposal_record["file"]}' if proposal_record['file'] else ''))
 
         # Signal handler for main process
         interrupted = False
@@ -1384,6 +1615,10 @@ class SimpliPyEngine:
             seed=seed, mine_seed=mine_seed, confirm_seed=confirm_seed,
             confirm=confirm, candidate_fold_filter=candidate_fold_filter,
             prune=prune, reset_rules=reset_rules)
+        if proposal_record is not None:
+            # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
+            # counts are filled in by the proposal pass itself (_find_rules_native).
+            provenance['proposals'] = proposal_record
 
         # --- Phase 2: mine natively on the Rust engine (the only mining path since 0.5.0) ---
         try:
@@ -1408,6 +1643,8 @@ class SimpliPyEngine:
                 candidate_fold_filter=candidate_fold_filter,
                 relaxed_kruskal=relaxed_kruskal,
                 provenance=provenance,
+                proposal_entries=proposal_entries,
+                leaf_nodes=leaf_nodes,
             )
         finally:
             signal.signal(signal.SIGINT, old_handler)

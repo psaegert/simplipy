@@ -1,5 +1,5 @@
-//! The simplify kernel: the `!`-certificate lookup, `apply_rules_top_down` (with the constant
-//! fold of the numeric line), and the `simplify` fixpoint, all running on interned ids against
+//! The simplify kernel: the `!`-certificate lookup, `apply_rules_top_down` (with the
+//! constant-fold fallback), and the `simplify` fixpoint, all running on interned ids against
 //! the per-call [`SimplifyCtx`].
 
 use std::cell::RefCell;
@@ -75,19 +75,17 @@ impl Engine {
         parse_subtree(tokens, 0, &|t| view.arity(t)).0
     }
 
-    /// Faithful port of `apply_simplification_rules` (engine.py@0.2.15:1252): the whole-expression
+    /// The rule-application sub-unit `apply_simplification_rules`: the whole-expression
     /// all-`<constant>`/operator fold, then parse -> `apply_rules_top_down` -> flatten back to
-    /// prefix. This is the rule-application sub-unit (the `simplify` fixpoint's per-iteration rule
-    /// pass); validated in isolation against fresh Python `apply_simplification_rules`.
+    /// prefix. This is the `simplify` fixpoint's per-iteration rule pass.
     pub fn apply_simplification_rules(
         &self,
         expression: &[String],
         max_pattern_length: Option<usize>,
-        fold: bool,
     ) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(expression, &ctx);
-        let out = self.apply_simplification_rules_with_ctx(&toks, max_pattern_length, fold, &ctx);
+        let out = self.apply_simplification_rules_with_ctx(&toks, max_pattern_length, &ctx);
         self.resolve_seq(&out, &ctx)
     }
 
@@ -97,7 +95,6 @@ impl Engine {
         &self,
         expression: &[Tok],
         max_pattern_length: Option<usize>,
-        fold: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
         let view = self.view(ctx);
@@ -108,7 +105,7 @@ impl Engine {
             return vec![self.tokens.constant];
         }
         let tree = self.parse_prefix(expression, ctx);
-        let simplified = self.apply_rules_top_down(tree, max_pattern_length, fold, ctx);
+        let simplified = self.apply_rules_top_down(tree, max_pattern_length, ctx);
         let mut out = Vec::new();
         tree_to_prefix(&simplified, &mut out);
         out
@@ -159,37 +156,22 @@ impl Engine {
         None
     }
 
-    /// Faithful port of `apply_rules_top_down` (engine.py@0.2.15:1025), the deployed (no-statistics) path:
-    /// per-node all-`<constant>` fold; exact-rule lookup; pattern scan longest-length-first
-    /// (first-match-wins, via the operand[0] index); else recurse into operands and re-check exact +
-    /// pattern rules on the rebuilt node.
-    ///
-    /// `fold` selects the engine line. `false` = faithful `dev_7-3`: the early per-node
-    /// all-`<constant>` collapse runs BEFORE the rule scan. `true` = the numeric line: that early
-    /// collapse is REMOVED and folding runs as a FALLBACK after each rule scan (`try_fold_constants`
-    /// at the two sites = engine.py@0.2.15:1432/1480), so a rule that matches an all-`<constant>` subtree
-    /// is tried before the subtree is collapsed (the position change the numeric branch introduced).
+    /// `apply_rules_top_down`, the deployed (no-statistics) path:
+    /// exact-rule lookup; pattern scan longest-length-first (first-match-wins, via the
+    /// operand[0] index); constant folding as a FALLBACK after each rule scan
+    /// (`try_fold_constants` at the two sites), so a rule that matches an all-`<constant>`
+    /// subtree is tried before the subtree is collapsed; else recurse into operands and
+    /// re-check exact + pattern rules (and the fold fallback) on the rebuilt node.
     fn apply_rules_top_down(
         &self,
         node: Node,
         max_pattern_length: Option<usize>,
-        fold: bool,
         ctx: &SimplifyCtx,
     ) -> Node {
-        let constant = self.tokens.constant;
         let operands = match &node {
             Node::Leaf(_) => return node,
             Node::Op { operands, .. } => operands,
         };
-        // Faithful per-node fold (engine.py tag:1059): all DIRECT operands `<constant>` -> collapse.
-        // The numeric line removes this (folds as a post-rule fallback instead).
-        if !fold
-            && operands
-                .iter()
-                .all(|o| matches!(o, Node::Leaf(t) if *t == constant))
-        {
-            return Node::Leaf(constant);
-        }
         let operator = node.root_token();
 
         let mut flat = Vec::new();
@@ -208,14 +190,12 @@ impl Engine {
 
         // First fire site: exact lookup + pattern scan on the node as-is.
         if let Some(replacement) = self.try_rule_rewrite(&node, &flat, subtree_max_pl, ctx) {
-            return self.apply_rules_top_down(replacement, max_pattern_length, fold, ctx);
+            return self.apply_rules_top_down(replacement, max_pattern_length, ctx);
         }
 
-        // Numeric line: no rule matched -> try constant folding as fallback (engine.py@0.2.15:1432).
-        if fold {
-            if let Some(folded) = self.try_fold_constants(operator, operands, ctx) {
-                return folded;
-            }
+        // No rule matched -> try constant folding as fallback.
+        if let Some(folded) = self.try_fold_constants(operator, operands, ctx) {
+            return folded;
         }
 
         // No rule at this node: recurse into operands and rebuild. `node` is owned -- consume its
@@ -226,7 +206,7 @@ impl Engine {
         };
         let simplified_operands: Vec<Node> = owned_operands
             .into_iter()
-            .map(|o| self.apply_rules_top_down(o, max_pattern_length, fold, ctx))
+            .map(|o| self.apply_rules_top_down(o, max_pattern_length, ctx))
             .collect();
         let simplified = Node::Op {
             token: operator,
@@ -237,33 +217,25 @@ impl Engine {
         let mut flat2 = Vec::new();
         tree_to_prefix(&simplified, &mut flat2);
         if let Some(replacement) = self.try_rule_rewrite(&simplified, &flat2, subtree_max_pl, ctx) {
-            return self.apply_rules_top_down(replacement, max_pattern_length, fold, ctx);
+            return self.apply_rules_top_down(replacement, max_pattern_length, ctx);
         }
 
-        // Numeric line: no rule after operand simplification -> fold fallback (engine.py@0.2.15:1480).
-        if fold {
-            if let Node::Op {
-                operands: simp_ops, ..
-            } = &simplified
-            {
-                if let Some(folded) = self.try_fold_constants(operator, simp_ops, ctx) {
-                    return folded;
-                }
+        // No rule after operand simplification -> fold fallback.
+        if let Node::Op {
+            operands: simp_ops, ..
+        } = &simplified
+        {
+            if let Some(folded) = self.try_fold_constants(operator, simp_ops, ctx) {
+                return folded;
             }
         }
 
-        // `simplified` survived every fire site -> normal form for this call, UNLESS the
-        // faithful-mode entry collapse would still fold it (all direct operands `<constant>`).
-        let nf_safe = fold
-            || !matches!(&simplified, Node::Op { operands, .. }
-                if operands.iter().all(|o| matches!(o, Node::Leaf(t) if *t == constant)));
-        if nf_safe {
-            ctx.normal_forms.borrow_mut().insert(flat2);
-        }
+        // `simplified` survived every fire site -> normal form for this call.
+        ctx.normal_forms.borrow_mut().insert(flat2);
         simplified
     }
 
-    /// Port of `_try_fold_constants` (engine.py@0.2.15:1314, the numeric line), extended with NaN
+    /// `_try_fold_constants`, extended with NaN
     /// literal propagation (works on ANY operand shapes): fold a subtree whose operands are
     /// ALL leaves. If every operand is VALUED (`numeric::leaf_value` resolves it: numeric
     /// literals, `np.pi`/`np.e`, `(-1)`-style parenthesized literals, the `float("...")`
@@ -326,12 +298,12 @@ impl Engine {
         None
     }
 
-    /// THE whole-unit kernel. Faithful port of the `simplify` fixpoint (engine.py@0.2.15:1815-1924), the
+    /// THE whole-unit kernel: the `simplify` fixpoint, the
     /// prefix-token-list contract: per iteration `cancel_terms` -> `apply_simplification_rules`
     /// (when enabled), break when the iteration is a no-op vs the previous (`<= max_iter`); then
     /// `mask_elementary_literals` (when enabled); then `sort_operands` (mask-BEFORE-sort so the
     /// canonical operand order is a fixpoint -- idempotent); then the LONGER-RESULT GUARD
-    /// (engine.py@0.2.15:1886/1893: if the result is longer than the original input, return the ORIGINAL).
+    /// (if the result is longer than the original input, return the ORIGINAL).
     ///
     /// Returns the simplified prefix tokens (the Python `'list'` return). The `inplace` /
     /// return-type machinery (str/tuple/np_array) is a Python-shim concern, not part of this kernel.
@@ -345,7 +317,6 @@ impl Engine {
         max_pattern_length: Option<usize>,
         mask_elementary_literals: bool,
         apply_simplification_rules: bool,
-        fold: bool,
     ) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
@@ -355,14 +326,12 @@ impl Engine {
             max_pattern_length,
             mask_elementary_literals,
             apply_simplification_rules,
-            fold,
             &ctx,
         );
         self.resolve_seq(&out, &ctx)
     }
 
     /// The id-level simplify fixpoint (see [`Engine::simplify`] for the contract).
-    #[allow(clippy::too_many_arguments)]
     fn simplify_toks(
         &self,
         tokens: &[Tok],
@@ -370,7 +339,6 @@ impl Engine {
         max_pattern_length: Option<usize>,
         mask_elementary_literals: bool,
         apply_simplification_rules: bool,
-        fold: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
         let length_before = tokens.len();
@@ -396,7 +364,6 @@ impl Engine {
                     self.apply_simplification_rules_with_ctx(
                         &new_expression,
                         max_pattern_length,
-                        fold,
                         ctx,
                     )
                 });

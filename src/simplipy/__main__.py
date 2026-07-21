@@ -83,8 +83,9 @@ def main(argv: str = None) -> None:
             # SimpliPyEngine.from_config now receives a guaranteed valid path
             engine = SimpliPyEngine.from_config(engine_config_path)
 
-            if not os.path.exists(os.path.dirname(args.output_file)):
-                os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
+            output_dir = os.path.dirname(args.output_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
 
             rule_finding_config = load_config(args.config, resolve_paths=True)
 
@@ -105,6 +106,7 @@ def main(argv: str = None) -> None:
                     int(k): int(v) for k, v in
                     (rule_finding_config.get('source_sample_per_length') or {}).items()},
                 candidate_fold_filter=rule_finding_config.get('candidate_fold_filter', True),
+                proposals=rule_finding_config.get('proposals', None),
                 output_file=args.output_file,
                 save_every=args.save_every,
                 reset_rules=args.reset_rules,

@@ -1,10 +1,10 @@
 //! Canonical operand ordering for commutative operators (`+`, `*`), the last stage of the `simplify`
 //! fixpoint. Public entry [`sort_operands_unit`] is IDEMPOTENT: it iterates [`sort_operands_once`]
-//! (the per-pass port of `sort_operands`, engine.py@0.2.15:1636) to a fixpoint.
+//! (the per-pass port of `sort_operands`) to a fixpoint.
 //!
 //! ## Mechanism (and the rotation drift the fixpoint fixes)
 //! One pass (`sort_operands_once`), right-to-left, builds subtrees bottom-up. For a commutative node:
-//!  1. **Rotation special case** (engine.py@0.2.15:1667): if the LEFT operand is a composite Op with the
+//!  1. **Rotation special case**: if the LEFT operand is a composite Op with the
 //!     SAME operator (`op(op(A,B), C)`), right-rotate to `op(A, op(B,C))` and `continue` -- which
 //!     SKIPS the sort for this node. So a single pass leaves left-nested chains only PARTIALLY sorted
 //!     (`sort_once(['+','+','x2','x3','x1']) == ['+','x2','+','x3','x1']`) -- NON-idempotent. The
@@ -18,7 +18,7 @@
 //! paths matters. Stability IS load-bearing (composite duplicates survive cancel): equal keys must
 //! preserve input order to match Python's Timsort -- stable `slice::sort_by`, never `sort_unstable_by`.
 //!
-//! ## `operand_key` (engine.py@0.2.15:2512) -- a heterogeneous tuple, lifted to [`Key`]
+//! ## `operand_key` -- a heterogeneous tuple, lifted to [`Key`]
 //!  * non-numeric leaf  -> `(0, token)`        -> [`Key::Var`]  (sorts FIRST)
 //!  * numeric leaf       -> `(1, float(token))` -> [`Key::Num`]  (sorts SECOND)
 //!  * composite node     -> `(2, len, child_keys, op)` -> [`Key::Node`] (sorts LAST)
@@ -36,7 +36,7 @@ use std::cmp::Ordering;
 use crate::parse::{tree_to_prefix, Node};
 use crate::tokens::{Tok, TokenView};
 
-/// The `operand_key` value (engine.py@0.2.15:2512), as an ordered enum mirroring the Python tuple.
+/// The `operand_key` value, as an ordered enum mirroring the Python tuple.
 enum Key {
     /// `(0, token)` -- a non-numeric leaf (variable / `<constant>` / named const / `(-1)`).
     Var(Tok),
@@ -108,7 +108,7 @@ fn prefix_len(node: &Node) -> usize {
     }
 }
 
-/// Faithful port of `operand_key` (engine.py@0.2.15:2512).
+/// Port of `operand_key`.
 fn operand_key(node: &Node, view: &TokenView) -> Key {
     match node {
         // Node: `(2, len(flatten(operands)), tuple(operand_key(c) for c in operands[1]), operands[0])`.
@@ -171,7 +171,7 @@ fn node_at_mut<'a>(mut node: &'a mut Node, path: &[usize]) -> &'a mut Node {
     node
 }
 
-/// The commutative-node sort (engine.py@0.2.15:1673-1722): gather boundary paths, lex-sort them, key-sort
+/// The commutative-node sort: gather boundary paths, lex-sort them, key-sort
 /// the operands (STABLE), and place sorted-operand[i] at sorted-path[i] in a clone of the subtree.
 fn sort_commutative_node(subtree: Node, operator: Tok, view: &TokenView) -> Node {
     let mut positions: Vec<Vec<usize>> = Vec::new();

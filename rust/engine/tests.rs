@@ -38,7 +38,7 @@ fn prune_explicit_is_correct() {
             (l.clone(), rhs)
         })
         .collect();
-    let pruned = e.prune_explicit(&sample, false, true);
+    let pruned = e.prune_explicit(&sample, false);
     assert!(
         pruned.len() < sample.len(),
         "prune must not remove everything (got {}/{})",
@@ -46,7 +46,7 @@ fn prune_explicit_is_correct() {
         sample.len()
     );
     for lhs in &pruned {
-        let r = e.simplify(lhs, 5, None, false, true, true);
+        let r = e.simplify(lhs, 5, None, false, true);
         assert_eq!(
             &r,
             rhs_of.get(lhs).unwrap(),
@@ -60,14 +60,16 @@ fn load(name: &str) -> Vec<Vec<String>> {
     serde_json::from_str(&fs::read_to_string(p).expect("corpus fixture present")).unwrap()
 }
 
-/// Whole-unit gate (a self-contained slice of benchmarks/diff_simplify.py): the composed Rust
-/// `simplify` fixpoint reproduces the frozen dev_7-3 reference on the first 400 corpus skeletons
-/// at mpl=4 AND mpl=7. The full 10000/10000 (both mpl) + 3000-row fresh-Python cross-check live
-/// in the harness; this pins it in CI.
+/// Whole-unit regression gate: the composed Rust `simplify` fixpoint reproduces the frozen
+/// reference outputs on the first 400 corpus skeletons at mpl=4 AND mpl=7. The reference is the
+/// 0.7.0 ALIGNED engine line (real pow semantics at a -inf base; single engine line) -- it was
+/// regenerated from this engine when the faithful dev_7-3 reproduction line was removed. The
+/// corpus is the first 400 skeletons of the 65,536-expression training-prior benchmark. To
+/// reproduce the historical dev_7-3 / v23.0-era outputs byte-for-byte, install simplipy<=0.6.0.
 #[test]
 fn simplify_matches_frozen_reference() {
-    // Skip when the (multi-MB, not-vendored) frozen corpus is absent -- the full 10k parity runs
-    // in the benchmark harness; this in-crate slice only fires where the fixtures are staged.
+    // Skip when the frozen corpus is absent -- this in-crate slice only fires where the
+    // fixtures are staged (benchmarks/corpus/).
     let corpus = format!(
         "{}/benchmarks/corpus/raw_skeletons.json",
         env!("CARGO_MANIFEST_DIR")
@@ -79,11 +81,11 @@ fn simplify_matches_frozen_reference() {
     let Some(e) = engine() else { return };
     let raw = load("raw_skeletons.json");
     for mpl in [4usize, 7usize] {
-        let reference = load(&format!("reference_dev_7-3_mpl{mpl}.json"));
+        let reference = load(&format!("reference_aligned_mpl{mpl}.json"));
         assert_eq!(raw.len(), reference.len());
         let mut n_changed = 0;
         for (s, r) in raw.iter().zip(reference.iter()).take(400) {
-            let out = e.simplify(s, 5, Some(mpl), true, true, false);
+            let out = e.simplify(s, 5, Some(mpl), true, true);
             if &out != s {
                 n_changed += 1;
             }
@@ -96,8 +98,7 @@ fn simplify_matches_frozen_reference() {
     }
 }
 
-/// `is_valid` (engine.py@0.2.15:354) canonical cases, cross-checked against fresh Python (the ~248k-input
-/// corpus+fuzz gate lives in benchmarks/diff_is_valid.py). Pins each reject path + the numeric guard.
+/// `is_valid` canonical cases. Pins each reject path + the numeric guard.
 #[test]
 fn is_valid_cases() {
     let Some(e) = engine() else { return };
@@ -131,7 +132,7 @@ fn is_valid_cases() {
     }
 }
 
-/// `operators_to_realizations` / `realizations_to_operators` (engine.py@0.2.15:2547/2566): operator
+/// `operators_to_realizations` / `realizations_to_operators`: operator
 /// names <-> realizations, non-operator tokens untouched, round-trip on canonical prefix.
 #[test]
 fn realizations_round_trip() {
@@ -178,14 +179,13 @@ fn nan_literal_propagates_in_numeric_fold() {
             5,
             None,
             true,
-            true,
             true
         ),
         nan
     );
     // propagation reaches VARIABLE contexts, which the evidence-based miner cannot:
     assert_eq!(
-        e.simplify(&t(&["*", "x0", "acos", "np.e"]), 5, None, true, true, true),
+        e.simplify(&t(&["*", "x0", "acos", "np.e"]), 5, None, true, true),
         nan
     );
     // pow does not propagate structurally (pow(1, NaN) = 1):
@@ -194,7 +194,6 @@ fn nan_literal_propagates_in_numeric_fold() {
         &t(&["pow", "<constant>", "acos", "np.e"]),
         5,
         None,
-        true,
         true,
         true,
     );

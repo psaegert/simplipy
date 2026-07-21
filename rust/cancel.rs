@@ -1,5 +1,5 @@
-//! Faithful port of the term-cancellation unit: `collect_multiplicities` (engine.py@0.2.15:1290) feeding
-//! `cancel_terms` (engine.py@0.2.15:1410). In the `simplify` fixpoint these always run as a pair
+//! Port of the term-cancellation unit: `collect_multiplicities` feeding
+//! `cancel_terms`. In the `simplify` fixpoint these always run as a pair
 //! (`cancel_terms(*collect_multiplicities(expr))`), so the public entry here is the fused unit
 //! [`cancel_terms_unit`].
 //!
@@ -31,7 +31,7 @@
 use crate::operators::Operators;
 use crate::tokens::{Tok, TokenTable, TokenView};
 
-// Connection classes, hardcoded exactly as engine.py@0.2.15:172-176 (NOT config-derived). Iteration order
+// Connection classes, hardcoded (NOT config-derived). Iteration order
 // of `self.connection_classes` is the dict insertion order [add, mult]; we index by these consts.
 const CC_ADD: usize = 0;
 const CC_MULT: usize = 1;
@@ -55,7 +55,7 @@ fn neutral(cc: usize, tt: &TokenTable) -> Tok {
     }
 }
 
-/// `connection_classes_inverse` (engine.py@0.2.15:174): the unary inverse operator of each class.
+/// `connection_classes_inverse`: the unary inverse operator of each class.
 #[inline]
 fn cc_inverse(cc: usize, tt: &TokenTable) -> Tok {
     match cc {
@@ -64,17 +64,17 @@ fn cc_inverse(cc: usize, tt: &TokenTable) -> Tok {
     }
 }
 
-/// `connection_classes_hyper` (engine.py@0.2.15:175): the hyper-operator PREFIX of each class (the
+/// `connection_classes_hyper`: the hyper-operator PREFIX of each class (the
 /// emitted token is `format!("{hyper}{k}")`, interned at emission).
 const CC_HYPER: [&str; N_CC] = ["mult", "pow"];
 
-/// `token in self.binary_connectable_operators` (engine.py@0.2.15:176).
+/// `token in self.binary_connectable_operators`.
 #[inline]
 fn is_binary_connectable(token: Tok, tt: &TokenTable) -> bool {
     token == tt.plus || token == tt.minus || token == tt.star || token == tt.slash
 }
 
-/// `self.operator_to_class[operator]` (engine.py@0.2.15:173) for a binary-connectable operator.
+/// `self.operator_to_class[operator]` for a binary-connectable operator.
 #[inline]
 fn operator_to_class(op: Tok, tt: &TokenTable) -> usize {
     if op == tt.plus || op == tt.minus {
@@ -117,7 +117,7 @@ struct AnnNode {
     label: Vec<Tok>,
 }
 
-/// Faithful port of `collect_multiplicities` (engine.py@0.2.15:1290). Right-to-left scan building a stack
+/// Port of `collect_multiplicities`. Right-to-left scan building a stack
 /// of annotated subtrees; for a well-formed prefix expression the stack ends with a single root,
 /// which is returned. Mirrors the leaf / binary-connectable / general-operator branches exactly.
 fn collect_multiplicities(expression: &[Tok], view: &TokenView) -> Option<AnnNode> {
@@ -248,7 +248,7 @@ struct Frame<'a> {
     still_connected: bool,
 }
 
-/// Faithful port of `cancel_terms` (engine.py@0.2.15:1410), the deployed `collect_statistics=False` path.
+/// Port of `cancel_terms`, the deployed `collect_statistics=False` path.
 fn cancel_terms(root: &AnnNode, ops: &Operators, view: &TokenView) -> Vec<Tok> {
     let tt = view.table;
     let mut expression: Vec<Tok> = Vec::new();
@@ -291,14 +291,14 @@ fn cancel_terms(root: &AnnNode, ops: &Operators, view: &TokenView) -> Vec<Tok> {
                         let current_parity = subtree_parities[argmax_class];
                         let inverse_operator = cc_inverse(argmax_class, tt);
 
-                        // Negative parity and negative multiplicity cancel out (engine.py@0.2.15:1483).
+                        // Negative parity and negative multiplicity cancel out.
                         let inverse_operator_prefix: Vec<Tok> =
                             if current_parity * cancelled_multiplicity_sum >= 0 {
                                 Vec::new()
                             } else {
                                 vec![inverse_operator]
                             };
-                        // `double_inverse_operator_prefix` (engine.py@0.2.15:1485/1488) is computed in the
+                        // `double_inverse_operator_prefix` is computed in the
                         // source but never consumed -> intentionally omitted (verified dead).
 
                         let mut fr: Vec<Tok> = Vec::new();

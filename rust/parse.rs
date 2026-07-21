@@ -1,5 +1,5 @@
-//! Prefix <-> tree parsing, mirroring `engine.parse_subtree` (engine.py@0.2.15:1033) and
-//! `engine.prefix_to_tree` (engine.py@0.2.15:935).
+//! Prefix <-> tree parsing, mirroring `engine.parse_subtree` and
+//! `engine.prefix_to_tree`.
 //!
 //! The tree node is the Rust analogue of simplipy's nested-list representation
 //! `[op, [child], [child], ...]` with leaves as single-element lists `[token]`. Tokens are
@@ -29,7 +29,7 @@ impl Node {
 
 /// Parse one prefix subtree starting at `start_idx`; returns (node, next_index).
 ///
-/// Faithful port of `parse_subtree` (engine.py@0.2.15:1033). A token with a known arity is an operator and
+/// Port of `parse_subtree`. A token with a known arity is an operator and
 /// consumes that many operand subtrees; anything else is a leaf. For dev_7-3 this is also a faithful
 /// stand-in for `prefix_to_tree` (used on rule patterns): VERIFIED that every operator has arity 1
 /// or 2 (no arity-0 operators) and no alias / `**` token appears in the rules or skeletons, so the

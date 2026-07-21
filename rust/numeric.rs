@@ -1,14 +1,16 @@
 //! Numeric constant folding (the `numeric` engine line): a native f64 evaluator + a CPython-exact
-//! `str(float)` formatter, replacing the Python `_evaluate_constant_subtree` (engine.py@0.2.15:1073) which
+//! `str(float)` formatter, replacing the Python `_evaluate_constant_subtree` which
 //! went through `operators_to_realizations` -> `prefix_to_infix` -> `codify` -> `code_to_lambda`.
 //!
 //! Parity policy ("numerically correct"): the evaluator uses the SAME primitives as
 //! Python -- libm (`powf`/`sin`/...) and exact f64 arithmetic, with the engine's custom operator
-//! semantics (the `div`/`inv` zero handling, the real cube/fifth roots, `pow1_2`/`pow1_4` of a
-//! negative base yielding a COMPLEX result -> no fold, binary `pow` via `np.power` -> NaN). This is
-//! the same platform-libm parity Python itself has; values match bit-for-bit on a given build, and
-//! the float repr matches `str()` byte-for-byte. Result `None` mirrors Python returning `None`
-//! (unfoldable: complex result, unparseable leaf, unknown operator).
+//! semantics (the `div`/`inv` zero handling, the real cube/fifth roots, negative-base powers ->
+//! NaN). One deliberate deviation from raw libm (`aligned_pow`): `pow(negative base incl. -inf,
+//! finite non-integer exponent)` is NaN -- the real-analysis semantics -- overriding C99's
+//! magnitude convention at the -inf-base row only; infinite exponents keep the C99
+//! magnitude-step cells. Values otherwise match Python bit-for-bit on a given build, and the
+//! float repr matches `str()` byte-for-byte. Result `None` mirrors Python returning `None`
+//! (unfoldable: unparseable leaf, unknown operator).
 
 use crate::operators::Operators;
 
@@ -51,7 +53,21 @@ fn cpow(x: f64, y: f64) -> f64 {
     unsafe { cmath::pow(std::hint::black_box(x), std::hint::black_box(y)) }
 }
 
-/// Faithful port of `_evaluate_constant_subtree` (engine.py@0.2.15:1073): evaluate an all-numeric prefix
+/// Contract-aligned power: `pow(negative base — including −∞ — , finite non-integer
+/// exponent)` is undefined (NaN), the real-analysis semantics. libm already returns NaN
+/// for finite negative bases; C99's special case `pow(−∞, non-integer) = ±∞` (magnitude
+/// convention) is deliberately overridden, so the override changes only the −∞-base row.
+/// Infinite exponents keep the C99 magnitude-step semantics (`pow(t, ±∞)` decided by
+/// |t| — including negative `t`), which the contract ratifies as-is.
+#[inline]
+fn aligned_pow(x: f64, y: f64) -> f64 {
+    if x < 0.0 && y.is_finite() && y.fract() != 0.0 {
+        return f64::NAN;
+    }
+    cpow(x, y)
+}
+
+/// Port of `_evaluate_constant_subtree`: evaluate an all-numeric prefix
 /// subtree to a single result token, or `None` if it cannot be folded (matches Python's `None`).
 pub fn evaluate_constant_subtree(tokens: &[String], ops: &Operators) -> Option<String> {
     let mut idx = 0;
@@ -153,13 +169,13 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
         "div4" => |x| x / 4.0,
         "div5" => |x| x / 5.0,
         // pow{N} = `x ** N` (C pow, matches Python float.__pow__); integer exponent -> always real
-        "pow2" => |x| cpow(x, 2.0),
-        "pow3" => |x| cpow(x, 3.0),
-        "pow4" => |x| cpow(x, 4.0),
-        "pow5" => |x| cpow(x, 5.0),
-        // pow1_2 / pow1_4 = `x ** 0.5` / `x ** 0.25`: negative base -> NaN (keep `sqrt(-1)` symbolic).
-        "pow1_2" => |x| cpow(x, 0.5),
-        "pow1_4" => |x| cpow(x, 0.25),
+        "pow2" => |x| aligned_pow(x, 2.0),
+        "pow3" => |x| aligned_pow(x, 3.0),
+        "pow4" => |x| aligned_pow(x, 4.0),
+        "pow5" => |x| aligned_pow(x, 5.0),
+        // pow1_2 / pow1_4 = `x ** 0.5` / `x ** 0.25`: negative base (incl. -inf) -> NaN.
+        "pow1_2" => |x| aligned_pow(x, 0.5),
+        "pow1_4" => |x| aligned_pow(x, 0.25),
         // pow1_3 / pow1_5: real cube/fifth root (operators.py:121,164) -- sign-folded, always real
         "pow1_3" => |x| real_odd_root(x, 1.0 / 3.0),
         "pow1_5" => |x| real_odd_root(x, 1.0 / 5.0),
@@ -191,7 +207,7 @@ pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
         // `/` realization is `operators.div`: scalar zero-divisor -> signed inf / nan (operators.py:29)
         "/" => op_div,
         // binary `pow` = `x ** y` = C pow (invalid -> NaN, overflow -> inf)
-        "pow" => cpow,
+        "pow" => aligned_pow,
         _ => return None,
     })
 }
@@ -224,7 +240,7 @@ fn real_odd_root(x: f64, r: f64) -> f64 {
     }
 }
 
-/// CPython-exact `str(float)` as the result formatter uses it (engine.py@0.2.15:1085-1093):
+/// CPython-exact `str(float)` as the result formatter uses it:
 /// nan/inf -> `float("...")` tokens; integer-valued -> `str(int(x))`; else `str(float)`.
 pub fn py_float_repr(x: f64) -> String {
     if x.is_nan() {
@@ -358,5 +374,47 @@ mod tests {
         assert_eq!(py_float_repr(f64::NAN), "float(\"nan\")");
         assert_eq!(py_float_repr(f64::INFINITY), "float(\"inf\")");
         assert_eq!(py_float_repr(f64::NEG_INFINITY), "float(\"-inf\")");
+    }
+}
+
+#[cfg(test)]
+mod aligned_pow_tests {
+    use super::*;
+
+    /// The contract's normative pow cells at negative and infinite bases: NaN for
+    /// negative base (incl. −∞) with finite non-integer exponent; integer exponents
+    /// and the magnitude-step infinite-exponent cells unchanged from C99.
+    #[test]
+    fn negative_infinite_base_non_integer_exponent_is_nan() {
+        for op in ["pow1_2", "pow1_4"] {
+            let f = unary_fn(op).unwrap();
+            assert!(f(f64::NEG_INFINITY).is_nan(), "{op}(-inf) must be NaN");
+            assert!(f(-1.0).is_nan(), "{op}(-1) must be NaN");
+        }
+        let p = binary_fn("pow").unwrap();
+        assert!(p(f64::NEG_INFINITY, 0.25).is_nan());
+        assert!(p(f64::NEG_INFINITY, 0.5).is_nan());
+        assert!(p(-2.0, 0.5).is_nan());
+    }
+
+    #[test]
+    fn ratified_cells_unchanged() {
+        let p = binary_fn("pow").unwrap();
+        assert_eq!(p(f64::NEG_INFINITY, 2.0), f64::INFINITY);
+        assert_eq!(p(f64::NEG_INFINITY, 3.0), f64::NEG_INFINITY);
+        // §9.4 magnitude-step at infinite exponents, including negative t:
+        assert_eq!(p(f64::NEG_INFINITY, f64::INFINITY), f64::INFINITY);
+        assert_eq!(p(f64::NEG_INFINITY, f64::NEG_INFINITY), 0.0);
+        assert_eq!(p(-2.0, f64::INFINITY), f64::INFINITY);
+        assert_eq!(p(-0.5, f64::INFINITY), 0.0);
+        assert_eq!(p(-1.0, f64::INFINITY), 1.0);
+        // IEEE-definitional nan-pow cells (ratified):
+        assert_eq!(p(1.0, f64::NAN), 1.0);
+        assert_eq!(p(f64::NAN, 0.0), 1.0);
+        // one-zero: -0.0 is not a negative base
+        assert_eq!(p(-0.0, 0.5), 0.0);
+        // odd real roots stay sign-folded and defined:
+        let r3 = unary_fn("pow1_3").unwrap();
+        assert_eq!(r3(-8.0), -2.0);
     }
 }

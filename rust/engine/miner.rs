@@ -183,9 +183,9 @@ impl Engine {
             .par_iter()
             .enumerate()
             .filter_map(|(idx, src)| {
-                // Kruskal prune (engine.py@0.2.15:2722): simplify with the current rules; skip if it
+                // Kruskal prune: simplify with the current rules; skip if it
                 // shortens (strict), or tighten the search bound to the simplified length (relaxed).
-                let slen = self.simplify(src, 5, None, true, true, true).len();
+                let slen = self.simplify(src, 5, None, true, true).len();
                 if slen < src.len() && !relaxed_kruskal {
                     return None;
                 }
@@ -221,7 +221,6 @@ impl Engine {
         &mut self,
         ordered_lhs: &[Vec<String>],
         mask_elementary_literals: bool,
-        fold: bool,
     ) -> Vec<Vec<String>> {
         let mut pruned = Vec::new();
         for lhs in ordered_lhs {
@@ -235,7 +234,7 @@ impl Engine {
                 .iter()
                 .map(|&t| self.tokens.resolve(t).to_string())
                 .collect();
-            let result = self.simplify(lhs, 5, None, mask_elementary_literals, true, fold);
+            let result = self.simplify(lhs, 5, None, mask_elementary_literals, true);
             if result == rhs {
                 pruned.push(lhs.clone()); // redundant: keep removed
             } else {

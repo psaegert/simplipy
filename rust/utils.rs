@@ -10,7 +10,7 @@ use crate::tokens::{Tok, TokenView};
 // `operand_key` + its ordered key type are ported in `src/sort.rs` (co-located with `sort_operands`,
 // their only consumer).
 
-/// Faithful port of `is_numeric_string` (utils.py@0.2.15:552), the predicate `mask_elementary_literals`
+/// Port of `is_numeric_string`, the predicate `mask_elementary_literals`
 /// uses. It is a string-munging check, NOT `float()`:
 /// `s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e', '', 1).isdigit()`.
 /// Order matters (`.` then `e-` then `e`); each `replace(..., 1)` is first-occurrence-only;
@@ -34,7 +34,7 @@ fn replace_first(s: &str, pat: &str) -> String {
     }
 }
 
-/// Faithful port of `mask_elementary_literals` (utils.py@0.2.15:679): replace every token for which
+/// Port of `mask_elementary_literals`: replace every token for which
 /// [`is_numeric_string`] holds (e.g. `0`, `1`, `14`, `3.14`) with `<constant>`. The final step of
 /// `simplify` (after sort), abstracting the literal coefficients/neutrals that cancellation emits.
 /// Per-id predicate via the view (same `is_numeric_string`, computed at intern).
@@ -51,7 +51,7 @@ pub fn mask_elementary_literals(expression: &[Tok], view: &TokenView) -> Vec<Tok
         .collect()
 }
 
-/// Faithful port of `numbers_to_constant` (utils.py@0.2.15:259): replace every token for which Python's
+/// Port of `numbers_to_constant`: replace every token for which Python's
 /// `float(token)` SUCCEEDS with `<constant>`. NOTE this uses `float()` (try/except), NOT
 /// `is_numeric_string` -- so it is a DIFFERENT predicate from [`mask_elementary_literals`]
 /// (e.g. `float('1e3')` succeeds, `float('inf')`/`float('nan')` succeed). `parse` calls this when
@@ -72,7 +72,7 @@ pub fn numbers_to_constant(prefix_expression: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Faithful port of `remove_pow1` (utils.py@0.2.15:898): drop every `pow1` token (raising-to-1 identity)
+/// Port of `remove_pow1`: drop every `pow1` token (raising-to-1 identity)
 /// and rewrite `pow_1` (raising-to-(-1)) as `inv`; all other tokens pass through. The final cleanup
 /// step of `parse`.
 pub fn remove_pow1(prefix_expression: &[String]) -> Vec<String> {
@@ -90,7 +90,7 @@ pub fn remove_pow1(prefix_expression: &[String]) -> Vec<String> {
     out
 }
 
-/// Faithful port of `utils.is_prime` (utils.py@0.2.15:396). NOTE: this mirrors the SOURCE exactly,
+/// Port of `utils.is_prime`. NOTE: this mirrors the SOURCE exactly,
 /// quirks included -- it is only ever invoked from `cancel_terms` with `abs(sum) > 5`, but the
 /// faithful contract is exact replication, not a "correct" primality test. Python:
 /// ```python
@@ -114,7 +114,7 @@ pub fn is_prime(n: i64) -> bool {
     true
 }
 
-/// Faithful port of `utils.factorize_to_at_most` (utils.py@0.2.15:583). Decomposes `p` into factors
+/// Port of `utils.factorize_to_at_most`. Decomposes `p` into factors
 /// each `<= max_factor` whose product is `p`, in discovery order (NOT sorted). Returns `Err(())`
 /// where Python raises `ValueError` -- the caller (`cancel_terms`) branches on the raise to a
 /// `*`/`pow`-coefficient fallback, so the raise conditions are CONTROL FLOW and must match exactly:

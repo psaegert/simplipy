@@ -1,6 +1,63 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.7.0 (unreleased)
+
+Real-semantics pow alignment and the removal of the faithful dev_7-3 reproduction line:
+the package now ships ONE engine line.
+
+### Added
+- **LLM-proposal channel in the miner**: `find_rules(..., proposals=...)` accepts a path
+  to a proposals JSON (consolidated `{"proposals": [...]}` artifact or a bare list of
+  `{source, target?}` objects) or the equivalent in-memory object. After the mining
+  length loop and before the optional prune, every proposal runs the exact
+  `certify_rules` chain against the just-mined rule state with the mine's evaluation
+  matrices, tolerances and master-seed-derived, content-derived per-proposal seeds;
+  certified proposals join the ruleset through the same `deduplicate_rules` path. The
+  find-rules YAML forwards a `proposals:` key, and the provenance sidecar records the
+  proposals file, its sha256, and per-outcome counts
+  (`certified` / `already_covered` / `rejected` / `duplicate`). This makes a
+  mined-plus-proposed ruleset reproducible from one config and one command.
+- **Special-point certification phase in the miner** (`rust/battery.rs`): rule
+  certification now additionally checks every accepted (source, candidate) pair at a
+  battery of symbolic special points (0, ±1/2, ±1, ..., ±π/2, π, e) per variable, sweeps a
+  battery of special source-constant values, and snaps fitted witness constants to nearby
+  integers / half-integers before the domain-preservation gate. This closes three gaps
+  where a rule could certify on random evaluation matrices yet be unsound at points
+  deployed expressions actually reach: a fitted exponent like `2.9999999999999996` is NaN
+  on the negative half-line and hides the positive-measure domain extension its snapped
+  witness `3.0` creates (`exp(log(pow3 x)) → pow(x, C)`); a rule can be false exactly at a
+  symbolic coincidence (`pow(sin x, inf) → 0` is 1 at x = π/2); and a pattern-bound
+  source constant reaches special values in deployment (`pow(cos C, inf) → 0` at C = 0).
+  Rows where deployed f64 evaluation diverges from contract semantics are re-judged at
+  three fixed precision rungs (50/120/250 decimal digits) with symbolic coordinates
+  rendered at each precision, so stable limit completions (`x/x → 1`) keep certifying
+  while precision-dependent cancellation seams are rejected fail-closed.
+
+### Changed
+- **Stricter mining certification (see the special-point phase above)**: `find_rules`
+  rejects rule families that earlier versions could mine. Rulesets mined with
+  `simplipy <= 0.6.0` may therefore contain rules that 0.7.0 refuses to re-mine;
+  re-mining under 0.7.0 is the recommended migration.
+- **Pow alignment (real semantics)**: `pow` at a `-inf` base with a finite non-integer
+  exponent now evaluates to NaN (real semantics) across the constant folder, the operator
+  realizations, and the interval engine. Magnitude-step cells at infinite exponents are
+  unchanged.
+- **`engine_id` now reports the package version** (e.g. `simplipy-0.7.0`) instead of the
+  frozen reference id `dev_7-3`, so provenance records identify the exact engine build.
+
+### Removed
+- **BREAKING: the faithful dev_7-3 reproduction line is removed.** The `fold` parameter of
+  `_core.Engine.simplify` / `apply_rules` / `prune_explicit` is gone (the numeric
+  constant-folding behavior is now the only one), the legacy quirk-preserving conversion
+  variants are gone (the corrected conversions are now exposed under the plain
+  `prefix_to_infix` / `infix_to_prefix` / `convert_expression` / `parse` names, which is
+  what the Python API always routed), and the frozen byte-identical-to-0.2.15 parity
+  fixtures and reference constants (`FAITHFUL_ENGINE_ID`, `REFERENCE_SIMPLIPY_VERSION`,
+  `REFERENCE_SIMPLIPY_COMMIT`) are gone. The parity regression test is re-baselined
+  against the 0.7.0 aligned engine line. To reproduce v23.0/dev_7-3-era behavior
+  byte-for-byte, install `simplipy<=0.6.0`.
+
+## 0.6.0
 
 A performance overhaul of the simplify hot path (byte-identical outputs), sorted rule
 placeholders with match-time certificates, ruleset pruning and observability tools, and

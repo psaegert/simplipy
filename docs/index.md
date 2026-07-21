@@ -108,12 +108,10 @@ flowchart TD
     CCACHE[("certificate caches:<br/>per-call + per-engine")] -.- CERT
 ```
 
-The compiled core implements two *engine lines*, selected per call via its `fold`
-parameter. The **faithful** line (`fold=False`, plain conversions) is byte-identical to
-the frozen 0.2.15 pure-Python reference, kept so results produced against that engine
-stay reproducible; the **numeric** line (`fold=True`, fixed conversions) adds numeric
-constant folding and the conversion bug fixes, and is what the shipped Python API
-routes.
+The compiled core implements ONE engine line, carrying the contract semantics: numeric
+constant folding (including non-finite results such as `1/0 -> float("inf")`), the
+corrected conversions, and real-semantics power evaluation. Byte-exact reproduction of
+historical behavior (the dev_7-3 / v23.0 era) is served by installing `simplipy<=0.6.0`.
 
 
 ## Key Components
