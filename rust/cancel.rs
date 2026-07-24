@@ -554,9 +554,9 @@ fn cancel_terms(
 ///
 /// `transparent` is part of the MOVE SPACE, not a policy: opaque `neg`/`inv` regions expose
 /// candidates (and emits) the transparent shape cannot reach, so a search that branches only
-/// over transparent cancels cannot dominate the old `LegacyOpaque` trajectory. When the
-/// expression contains no `neg`/`inv` the two shapes coincide exactly, so callers can skip the
-/// duplicate enumeration ([`has_class_inverse`]).
+/// over transparent cancels cannot dominate the old `LegacyOpaque` trajectory. Note the shapes cannot be
+/// told apart up front by scanning for `neg`/`inv`: cancel EMITS them, so an expression with
+/// none can acquire one mid-trajectory.
 pub fn cancel_nth(
     expression: &[Tok],
     ops: &Operators,
@@ -574,13 +574,6 @@ pub fn cancel_nth(
     }
 }
 
-/// Does the expression contain a class inverse (`neg`/`inv`)? When it does not, the transparent
-/// and opaque region shapes are identical by construction, so the search need only enumerate one.
-pub fn has_class_inverse(expression: &[Tok], view: &TokenView) -> bool {
-    let tt = view.table;
-    expression.iter().any(|&t| t == tt.neg || t == tt.inv)
-}
-
 /// The fused public entry: `cancel_terms(*collect_multiplicities(expression))` under the
 /// engine's own region shape and candidate selection (transparent `neg`/`inv`, historical
 /// last-qualifying-at-the-root-most-node) -- i.e. exactly the step [`crate::Engine::simplify`]'s
@@ -588,9 +581,14 @@ pub fn has_class_inverse(expression: &[Tok], view: &TokenView) -> bool {
 /// expression (`collect_multiplicities` does not collapse to a single root) the input is
 /// returned unchanged; the deployed skeleton path only ever feeds well-formed prefix
 /// expressions.
-pub fn cancel_terms_unit(expression: &[Tok], ops: &Operators, view: &TokenView) -> Vec<Tok> {
-    match collect_multiplicities(expression, view, true) {
-        Some(root) => cancel_terms(&root, ops, view, true, None).0,
+pub fn cancel_terms_unit(
+    expression: &[Tok],
+    ops: &Operators,
+    view: &TokenView,
+    transparent: bool,
+) -> Vec<Tok> {
+    match collect_multiplicities(expression, view, transparent) {
+        Some(root) => cancel_terms(&root, ops, view, transparent, None).0,
         None => expression.to_vec(),
     }
 }

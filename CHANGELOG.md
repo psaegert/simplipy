@@ -11,10 +11,13 @@ independently gate + monitor any rule set.
   cancellation order. Cancel is non-confluent -- taking candidate A can destroy candidate B,
   and which choice ends shortest depends on what the ruleset can fold -- so the kernel now
   SEARCHES a small move graph instead of guessing. State = an expression; the moves are a flat
-  choice set (apply the rules pass, or cancel any one qualifying candidate, under either
-  `neg`/`inv` region shape); the answer is the shortest state visited. Because every state is
-  a.e.-equivalent to the input, and the input is state zero, `simplify` can now never return a
-  result longer than a previous release's, and never longer than its own input. Best-first by
+  choice set (apply the rules pass, or cancel any one qualifying candidate); the answer is the
+  shortest state visited. Because every state is a.e.-equivalent to the input, and the input is
+  state zero, `simplify` can never return a result longer than its own input; and the search is
+  seeded with BOTH greedy trajectories (the current cancellation and the pre-0.8.0 one, whose
+  `neg`/`inv` regions were opaque), so it can never return a result longer than a previous
+  release's either. Neither property can be had from a length guard, which is input-relative and
+  cannot see that a different cancellation order would have been shorter. Best-first by
   length with a visited-set; the node budget (`SIMPLIPY_SEARCH_BUDGET`, default 64; 0 = the old
   greedy fixpoint) bounds a rare heavy tail -- the median expression expands 2 nodes and 53%
   have no cancellation candidate at all. On the 64k v23.0 prior this shortens 2867/1008/351

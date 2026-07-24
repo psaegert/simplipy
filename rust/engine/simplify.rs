@@ -410,6 +410,10 @@ impl Engine {
     /// * **State** = a prefix expression.
     /// * **Moves** (a single flat choice set, NOT a fixed cancel->rules alternation):
     ///   `apply_simplification_rules(S)`, and `cancel k-th candidate of S` for every `k`.
+    ///   The opaque `neg`/`inv` region shape is deliberately NOT a move: what it is worth is
+    ///   exactly the pre-0.8.0 engine's trajectory, so it enters as a second SEED (one greedy
+    ///   pass) rather than doubling the branching at every expansion -- same guarantee, and it
+    ///   measured free, where branching it cost +10% at budget 64 and +35% at 256.
     ///   Interleavings the old fixpoint could not express (cancel->cancel->rules, rules-first,
     ///   cancel-only) are ordinary paths here. Ordering is load-bearing: applying the rules pass
     ///   as state *normalization* before the first cancel destroys cancellations.
@@ -434,14 +438,39 @@ impl Engine {
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
-        // Greedy seed: the incumbent trajectory. Guarantees never-worse under ANY budget.
+        // Greedy SEEDS. The search branches over candidates under the transparent region shape
+        // only; the opaque shape enters here instead, as a second seed. Rationale: what the
+        // opaque shape is worth is exactly the PREVIOUS engine's trajectory (its cancel treated
+        // `neg`/`inv` as opaque), not arbitrary opaque interleavings -- so it costs one extra
+        // greedy pass rather than doubling the branching at every expansion. Together these
+        // seeds make "never longer than the previous release, on any expression" hold by
+        // construction, which no length guard can do: the guard is input-relative and cannot
+        // see that another order would have been shorter.
         let mut best = self.simplify_trajectory(
             tokens,
             max_iter,
             max_pattern_length,
             apply_simplification_rules,
+            true,
             ctx,
         );
+        // NOTE: this must NOT be gated on the input containing `neg`/`inv`. Cancel EMITS the
+        // class inverses, so an input with none can acquire one mid-trajectory and the two
+        // region shapes diverge from there (idx 2189 of the v23.0 prior: no `neg` in the input,
+        // a `neg` in the shorter answer).
+        {
+            let opaque = self.simplify_trajectory(
+                tokens,
+                max_iter,
+                max_pattern_length,
+                apply_simplification_rules,
+                false,
+                ctx,
+            );
+            if opaque.len() < best.len() {
+                best = opaque;
+            }
+        }
         let budget = search_budget();
         if budget == 0 {
             return best;
@@ -475,34 +504,19 @@ impl Engine {
                 }));
             }
             let t_cancel = std::time::Instant::now();
-            // Region SHAPE is part of the move space: opaque `neg`/`inv` regions expose emits
-            // the transparent shape cannot reach (this is what the retired `LegacyOpaque`
-            // policy supplied). Without a class inverse present the two shapes coincide, so the
-            // second enumeration is skipped rather than deduplicated after the fact.
-            let both_shapes = crate::cancel::has_class_inverse(&state, &self.view(ctx));
-            for transparent in [true, false] {
-                if !transparent && !both_shapes {
-                    break;
-                }
-                let (_, n_candidates) = crate::cancel::cancel_nth(
-                    &state,
-                    &self.operators,
-                    &self.view(ctx),
-                    None,
-                    transparent,
+            let (_, n_candidates) =
+                crate::cancel::cancel_nth(&state, &self.operators, &self.view(ctx), None, true);
+            for k in 0..n_candidates {
+                successors.push(
+                    crate::cancel::cancel_nth(
+                        &state,
+                        &self.operators,
+                        &self.view(ctx),
+                        Some(k),
+                        true,
+                    )
+                    .0,
                 );
-                for k in 0..n_candidates {
-                    successors.push(
-                        crate::cancel::cancel_nth(
-                            &state,
-                            &self.operators,
-                            &self.view(ctx),
-                            Some(k),
-                            transparent,
-                        )
-                        .0,
-                    );
-                }
             }
             stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
 
@@ -538,6 +552,7 @@ impl Engine {
         max_iter: usize,
         max_pattern_length: Option<usize>,
         apply_simplification_rules: bool,
+        transparent: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
         // current_expression / new_expression both start as a copy of the input.
@@ -549,9 +564,23 @@ impl Engine {
             stats::bump(&stats::SIMPLIFY_ITERS);
             // Cancel any terms (cancel_terms(*collect_multiplicities(new_expression))).
             let t_cancel = std::time::Instant::now();
-            new_expression = memoized_pass(&ctx.cancel_memo, &new_expression, || {
-                crate::cancel::cancel_terms_unit(&new_expression, &self.operators, &self.view(ctx))
-            });
+            new_expression = if transparent {
+                memoized_pass(&ctx.cancel_memo, &new_expression, || {
+                    crate::cancel::cancel_terms_unit(
+                        &new_expression,
+                        &self.operators,
+                        &self.view(ctx),
+                        true,
+                    )
+                })
+            } else {
+                crate::cancel::cancel_terms_unit(
+                    &new_expression,
+                    &self.operators,
+                    &self.view(ctx),
+                    false,
+                )
+            };
             stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
 
             // Apply simplification rules.
