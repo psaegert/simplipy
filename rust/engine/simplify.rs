@@ -36,14 +36,21 @@ fn memoized_pass(
 /// state it has seen. The distribution is extremely skewed -- on the 64k v23.0 prior the median
 /// expression needs 2 expansions and 53% have no cancellation candidate at all, but the p99 is
 /// ~186 and a handful of rows would run indefinitely -- so the budget bounds that tail rather
-/// than the typical case. `SIMPLIPY_SEARCH_BUDGET` overrides it (0 = greedy only).
+/// than the typical case.
+///
+/// The default is the measured elbow of the returns curve on the 64k v23.0 prior (4-3): 24 is
+/// the smallest budget at which no expression comes out longer than the previous release's, and
+/// beyond it the yield collapses (8->24 buys ~14 tokens per extra us; 24->64 buys ~2.7; 64->256
+/// buys 0.7). `SIMPLIPY_SEARCH_BUDGET` overrides it -- 0 restores the plain greedy fixpoint and
+/// its speed exactly; raise it for offline corpus canonicalisation, where the tail is worth
+/// more than the wall clock.
 fn search_budget() -> usize {
     static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *BUDGET.get_or_init(|| {
         std::env::var("SIMPLIPY_SEARCH_BUDGET")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(64)
+            .unwrap_or(24)
     })
 }
 
@@ -435,9 +442,12 @@ impl Engine {
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
-        // Pre-fill `best` with the greedy trajectory. This is ONLY insurance for a budget that
-        // cuts the search off early: the greedy path is one path through the same move graph, so
-        // with an unbounded budget the search finds it anyway. It costs one trajectory.
+        // Pre-fill `best` with the greedy trajectory: insurance for a budget that cuts the
+        // search off early (the greedy path is one path through this same move graph, so an
+        // unbounded search reaches it anyway). MEASURED on the 64k v23.0 prior, 4-3: it costs
+        // ~5% wall time and is strictly dominant -- pre-filled at budget 32 beats un-pre-filled
+        // at budget 64 on time (99.7 vs 119.7 us/expr) AND on output length. Un-pre-filled at
+        // budget 8 leaves 551 expressions worse than the greedy result alone; pre-filled, 2.
         let mut best = self.simplify_trajectory(
             tokens,
             max_iter,

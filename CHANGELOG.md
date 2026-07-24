@@ -14,11 +14,15 @@ independently gate + monitor any rule set.
   choice set (apply the rules pass, or cancel any one qualifying candidate); the answer is the
   shortest state visited. Every state is a.e.-equivalent to the input and the input is state
   zero, so a result can never be longer than its own input. Best-first by
-  length with a visited-set; the node budget (`SIMPLIPY_SEARCH_BUDGET`, default 64; 0 = the old
-  greedy fixpoint) bounds a rare heavy tail -- the median expression expands 2 nodes and 53%
-  have no cancellation candidate at all. On the 64k v23.0 prior this shortens 2867/1008/351
-  expressions (2-1/3-2/4-3) that no previous version could reach, at ~3x the simplify wall
-  time; lower the budget to trade the tail back for speed.
+  length with a visited-set, pre-filled with the greedy result so a truncated budget can never
+  do worse than the plain fixpoint. The node budget (`SIMPLIPY_SEARCH_BUDGET`, default 24;
+  0 restores the plain greedy fixpoint and its speed exactly) bounds a rare heavy tail -- the
+  median expression expands 2 nodes and 53% have no cancellation candidate at all, but the p99
+  is ~186. The default is the measured elbow of the returns curve on the 64k v23.0 prior: below
+  24 an extra microsecond buys ~14 output tokens, above it ~2.7, and by 256 only 0.7. On that
+  corpus the search shortens ~2860/1000/350 expressions (2-1/3-2/4-3) that no previous version
+  could reach, at ~2.3x the simplify wall time; raise the budget for offline corpus
+  canonicalisation, lower it for latency.
 - **Symmetric `neg`/`inv` cancellation** (BEHAVIOUR CHANGE). The cancellation unit already
   EMITTED the class inverses but never CONSUMED them: a leaf under its own class inverse was
   shielded, so `x * inv(x)` and `x + neg(x)` did not cancel through the inverse. Each inverse is
