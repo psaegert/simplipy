@@ -1,5 +1,5 @@
 //! The simplify kernel: the `!`-certificate lookup, `apply_rules_top_down` (with the
-//! constant-fold fallback), and the `simplify` fixpoint, all running on interned ids against
+//! constant-fold fallback), and the `simplify` tree search, all running on interned ids against
 //! the per-call [`SimplifyCtx`].
 
 use std::cell::RefCell;
@@ -16,7 +16,7 @@ use super::memo::SimplifyCtx;
 use super::stats;
 use super::Engine;
 
-/// One memo-wrapped pass of the fixpoint: return the cached output for `input`, or run
+/// One memo-wrapped rewrite pass: return the cached output for `input`, or run
 /// `compute` and memoize its result (whole-pass input -> output map; see [`SimplifyCtx`]).
 fn memoized_pass(
     memo: &RefCell<FxHashMap<Vec<Tok>, Vec<Tok>>>,
@@ -38,19 +38,25 @@ fn memoized_pass(
 /// ~186 and a handful of rows would run indefinitely -- so the budget bounds that tail rather
 /// than the typical case.
 ///
-/// The default is the measured elbow of the returns curve on the 64k v23.0 prior (4-3): 24 is
-/// the smallest budget at which no expression comes out longer than the previous release's, and
-/// beyond it the yield collapses (8->24 buys ~14 tokens per extra us; 24->64 buys ~2.7; 64->256
-/// buys 0.7). `SIMPLIPY_SEARCH_BUDGET` overrides it -- 0 restores the plain greedy fixpoint and
-/// its speed exactly; raise it for offline corpus canonicalisation, where the tail is worth
-/// more than the wall clock.
+/// The default is the measured elbow of the returns curve on the 64k v23.0 prior (4-3):
+///
+/// ```text
+/// budget           24     32     40     48     64     96    192    384
+/// us/expr        73.7   78.5   84.1   88.3   97.0  109.3  131.5  156.5
+/// tokens/extra-us      13.5    9.8    7.1    3.4    2.2    1.4    0.3
+/// ```
+///
+/// The yield halves across 48, and past ~96 an extra microsecond buys about one token in a
+/// 1.5M-token corpus. `SIMPLIPY_SEARCH_BUDGET` overrides it: raise it for offline corpus
+/// canonicalisation, where the tail is worth more than the wall clock. NOTE that 0 now expands
+/// nothing and returns the input unsimplified -- it is a kill switch, not a fast mode.
 fn search_budget() -> usize {
     static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *BUDGET.get_or_init(|| {
         std::env::var("SIMPLIPY_SEARCH_BUDGET")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(24)
+            .unwrap_or(48)
     })
 }
 
@@ -102,7 +108,7 @@ impl Engine {
 
     /// The rule-application sub-unit `apply_simplification_rules`: the whole-expression
     /// all-`<constant>`/operator fold, then parse -> `apply_rules_top_down` -> flatten back to
-    /// prefix. This is the `simplify` fixpoint's per-iteration rule pass.
+    /// prefix. This is the rules EDGE of the search graph.
     pub fn apply_simplification_rules(
         &self,
         expression: &[String],
@@ -115,7 +121,7 @@ impl Engine {
     }
 
     /// The rules pass against a caller-owned memo context: `simplify` threads ONE ctx
-    /// across all fixpoint iterations so the confirming pass and unchanged subtrees are free.
+    /// across every node it expands, so a node reached by several paths costs one pass.
     fn apply_simplification_rules_with_ctx(
         &self,
         expression: &[Tok],
@@ -324,22 +330,18 @@ impl Engine {
         None
     }
 
-    /// THE whole-unit kernel: the `simplify` fixpoint, the
-    /// prefix-token-list contract: per iteration `cancel_terms` -> `apply_simplification_rules`
-    /// (when enabled), break when the iteration is a no-op vs the previous (`<= max_iter`);
-    /// the loop then yields the BEST (shortest, ties -> later) iterate rather than the endpoint --
-    /// every iterate is a.e.-equivalent, and a cancel emit may grow transiently betting on rule
-    /// folding the ruleset cannot always pay off; then `mask_elementary_literals` (when enabled);
-    /// then `sort_operands` (mask-BEFORE-sort so the canonical operand order is a fixpoint --
-    /// idempotent); then the LONGER-RESULT GUARD (if the result is longer than the original
-    /// input, return the ORIGINAL -- with best-iterate tracking this is an unreachable
-    /// defensive invariant, since the input itself is iterate zero).
+    /// THE whole-unit kernel, on the prefix-token-list contract: run the tree search
+    /// ([`Engine::simplify_search`]) to get the shortest a.e.-equivalent form it reaches, then
+    /// `mask_elementary_literals` (when enabled), then `sort_operands` -- mask BEFORE sort, so the
+    /// canonical operand order is computed on canonical tokens and mask/sort is idempotent. Both
+    /// of those are length-neutral, so the search's guarantee (never longer than the input)
+    /// survives them and no result guard is needed.
     ///
     /// Returns the simplified prefix tokens (the Python `'list'` return). The `inplace` /
     /// return-type machinery (str/tuple/np_array) is a Python-shim concern, not part of this kernel.
     ///
     /// This is the string boundary -- intern once at entry, resolve once at exit; the whole
-    /// fixpoint runs on `Tok` ids ([`Engine::simplify_toks`]).
+    /// search runs on `Tok` ids ([`Engine::simplify_toks`]).
     pub fn simplify(
         &self,
         tokens: &[String],
@@ -362,7 +364,7 @@ impl Engine {
         self.resolve_seq(&out, &ctx)
     }
 
-    /// The id-level simplify fixpoint (see [`Engine::simplify`] for the contract).
+    /// The id-level kernel (see [`Engine::simplify`] for the contract).
     fn simplify_toks(
         &self,
         tokens: &[Tok],
@@ -372,7 +374,6 @@ impl Engine {
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
-        let length_before = tokens.len();
         stats::bump(&stats::SIMPLIFY_CALLS);
 
         // SEARCH over the cancel/rules move graph (see `simplify_search`): one mechanism
@@ -401,39 +402,41 @@ impl Engine {
         new_expression = crate::sort::sort_operands_unit(&new_expression, &self.view(ctx));
         stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
 
-        // Longer-result guard: a result longer than the input is not a simplification.
-        // With best-iterate tracking (`simplify_trajectory`) this is an unreachable defensive
-        // invariant -- the input itself is iterate zero, so best <= input always.
-        if new_expression.len() > length_before {
-            return tokens.to_vec();
-        }
-
+        // No longer-result guard: the search cannot return one. The root is `best`'s initial
+        // value and only strictly shorter nodes replace it, while masking and operand sorting
+        // are length-neutral -- so the answer is <= the input by construction. (Checked on the
+        // whole 64k prior across all rule sets: zero outputs exceed their input.)
         new_expression
     }
 
-    /// THE search over the cancel/rules move graph -- one mechanism in place of the former
-    /// hand-picked candidate policies.
+    /// THE simplification algorithm: a best-first TREE SEARCH over rewrite states.
     ///
-    /// * **State** = a prefix expression.
-    /// * **Moves** (a single flat choice set, NOT a fixed cancel->rules alternation):
-    ///   `apply_simplification_rules(S)`, and `cancel k-th candidate of S` for every `k`.
-    ///   There is one region shape only: `neg`/`inv` are always region-continuing.
-    ///   Interleavings the old fixpoint could not express (cancel->cancel->rules, rules-first,
-    ///   cancel-only) are ordinary paths here. Ordering is load-bearing: applying the rules pass
-    ///   as state *normalization* before the first cancel destroys cancellations.
-    /// * **Objective** = the shortest state ever VISITED, not just terminal ones. That single
-    ///   choice is what makes "decline to cancel" free -- retaining the parent node IS the old
-    ///   `LegacyOpaque` policy, and tracking the running minimum IS best-iterate -- so both stop
-    ///   being separate mechanisms.
+    /// * **Node** = a prefix expression. The **root** is the input.
+    /// * **Edges** (one flat move set; there is no cancel->rules alternation): a node's children
+    ///   are `apply_simplification_rules(node)` and `cancel(node, k)` for every qualifying
+    ///   cancellation candidate `k`. `neg`/`inv` are always region-connected -- one cancel, one
+    ///   region shape.
+    /// * **Answer** = the shortest node ever VISITED, not merely the leaves. Every node is
+    ///   a.e.-equivalent to the root (sound cancel and sound rules compose), so every node is a
+    ///   legal answer and minimising over all of them is free. Two properties fall out with no
+    ///   extra machinery: declining to cancel is simply keeping the parent, and no answer can
+    ///   ever be longer than the input, because the root itself is the first candidate.
     ///
-    /// Every state is a.e.-equivalent to the input (sound cancel + sound rules compose), so any
-    /// visited state is a sound answer and the search is free to minimize over all of them.
+    /// The graph is a DAG rather than a tree -- most branches reconverge -- so a `visited` set on
+    /// the exact token sequence collapses it. The frontier is a min-heap on node length; ties go
+    /// to insertion order, which keeps the result deterministic.
     ///
-    /// Best-first by length (ties -> insertion order, so it is deterministic), a visited-set on
-    /// the exact token sequence (the move graph is a DAG, not a tree -- most branches reconverge),
-    /// depth capped at `2 * max_iter` moves (one old fixpoint iteration = cancel + rules = 2
-    /// moves), and [`search_budget`] expansions. `best` is SEEDED with the greedy trajectory, so
-    /// the result is never longer than the incumbent fixpoint's regardless of budget.
+    /// Two bounds, both about work rather than correctness: [`search_budget`] caps how many nodes
+    /// are EXPANDED, and depth is capped at `2 * max_iter` moves (`max_iter` is the fixpoint-era
+    /// public parameter; one of those iterations was a cancel move plus a rules move, hence 2).
+    ///
+    /// Deliberately absent, each tried and measured on the 64k v23.0 prior:
+    /// * a greedy PRE-FILL of `best` -- at matched wall-clock it is a wash (un-pre-filled at
+    ///   budget 32 is 1509383 tokens / 78.5 us against pre-filled at 24 with 1509365 / 79.1), and
+    ///   it forced a whole second cancel->rules code path to exist purely to produce it;
+    /// * frontier PRIORITISATION by the promise of a move -- tie-breaking by candidate kind won
+    ///   ~15 tokens per 1.5M for +2.8% time, and a one-ply post-rules lookahead LOST outright at
+    ///   matched cost. Spending the time on more expansions beats spending it on a better order.
     fn simplify_search(
         &self,
         tokens: &[Tok],
@@ -442,36 +445,20 @@ impl Engine {
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
-        // Pre-fill `best` with the greedy trajectory: insurance for a budget that cuts the
-        // search off early (the greedy path is one path through this same move graph, so an
-        // unbounded search reaches it anyway). MEASURED on the 64k v23.0 prior, 4-3: it costs
-        // ~5% wall time and is strictly dominant -- pre-filled at budget 32 beats un-pre-filled
-        // at budget 64 on time (99.7 vs 119.7 us/expr) AND on output length. Un-pre-filled at
-        // budget 8 leaves 551 expressions worse than the greedy result alone; pre-filled, 2.
-        let mut best = self.simplify_trajectory(
-            tokens,
-            max_iter,
-            max_pattern_length,
-            apply_simplification_rules,
-            ctx,
-        );
-        let budget = search_budget();
-        if budget == 0 {
-            return best;
-        }
-
+        // The root is the first candidate answer; every other node must beat it to be adopted.
+        let mut best = tokens.to_vec();
         let max_depth = 2 * max_iter;
-        let mut seen: FxHashSet<Vec<Tok>> = FxHashSet::default();
-        seen.insert(tokens.to_vec());
-        // (length, tie, depth, state) under `Reverse` -> pop the SHORTEST first; `tie` is unique
-        // so the state itself is never compared (deterministic, and no Ord cost on the payload).
+        let mut visited: FxHashSet<Vec<Tok>> = FxHashSet::default();
+        visited.insert(tokens.to_vec());
+        // (length, tie, depth, node) under `Reverse` -> pop the SHORTEST first; `tie` is unique
+        // so the node itself is never compared (deterministic, and no Ord cost on the payload).
         let mut frontier: BinaryHeap<Reverse<(usize, usize, usize, Vec<Tok>)>> = BinaryHeap::new();
         frontier.push(Reverse((tokens.len(), 0, 0, tokens.to_vec())));
         let mut tie: usize = 0;
         let mut expanded: usize = 0;
 
-        while let Some(Reverse((_, _, depth, state))) = frontier.pop() {
-            if expanded >= budget {
+        while let Some(Reverse((_, _, depth, node))) = frontier.pop() {
+            if expanded >= search_budget() {
                 break;
             }
             expanded += 1;
@@ -480,29 +467,22 @@ impl Engine {
             }
             stats::bump(&stats::SIMPLIFY_ITERS);
 
-            // Successors: the rules move, then every cancellation candidate. Ordering them by
-            // the promise of the move was TRIED and dropped: tie-breaking by candidate kind
-            // bought ~15 tokens per 1.5M for +2.8% time, and scoring by post-rules length (a
-            // one-ply lookahead, the version that actually corrects for cancel being
-            // length-neutral) LOST at matched wall-clock -- 1509437 tokens at 77.1 us/expr
-            // against 1509365 at 76.0 for the plain length key. Computing a better priority
-            // costs more than spending the same time on more expansions.
-            let mut successors: Vec<Vec<Tok>> = Vec::new();
+            let mut children: Vec<Vec<Tok>> = Vec::new();
             if apply_simplification_rules {
-                successors.push(memoized_pass(&ctx.rules_memo, &state, || {
-                    self.apply_simplification_rules_with_ctx(&state, max_pattern_length, ctx)
+                children.push(memoized_pass(&ctx.rules_memo, &node, || {
+                    self.apply_simplification_rules_with_ctx(&node, max_pattern_length, ctx)
                 }));
             }
             let t_cancel = std::time::Instant::now();
-            successors.extend(
-                crate::cancel::cancel_successors(&state, &self.operators, &self.view(ctx))
+            children.extend(
+                crate::cancel::cancel_successors(&node, &self.operators, &self.view(ctx))
                     .into_iter()
-                    .map(|(out, _sum)| out),
+                    .map(|(child, _sum)| child),
             );
             stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
 
-            for child in successors {
-                if !seen.insert(child.clone()) {
+            for child in children {
+                if !visited.insert(child.clone()) {
                     continue;
                 }
                 if child.len() < best.len() {
@@ -516,62 +496,4 @@ impl Engine {
         best
     }
 
-    /// One fixpoint trajectory under a fixed cancel-candidate policy: per iteration
-    /// `cancel_terms` -> `apply_simplification_rules` (when enabled), break on no-op vs the
-    /// previous iterate (`<= max_iter`).
-    ///
-    /// Returns the BEST-ITERATE, not the endpoint: every iterate is a.e.-equivalent to the
-    /// input (sound cancel + sound rules compose), and a cancel emit may grow the expression
-    /// (hyper/inverse tokens) betting on rule folding the ruleset cannot always pay off (sparse
-    /// assets like 2-1); the endpoint can then stall LONGER than a mid-trajectory form, and the
-    /// old endpoint-vs-input guard threw all banked wins away. Shortest iterate wins, ties
-    /// prefer the LATER one (more rule-normalized).
-    ///
-    fn simplify_trajectory(
-        &self,
-        tokens: &[Tok],
-        max_iter: usize,
-        max_pattern_length: Option<usize>,
-        apply_simplification_rules: bool,
-        ctx: &SimplifyCtx,
-    ) -> Vec<Tok> {
-        // current_expression / new_expression both start as a copy of the input.
-        let mut current_expression = tokens.to_vec();
-        let mut new_expression = current_expression.clone();
-        let mut best_expression = current_expression.clone();
-
-        for _ in 0..max_iter {
-            stats::bump(&stats::SIMPLIFY_ITERS);
-            // Cancel any terms (cancel_terms(*collect_multiplicities(new_expression))).
-            let t_cancel = std::time::Instant::now();
-            new_expression = memoized_pass(&ctx.cancel_memo, &new_expression, || {
-                crate::cancel::cancel_terms_unit(&new_expression, &self.operators, &self.view(ctx))
-            });
-            stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
-
-            // Apply simplification rules.
-            if apply_simplification_rules {
-                let t_rules = std::time::Instant::now();
-                new_expression = memoized_pass(&ctx.rules_memo, &new_expression, || {
-                    self.apply_simplification_rules_with_ctx(
-                        &new_expression,
-                        max_pattern_length,
-                        ctx,
-                    )
-                });
-                stats::add(&stats::NANOS_RULES, t_rules.elapsed().as_nanos() as u64);
-            }
-
-            // Converged: this iteration produced no change vs the previous iteration's result.
-            if new_expression == current_expression {
-                break;
-            }
-            if new_expression.len() <= best_expression.len() {
-                best_expression = new_expression.clone();
-            }
-            current_expression = new_expression.clone();
-        }
-
-        best_expression
-    }
 }

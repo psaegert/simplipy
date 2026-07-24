@@ -1,7 +1,7 @@
 //! Port of the term-cancellation unit: `collect_multiplicities` feeding
-//! `cancel_terms`. In the `simplify` fixpoint these always run as a pair
-//! (`cancel_terms(*collect_multiplicities(expr))`), so the public entry here is the fused unit
-//! [`cancel_terms_unit`].
+//! `cancel_terms`. These always run as a pair (`cancel_terms(*collect_multiplicities(expr))`),
+//! so the public entry here is the fused unit [`cancel_terms_unit`]; the tree search enumerates
+//! a node's cancellation children through [`cancel_successors`].
 //!
 //! ## What it does (the actual mechanism, not the docstring)
 //! Within a maximal *connected region* of one connection class -- additive (`+`/`-`) or
@@ -9,7 +9,8 @@
 //! leaf's `sum(|pos|,|neg|) > 1`, merges its occurrences: the first occurrence becomes the merged
 //! term (`mult{k}`/`pow{k}` hyper-operator, or a `neg`/`inv` inverse prefix, or a `*k`/`pow ... k`
 //! coefficient fallback) and every later occurrence becomes the class neutral (`0`/`1`). Only ONE
-//! cancellation candidate is taken per call; the fixpoint re-invokes until convergence. Composite
+//! cancellation candidate is taken per call -- the search branches over the choice, and reaching
+//! a further cancellation is simply another edge deeper in the graph. Composite
 //! subtrees do NOT register as cancellable hashes (only leaf `(token,)` hashes propagate), so the
 //! `(a*b)+(a*b)` docstring example is not what the code actually cancels.
 //!
@@ -18,11 +19,11 @@
 //!   insertion-ordered `Vec<(key,[i64;2])>`, NOT a hash map.
 //! * Candidate selection does **NOT break**: it runs the full `[add, mult] x dict.items()` nest, so
 //!   the candidate is the **last** qualifying match, not the first.
-//! * Which candidate to take is NOT decided here by a policy: the selection below is the
-//!   historical one, and `Engine::simplify_search` instead BRANCHES over every candidate (and
-//!   over both region shapes) via `cancel_nth`, keeping the shortest state it reaches. Cancel is
-//!   non-confluent -- taking candidate A can destroy candidate B -- and which choice ends
-//!   shortest depends on what the ruleset can fold, so it is searched, not guessed.
+//! * Which candidate to take is NOT decided here. Cancellation is non-confluent -- taking
+//!   candidate A can destroy candidate B, and which choice ends shortest depends on what the
+//!   rule set can fold afterwards -- so `Engine::simplify_search` BRANCHES over every candidate
+//!   (via [`cancel_successors`]) and keeps the shortest node it reaches. It is searched, never
+//!   guessed; the `select_nth` argument below just names which branch to emit.
 //! * `factorize_to_at_most` raising `ValueError` is control flow -> the `Err` arm selects the
 //!   `*`/`pow`-coefficient fallback.
 //! * The `[::-1]` reversed-flatten label of a subtree is exactly its prefix-token sequence (leaves
@@ -461,7 +462,7 @@ fn cancel_terms(
             // `annihilation_only`, entries with sum != 0 do not qualify (see `has_annihilation`).
             //
             // `select_nth = Some(k)`: SEARCH mode -- enumerate every qualifying (node, cc, hash)
-            // triple in walk order and select the k-th, instead of the policy's choice. This is
+            // triple in walk order and select the k-th. This is
             // the branching operator of the search formulation (each k is one successor state);
             // `n_candidates` keeps counting past the selection so the caller learns the full
             // branching factor of this state in one pass.
