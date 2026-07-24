@@ -458,12 +458,11 @@ fn cancel_terms(
             }
 
             // Try to find a cancellation candidate in THIS subtree (only if none yet). No break:
-            // the full nest runs, so the LAST qualifying (cc, hash) wins. Under
-            // `annihilation_only`, entries with sum != 0 do not qualify (see `has_annihilation`).
+            // the full nest runs, so the LAST qualifying (cc, hash) wins.
             //
-            // `select_nth = Some(k)`: SEARCH mode -- enumerate every qualifying (node, cc, hash)
-            // triple in walk order and select the k-th. This is
-            // the branching operator of the search formulation (each k is one successor state);
+            // `select_nth = Some(k)`: enumerate every qualifying (node, cc, hash) triple in walk
+            // order and select the k-th -- this is how the tree search names a child (each k is
+            // one cancellation edge);
             // `n_candidates` keeps counting past the selection so the caller learns the full
             // branching factor of this state in one pass.
             if select_nth.is_some() || cancellation_candidate.is_none() {
@@ -591,8 +590,7 @@ mod tests {
         s.iter().map(|t| t.to_string()).collect()
     }
 
-    /// Canonical cancellation cases, cross-checked against fresh Python (see benchmarks/diff_cancel.py
-    /// for the full 10k+18k corpus gate). These pin the mechanism: hyper-operator factorization
+    /// Canonical cancellation cases. These pin the mechanism: hyper-operator factorization
     /// (`mult{k}`/`pow{k}`), the `neg`/`inv` parity prefix, the `<constant>` special case, and
     /// the additive-vs-multiplicative neutral element.
     #[test]
@@ -701,14 +699,14 @@ mod tests {
         }
     }
 
-    /// The standalone entry must stay IDENTICAL to the step the kernel's greedy seed takes
-    /// (historical selection). It drifted once -- `cancel_only` briefly
-    /// reported an annihilation-first result the engine never produced -- so this pins the
-    /// contract on a tree that HAS two candidates and therefore distinguishes the policies:
-    /// `(x1/x1) * inv(x1)` has an inner annihilation (x1:[1,1]) and a root shuffle (x1:[1,2]),
-    /// and the historical walk takes the root-most one.
+    /// `cancel_terms_unit` (behind the public `cancel_only`) applies ONE cancellation using the
+    /// default selection. It is a unit-inspection entry, NOT "what simplify does" -- the tree
+    /// search branches over every candidate rather than privileging one, so the two answer
+    /// different questions and must not be read as equivalent. This pins the unit's own contract
+    /// on a tree with two candidates: `(x1/x1) * inv(x1)` has an inner annihilation (x1:[1,1])
+    /// and a root-level x1:[1,2]; the walk selects the root-most.
     #[test]
-    fn cancel_unit_is_the_kernel_step() {
+    fn cancel_unit_selects_the_root_most_candidate() {
         let Some(e) = engine() else { return };
         assert_eq!(
             e.cancel_terms(&toks(&["*", "/", "x1", "x1", "inv", "x1"])),

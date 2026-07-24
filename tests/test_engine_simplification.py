@@ -932,10 +932,10 @@ class TestSearchAndAggressiveMode:
             assert default == explicit_off, expr
             assert len(aggressive) <= len(default), (expr, default, aggressive)
 
-    def test_cancel_only_matches_the_kernels_own_cancel_step(self) -> None:
-        """`cancel_only` is a validation entry; it must not drift from the policy the kernel
-        actually uses (it did once, reporting an annihilation-first result the engine never
-        produced)."""
+    def test_cancel_only_applies_one_cancellation(self) -> None:
+        """`cancel_only` exposes the cancellation unit alone: ONE cancellation under the default
+        selection. It is not "what simplify does" -- the tree search branches over every
+        candidate instead of privileging one -- so this pins the unit's own contract only."""
         engine = self._engine()
         expr = ["*", "/", "x1", "x1", "inv", "x1"]
         assert list(engine._core.cancel_only(list(expr))) == \
