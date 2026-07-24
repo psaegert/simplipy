@@ -37,13 +37,13 @@ fn main() {
         .map(|l| l.split(' ').map(str::to_string).collect())
         .collect();
     for e in corpus.iter().take(200) {
-        eng.simplify(e, 5, None, true, true, false);
+        eng.simplify(e, 5, None, true, false);
     }
     let (a0, b0) = (ALLOCS.load(Relaxed), BYTES.load(Relaxed));
     let t0 = std::time::Instant::now();
     let mut sink = 0usize;
     for e in &corpus {
-        sink += eng.simplify(e, 5, None, true, true, false).len();
+        sink += eng.simplify(e, 5, None, true, false).len();
     }
     let dt = t0.elapsed();
     let (a1, b1) = (ALLOCS.load(Relaxed), BYTES.load(Relaxed));

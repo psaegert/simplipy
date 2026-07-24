@@ -46,7 +46,7 @@ fn prune_explicit_is_correct() {
         sample.len()
     );
     for lhs in &pruned {
-        let r = e.simplify(lhs, 5, None, false, true, false);
+        let r = e.simplify(lhs, 5, None, true, false);
         assert_eq!(
             &r,
             rhs_of.get(lhs).unwrap(),
@@ -69,10 +69,18 @@ fn load(name: &str) -> Vec<Vec<String>> {
 /// budget -- reporting "regression" when the engine had merely searched harder. What is actually
 /// contractual is asserted here instead, and holds at ANY budget:
 ///   * no result is longer than its input (the root is the first candidate answer);
-///   * simplify is idempotent (a second pass cannot beat the first);
-///   * simplify is deterministic (ties break on insertion order);
+///   * the EQUIVALENCE LOOP (mask=false) is idempotent (a second pass cannot beat the first);
+///   * it is deterministic (ties break on insertion order);
 ///   * a larger budget never yields a longer result (more search cannot hurt);
-///   * the engine actually does something (most rows change).
+///   * the engine actually does something (most rows change);
+///   * the TERMINAL MASK (mask=true) is length-neutral -- it only relabels literals to
+///     `<constant>`, never grows or shrinks. Idempotence is asserted on the equivalence loop,
+///     NOT on the masked result: masking mints free constants from structural literals
+///     (`x-x -> 0 -> <constant>`), so a masked output re-fed to `simplify` can collect
+///     redundant constants (~0.4% of rows). That is by design -- masking is a terminal
+///     representation step for the downstream model, never re-simplified -- so requiring the
+///     masked form to be a search fixpoint would re-introduce the unsound in-loop fold it
+///     was split out to avoid.
 #[test]
 fn simplify_holds_its_invariants_on_the_corpus() {
     let corpus = format!(
@@ -88,21 +96,29 @@ fn simplify_holds_its_invariants_on_the_corpus() {
     for mpl in [4usize, 7usize] {
         let mut n_changed = 0;
         for s in raw.iter().take(400) {
-            let out = e.simplify(s, 48, Some(mpl), true, true, false);
+            // The equivalence loop: the sound, idempotent, deterministic core (no masking).
+            let out = e.simplify(s, 48, Some(mpl), true, false);
             assert!(
                 out.len() <= s.len(),
                 "grew: mpl={mpl} {} -> {} input={s:?}",
                 s.len(),
                 out.len()
             );
-            let again = e.simplify(&out, 48, Some(mpl), true, true, false);
+            let again = e.simplify(&out, 48, Some(mpl), true, false);
             assert_eq!(&again, &out, "not idempotent: mpl={mpl} input={s:?}");
-            let repeat = e.simplify(s, 48, Some(mpl), true, true, false);
+            let repeat = e.simplify(s, 48, Some(mpl), true, false);
             assert_eq!(&repeat, &out, "not deterministic: mpl={mpl} input={s:?}");
-            let richer = e.simplify(s, 256, Some(mpl), true, true, false);
+            let richer = e.simplify(s, 256, Some(mpl), true, false);
             assert!(
                 richer.len() <= out.len(),
                 "more budget gave a longer result: mpl={mpl} input={s:?}"
+            );
+            // The separate mask pass is length-neutral (it only relabels literals + sorts).
+            let masked = e.mask(&out);
+            assert_eq!(
+                masked.len(),
+                out.len(),
+                "mask changed length: mpl={mpl} input={s:?}"
             );
             if &out != s {
                 n_changed += 1;
@@ -191,31 +207,17 @@ fn nan_literal_propagates_in_numeric_fold() {
     let nan = t(&["float(\"nan\")"]);
     // C * acos(np.e) -> nan (constant-subtree fold + propagation)
     assert_eq!(
-        e.simplify(
-            &t(&["*", "<constant>", "acos", "np.e"]),
-            5,
-            None,
-            true,
-            true,
-            false
-        ),
+        e.simplify(&t(&["*", "<constant>", "acos", "np.e"]), 5, None, true, false),
         nan
     );
     // propagation reaches VARIABLE contexts, which the evidence-based miner cannot:
     assert_eq!(
-        e.simplify(&t(&["*", "x0", "acos", "np.e"]), 5, None, true, true, false),
+        e.simplify(&t(&["*", "x0", "acos", "np.e"]), 5, None, true, false),
         nan
     );
     // pow does not propagate structurally (pow(1, NaN) = 1):
     e.set_rules(Vec::new());
-    let kept = e.simplify(
-        &t(&["pow", "<constant>", "acos", "np.e"]),
-        5,
-        None,
-        true,
-        true,
-        false,
-    );
+    let kept = e.simplify(&t(&["pow", "<constant>", "acos", "np.e"]), 5, None, true, false);
     assert_ne!(kept, nan, "pow(<constant>, nan) must not fold to nan");
     assert_eq!(
         kept,

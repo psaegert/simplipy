@@ -243,9 +243,14 @@ impl Engine {
     /// ALL leaves. If every operand is VALUED (`numeric::leaf_value` resolves it: numeric
     /// literals, `np.pi`/`np.e`, `(-1)`-style parenthesized literals, the `float("...")`
     /// tokens) -> evaluate to the `f64` result token (`evaluate_constant_subtree`; `None` if
-    /// unfoldable). ELSE if every operand is `<constant>` or a FINITE-valued leaf -> collapse to
-    /// `<constant>` (inf/nan literals never absorb into `<constant>`: non-finite algebra belongs
-    /// to explicit rules such as `+ float("-inf") <constant> -> float("-inf")`).
+    /// unfoldable). ELSE if every operand is `<constant>` or a FINITE-valued leaf, AND the subtree
+    /// is CERTIFIED to have a positive-measure finite value (`interval::value_set` over R:
+    /// `has_fin && !fin_null`) -> collapse to `<constant>` (inf/nan literals never absorb into
+    /// `<constant>`: non-finite algebra belongs to explicit rules such as
+    /// `+ float("-inf") <constant> -> float("-inf")`). The finiteness certificate is REQUIRED, not
+    /// cosmetic: finite operands can compose to a non-finite-a.e. value (`<constant>/0`), and
+    /// collapsing that to a free finite constant is unsound -- this edge is the one that used to
+    /// skip the certification the rule matcher and the cancellation already enforce.
     /// The `if all_valued { ... } elif ... { ... }` ORDER is load-bearing: an all-valued but
     /// UNFOLDABLE subtree returns `None` (it does NOT fall through to the `<constant>` collapse).
     /// Both gates MUST use `numeric::leaf_value` -- the tape evaluator's own leaf table -- so the
@@ -296,17 +301,46 @@ impl Engine {
             .iter()
             .all(|&v| v == self.tokens.constant || view.leaf_value(v).is_some_and(f64::is_finite));
         if all_const_or_finite {
-            return Some(Node::Leaf(self.tokens.constant));
+            // The syntactic "every operand is <constant> or a finite literal" test is NOT
+            // sufficient to collapse the subtree to a free <constant>: an operator can map finite
+            // operands to a value that is non-finite on FULL measure. `<constant> / 0` is +-inf/nan
+            // for EVERY constant, so folding it to a finite free <constant> both drops the reachable
+            // non-finite value and fabricates finite ones -- unsound (it revives a structurally
+            // zeroed term; corpus idx 35585, the `zoo`-collapse). This is the one search edge that
+            // skipped the finiteness certification the rule matcher (`match_pattern_with_cert` ->
+            // `bang_certified`) and the cancellation (its group-axiom leaf gate) both already carry.
+            // Gate it on the SAME value-set analysis: fold only when the subtree has a
+            // POSITIVE-MEASURE finite part (`has_fin && !fin_null`) -- the exact predicate whose
+            // negation is `finite_ae`'s witness. This is WEAKER than `finite_ae` on purpose: an
+            // unbounded-but-finite-a.e. subtree (`inv <constant>` = 1/C, `tan <constant>`,
+            // `cosh(<constant>+5)`) stays foldable (the pole is measure-zero), while a non-finite-a.e.
+            // subtree (`<constant>/0`, `<constant>*inv(0)`) does not.
+            let mut flat: Vec<String> = Vec::with_capacity(values.len() + 1);
+            flat.push(view.to_string(operator));
+            flat.extend(values.iter().map(|&v| view.to_string(v)));
+            let finite_pm =
+                crate::interval::value_set(&flat, &self.operators, &crate::interval::Vs::reals())
+                    .is_some_and(|vs| vs.has_fin && !vs.fin_null);
+            if finite_pm {
+                return Some(Node::Leaf(self.tokens.constant));
+            }
+            return None;
         }
         None
     }
 
     /// THE whole-unit kernel, on the prefix-token-list contract: run the tree search
-    /// ([`Engine::simplify_search`]) to get the shortest a.e.-equivalent form it reaches, then
-    /// `mask_elementary_literals` (when enabled), then `sort_operands` -- mask BEFORE sort, so the
-    /// canonical operand order is computed on canonical tokens and mask/sort is idempotent. Both
-    /// of those are length-neutral, so the search's guarantee (never longer than the input)
-    /// survives them and no result guard is needed.
+    /// ([`Engine::simplify_search`]) to a `search -> sort` fixpoint (the EQUIVALENCE LOOP), which
+    /// preserves the function EXACTLY and is idempotent by construction.
+    ///
+    /// `simplify` does NOT mask. Masking (numeric literals -> `<constant>`) is a REPRESENTATION
+    /// step for a downstream model that cannot consume literals, not an equivalence-preserving
+    /// rewrite; it is carved out into [`Engine::mask`] and applied by callers to `simplify`'s
+    /// output when placeholders are needed. Entangling it here was unsound: masking mints a free
+    /// `<constant>` from a structural literal (`x-x -> 0 -> <constant>`), and re-searching that
+    /// folds the fresh constant into a denominator, losing the reachable `C=0` and turning a term
+    /// that was identically 0 into a non-zeroable one (non-equivalent). It was also the sole cause
+    /// of the former non-idempotence.
     ///
     /// Returns the simplified prefix tokens (the Python `'list'` return). The `inplace` /
     /// return-type machinery (str/tuple/np_array) is a Python-shim concern, not part of this kernel.
@@ -318,7 +352,6 @@ impl Engine {
         tokens: &[String],
         node_budget: usize,
         max_pattern_length: Option<usize>,
-        mask_elementary_literals: bool,
         apply_simplification_rules: bool,
         wildcard_all: bool,
     ) -> Vec<String> {
@@ -328,35 +361,46 @@ impl Engine {
             &toks,
             node_budget,
             max_pattern_length,
-            mask_elementary_literals,
             apply_simplification_rules,
             &ctx,
         );
         self.resolve_seq(&out, &ctx)
     }
 
-    /// The id-level kernel (see [`Engine::simplify`] for the contract).
+    /// The REPRESENTATION pass, carved out of the simplify kernel: relabel every numeric literal
+    /// token to `<constant>` (so a downstream model sees placeholders), then sort to canonicalise
+    /// the relabelled operands. A pure WIDENING -- every masked value is recoverable by its
+    /// placeholder (`0*X -> <constant>*X` at C=0; `pi/2 -> <constant>` at C=pi/2). Apply ONCE to a
+    /// simplified expression and never re-`simplify` the result: a masked form re-fed to the search
+    /// can collect redundant constants (~0.4% of rows) and, on structural-zero inputs, fold
+    /// unsoundly -- which is exactly why masking is not part of `simplify`. mask+sort are each
+    /// idempotent, so `mask` itself is a fixpoint.
+    pub fn mask(&self, tokens: &[String]) -> Vec<String> {
+        let ctx = SimplifyCtx::new(self.tokens.len(), false);
+        let toks = self.intern_seq(tokens, &ctx);
+        let masked = crate::utils::mask_elementary_literals(&toks, &self.view(&ctx));
+        let out = crate::sort::sort_operands_unit(&masked, &self.view(&ctx));
+        self.resolve_seq(&out, &ctx)
+    }
+
+    /// The id-level kernel (see [`Engine::simplify`] for the contract): the EQUIVALENCE LOOP only.
     fn simplify_toks(
         &self,
         tokens: &[Tok],
         node_budget: usize,
         max_pattern_length: Option<usize>,
-        mask_elementary_literals: bool,
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
         stats::bump(&stats::SIMPLIFY_CALLS);
 
-        // SEARCH over the cancel/rules move graph (see `simplify_search`): one mechanism
-        // replacing the former hand-picked candidate policies.
-        // Iterate SEARCH -> mask -> sort until the whole pipeline stops moving. Masking and
-        // operand sorting are not cosmetic post-processing: they rewrite tokens (literals ->
-        // `<constant>`) and reorder operands, which changes WHICH RULES MATCH, so a canonicalised
-        // answer can be simplifiable again. Leaving them outside the loop is what made `simplify`
-        // non-idempotent -- a second call found more on 0.87% of the 64k prior (979 tokens on
-        // 4-3). Both are length-neutral and idempotent, and every round but the last strictly
-        // shortens, so this terminates. `ctx` is shared across rounds, so the rules memo makes
-        // repeated nodes free.
+        // EQUIVALENCE LOOP: iterate SEARCH -> sort until the pair stops moving. Both are
+        // equivalence-preserving; sorting is in the loop because reordering operands changes
+        // WHICH RULES MATCH, so a re-sorted answer can be searchable again. This reaches a fixpoint
+        // on its own -- masking is NOT part of `simplify` (see the doc on `simplify`/`mask`), so
+        // there is no mint-a-constant-then-refold churn and idempotence holds by construction.
+        // `ctx` is shared across rounds, so the rules memo makes repeated nodes free. Every round
+        // but the last strictly shortens, so this terminates.
         let mut current = tokens.to_vec();
         loop {
             let searched = self.simplify_search(
@@ -367,12 +411,7 @@ impl Engine {
                 ctx,
             );
             let t_post = std::time::Instant::now();
-            let mut canonical = if mask_elementary_literals {
-                crate::utils::mask_elementary_literals(&searched, &self.view(ctx))
-            } else {
-                searched
-            };
-            canonical = crate::sort::sort_operands_unit(&canonical, &self.view(ctx));
+            let canonical = crate::sort::sort_operands_unit(&searched, &self.view(ctx));
             stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
             if canonical == current {
                 return current;

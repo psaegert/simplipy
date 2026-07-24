@@ -128,7 +128,7 @@ def refund(rules, operators, promote_set):
         rest = [[list(l), list(r)] for j, (l, r) in enumerate(current) if j != i and (l, r) not in pruned]
         e2 = SimpliPyEngine(operators=OPS, rules=rest)
         try:
-            got = e2.simplify(fresh(lhs), max_pattern_length=None, mask_elementary_literals=False)
+            got = e2.simplify(fresh(lhs), max_pattern_length=None)
         except Exception:
             keep.append((lhs, rhs))
             continue

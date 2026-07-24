@@ -335,7 +335,7 @@ class SimpliPyEngine:
 
         def covered(core: Any, lhs: tuple[str, ...], rhs: tuple[str, ...]) -> bool:
             return all(
-                len(core.simplify(variant_lhs, 5, None, True, True)) <= len(variant_rhs)
+                len(core.simplify(variant_lhs, 5, None, True)) <= len(variant_rhs)
                 for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
 
         kept = set(full)
@@ -661,15 +661,23 @@ class SimpliPyEngine:
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             node_budget: int = 48,
             max_pattern_length: int | None = None,
-            mask_elementary_literals: bool = True,
             apply_simplification_rules: bool = True,
             inplace: bool = False,
             wildcard_all: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
-        """Performs a full simplification of a mathematical expression.
+        """Performs a full, EQUIVALENCE-preserving simplification of an expression.
 
         This is the main public method for simplification. The whole fixpoint
-        (term cancellation, rule application, constant folding, operand sorting,
-        the longer-result guard) runs in the compiled core as ONE call.
+        (term cancellation, rule application, constant folding, operand sorting)
+        runs in the compiled core as ONE call, and is idempotent by construction.
+
+        ``simplify`` does NOT mask literals. Masking (replacing numeric literals with the
+        generic ``<constant>`` placeholder) is a REPRESENTATION step for a downstream model
+        that cannot consume literals, not an equivalence-preserving rewrite -- it is carved out
+        into :meth:`mask`. A caller that needs placeholders applies ``mask`` to this output,
+        e.g. ``engine.mask(engine.simplify(expr))``. Masking was removed from ``simplify``
+        because folding a freshly-masked literal is unsound (a structural ``x-x -> 0`` masked to
+        a free ``<constant>`` can be re-folded into a denominator, dropping the reachable ``0``
+        and making the result non-equivalent) and was the sole cause of non-idempotence.
 
         Parameters
         ----------
@@ -681,14 +689,10 @@ class SimpliPyEngine:
             returns the shortest expression it reached. Defaults to 48, the measured elbow of
             the returns curve: below it an extra microsecond buys several output tokens, above
             it a fraction of one. Raise it for offline corpus canonicalisation. Note that 0
-            disables the SEARCH only: literal masking and operand sorting still run, so the
-            result is the canonicalised expression (``* 2 2`` becomes ``* <constant>
-            <constant>``), not the input verbatim.
+            disables the SEARCH only: operand sorting still runs, so the result is the
+            sort-canonicalised input rather than the input verbatim.
         max_pattern_length : int or None, optional
             The maximum length of a rule pattern to consider.
-        mask_elementary_literals : bool, optional
-            If True, replaces literals like '0' and '1' that result from
-            cancellation with a generic `<constant>` token. Defaults to True.
         apply_simplification_rules : bool, optional
             If False, skips the rule-based simplification step. Defaults to True.
         inplace : bool, optional
@@ -705,9 +709,7 @@ class SimpliPyEngine:
         Returns
         -------
         str or list[str] or tuple[str, ...] or np.ndarray
-            The simplified expression, in the same format as the input. If the
-            simplification results in a longer expression, the original
-            expression is returned (for a str input, the re-rendered original).
+            The simplified expression, in the same format as the input.
 
         Notes
         -----
@@ -716,9 +718,6 @@ class SimpliPyEngine:
         (``1/0`` -> ``float("inf")``, ``sqrt(-1)`` -> ``float("nan")``). The
         resulting ``float("inf")`` / ``float("-inf")`` / ``float("nan")`` tokens
         are atomic and round-trip through the prefix/infix conversions.
-
-        The ``collect_statistics`` and ``verbose`` debugging parameters of the removed
-        pure-Python engine are gone.
         """
         # Normalize the input to a prefix token list (per type), then ONE core call, then
         # denormalize back to the input type.
@@ -731,9 +730,53 @@ class SimpliPyEngine:
             tokens = list(expression)
 
         out = self._core.simplify(tokens, node_budget, max_pattern_length,
-                                  mask_elementary_literals, apply_simplification_rules,
-                                  wildcard_all)
+                                  apply_simplification_rules, wildcard_all)
 
+        return self._denormalize(out, expression, inplace)
+
+    def mask(
+            self,
+            expression: str | list[str] | tuple[str, ...] | np.ndarray,
+            inplace: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
+        """The REPRESENTATION pass, carved out of :meth:`simplify`.
+
+        Relabels every numeric-literal token (``0``, ``1``, ``3.14``, ...) to the generic
+        ``<constant>`` placeholder and sorts, so a downstream model that cannot consume literals
+        sees placeholders. Apply to the output of :meth:`simplify`; do NOT re-``simplify`` the
+        result (a masked form re-fed to the search can collect redundant constants and, on
+        structural-zero inputs, fold unsoundly -- which is why masking is not part of
+        ``simplify``). ``mask`` is a pure widening and is idempotent.
+
+        Parameters
+        ----------
+        expression : str or list[str] or tuple[str, ...] or np.ndarray
+            The expression to mask, in any of the accepted input formats.
+        inplace : bool, optional
+            If the input is a list, this modifies it directly. Defaults to False.
+
+        Returns
+        -------
+        str or list[str] or tuple[str, ...] or np.ndarray
+            The masked expression, in the same format as the input.
+        """
+        if isinstance(expression, str):
+            tokens = self._core.parse(expression, True, False)
+        elif isinstance(expression, np.ndarray):
+            _validate_ndarray_input(expression, inplace)
+            tokens = expression.tolist()
+        else:
+            tokens = list(expression)
+
+        out = self._core.mask(tokens)
+
+        return self._denormalize(out, expression, inplace)
+
+    def _denormalize(
+            self,
+            out: list[str],
+            expression: str | list[str] | tuple[str, ...] | np.ndarray,
+            inplace: bool) -> str | list[str] | tuple[str, ...] | np.ndarray:
+        """Map a core prefix-token result back to the input's type (shared by simplify/mask)."""
         if isinstance(expression, str):
             return self._core.prefix_to_infix(out, '**', False)
         if isinstance(expression, np.ndarray):

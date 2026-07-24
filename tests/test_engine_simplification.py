@@ -163,7 +163,7 @@ class TestPruneRedundantRules:
             engine.simplification_rules = [r for r in all_rules if tuple(r[0]) != tuple(lhs)]
             engine.compile_rules()
             try:
-                result = engine.simplify(list(lhs), mask_elementary_literals=False)
+                result = engine.simplify(list(lhs))
                 assert tuple(result) != tuple(rhs), (
                     f"Rule {lhs} -> {rhs} is still redundant after pruning"
                 )
@@ -685,69 +685,69 @@ class TestConstantFolding:
     def test_binary_addition_folding(self) -> None:
         """1.23 + 4.56 should evaluate to a numeric result close to 5.79."""
         engine = self._engine()
-        result = engine.simplify(["+", "1.23", "4.56"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "1.23", "4.56"])
         assert len(result) == 1
         assert abs(float(result[0]) - 5.79) < 1e-10
 
     def test_binary_subtraction_folding(self) -> None:
         """5 - 3 should evaluate to 2."""
         engine = self._engine()
-        result = engine.simplify(["-", "5", "3"], mask_elementary_literals=False)
+        result = engine.simplify(["-", "5", "3"])
         assert result == ["2"]
 
     def test_integer_result_formatting(self) -> None:
         """Integer-valued results should not have a decimal point."""
         engine = self._engine()
-        result = engine.simplify(["+", "1", "2"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "1", "2"])
         assert result == ["3"]
 
     def test_unary_folding(self) -> None:
         """neg(3) should evaluate to -3."""
         engine = self._engine()
-        result = engine.simplify(["neg", "3"], mask_elementary_literals=False)
+        result = engine.simplify(["neg", "3"])
         assert result == ["-3"]
 
     def test_nested_constant_folding(self) -> None:
         """2 * 3 + 4 should evaluate to 10 via nested folding."""
         engine = self._engine()
-        result = engine.simplify(["+", "*", "2", "3", "4"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "*", "2", "3", "4"])
         assert result == ["10"]
 
     def test_division_by_zero_produces_inf(self) -> None:
         """1 / 0 should produce float("inf") token."""
         engine = self._engine()
-        result = engine.simplify(["/", "1", "0"], mask_elementary_literals=False)
+        result = engine.simplify(["/", "1", "0"])
         assert result == ['float("inf")']
 
     def test_mixed_constant_and_placeholder(self) -> None:
         """<constant> + numeric should fold to <constant>."""
         engine = self._engine()
-        result = engine.simplify(["+", "1.23", "<constant>"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "1.23", "<constant>"])
         assert result == ["<constant>"]
 
     def test_constant_placeholder_still_folds(self) -> None:
         """<constant> + <constant> should still fold to <constant>."""
         engine = self._engine()
-        result = engine.simplify(["+", "<constant>", "<constant>"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "<constant>", "<constant>"])
         assert result == ["<constant>"]
 
     def test_folding_enables_further_rules(self) -> None:
         """1 - 1 = 0, then x + 0 should simplify to x via rule."""
         engine = self._engine(rules=[(["+", "_0", "0"], ["_0"])])
-        result = engine.simplify(["+", "x", "-", "1", "1"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "x", "-", "1", "1"])
         assert result == ["x"]
 
     def test_simplify_infix_numeric_constants(self) -> None:
-        """End-to-end: infix '1.23 + 4.56' should become '<constant>'."""
+        """End-to-end: infix '1.23 + 4.56' folds to a literal, then mask() -> '<constant>'."""
         engine = self._engine()
-        result = engine.simplify("1.23 + 4.56")
+        result = engine.mask(engine.simplify("1.23 + 4.56"))
         assert result == "<constant>"
 
     def test_constant_folding_observable(self) -> None:
         """Folding is observable through the simplify result itself (the pure-Python
         SimplificationStatistics instrumentation was removed in the Rust-only cutover)."""
         engine = self._engine()
-        assert engine.simplify(["+", "1", "2"], mask_elementary_literals=False) == ["3"]
+        assert engine.simplify(["+", "1", "2"]) == ["3"]
 
 
 class TestResolveConstantRules:
@@ -806,7 +806,7 @@ class TestResolveConstantRules:
         rules = {tuple(lhs): tuple(rhs) for lhs, rhs in engine.simplification_rules}
         assert ("sin", "1") in rules
         assert rules[("sin", "1")] != ("<constant>",)
-        result = engine.simplify(["sin", "1"], mask_elementary_literals=False)
+        result = engine.simplify(["sin", "1"])
         assert tuple(result) == rules[("sin", "1")]
 
     def test_multiple_rules_mixed(self) -> None:
