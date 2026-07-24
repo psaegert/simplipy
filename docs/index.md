@@ -21,8 +21,9 @@ costs that dominate at scale. SimpliPy was created to remove those bottlenecks:
 
 - **Prefix-first representation** – Expressions stay as token lists the entire
 	time, so there's no repeated parsing or AST allocation.
-- **Deterministic pipelines** – Rule application, operand sorting, and literal
-	masking always produce the same layout, which keeps downstream caches warm.
+- **Deterministic pipelines** – Rule application, operand sorting, and the separate
+	literal-masking step (`mask`) always produce the same layout, which keeps downstream
+	caches warm.
 - **ML-pipeline integration** – Outputs stay in the prefix token space consumed
 	by the `symbolic-data` layer (and through it by Flash-ANSR training) without
 	any conversion step, making it practical to simplify millions of candidates
@@ -55,26 +56,39 @@ of magnitude faster than SymPy, while producing near-identical simplification ra
 ## Simplification Pipeline (Pseudo-Algorithm)
 
 ```text
-function simplify(expr, max_iter=5):
-    tokens = parse(expr)               # infix→prefix, or validate existing prefix
+function simplify(expr, node_budget=48, mode=SOUND):
+    tokens = parse(expr)                        # infix→prefix, or validate existing prefix
 
-    for _ in range(max_iter):          # fixpoint loop
-        tokens = cancel_terms(tokens)  # one additive/multiplicative cancellation per pass
-        tokens = apply_rules(tokens)   # indexed rewrite patterns, top-down, first match wins
-        if unchanged_vs_previous_pass:
-            break                      # converged
-
-    tokens = mask_literals(tokens)     # collapse trivial numerics to <constant> (before sort)
-    tokens = sort_operands(tokens)     # canonical order for commutative ops
-    return tokens if len(tokens) <= len(input) else input   # longer results are rejected
+    loop:                                       # the EQUIVALENCE loop: search → sort to a fixpoint
+        best   = search(tokens, node_budget, mode)  # best-first over the rewrite MOVE graph
+                                                     # (apply the rules pass, or cancel any one
+                                                     # candidate); answer = shortest state VISITED
+        sorted = sort_operands(best)            # canonical order for commutative operands
+        if sorted == tokens: break              # converged
+        tokens = sorted
+    return tokens                               # never longer than the input (the input is
+                                                # state zero), sound and idempotent by construction
 ```
 
-Masking runs before sorting (so the canonical operand order is computed on the masked
-tokens and the mask/sort pair is a fixpoint), both run once after the loop, and a
-result longer than the input is rejected in favor of the input. Since 0.6.0 the loop
-memoizes whole passes and rule-normal subtrees per call, so the convergence-confirming
-iteration and unchanged subexpressions cost hash lookups instead of re-scans — with
-byte-identical outputs.
+`simplify` is the **equivalence loop only**. Every move — cancellation, rule application, and
+the constant-fold fallback — preserves the function almost everywhere, so the result is sound,
+never longer than the input (the input is the first candidate), and idempotent by construction.
+The search replaces the old fixed cancel→rules order: cancellation is non-confluent (taking one
+candidate can destroy another), so the kernel searches a bounded move graph instead of guessing
+(`node_budget` caps how many nodes it expands; `SIMPLIPY_SEARCH_BUDGET` overrides the default).
+
+**Masking is not part of `simplify`.** Relabelling numeric literals to the generic `<constant>`
+placeholder is a *representation* step for a downstream model that cannot consume literals, not
+an equivalence-preserving rewrite. It is a separate terminal method — apply it to `simplify`'s
+output and never re-`simplify` the result:
+
+```python
+tokens = engine.mask(engine.simplify(expr))   # literals -> <constant>, then one sort
+```
+
+The `mode` argument selects the soundness/recall trade-off; see **Soundness Modes** below.
+Since 0.6.0 the loop memoizes whole passes and rule-normal subtrees per call, so the
+convergence-confirming iteration and unchanged subexpressions cost hash lookups, not re-scans.
 
 The same call as a flowchart, with the memo state each stage touches drawn as
 cylinders (dotted links are lookups/inserts, not data flow):
@@ -82,28 +96,25 @@ cylinders (dotted links are lookups/inserts, not data flow):
 ```mermaid
 flowchart TD
     IN["input tokens"] --> INTERN["intern to token ids"]
-    INTERN --> CANCEL
-    subgraph LOOP["fixpoint loop (up to max_iter passes)"]
-        CANCEL["cancel_terms"] --> RULES["apply_rules"]
-        RULES --> CONV{"changed vs<br/>previous pass?"}
-        CONV -- yes --> CANCEL
+    INTERN --> SEARCH
+    subgraph LOOP["equivalence loop (search → sort to a fixpoint)"]
+        SEARCH["best-first SEARCH over the move graph<br/>(apply rules · cancel any one candidate);<br/>answer = shortest state VISITED"] --> SORT["sort operands"]
+        SORT --> CONV{"changed vs<br/>previous round?"}
+        CONV -- yes --> SEARCH
     end
-    CONV -- "no (converged)" --> MASK["mask elementary literals"]
-    MASK --> SORT["sort operands"]
-    SORT --> GUARD{"result longer<br/>than input?"}
-    GUARD -- yes --> ORIG["return original input"]
-    GUARD -- no --> OUT["output tokens"]
+    CONV -- "no (converged)" --> OUT["output tokens<br/>(≤ input · sound · idempotent)"]
+    OUT -. "callers, when placeholders needed" .-> MASK["mask() — separate terminal step:<br/>literals → &lt;constant&gt;, one sort"]
 
-    subgraph WALK["inside apply_rules: per subtree, top-down"]
+    subgraph WALK["inside the rules move: per subtree, top-down"]
         EXACT["exact rule lookup"] -- miss --> PATT["pattern scan,<br/>first match wins"]
-        PATT -- "match completed" --> CERT["certify !-bindings"]
-        PATT -- "no match" --> REC["recurse into operands,<br/>re-check the rebuilt node"]
+        PATT -- "match completed" --> CERT["certify !-bindings<br/>(skipped in LOSSY)"]
+        PATT -- "no match" --> FOLD["constant-fold fallback<br/>(finiteness-gated; relaxed in LOSSY)"]
+        FOLD -- "no fold" --> REC["recurse into operands,<br/>re-check the rebuilt node"]
     end
-    RULES -.- WALK
+    SEARCH -.- WALK
 
     STORE[("token store:<br/>engine table +<br/>per-call overlay")] -.- INTERN
-    PMEMO[("pass memos<br/>(cancel / rules)")] -.- CANCEL
-    PMEMO -.- RULES
+    PMEMO[("pass memos<br/>(cancel / rules)")] -.- SEARCH
     NF[("rule-normal<br/>subtree set")] -.- WALK
     CCACHE[("certificate caches:<br/>per-call + per-engine")] -.- CERT
 ```
@@ -112,6 +123,56 @@ The compiled core implements ONE engine line, carrying the contract semantics: n
 constant folding (including non-finite results such as `1/0 -> float("inf")`), the
 corrected conversions, and real-semantics power evaluation. Byte-exact reproduction of
 historical behavior (the dev_7-3 / v23.0 era) is served by installing `simplipy<=0.6.0`.
+
+
+## Soundness Modes
+
+`simplify(expr, mode=...)` selects a point on a single ordinal soundness axis, `simplipy.Mode`.
+Two rungs are implemented; `EXACT` and `AE` are reserved positions in the decided
+`EXACT ≤ SOUND ≤ AE ≤ LOSSY` ordering.
+
+- **`Mode.SOUND`** (the default) is equivalence-preserving and idempotent. Every rewrite edge
+  carries a soundness gate: rules only bind a composite subtree that a match-time certificate
+  proves defined-and-finite almost everywhere (the `!`-sort); cancellation only cancels leaves
+  where the group axioms hold; and the constant-fold collapses a subtree to a free `<constant>`
+  only when its value is finite on a positive-measure set of its constants. This is the mode to
+  use whenever the output is scored against data from an unknown function (inference, recovery
+  scoring, holdout matching).
+
+- **`Mode.LOSSY`** relaxes *all three* gates together — every rule placeholder binds any subtree
+  (`!`-certificate skipped), cancellation drops its group-axiom gate, and the constant-fold drops
+  its finiteness gate. It only ever binds *more*, so it recovers reductions the sound line leaves
+  on the table, at the cost of firing off the certified domain (pole/`inf`/`nan`-bearing
+  cofactors). It is **not** equivalence-preserving.
+
+```python
+from simplipy import Mode
+
+# <constant>/0 is ±inf/nan for every constant: SOUND keeps it, LOSSY folds it.
+engine.simplify(['/', '<constant>', '0'], mode=Mode.SOUND)   # -> ['/', '<constant>', '0']
+engine.simplify(['/', '<constant>', '0'], mode=Mode.LOSSY)   # -> ['<constant>']
+
+# A finite-a.e. subtree (pole at a single measure-zero constant) folds in BOTH modes:
+engine.simplify(['inv', '<constant>'])                       # -> ['<constant>']   (1/C)
+```
+
+**Why two modes, and how flash-ansr uses them.** The downstream trainer
+([flash-ansr](https://github.com/psaegert/flash-ansr), a transformer for symbolic regression)
+uses each mode on a different side of its pipeline:
+
+- **Training-data generation uses `Mode.LOSSY`.** A skeleton is lossy-simplified and the numeric
+  data is then generated *from that simplified form* — so the target the model learns and the data
+  it is trained on are the *same* expression (`target == data`). There is no external ground-truth
+  function for LOSSY to violate, so the aggressive reductions are safe here and they give the model
+  the shortest, most canonical target. (A structural `<constant>/0` that survives cancellation, for
+  instance, becomes a plain `<constant>`, which is what the generated data reflects.)
+
+- **Inference and recovery scoring use `Mode.SOUND`.** At test time the data comes from an unknown
+  true function; the predicted skeleton must be simplified *without* changing what it computes, or
+  the fit and the score would drift. Only the equivalence-preserving mode is safe there.
+
+That split is the whole reason both modes exist: LOSSY maximizes canonicalization where the
+simplified form *defines* the data, and SOUND guarantees equivalence where it must not.
 
 
 ## Key Components
@@ -152,6 +213,14 @@ engine.simplify(['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'lo
 # Simplify infix expressions
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # -> '<constant> / x3'
+
+# Mask numeric literals to <constant> AFTER simplifying (for models that need placeholders)
+engine.mask(engine.simplify(['+', 'x1', '3.14']))
+# -> ['+', '<constant>', 'x1']
+
+# Aggressive canonicalization for training targets (see Soundness Modes)
+from simplipy import Mode
+engine.simplify(['/', '<constant>', '0'], mode=Mode.LOSSY)   # -> ['<constant>']
 ```
 
 Available engines can be browsed and downloaded from Hugging Face.
