@@ -46,7 +46,7 @@ fn prune_explicit_is_correct() {
         sample.len()
     );
     for lhs in &pruned {
-        let r = e.simplify(lhs, 5, None, false, true);
+        let r = e.simplify(lhs, 5, None, false, true, false);
         assert_eq!(
             &r,
             rhs_of.get(lhs).unwrap(),
@@ -85,7 +85,7 @@ fn simplify_matches_frozen_reference() {
         assert_eq!(raw.len(), reference.len());
         let mut n_changed = 0;
         for (s, r) in raw.iter().zip(reference.iter()).take(400) {
-            let out = e.simplify(s, 5, Some(mpl), true, true);
+            let out = e.simplify(s, 5, Some(mpl), true, true, false);
             if &out != s {
                 n_changed += 1;
             }
@@ -179,13 +179,14 @@ fn nan_literal_propagates_in_numeric_fold() {
             5,
             None,
             true,
-            true
+            true,
+            false
         ),
         nan
     );
     // propagation reaches VARIABLE contexts, which the evidence-based miner cannot:
     assert_eq!(
-        e.simplify(&t(&["*", "x0", "acos", "np.e"]), 5, None, true, true),
+        e.simplify(&t(&["*", "x0", "acos", "np.e"]), 5, None, true, true, false),
         nan
     );
     // pow does not propagate structurally (pow(1, NaN) = 1):
@@ -196,6 +197,7 @@ fn nan_literal_propagates_in_numeric_fold() {
         None,
         true,
         true,
+        false,
     );
     assert_ne!(kept, nan, "pow(<constant>, nan) must not fold to nan");
     assert_eq!(

@@ -3,8 +3,10 @@
 //! the per-call [`SimplifyCtx`].
 
 use std::cell::RefCell;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::matcher::{apply_mapping, match_pattern_with_cert};
 use crate::parse::{parse_subtree, tree_to_prefix, Node};
@@ -27,6 +29,22 @@ fn memoized_pass(
     let out = compute();
     memo.borrow_mut().insert(input.to_vec(), out.clone());
     out
+}
+
+/// Node budget for the cancel/rules search ([`Engine::simplify_search`]): the maximum number of
+/// states EXPANDED (popped and given successors) before the search stops and returns the best
+/// state it has seen. The distribution is extremely skewed -- on the 64k v23.0 prior the median
+/// expression needs 2 expansions and 53% have no cancellation candidate at all, but the p99 is
+/// ~186 and a handful of rows would run indefinitely -- so the budget bounds that tail rather
+/// than the typical case. `SIMPLIPY_SEARCH_BUDGET` overrides it (0 = greedy only).
+fn search_budget() -> usize {
+    static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("SIMPLIPY_SEARCH_BUDGET")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(64)
+    })
 }
 
 impl Engine {
@@ -83,7 +101,7 @@ impl Engine {
         expression: &[String],
         max_pattern_length: Option<usize>,
     ) -> Vec<String> {
-        let ctx = SimplifyCtx::new(self.tokens.len());
+        let ctx = SimplifyCtx::new(self.tokens.len(), false);
         let toks = self.intern_seq(expression, &ctx);
         let out = self.apply_simplification_rules_with_ctx(&toks, max_pattern_length, &ctx);
         self.resolve_seq(&out, &ctx)
@@ -146,6 +164,7 @@ impl Engine {
                     &rule.lhs_tree,
                     &mut mapping,
                     Some(&|n: &Node| self.bang_certified(n, ctx)),
+                    ctx.wildcard_all,
                     &view,
                 ) {
                     stats::bump(&stats::PATTERN_FIRES);
@@ -300,10 +319,14 @@ impl Engine {
 
     /// THE whole-unit kernel: the `simplify` fixpoint, the
     /// prefix-token-list contract: per iteration `cancel_terms` -> `apply_simplification_rules`
-    /// (when enabled), break when the iteration is a no-op vs the previous (`<= max_iter`); then
-    /// `mask_elementary_literals` (when enabled); then `sort_operands` (mask-BEFORE-sort so the
-    /// canonical operand order is a fixpoint -- idempotent); then the LONGER-RESULT GUARD
-    /// (if the result is longer than the original input, return the ORIGINAL).
+    /// (when enabled), break when the iteration is a no-op vs the previous (`<= max_iter`);
+    /// the loop then yields the BEST (shortest, ties -> later) iterate rather than the endpoint --
+    /// every iterate is a.e.-equivalent, and a cancel emit may grow transiently betting on rule
+    /// folding the ruleset cannot always pay off; then `mask_elementary_literals` (when enabled);
+    /// then `sort_operands` (mask-BEFORE-sort so the canonical operand order is a fixpoint --
+    /// idempotent); then the LONGER-RESULT GUARD (if the result is longer than the original
+    /// input, return the ORIGINAL -- with best-iterate tracking this is an unreachable
+    /// defensive invariant, since the input itself is iterate zero).
     ///
     /// Returns the simplified prefix tokens (the Python `'list'` return). The `inplace` /
     /// return-type machinery (str/tuple/np_array) is a Python-shim concern, not part of this kernel.
@@ -317,8 +340,9 @@ impl Engine {
         max_pattern_length: Option<usize>,
         mask_elementary_literals: bool,
         apply_simplification_rules: bool,
+        wildcard_all: bool,
     ) -> Vec<String> {
-        let ctx = SimplifyCtx::new(self.tokens.len());
+        let ctx = SimplifyCtx::new(self.tokens.len(), wildcard_all);
         let toks = self.intern_seq(tokens, &ctx);
         let out = self.simplify_toks(
             &toks,
@@ -344,9 +368,182 @@ impl Engine {
         let length_before = tokens.len();
         stats::bump(&stats::SIMPLIFY_CALLS);
 
+        // SEARCH over the cancel/rules move graph (see `simplify_search`): one mechanism
+        // replacing the former hand-picked candidate policies.
+        let mut new_expression = self.simplify_search(
+            tokens,
+            max_iter,
+            max_pattern_length,
+            apply_simplification_rules,
+            ctx,
+        );
+
+        // Mask elementary literals (0/1/coefficients -> <constant>) BEFORE sorting, so the final
+        // operand order is computed on the canonical (masked) tokens. Masking still runs AFTER the
+        // rule loop, so which rules fire is unchanged; this only reorders the operands of
+        // masked-literal cases and makes sort/mask a fixpoint -- fixing the sort-then-mask
+        // non-idempotency (a literal's post-sort position differed from <constant>'s, so a re-pass
+        // re-sorted the now-masked token).
+        let t_post = std::time::Instant::now();
+        if mask_elementary_literals {
+            new_expression =
+                crate::utils::mask_elementary_literals(&new_expression, &self.view(ctx));
+        }
+
+        // Sort operands (once, after masking).
+        new_expression = crate::sort::sort_operands_unit(&new_expression, &self.view(ctx));
+        stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
+
+        // Longer-result guard: a result longer than the input is not a simplification.
+        // With best-iterate tracking (`simplify_trajectory`) this is an unreachable defensive
+        // invariant -- the input itself is iterate zero, so best <= input always.
+        if new_expression.len() > length_before {
+            return tokens.to_vec();
+        }
+
+        new_expression
+    }
+
+    /// THE search over the cancel/rules move graph -- one mechanism in place of the former
+    /// hand-picked candidate policies.
+    ///
+    /// * **State** = a prefix expression.
+    /// * **Moves** (a single flat choice set, NOT a fixed cancel->rules alternation):
+    ///   `apply_simplification_rules(S)`, and `cancel k-th candidate of S` for every `k`.
+    ///   Interleavings the old fixpoint could not express (cancel->cancel->rules, rules-first,
+    ///   cancel-only) are ordinary paths here. Ordering is load-bearing: applying the rules pass
+    ///   as state *normalization* before the first cancel destroys cancellations.
+    /// * **Objective** = the shortest state ever VISITED, not just terminal ones. That single
+    ///   choice is what makes "decline to cancel" free -- retaining the parent node IS the old
+    ///   `LegacyOpaque` policy, and tracking the running minimum IS best-iterate -- so both stop
+    ///   being separate mechanisms.
+    ///
+    /// Every state is a.e.-equivalent to the input (sound cancel + sound rules compose), so any
+    /// visited state is a sound answer and the search is free to minimize over all of them.
+    ///
+    /// Best-first by length (ties -> insertion order, so it is deterministic), a visited-set on
+    /// the exact token sequence (the move graph is a DAG, not a tree -- most branches reconverge),
+    /// depth capped at `2 * max_iter` moves (one old fixpoint iteration = cancel + rules = 2
+    /// moves), and [`search_budget`] expansions. `best` is SEEDED with the greedy trajectory, so
+    /// the result is never longer than the incumbent fixpoint's regardless of budget.
+    fn simplify_search(
+        &self,
+        tokens: &[Tok],
+        max_iter: usize,
+        max_pattern_length: Option<usize>,
+        apply_simplification_rules: bool,
+        ctx: &SimplifyCtx,
+    ) -> Vec<Tok> {
+        // Greedy seed: the incumbent trajectory. Guarantees never-worse under ANY budget.
+        let mut best = self.simplify_trajectory(
+            tokens,
+            max_iter,
+            max_pattern_length,
+            apply_simplification_rules,
+            ctx,
+        );
+        let budget = search_budget();
+        if budget == 0 {
+            return best;
+        }
+
+        let max_depth = 2 * max_iter;
+        let mut seen: FxHashSet<Vec<Tok>> = FxHashSet::default();
+        seen.insert(tokens.to_vec());
+        // (length, tie, depth, state) under `Reverse` -> pop the SHORTEST first; `tie` is unique
+        // so the state itself is never compared (deterministic, and no Ord cost on the payload).
+        let mut frontier: BinaryHeap<Reverse<(usize, usize, usize, Vec<Tok>)>> = BinaryHeap::new();
+        frontier.push(Reverse((tokens.len(), 0, 0, tokens.to_vec())));
+        let mut tie: usize = 0;
+        let mut expanded: usize = 0;
+
+        while let Some(Reverse((_, _, depth, state))) = frontier.pop() {
+            if expanded >= budget {
+                break;
+            }
+            expanded += 1;
+            if depth >= max_depth {
+                continue;
+            }
+            stats::bump(&stats::SIMPLIFY_ITERS);
+
+            // Successors: the rules move, then every cancellation candidate.
+            let mut successors: Vec<Vec<Tok>> = Vec::new();
+            if apply_simplification_rules {
+                successors.push(memoized_pass(&ctx.rules_memo, &state, || {
+                    self.apply_simplification_rules_with_ctx(&state, max_pattern_length, ctx)
+                }));
+            }
+            let t_cancel = std::time::Instant::now();
+            // Region SHAPE is part of the move space: opaque `neg`/`inv` regions expose emits
+            // the transparent shape cannot reach (this is what the retired `LegacyOpaque`
+            // policy supplied). Without a class inverse present the two shapes coincide, so the
+            // second enumeration is skipped rather than deduplicated after the fact.
+            let both_shapes = crate::cancel::has_class_inverse(&state, &self.view(ctx));
+            for transparent in [true, false] {
+                if !transparent && !both_shapes {
+                    break;
+                }
+                let (_, n_candidates) = crate::cancel::cancel_nth(
+                    &state,
+                    &self.operators,
+                    &self.view(ctx),
+                    None,
+                    transparent,
+                );
+                for k in 0..n_candidates {
+                    successors.push(
+                        crate::cancel::cancel_nth(
+                            &state,
+                            &self.operators,
+                            &self.view(ctx),
+                            Some(k),
+                            transparent,
+                        )
+                        .0,
+                    );
+                }
+            }
+            stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
+
+            for child in successors {
+                if !seen.insert(child.clone()) {
+                    continue;
+                }
+                if child.len() < best.len() {
+                    best = child.clone();
+                }
+                tie += 1;
+                frontier.push(Reverse((child.len(), tie, depth + 1, child)));
+            }
+        }
+
+        best
+    }
+
+    /// One fixpoint trajectory under a fixed cancel-candidate policy: per iteration
+    /// `cancel_terms` -> `apply_simplification_rules` (when enabled), break on no-op vs the
+    /// previous iterate (`<= max_iter`).
+    ///
+    /// Returns the BEST-ITERATE, not the endpoint: every iterate is a.e.-equivalent to the
+    /// input (sound cancel + sound rules compose), and a cancel emit may grow the expression
+    /// (hyper/inverse tokens) betting on rule folding the ruleset cannot always pay off (sparse
+    /// assets like 2-1); the endpoint can then stall LONGER than a mid-trajectory form, and the
+    /// old endpoint-vs-input guard threw all banked wins away. Shortest iterate wins, ties
+    /// prefer the LATER one (more rule-normalized).
+    ///
+    fn simplify_trajectory(
+        &self,
+        tokens: &[Tok],
+        max_iter: usize,
+        max_pattern_length: Option<usize>,
+        apply_simplification_rules: bool,
+        ctx: &SimplifyCtx,
+    ) -> Vec<Tok> {
         // current_expression / new_expression both start as a copy of the input.
         let mut current_expression = tokens.to_vec();
         let mut new_expression = current_expression.clone();
+        let mut best_expression = current_expression.clone();
 
         for _ in 0..max_iter {
             stats::bump(&stats::SIMPLIFY_ITERS);
@@ -374,30 +571,12 @@ impl Engine {
             if new_expression == current_expression {
                 break;
             }
+            if new_expression.len() <= best_expression.len() {
+                best_expression = new_expression.clone();
+            }
             current_expression = new_expression.clone();
         }
 
-        // Mask elementary literals (0/1/coefficients -> <constant>) BEFORE sorting, so the final
-        // operand order is computed on the canonical (masked) tokens. Masking still runs AFTER the
-        // rule loop, so which rules fire is unchanged; this only reorders the operands of
-        // masked-literal cases and makes sort/mask a fixpoint -- fixing the sort-then-mask
-        // non-idempotency (a literal's post-sort position differed from <constant>'s, so a re-pass
-        // re-sorted the now-masked token).
-        let t_post = std::time::Instant::now();
-        if mask_elementary_literals {
-            new_expression =
-                crate::utils::mask_elementary_literals(&new_expression, &self.view(ctx));
-        }
-
-        // Sort operands (once, after masking).
-        new_expression = crate::sort::sort_operands_unit(&new_expression, &self.view(ctx));
-        stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
-
-        // Longer-result guard: a result longer than the input is not a simplification.
-        if new_expression.len() > length_before {
-            return tokens.to_vec();
-        }
-
-        new_expression
+        best_expression
     }
 }

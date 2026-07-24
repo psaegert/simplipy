@@ -193,7 +193,7 @@ impl Engine {
     /// as invoked once per `simplify` fixpoint iteration. Cancel is
     /// `max_pattern_length`-independent (no `mpl` argument).
     pub fn cancel_terms(&self, expression: &[String]) -> Vec<String> {
-        let ctx = SimplifyCtx::new(self.tokens.len());
+        let ctx = SimplifyCtx::new(self.tokens.len(), false);
         let toks = self.intern_seq(expression, &ctx);
         let out = crate::cancel::cancel_terms_unit(&toks, &self.operators, &self.view(&ctx));
         self.resolve_seq(&out, &ctx)
@@ -203,7 +203,7 @@ impl Engine {
     /// commutative-operand ordering, the final stage of the `simplify` fixpoint (runs once, after the
     /// loop).
     pub fn sort_operands(&self, expression: &[String]) -> Vec<String> {
-        let ctx = SimplifyCtx::new(self.tokens.len());
+        let ctx = SimplifyCtx::new(self.tokens.len(), false);
         let toks = self.intern_seq(expression, &ctx);
         let out = crate::sort::sort_operands_unit(&toks, &self.view(&ctx));
         self.resolve_seq(&out, &ctx)

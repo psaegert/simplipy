@@ -877,3 +877,66 @@ class TestBangSort:
         # inv: finite a.e. but pole-bearing -- OUT of the certificate's stated scope (needs
         # inf_null); fail-closed means no binding, never unsoundness
         assert list(engine.simplify(["-", "inv", "x0", "inv", "x0"])) == ["-", "inv", "x0", "inv", "x0"]
+
+
+class TestSearchAndAggressiveMode:
+    """The cancel/rules SEARCH (`Engine::simplify_search`) and the `wildcard_all` apply-time
+    aggressive mode -- the two public behaviours added on top of the plain fixpoint."""
+
+    def _engine(self):
+        import simplipy
+        return SimpliPyEngine.from_config(simplipy.get_path('4-3', install=True))
+
+    def test_search_never_grows_an_expression(self) -> None:
+        """The search minimises over VISITED states and the input is state zero, so no result
+        can ever be longer than its input -- for any node budget."""
+        engine = self._engine()
+        cases = [
+            ["/", "x0", "inv", "x0"],
+            ["*", "/", "x1", "x1", "inv", "x1"],
+            ["+", "x0", "neg", "+", "x0", "x1"],
+            ["/", "inv", "x4", "x4"],
+            ["-", "x5", "+", "x5", "x5"],
+        ]
+        for expr in cases:
+            assert len(engine.simplify(list(expr))) <= len(expr), expr
+
+    def test_search_finds_the_shadowed_cancellation(self) -> None:
+        """Regression for the candidate-shadowing tail: `inv(x)/x` must not be left at the
+        greedy hyper-merge form, which is LONGER than simply not cancelling."""
+        engine = self._engine()
+        assert len(engine.simplify(["/", "inv", "x4", "x4"])) <= 4
+
+    def test_simplify_is_idempotent(self) -> None:
+        """A second pass must be a no-op: the search returns a state the next call cannot beat."""
+        engine = self._engine()
+        for expr in (["/", "x0", "inv", "x0"], ["*", "/", "x1", "x1", "inv", "x1"],
+                     ["-", "x5", "+", "x5", "x5"], ["/", "inv", "x4", "x4"]):
+            once = list(engine.simplify(list(expr)))
+            assert list(engine.simplify(list(once))) == once, expr
+
+    def test_wildcard_all_is_off_by_default_and_only_widens(self) -> None:
+        """`wildcard_all` is the AGGRESSIVE apply-time mode: default OFF, and when ON it only
+        ever binds MORE (never fewer) placeholders, so it can only shorten."""
+        engine = self._engine()
+        exprs = [
+            ["/", "x0", "inv", "x0"],
+            ["*", "x1", "/", "x1", "x1"],
+            ["+", "sin", "x0", "neg", "sin", "x0"],
+            ["-", "log", "x0", "log", "x0"],
+        ]
+        for expr in exprs:
+            default = list(engine.simplify(list(expr)))
+            explicit_off = list(engine.simplify(list(expr), wildcard_all=False))
+            aggressive = list(engine.simplify(list(expr), wildcard_all=True))
+            assert default == explicit_off, expr
+            assert len(aggressive) <= len(default), (expr, default, aggressive)
+
+    def test_cancel_only_matches_the_kernels_own_cancel_step(self) -> None:
+        """`cancel_only` is a validation entry; it must not drift from the policy the kernel
+        actually uses (it did once, reporting an annihilation-first result the engine never
+        produced)."""
+        engine = self._engine()
+        expr = ["*", "/", "x1", "x1", "inv", "x1"]
+        assert list(engine._core.cancel_only(list(expr))) == \
+            ["*", "/", "inv", "x1", "1", "inv", "1"]

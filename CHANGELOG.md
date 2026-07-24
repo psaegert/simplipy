@@ -7,6 +7,30 @@ promotes every rule to the strongest sound sort, and a public verification API c
 independently gate + monitor any rule set.
 
 ### Added
+- **Cancellation search** (`Engine::simplify_search`). `simplify` no longer commits to one
+  cancellation order. Cancel is non-confluent -- taking candidate A can destroy candidate B,
+  and which choice ends shortest depends on what the ruleset can fold -- so the kernel now
+  SEARCHES a small move graph instead of guessing. State = an expression; the moves are a flat
+  choice set (apply the rules pass, or cancel any one qualifying candidate, under either
+  `neg`/`inv` region shape); the answer is the shortest state visited. Because every state is
+  a.e.-equivalent to the input, and the input is state zero, `simplify` can now never return a
+  result longer than a previous release's, and never longer than its own input. Best-first by
+  length with a visited-set; the node budget (`SIMPLIPY_SEARCH_BUDGET`, default 64; 0 = the old
+  greedy fixpoint) bounds a rare heavy tail -- the median expression expands 2 nodes and 53%
+  have no cancellation candidate at all. On the 64k v23.0 prior this shortens 2867/1008/351
+  expressions (2-1/3-2/4-3) that no previous version could reach, at ~3x the simplify wall
+  time; lower the budget to trade the tail back for speed.
+- **Symmetric `neg`/`inv` cancellation.** The cancellation unit already EMITTED the class
+  inverses but never CONSUMED them: a leaf under its own class inverse was shielded, so
+  `x * inv(x)` and `x + neg(x)` did not cancel through the inverse. Each inverse is now
+  region-continuing in its own class (`neg` additive, `inv` multiplicative), symmetric with
+  the emit path.
+- **`simplify(..., wildcard_all=False)`** -- an apply-time AGGRESSIVE mode in which every rule
+  placeholder binds any subtree and the `!`-sort finite-a.e. certificate is skipped (the
+  symmetric opposite of the `SIMPLIPY_LEAF_WILDCARDS` diagnostic). This trades soundness for
+  recall by construction: rules fire off their certified domain, on pole/inf/nan-bearing
+  subtrees. Intended for training-corpus canonicalisation; do NOT use it on an inference or
+  scoring path.
 - **Native sort promotion** (`simplipy.promotion`; `find_rules(promote_sorts=True)`, CLI
   config key `promote_sorts`). After mining and pruning, every rule (mined + proposed) is
   re-certified at the stronger sorts and shipped at the strongest SOUND one: `_` (arbitrary

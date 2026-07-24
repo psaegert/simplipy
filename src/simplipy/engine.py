@@ -663,7 +663,8 @@ class SimpliPyEngine:
             max_pattern_length: int | None = None,
             mask_elementary_literals: bool = True,
             apply_simplification_rules: bool = True,
-            inplace: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
+            inplace: bool = False,
+            wildcard_all: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Performs a full simplification of a mathematical expression.
 
         This is the main public method for simplification. The whole fixpoint
@@ -686,6 +687,14 @@ class SimpliPyEngine:
             If False, skips the rule-based simplification step. Defaults to True.
         inplace : bool, optional
             If the input is a list, this modifies it directly. Defaults to False.
+        wildcard_all : bool, optional
+            AGGRESSIVE (slightly-unsound) apply-time mode. If True, every rule placeholder
+            binds ANY subtree and the ``!``-sort finite-a.e. certificate is skipped (all
+            placeholders behave as ``_``) -- the symmetric opposite of the
+            ``SIMPLIPY_LEAF_WILDCARDS`` diagnostic. Recovers composite recall the sound sorts
+            demote, at the cost of applying rules off their certified domain
+            (pole/inf/nan-bearing cofactors). Defaults to False. Do NOT use on the deployed
+            inference/scoring path; intended for training-corpus canonicalisation.
 
         Returns
         -------
@@ -716,7 +725,8 @@ class SimpliPyEngine:
             tokens = list(expression)
 
         out = self._core.simplify(tokens, max_iter, max_pattern_length,
-                                  mask_elementary_literals, apply_simplification_rules)
+                                  mask_elementary_literals, apply_simplification_rules,
+                                  wildcard_all)
 
         if isinstance(expression, str):
             return self._core.prefix_to_infix(out, '**', False)

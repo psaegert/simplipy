@@ -146,7 +146,7 @@ impl PyEngine {
     /// (`simplify(skeleton, inplace=True, max_pattern_length=None)`); `inplace` is a Python-shim
     /// concern (the shim mutates the caller's list), so it is NOT a kernel parameter here.
     #[pyo3(signature = (tokens, max_iter=5, max_pattern_length=None, mask_elementary_literals=true,
-                        apply_simplification_rules=true))]
+                        apply_simplification_rules=true, wildcard_all=false))]
     fn simplify(
         &self,
         py: Python<'_>,
@@ -155,6 +155,7 @@ impl PyEngine {
         max_pattern_length: Option<usize>,
         mask_elementary_literals: bool,
         apply_simplification_rules: bool,
+        wildcard_all: bool,
     ) -> PyResult<Py<PyList>> {
         ensure_well_formed(&self.inner, &tokens)?;
         // Release the GIL for the pure-Rust kernel (parallel callers are not serialized on Python's lock).
@@ -165,6 +166,7 @@ impl PyEngine {
                 max_pattern_length,
                 mask_elementary_literals,
                 apply_simplification_rules,
+                wildcard_all,
             )
         });
         Ok(PyList::new(py, out)?.into())

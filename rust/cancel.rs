@@ -18,6 +18,11 @@
 //!   insertion-ordered `Vec<(key,[i64;2])>`, NOT a hash map.
 //! * Candidate selection does **NOT break**: it runs the full `[add, mult] x dict.items()` nest, so
 //!   the candidate is the **last** qualifying match, not the first.
+//! * Which candidate to take is NOT decided here by a policy: the selection below is the
+//!   historical one, and `Engine::simplify_search` instead BRANCHES over every candidate (and
+//!   over both region shapes) via `cancel_nth`, keeping the shortest state it reaches. Cancel is
+//!   non-confluent -- taking candidate A can destroy candidate B -- and which choice ends
+//!   shortest depends on what the ruleset can fold, so it is searched, not guessed.
 //! * `factorize_to_at_most` raising `ValueError` is control flow -> the `Err` arm selects the
 //!   `*`/`pow`-coefficient fallback.
 //! * The `[::-1]` reversed-flatten label of a subtree is exactly its prefix-token sequence (leaves
@@ -120,7 +125,13 @@ struct AnnNode {
 /// Port of `collect_multiplicities`. Right-to-left scan building a stack
 /// of annotated subtrees; for a well-formed prefix expression the stack ends with a single root,
 /// which is returned. Mirrors the leaf / binary-connectable / general-operator branches exactly.
-fn collect_multiplicities(expression: &[Tok], view: &TokenView) -> Option<AnnNode> {
+/// `transparent`: whether `neg`/`inv` are region-continuing class inverses (the 2026-07 fix) or
+/// opaque general operators (the legacy unit; see `CancelPolicy::LegacyOpaque`).
+fn collect_multiplicities(
+    expression: &[Tok],
+    view: &TokenView,
+    transparent: bool,
+) -> Option<AnnNode> {
     let tt = view.table;
     let mut stack: Vec<AnnNode> = Vec::new();
 
@@ -168,16 +179,40 @@ fn collect_multiplicities(expression: &[Tok], view: &TokenView) -> Option<AnnNod
         }
 
         if let Some(arity) = view.arity(token) {
-            // General (non-connectable) operator: empty annotation in BOTH classes.
             let arity = arity as usize;
             let mut operands: Vec<AnnNode> = stack.split_off(stack.len() - arity);
             operands.reverse();
+            // The class INVERSE operators (`cc_inverse`) are made region-CONTINUING in THEIR OWN
+            // class, symmetric with how `cancel_terms` already EMITS them: `neg` = additive inverse
+            // (flip CC_ADD multiplicities); `inv` = multiplicative inverse (flip CC_MULT). Each is
+            // OPAQUE in the other class. (`neg` as a cross-class `-1` MULTIPLICATIVE factor is NOT
+            // handled here: it needs the `-1` sign preserved when the inner content fully cancels,
+            // which the emit does not currently thread -- deferred; any other general operator: empty.)
+            let own: [Ann; N_CC] = if transparent && token == tt.neg && arity == 1 {
+                let mut add: Ann = Vec::new();
+                for (h, v) in &operands[0].own[CC_ADD] {
+                    let e = ann_entry(&mut add, h);
+                    e[0] += v[1];
+                    e[1] += v[0];
+                }
+                [add, Vec::new()]
+            } else if transparent && token == tt.inv && arity == 1 {
+                let mut mult: Ann = Vec::new();
+                for (h, v) in &operands[0].own[CC_MULT] {
+                    let e = ann_entry(&mut mult, h);
+                    e[0] += v[1];
+                    e[1] += v[0];
+                }
+                [Vec::new(), mult]
+            } else {
+                [Vec::new(), Vec::new()]
+            };
             let label = build_label(token, &operands);
             stack.push(AnnNode {
                 op: Some(token),
                 token,
                 operands,
-                own: [Vec::new(), Vec::new()],
+                own,
                 label,
             });
             i -= 1;
@@ -249,13 +284,25 @@ struct Frame<'a> {
 }
 
 /// Port of `cancel_terms`, the deployed `collect_statistics=False` path.
-fn cancel_terms(root: &AnnNode, ops: &Operators, view: &TokenView) -> Vec<Tok> {
+/// `transparent` must match the flag `root` was collected with (the emit's
+/// region walk and parity flips must mirror the collect's region shape exactly, or the two
+/// phases disagree on which occurrences belong to the candidate). The second return value is
+/// the CHOSEN candidate's sum (`None` when no cancellation fired).
+fn cancel_terms(
+    root: &AnnNode,
+    ops: &Operators,
+    view: &TokenView,
+    transparent: bool,
+    select_nth: Option<usize>,
+) -> (Vec<Tok>, Option<i64>, usize) {
     let tt = view.table;
     let mut expression: Vec<Tok> = Vec::new();
 
     // (argmax_class, cancelled_subtree, cancelled_multiplicity_sum). Set at most once.
     let mut cancellation_candidate: Option<(usize, Vec<Tok>, i64)> = None;
     let mut n_replaced: i64 = 0;
+    // Total qualifying (node, cc, hash) triples seen -- the state's branching factor.
+    let mut n_candidates: usize = 0;
 
     // stack initialized to the single root; parity {add:1, mult:1}; still_connected = False.
     let mut stack: Vec<Frame> = vec![Frame {
@@ -276,7 +323,12 @@ fn cancel_terms(root: &AnnNode, ops: &Operators, view: &TokenView) -> Vec<Tok> {
         {
             // still_connected stays true only along operators of the cancellation class (or leaves).
             let st0 = subtree.token;
-            let in_class = connection_ops(argmax_class, tt).contains(&st0);
+            // neg/inv are region-continuing class inverses (see collect_multiplicities): treat them
+            // as in-class so still_connected survives across them (neg additive; inv mult only) --
+            // transparent mode only, mirroring the collect.
+            let in_class = connection_ops(argmax_class, tt).contains(&st0)
+                || (transparent && st0 == tt.neg && argmax_class == CC_ADD)
+                || (transparent && st0 == tt.inv && argmax_class == CC_MULT);
             let not_operator = !view.is_operator(st0);
             still_connected = still_connected && (in_class || not_operator);
 
@@ -415,16 +467,33 @@ fn cancel_terms(root: &AnnNode, ops: &Operators, view: &TokenView) -> Vec<Tok> {
             }
 
             // Try to find a cancellation candidate in THIS subtree (only if none yet). No break:
-            // the full nest runs, so the LAST qualifying (cc, hash) wins.
-            if cancellation_candidate.is_none() {
+            // the full nest runs, so the LAST qualifying (cc, hash) wins. Under
+            // `annihilation_only`, entries with sum != 0 do not qualify (see `has_annihilation`).
+            //
+            // `select_nth = Some(k)`: SEARCH mode -- enumerate every qualifying (node, cc, hash)
+            // triple in walk order and select the k-th, instead of the policy's choice. This is
+            // the branching operator of the search formulation (each k is one successor state);
+            // `n_candidates` keeps counting past the selection so the caller learns the full
+            // branching factor of this state in one pass.
+            if select_nth.is_some() || cancellation_candidate.is_none() {
                 for cc in [CC_ADD, CC_MULT] {
                     for (subtree_hash, multiplicity) in &subtree.own[cc] {
                         let abs_sum = multiplicity[0].abs() + multiplicity[1].abs();
                         let has_constant = subtree_hash.iter().any(|&t| t == tt.constant);
                         if abs_sum > 1 && (!has_constant || subtree_hash.len() == 1) {
-                            cancellation_candidate =
-                                Some((cc, subtree_hash.clone(), multiplicity[0] - multiplicity[1]));
-                            still_connected = true;
+                            let take = match select_nth {
+                                Some(k) => n_candidates == k,
+                                None => true,
+                            };
+                            n_candidates += 1;
+                            if take {
+                                cancellation_candidate = Some((
+                                    cc,
+                                    subtree_hash.clone(),
+                                    multiplicity[0] - multiplicity[1],
+                                ));
+                                still_connected = true;
+                            }
                         }
                     }
                 }
@@ -445,6 +514,22 @@ fn cancel_terms(root: &AnnNode, ops: &Operators, view: &TokenView) -> Vec<Tok> {
                 parity: prop[0],
                 still_connected,
             });
+        } else if transparent && operator == tt.neg && subtree.operands.len() == 1 {
+            // neg: additive inverse (flip CC_ADD parity); the multiplicative region resets inside.
+            expression.push(operator);
+            stack.push(Frame {
+                node: &subtree.operands[0],
+                parity: [-subtree_parities[CC_ADD], 1],
+                still_connected,
+            });
+        } else if transparent && operator == tt.inv && subtree.operands.len() == 1 {
+            // inv: multiplicative inverse (flip CC_MULT parity); the additive region resets inside.
+            expression.push(operator);
+            stack.push(Frame {
+                node: &subtree.operands[0],
+                parity: [1, -subtree_parities[CC_MULT]],
+                still_connected,
+            });
         } else {
             // General operator: children get reset parity {add:1, mult:1}; still_connected carried.
             expression.push(operator);
@@ -458,15 +543,54 @@ fn cancel_terms(root: &AnnNode, ops: &Operators, view: &TokenView) -> Vec<Tok> {
         }
     }
 
-    expression
+    let chosen_sum = cancellation_candidate.as_ref().map(|(_, _, s)| *s);
+    (expression, chosen_sum, n_candidates)
 }
 
-/// The fused public entry: `cancel_terms(*collect_multiplicities(expression))`. On a malformed
-/// expression (`collect_multiplicities` does not collapse to a single root) returns the input
-/// unchanged -- the deployed skeleton path only ever feeds well-formed prefix expressions.
+/// SEARCH branching operator: apply the `n`-th qualifying cancellation candidate (walk order)
+/// under the given region shape, and report the state's branching factor. `n = None` counts
+/// only. Returns `(output, n_candidates)`; with `n >= n_candidates` the expression is returned
+/// unchanged.
+///
+/// `transparent` is part of the MOVE SPACE, not a policy: opaque `neg`/`inv` regions expose
+/// candidates (and emits) the transparent shape cannot reach, so a search that branches only
+/// over transparent cancels cannot dominate the old `LegacyOpaque` trajectory. When the
+/// expression contains no `neg`/`inv` the two shapes coincide exactly, so callers can skip the
+/// duplicate enumeration ([`has_class_inverse`]).
+pub fn cancel_nth(
+    expression: &[Tok],
+    ops: &Operators,
+    view: &TokenView,
+    n: Option<usize>,
+    transparent: bool,
+) -> (Vec<Tok>, usize) {
+    match collect_multiplicities(expression, view, transparent) {
+        Some(root) => {
+            let (out, _, k) =
+                cancel_terms(&root, ops, view, transparent, n.or(Some(usize::MAX)));
+            (out, k)
+        }
+        None => (expression.to_vec(), 0),
+    }
+}
+
+/// Does the expression contain a class inverse (`neg`/`inv`)? When it does not, the transparent
+/// and opaque region shapes are identical by construction, so the search need only enumerate one.
+pub fn has_class_inverse(expression: &[Tok], view: &TokenView) -> bool {
+    let tt = view.table;
+    expression.iter().any(|&t| t == tt.neg || t == tt.inv)
+}
+
+/// The fused public entry: `cancel_terms(*collect_multiplicities(expression))` under the
+/// engine's own region shape and candidate selection (transparent `neg`/`inv`, historical
+/// last-qualifying-at-the-root-most-node) -- i.e. exactly the step [`crate::Engine::simplify`]'s
+/// greedy seed takes, so this validation entry and the kernel cannot drift apart. On a malformed
+/// expression (`collect_multiplicities` does not collapse to a single root) the input is
+/// returned unchanged; the deployed skeleton path only ever feeds well-formed prefix
+/// expressions.
 pub fn cancel_terms_unit(expression: &[Tok], ops: &Operators, view: &TokenView) -> Vec<Tok> {
-    match collect_multiplicities(expression, view) {
-        Some(root) => cancel_terms(&root, ops, view),
+    match collect_multiplicities(expression, view, true) {
+        Some(root) => cancel_terms(&root, ops, view, true, None).0,
         None => expression.to_vec(),
     }
 }
@@ -553,5 +677,58 @@ mod tests {
                 "input {input:?}"
             );
         }
+    }
+
+    /// neg/inv are region-continuing class inverses (symmetric with `cc_inverse` on EMIT): a leaf
+    /// cancels through the unary inverse OF ITS OWN CLASS. `inv` = multiplicative inverse; `neg` =
+    /// additive inverse (across a composite too). Cross-class `neg` as a `-1` multiplicative factor
+    /// is deliberately NOT handled (sign preservation on full inner cancellation) -- see
+    /// `collect_multiplicities` -- so `neg(x)/x` is left to a rule, not cancelled here.
+    #[test]
+    fn cancel_neg_inv_symmetric() {
+        let Some(e) = engine() else { return };
+        let cases: &[(&[&str], &[&str])] = &[
+            // inv = multiplicative inverse: x / inv(x) = x^2 ; x * inv(x) = 1.
+            (&["/", "x0", "inv", "x0"], &["/", "pow2", "x0", "inv", "1"]),
+            (&["*", "x0", "inv", "x0"], &["*", "1", "inv", "1"]),
+            // neg = additive inverse across a composite: x0 + neg(x0 + x1) -> -x1.
+            (
+                &["+", "x0", "neg", "+", "x0", "x1"],
+                &["+", "0", "neg", "+", "0", "x1"],
+            ),
+            // NO false cancel: x0 / inv(x0 + x1) keeps x0 (inner x0 is an ADDITIVE sub-leaf, not a
+            // multiplicative leaf of the outer region).
+            (
+                &["/", "x0", "inv", "+", "x0", "x1"],
+                &["/", "x0", "inv", "+", "x0", "x1"],
+            ),
+            // cross-class neg is NOT cancelled here (deferred): neg(x0) / x0 stays for a rule.
+            (
+                &["/", "neg", "x0", "x0"],
+                &["/", "neg", "x0", "x0"],
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                e.cancel_terms(&toks(input)),
+                toks(expected),
+                "input {input:?}"
+            );
+        }
+    }
+
+    /// The standalone entry must stay IDENTICAL to the step the kernel's greedy seed takes
+    /// (transparent regions, historical selection). It drifted once -- `cancel_only` briefly
+    /// reported an annihilation-first result the engine never produced -- so this pins the
+    /// contract on a tree that HAS two candidates and therefore distinguishes the policies:
+    /// `(x1/x1) * inv(x1)` has an inner annihilation (x1:[1,1]) and a root shuffle (x1:[1,2]),
+    /// and the historical walk takes the root-most one.
+    #[test]
+    fn cancel_unit_is_the_kernel_step() {
+        let Some(e) = engine() else { return };
+        assert_eq!(
+            e.cancel_terms(&toks(&["*", "/", "x1", "x1", "inv", "x1"])),
+            toks(&["*", "/", "inv", "x1", "1", "inv", "1"]),
+        );
     }
 }

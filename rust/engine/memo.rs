@@ -64,19 +64,26 @@ impl BangCache {
 pub(super) struct SimplifyCtx {
     pub(super) overlay: RefCell<TokenOverlay>,
     pub(super) cert_scratch: RefCell<FxHashMap<Vec<Tok>, bool>>,
+    /// Greedy-seed cancel pass (`cancel_terms_unit`). The search's own branching enumeration
+    /// is not memoized here: it is keyed by (state, shape, k), and its states are already
+    /// deduplicated by the search's visited-set.
     pub(super) cancel_memo: RefCell<FxHashMap<Vec<Tok>, Vec<Tok>>>,
     pub(super) rules_memo: RefCell<FxHashMap<Vec<Tok>, Vec<Tok>>>,
     pub(super) normal_forms: RefCell<rustc_hash::FxHashSet<Vec<Tok>>>,
+    /// AGGRESSIVE apply-time mode: bind every placeholder as `_` and skip the `!` certificate
+    /// (see `matcher::match_pattern_with_cert`). Set once per call at the simplify entry.
+    pub(super) wildcard_all: bool,
 }
 
 impl SimplifyCtx {
-    pub(super) fn new(table_len: usize) -> Self {
+    pub(super) fn new(table_len: usize, wildcard_all: bool) -> Self {
         Self {
             overlay: RefCell::new(TokenOverlay::new(table_len)),
             cert_scratch: RefCell::new(FxHashMap::default()),
             cancel_memo: RefCell::new(FxHashMap::default()),
             rules_memo: RefCell::new(FxHashMap::default()),
             normal_forms: RefCell::new(rustc_hash::FxHashSet::default()),
+            wildcard_all,
         }
     }
 }
