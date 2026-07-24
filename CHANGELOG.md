@@ -1,10 +1,12 @@
 # Changelog
 
-## 0.8.0 (unreleased)
+## 0.9.0 (unreleased)
 
-Makes the public package produce the BEST rule sets from one command: mining now natively
-promotes every rule to the strongest sound sort, and a public verification API can
-independently gate + monitor any rule set.
+A new simplify kernel. `simplify` is now a best-first cancellation SEARCH instead of a fixed
+cancellation order; masking (numeric literals -> `<constant>`) is separated from the
+equivalence loop so representation is no longer entangled with rewriting; and the constant-fold
+fallback is brought under the same finite-a.e. certificate the rules and cancellation already
+enforce.
 
 ### Added
 - **Cancellation search** (`Engine::simplify_search`). `simplify` no longer commits to one
@@ -40,6 +42,38 @@ independently gate + monitor any rule set.
   recall by construction: rules fire off their certified domain, on pole/inf/nan-bearing
   subtrees. Intended for training-corpus canonicalisation; do NOT use it on an inference or
   scoring path.
+
+### Changed
+- **BREAKING: masking is separated from `simplify`.** Masking numeric literals to the generic
+  `<constant>` placeholder is a REPRESENTATION step for downstream models that cannot consume
+  literals, not an equivalence-preserving rewrite. `simplify` no longer masks; it is now the
+  equivalence loop only (search + sort to a fixpoint), sound and idempotent by construction. The
+  `mask_elementary_literals` parameter of `simplify` is removed; use the new terminal
+  `Engine.mask()` (relabel literals + one sort, no re-simplify) on `simplify`'s output when
+  placeholders are needed, and do NOT re-`simplify` a masked expression. Entangling masking with
+  the search fixpoint was also the sole cause of the former non-idempotence: masking mints a free
+  `<constant>` from a structural literal (`x - x -> 0 -> <constant>`), and re-searching could
+  fold that constant into a denominator, dropping the reachable `C = 0` the input required.
+
+### Fixed
+- **Constant folding respects the finiteness certificate.** The constant-fold fallback collapsed
+  any subtree whose operands are all `<constant>` or finite literals to a free `<constant>`, on a
+  syntactic test that assumed finite operands compose to a finite result. That is false at a pole
+  (`<constant> / 0` is +-inf/nan for every constant), so a structural zero reaching a denominator
+  could be folded to a finite free constant -- unsound (it revives a structurally zeroed term).
+  This was the one search edge that skipped the finiteness certification the rule matcher and the
+  cancellation already enforce. The fold now consults the same value-set analysis and collapses to
+  `<constant>` only when the subtree has a positive-measure finite part, keeping
+  unbounded-but-finite-a.e. folds (`1/C`, `tan C`, `cosh(C + 5)`) and refusing non-finite-a.e.
+  ones (`C / 0`, `C * inv(0)`).
+
+## 0.8.0 (unreleased)
+
+Makes the public package produce the BEST rule sets from one command: mining now natively
+promotes every rule to the strongest sound sort, and a public verification API can
+independently gate + monitor any rule set.
+
+### Added
 - **Native sort promotion** (`simplipy.promotion`; `find_rules(promote_sorts=True)`, CLI
   config key `promote_sorts`). After mining and pruning, every rule (mined + proposed) is
   re-certified at the stronger sorts and shipped at the strongest SOUND one: `_` (arbitrary
