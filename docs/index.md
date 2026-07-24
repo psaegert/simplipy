@@ -58,13 +58,9 @@ Rulesets** — the published `2-1`/`3-2`/`4-3` artifacts at the default `max_pat
 (darker = larger); **Safe vs Aggressive** — `4-3` in the deployed `SOUND` mode vs the training-only
 `LOSSY` mode; **Search Budget** — `4-3` SOUND at node budgets 1 to 48. SimpliPy is timed per call
 (`perf_counter`, gc off); SymPy is given each `<constant>` as a free symbol and simplified
-symbolically inside a per-expression worker with a 1 s timeout, scored by its native prefix length.
-SimpliPy simplifies at a median of ~70–90 µs — **roughly three orders of magnitude** faster than
-SymPy, which does not begin completing until ~10 ms and times out on 12.6% of expressions at 1 s
-(its ECDF therefore plateaus below 1). SimpliPy never exceeds ratio 1.0 (never longer than its
-input, by construction), whereas SymPy's symbolic canonical form is *longer* in prefix tokens on a
-majority of expressions (median ratio > 1). More rules reach shorter forms; SOUND and LOSSY are
-near-identical at the median; and the search quality converges by a budget of 2.
+symbolically inside a per-expression worker with a 1 s timeout, then scored by its native prefix
+length. The measured quantities are the two ECDFs; the plot, not this caption, reports what they
+show.
 
 
 ## Simplification Pipeline (Pseudo-Algorithm)
