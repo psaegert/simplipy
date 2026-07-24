@@ -44,13 +44,27 @@ hot path runs on interned token ids (~20× fewer allocations per call). On a
 65,536-expression training-prior benchmark, large certificate-bearing rulesets run
 ~59× faster than 0.5.0; certificate-free rulesets run ~2.3× faster.
 
-![Simplification time and ratio ECDFs: SymPy vs SimpliPy Python 0.2.15 vs SimpliPy Rust 0.3.0](https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplification_comparison_sympy_python_rust.svg)
+Since 0.7.0 there is a single compiled engine line, and the published ruleset artifacts
+(`2-1`, `3-2`, `4-3`, …) are the distinguishing factor between engines — all loaded at the
+default `max_pattern_length=None`.
 
-ECDFs of simplification wall-clock time (left) and simplification ratio (right) across maximum
-pattern lengths `L_max = 0`–`7`. **Top:** SimpliPy `0.3.0` (Rust, green); **bottom:** SimpliPy
-`0.2.15` (pure Python, blue); the SymPy baseline is orange/red. The Rust inline engine is roughly
-5× to 100× faster than the pure-Python engine at the same `L_max` (≈ 15× at `L_max = 4`) and orders
-of magnitude faster than SymPy, while producing near-identical simplification ratios.
+![Simplification time and ratio ECDFs: SimpliPy 0.9.1 vs SymPy across mined rulesets, safe vs aggressive, and search budget, on 64k Lample-Charton expressions from the Flash-ANSR v23.0 prior](https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplipy_vs_sympy.svg)
+
+ECDFs of simplification wall-clock time (**top row**) and simplification ratio `|simp|/|orig|` in
+prefix tokens (**bottom row**, inset: low-ratio tail), over 65,536 randomly generated
+Lample-Charton expressions from the Flash-ANSR v23.0 training prior. Three axes vary SimpliPy
+(green) against a fixed **SymPy** reference (orange `ratio=None` / red `ratio=1`): **Mined
+Rulesets** — the published `2-1`/`3-2`/`4-3` artifacts at the default `max_pattern_length=None`
+(darker = larger); **Safe vs Aggressive** — `4-3` in the deployed `SOUND` mode vs the training-only
+`LOSSY` mode; **Search Budget** — `4-3` SOUND at node budgets 1 to 48. SimpliPy is timed per call
+(`perf_counter`, gc off); SymPy is given each `<constant>` as a free symbol and simplified
+symbolically inside a per-expression worker with a 1 s timeout, scored by its native prefix length.
+SimpliPy simplifies at a median of ~70–90 µs — **roughly three orders of magnitude** faster than
+SymPy, which does not begin completing until ~10 ms and times out on 12.6% of expressions at 1 s
+(its ECDF therefore plateaus below 1). SimpliPy never exceeds ratio 1.0 (never longer than its
+input, by construction), whereas SymPy's symbolic canonical form is *longer* in prefix tokens on a
+majority of expressions (median ratio > 1). More rules reach shorter forms; SOUND and LOSSY are
+near-identical at the median; and the search quality converges by a budget of 2.
 
 
 ## Simplification Pipeline (Pseudo-Algorithm)
@@ -204,7 +218,7 @@ pip install simplipy
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("dev_7-3", install=True)
+engine = sp.SimpliPyEngine.load("4-3", install=True)   # a published ruleset artifact
 
 # Simplify prefix expressions
 engine.simplify(['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'])
@@ -229,8 +243,9 @@ The SimpliPy Asset Manager handles listing, installing, and uninstalling assets:
 ```python
 sp.list_assets("engine")
 # --- Available Assets ---
-# - dev_7-3         [installed]  Development engine 7-3 for mathematical expression simplification.
-# - dev_7-2                      Development engine 7-2 for mathematical expression simplification.
+# - 2-1             [installed]  Complete rule mine (sources to length 2, targets to length 1) + certified LLM proposals.
+# - 3-2             [installed]  Complete rule mine (sources to length 3, targets to length 2) + certified LLM proposals.
+# - 4-3             [installed]  Complete rule mine (sources to length 4, targets to length 3) + certified LLM proposals.
 ```
 
 ## Normalization

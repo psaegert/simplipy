@@ -102,6 +102,13 @@ than during every candidate attempt, and memoized (per call, plus a generational
 per-engine cache), which makes `!`-bearing rulesets fast at scale with identical
 verdicts.
 
+These sort gates define the default **`SOUND`** apply-time contract. `Mode.LOSSY`
+(see [Soundness Modes](index.md#soundness-modes)) relaxes them together — every `!`
+placeholder then binds any subtree with the certificate skipped — which recovers extra
+reductions for training-data canonicalization at the cost of equivalence. Mined rules are
+always *certified* under the sound gates regardless; the mode only changes how they bind
+at apply time.
+
 ### Diagnostics
 
 Setting the environment variable `SIMPLIPY_LEAF_WILDCARDS=1` makes every `_i`
@@ -185,9 +192,10 @@ candidate_fold_filter: true
 proposals: ./llm_proposals.json
 ```
 
-Complete enumeration through length 5 covers tens of millions of sources and is a
-multi-day run on a modern many-core CPU; the sampled lengths add time proportional to
-their sample sizes. Progress, per-length rule counts, and universe coverage are printed
+Complete enumeration through length 5 covers about 21 million sources (with this operator
+set) and is the dominant cost: a multi-day run even on a busy 30-plus-core CPU (throughput
+is tens of sources/second once the length-5 tier is saturated). The sampled lengths add
+time proportional to their sample sizes. Progress, per-length rule counts, and universe coverage are printed
 as the mine advances, and the output file plus its provenance sidecar are updated after
 every completed length.
 
@@ -256,7 +264,7 @@ To certify proposals against an already-built engine without re-mining, use the
 import simplipy as sp
 from simplipy.utils import deduplicate_rules
 
-engine = sp.SimpliPyEngine.load("dev_7-3")
+engine = sp.SimpliPyEngine.load("4-3")
 
 proposals = [
     ["+", "pow2", "sin", "x0", "pow2", "cos", "x0"],   # sin^2 + cos^2
@@ -311,10 +319,10 @@ certified-minimal target about 85–90% of the time.
 2. **Mine + certify** with the configuration above, including its `proposals:` key —
    one command (`simplipy find-rules ...`) runs the mine and then certifies every
    proposal against the freshly mined state (roughly 1–2 seconds per proposal).
-   Complete enumeration through length 5 plus one-million-source samples at lengths 6
-   and 7 is roughly a week on a modern 16-core CPU; the provenance sidecar records
-   everything needed to reproduce the run from its seed, including the proposal file's
-   sha256 and per-outcome counts.
+   Complete enumeration through length 5 (about 21 million sources) plus million-source
+   samples at lengths 6 and 7 is a week-scale run on a busy many-core CPU, with length 5
+   dominating the cost; the provenance sidecar records everything needed to reproduce the
+   run from its seed, including the proposal file's sha256 and per-outcome counts.
 3. **Post-process** (optional): `prune-rules` / `prune-covered-rules` /
    `resolve-rules`, below.
 
@@ -329,16 +337,16 @@ result to a JSON file (they do not modify the installed asset in place):
 
 ```sh
 # Remove explicit rules that are already subsumed by wildcard-pattern rules
-simplipy prune-rules -e "dev_7-3" -o "path/to/pruned_rules.json" -v
+simplipy prune-rules -e "4-3" -o "path/to/pruned_rules.json" -v
 
 # Remove rules that the remaining rules already cover compositionally
-simplipy prune-covered-rules -e "dev_7-3" -o "path/to/pruned_rules.json" -v
+simplipy prune-covered-rules -e "4-3" -o "path/to/pruned_rules.json" -v
 
 # Replace <constant> placeholders with concrete numeric values in all-numeric rules
-simplipy resolve-rules -e "dev_7-3" -o "path/to/resolved_rules.json" -v
+simplipy resolve-rules -e "4-3" -o "path/to/resolved_rules.json" -v
 ```
 
-- `-e` is the engine name (e.g. `dev_7-3`) or a path to an engine configuration file
+- `-e` is the engine name (e.g. `4-3`) or a path to an engine configuration file
 - `-o` is the output path for the post-processed rules
 - `-v` enables verbose progress output
 
@@ -384,8 +392,9 @@ already installed locally:
 ```sh
 simplipy list --type engine
 # --- Available Assets ---
-# - dev_7-3         [installed]  Development engine 7-3 for mathematical expression simplification.
-# - dev_7-2                      Development engine 7-2 for mathematical expression simplification.
+# - 2-1             [installed]  Complete rule mine (sources to length 2, targets to length 1) + certified LLM proposals.
+# - 3-2             [installed]  Complete rule mine (sources to length 3, targets to length 2) + certified LLM proposals.
+# - 4-3             [installed]  Complete rule mine (sources to length 4, targets to length 3) + certified LLM proposals.
 
 simplipy list --installed        # only assets already downloaded
 ```
@@ -393,8 +402,8 @@ simplipy list --installed        # only assets already downloaded
 Install or remove an asset by name:
 
 ```sh
-simplipy install dev_7-3         # download an asset from Hugging Face (--force to reinstall)
-simplipy remove dev_7-3          # remove a locally installed asset
+simplipy install 4-3         # download an asset from Hugging Face (--force to reinstall)
+simplipy remove 4-3          # remove a locally installed asset
 ```
 
 The same operations are available from Python (this is also what the engine loader uses under the hood):
@@ -402,10 +411,10 @@ The same operations are available from Python (this is also what the engine load
 ```python
 import simplipy as sp
 
-sp.install("dev_7-3")     # download an asset from Hugging Face
-sp.uninstall("dev_7-3")   # remove a locally installed asset
-sp.get_path("dev_7-3", install=True)  # resolve a local path, installing if needed
+sp.install("4-3")     # download an asset from Hugging Face
+sp.uninstall("4-3")   # remove a locally installed asset
+sp.get_path("4-3", install=True)  # resolve a local path, installing if needed
 ```
 
-`sp.SimpliPyEngine.load("dev_7-3", install=True)` installs the engine
+`sp.SimpliPyEngine.load("4-3", install=True)` installs the engine
 on demand as part of loading.
