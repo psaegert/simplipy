@@ -34,6 +34,32 @@ pub static ALL: [(&str, &AtomicU64); 11] = [
     ("nanos_mask_sort", &NANOS_MASK_SORT),
 ];
 
+// --- OFFLINE mining progress: a within-tier "sources done / total" signal a driver can poll
+// while `mine_one_length` (one blocking, rayon-parallel call) is running, so a length tier is no
+// longer an opaque black box. Process-global relaxed atomics, incremented once per source.
+pub static MINE_SOURCES_DONE: AtomicU64 = AtomicU64::new(0);
+pub static MINE_SOURCES_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Start a tier: publish the total source count and reset the done counter.
+pub fn mine_begin(total: u64) {
+    MINE_SOURCES_TOTAL.store(total, Relaxed);
+    MINE_SOURCES_DONE.store(0, Relaxed);
+}
+
+/// One source finished (called from every rayon worker).
+#[inline]
+pub fn mine_tick() {
+    MINE_SOURCES_DONE.fetch_add(1, Relaxed);
+}
+
+/// `(done, total)` for the tier currently mining.
+pub fn mine_progress() -> (u64, u64) {
+    (
+        MINE_SOURCES_DONE.load(Relaxed),
+        MINE_SOURCES_TOTAL.load(Relaxed),
+    )
+}
+
 #[inline]
 pub fn bump(c: &AtomicU64) {
     c.fetch_add(1, Relaxed);
