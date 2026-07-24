@@ -435,6 +435,21 @@ class TestMode:
         assert engine.simplify(["inv", "<constant>"], mode=Mode.SOUND) == ["<constant>"]
         assert engine.simplify(["inv", "<constant>"], mode=Mode.LOSSY) == ["<constant>"]
 
+    def test_lossy_relaxes_cancellation_group_axioms(self) -> None:
+        """The THIRD edge: SOUND cancellation respects the group axioms (`inf/inf`, `inf-inf`
+        stay the sound `nan`); LOSSY relaxes them (structural cancel) -- the same relaxation LOSSY
+        applies to the rule matcher's `!`-cert and the constant-fold's finiteness gate, so all
+        three edges behave consistently under `Mode.LOSSY`."""
+        import simplipy
+        from simplipy import Mode
+        engine = SimpliPyEngine.from_config(simplipy.get_path('4-3', install=True))
+        for c in ([["*", "/", 'float("inf")', 'float("inf")', "x0"],    # (inf/inf)*x0
+                   ["+", "-", 'float("inf")', 'float("inf")', "x0"]]):   # (inf-inf)+x0
+            sound = list(engine.simplify(list(c), mode=Mode.SOUND))
+            lossy = list(engine.simplify(list(c), mode=Mode.LOSSY))
+            assert sound == ['float("nan")'], (c, sound)   # SOUND keeps the sound (non-finite) value
+            assert lossy != sound, (c, sound, lossy)       # LOSSY structurally relaxed it
+
 
 class TestOperatorConversions:
     """Tests for operators_to_realizations and realizations_to_operators."""

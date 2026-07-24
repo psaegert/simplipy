@@ -126,7 +126,7 @@ struct AnnNode {
 /// Port of `collect_multiplicities`. Right-to-left scan building a stack
 /// of annotated subtrees; for a well-formed prefix expression the stack ends with a single root,
 /// which is returned. Mirrors the leaf / binary-connectable / general-operator branches exactly.
-fn collect_multiplicities(expression: &[Tok], view: &TokenView) -> Option<AnnNode> {
+fn collect_multiplicities(expression: &[Tok], view: &TokenView, wildcard_all: bool) -> Option<AnnNode> {
     let tt = view.table;
     let mut stack: Vec<AnnNode> = Vec::new();
 
@@ -214,8 +214,8 @@ fn collect_multiplicities(expression: &[Tok], view: &TokenView) -> Option<AnnNod
             continue;
         }
 
-        // Leaf: registers itself with multiplicity [1,0]. Cancellation assumes the group
-        // axioms, so a leaf registers ONLY in the connection classes where they hold:
+        // Leaf: registers itself with multiplicity [1,0]. In SOUND mode cancellation assumes the
+        // group axioms, so a leaf registers ONLY in the connection classes where they hold:
         //   - VARIABLES in both classes (`x - x -> 0` is total; `x/x -> 1` fills a null hole);
         //   - a LITERAL where its value is a group element: nonzero finite in both classes; 0 in
         //     the ADDITIVE class only (`0/0 -> 1` and the sign-of-zero family are wrong answers);
@@ -224,6 +224,12 @@ fn collect_multiplicities(expression: &[Tok], view: &TokenView) -> Option<AnnNod
         // Not registering is the same state a composite subtree has always had (own = empty), so
         // the cancel phase needs no other change; it also UN-SHADOWS the already-mined correct
         // ground rules (`('/','0','0') -> float("nan")` et al.) that this pass pre-empted.
+        //
+        // LOSSY mode (`wildcard_all`) drops this group-axiom gate, exactly as it drops the rule
+        // matcher's `!`-certificate and the constant-fold's finiteness gate: EVERY leaf registers
+        // in BOTH classes, so `0/0 -> 1`, `inf/inf -> 1`, `inf - inf -> 0` cancel structurally. Not
+        // sound; the training-corpus-canonicalisation contract (data generated FROM the simplified
+        // form, target == data) is what makes the three relaxations coherent.
         let leaf_hash = vec![token];
         let lv = if token == tt.constant {
             None
@@ -237,10 +243,14 @@ fn collect_multiplicities(expression: &[Tok], view: &TokenView) -> Option<AnnNod
                 Vec::new()
             }
         };
-        let own = [
-            reg(lv.map(|v| v.is_finite()).unwrap_or(true)),
-            reg(lv.map(|v| v.is_finite() && v != 0.0).unwrap_or(true)),
-        ];
+        let own = if wildcard_all {
+            [reg(true), reg(true)]
+        } else {
+            [
+                reg(lv.map(|v| v.is_finite()).unwrap_or(true)),
+                reg(lv.map(|v| v.is_finite() && v != 0.0).unwrap_or(true)),
+            ]
+        };
         stack.push(AnnNode {
             op: None,
             token,
@@ -550,8 +560,9 @@ pub fn cancel_successors(
     expression: &[Tok],
     ops: &Operators,
     view: &TokenView,
+    wildcard_all: bool,
 ) -> Vec<(Vec<Tok>, i64)> {
-    let Some(root) = collect_multiplicities(expression, view) else {
+    let Some(root) = collect_multiplicities(expression, view, wildcard_all) else {
         return Vec::new();
     };
     // select_nth = usize::MAX selects nothing and just counts the qualifying triples.
@@ -572,7 +583,8 @@ pub fn cancel_successors(
 /// returned unchanged; the deployed skeleton path only ever feeds well-formed prefix
 /// expressions.
 pub fn cancel_terms_unit(expression: &[Tok], ops: &Operators, view: &TokenView) -> Vec<Tok> {
-    match collect_multiplicities(expression, view) {
+    // The diagnostic unit entry (`cancel_only`) stays SOUND (group-axiom gate on).
+    match collect_multiplicities(expression, view, false) {
         Some(root) => cancel_terms(&root, ops, view, None).0,
         None => expression.to_vec(),
     }

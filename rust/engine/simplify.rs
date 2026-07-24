@@ -559,7 +559,7 @@ impl Engine {
         }
         let t_cancel = std::time::Instant::now();
         children.extend(
-            crate::cancel::cancel_successors(node, &self.operators, &self.view(ctx))
+            crate::cancel::cancel_successors(node, &self.operators, &self.view(ctx), ctx.wildcard_all)
                 .into_iter()
                 .map(|(child, _sum)| child),
         );
