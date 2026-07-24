@@ -38,7 +38,7 @@ pip install simplipy
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("dev_7-3", install=True)
+engine = sp.SimpliPyEngine.load("4-3", install=True)   # a published ruleset artifact
 
 # Simplify prefix expressions
 engine.simplify(('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'))
@@ -86,16 +86,16 @@ rule-normal subtrees, and runs on interned token ids (~20× fewer allocations pe
 all at byte-identical outputs. On a 65,536-expression training-prior benchmark, large
 certificate-bearing rulesets simplify ~59× faster than 0.5.0 and certificate-free
 rulesets ~2.3× faster; see the [CHANGELOG](https://github.com/psaegert/simplipy/blob/main/CHANGELOG.md)
-for details. As of 0.7.0 there is a single engine line; to reproduce the historical
-dev_7-3 / v23.0-era behavior byte-for-byte, install `simplipy<=0.6.0`. The comparison
-below dates from the 0.3.0 Rust cutover:
+for details. Since 0.7.0 there is a single compiled engine line; the published ruleset
+artifacts (`2-1`, `3-2`, `4-3`, …) are the distinguishing factor between engines, all loaded at
+the default `max_pattern_length=None`. (To reproduce the historical dev_7-3 / v23.0-era behavior
+byte-for-byte, install `simplipy<=0.6.0`.)
 
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplification_comparison_sympy_python_rust.svg" alt="Simplification time and ratio ECDFs: SymPy vs SimpliPy (Python 0.2.15) vs SimpliPy (Rust 0.3.0)" width="680">
-      <p><strong>Top row:</strong> SimpliPy <code>0.3.0</code> (Rust inline engine, green). <strong>Bottom row:</strong> SimpliPy <code>0.2.15</code> (pure Python, blue). <strong>Left:</strong> Empirical Cumulative Distribution Functions (ECDFs) of simplification wall-clock time across maximum pattern lengths L<sub>max</sub> = 0–7, with the SymPy <a href="https://peerj.com/articles/cs-103/">[Meurer et al. 2017]</a> baseline (orange, red). The Rust inline engine is roughly 5× to 100× faster than the pure-Python engine at the same L<sub>max</sub> (≈ 15× at L<sub>max</sub> = 4), and both are orders of magnitude faster than SymPy. <strong>Right:</strong> ECDF of the simplification ratio |τ ∗|/|τ | (inset: zoom on the low-ratio region where the L<sub>max</sub> curves separate); the Rust and Python engines produce near-identical simplification-ratio distributions, so the Rust rewrite buys the speed-up without sacrificing simplification quality. (0.3.0 does deliberately change behaviour on a small fraction of inputs via the conversion-quirk fixes and numeric folding; see the <a href="https://github.com/psaegert/simplipy/blob/main/CHANGELOG.md">CHANGELOG</a>.)<br>
-      Source expressions are sampled with 0 to 17 unique variables and 1 to 35 symbols <a href="https://arxiv.org/abs/2602.08885">[Saegert & Köthe 2026]</a></p>
+      <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplipy_vs_sympy.svg" alt="Simplification time and ratio ECDFs: SimpliPy 0.9.1 vs SymPy across three axes (mined rulesets, safe vs aggressive, search budget) on 64k Lample-Charton expressions from the Flash-ANSR v23.0 prior" width="900">
+      <p>Empirical Cumulative Distribution Functions (ECDFs) of simplification wall-clock time (<strong>top row</strong>) and simplification ratio <code>|simp| / |orig|</code> in prefix tokens (<strong>bottom row</strong>, inset: zoom on the low-ratio tail), over 65,536 randomly generated Lample-Charton expressions sampled from the Flash-ANSR v23.0 training prior (0 to 17 unique variables, 1 to 35 symbols <a href="https://arxiv.org/abs/2602.08885">[Saegert & Köthe 2026]</a>). Three axes vary SimpliPy (green) while <strong>SymPy</strong> <a href="https://peerj.com/articles/cs-103/">[Meurer et al. 2017]</a> (orange <code>ratio=None</code> / red <code>ratio=1</code>) is the fixed reference: <strong>Mined Rulesets</strong> — the published <code>2-1</code>/<code>3-2</code>/<code>4-3</code> artifacts at the default <code>max_pattern_length=None</code> (darker = larger); <strong>Safe vs Aggressive</strong> — <code>4-3</code> in the deployed <code>SOUND</code> mode vs the training-only <code>LOSSY</code> mode; <strong>Search Budget</strong> — <code>4-3</code> SOUND at node budgets 1 to 48. SimpliPy is timed per call (<code>perf_counter</code>, gc off); SymPy is given each <code>&lt;constant&gt;</code> as a free symbol and simplified symbolically inside a per-expression worker with a 1 s timeout, then scored by its native prefix length. The measured quantities are the two ECDFs; the plot, not this caption, reports what they show.</p>
     </td>
   </tr>
 </table>
@@ -142,7 +142,7 @@ pytest tests --cov src --cov-report html -m "not integration"
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2026,
     publisher = {GitHub},
-    version = {0.7.0},
+    version = {0.9.1},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
