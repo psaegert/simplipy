@@ -680,8 +680,10 @@ class SimpliPyEngine:
             How many nodes the simplification tree search may EXPAND before it stops and
             returns the shortest expression it reached. Defaults to 48, the measured elbow of
             the returns curve: below it an extra microsecond buys several output tokens, above
-            it a fraction of one. Raise it for offline corpus canonicalisation; note that 0
-            expands nothing and returns the expression unsimplified.
+            it a fraction of one. Raise it for offline corpus canonicalisation. Note that 0
+            disables the SEARCH only: literal masking and operand sorting still run, so the
+            result is the canonicalised expression (``* 2 2`` becomes ``* <constant>
+            <constant>``), not the input verbatim.
         max_pattern_length : int or None, optional
             The maximum length of a rule pattern to consider.
         mask_elementary_literals : bool, optional

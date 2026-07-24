@@ -436,7 +436,10 @@ impl Engine {
     /// to insertion order, which keeps the result deterministic.
     ///
     /// ONE bound, about work rather than correctness: `node_budget` caps how many nodes are
-    /// EXPANDED. A separate depth cap used to exist and was removed as provably redundant --
+    /// EXPANDED. Its default (48, set at the API boundary) is the measured elbow of the returns
+    /// curve on the 64k v23.0 prior; raise it for offline corpus canonicalisation. A budget of 0
+    /// disables the SEARCH only -- the caller still gets masking and operand sorting, so the
+    /// result is the CANONICALISED input, not the input verbatim. A separate depth cap used to exist and was removed as provably redundant --
     /// depth <= expansions <= budget, so any cap at or above the budget can never bind, and
     /// measurement confirmed the reachable depth saturates well inside it.
     ///
