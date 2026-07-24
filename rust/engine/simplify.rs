@@ -480,7 +480,13 @@ impl Engine {
             }
             stats::bump(&stats::SIMPLIFY_ITERS);
 
-            // Successors: the rules move, then every cancellation candidate.
+            // Successors: the rules move, then every cancellation candidate. Ordering them by
+            // the promise of the move was TRIED and dropped: tie-breaking by candidate kind
+            // bought ~15 tokens per 1.5M for +2.8% time, and scoring by post-rules length (a
+            // one-ply lookahead, the version that actually corrects for cancel being
+            // length-neutral) LOST at matched wall-clock -- 1509437 tokens at 77.1 us/expr
+            // against 1509365 at 76.0 for the plain length key. Computing a better priority
+            // costs more than spending the same time on more expansions.
             let mut successors: Vec<Vec<Tok>> = Vec::new();
             if apply_simplification_rules {
                 successors.push(memoized_pass(&ctx.rules_memo, &state, || {
@@ -488,13 +494,11 @@ impl Engine {
                 }));
             }
             let t_cancel = std::time::Instant::now();
-            let (_, n_candidates) =
-                crate::cancel::cancel_nth(&state, &self.operators, &self.view(ctx), None);
-            for k in 0..n_candidates {
-                successors.push(
-                    crate::cancel::cancel_nth(&state, &self.operators, &self.view(ctx), Some(k)).0,
-                );
-            }
+            successors.extend(
+                crate::cancel::cancel_successors(&state, &self.operators, &self.view(ctx))
+                    .into_iter()
+                    .map(|(out, _sum)| out),
+            );
             stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
 
             for child in successors {

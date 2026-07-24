@@ -537,27 +537,31 @@ fn cancel_terms(
     (expression, chosen_sum, n_candidates)
 }
 
-/// SEARCH branching operator: apply the `n`-th qualifying cancellation candidate (walk order)
-/// under the given region shape, and report the state's branching factor. `n = None` counts
-/// only. Returns `(output, n_candidates)`; with `n >= n_candidates` the expression is returned
-/// unchanged.
+/// SEARCH branching operator: every successor of `expression` under the cancel move, each
+/// paired with the SIGNED multiplicity sum of the candidate it took (the caller ranks on it).
+///
+/// The annotation tree is collected ONCE and the per-candidate emit walks reuse it; enumerating
+/// via a per-candidate entry point re-collected it `b + 1` times per expansion.
 ///
 /// There is exactly ONE region shape: `neg`/`inv` are ALWAYS region-continuing class inverses.
 /// Treating them as opaque was the original defect (the unit emitted the class inverses but
 /// never consumed them); the pre-0.8.0 outputs that relied on that asymmetry are not preserved.
-pub fn cancel_nth(
+pub fn cancel_successors(
     expression: &[Tok],
     ops: &Operators,
     view: &TokenView,
-    n: Option<usize>,
-) -> (Vec<Tok>, usize) {
-    match collect_multiplicities(expression, view) {
-        Some(root) => {
-            let (out, _, k) = cancel_terms(&root, ops, view, n.or(Some(usize::MAX)));
-            (out, k)
-        }
-        None => (expression.to_vec(), 0),
-    }
+) -> Vec<(Vec<Tok>, i64)> {
+    let Some(root) = collect_multiplicities(expression, view) else {
+        return Vec::new();
+    };
+    // select_nth = usize::MAX selects nothing and just counts the qualifying triples.
+    let (_, _, n_candidates) = cancel_terms(&root, ops, view, Some(usize::MAX));
+    (0..n_candidates)
+        .map(|k| {
+            let (out, sum, _) = cancel_terms(&root, ops, view, Some(k));
+            (out, sum.unwrap_or(0))
+        })
+        .collect()
 }
 
 /// The fused public entry: `cancel_terms(*collect_multiplicities(expression))` under the
