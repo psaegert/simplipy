@@ -513,6 +513,19 @@ impl Engine {
                 .map(|(child, _sum)| child),
         );
         stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
+        // Operand SORTING is a legitimate edge -- length-neutral, semantically identity on
+        // commutative operands, and it changes which rules match -- and it was TRIED as one. It
+        // raises the reachable ceiling: with sorting confined to the pipeline loop the 64k prior
+        // saturates at 1508224 tokens (4-3) no matter how large the budget gets, while sorting
+        // as an edge reaches 1508057. But it is not efficient, because a sort pass is then paid
+        // at EVERY expansion:
+        //     ~124us  budget-only 1508255 (b96)  vs  sort-edge 1508656 (b12)
+        //     ~150us  budget-only 1508229 (b192) vs  sort-edge 1508301 (b24)
+        //     ~174us  budget-only 1508224 (b384) vs  sort-edge 1508158 (b32)   <- crossover
+        // Below ~170us/expr the budget wins outright; only past the plateau does sorting pay.
+        // At the shipped operating point (~106us) it costs ~2x for 241 tokens in 1.5M, so the
+        // cheap way to get sorting's rule-unlocking effect is what `simplify_toks` already does:
+        // sort BETWEEN pipeline rounds, a handful of times, instead of at every node.
         children
     }
 
