@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.9.0 (unreleased)
+## 0.9.1 (unreleased)
+
+### Added
+- **Within-tier mining progress.** `find_rules(verbose=True)` now reports progress WHILE a length
+  tier is mining, not only at the end. The Rust miner publishes a `(sources_done, sources_total)`
+  counter (`Engine.mining_progress()` on the compiled core) that a daemon monitor polls, printing
+  `Length L: X/N sources (P%) | R src/s | ETA T | elapsed E | RSS M` at 20 / 60 / 180 s and then
+  every `SIMPLIPY_MINE_PROGRESS_INTERVAL` seconds (default 600). A long tier -- the length-5+
+  combinatorial wall where a mine can sit for days -- is no longer an opaque wait: its rate, ETA,
+  and memory are visible as it runs. Zero effect when `verbose=False`.
+
+## 0.9.0 — 2026-07-24
 
 A new simplify kernel. `simplify` is now a best-first cancellation SEARCH instead of a fixed
 cancellation order; masking (numeric literals -> `<constant>`) is separated from the

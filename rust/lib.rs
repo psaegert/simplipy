@@ -436,6 +436,14 @@ impl PyEngine {
         crate::engine::stats::reset();
     }
 
+    /// OFFLINE mining progress: `(sources_done, sources_total)` for the length tier currently
+    /// being mined by `mine_one_length`. `mine_one_length` is one blocking, rayon-parallel call,
+    /// so a driver polls this from another thread to get within-tier progress (rate / ETA)
+    /// instead of only the end-of-tier summary. `(0, 0)` before the first tier starts.
+    fn mining_progress(&self) -> (u64, u64) {
+        crate::engine::stats::mine_progress()
+    }
+
     /// OFFLINE / TEST HOOK: the value set of `tokens` over an explicit per-variable BOX --
     /// variable `i` ranges over `[los[i], his[i]]`. Returns
     /// `(has_finite, pos_inf, neg_inf, nan, fin_lo, fin_hi)`, or `None` if unevaluable.

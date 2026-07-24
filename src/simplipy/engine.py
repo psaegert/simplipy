@@ -896,6 +896,74 @@ class SimpliPyEngine:
                 confirmed.append((source, target))
         return confirmed
 
+    def _mine_tier_with_progress(self, length: int, n_sources: int, mine_call: Callable, verbose: bool) -> Any:
+        """Run one length tier's ``mine_one_length`` (a single blocking, rayon-parallel call) while a
+        daemon thread polls the core's within-tier ``mining_progress()`` and prints a rate / ETA /
+        RSS line, so a long tier is not an opaque wait. Quick early reports (20 / 60 / 180 s), then
+        every ``SIMPLIPY_MINE_PROGRESS_INTERVAL`` seconds (default 600). No effect unless ``verbose``."""
+        if not verbose:
+            return mine_call()
+        import threading
+        import time
+        try:
+            interval = float(os.environ.get('SIMPLIPY_MINE_PROGRESS_INTERVAL', '600'))
+        except ValueError:
+            interval = 600.0
+
+        def _rss_gb() -> float:
+            try:
+                with open('/proc/self/status') as status:
+                    for line in status:
+                        if line.startswith('VmRSS:'):
+                            return int(line.split()[1]) / 1048576
+            except OSError:
+                pass
+            return float('nan')
+
+        def _fmt(sec: float) -> str:
+            if sec != sec or sec == float('inf'):
+                return '?'
+            isec = int(sec)
+            hours, isec = divmod(isec, 3600)
+            mins, isec = divmod(isec, 60)
+            return f'{hours}h{mins:02d}m' if hours else (f'{mins}m{isec:02d}s' if mins else f'{isec}s')
+
+        t0 = time.perf_counter()
+
+        def _report() -> None:
+            done, total = self._core.mining_progress()
+            total = total or n_sources
+            elapsed = time.perf_counter() - t0
+            rate = done / elapsed if elapsed > 0 else 0.0
+            eta = (total - done) / rate if rate > 0 else float('inf')
+            pct = 100.0 * done / total if total else 0.0
+            print(f'  Length {length}: {done:,}/{total:,} sources ({pct:.1f}%) | {rate:,.0f} src/s'
+                  f' | ETA {_fmt(eta)} | elapsed {_fmt(elapsed)} | RSS {_rss_gb():.1f} GB', flush=True)
+
+        stop = threading.Event()
+
+        def _monitor() -> None:
+            schedule = [20.0, 60.0, 180.0]   # quick early confirmations that it is alive + moving
+            i, last = 0, 0.0
+            while not stop.is_set():
+                elapsed = time.perf_counter() - t0
+                due = schedule[i] if i < len(schedule) else last + interval
+                if elapsed >= due:
+                    _report()
+                    last = elapsed
+                    if i < len(schedule):
+                        i += 1
+                stop.wait(5.0)
+
+        monitor = threading.Thread(target=_monitor, daemon=True)
+        monitor.start()
+        try:
+            return mine_call()
+        finally:
+            stop.set()
+            monitor.join(timeout=2.0)
+            _report()   # final within-tier line before the end-of-tier summary
+
     def _find_rules_native(
             self,
             expressions_of_length: dict[int, set[tuple[str, ...]]],
@@ -974,11 +1042,14 @@ class SimpliPyEngine:
             sources = [list(expression) for expression in sorted(expressions_of_length[length])]
             # Per-length seed block: lengths are spaced by 2^40 (far above any per-length
             # source count) so the per-source streams (seed + index) never collide.
-            found = self._core.mine_one_length(
-                sources, library, max_target_pattern_length,
-                constants_fit_challenges, constants_fit_retries,
-                mine_seed + (length << 40), rtol, atol, min_informative,
-                relaxed_kruskal)
+            found = self._mine_tier_with_progress(
+                length, len(sources),
+                lambda: self._core.mine_one_length(
+                    sources, library, max_target_pattern_length,
+                    constants_fit_challenges, constants_fit_retries,
+                    mine_seed + (length << 40), rtol, atol, min_informative,
+                    relaxed_kruskal),
+                verbose)
             if found and X_confirm is not None:
                 n_mined = len(found)
                 found = self._confirm_mined_rules(

@@ -179,32 +179,40 @@ impl Engine {
         min_informative: usize,
         relaxed_kruskal: bool,
     ) -> Vec<(Vec<String>, Vec<String>)> {
+        // Publish the tier size so a driver polling `mine_progress()` sees within-tier progress
+        // while this one blocking call runs.
+        super::stats::mine_begin(sources.len() as u64);
         sources
             .par_iter()
             .enumerate()
             .filter_map(|(idx, src)| {
                 // Kruskal prune: simplify with the current rules; skip if it
                 // shortens (strict), or tighten the search bound to the simplified length (relaxed).
-                let slen = self.simplify(src, 48, None, true, false).len();
-                if slen < src.len() && !relaxed_kruskal {
-                    return None;
-                }
-                let s = seed.wrapping_add(idx as u64);
-                match self.find_rule_with_lib(
-                    src,
-                    slen,
-                    max_target,
-                    lib,
-                    challenges,
-                    retries,
-                    s,
-                    rtol,
-                    atol,
-                    min_informative,
-                ) {
-                    Ok(Some(target)) => Some((src.clone(), target)),
-                    _ => None,
-                }
+                let out = {
+                    let slen = self.simplify(src, 48, None, true, false).len();
+                    if slen < src.len() && !relaxed_kruskal {
+                        None
+                    } else {
+                        let s = seed.wrapping_add(idx as u64);
+                        match self.find_rule_with_lib(
+                            src,
+                            slen,
+                            max_target,
+                            lib,
+                            challenges,
+                            retries,
+                            s,
+                            rtol,
+                            atol,
+                            min_informative,
+                        ) {
+                            Ok(Some(target)) => Some((src.clone(), target)),
+                            _ => None,
+                        }
+                    }
+                };
+                super::stats::mine_tick(); // count the source whether or not it yielded a rule
+                out
             })
             .collect()
     }
