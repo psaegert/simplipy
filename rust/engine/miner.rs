@@ -185,7 +185,7 @@ impl Engine {
             .filter_map(|(idx, src)| {
                 // Kruskal prune: simplify with the current rules; skip if it
                 // shortens (strict), or tighten the search bound to the simplified length (relaxed).
-                let slen = self.simplify(src, 5, None, true, true).len();
+                let slen = self.simplify(src, 48, None, true, false).len();
                 if slen < src.len() && !relaxed_kruskal {
                     return None;
                 }
@@ -234,7 +234,13 @@ impl Engine {
                 .iter()
                 .map(|&t| self.tokens.resolve(t).to_string())
                 .collect();
-            let result = self.simplify(lhs, 5, None, mask_elementary_literals, true);
+            let simplified = self.simplify(lhs, 48, None, true, false);
+            // rhs may be stored in masked (placeholder) form; mask to compare like-for-like.
+            let result = if mask_elementary_literals {
+                self.mask(&simplified)
+            } else {
+                simplified
+            };
             if result == rhs {
                 pruned.push(lhs.clone()); // redundant: keep removed
             } else {

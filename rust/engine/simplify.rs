@@ -1,10 +1,12 @@
 //! The simplify kernel: the `!`-certificate lookup, `apply_rules_top_down` (with the
-//! constant-fold fallback), and the `simplify` fixpoint, all running on interned ids against
+//! constant-fold fallback), and the `simplify` tree search, all running on interned ids against
 //! the per-call [`SimplifyCtx`].
 
 use std::cell::RefCell;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::matcher::{apply_mapping, match_pattern_with_cert};
 use crate::parse::{parse_subtree, tree_to_prefix, Node};
@@ -14,7 +16,7 @@ use super::memo::SimplifyCtx;
 use super::stats;
 use super::Engine;
 
-/// One memo-wrapped pass of the fixpoint: return the cached output for `input`, or run
+/// One memo-wrapped rewrite pass: return the cached output for `input`, or run
 /// `compute` and memoize its result (whole-pass input -> output map; see [`SimplifyCtx`]).
 fn memoized_pass(
     memo: &RefCell<FxHashMap<Vec<Tok>, Vec<Tok>>>,
@@ -77,20 +79,20 @@ impl Engine {
 
     /// The rule-application sub-unit `apply_simplification_rules`: the whole-expression
     /// all-`<constant>`/operator fold, then parse -> `apply_rules_top_down` -> flatten back to
-    /// prefix. This is the `simplify` fixpoint's per-iteration rule pass.
+    /// prefix. This is the rules EDGE of the search graph.
     pub fn apply_simplification_rules(
         &self,
         expression: &[String],
         max_pattern_length: Option<usize>,
     ) -> Vec<String> {
-        let ctx = SimplifyCtx::new(self.tokens.len());
+        let ctx = SimplifyCtx::new(self.tokens.len(), false);
         let toks = self.intern_seq(expression, &ctx);
         let out = self.apply_simplification_rules_with_ctx(&toks, max_pattern_length, &ctx);
         self.resolve_seq(&out, &ctx)
     }
 
     /// The rules pass against a caller-owned memo context: `simplify` threads ONE ctx
-    /// across all fixpoint iterations so the confirming pass and unchanged subtrees are free.
+    /// across every node it expands, so a node reached by several paths costs one pass.
     fn apply_simplification_rules_with_ctx(
         &self,
         expression: &[Tok],
@@ -146,6 +148,7 @@ impl Engine {
                     &rule.lhs_tree,
                     &mut mapping,
                     Some(&|n: &Node| self.bang_certified(n, ctx)),
+                    ctx.wildcard_all,
                     &view,
                 ) {
                     stats::bump(&stats::PATTERN_FIRES);
@@ -240,9 +243,14 @@ impl Engine {
     /// ALL leaves. If every operand is VALUED (`numeric::leaf_value` resolves it: numeric
     /// literals, `np.pi`/`np.e`, `(-1)`-style parenthesized literals, the `float("...")`
     /// tokens) -> evaluate to the `f64` result token (`evaluate_constant_subtree`; `None` if
-    /// unfoldable). ELSE if every operand is `<constant>` or a FINITE-valued leaf -> collapse to
-    /// `<constant>` (inf/nan literals never absorb into `<constant>`: non-finite algebra belongs
-    /// to explicit rules such as `+ float("-inf") <constant> -> float("-inf")`).
+    /// unfoldable). ELSE if every operand is `<constant>` or a FINITE-valued leaf, AND the subtree
+    /// is CERTIFIED to have a positive-measure finite value (`interval::value_set` over R:
+    /// `has_fin && !fin_null`) -> collapse to `<constant>` (inf/nan literals never absorb into
+    /// `<constant>`: non-finite algebra belongs to explicit rules such as
+    /// `+ float("-inf") <constant> -> float("-inf")`). The finiteness certificate is REQUIRED, not
+    /// cosmetic: finite operands can compose to a non-finite-a.e. value (`<constant>/0`), and
+    /// collapsing that to a free finite constant is unsound -- this edge is the one that used to
+    /// skip the certification the rule matcher and the cancellation already enforce.
     /// The `if all_valued { ... } elif ... { ... }` ORDER is load-bearing: an all-valued but
     /// UNFOLDABLE subtree returns `None` (it does NOT fall through to the `<constant>` collapse).
     /// Both gates MUST use `numeric::leaf_value` -- the tape evaluator's own leaf table -- so the
@@ -293,111 +301,287 @@ impl Engine {
             .iter()
             .all(|&v| v == self.tokens.constant || view.leaf_value(v).is_some_and(f64::is_finite));
         if all_const_or_finite {
-            return Some(Node::Leaf(self.tokens.constant));
+            // The syntactic "every operand is <constant> or a finite literal" test is NOT
+            // sufficient to collapse the subtree to a free <constant>: an operator can map finite
+            // operands to a value that is non-finite on FULL measure. `<constant> / 0` is +-inf/nan
+            // for EVERY constant, so folding it to a finite free <constant> both drops the reachable
+            // non-finite value and fabricates finite ones -- unsound (it revives a structurally
+            // zeroed term; corpus idx 35585, the `zoo`-collapse). This is the one search edge that
+            // skipped the finiteness certification the rule matcher (`match_pattern_with_cert` ->
+            // `bang_certified`) and the cancellation (its group-axiom leaf gate) both already carry.
+            // Gate it on the SAME value-set analysis: fold only when the subtree has a
+            // POSITIVE-MEASURE finite part (`has_fin && !fin_null`) -- the exact predicate whose
+            // negation is `finite_ae`'s witness. This is WEAKER than `finite_ae` on purpose: an
+            // unbounded-but-finite-a.e. subtree (`inv <constant>` = 1/C, `tan <constant>`,
+            // `cosh(<constant>+5)`) stays foldable (the pole is measure-zero), while a non-finite-a.e.
+            // subtree (`<constant>/0`, `<constant>*inv(0)`) does not.
+            //
+            // LOSSY mode (`wildcard_all`) relaxes this finiteness certificate, exactly as it relaxes
+            // the rule matcher's `!`-certificate: a non-finite-a.e. subtree (`<constant>/0`) then
+            // collapses to `<constant>` too. That is the intended training-corpus behaviour (the data
+            // is generated FROM the simplified form, so target == data and there is nothing to
+            // violate); it is NOT sound and must never run on an inference/scoring path.
+            if ctx.wildcard_all {
+                return Some(Node::Leaf(self.tokens.constant));
+            }
+            let mut flat: Vec<String> = Vec::with_capacity(values.len() + 1);
+            flat.push(view.to_string(operator));
+            flat.extend(values.iter().map(|&v| view.to_string(v)));
+            let finite_pm =
+                crate::interval::value_set(&flat, &self.operators, &crate::interval::Vs::reals())
+                    .is_some_and(|vs| vs.has_fin && !vs.fin_null);
+            if finite_pm {
+                return Some(Node::Leaf(self.tokens.constant));
+            }
+            return None;
         }
         None
     }
 
-    /// THE whole-unit kernel: the `simplify` fixpoint, the
-    /// prefix-token-list contract: per iteration `cancel_terms` -> `apply_simplification_rules`
-    /// (when enabled), break when the iteration is a no-op vs the previous (`<= max_iter`); then
-    /// `mask_elementary_literals` (when enabled); then `sort_operands` (mask-BEFORE-sort so the
-    /// canonical operand order is a fixpoint -- idempotent); then the LONGER-RESULT GUARD
-    /// (if the result is longer than the original input, return the ORIGINAL).
+    /// THE whole-unit kernel, on the prefix-token-list contract: run the tree search
+    /// ([`Engine::simplify_search`]) to a `search -> sort` fixpoint (the EQUIVALENCE LOOP), which
+    /// preserves the function EXACTLY and is idempotent by construction.
+    ///
+    /// `simplify` does NOT mask. Masking (numeric literals -> `<constant>`) is a REPRESENTATION
+    /// step for a downstream model that cannot consume literals, not an equivalence-preserving
+    /// rewrite; it is carved out into [`Engine::mask`] and applied by callers to `simplify`'s
+    /// output when placeholders are needed. Entangling it here was unsound: masking mints a free
+    /// `<constant>` from a structural literal (`x-x -> 0 -> <constant>`), and re-searching that
+    /// folds the fresh constant into a denominator, losing the reachable `C=0` and turning a term
+    /// that was identically 0 into a non-zeroable one (non-equivalent). It was also the sole cause
+    /// of the former non-idempotence.
     ///
     /// Returns the simplified prefix tokens (the Python `'list'` return). The `inplace` /
     /// return-type machinery (str/tuple/np_array) is a Python-shim concern, not part of this kernel.
     ///
     /// This is the string boundary -- intern once at entry, resolve once at exit; the whole
-    /// fixpoint runs on `Tok` ids ([`Engine::simplify_toks`]).
+    /// search runs on `Tok` ids ([`Engine::simplify_toks`]).
     pub fn simplify(
         &self,
         tokens: &[String],
-        max_iter: usize,
+        node_budget: usize,
         max_pattern_length: Option<usize>,
-        mask_elementary_literals: bool,
         apply_simplification_rules: bool,
+        wildcard_all: bool,
     ) -> Vec<String> {
-        let ctx = SimplifyCtx::new(self.tokens.len());
+        let ctx = SimplifyCtx::new(self.tokens.len(), wildcard_all);
         let toks = self.intern_seq(tokens, &ctx);
         let out = self.simplify_toks(
             &toks,
-            max_iter,
+            node_budget,
             max_pattern_length,
-            mask_elementary_literals,
             apply_simplification_rules,
             &ctx,
         );
         self.resolve_seq(&out, &ctx)
     }
 
-    /// The id-level simplify fixpoint (see [`Engine::simplify`] for the contract).
+    /// The REPRESENTATION pass, carved out of the simplify kernel: relabel every numeric literal
+    /// token to `<constant>` (so a downstream model sees placeholders), then sort to canonicalise
+    /// the relabelled operands. A pure WIDENING -- every masked value is recoverable by its
+    /// placeholder (`0*X -> <constant>*X` at C=0; `pi/2 -> <constant>` at C=pi/2). Apply ONCE to a
+    /// simplified expression and never re-`simplify` the result: a masked form re-fed to the search
+    /// can collect redundant constants (~0.4% of rows) and, on structural-zero inputs, fold
+    /// unsoundly -- which is exactly why masking is not part of `simplify`. mask+sort are each
+    /// idempotent, so `mask` itself is a fixpoint.
+    pub fn mask(&self, tokens: &[String]) -> Vec<String> {
+        let ctx = SimplifyCtx::new(self.tokens.len(), false);
+        let toks = self.intern_seq(tokens, &ctx);
+        let masked = crate::utils::mask_elementary_literals(&toks, &self.view(&ctx));
+        let out = crate::sort::sort_operands_unit(&masked, &self.view(&ctx));
+        self.resolve_seq(&out, &ctx)
+    }
+
+    /// The id-level kernel (see [`Engine::simplify`] for the contract): the EQUIVALENCE LOOP only.
     fn simplify_toks(
         &self,
         tokens: &[Tok],
-        max_iter: usize,
+        node_budget: usize,
         max_pattern_length: Option<usize>,
-        mask_elementary_literals: bool,
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
-        let length_before = tokens.len();
         stats::bump(&stats::SIMPLIFY_CALLS);
 
-        // current_expression / new_expression both start as a copy of the input.
-        let mut current_expression = tokens.to_vec();
-        let mut new_expression = current_expression.clone();
-
-        for _ in 0..max_iter {
-            stats::bump(&stats::SIMPLIFY_ITERS);
-            // Cancel any terms (cancel_terms(*collect_multiplicities(new_expression))).
-            let t_cancel = std::time::Instant::now();
-            new_expression = memoized_pass(&ctx.cancel_memo, &new_expression, || {
-                crate::cancel::cancel_terms_unit(&new_expression, &self.operators, &self.view(ctx))
-            });
-            stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
-
-            // Apply simplification rules.
-            if apply_simplification_rules {
-                let t_rules = std::time::Instant::now();
-                new_expression = memoized_pass(&ctx.rules_memo, &new_expression, || {
-                    self.apply_simplification_rules_with_ctx(
-                        &new_expression,
-                        max_pattern_length,
-                        ctx,
-                    )
-                });
-                stats::add(&stats::NANOS_RULES, t_rules.elapsed().as_nanos() as u64);
+        // EQUIVALENCE LOOP: iterate SEARCH -> sort until the pair stops moving. Both are
+        // equivalence-preserving; sorting is in the loop because reordering operands changes
+        // WHICH RULES MATCH, so a re-sorted answer can be searchable again. This reaches a fixpoint
+        // on its own -- masking is NOT part of `simplify` (see the doc on `simplify`/`mask`), so
+        // there is no mint-a-constant-then-refold churn and idempotence holds by construction.
+        // `ctx` is shared across rounds, so the rules memo makes repeated nodes free. Every round
+        // but the last strictly shortens, so this terminates.
+        let mut current = tokens.to_vec();
+        loop {
+            let searched = self.simplify_search(
+                &current,
+                node_budget,
+                max_pattern_length,
+                apply_simplification_rules,
+                ctx,
+            );
+            let t_post = std::time::Instant::now();
+            let canonical = crate::sort::sort_operands_unit(&searched, &self.view(ctx));
+            stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
+            if canonical == current {
+                return current;
             }
+            current = canonical;
+        }
+    }
 
-            // Converged: this iteration produced no change vs the previous iteration's result.
-            if new_expression == current_expression {
+    /// THE simplification algorithm: a best-first TREE SEARCH over rewrite states, re-rooted
+    /// until it reaches a fixed point (see [`Engine::search_once`] for one search).
+    ///
+    /// One bounded search is not enough on its own: `best` is adopted the moment a node is
+    /// GENERATED, but the budget can stop before that node is ever EXPANDED, so the answer may
+    /// sit one move away from something shorter -- which is exactly what a user calling
+    /// `simplify` twice would discover. (Measured on the 64k v23.0 prior: 0.87% of 4-3 rows
+    /// improved on a second call, worth 979 tokens, about half of what the search itself buys.)
+    /// Re-rooting the search at its own answer until the answer stops moving closes that, and
+    /// makes idempotence hold BY CONSTRUCTION rather than by hope. It terminates because every
+    /// round but the last strictly shortens the expression: `best` starts at the root and only
+    /// strictly shorter nodes replace it, so a round either returns its root unchanged or
+    /// returns something shorter.
+    fn simplify_search(
+        &self,
+        tokens: &[Tok],
+        node_budget: usize,
+        max_pattern_length: Option<usize>,
+        apply_simplification_rules: bool,
+        ctx: &SimplifyCtx,
+    ) -> Vec<Tok> {
+        let mut current = tokens.to_vec();
+        loop {
+            let out = self.search_once(
+                &current,
+                node_budget,
+                max_pattern_length,
+                apply_simplification_rules,
+                ctx,
+            );
+            if out == current {
+                return current;
+            }
+            current = out;
+        }
+    }
+
+    /// ONE bounded best-first search over rewrite states.
+    ///
+    /// * **Node** = a prefix expression. The **root** is the input.
+    /// * **Edges** (one flat move set; there is no cancel->rules alternation): a node's children
+    ///   are `apply_simplification_rules(node)` and `cancel(node, k)` for every qualifying
+    ///   cancellation candidate `k`. `neg`/`inv` are always region-connected -- one cancel, one
+    ///   region shape.
+    /// * **Answer** = the shortest node ever VISITED, not merely the leaves. Every node is
+    ///   a.e.-equivalent to the root (sound cancel and sound rules compose), so every node is a
+    ///   legal answer and minimising over all of them is free. Two properties fall out with no
+    ///   extra machinery: declining to cancel is simply keeping the parent, and no answer can
+    ///   ever be longer than the input, because the root itself is the first candidate.
+    ///
+    /// The graph is a DAG rather than a tree -- most branches reconverge -- so a `visited` set on
+    /// the exact token sequence collapses it. The frontier is a min-heap on node length; ties go
+    /// to insertion order, which keeps the result deterministic.
+    ///
+    /// ONE bound, about work rather than correctness: `node_budget` caps how many nodes are
+    /// EXPANDED. Its default (48, set at the API boundary) is the measured elbow of the returns
+    /// curve on the 64k v23.0 prior; raise it for offline corpus canonicalisation. A budget of 0
+    /// disables the SEARCH only -- the caller still gets masking and operand sorting, so the
+    /// result is the CANONICALISED input, not the input verbatim. A separate depth cap used to exist and was removed as provably redundant --
+    /// depth <= expansions <= budget, so any cap at or above the budget can never bind, and
+    /// measurement confirmed the reachable depth saturates well inside it.
+    ///
+    /// Deliberately absent, each tried and measured on the 64k v23.0 prior:
+    /// * a greedy PRE-FILL of `best` -- at matched wall-clock it is a wash (un-pre-filled at
+    ///   budget 32 is 1509383 tokens / 78.5 us against pre-filled at 24 with 1509365 / 79.1), and
+    ///   it forced a whole second cancel->rules code path to exist purely to produce it;
+    /// * frontier PRIORITISATION by the promise of a move -- tie-breaking by candidate kind won
+    ///   ~15 tokens per 1.5M for +2.8% time, and a one-ply post-rules lookahead LOST outright at
+    ///   matched cost. Spending the time on more expansions beats spending it on a better order.
+    fn search_once(
+        &self,
+        tokens: &[Tok],
+        node_budget: usize,
+        max_pattern_length: Option<usize>,
+        apply_simplification_rules: bool,
+        ctx: &SimplifyCtx,
+    ) -> Vec<Tok> {
+        // The root is the first candidate answer; every other node must beat it to be adopted.
+        let mut best = tokens.to_vec();
+        let mut visited: FxHashSet<Vec<Tok>> = FxHashSet::default();
+        visited.insert(tokens.to_vec());
+        // (length, tie, node) under `Reverse` -> pop the SHORTEST first; `tie` is unique so the
+        // node itself is never compared (deterministic, and no Ord cost on the payload).
+        let mut frontier: BinaryHeap<Reverse<(usize, usize, Vec<Tok>)>> = BinaryHeap::new();
+        frontier.push(Reverse((tokens.len(), 0, tokens.to_vec())));
+        let mut tie: usize = 0;
+        let mut expanded: usize = 0;
+
+        while let Some(Reverse((_, _, node))) = frontier.pop() {
+            if expanded >= node_budget {
                 break;
             }
-            current_expression = new_expression.clone();
+            expanded += 1;
+            stats::bump(&stats::SIMPLIFY_ITERS);
+
+            let children =
+                self.children_of(&node, max_pattern_length, apply_simplification_rules, ctx);
+
+            for child in children {
+                if !visited.insert(child.clone()) {
+                    continue;
+                }
+                if child.len() < best.len() {
+                    best = child.clone();
+                }
+                tie += 1;
+                frontier.push(Reverse((child.len(), tie, child)));
+            }
         }
 
-        // Mask elementary literals (0/1/coefficients -> <constant>) BEFORE sorting, so the final
-        // operand order is computed on the canonical (masked) tokens. Masking still runs AFTER the
-        // rule loop, so which rules fire is unchanged; this only reorders the operands of
-        // masked-literal cases and makes sort/mask a fixpoint -- fixing the sort-then-mask
-        // non-idempotency (a literal's post-sort position differed from <constant>'s, so a re-pass
-        // re-sorted the now-masked token).
-        let t_post = std::time::Instant::now();
-        if mask_elementary_literals {
-            new_expression =
-                crate::utils::mask_elementary_literals(&new_expression, &self.view(ctx));
+        best
+    }
+
+    /// A node's children in the search graph: one rules pass, plus one per qualifying
+    /// cancellation candidate.
+    fn children_of(
+        &self,
+        node: &[Tok],
+        max_pattern_length: Option<usize>,
+        apply_simplification_rules: bool,
+        ctx: &SimplifyCtx,
+    ) -> Vec<Vec<Tok>> {
+        let mut children: Vec<Vec<Tok>> = Vec::new();
+        if apply_simplification_rules {
+            children.push(memoized_pass(&ctx.rules_memo, node, || {
+                self.apply_simplification_rules_with_ctx(node, max_pattern_length, ctx)
+            }));
         }
-
-        // Sort operands (once, after masking).
-        new_expression = crate::sort::sort_operands_unit(&new_expression, &self.view(ctx));
-        stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
-
-        // Longer-result guard: a result longer than the input is not a simplification.
-        if new_expression.len() > length_before {
-            return tokens.to_vec();
-        }
-
-        new_expression
+        let t_cancel = std::time::Instant::now();
+        children.extend(
+            crate::cancel::cancel_successors(
+                node,
+                &self.operators,
+                &self.view(ctx),
+                ctx.wildcard_all,
+            )
+            .into_iter()
+            .map(|(child, _sum)| child),
+        );
+        stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
+        // Operand SORTING is a legitimate edge -- length-neutral, semantically identity on
+        // commutative operands, and it changes which rules match -- and it was TRIED as one. It
+        // raises the reachable ceiling: with sorting confined to the pipeline loop the 64k prior
+        // saturates at 1508224 tokens (4-3) no matter how large the budget gets, while sorting
+        // as an edge reaches 1508057. But it is not efficient, because a sort pass is then paid
+        // at EVERY expansion:
+        //     ~124us  budget-only 1508255 (b96)  vs  sort-edge 1508656 (b12)
+        //     ~150us  budget-only 1508229 (b192) vs  sort-edge 1508301 (b24)
+        //     ~174us  budget-only 1508224 (b384) vs  sort-edge 1508158 (b32)   <- crossover
+        // Below ~170us/expr the budget wins outright; only past the plateau does sorting pay.
+        // At the shipped operating point (~106us) it costs ~2x for 241 tokens in 1.5M, so the
+        // cheap way to get sorting's rule-unlocking effect is what `simplify_toks` already does:
+        // sort BETWEEN pipeline rounds, a handful of times, instead of at every node.
+        children
     }
 }

@@ -6,7 +6,7 @@
 //! with NO boundary crossings:
 //!   cancel_terms -> apply_simplification_rules (parse_subtree + apply_rules_top_down +
 //!   match_pattern_with_cert + apply_mapping + the constant fold) -> sort_operands ->
-//!   mask_elementary_literals -> longer-result guard, iterated to a fixpoint (<= max_iter).
+//!   mask_elementary_literals, over a best-first tree search bounded by `node_budget`.
 //! ~1.8 boundary crossings/expr; FFI marshalling stays <1% of wall time.
 //! Porting the pattern matcher alone is a TRAP (millions of crossings -> the speedup evaporates).
 //! Therefore the PyO3 layer here is deliberately THIN: marshal `list[str]` <-> `Vec<String>`,
@@ -142,31 +142,43 @@ impl PyEngine {
     }
 
     /// THE hot path and the whole FFI unit. `tokens` is a prefix token list; returns the
-    /// simplified prefix token list. Defaults mirror the deployed call
+    /// EQUIVALENCE-preserving simplified prefix token list. Defaults mirror the deployed call
     /// (`simplify(skeleton, inplace=True, max_pattern_length=None)`); `inplace` is a Python-shim
     /// concern (the shim mutates the caller's list), so it is NOT a kernel parameter here.
-    #[pyo3(signature = (tokens, max_iter=5, max_pattern_length=None, mask_elementary_literals=true,
-                        apply_simplification_rules=true))]
+    ///
+    /// Does NOT mask: masking (literals -> `<constant>`) is a representation step carved out into
+    /// [`PyEngine::mask`] -- callers needing placeholders apply it to this output.
+    #[pyo3(signature = (tokens, node_budget=48, max_pattern_length=None,
+                        apply_simplification_rules=true, wildcard_all=false))]
     fn simplify(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
-        max_iter: usize,
+        node_budget: usize,
         max_pattern_length: Option<usize>,
-        mask_elementary_literals: bool,
         apply_simplification_rules: bool,
+        wildcard_all: bool,
     ) -> PyResult<Py<PyList>> {
         ensure_well_formed(&self.inner, &tokens)?;
         // Release the GIL for the pure-Rust kernel (parallel callers are not serialized on Python's lock).
         let out = py.detach(|| {
             self.inner.simplify(
                 &tokens,
-                max_iter,
+                node_budget,
                 max_pattern_length,
-                mask_elementary_literals,
                 apply_simplification_rules,
+                wildcard_all,
             )
         });
+        Ok(PyList::new(py, out)?.into())
+    }
+
+    /// The REPRESENTATION pass: relabel numeric literals to `<constant>` + sort. Apply to
+    /// `simplify`'s output when a downstream model needs placeholders; never re-`simplify` the
+    /// result (see [`Engine::mask`]).
+    fn mask(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
+        ensure_well_formed(&self.inner, &tokens)?;
+        let out = py.detach(|| self.inner.mask(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 

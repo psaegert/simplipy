@@ -46,7 +46,7 @@ fn prune_explicit_is_correct() {
         sample.len()
     );
     for lhs in &pruned {
-        let r = e.simplify(lhs, 5, None, false, true);
+        let r = e.simplify(lhs, 5, None, true, false);
         assert_eq!(
             &r,
             rhs_of.get(lhs).unwrap(),
@@ -60,36 +60,69 @@ fn load(name: &str) -> Vec<Vec<String>> {
     serde_json::from_str(&fs::read_to_string(p).expect("corpus fixture present")).unwrap()
 }
 
-/// Whole-unit regression gate: the composed Rust `simplify` fixpoint reproduces the frozen
-/// reference outputs on the first 400 corpus skeletons at mpl=4 AND mpl=7. The reference is the
-/// 0.7.0 ALIGNED engine line (real pow semantics at a -inf base; single engine line) -- it was
-/// regenerated from this engine when the faithful dev_7-3 reproduction line was removed. The
-/// corpus is the first 400 skeletons of the 65,536-expression training-prior benchmark. To
-/// reproduce the historical dev_7-3 / v23.0-era outputs byte-for-byte, install simplipy<=0.6.0.
+/// Whole-unit gate over the 400-skeleton corpus slice, asserting the search's INVARIANTS
+/// rather than a stored answer sheet.
+///
+/// It used to compare against frozen per-row outputs. That is the wrong shape of test for a
+/// bounded search: the outputs are a function of `node_budget`, so the expectations had to be
+/// regenerated on every tuning change and would fail confusingly for anyone running a different
+/// budget -- reporting "regression" when the engine had merely searched harder. What is actually
+/// contractual is asserted here instead, and holds at ANY budget:
+///   * no result is longer than its input (the root is the first candidate answer);
+///   * the EQUIVALENCE LOOP (mask=false) is idempotent (a second pass cannot beat the first);
+///   * it is deterministic (ties break on insertion order);
+///   * a larger budget never yields a longer result (more search cannot hurt);
+///   * the engine actually does something (most rows change);
+///   * the TERMINAL MASK (mask=true) is length-neutral -- it only relabels literals to
+///     `<constant>`, never grows or shrinks. Idempotence is asserted on the equivalence loop,
+///     NOT on the masked result: masking mints free constants from structural literals
+///     (`x-x -> 0 -> <constant>`), so a masked output re-fed to `simplify` can collect
+///     redundant constants (~0.4% of rows). That is by design -- masking is a terminal
+///     representation step for the downstream model, never re-simplified -- so requiring the
+///     masked form to be a search fixpoint would re-introduce the unsound in-loop fold it
+///     was split out to avoid.
 #[test]
-fn simplify_matches_frozen_reference() {
-    // Skip when the frozen corpus is absent -- this in-crate slice only fires where the
-    // fixtures are staged (benchmarks/corpus/).
+fn simplify_holds_its_invariants_on_the_corpus() {
     let corpus = format!(
         "{}/benchmarks/corpus/raw_skeletons.json",
         env!("CARGO_MANIFEST_DIR")
     );
     if !std::path::Path::new(&corpus).exists() {
-        eprintln!("simplify_matches_frozen_reference: SKIPPED (corpus fixtures not vendored)");
+        eprintln!("simplify_holds_its_invariants_on_the_corpus: SKIPPED (fixtures not vendored)");
         return;
     }
     let Some(e) = engine() else { return };
     let raw = load("raw_skeletons.json");
     for mpl in [4usize, 7usize] {
-        let reference = load(&format!("reference_aligned_mpl{mpl}.json"));
-        assert_eq!(raw.len(), reference.len());
         let mut n_changed = 0;
-        for (s, r) in raw.iter().zip(reference.iter()).take(400) {
-            let out = e.simplify(s, 5, Some(mpl), true, true);
+        for s in raw.iter().take(400) {
+            // The equivalence loop: the sound, idempotent, deterministic core (no masking).
+            let out = e.simplify(s, 48, Some(mpl), true, false);
+            assert!(
+                out.len() <= s.len(),
+                "grew: mpl={mpl} {} -> {} input={s:?}",
+                s.len(),
+                out.len()
+            );
+            let again = e.simplify(&out, 48, Some(mpl), true, false);
+            assert_eq!(&again, &out, "not idempotent: mpl={mpl} input={s:?}");
+            let repeat = e.simplify(s, 48, Some(mpl), true, false);
+            assert_eq!(&repeat, &out, "not deterministic: mpl={mpl} input={s:?}");
+            let richer = e.simplify(s, 256, Some(mpl), true, false);
+            assert!(
+                richer.len() <= out.len(),
+                "more budget gave a longer result: mpl={mpl} input={s:?}"
+            );
+            // The separate mask pass is length-neutral (it only relabels literals + sorts).
+            let masked = e.mask(&out);
+            assert_eq!(
+                masked.len(),
+                out.len(),
+                "mask changed length: mpl={mpl} input={s:?}"
+            );
             if &out != s {
                 n_changed += 1;
             }
-            assert_eq!(&out, r, "mpl={mpl} input={s:?}");
         }
         assert!(
             n_changed > 300,
@@ -179,13 +212,13 @@ fn nan_literal_propagates_in_numeric_fold() {
             5,
             None,
             true,
-            true
+            false
         ),
         nan
     );
     // propagation reaches VARIABLE contexts, which the evidence-based miner cannot:
     assert_eq!(
-        e.simplify(&t(&["*", "x0", "acos", "np.e"]), 5, None, true, true),
+        e.simplify(&t(&["*", "x0", "acos", "np.e"]), 5, None, true, false),
         nan
     );
     // pow does not propagate structurally (pow(1, NaN) = 1):
@@ -195,7 +228,7 @@ fn nan_literal_propagates_in_numeric_fold() {
         5,
         None,
         true,
-        true,
+        false,
     );
     assert_ne!(kept, nan, "pow(<constant>, nan) must not fold to nan");
     assert_eq!(

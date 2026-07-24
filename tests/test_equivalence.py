@@ -96,13 +96,24 @@ def test_equivalence_10k_with_asset_manager():
                 is_both_negative_inf_mask = (np.isneginf(y_filtered) & np.isneginf(y_candidate_filtered))
                 is_both_invalid_mask = is_both_nan_mask | is_both_inf_mask | is_both_negative_inf_mask
 
-                # absolute_equivalence_mask = abs_diff <= absolute_tolerance
+                # Accept a point as equivalent on EITHER a small relative OR a small absolute
+                # difference. The absolute clause matters for expressions that are mathematically
+                # zero: `simplify` now correctly reduces them to the literal `0` (previously the
+                # trailing mask relabelled that `0` to `<constant>`, so the candidate carried a
+                # constant and this branch was skipped entirely), but the ORIGINAL evaluates to
+                # floating-point noise ~1e-14 around zero, and dividing that noise by itself gives
+                # a relative difference of ~1. A small absolute tolerance recognises "original ~= 0,
+                # candidate == 0" as the correct simplification it is.
+                absolute_tolerance = 1e-8
+                absolute_equivalence_mask = abs_diff <= absolute_tolerance
                 relative_equivalence_mask = np.abs(abs_diff / np.where(y_filtered != 0, y_filtered, 1)) <= relative_tolerance
 
-                # Require 99% of values to be equivalent
-                # The following is a correct simplification but creates <1% values that are not equivalent (perhaps due to numerical issues):
-                # ['tan', '+', 'atan', 'x2', '*', 'exp', '-', '+', 'x2', '+', 'x3', '/', 'x2', 'x3', 'x2', 'x2'] -> ['tan', '+', 'atan', 'x2', '*', 'exp', '-', '+', 'x2', '+', 'x3', '/', 'x2', 'x3', 'x2', 'x2']
-                expressions_match = np.mean(relative_equivalence_mask | is_both_invalid_mask) >= 0.95
+                # Require 95% of values to be equivalent (relative OR absolute OR both-invalid).
+                # Some correct simplifications still leave <5% numerically-divergent points, e.g.
+                # ['tan', '+', 'atan', 'x2', '*', 'exp', '-', '+', 'x2', '+', 'x3', '/', 'x2', 'x3', 'x2', 'x2'].
+                expressions_match = np.mean(
+                    relative_equivalence_mask | absolute_equivalence_mask | is_both_invalid_mask
+                ) >= 0.95
             else:
                 # FIXME: Cannot check reliably because optimizer sometimes cannot reliably fit constants
                 expressions_match = True

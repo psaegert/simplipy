@@ -6,7 +6,7 @@ required compiled Rust core, ``simplipy._core``), expression-normalization
 helpers, token/rule utilities, and asset management for downloading and
 resolving engine rulesets and test data.
 """
-from .engine import SimpliPyEngine
+from .engine import SimpliPyEngine, Mode
 from . import engine
 from . import operators
 from . import utils

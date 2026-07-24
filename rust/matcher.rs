@@ -55,11 +55,18 @@ fn is_variable_leaf(node: &Node, view: &TokenView) -> bool {
 /// certificates run ONCE per COMPLETED syntactic match, over the final `!`-bindings -- the same
 /// conjunction as certifying mid-walk (identical verdicts), but never paid on attempts that
 /// fail syntactically elsewhere.
+///
+/// `wildcard_all` (the AGGRESSIVE apply-time mode, the symmetric opposite of
+/// `leaf_wildcards_only`): every placeholder (`?`/`!`/`_`) binds ANY subtree and the `!`
+/// certificate is SKIPPED. This is the "ignore certificates, treat all as `_`" mode -- slightly
+/// unsound (binds pole/inf/nan-bearing composites) by construction. The sort-independent
+/// `contains_constant` rebind guard is preserved (it is not a soundness certificate).
 pub fn match_pattern_with_cert<'a>(
     tree: &'a Node,
     pattern: &Node,
     mapping: &mut FxHashMap<Tok, &'a Node>,
     cert: Option<&dyn Fn(&Node) -> bool>,
+    wildcard_all: bool,
     view: &TokenView,
 ) -> bool {
     if !match_pattern_impl(
@@ -68,15 +75,18 @@ pub fn match_pattern_with_cert<'a>(
         mapping,
         leaf_wildcards_only(),
         cert.is_some(),
+        wildcard_all,
         view,
     ) {
         return false;
     }
-    for (pkey, bound) in mapping.iter() {
-        if view.sigil(*pkey) == b'!' && !is_variable_leaf(bound, view) {
-            match cert {
-                Some(f) if f(bound) => {}
-                _ => return false, // uncertified or uncertifiable: no binding (fail-closed)
+    if !wildcard_all {
+        for (pkey, bound) in mapping.iter() {
+            if view.sigil(*pkey) == b'!' && !is_variable_leaf(bound, view) {
+                match cert {
+                    Some(f) if f(bound) => {}
+                    _ => return false, // uncertified or uncertifiable: no binding (fail-closed)
+                }
             }
         }
     }
@@ -89,6 +99,7 @@ fn match_pattern_impl<'a>(
     mapping: &mut FxHashMap<Tok, &'a Node>,
     leaf_only: bool,
     bang_binds_composite: bool,
+    wildcard_all: bool,
     view: &TokenView,
 ) -> bool {
     match pattern {
@@ -102,11 +113,13 @@ fn match_pattern_impl<'a>(
                 // SIMPLIPY_LEAF_WILDCARDS diagnostic demotes it; `!` binds a variable leaf
                 // freely, or a SUBTREE only when the
                 // certifier proves it defined-and-finite a.e.
-                if (sigil == b'?' || leaf_only) && !is_variable_leaf(tree, view) {
-                    return false;
-                }
-                if sigil == b'!' && !is_variable_leaf(tree, view) && !bang_binds_composite {
-                    return false; // no certifier available: `!` binds variable leaves only
+                if !wildcard_all {
+                    if (sigil == b'?' || leaf_only) && !is_variable_leaf(tree, view) {
+                        return false;
+                    }
+                    if sigil == b'!' && !is_variable_leaf(tree, view) && !bang_binds_composite {
+                        return false; // no certifier available: `!` binds variable leaves only
+                    }
                 }
                 match mapping.get(pkey) {
                     None => {
@@ -148,6 +161,7 @@ fn match_pattern_impl<'a>(
                         mapping,
                         leaf_only,
                         bang_binds_composite,
+                        wildcard_all,
                         view,
                     ) {
                         return false;
@@ -231,7 +245,7 @@ mod tests {
         let view = TokenView::new(&table, &overlay);
         let (q, p) = (tree(query, &view), tree(pattern, &view));
         let mut m = FxHashMap::default();
-        match_pattern_impl(&q, &p, &mut m, leaf_only, false, &view)
+        match_pattern_impl(&q, &p, &mut m, leaf_only, false, false, &view)
     }
 
     /// Under `?`-sort semantics (leaf_only=true) a slot binds a variable leaf or nothing.

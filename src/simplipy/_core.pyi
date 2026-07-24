@@ -16,11 +16,12 @@ class Engine:
     def simplify(
         self,
         tokens: list[str],
-        max_iter: int = ...,
+        node_budget: int = ...,
         max_pattern_length: int | None = ...,
-        mask_elementary_literals: bool = ...,
         apply_simplification_rules: bool = ...,
+        wildcard_all: bool = ...,
     ) -> list[str]: ...
+    def mask(self, tokens: list[str]) -> list[str]: ...
     def apply_rules(
         self, tokens: list[str], max_pattern_length: int | None = ...
     ) -> list[str]: ...

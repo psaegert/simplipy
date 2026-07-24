@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.9.0 (unreleased)
+
+A new simplify kernel. `simplify` is now a best-first cancellation SEARCH instead of a fixed
+cancellation order; masking (numeric literals -> `<constant>`) is separated from the
+equivalence loop so representation is no longer entangled with rewriting; and the constant-fold
+fallback is brought under the same finite-a.e. certificate the rules and cancellation already
+enforce.
+
+### Added
+- **Cancellation search** (`Engine::simplify_search`). `simplify` no longer commits to one
+  cancellation order. Cancel is non-confluent -- taking candidate A can destroy candidate B,
+  and which choice ends shortest depends on what the ruleset can fold -- so the kernel now
+  SEARCHES a small move graph instead of guessing. State = an expression; the moves are a flat
+  choice set (apply the rules pass, or cancel any one qualifying candidate); the answer is the
+  shortest state visited. Every state is a.e.-equivalent to the input and the input is state
+  zero, so a result can never be longer than its own input. Best-first by
+  length with a visited-set, pre-filled with the greedy result so a truncated budget can never
+  do worse than the plain fixpoint. The node budget (`SIMPLIPY_SEARCH_BUDGET`, default 24;
+  0 restores the plain greedy fixpoint and its speed exactly) bounds a rare heavy tail -- the
+  median expression expands 2 nodes and 53% have no cancellation candidate at all, but the p99
+  is ~186. The default is the measured elbow of the returns curve on the 64k v23.0 prior: below
+  24 an extra microsecond buys ~14 output tokens, above it ~2.7, and by 256 only 0.7. On that
+  corpus the search shortens ~2860/1000/350 expressions (2-1/3-2/4-3) that no previous version
+  could reach, at ~2.3x the simplify wall time; raise the budget for offline corpus
+  canonicalisation, lower it for latency.
+- **Symmetric `neg`/`inv` cancellation** (BEHAVIOUR CHANGE). The cancellation unit already
+  EMITTED the class inverses but never CONSUMED them: a leaf under its own class inverse was
+  shielded, so `x * inv(x)` and `x + neg(x)` did not cancel through the inverse. Each inverse is
+  now region-continuing in its own class (`neg` additive, `inv` multiplicative), symmetric with
+  the emit path, and there is exactly one region shape -- the asymmetry is not preserved behind
+  a flag. Consequence on sparse rule sets: a handful of expressions come out ONE token longer
+  than in 0.7.x, because the old opaque treatment happened to leave a sign arrangement those
+  rule sets can re-fold and the connected treatment does not (6 of 65536 on the 2-1/3-2-class
+  `3-2` set; none on `4-3` or richer, and never longer than the input). Cancelling through the
+  class inverse is worth far more than it costs: the same corpus gets 1005 expressions SHORTER
+  on `3-2` and 350 on `4-3`.
+- **Soundness `Mode` (`simplify(expr, mode=Mode.SOUND)`).** A single ordinal soundness axis,
+  exposed as `simplipy.Mode`. `Mode.SOUND` (the default) is equivalence-preserving and
+  idempotent -- the deployed inference/scoring path, byte-identical to the historical default.
+  `Mode.LOSSY` trades soundness for recall: every rule placeholder binds any subtree (the
+  `!`-sort finite-a.e. certificate is skipped) AND the constant-fold's finiteness gate is
+  relaxed, so a non-finite-a.e. subtree such as `<constant>/0` collapses to `<constant>` too.
+  `Mode.LOSSY` is for training-corpus canonicalisation ONLY -- the training data is generated
+  FROM the simplified form (target == data) -- and must never run on an inference or scoring
+  path. The decided full ordering is `EXACT <= SOUND <= AE <= LOSSY`; only `SOUND` and `LOSSY`
+  are implemented.
+
+### Changed
+- **BREAKING: masking is separated from `simplify`.** Masking numeric literals to the generic
+  `<constant>` placeholder is a REPRESENTATION step for downstream models that cannot consume
+  literals, not an equivalence-preserving rewrite. `simplify` no longer masks; it is now the
+  equivalence loop only (search + sort to a fixpoint), sound and idempotent by construction. The
+  `mask_elementary_literals` parameter of `simplify` is removed; use the new terminal
+  `Engine.mask()` (relabel literals + one sort, no re-simplify) on `simplify`'s output when
+  placeholders are needed, and do NOT re-`simplify` a masked expression. Entangling masking with
+  the search fixpoint was also the sole cause of the former non-idempotence: masking mints a free
+  `<constant>` from a structural literal (`x - x -> 0 -> <constant>`), and re-searching could
+  fold that constant into a denominator, dropping the reachable `C = 0` the input required.
+
+### Fixed
+- **Constant folding respects the finiteness certificate.** The constant-fold fallback collapsed
+  any subtree whose operands are all `<constant>` or finite literals to a free `<constant>`, on a
+  syntactic test that assumed finite operands compose to a finite result. That is false at a pole
+  (`<constant> / 0` is +-inf/nan for every constant), so a structural zero reaching a denominator
+  could be folded to a finite free constant -- unsound (it revives a structurally zeroed term).
+  This was the one search edge that skipped the finiteness certification the rule matcher and the
+  cancellation already enforce. The fold now consults the same value-set analysis and collapses to
+  `<constant>` only when the subtree has a positive-measure finite part, keeping
+  unbounded-but-finite-a.e. folds (`1/C`, `tan C`, `cosh(C + 5)`) and refusing non-finite-a.e.
+  ones (`C / 0`, `C * inv(0)`).
+
 ## 0.8.0 (unreleased)
 
 Makes the public package produce the BEST rule sets from one command: mining now natively

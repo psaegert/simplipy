@@ -163,7 +163,7 @@ class TestPruneRedundantRules:
             engine.simplification_rules = [r for r in all_rules if tuple(r[0]) != tuple(lhs)]
             engine.compile_rules()
             try:
-                result = engine.simplify(list(lhs), mask_elementary_literals=False)
+                result = engine.simplify(list(lhs))
                 assert tuple(result) != tuple(rhs), (
                     f"Rule {lhs} -> {rhs} is still redundant after pruning"
                 )
@@ -405,6 +405,52 @@ class TestApplySimplificationRules:
         assert result == ["+", "x", "y"]
 
 
+class TestMode:
+    """The soundness `Mode` axis: SOUND (default) keeps a non-finite-a.e. subtree; LOSSY
+    relaxes the constant-fold's finiteness gate (and the rule matcher's `!`-certificate)."""
+
+    def test_mode_is_exported_and_ordinal(self) -> None:
+        from simplipy import Mode
+        assert Mode.SOUND < Mode.LOSSY
+        assert [m.name for m in Mode] == ["SOUND", "LOSSY"]
+
+    def test_sound_keeps_constant_over_zero(self) -> None:
+        """`<constant>/0` is +-inf/nan for every constant, so SOUND must NOT fold it."""
+        from simplipy import Mode
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        assert engine.simplify(["/", "<constant>", "0"], mode=Mode.SOUND) == ["/", "<constant>", "0"]
+        # the default is SOUND
+        assert engine.simplify(["/", "<constant>", "0"]) == ["/", "<constant>", "0"]
+
+    def test_lossy_folds_constant_over_zero(self) -> None:
+        """LOSSY relaxes the finiteness gate: `<constant>/0` collapses to `<constant>`."""
+        from simplipy import Mode
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        assert engine.simplify(["/", "<constant>", "0"], mode=Mode.LOSSY) == ["<constant>"]
+
+    def test_finite_ae_fold_is_mode_independent(self) -> None:
+        """A finite-a.e. subtree (`1/C`) folds in BOTH modes -- the pole is measure-zero."""
+        from simplipy import Mode
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        assert engine.simplify(["inv", "<constant>"], mode=Mode.SOUND) == ["<constant>"]
+        assert engine.simplify(["inv", "<constant>"], mode=Mode.LOSSY) == ["<constant>"]
+
+    def test_lossy_relaxes_cancellation_group_axioms(self) -> None:
+        """The THIRD edge: SOUND cancellation respects the group axioms (`inf/inf`, `inf-inf`
+        stay the sound `nan`); LOSSY relaxes them (structural cancel) -- the same relaxation LOSSY
+        applies to the rule matcher's `!`-cert and the constant-fold's finiteness gate, so all
+        three edges behave consistently under `Mode.LOSSY`."""
+        import simplipy
+        from simplipy import Mode
+        engine = SimpliPyEngine.from_config(simplipy.get_path('4-3', install=True))
+        for c in ([["*", "/", 'float("inf")', 'float("inf")', "x0"],    # (inf/inf)*x0
+                   ["+", "-", 'float("inf")', 'float("inf")', "x0"]]):   # (inf-inf)+x0
+            sound = list(engine.simplify(list(c), mode=Mode.SOUND))
+            lossy = list(engine.simplify(list(c), mode=Mode.LOSSY))
+            assert sound == ['float("nan")'], (c, sound)   # SOUND keeps the sound (non-finite) value
+            assert lossy != sound, (c, sound, lossy)       # LOSSY structurally relaxed it
+
+
 class TestOperatorConversions:
     """Tests for operators_to_realizations and realizations_to_operators."""
 
@@ -432,7 +478,7 @@ class TestOperatorConversions:
     engine = SimpliPyEngine.load("dev_7-3", install=True)
     expr = " + ".join(["x"] * 14)
 
-    simplified = engine.simplify(expr, max_iter=1)
+    simplified = engine.simplify(expr, node_budget=2)
     simplified_prefix = engine.parse(simplified)
 
     assert "mult7" not in simplified_prefix
@@ -443,7 +489,7 @@ def test_repeated_multiplication_avoids_unsupported_powers() -> None:
     engine = SimpliPyEngine.load("dev_7-3", install=True)
     expr = "x / (" + " * ".join(["x"] * 15) + ")"
 
-    simplified = engine.simplify(expr, max_iter=1)
+    simplified = engine.simplify(expr, node_budget=2)
     simplified_prefix = engine.parse(simplified)
 
     assert "pow7" not in simplified_prefix
@@ -456,7 +502,7 @@ def test_simplify_accepts_numpy_array_tokens() -> None:
     prefix_tokens = engine.parse("x1 + x2")
     expr = np.array(prefix_tokens, dtype=object)
 
-    simplified = engine.simplify(expr, max_iter=1, apply_simplification_rules=False)
+    simplified = engine.simplify(expr, node_budget=2, apply_simplification_rules=False)
 
     assert isinstance(simplified, np.ndarray)
     assert simplified.dtype == expr.dtype
@@ -685,69 +731,69 @@ class TestConstantFolding:
     def test_binary_addition_folding(self) -> None:
         """1.23 + 4.56 should evaluate to a numeric result close to 5.79."""
         engine = self._engine()
-        result = engine.simplify(["+", "1.23", "4.56"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "1.23", "4.56"])
         assert len(result) == 1
         assert abs(float(result[0]) - 5.79) < 1e-10
 
     def test_binary_subtraction_folding(self) -> None:
         """5 - 3 should evaluate to 2."""
         engine = self._engine()
-        result = engine.simplify(["-", "5", "3"], mask_elementary_literals=False)
+        result = engine.simplify(["-", "5", "3"])
         assert result == ["2"]
 
     def test_integer_result_formatting(self) -> None:
         """Integer-valued results should not have a decimal point."""
         engine = self._engine()
-        result = engine.simplify(["+", "1", "2"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "1", "2"])
         assert result == ["3"]
 
     def test_unary_folding(self) -> None:
         """neg(3) should evaluate to -3."""
         engine = self._engine()
-        result = engine.simplify(["neg", "3"], mask_elementary_literals=False)
+        result = engine.simplify(["neg", "3"])
         assert result == ["-3"]
 
     def test_nested_constant_folding(self) -> None:
         """2 * 3 + 4 should evaluate to 10 via nested folding."""
         engine = self._engine()
-        result = engine.simplify(["+", "*", "2", "3", "4"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "*", "2", "3", "4"])
         assert result == ["10"]
 
     def test_division_by_zero_produces_inf(self) -> None:
         """1 / 0 should produce float("inf") token."""
         engine = self._engine()
-        result = engine.simplify(["/", "1", "0"], mask_elementary_literals=False)
+        result = engine.simplify(["/", "1", "0"])
         assert result == ['float("inf")']
 
     def test_mixed_constant_and_placeholder(self) -> None:
         """<constant> + numeric should fold to <constant>."""
         engine = self._engine()
-        result = engine.simplify(["+", "1.23", "<constant>"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "1.23", "<constant>"])
         assert result == ["<constant>"]
 
     def test_constant_placeholder_still_folds(self) -> None:
         """<constant> + <constant> should still fold to <constant>."""
         engine = self._engine()
-        result = engine.simplify(["+", "<constant>", "<constant>"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "<constant>", "<constant>"])
         assert result == ["<constant>"]
 
     def test_folding_enables_further_rules(self) -> None:
         """1 - 1 = 0, then x + 0 should simplify to x via rule."""
         engine = self._engine(rules=[(["+", "_0", "0"], ["_0"])])
-        result = engine.simplify(["+", "x", "-", "1", "1"], mask_elementary_literals=False)
+        result = engine.simplify(["+", "x", "-", "1", "1"])
         assert result == ["x"]
 
     def test_simplify_infix_numeric_constants(self) -> None:
-        """End-to-end: infix '1.23 + 4.56' should become '<constant>'."""
+        """End-to-end: infix '1.23 + 4.56' folds to a literal, then mask() -> '<constant>'."""
         engine = self._engine()
-        result = engine.simplify("1.23 + 4.56")
+        result = engine.mask(engine.simplify("1.23 + 4.56"))
         assert result == "<constant>"
 
     def test_constant_folding_observable(self) -> None:
         """Folding is observable through the simplify result itself (the pure-Python
         SimplificationStatistics instrumentation was removed in the Rust-only cutover)."""
         engine = self._engine()
-        assert engine.simplify(["+", "1", "2"], mask_elementary_literals=False) == ["3"]
+        assert engine.simplify(["+", "1", "2"]) == ["3"]
 
 
 class TestResolveConstantRules:
@@ -806,7 +852,7 @@ class TestResolveConstantRules:
         rules = {tuple(lhs): tuple(rhs) for lhs, rhs in engine.simplification_rules}
         assert ("sin", "1") in rules
         assert rules[("sin", "1")] != ("<constant>",)
-        result = engine.simplify(["sin", "1"], mask_elementary_literals=False)
+        result = engine.simplify(["sin", "1"])
         assert tuple(result) == rules[("sin", "1")]
 
     def test_multiple_rules_mixed(self) -> None:
@@ -877,3 +923,67 @@ class TestBangSort:
         # inv: finite a.e. but pole-bearing -- OUT of the certificate's stated scope (needs
         # inf_null); fail-closed means no binding, never unsoundness
         assert list(engine.simplify(["-", "inv", "x0", "inv", "x0"])) == ["-", "inv", "x0", "inv", "x0"]
+
+
+class TestSearchAndAggressiveMode:
+    """The cancel/rules SEARCH (`Engine::simplify_search`) and the `Mode.LOSSY` apply-time
+    aggressive mode -- the two public behaviours added on top of the plain fixpoint."""
+
+    def _engine(self):
+        import simplipy
+        return SimpliPyEngine.from_config(simplipy.get_path('4-3', install=True))
+
+    def test_search_never_grows_an_expression(self) -> None:
+        """The search minimises over VISITED states and the input is state zero, so no result
+        can ever be longer than its input -- for any node budget."""
+        engine = self._engine()
+        cases = [
+            ["/", "x0", "inv", "x0"],
+            ["*", "/", "x1", "x1", "inv", "x1"],
+            ["+", "x0", "neg", "+", "x0", "x1"],
+            ["/", "inv", "x4", "x4"],
+            ["-", "x5", "+", "x5", "x5"],
+        ]
+        for expr in cases:
+            assert len(engine.simplify(list(expr))) <= len(expr), expr
+
+    def test_search_finds_the_shadowed_cancellation(self) -> None:
+        """Regression for the candidate-shadowing tail: `inv(x)/x` must not be left at the
+        greedy hyper-merge form, which is LONGER than simply not cancelling."""
+        engine = self._engine()
+        assert len(engine.simplify(["/", "inv", "x4", "x4"])) <= 4
+
+    def test_simplify_is_idempotent(self) -> None:
+        """A second pass must be a no-op: the search returns a state the next call cannot beat."""
+        engine = self._engine()
+        for expr in (["/", "x0", "inv", "x0"], ["*", "/", "x1", "x1", "inv", "x1"],
+                     ["-", "x5", "+", "x5", "x5"], ["/", "inv", "x4", "x4"]):
+            once = list(engine.simplify(list(expr)))
+            assert list(engine.simplify(list(once))) == once, expr
+
+    def test_lossy_mode_is_off_by_default_and_only_widens(self) -> None:
+        """`Mode.LOSSY` is the AGGRESSIVE apply-time mode: `Mode.SOUND` is the default, and LOSSY
+        only ever binds MORE (never fewer) placeholders, so it can only shorten."""
+        from simplipy import Mode
+        engine = self._engine()
+        exprs = [
+            ["/", "x0", "inv", "x0"],
+            ["*", "x1", "/", "x1", "x1"],
+            ["+", "sin", "x0", "neg", "sin", "x0"],
+            ["-", "log", "x0", "log", "x0"],
+        ]
+        for expr in exprs:
+            default = list(engine.simplify(list(expr)))
+            explicit_sound = list(engine.simplify(list(expr), mode=Mode.SOUND))
+            aggressive = list(engine.simplify(list(expr), mode=Mode.LOSSY))
+            assert default == explicit_sound, expr
+            assert len(aggressive) <= len(default), (expr, default, aggressive)
+
+    def test_cancel_only_applies_one_cancellation(self) -> None:
+        """`cancel_only` exposes the cancellation unit alone: ONE cancellation under the default
+        selection. It is not "what simplify does" -- the tree search branches over every
+        candidate instead of privileging one -- so this pins the unit's own contract only."""
+        engine = self._engine()
+        expr = ["*", "/", "x1", "x1", "inv", "x1"]
+        assert list(engine._core.cancel_only(list(expr))) == \
+            ["*", "/", "inv", "x1", "1", "inv", "1"]
