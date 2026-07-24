@@ -432,7 +432,7 @@ class TestOperatorConversions:
     engine = SimpliPyEngine.load("dev_7-3", install=True)
     expr = " + ".join(["x"] * 14)
 
-    simplified = engine.simplify(expr, max_iter=1)
+    simplified = engine.simplify(expr, node_budget=2)
     simplified_prefix = engine.parse(simplified)
 
     assert "mult7" not in simplified_prefix
@@ -443,7 +443,7 @@ def test_repeated_multiplication_avoids_unsupported_powers() -> None:
     engine = SimpliPyEngine.load("dev_7-3", install=True)
     expr = "x / (" + " * ".join(["x"] * 15) + ")"
 
-    simplified = engine.simplify(expr, max_iter=1)
+    simplified = engine.simplify(expr, node_budget=2)
     simplified_prefix = engine.parse(simplified)
 
     assert "pow7" not in simplified_prefix
@@ -456,7 +456,7 @@ def test_simplify_accepts_numpy_array_tokens() -> None:
     prefix_tokens = engine.parse("x1 + x2")
     expr = np.array(prefix_tokens, dtype=object)
 
-    simplified = engine.simplify(expr, max_iter=1, apply_simplification_rules=False)
+    simplified = engine.simplify(expr, node_budget=2, apply_simplification_rules=False)
 
     assert isinstance(simplified, np.ndarray)
     assert simplified.dtype == expr.dtype

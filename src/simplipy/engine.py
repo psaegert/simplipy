@@ -659,7 +659,7 @@ class SimpliPyEngine:
     def simplify(
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
-            max_iter: int = 5,
+            node_budget: int = 48,
             max_pattern_length: int | None = None,
             mask_elementary_literals: bool = True,
             apply_simplification_rules: bool = True,
@@ -676,8 +676,12 @@ class SimpliPyEngine:
         expression : str or list[str] or tuple[str, ...] or np.ndarray
             The expression to simplify, given as an infix string, a prefix
             token list/tuple, or a one-dimensional numpy array of tokens.
-        max_iter : int, optional
-            The maximum number of simplification iterations. Defaults to 5.
+        node_budget : int, optional
+            How many nodes the simplification tree search may EXPAND before it stops and
+            returns the shortest expression it reached. Defaults to 48, the measured elbow of
+            the returns curve: below it an extra microsecond buys several output tokens, above
+            it a fraction of one. Raise it for offline corpus canonicalisation; note that 0
+            expands nothing and returns the expression unsimplified.
         max_pattern_length : int or None, optional
             The maximum length of a rule pattern to consider.
         mask_elementary_literals : bool, optional
@@ -724,7 +728,7 @@ class SimpliPyEngine:
         else:
             tokens = list(expression)
 
-        out = self._core.simplify(tokens, max_iter, max_pattern_length,
+        out = self._core.simplify(tokens, node_budget, max_pattern_length,
                                   mask_elementary_literals, apply_simplification_rules,
                                   wildcard_all)
 

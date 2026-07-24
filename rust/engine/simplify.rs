@@ -31,35 +31,6 @@ fn memoized_pass(
     out
 }
 
-/// Node budget for the cancel/rules search ([`Engine::simplify_search`]): the maximum number of
-/// states EXPANDED (popped and given successors) before the search stops and returns the best
-/// state it has seen. The distribution is extremely skewed -- on the 64k v23.0 prior the median
-/// expression needs 2 expansions and 53% have no cancellation candidate at all, but the p99 is
-/// ~186 and a handful of rows would run indefinitely -- so the budget bounds that tail rather
-/// than the typical case.
-///
-/// The default is the measured elbow of the returns curve on the 64k v23.0 prior (4-3):
-///
-/// ```text
-/// budget           24     32     40     48     64     96    192    384
-/// us/expr        73.7   78.5   84.1   88.3   97.0  109.3  131.5  156.5
-/// tokens/extra-us      13.5    9.8    7.1    3.4    2.2    1.4    0.3
-/// ```
-///
-/// The yield halves across 48, and past ~96 an extra microsecond buys about one token in a
-/// 1.5M-token corpus. `SIMPLIPY_SEARCH_BUDGET` overrides it: raise it for offline corpus
-/// canonicalisation, where the tail is worth more than the wall clock. NOTE that 0 now expands
-/// nothing and returns the input unsimplified -- it is a kill switch, not a fast mode.
-fn search_budget() -> usize {
-    static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *BUDGET.get_or_init(|| {
-        std::env::var("SIMPLIPY_SEARCH_BUDGET")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(48)
-    })
-}
-
 impl Engine {
     /// The `!`-sort certificate behind the memos: defined-and-finite a.e. per
     /// `interval::finite_ae`. Variable leaves never reach here (match_pattern binds them
@@ -345,7 +316,7 @@ impl Engine {
     pub fn simplify(
         &self,
         tokens: &[String],
-        max_iter: usize,
+        node_budget: usize,
         max_pattern_length: Option<usize>,
         mask_elementary_literals: bool,
         apply_simplification_rules: bool,
@@ -355,7 +326,7 @@ impl Engine {
         let toks = self.intern_seq(tokens, &ctx);
         let out = self.simplify_toks(
             &toks,
-            max_iter,
+            node_budget,
             max_pattern_length,
             mask_elementary_literals,
             apply_simplification_rules,
@@ -368,7 +339,7 @@ impl Engine {
     fn simplify_toks(
         &self,
         tokens: &[Tok],
-        max_iter: usize,
+        node_budget: usize,
         max_pattern_length: Option<usize>,
         mask_elementary_literals: bool,
         apply_simplification_rules: bool,
@@ -378,38 +349,76 @@ impl Engine {
 
         // SEARCH over the cancel/rules move graph (see `simplify_search`): one mechanism
         // replacing the former hand-picked candidate policies.
-        let mut new_expression = self.simplify_search(
-            tokens,
-            max_iter,
-            max_pattern_length,
-            apply_simplification_rules,
-            ctx,
-        );
-
-        // Mask elementary literals (0/1/coefficients -> <constant>) BEFORE sorting, so the final
-        // operand order is computed on the canonical (masked) tokens. Masking still runs AFTER the
-        // rule loop, so which rules fire is unchanged; this only reorders the operands of
-        // masked-literal cases and makes sort/mask a fixpoint -- fixing the sort-then-mask
-        // non-idempotency (a literal's post-sort position differed from <constant>'s, so a re-pass
-        // re-sorted the now-masked token).
-        let t_post = std::time::Instant::now();
-        if mask_elementary_literals {
-            new_expression =
-                crate::utils::mask_elementary_literals(&new_expression, &self.view(ctx));
+        // Iterate SEARCH -> mask -> sort until the whole pipeline stops moving. Masking and
+        // operand sorting are not cosmetic post-processing: they rewrite tokens (literals ->
+        // `<constant>`) and reorder operands, which changes WHICH RULES MATCH, so a canonicalised
+        // answer can be simplifiable again. Leaving them outside the loop is what made `simplify`
+        // non-idempotent -- a second call found more on 0.87% of the 64k prior (979 tokens on
+        // 4-3). Both are length-neutral and idempotent, and every round but the last strictly
+        // shortens, so this terminates. `ctx` is shared across rounds, so the rules memo makes
+        // repeated nodes free.
+        let mut current = tokens.to_vec();
+        loop {
+            let searched = self.simplify_search(
+                &current,
+                node_budget,
+                max_pattern_length,
+                apply_simplification_rules,
+                ctx,
+            );
+            let t_post = std::time::Instant::now();
+            let mut canonical = if mask_elementary_literals {
+                crate::utils::mask_elementary_literals(&searched, &self.view(ctx))
+            } else {
+                searched
+            };
+            canonical = crate::sort::sort_operands_unit(&canonical, &self.view(ctx));
+            stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
+            if canonical == current {
+                return current;
+            }
+            current = canonical;
         }
-
-        // Sort operands (once, after masking).
-        new_expression = crate::sort::sort_operands_unit(&new_expression, &self.view(ctx));
-        stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
-
-        // No longer-result guard: the search cannot return one. The root is `best`'s initial
-        // value and only strictly shorter nodes replace it, while masking and operand sorting
-        // are length-neutral -- so the answer is <= the input by construction. (Checked on the
-        // whole 64k prior across all rule sets: zero outputs exceed their input.)
-        new_expression
     }
 
-    /// THE simplification algorithm: a best-first TREE SEARCH over rewrite states.
+    /// THE simplification algorithm: a best-first TREE SEARCH over rewrite states, re-rooted
+    /// until it reaches a fixed point (see [`Engine::search_once`] for one search).
+    ///
+    /// One bounded search is not enough on its own: `best` is adopted the moment a node is
+    /// GENERATED, but the budget can stop before that node is ever EXPANDED, so the answer may
+    /// sit one move away from something shorter -- which is exactly what a user calling
+    /// `simplify` twice would discover. (Measured on the 64k v23.0 prior: 0.87% of 4-3 rows
+    /// improved on a second call, worth 979 tokens, about half of what the search itself buys.)
+    /// Re-rooting the search at its own answer until the answer stops moving closes that, and
+    /// makes idempotence hold BY CONSTRUCTION rather than by hope. It terminates because every
+    /// round but the last strictly shortens the expression: `best` starts at the root and only
+    /// strictly shorter nodes replace it, so a round either returns its root unchanged or
+    /// returns something shorter.
+    fn simplify_search(
+        &self,
+        tokens: &[Tok],
+        node_budget: usize,
+        max_pattern_length: Option<usize>,
+        apply_simplification_rules: bool,
+        ctx: &SimplifyCtx,
+    ) -> Vec<Tok> {
+        let mut current = tokens.to_vec();
+        loop {
+            let out = self.search_once(
+                &current,
+                node_budget,
+                max_pattern_length,
+                apply_simplification_rules,
+                ctx,
+            );
+            if out == current {
+                return current;
+            }
+            current = out;
+        }
+    }
+
+    /// ONE bounded best-first search over rewrite states.
     ///
     /// * **Node** = a prefix expression. The **root** is the input.
     /// * **Edges** (one flat move set; there is no cancel->rules alternation): a node's children
@@ -426,9 +435,10 @@ impl Engine {
     /// the exact token sequence collapses it. The frontier is a min-heap on node length; ties go
     /// to insertion order, which keeps the result deterministic.
     ///
-    /// Two bounds, both about work rather than correctness: [`search_budget`] caps how many nodes
-    /// are EXPANDED, and depth is capped at `2 * max_iter` moves (`max_iter` is the fixpoint-era
-    /// public parameter; one of those iterations was a cancel move plus a rules move, hence 2).
+    /// ONE bound, about work rather than correctness: `node_budget` caps how many nodes are
+    /// EXPANDED. A separate depth cap used to exist and was removed as provably redundant --
+    /// depth <= expansions <= budget, so any cap at or above the budget can never bind, and
+    /// measurement confirmed the reachable depth saturates well inside it.
     ///
     /// Deliberately absent, each tried and measured on the 64k v23.0 prior:
     /// * a greedy PRE-FILL of `best` -- at matched wall-clock it is a wash (un-pre-filled at
@@ -437,49 +447,34 @@ impl Engine {
     /// * frontier PRIORITISATION by the promise of a move -- tie-breaking by candidate kind won
     ///   ~15 tokens per 1.5M for +2.8% time, and a one-ply post-rules lookahead LOST outright at
     ///   matched cost. Spending the time on more expansions beats spending it on a better order.
-    fn simplify_search(
+    fn search_once(
         &self,
         tokens: &[Tok],
-        max_iter: usize,
+        node_budget: usize,
         max_pattern_length: Option<usize>,
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
         // The root is the first candidate answer; every other node must beat it to be adopted.
         let mut best = tokens.to_vec();
-        let max_depth = 2 * max_iter;
         let mut visited: FxHashSet<Vec<Tok>> = FxHashSet::default();
         visited.insert(tokens.to_vec());
-        // (length, tie, depth, node) under `Reverse` -> pop the SHORTEST first; `tie` is unique
-        // so the node itself is never compared (deterministic, and no Ord cost on the payload).
-        let mut frontier: BinaryHeap<Reverse<(usize, usize, usize, Vec<Tok>)>> = BinaryHeap::new();
-        frontier.push(Reverse((tokens.len(), 0, 0, tokens.to_vec())));
+        // (length, tie, node) under `Reverse` -> pop the SHORTEST first; `tie` is unique so the
+        // node itself is never compared (deterministic, and no Ord cost on the payload).
+        let mut frontier: BinaryHeap<Reverse<(usize, usize, Vec<Tok>)>> = BinaryHeap::new();
+        frontier.push(Reverse((tokens.len(), 0, tokens.to_vec())));
         let mut tie: usize = 0;
         let mut expanded: usize = 0;
 
-        while let Some(Reverse((_, _, depth, node))) = frontier.pop() {
-            if expanded >= search_budget() {
+        while let Some(Reverse((_, _, node))) = frontier.pop() {
+            if expanded >= node_budget {
                 break;
             }
             expanded += 1;
-            if depth >= max_depth {
-                continue;
-            }
             stats::bump(&stats::SIMPLIFY_ITERS);
 
-            let mut children: Vec<Vec<Tok>> = Vec::new();
-            if apply_simplification_rules {
-                children.push(memoized_pass(&ctx.rules_memo, &node, || {
-                    self.apply_simplification_rules_with_ctx(&node, max_pattern_length, ctx)
-                }));
-            }
-            let t_cancel = std::time::Instant::now();
-            children.extend(
-                crate::cancel::cancel_successors(&node, &self.operators, &self.view(ctx))
-                    .into_iter()
-                    .map(|(child, _sum)| child),
-            );
-            stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
+            let children =
+                self.children_of(&node, max_pattern_length, apply_simplification_rules, ctx);
 
             for child in children {
                 if !visited.insert(child.clone()) {
@@ -489,11 +484,36 @@ impl Engine {
                     best = child.clone();
                 }
                 tie += 1;
-                frontier.push(Reverse((child.len(), tie, depth + 1, child)));
+                frontier.push(Reverse((child.len(), tie, child)));
             }
         }
 
         best
+    }
+
+    /// A node's children in the search graph: one rules pass, plus one per qualifying
+    /// cancellation candidate.
+    fn children_of(
+        &self,
+        node: &[Tok],
+        max_pattern_length: Option<usize>,
+        apply_simplification_rules: bool,
+        ctx: &SimplifyCtx,
+    ) -> Vec<Vec<Tok>> {
+        let mut children: Vec<Vec<Tok>> = Vec::new();
+        if apply_simplification_rules {
+            children.push(memoized_pass(&ctx.rules_memo, node, || {
+                self.apply_simplification_rules_with_ctx(node, max_pattern_length, ctx)
+            }));
+        }
+        let t_cancel = std::time::Instant::now();
+        children.extend(
+            crate::cancel::cancel_successors(node, &self.operators, &self.view(ctx))
+                .into_iter()
+                .map(|(child, _sum)| child),
+        );
+        stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
+        children
     }
 
 }
