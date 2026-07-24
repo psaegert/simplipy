@@ -12,22 +12,24 @@ independently gate + monitor any rule set.
   and which choice ends shortest depends on what the ruleset can fold -- so the kernel now
   SEARCHES a small move graph instead of guessing. State = an expression; the moves are a flat
   choice set (apply the rules pass, or cancel any one qualifying candidate); the answer is the
-  shortest state visited. Because every state is a.e.-equivalent to the input, and the input is
-  state zero, `simplify` can never return a result longer than its own input; and the search is
-  seeded with BOTH greedy trajectories (the current cancellation and the pre-0.8.0 one, whose
-  `neg`/`inv` regions were opaque), so it can never return a result longer than a previous
-  release's either. Neither property can be had from a length guard, which is input-relative and
-  cannot see that a different cancellation order would have been shorter. Best-first by
+  shortest state visited. Every state is a.e.-equivalent to the input and the input is state
+  zero, so a result can never be longer than its own input. Best-first by
   length with a visited-set; the node budget (`SIMPLIPY_SEARCH_BUDGET`, default 64; 0 = the old
   greedy fixpoint) bounds a rare heavy tail -- the median expression expands 2 nodes and 53%
   have no cancellation candidate at all. On the 64k v23.0 prior this shortens 2867/1008/351
   expressions (2-1/3-2/4-3) that no previous version could reach, at ~3x the simplify wall
   time; lower the budget to trade the tail back for speed.
-- **Symmetric `neg`/`inv` cancellation.** The cancellation unit already EMITTED the class
-  inverses but never CONSUMED them: a leaf under its own class inverse was shielded, so
-  `x * inv(x)` and `x + neg(x)` did not cancel through the inverse. Each inverse is now
-  region-continuing in its own class (`neg` additive, `inv` multiplicative), symmetric with
-  the emit path.
+- **Symmetric `neg`/`inv` cancellation** (BEHAVIOUR CHANGE). The cancellation unit already
+  EMITTED the class inverses but never CONSUMED them: a leaf under its own class inverse was
+  shielded, so `x * inv(x)` and `x + neg(x)` did not cancel through the inverse. Each inverse is
+  now region-continuing in its own class (`neg` additive, `inv` multiplicative), symmetric with
+  the emit path, and there is exactly one region shape -- the asymmetry is not preserved behind
+  a flag. Consequence on sparse rule sets: a handful of expressions come out ONE token longer
+  than in 0.7.x, because the old opaque treatment happened to leave a sign arrangement those
+  rule sets can re-fold and the connected treatment does not (6 of 65536 on the 2-1/3-2-class
+  `3-2` set; none on `4-3` or richer, and never longer than the input). Cancelling through the
+  class inverse is worth far more than it costs: the same corpus gets 1005 expressions SHORTER
+  on `3-2` and 350 on `4-3`.
 - **`simplify(..., wildcard_all=False)`** -- an apply-time AGGRESSIVE mode in which every rule
   placeholder binds any subtree and the `!`-sort finite-a.e. certificate is skipped (the
   symmetric opposite of the `SIMPLIPY_LEAF_WILDCARDS` diagnostic). This trades soundness for

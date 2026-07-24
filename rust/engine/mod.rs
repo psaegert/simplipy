@@ -195,7 +195,7 @@ impl Engine {
     pub fn cancel_terms(&self, expression: &[String]) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len(), false);
         let toks = self.intern_seq(expression, &ctx);
-        let out = crate::cancel::cancel_terms_unit(&toks, &self.operators, &self.view(&ctx), true);
+        let out = crate::cancel::cancel_terms_unit(&toks, &self.operators, &self.view(&ctx));
         self.resolve_seq(&out, &ctx)
     }
 
