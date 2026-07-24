@@ -207,7 +207,13 @@ fn nan_literal_propagates_in_numeric_fold() {
     let nan = t(&["float(\"nan\")"]);
     // C * acos(np.e) -> nan (constant-subtree fold + propagation)
     assert_eq!(
-        e.simplify(&t(&["*", "<constant>", "acos", "np.e"]), 5, None, true, false),
+        e.simplify(
+            &t(&["*", "<constant>", "acos", "np.e"]),
+            5,
+            None,
+            true,
+            false
+        ),
         nan
     );
     // propagation reaches VARIABLE contexts, which the evidence-based miner cannot:
@@ -217,7 +223,13 @@ fn nan_literal_propagates_in_numeric_fold() {
     );
     // pow does not propagate structurally (pow(1, NaN) = 1):
     e.set_rules(Vec::new());
-    let kept = e.simplify(&t(&["pow", "<constant>", "acos", "np.e"]), 5, None, true, false);
+    let kept = e.simplify(
+        &t(&["pow", "<constant>", "acos", "np.e"]),
+        5,
+        None,
+        true,
+        false,
+    );
     assert_ne!(kept, nan, "pow(<constant>, nan) must not fold to nan");
     assert_eq!(
         kept,

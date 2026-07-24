@@ -559,9 +559,14 @@ impl Engine {
         }
         let t_cancel = std::time::Instant::now();
         children.extend(
-            crate::cancel::cancel_successors(node, &self.operators, &self.view(ctx), ctx.wildcard_all)
-                .into_iter()
-                .map(|(child, _sum)| child),
+            crate::cancel::cancel_successors(
+                node,
+                &self.operators,
+                &self.view(ctx),
+                ctx.wildcard_all,
+            )
+            .into_iter()
+            .map(|(child, _sum)| child),
         );
         stats::add(&stats::NANOS_CANCEL, t_cancel.elapsed().as_nanos() as u64);
         // Operand SORTING is a legitimate edge -- length-neutral, semantically identity on
@@ -579,5 +584,4 @@ impl Engine {
         // sort BETWEEN pipeline rounds, a handful of times, instead of at every node.
         children
     }
-
 }

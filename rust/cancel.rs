@@ -126,7 +126,11 @@ struct AnnNode {
 /// Port of `collect_multiplicities`. Right-to-left scan building a stack
 /// of annotated subtrees; for a well-formed prefix expression the stack ends with a single root,
 /// which is returned. Mirrors the leaf / binary-connectable / general-operator branches exactly.
-fn collect_multiplicities(expression: &[Tok], view: &TokenView, wildcard_all: bool) -> Option<AnnNode> {
+fn collect_multiplicities(
+    expression: &[Tok],
+    view: &TokenView,
+    wildcard_all: bool,
+) -> Option<AnnNode> {
     let tt = view.table;
     let mut stack: Vec<AnnNode> = Vec::new();
 
@@ -697,10 +701,7 @@ mod tests {
                 &["/", "x0", "inv", "+", "x0", "x1"],
             ),
             // cross-class neg is NOT cancelled here (deferred): neg(x0) / x0 stays for a rule.
-            (
-                &["/", "neg", "x0", "x0"],
-                &["/", "neg", "x0", "x0"],
-            ),
+            (&["/", "neg", "x0", "x0"], &["/", "neg", "x0", "x0"]),
         ];
         for (input, expected) in cases {
             assert_eq!(
