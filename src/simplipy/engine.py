@@ -17,6 +17,7 @@ from typing import Callable
 from pathlib import Path
 from typing import Any, Literal
 from copy import deepcopy
+from enum import IntEnum
 
 import numpy as np
 import json
@@ -138,6 +139,28 @@ def _load_proposals(
         record['sha256'] = hashlib.sha256(normalized.encode()).hexdigest()
     record['count'] = len(entries)
     return entries, record
+
+
+class Mode(IntEnum):
+    """The simplification soundness mode: an ORDINAL axis where a higher rung permits
+    strictly more aggressive (less sound) rewrites.
+
+    The decided full ordering is ``EXACT <= SOUND <= AE <= LOSSY``; only the two implemented
+    rungs are exposed. ``EXACT`` (0) and ``AE`` (2) are reserved positions in that ordering,
+    not yet implemented -- the gaps in the integer values keep the ordinal stable when they
+    are added.
+
+    - ``SOUND`` (the default): equivalence-preserving and idempotent. The deployed
+      inference/scoring mode. Byte-identical to the historical default.
+    - ``LOSSY``: trades soundness for recall -- every rule placeholder binds any subtree (the
+      ``!``-sort finite-a.e. certificate is skipped) AND the constant-fold's finiteness gate is
+      relaxed (so e.g. ``<constant>/0`` collapses to ``<constant>``). For training-corpus
+      canonicalisation ONLY: the training data is generated FROM the simplified form, so the
+      target equals the data and there is no external function to violate. Do NOT use on an
+      inference or scoring path.
+    """
+    SOUND = 1
+    LOSSY = 3
 
 
 class SimpliPyEngine:
@@ -663,7 +686,7 @@ class SimpliPyEngine:
             max_pattern_length: int | None = None,
             apply_simplification_rules: bool = True,
             inplace: bool = False,
-            wildcard_all: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
+            mode: Mode = Mode.SOUND) -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Performs a full, EQUIVALENCE-preserving simplification of an expression.
 
         This is the main public method for simplification. The whole fixpoint
@@ -697,14 +720,14 @@ class SimpliPyEngine:
             If False, skips the rule-based simplification step. Defaults to True.
         inplace : bool, optional
             If the input is a list, this modifies it directly. Defaults to False.
-        wildcard_all : bool, optional
-            AGGRESSIVE (slightly-unsound) apply-time mode. If True, every rule placeholder
-            binds ANY subtree and the ``!``-sort finite-a.e. certificate is skipped (all
-            placeholders behave as ``_``) -- the symmetric opposite of the
-            ``SIMPLIPY_LEAF_WILDCARDS`` diagnostic. Recovers composite recall the sound sorts
-            demote, at the cost of applying rules off their certified domain
-            (pole/inf/nan-bearing cofactors). Defaults to False. Do NOT use on the deployed
-            inference/scoring path; intended for training-corpus canonicalisation.
+        mode : Mode, optional
+            The soundness mode (see :class:`Mode`). ``Mode.SOUND`` (default) is
+            equivalence-preserving and idempotent -- the deployed inference/scoring path.
+            ``Mode.LOSSY`` trades soundness for recall: rule placeholders bind any subtree
+            (the ``!``-sort finite-a.e. certificate is skipped) and the constant-fold's
+            finiteness gate is relaxed (so e.g. ``<constant>/0`` collapses to ``<constant>``).
+            Use ``Mode.LOSSY`` ONLY for training-corpus canonicalisation, never on an inference
+            or scoring path.
 
         Returns
         -------
@@ -730,7 +753,7 @@ class SimpliPyEngine:
             tokens = list(expression)
 
         out = self._core.simplify(tokens, node_budget, max_pattern_length,
-                                  apply_simplification_rules, wildcard_all)
+                                  apply_simplification_rules, mode == Mode.LOSSY)
 
         return self._denormalize(out, expression, inplace)
 

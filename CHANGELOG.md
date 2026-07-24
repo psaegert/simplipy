@@ -36,12 +36,16 @@ enforce.
   `3-2` set; none on `4-3` or richer, and never longer than the input). Cancelling through the
   class inverse is worth far more than it costs: the same corpus gets 1005 expressions SHORTER
   on `3-2` and 350 on `4-3`.
-- **`simplify(..., wildcard_all=False)`** -- an apply-time AGGRESSIVE mode in which every rule
-  placeholder binds any subtree and the `!`-sort finite-a.e. certificate is skipped (the
-  symmetric opposite of the `SIMPLIPY_LEAF_WILDCARDS` diagnostic). This trades soundness for
-  recall by construction: rules fire off their certified domain, on pole/inf/nan-bearing
-  subtrees. Intended for training-corpus canonicalisation; do NOT use it on an inference or
-  scoring path.
+- **Soundness `Mode` (`simplify(expr, mode=Mode.SOUND)`).** A single ordinal soundness axis,
+  exposed as `simplipy.Mode`. `Mode.SOUND` (the default) is equivalence-preserving and
+  idempotent -- the deployed inference/scoring path, byte-identical to the historical default.
+  `Mode.LOSSY` trades soundness for recall: every rule placeholder binds any subtree (the
+  `!`-sort finite-a.e. certificate is skipped) AND the constant-fold's finiteness gate is
+  relaxed, so a non-finite-a.e. subtree such as `<constant>/0` collapses to `<constant>` too.
+  `Mode.LOSSY` is for training-corpus canonicalisation ONLY -- the training data is generated
+  FROM the simplified form (target == data) -- and must never run on an inference or scoring
+  path. The decided full ordering is `EXACT <= SOUND <= AE <= LOSSY`; only `SOUND` and `LOSSY`
+  are implemented.
 
 ### Changed
 - **BREAKING: masking is separated from `simplify`.** Masking numeric literals to the generic

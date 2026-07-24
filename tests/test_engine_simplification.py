@@ -405,6 +405,37 @@ class TestApplySimplificationRules:
         assert result == ["+", "x", "y"]
 
 
+class TestMode:
+    """The soundness `Mode` axis: SOUND (default) keeps a non-finite-a.e. subtree; LOSSY
+    relaxes the constant-fold's finiteness gate (and the rule matcher's `!`-certificate)."""
+
+    def test_mode_is_exported_and_ordinal(self) -> None:
+        from simplipy import Mode
+        assert Mode.SOUND < Mode.LOSSY
+        assert [m.name for m in Mode] == ["SOUND", "LOSSY"]
+
+    def test_sound_keeps_constant_over_zero(self) -> None:
+        """`<constant>/0` is +-inf/nan for every constant, so SOUND must NOT fold it."""
+        from simplipy import Mode
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        assert engine.simplify(["/", "<constant>", "0"], mode=Mode.SOUND) == ["/", "<constant>", "0"]
+        # the default is SOUND
+        assert engine.simplify(["/", "<constant>", "0"]) == ["/", "<constant>", "0"]
+
+    def test_lossy_folds_constant_over_zero(self) -> None:
+        """LOSSY relaxes the finiteness gate: `<constant>/0` collapses to `<constant>`."""
+        from simplipy import Mode
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        assert engine.simplify(["/", "<constant>", "0"], mode=Mode.LOSSY) == ["<constant>"]
+
+    def test_finite_ae_fold_is_mode_independent(self) -> None:
+        """A finite-a.e. subtree (`1/C`) folds in BOTH modes -- the pole is measure-zero."""
+        from simplipy import Mode
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        assert engine.simplify(["inv", "<constant>"], mode=Mode.SOUND) == ["<constant>"]
+        assert engine.simplify(["inv", "<constant>"], mode=Mode.LOSSY) == ["<constant>"]
+
+
 class TestOperatorConversions:
     """Tests for operators_to_realizations and realizations_to_operators."""
 
@@ -880,7 +911,7 @@ class TestBangSort:
 
 
 class TestSearchAndAggressiveMode:
-    """The cancel/rules SEARCH (`Engine::simplify_search`) and the `wildcard_all` apply-time
+    """The cancel/rules SEARCH (`Engine::simplify_search`) and the `Mode.LOSSY` apply-time
     aggressive mode -- the two public behaviours added on top of the plain fixpoint."""
 
     def _engine(self):
@@ -915,9 +946,10 @@ class TestSearchAndAggressiveMode:
             once = list(engine.simplify(list(expr)))
             assert list(engine.simplify(list(once))) == once, expr
 
-    def test_wildcard_all_is_off_by_default_and_only_widens(self) -> None:
-        """`wildcard_all` is the AGGRESSIVE apply-time mode: default OFF, and when ON it only
-        ever binds MORE (never fewer) placeholders, so it can only shorten."""
+    def test_lossy_mode_is_off_by_default_and_only_widens(self) -> None:
+        """`Mode.LOSSY` is the AGGRESSIVE apply-time mode: `Mode.SOUND` is the default, and LOSSY
+        only ever binds MORE (never fewer) placeholders, so it can only shorten."""
+        from simplipy import Mode
         engine = self._engine()
         exprs = [
             ["/", "x0", "inv", "x0"],
@@ -927,9 +959,9 @@ class TestSearchAndAggressiveMode:
         ]
         for expr in exprs:
             default = list(engine.simplify(list(expr)))
-            explicit_off = list(engine.simplify(list(expr), wildcard_all=False))
-            aggressive = list(engine.simplify(list(expr), wildcard_all=True))
-            assert default == explicit_off, expr
+            explicit_sound = list(engine.simplify(list(expr), mode=Mode.SOUND))
+            aggressive = list(engine.simplify(list(expr), mode=Mode.LOSSY))
+            assert default == explicit_sound, expr
             assert len(aggressive) <= len(default), (expr, default, aggressive)
 
     def test_cancel_only_applies_one_cancellation(self) -> None:

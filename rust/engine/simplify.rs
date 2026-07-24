@@ -315,6 +315,15 @@ impl Engine {
             // unbounded-but-finite-a.e. subtree (`inv <constant>` = 1/C, `tan <constant>`,
             // `cosh(<constant>+5)`) stays foldable (the pole is measure-zero), while a non-finite-a.e.
             // subtree (`<constant>/0`, `<constant>*inv(0)`) does not.
+            //
+            // LOSSY mode (`wildcard_all`) relaxes this finiteness certificate, exactly as it relaxes
+            // the rule matcher's `!`-certificate: a non-finite-a.e. subtree (`<constant>/0`) then
+            // collapses to `<constant>` too. That is the intended training-corpus behaviour (the data
+            // is generated FROM the simplified form, so target == data and there is nothing to
+            // violate); it is NOT sound and must never run on an inference/scoring path.
+            if ctx.wildcard_all {
+                return Some(Node::Leaf(self.tokens.constant));
+            }
             let mut flat: Vec<String> = Vec::with_capacity(values.len() + 1);
             flat.push(view.to_string(operator));
             flat.extend(values.iter().map(|&v| view.to_string(v)));
