@@ -123,7 +123,11 @@ impl Engine {
 
     /// The rules pass against a caller-owned memo context: `simplify` threads ONE ctx
     /// across every node it expands, so a node reached by several paths costs one pass.
-    fn apply_simplification_rules_with_ctx(&self, expression: &[Tok], ctx: &SimplifyCtx) -> Vec<Tok> {
+    fn apply_simplification_rules_with_ctx(
+        &self,
+        expression: &[Tok],
+        ctx: &SimplifyCtx,
+    ) -> Vec<Tok> {
         let view = self.view(ctx);
         if expression
             .iter()

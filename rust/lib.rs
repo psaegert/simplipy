@@ -162,8 +162,12 @@ impl PyEngine {
         ensure_well_formed(&self.inner, &tokens)?;
         // Release the GIL for the pure-Rust kernel (parallel callers are not serialized on Python's lock).
         let out = py.detach(|| {
-            self.inner
-                .simplify(&tokens, node_budget, apply_simplification_rules, wildcard_all)
+            self.inner.simplify(
+                &tokens,
+                node_budget,
+                apply_simplification_rules,
+                wildcard_all,
+            )
         });
         Ok(PyList::new(py, out)?.into())
     }
