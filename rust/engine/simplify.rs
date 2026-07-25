@@ -71,6 +71,40 @@ impl Engine {
         b
     }
 
+    /// The `$`-sort certificate: defined, finite AND nonzero a.e. per
+    /// `interval::finite_nonzero_ae` -- the multiplicative group's regular domain, the exact
+    /// soundness domain of `A/A -> 1`. Same memo discipline as `bang_certified` (per-call
+    /// scratch, then the generational per-engine cache, then compute; fail-closed).
+    fn mult_certified(&self, node: &Node, ctx: &SimplifyCtx) -> bool {
+        let scratch = &ctx.cert_mult_scratch;
+        let t0 = std::time::Instant::now();
+        stats::bump(&stats::CERT_CALLS);
+        let mut flat = Vec::new();
+        tree_to_prefix(node, &mut flat);
+        if let Some(&b) = scratch.borrow().get(&flat) {
+            stats::bump(&stats::CERT_HITS);
+            stats::add(&stats::NANOS_CERT, t0.elapsed().as_nanos() as u64);
+            return b;
+        }
+        let table_only = flat.iter().all(|&t| self.tokens.is_table_id(t));
+        if table_only {
+            if let Some(b) = self.mult_cache.lock().unwrap().get_promoting(&flat) {
+                scratch.borrow_mut().insert(flat, b);
+                stats::bump(&stats::CERT_HITS);
+                stats::add(&stats::NANOS_CERT, t0.elapsed().as_nanos() as u64);
+                return b;
+            }
+        }
+        let flat_strs = self.resolve_seq(&flat, ctx);
+        let b = crate::interval::finite_nonzero_ae(&flat_strs, &self.operators);
+        if table_only {
+            self.mult_cache.lock().unwrap().insert(flat.clone(), b);
+        }
+        scratch.borrow_mut().insert(flat, b);
+        stats::add(&stats::NANOS_CERT, t0.elapsed().as_nanos() as u64);
+        b
+    }
+
     /// Parse a flat prefix id slice into a tree using this engine's operator arities.
     fn parse_prefix(&self, tokens: &[Tok], ctx: &SimplifyCtx) -> Node {
         let view = self.view(ctx);
@@ -148,6 +182,7 @@ impl Engine {
                     &rule.lhs_tree,
                     &mut mapping,
                     Some(&|n: &Node| self.bang_certified(n, ctx)),
+                    Some(&|n: &Node| self.mult_certified(n, ctx)),
                     ctx.wildcard_all,
                     &view,
                 ) {

@@ -66,6 +66,8 @@ pub struct Engine {
     /// tests build many engines with different op sets in one process. Generational (see
     /// `BangCache`): bounded memory, never stops memoizing.
     bang_cache: std::sync::Mutex<BangCache>,
+    /// The `$`-sort twin (`interval::finite_nonzero_ae`), same discipline.
+    mult_cache: std::sync::Mutex<BangCache>,
 }
 
 impl Engine {
@@ -108,6 +110,7 @@ impl Engine {
             tokens,
             engine_id: concat!("simplipy-", env!("CARGO_PKG_VERSION")).to_string(),
             bang_cache: std::sync::Mutex::new(BangCache::new()),
+            mult_cache: std::sync::Mutex::new(BangCache::new()),
         })
     }
 

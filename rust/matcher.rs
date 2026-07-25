@@ -41,24 +41,26 @@ fn is_variable_leaf(node: &Node, view: &TokenView) -> bool {
     }
 }
 
-/// `match_pattern_with_cert` is the port of `match_pattern` plus a
-/// `!`-sort certifier: it matches a query subtree `tree` against a rule LHS `pattern`; on
-/// success `mapping` binds each placeholder id to the matched query subtree (borrowed from `tree`).
+/// `match_pattern_with_cert` is the port of `match_pattern` plus the certified-sort
+/// certifiers: it matches a query subtree `tree` against a rule LHS `pattern`; on success
+/// `mapping` binds each placeholder id to the matched query subtree (borrowed from `tree`).
 /// The bare-string-operand early-return branch in the Python source is DEAD for
 /// `prefix_to_tree`-built patterns (operands are always subtrees), so it is intentionally omitted.
 /// The certifier `cert(subtree)` answers "is this subtree defined-and-finite a.e.?" (the engine
-/// passes `interval::finite_ae` behind its per-engine cache). With `None`, `!` slots bind
-/// VARIABLE LEAVES only -- fail-closed: a caller that cannot certify loses `!`-subtree
-/// capability, never soundness.
+/// passes `interval::finite_ae` behind its per-engine cache) and gates `!` slots; `cert_mult`
+/// answers "defined, finite AND nonzero a.e.?" (`interval::finite_nonzero_ae`, the
+/// multiplicative group's regular domain) and gates `$` slots. With `None`, the corresponding
+/// slots bind VARIABLE LEAVES only -- fail-closed: a caller that cannot certify loses that
+/// sort's subtree capability, never soundness.
 ///
-/// The walk is purely syntactic (`!` binds composites freely when a certifier exists); the
-/// certificates run ONCE per COMPLETED syntactic match, over the final `!`-bindings -- the same
+/// The walk is purely syntactic (`!`/`$` bind composites freely when their certifier exists);
+/// the certificates run ONCE per COMPLETED syntactic match, over the final bindings -- the same
 /// conjunction as certifying mid-walk (identical verdicts), but never paid on attempts that
 /// fail syntactically elsewhere.
 ///
 /// `wildcard_all` (the AGGRESSIVE apply-time mode, the symmetric opposite of
-/// `leaf_wildcards_only`): every placeholder (`?`/`!`/`_`) binds ANY subtree and the `!`
-/// certificate is SKIPPED. This is the "ignore certificates, treat all as `_`" mode -- slightly
+/// `leaf_wildcards_only`): every placeholder (`?`/`!`/`$`/`_`) binds ANY subtree and the
+/// certificates are SKIPPED. This is the "ignore certificates, treat all as `_`" mode -- slightly
 /// unsound (binds pole/inf/nan-bearing composites) by construction. The sort-independent
 /// `contains_constant` rebind guard is preserved (it is not a soundness certificate).
 pub fn match_pattern_with_cert<'a>(
@@ -66,6 +68,7 @@ pub fn match_pattern_with_cert<'a>(
     pattern: &Node,
     mapping: &mut FxHashMap<Tok, &'a Node>,
     cert: Option<&dyn Fn(&Node) -> bool>,
+    cert_mult: Option<&dyn Fn(&Node) -> bool>,
     wildcard_all: bool,
     view: &TokenView,
 ) -> bool {
@@ -75,6 +78,7 @@ pub fn match_pattern_with_cert<'a>(
         mapping,
         leaf_wildcards_only(),
         cert.is_some(),
+        cert_mult.is_some(),
         wildcard_all,
         view,
     ) {
@@ -82,10 +86,17 @@ pub fn match_pattern_with_cert<'a>(
     }
     if !wildcard_all {
         for (pkey, bound) in mapping.iter() {
-            if view.sigil(*pkey) == b'!' && !is_variable_leaf(bound, view) {
+            let sigil = view.sigil(*pkey);
+            if sigil == b'!' && !is_variable_leaf(bound, view) {
                 match cert {
                     Some(f) if f(bound) => {}
                     _ => return false, // uncertified or uncertifiable: no binding (fail-closed)
+                }
+            }
+            if sigil == b'$' && !is_variable_leaf(bound, view) {
+                match cert_mult {
+                    Some(f) if f(bound) => {}
+                    _ => return false, // fail-closed, exactly as `!`
                 }
             }
         }
@@ -99,6 +110,7 @@ fn match_pattern_impl<'a>(
     mapping: &mut FxHashMap<Tok, &'a Node>,
     leaf_only: bool,
     bang_binds_composite: bool,
+    mult_binds_composite: bool,
     wildcard_all: bool,
     view: &TokenView,
 ) -> bool {
@@ -107,18 +119,21 @@ fn match_pattern_impl<'a>(
         Node::Leaf(pkey) => {
             let sigil = view.sigil(*pkey);
             if sigil != 0 {
-                // Placeholder. Python keys on the sigil prefix, not the full ^[_?!]\d+$ regex.
+                // Placeholder. Python keys on the sigil prefix, not the full ^[_?!$]\d+$ regex.
                 // The SORT is the sigil: `?` always binds
                 // a variable leaf or nothing; `_` binds any subtree unless the
                 // SIMPLIPY_LEAF_WILDCARDS diagnostic demotes it; `!` binds a variable leaf
-                // freely, or a SUBTREE only when the
-                // certifier proves it defined-and-finite a.e.
+                // freely, or a SUBTREE only when the certifier proves it defined-and-finite
+                // a.e.; `$` likewise, with the finite-AND-nonzero certifier.
                 if !wildcard_all {
                     if (sigil == b'?' || leaf_only) && !is_variable_leaf(tree, view) {
                         return false;
                     }
                     if sigil == b'!' && !is_variable_leaf(tree, view) && !bang_binds_composite {
                         return false; // no certifier available: `!` binds variable leaves only
+                    }
+                    if sigil == b'$' && !is_variable_leaf(tree, view) && !mult_binds_composite {
+                        return false; // no certifier available: `$` binds variable leaves only
                     }
                 }
                 match mapping.get(pkey) {
@@ -161,6 +176,7 @@ fn match_pattern_impl<'a>(
                         mapping,
                         leaf_only,
                         bang_binds_composite,
+                        mult_binds_composite,
                         wildcard_all,
                         view,
                     ) {
@@ -245,7 +261,7 @@ mod tests {
         let view = TokenView::new(&table, &overlay);
         let (q, p) = (tree(query, &view), tree(pattern, &view));
         let mut m = FxHashMap::default();
-        match_pattern_impl(&q, &p, &mut m, leaf_only, false, false, &view)
+        match_pattern_impl(&q, &p, &mut m, leaf_only, false, false, false, &view)
     }
 
     /// Under `?`-sort semantics (leaf_only=true) a slot binds a variable leaf or nothing.

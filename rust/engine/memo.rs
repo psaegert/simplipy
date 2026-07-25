@@ -65,10 +65,13 @@ impl BangCache {
 pub(super) struct SimplifyCtx {
     pub(super) overlay: RefCell<TokenOverlay>,
     pub(super) cert_scratch: RefCell<FxHashMap<Vec<Tok>, bool>>,
+    /// The `$`-sort twin of `cert_scratch` (see `mult_certified`).
+    pub(super) cert_mult_scratch: RefCell<FxHashMap<Vec<Tok>, bool>>,
     pub(super) rules_memo: RefCell<FxHashMap<Vec<Tok>, Vec<Tok>>>,
     pub(super) normal_forms: RefCell<rustc_hash::FxHashSet<Vec<Tok>>>,
-    /// AGGRESSIVE apply-time mode: bind every placeholder as `_` and skip the `!` certificate
-    /// (see `matcher::match_pattern_with_cert`). Set once per call at the simplify entry.
+    /// AGGRESSIVE apply-time mode: bind every placeholder as `_` and skip the `!`/`$`
+    /// certificates (see `matcher::match_pattern_with_cert`). Set once per call at the
+    /// simplify entry.
     pub(super) wildcard_all: bool,
 }
 
@@ -77,6 +80,7 @@ impl SimplifyCtx {
         Self {
             overlay: RefCell::new(TokenOverlay::new(table_len)),
             cert_scratch: RefCell::new(FxHashMap::default()),
+            cert_mult_scratch: RefCell::new(FxHashMap::default()),
             rules_memo: RefCell::new(FxHashMap::default()),
             normal_forms: RefCell::new(rustc_hash::FxHashSet::default()),
             wildcard_all,

@@ -65,10 +65,11 @@ SEED = 20260717
 
 
 def wildcards(tokens):
-    """DISTINCT slot names, all three sorts (`_` subtree, `!` certified subtree, `?` leaf)."""
+    """DISTINCT slot names, all four sorts (`_` subtree, `!` certified subtree, `$`
+    certified-nonzero subtree, `?` leaf)."""
     seen = []
     for t in tokens:
-        if t.startswith(('_', '?', '!')) and t not in seen:
+        if t.startswith(('_', '?', '!', '$')) and t not in seen:
             seen.append(t)
     return seen
 
@@ -146,9 +147,16 @@ def _literal_spans(tokens):
                    for k in range(i, end[i]))
     spans, i = [], 0
     while i < n:
-        if is_lit(i):
-            spans.append((i, end[i]))
-            i = end[i]
+        # `end[i] > i` is a TERMINATION guard, not an optimisation: an index the walk never
+        # visited (malformed input, or an operator missing from ARITY) still holds the
+        # zero-initialised 0, and `is_lit` over the then-EMPTY range is vacuously true --
+        # following it would move `i` BACKWARD and loop forever while `spans` grows without
+        # bound (observed: a judge called before `configure(engine)` pinned a core and ate
+        # ~17 GiB). Such indices are simply not literal spans; advance past them.
+        e = end[i]
+        if e > i and is_lit(i):
+            spans.append((i, e))
+            i = e
         else:
             i += 1
     return spans
@@ -172,6 +180,10 @@ def prefold(tokens):
     10^-1.6M) is precision-STABLE and must NOT be snapped. Zeros are the only snapped
     class: finite nonzero coincidences are already protected by the rel-band, and
     only zero flips an algebraic class (0*inf, 0/0)."""
+    if not ARITY:
+        raise RuntimeError(
+            'promotion oracle not configured: call promotion._f64_eval.configure(engine) '
+            'before judging (ARITY is empty, so expression spans cannot be parsed)')
     key = tuple(tokens)
     if key in _PREFOLD_CACHE:
         return _PREFOLD_CACHE[key]

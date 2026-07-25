@@ -2161,8 +2161,9 @@ pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators) -> bool {
 }
 
 /// f > 0 a.e.: the pow-base predicate completing the algebra. Conservative v1 (no
-/// consumer yet): structural heads that are positive wherever defined, else a strictly
-/// positive whole-space range.
+/// consumer yet -- the flatten-and-collect pass (proposal P4) is the intended one, hence
+/// the allow).
+#[allow(dead_code)]
 pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
     if tokens.is_empty() {
         return false;
