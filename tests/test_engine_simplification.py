@@ -920,9 +920,14 @@ class TestBangSort:
         # pow(x, inf): a.e. in {0, inf} -- inf - inf = nan on positive measure
         expr = ["-", "pow", "x0", 'float("inf")', "pow", "x0", 'float("inf")']
         assert list(engine.simplify(list(expr))) == expr
-        # inv: finite a.e. but pole-bearing -- OUT of the certificate's stated scope (needs
-        # inf_null); fail-closed means no binding, never unsoundness
-        assert list(engine.simplify(["-", "inv", "x0", "inv", "x0"])) == ["-", "inv", "x0", "inv", "x0"]
+
+    def test_pole_bearing_subtrees_bind_via_the_structural_path(self, tmp_path) -> None:
+        # inv: finite a.e. with a measure-zero pole. Formerly the certificate's stated-scope
+        # exclusion (subdivision cannot resolve a pole cell); the structural null-measure
+        # certificate (`interval::nonfinite_null`) closes it: inv(x) - inv(x) -> 0 is sound
+        # a.e. (the exceptional set {x = 0} is null).
+        engine = self._engine(tmp_path)
+        assert list(engine.simplify(["-", "inv", "x0", "inv", "x0"])) == ["0"]
 
 
 class TestSearchAndAggressiveMode:
