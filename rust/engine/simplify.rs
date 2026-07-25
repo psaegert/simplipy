@@ -114,25 +114,16 @@ impl Engine {
     /// The rule-application sub-unit `apply_simplification_rules`: the whole-expression
     /// all-`<constant>`/operator fold, then parse -> `apply_rules_top_down` -> flatten back to
     /// prefix. This is the rules EDGE of the search graph.
-    pub fn apply_simplification_rules(
-        &self,
-        expression: &[String],
-        max_pattern_length: Option<usize>,
-    ) -> Vec<String> {
+    pub fn apply_simplification_rules(&self, expression: &[String]) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len(), false);
         let toks = self.intern_seq(expression, &ctx);
-        let out = self.apply_simplification_rules_with_ctx(&toks, max_pattern_length, &ctx);
+        let out = self.apply_simplification_rules_with_ctx(&toks, &ctx);
         self.resolve_seq(&out, &ctx)
     }
 
     /// The rules pass against a caller-owned memo context: `simplify` threads ONE ctx
     /// across every node it expands, so a node reached by several paths costs one pass.
-    fn apply_simplification_rules_with_ctx(
-        &self,
-        expression: &[Tok],
-        max_pattern_length: Option<usize>,
-        ctx: &SimplifyCtx,
-    ) -> Vec<Tok> {
+    fn apply_simplification_rules_with_ctx(&self, expression: &[Tok], ctx: &SimplifyCtx) -> Vec<Tok> {
         let view = self.view(ctx);
         if expression
             .iter()
@@ -141,7 +132,7 @@ impl Engine {
             return vec![self.tokens.constant];
         }
         let tree = self.parse_prefix(expression, ctx);
-        let simplified = self.apply_rules_top_down(tree, max_pattern_length, ctx);
+        let simplified = self.apply_rules_top_down(tree, ctx);
         let mut out = Vec::new();
         tree_to_prefix(&simplified, &mut out);
         out
@@ -200,12 +191,7 @@ impl Engine {
     /// (`try_fold_constants` at the two sites), so a rule that matches an all-`<constant>`
     /// subtree is tried before the subtree is collapsed; else recurse into operands and
     /// re-check exact + pattern rules (and the fold fallback) on the rebuilt node.
-    fn apply_rules_top_down(
-        &self,
-        node: Node,
-        max_pattern_length: Option<usize>,
-        ctx: &SimplifyCtx,
-    ) -> Node {
+    fn apply_rules_top_down(&self, node: Node, ctx: &SimplifyCtx) -> Node {
         let operands = match &node {
             Node::Leaf(_) => return node,
             Node::Op { operands, .. } => operands,
@@ -221,14 +207,13 @@ impl Engine {
             return node;
         }
 
-        let subtree_max_pl = match max_pattern_length {
-            None => subtree_length.min(self.rules.max_pattern_length),
-            Some(m) => m.min(subtree_length).min(self.rules.max_pattern_length),
-        };
+        // The scan window is bounded by the longest pattern that EXISTS (an intrinsic property of
+        // the loaded ruleset), clipped to the subtree -- there is no caller-facing restriction.
+        let subtree_max_pl = subtree_length.min(self.rules.max_pattern_length);
 
         // First fire site: exact lookup + pattern scan on the node as-is.
         if let Some(replacement) = self.try_rule_rewrite(&node, &flat, subtree_max_pl, ctx) {
-            return self.apply_rules_top_down(replacement, max_pattern_length, ctx);
+            return self.apply_rules_top_down(replacement, ctx);
         }
 
         // No rule matched -> try constant folding as fallback.
@@ -244,7 +229,7 @@ impl Engine {
         };
         let simplified_operands: Vec<Node> = owned_operands
             .into_iter()
-            .map(|o| self.apply_rules_top_down(o, max_pattern_length, ctx))
+            .map(|o| self.apply_rules_top_down(o, ctx))
             .collect();
         let simplified = Node::Op {
             token: operator,
@@ -255,7 +240,7 @@ impl Engine {
         let mut flat2 = Vec::new();
         tree_to_prefix(&simplified, &mut flat2);
         if let Some(replacement) = self.try_rule_rewrite(&simplified, &flat2, subtree_max_pl, ctx) {
-            return self.apply_rules_top_down(replacement, max_pattern_length, ctx);
+            return self.apply_rules_top_down(replacement, ctx);
         }
 
         // No rule after operand simplification -> fold fallback.
@@ -395,19 +380,12 @@ impl Engine {
         &self,
         tokens: &[String],
         node_budget: usize,
-        max_pattern_length: Option<usize>,
         apply_simplification_rules: bool,
         wildcard_all: bool,
     ) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len(), wildcard_all);
         let toks = self.intern_seq(tokens, &ctx);
-        let out = self.simplify_toks(
-            &toks,
-            node_budget,
-            max_pattern_length,
-            apply_simplification_rules,
-            &ctx,
-        );
+        let out = self.simplify_toks(&toks, node_budget, apply_simplification_rules, &ctx);
         self.resolve_seq(&out, &ctx)
     }
 
@@ -432,7 +410,6 @@ impl Engine {
         &self,
         tokens: &[Tok],
         node_budget: usize,
-        max_pattern_length: Option<usize>,
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
@@ -447,13 +424,8 @@ impl Engine {
         // but the last strictly shortens, so this terminates.
         let mut current = tokens.to_vec();
         loop {
-            let searched = self.simplify_search(
-                &current,
-                node_budget,
-                max_pattern_length,
-                apply_simplification_rules,
-                ctx,
-            );
+            let searched =
+                self.simplify_search(&current, node_budget, apply_simplification_rules, ctx);
             let t_post = std::time::Instant::now();
             let canonical = crate::sort::sort_operands_unit(&searched, &self.view(ctx));
             stats::add(&stats::NANOS_MASK_SORT, t_post.elapsed().as_nanos() as u64);
@@ -481,19 +453,12 @@ impl Engine {
         &self,
         tokens: &[Tok],
         node_budget: usize,
-        max_pattern_length: Option<usize>,
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
         let mut current = tokens.to_vec();
         loop {
-            let out = self.search_once(
-                &current,
-                node_budget,
-                max_pattern_length,
-                apply_simplification_rules,
-                ctx,
-            );
+            let out = self.search_once(&current, node_budget, apply_simplification_rules, ctx);
             if out == current {
                 return current;
             }
@@ -537,7 +502,6 @@ impl Engine {
         &self,
         tokens: &[Tok],
         node_budget: usize,
-        max_pattern_length: Option<usize>,
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Tok> {
@@ -559,8 +523,7 @@ impl Engine {
             expanded += 1;
             stats::bump(&stats::SIMPLIFY_ITERS);
 
-            let children =
-                self.children_of(&node, max_pattern_length, apply_simplification_rules, ctx);
+            let children = self.children_of(&node, apply_simplification_rules, ctx);
 
             for child in children {
                 if !visited.insert(child.clone()) {
@@ -582,14 +545,13 @@ impl Engine {
     fn children_of(
         &self,
         node: &[Tok],
-        max_pattern_length: Option<usize>,
         apply_simplification_rules: bool,
         ctx: &SimplifyCtx,
     ) -> Vec<Vec<Tok>> {
         let mut children: Vec<Vec<Tok>> = Vec::new();
         if apply_simplification_rules {
             children.push(memoized_pass(&ctx.rules_memo, node, || {
-                self.apply_simplification_rules_with_ctx(node, max_pattern_length, ctx)
+                self.apply_simplification_rules_with_ctx(node, ctx)
             }));
         }
         let t_cancel = std::time::Instant::now();

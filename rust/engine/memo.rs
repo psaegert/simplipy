@@ -50,7 +50,7 @@ impl BangCache {
 }
 
 /// Per-simplify-call memo context. Pure-function memoization, valid because both passes are
-/// deterministic for a fixed engine + max_pattern_length (fixed within one call):
+/// deterministic for a fixed engine:
 /// - `rules_memo`: a whole-pass input->output token map. The tree search reaches the same node
 ///   by many paths, so the rules pass for a node is computed once no matter how often it recurs.
 ///   The cancel enumeration needs no memo: the search's `visited` set already dedupes its nodes.

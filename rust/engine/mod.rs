@@ -193,8 +193,8 @@ impl Engine {
     }
 
     /// The term-cancellation unit `cancel_terms(*collect_multiplicities(x))`,
-    /// as invoked once per `simplify` fixpoint iteration. Cancel is
-    /// `max_pattern_length`-independent (no `mpl` argument).
+    /// as invoked once per `simplify` fixpoint iteration. Cancel does not
+    /// consult the ruleset's pattern lengths.
     pub fn cancel_terms(&self, expression: &[String]) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len(), false);
         let toks = self.intern_seq(expression, &ctx);

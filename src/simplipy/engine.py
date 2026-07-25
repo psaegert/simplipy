@@ -358,7 +358,7 @@ class SimpliPyEngine:
 
         def covered(core: Any, lhs: tuple[str, ...], rhs: tuple[str, ...]) -> bool:
             return all(
-                len(core.simplify(variant_lhs, 5, None, True)) <= len(variant_rhs)
+                len(core.simplify(variant_lhs, 5, True)) <= len(variant_rhs)
                 for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
 
         kept = set(full)
@@ -683,7 +683,6 @@ class SimpliPyEngine:
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             node_budget: int = 48,
-            max_pattern_length: int | None = None,
             apply_simplification_rules: bool = True,
             inplace: bool = False,
             mode: Mode = Mode.SOUND) -> str | list[str] | tuple[str, ...] | np.ndarray:
@@ -714,8 +713,6 @@ class SimpliPyEngine:
             it a fraction of one. Raise it for offline corpus canonicalisation. Note that 0
             disables the SEARCH only: operand sorting still runs, so the result is the
             sort-canonicalised input rather than the input verbatim.
-        max_pattern_length : int or None, optional
-            The maximum length of a rule pattern to consider.
         apply_simplification_rules : bool, optional
             If False, skips the rule-based simplification step. Defaults to True.
         inplace : bool, optional
@@ -752,7 +749,7 @@ class SimpliPyEngine:
         else:
             tokens = list(expression)
 
-        out = self._core.simplify(tokens, node_budget, max_pattern_length,
+        out = self._core.simplify(tokens, node_budget,
                                   apply_simplification_rules, mode == Mode.LOSSY)
 
         return self._denormalize(out, expression, inplace)
