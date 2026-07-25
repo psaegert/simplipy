@@ -5,10 +5,12 @@ Certifies each mined rewrite rule against the strongest wildcard sort it can sou
 bind at, stepping DOWN a three-rung ladder of progressively weaker bindings when a
 stronger rung's bar is not met. The atom lattice (see `._pointwise.ATOMS`: 0, +-1,
 integers, half-integers, +-pi, +-e, +-inf, nan) is the finite set of exact probe points;
-on it, exact value equality is required, tolerating ONLY undefined -> defined extensions
-(e.g. `x/x -> 1` filling the hole at 0). A defined value may never change to a different
-defined value, even on a null set. The continuum keeps measure tolerance (the sampled
-jurisdiction of the miner, not this instrument).
+on it, exact value equality is required INCLUDING definedness: a nan/defined mismatch in
+EITHER direction is an exact kill (`_pointwise.judge`: `an != bn -> DEMOTE`), so a
+hole-filling rewrite like `x/x -> 1` can never certify at `_` -- it ships at `?`, whose
+bar is the one that tolerates the undefined -> defined extension. A defined value may
+never change to a different defined value, even on a null set. The continuum keeps
+measure tolerance (the sampled jurisdiction of the miner, not this instrument).
 
 THREE TIERS over a rules artifact (each with its own bar, by the pushforward theorem):
 
