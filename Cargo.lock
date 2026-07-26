@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "simplipy-core"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "astro-float",
  "pyo3",

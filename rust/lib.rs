@@ -143,19 +143,19 @@ impl PyEngine {
 
     /// THE hot path and the whole FFI unit. `tokens` is a prefix token list; returns the
     /// EQUIVALENCE-preserving simplified prefix token list. Defaults mirror the deployed call
-    /// (`simplify(skeleton, inplace=True, max_pattern_length=None)`); `inplace` is a Python-shim
+    /// (`simplify(skeleton, inplace=True)`); `inplace` is a Python-shim
     /// concern (the shim mutates the caller's list), so it is NOT a kernel parameter here.
+    /// The pattern-scan window is always the longest pattern in the loaded ruleset -- there is
+    /// no caller-facing restriction (the former `max_pattern_length` knob was removed).
     ///
     /// Does NOT mask: masking (literals -> `<constant>`) is a representation step carved out into
     /// [`PyEngine::mask`] -- callers needing placeholders apply it to this output.
-    #[pyo3(signature = (tokens, node_budget=48, max_pattern_length=None,
-                        apply_simplification_rules=true, wildcard_all=false))]
+    #[pyo3(signature = (tokens, node_budget=48, apply_simplification_rules=true, wildcard_all=false))]
     fn simplify(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         node_budget: usize,
-        max_pattern_length: Option<usize>,
         apply_simplification_rules: bool,
         wildcard_all: bool,
     ) -> PyResult<Py<PyList>> {
@@ -165,7 +165,6 @@ impl PyEngine {
             self.inner.simplify(
                 &tokens,
                 node_budget,
-                max_pattern_length,
                 apply_simplification_rules,
                 wildcard_all,
             )
@@ -184,18 +183,9 @@ impl PyEngine {
 
     /// Validation entry (NOT the shipped surface): the rule-application sub-unit only
     /// (`apply_simplification_rules`).
-    #[pyo3(signature = (tokens, max_pattern_length=None))]
-    fn apply_rules(
-        &self,
-        py: Python<'_>,
-        tokens: Vec<String>,
-        max_pattern_length: Option<usize>,
-    ) -> PyResult<Py<PyList>> {
+    fn apply_rules(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
         ensure_well_formed(&self.inner, &tokens)?;
-        let out = py.detach(|| {
-            self.inner
-                .apply_simplification_rules(&tokens, max_pattern_length)
-        });
+        let out = py.detach(|| self.inner.apply_simplification_rules(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 

@@ -189,7 +189,7 @@ impl Engine {
                 // Kruskal prune: simplify with the current rules; skip if it
                 // shortens (strict), or tighten the search bound to the simplified length (relaxed).
                 let out = {
-                    let slen = self.simplify(src, 48, None, true, false).len();
+                    let slen = self.simplify(src, 48, true, false).len();
                     if slen < src.len() && !relaxed_kruskal {
                         None
                     } else {
@@ -242,7 +242,7 @@ impl Engine {
                 .iter()
                 .map(|&t| self.tokens.resolve(t).to_string())
                 .collect();
-            let simplified = self.simplify(lhs, 48, None, true, false);
+            let simplified = self.simplify(lhs, 48, true, false);
             // rhs may be stored in masked (placeholder) form; mask to compare like-for-like.
             let result = if mask_elementary_literals {
                 self.mask(&simplified)

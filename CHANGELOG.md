@@ -1,6 +1,34 @@
 # Changelog
 
-## 0.9.1 (unreleased)
+## 0.10.0 — 2026-07-26
+
+### Added
+- **The certificate algebra: structural null-measure certificates.** A new predicate family in
+  the interval engine — `zero_set_null` (identity-theorem witness for entire-analytic
+  compositions plus structural recursion), `nonfinite_null` (pole-set tracking through the
+  domain-restricted unaries), `finite_nonzero_ae` (= the two combined: the regular domain of
+  multiplication), and `positive_ae` (v1) — closing the class of binding-dependent side
+  conditions. `finite_ae` now certifies through the structural path as well as box subdivision.
+- **The `$` wildcard sort: certified multiplicative cancellation.** `$N` binds composite
+  subtrees gated by `finite_nonzero_ae`, licensing `A/A -> 1`, `A·inv(A) -> 1`, and
+  `0/A -> 0` exactly where they are sound (`cosh(x)/cosh(x) -> 1`; `asin(x)/asin(x)` and
+  `0/0`-bearing trees refuse). Ships with `judge_bang_mult` (the promotion bar on the
+  finite-nonzero atom lattice) and four ladder seeds; deployed artifacts are unchanged until
+  the next production mine.
+
+### Fixed
+- **Promotion oracle non-termination (B4).** `_literal_spans` could loop forever with unbounded
+  memory when the operator table was empty or contained unknown ops (unvisited `end[]` entries
+  sent the scan backwards). A termination guard plus a fail-fast `RuntimeError` in `prefold`
+  when the oracle is unconfigured close both the hang and the silent misconfiguration path.
+
+### Removed
+- **BREAKING: the `max_pattern_length` parameter of `simplify` (and `apply_rules`) is gone.**
+  Rule application always considers every pattern in the loaded artifact; the scan window is
+  the ruleset's own longest pattern, an intrinsic property rather than a caller knob. All
+  deployed callers already passed `None`; passing the keyword now raises `TypeError`.
+
+## 0.9.1 — 2026-07-25
 
 ### Added
 - **Within-tier mining progress.** `find_rules(verbose=True)` now reports progress WHILE a length
@@ -82,7 +110,7 @@ enforce.
   unbounded-but-finite-a.e. folds (`1/C`, `tan C`, `cosh(C + 5)`) and refusing non-finite-a.e.
   ones (`C / 0`, `C * inv(0)`).
 
-## 0.8.0 (unreleased)
+## 0.8.0 — 2026-07-22
 
 Makes the public package produce the BEST rule sets from one command: mining now natively
 promotes every rule to the strongest sound sort, and a public verification API can

@@ -5,10 +5,12 @@ Certifies each mined rewrite rule against the strongest wildcard sort it can sou
 bind at, stepping DOWN a three-rung ladder of progressively weaker bindings when a
 stronger rung's bar is not met. The atom lattice (see `._pointwise.ATOMS`: 0, +-1,
 integers, half-integers, +-pi, +-e, +-inf, nan) is the finite set of exact probe points;
-on it, exact value equality is required, tolerating ONLY undefined -> defined extensions
-(e.g. `x/x -> 1` filling the hole at 0). A defined value may never change to a different
-defined value, even on a null set. The continuum keeps measure tolerance (the sampled
-jurisdiction of the miner, not this instrument).
+on it, exact value equality is required INCLUDING definedness: a nan/defined mismatch in
+EITHER direction is an exact kill (`_pointwise.judge`: `an != bn -> DEMOTE`), so a
+hole-filling rewrite like `x/x -> 1` can never certify at `_` -- it ships at `?`, whose
+bar is the one that tolerates the undefined -> defined extension. A defined value may
+never change to a different defined value, even on a null set. The continuum keeps
+measure tolerance (the sampled jurisdiction of the miner, not this instrument).
 
 THREE TIERS over a rules artifact (each with its own bar, by the pushforward theorem):
 
@@ -452,6 +454,41 @@ def judge_bang(lhs, rhs, rng):
     return v, info
 
 
+def _is_zero_token(t):
+    try:
+        return float(t) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def finite_nonzero_only(valuations):
+    """The multiplicative group's regular atoms: finite AND nonzero. On this lattice the
+    multiplicative cancellation identities hold EXACTLY (no measure tolerance is invoked) --
+    the `$`-sort twin of `finite_only`."""
+    return [v for v in finite_only(valuations) if not any(_is_zero_token(t) for t in v.values())]
+
+
+def judge_bang_mult(lhs, rhs, rng):
+    """The `$`-sort promotion bar: `judge_bang` restricted to the finite-NONZERO atom lattice
+    (SELFCANCEL Part 2 / judge_bang_mult). A `$`-bound subtree is certified defined, finite AND
+    nonzero a.e. at match time (`interval::finite_nonzero_ae`), so its pushforward puts no mass
+    on {0, nan, +-inf}: behaviour at zero and nonfinite valuations is a.e.-irrelevant and
+    dropped from the bar -- exactly as `judge_bang` drops the nonfinite ones for `!`. On the
+    remaining atoms `v / v = 1` holds with no hole, the same exactness footing as the additive
+    seed's `v - v = 0`."""
+    ws = wildcards(list(lhs) + list(rhs))
+    vals = finite_nonzero_only(valuations_for(ws, rng))
+    v, info = judge(list(lhs), list(rhs), vals)
+    if v in ('UNDECIDED', 'DEMOTE'):
+        from ._overturn import judge_exact
+        v2, _kill = judge_exact(list(lhs), list(rhs), vals)
+        if v2 == 'PROMOTE':
+            v, info = 'PROMOTE', 'exact-arbiter'
+    if v == 'PROMOTE' and pow_preimage_witness(lhs, rhs) is not None:
+        return 'DEMOTE', 'POW-PREIMAGE'
+    return v, info
+
+
 def respell_bang(tokens):
     return tuple('!' + t[1:] if t.startswith(('_', '?')) else t for t in tokens)
 
@@ -711,6 +748,22 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
         bv, _ = judge_bang(lhs, rhs, rng)
         if bv == 'PROMOTE':
             report['promoted_bang'].append((lhs, rhs, 'seed', ''))
+            kept.append((lhs, rhs))
+
+    # The multiplicative twins (SELFCANCEL Part 2): same seed discipline, certified through
+    # `judge_bang_mult` -- the judge_bang bar on the finite-NONZERO atom lattice, where the
+    # identities hold exactly. The match-time certificate (`interval::finite_nonzero_ae`)
+    # carries the instance-level burden; `<constant>`-bearing bindings are refused there and
+    # by the sort-independent rebind guard.
+    for lhs, rhs in [(('/', '$0', '$0'), ('1',)),
+                     (('*', '$0', 'inv', '$0'), ('1',)),
+                     (('*', 'inv', '$0', '$0'), ('1',)),
+                     (('/', '0', '$0'), ('0',))]:
+        if tuple(lhs) in lhs_seen:
+            continue
+        bv, _ = judge_bang_mult(lhs, rhs, rng)
+        if bv == 'PROMOTE':
+            report['promoted_bang'].append((lhs, rhs, 'seed-mult', ''))
             kept.append((lhs, rhs))
 
     # ground tier: skeleton semantics, mpmath

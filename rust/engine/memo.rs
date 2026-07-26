@@ -50,7 +50,7 @@ impl BangCache {
 }
 
 /// Per-simplify-call memo context. Pure-function memoization, valid because both passes are
-/// deterministic for a fixed engine + max_pattern_length (fixed within one call):
+/// deterministic for a fixed engine:
 /// - `rules_memo`: a whole-pass input->output token map. The tree search reaches the same node
 ///   by many paths, so the rules pass for a node is computed once no matter how often it recurs.
 ///   The cancel enumeration needs no memo: the search's `visited` set already dedupes its nodes.
@@ -65,10 +65,13 @@ impl BangCache {
 pub(super) struct SimplifyCtx {
     pub(super) overlay: RefCell<TokenOverlay>,
     pub(super) cert_scratch: RefCell<FxHashMap<Vec<Tok>, bool>>,
+    /// The `$`-sort twin of `cert_scratch` (see `mult_certified`).
+    pub(super) cert_mult_scratch: RefCell<FxHashMap<Vec<Tok>, bool>>,
     pub(super) rules_memo: RefCell<FxHashMap<Vec<Tok>, Vec<Tok>>>,
     pub(super) normal_forms: RefCell<rustc_hash::FxHashSet<Vec<Tok>>>,
-    /// AGGRESSIVE apply-time mode: bind every placeholder as `_` and skip the `!` certificate
-    /// (see `matcher::match_pattern_with_cert`). Set once per call at the simplify entry.
+    /// AGGRESSIVE apply-time mode: bind every placeholder as `_` and skip the `!`/`$`
+    /// certificates (see `matcher::match_pattern_with_cert`). Set once per call at the
+    /// simplify entry.
     pub(super) wildcard_all: bool,
 }
 
@@ -77,6 +80,7 @@ impl SimplifyCtx {
         Self {
             overlay: RefCell::new(TokenOverlay::new(table_len)),
             cert_scratch: RefCell::new(FxHashMap::default()),
+            cert_mult_scratch: RefCell::new(FxHashMap::default()),
             rules_memo: RefCell::new(FxHashMap::default()),
             normal_forms: RefCell::new(rustc_hash::FxHashSet::default()),
             wildcard_all,

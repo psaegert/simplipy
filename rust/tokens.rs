@@ -47,8 +47,8 @@ pub struct TokProps {
     pub sort_float: Option<f64>,
     /// `utils::is_numeric_string` -- the `mask_elementary_literals` predicate.
     pub is_num_str: bool,
-    /// First-character sigil class: b'_' / b'?' / b'!' or 0. Placeholder classification is BY
-    /// FIRST CHARACTER (Python keys on the sigil prefix, not the full `^[_?!]\d+$` regex).
+    /// First-character sigil class: b'_' / b'?' / b'!' / b'$' or 0. Placeholder classification is
+    /// BY FIRST CHARACTER (Python keys on the sigil prefix, not the full `^[_?!$]\d+$` regex).
     pub sigil: u8,
     /// `rules::is_wildcard` (the full sigil+digits check) -- rule-compile classification.
     pub is_wildcard: bool,
@@ -79,7 +79,7 @@ impl TokProps {
 #[inline]
 fn sigil_of(s: &str) -> u8 {
     match s.as_bytes().first() {
-        Some(b @ (b'_' | b'?' | b'!')) => *b,
+        Some(b @ (b'_' | b'?' | b'!' | b'$')) => *b,
         _ => 0,
     }
 }

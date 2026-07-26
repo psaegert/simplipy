@@ -45,8 +45,9 @@ hot path runs on interned token ids (~20× fewer allocations per call). On a
 ~59× faster than 0.5.0; certificate-free rulesets run ~2.3× faster.
 
 Since 0.7.0 there is a single compiled engine line, and the published ruleset artifacts
-(`2-1`, `3-2`, `4-3`, …) are the distinguishing factor between engines — all loaded at the
-default `max_pattern_length=None`.
+(`2-1`, `3-2`, `4-3`, …) are the distinguishing factor between engines. Rule application
+always considers every pattern in the loaded artifact (the former `max_pattern_length`
+knob was removed in 0.10.0).
 
 ![Simplification time and ratio ECDFs: SimpliPy 0.9.1 vs SymPy across mined rulesets, safe vs aggressive, and search budget, on 64k Lample-Charton expressions from the Flash-ANSR v23.0 prior](https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplipy_vs_sympy.svg)
 
@@ -54,7 +55,7 @@ ECDFs of simplification wall-clock time (**top row**) and simplification ratio `
 prefix tokens (**bottom row**, inset: low-ratio tail), over 65,536 randomly generated
 Lample-Charton expressions from the Flash-ANSR v23.0 training prior. Three axes vary SimpliPy
 (green) against a fixed **SymPy** reference (orange `ratio=None` / red `ratio=1`): **Mined
-Rulesets** — the published `2-1`/`3-2`/`4-3` artifacts at the default `max_pattern_length=None`
+Rulesets** — the published `2-1`/`3-2`/`4-3` artifacts, every pattern active
 (darker = larger); **Safe vs Aggressive** — `4-3` in the deployed `SOUND` mode vs the training-only
 `LOSSY` mode; **Search Budget** — `4-3` SOUND at node budgets 1 to 48. SimpliPy is timed per call
 (`perf_counter`, gc off); SymPy is given each `<constant>` as a free symbol and simplified

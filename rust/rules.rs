@@ -58,17 +58,19 @@ pub struct CompiledRules {
     pub max_pattern_length: usize,
 }
 
-/// Mirror of `_WILDCARD_RE = re.compile(r'^[_?]\d+$')` (utils.py): a slot token is a SORT SIGIL
-/// followed by one or more ASCII digits. Two sorts: `_N` binds an arbitrary SUBTREE (the
-/// pointwise-certified sort); `?N` binds a
-/// VARIABLE LEAF only (the sort the miner's certification actually establishes). The sort rides
-/// in the token, so a sorted rule set is just a rules.json with different spellings -- no schema
-/// change anywhere. (String form; the per-id `is_wildcard` property is computed from this at intern.)
+/// Mirror of `_WILDCARD_RE = re.compile(r'^[_?!$]\d+$')` (utils.py): a slot token is a SORT
+/// SIGIL followed by one or more ASCII digits. Four sorts: `_N` binds an arbitrary SUBTREE (the
+/// pointwise-certified sort); `?N` binds a VARIABLE LEAF only (the sort the miner's
+/// certification actually establishes); `!N` binds a composite gated by `finite_ae`; `$N`
+/// binds a composite gated by `finite_nonzero_ae` (the multiplicative-cancellation sort). The
+/// sort rides in the token, so a sorted rule set is just a rules.json with different spellings
+/// -- no schema change anywhere. (String form; the per-id `is_wildcard` property is computed
+/// from this at intern.)
 #[inline]
 pub fn is_wildcard(token: &str) -> bool {
     let b = token.as_bytes();
     b.len() >= 2
-        && (b[0] == b'_' || b[0] == b'?' || b[0] == b'!')
+        && (b[0] == b'_' || b[0] == b'?' || b[0] == b'!' || b[0] == b'$')
         && b[1..].iter().all(u8::is_ascii_digit)
 }
 

@@ -920,9 +920,113 @@ class TestBangSort:
         # pow(x, inf): a.e. in {0, inf} -- inf - inf = nan on positive measure
         expr = ["-", "pow", "x0", 'float("inf")', "pow", "x0", 'float("inf")']
         assert list(engine.simplify(list(expr))) == expr
-        # inv: finite a.e. but pole-bearing -- OUT of the certificate's stated scope (needs
-        # inf_null); fail-closed means no binding, never unsoundness
-        assert list(engine.simplify(["-", "inv", "x0", "inv", "x0"])) == ["-", "inv", "x0", "inv", "x0"]
+
+    def test_pole_bearing_subtrees_bind_via_the_structural_path(self, tmp_path) -> None:
+        # inv: finite a.e. with a measure-zero pole. Formerly the certificate's stated-scope
+        # exclusion (subdivision cannot resolve a pole cell); the structural null-measure
+        # certificate (`interval::nonfinite_null`) closes it: inv(x) - inv(x) -> 0 is sound
+        # a.e. (the exceptional set {x = 0} is null).
+        engine = self._engine(tmp_path)
+        assert list(engine.simplify(["-", "inv", "x0", "inv", "x0"])) == ["0"]
+
+
+class TestMultSort:
+    """The `$` fourth sort: `$N` binds a variable leaf freely, or a SUBTREE only when the
+    interval engine certifies it defined, finite AND nonzero a.e. (`finite_nonzero_ae` --
+    the multiplicative group's regular domain). This is what makes the composite
+    self-cancellation family (`f/f -> 1`, `f * inv(f) -> 1`, `0/f -> 0`) expressible at all
+    (SELFCANCEL_MULTIPLICATIVE: `judge_bang` demotes `A/A -> 1` at the atom 0, so no
+    pre-existing sort could carry it on composites)."""
+
+    SEEDS = [
+        [["/", "$0", "$0"], ["1"]],
+        [["*", "$0", "inv", "$0"], ["1"]],
+        [["*", "inv", "$0", "$0"], ["1"]],
+        [["/", "0", "$0"], ["0"]],
+    ]
+
+    def _engine(self, tmp_path):
+        import json
+
+        import yaml
+
+        ops = {
+            "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+            "-": {"realization": "-", "alias": [], "inverse": "+", "arity": 2, "precedence": 1, "commutative": False},
+            "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+            "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
+            "inv": {"realization": "simplipy.operators.inv", "alias": [], "inverse": "inv", "arity": 1, "precedence": 4, "commutative": False},
+            "cos": {"realization": "simplipy.operators.cos", "alias": [], "inverse": "acos", "arity": 1, "precedence": 2, "commutative": False},
+            "sin": {"realization": "simplipy.operators.sin", "alias": [], "inverse": "asin", "arity": 1, "precedence": 2, "commutative": False},
+            "asin": {"realization": "simplipy.operators.asin", "alias": [], "inverse": "sin", "arity": 1, "precedence": 2, "commutative": False},
+            "cosh": {"realization": "simplipy.operators.cosh", "alias": [], "inverse": "acosh", "arity": 1, "precedence": 2, "commutative": False},
+        }
+        (tmp_path / "rules.json").write_text(json.dumps(self.SEEDS))
+        (tmp_path / "config.yaml").write_text(
+            yaml.safe_dump({"operators": ops, "rules": "rules.json"}))
+        engine = SimpliPyEngine.from_config(str(tmp_path / "config.yaml"))
+        assert engine._core is not None
+        return engine
+
+    def test_certified_composites_cancel(self, tmp_path) -> None:
+        engine = self._engine(tmp_path)
+        # variable leaf: binds freely (a variable is nonzero a.e.)
+        assert list(engine.simplify(["/", "x0", "x0"])) == ["1"]
+        # certified composites: bounded-away (cosh), analytic-witness (sin, x - cos x)
+        for f in (["cosh", "x0"], ["sin", "x0"], ["-", "x0", "cos", "x0"]):
+            assert list(engine.simplify(["/"] + f + f)) == ["1"], f
+            assert list(engine.simplify(["*"] + f + ["inv"] + f)) == ["1"], f
+        # 0 / certified-nonzero composite -> 0
+        assert list(engine.simplify(["/", "0", "-", "x0", "cos", "x0"])) == ["0"]
+
+    def test_uncertified_composites_do_not_cancel(self, tmp_path) -> None:
+        engine = self._engine(tmp_path)
+        # region-nan operand: finite_nonzero_ae refuses (not finite a.e.)
+        expr = ["/", "asin", "x0", "asin", "x0"]
+        assert list(engine.simplify(list(expr))) == expr
+        # literal zero operand: 0/0 must never become 1 or 0 -- the all-valued exact fold
+        # legitimately evaluates it to the nan literal (0/0 IS nan; that is not a $-binding)
+        out = list(engine.simplify(["/", "0", "0"]))
+        assert out == ['float("nan")'], out
+        # identically-zero composite (plateau family): x0 - x0 folds to 0 upstream or stays;
+        # either way no $-binding may produce 1
+        out = list(engine.simplify(["/", "-", "x0", "x0", "-", "x0", "x0"]))
+        assert out != ["1"], out
+        # <constant>-bearing: the $-cancellation to 1 is refused (rebind guard + the
+        # certificate's constant exclusion). Reduction to <constant> IS allowed: leaf
+        # cancellation of x0 plus the independent-constant collapse C1/C2 -> <constant>
+        # is sound skeleton semantics, not a $-binding.
+        expr = ["/", "*", "<constant>", "x0", "*", "<constant>", "x0"]
+        out = list(engine.simplify(list(expr)))
+        assert out != ["1"], out
+
+    def test_lossy_skips_the_certificate(self, tmp_path) -> None:
+        from simplipy.engine import Mode
+        engine = self._engine(tmp_path)
+        assert list(engine.simplify(["/", "asin", "x0", "asin", "x0"], mode=Mode.LOSSY)) == ["1"]
+
+    def test_judge_bang_mult_bar(self, tmp_path) -> None:
+        # The promotion-side twin: the plain `!` bar demotes A/A -> 1 (0/0 = nan at the atom
+        # 0); the multiplicative bar promotes it on the finite-nonzero lattice. The judges
+        # REQUIRE the f64 oracle to be configured first (`configure(engine)`) -- calling them
+        # bare now raises instead of looping (the _literal_spans termination guard).
+        import numpy as np
+        import pytest as _pytest
+        from simplipy.promotion._f64_eval import configure
+        from simplipy.promotion._ladder import judge_bang, judge_bang_mult
+        from simplipy.promotion._pointwise import prefold
+        rng = np.random.default_rng(0)
+        from simplipy.promotion._f64_eval import ARITY
+        if not ARITY:  # order-independent: another test may have configured the module state
+            with _pytest.raises(RuntimeError, match='oracle not configured'):
+                prefold(['/', '1', '1'])
+        configure(self._engine(tmp_path))
+        v_bang, _ = judge_bang(('/', '!0', '!0'), ('1',), rng)
+        assert v_bang != 'PROMOTE'
+        v_mult, _ = judge_bang_mult(('/', '$0', '$0'), ('1',), rng)
+        assert v_mult == 'PROMOTE'
+        v_zero, _ = judge_bang_mult(('/', '0', '$0'), ('0',), rng)
+        assert v_zero == 'PROMOTE'
 
 
 class TestSearchAndAggressiveMode:

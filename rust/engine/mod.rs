@@ -66,6 +66,8 @@ pub struct Engine {
     /// tests build many engines with different op sets in one process. Generational (see
     /// `BangCache`): bounded memory, never stops memoizing.
     bang_cache: std::sync::Mutex<BangCache>,
+    /// The `$`-sort twin (`interval::finite_nonzero_ae`), same discipline.
+    mult_cache: std::sync::Mutex<BangCache>,
 }
 
 impl Engine {
@@ -108,6 +110,7 @@ impl Engine {
             tokens,
             engine_id: concat!("simplipy-", env!("CARGO_PKG_VERSION")).to_string(),
             bang_cache: std::sync::Mutex::new(BangCache::new()),
+            mult_cache: std::sync::Mutex::new(BangCache::new()),
         })
     }
 
@@ -190,8 +193,8 @@ impl Engine {
     }
 
     /// The term-cancellation unit `cancel_terms(*collect_multiplicities(x))`,
-    /// as invoked once per `simplify` fixpoint iteration. Cancel is
-    /// `max_pattern_length`-independent (no `mpl` argument).
+    /// as invoked once per `simplify` fixpoint iteration. Cancel does not
+    /// consult the ruleset's pattern lengths.
     pub fn cancel_terms(&self, expression: &[String]) -> Vec<String> {
         let ctx = SimplifyCtx::new(self.tokens.len(), false);
         let toks = self.intern_seq(expression, &ctx);

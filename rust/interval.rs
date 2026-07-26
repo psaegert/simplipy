@@ -1706,12 +1706,21 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 /// exhausted on a mixed cell, unevaluable cell -- returns FALSE (fail-closed: an uncertified
 /// subtree just doesn't bind; no soundness is ever staked on an unfinished search).
 ///
-/// STATED SCOPE: pole-bearing expressions that are truly finite a.e. (`1/x`, `tan x`) do NOT
-/// certify -- the pole cell never resolves clean and proving its null measure needs an
-/// `inf_null` sibling of `fin_null` that the domain does not track yet. Exp/sinh/polynomial
-/// compositions certify at depth 0-2. Like every interval verdict, the claim is scoped to the
-/// horizon box.
+/// Two sound under-approximations, unioned:
+///   1. the STRUCTURAL path (`nonfinite_null`, below): the only path that can certify
+///      pole-bearing trees (`1/x`, `tan x`, `x/(x1 - cos x1)`) -- a pole cell never
+///      resolves under subdivision, but the null measure of its x-support is a
+///      structural/analytic fact the certificate section proves directly;
+///   2. the SUBDIVISION path: bounded-clean cells over the horizon box, which certifies
+///      range-restricted compositions the structural tables refuse.
+/// Exp/sinh/polynomial compositions certify at depth 0-2. Like every interval verdict,
+/// the claim is scoped to the horizon box.
 pub fn finite_ae(tokens: &[String], ops: &Operators) -> bool {
+    nonfinite_null(tokens, ops) || finite_ae_subdivision(tokens, ops)
+}
+
+/// The subdivision path of `finite_ae` (the pre-certificate-algebra body, unchanged).
+fn finite_ae_subdivision(tokens: &[String], ops: &Operators) -> bool {
     const BANG_CERT_BUDGET: u32 = 4_000;
     #[allow(clippy::too_many_arguments)]
     fn rec(
@@ -1785,6 +1794,391 @@ pub fn finite_ae(tokens: &[String], ops: &Operators) -> bool {
         depth_per_dim * n as u32,
         &mut budget,
     )
+}
+
+// ===================== STRUCTURAL NULL-MEASURE CERTIFICATES ==========================
+//
+// The subdivision certificate above can never resolve a POLE cell: the cell containing a
+// pole subdivides forever (its value interval stays unbounded) and fails closed. Proving
+// that a pole's x-support is Lebesgue-NULL is not an interval fact -- it is a STRUCTURAL /
+// ANALYTIC fact about the expression tree. This section adds that primitive as a small
+// predicate algebra (the regular domains of the ring operations):
+//
+//   `zero_set_null(f)`     {x : f(x) = 0} is null, for EVERY value of any `<constant>`.
+//                          Refuses `<constant>`-bearing trees outright: a fitted constant
+//                          may sit exactly at 0 (`sin(C*x)` at C = 0 is identically 0).
+//   `nonfinite_null(f)`    {x : f(x) not a finite real} is null, for every `<constant>`
+//                          value. Constants are allowed: every zero-set-sensitive position
+//                          (a denominator) goes through `zero_set_null`, which refuses
+//                          them, and range proofs leave `<constant>` free over all reals,
+//                          so they hold for every fitted value.
+//   `finite_nonzero_ae(f)` = `zero_set_null && finite_ae`: the multiplicative group's
+//                          regular domain, the soundness domain of `A/A -> 1`.
+//   `positive_ae(f)`       f > 0 a.e. (completes the pow-base algebra; no consumer yet).
+//
+// Soundness:
+//   * Each structural arm reduces a claim to sub-claims whose exceptional sets COVER the
+//     parent's (Z(a*b) = Z(a) ∪ Z(b); poles(a/b) ⊆ nonfinite(a) ∪ nonfinite(b) ∪ Z(b);
+//     Z(1/g) ⊆ {g = ±inf}); a finite union of null sets is null.
+//   * ANALYTIC-WITNESS base case: if every operator in `f` is everywhere-defined and
+//     real-analytic on R (`op_entire_analytic`), the composition is real-analytic on the
+//     CONNECTED R^n, hence identically zero or null-zero-set (identity theorem). One
+//     subdivision cell whose value interval is a positive-measure set of values excluding
+//     0 proves f is not identically zero. The interval decorrelation only WIDENS value
+//     intervals, so a found witness is real; `x0 - x0` (identically 0) can never witness.
+//     abs / odd roots are total but NOT analytic (kink at 0) and are deliberately absent
+//     from the analytic set: `abs(x) + x` vanishes on a half-line and is exactly the
+//     plateau family the witness path must never certify (and cannot: the '+' arm defers
+//     only to the witness path, which refuses `abs`).
+//   * Division / inv are excluded from the analytic set (poles split R^n into components;
+//     the identity theorem is per-component) and handled structurally instead.
+//   * Everything else fails CLOSED, like every certificate in this module.
+//
+// The operator classification mirrors the ENGINE's real semantics (the u_* tables above,
+// corroborated by the promoted artifact family: `* 0 tan !0 -> 0` shipped, `* 0 asin !0`
+// was killed at promotion): odd roots are total (real cbrt); even roots, log, asin, acos,
+// acosh, atanh and binary pow are region-restricted.
+
+/// Everywhere-defined AND finite on finite real inputs (engine real semantics; overflow
+/// is representation, not a value -- see the module header).
+fn op_total_finite(op: &str) -> bool {
+    matches!(
+        op,
+        "+" | "-"
+            | "*"
+            | "neg"
+            | "abs"
+            | "pow2"
+            | "pow3"
+            | "pow4"
+            | "pow5"
+            | "pow1_3"
+            | "pow1_5"
+            | "mult2"
+            | "mult3"
+            | "mult4"
+            | "mult5"
+            | "div2"
+            | "div3"
+            | "div4"
+            | "div5"
+            | "exp"
+            | "sin"
+            | "cos"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "atan"
+            | "asinh"
+    )
+}
+
+/// Everywhere-defined and REAL-ANALYTIC on all of R: the identity-theorem class. `abs`,
+/// `pow1_3`, `pow1_5` are total but not analytic at 0 and are excluded on purpose.
+fn op_entire_analytic(op: &str) -> bool {
+    matches!(
+        op,
+        "+" | "-"
+            | "*"
+            | "neg"
+            | "pow2"
+            | "pow3"
+            | "pow4"
+            | "pow5"
+            | "mult2"
+            | "mult3"
+            | "mult4"
+            | "mult5"
+            | "div2"
+            | "div3"
+            | "div4"
+            | "div5"
+            | "exp"
+            | "sin"
+            | "cos"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "atan"
+            | "asinh"
+    )
+}
+
+/// End index (exclusive) of the prefix subtree starting at `i`.
+fn subtree_end(t: &[String], i: usize, ops: &Operators) -> Option<usize> {
+    let mut need = 1usize;
+    let mut j = i;
+    while need > 0 {
+        let tok = t.get(j)?;
+        need = need - 1 + ops.arity_of(tok).unwrap_or(0) as usize;
+        j += 1;
+    }
+    Some(j)
+}
+
+/// Whole-space range of a subexpression: every variable AND every free `<constant>` over
+/// all finite reals -- containment proofs made on it are valid for EVERY fitted constant.
+fn whole_range(t: &[String], ops: &Operators) -> Option<Vs> {
+    value_set(t, ops, &Vs::reals())
+}
+
+const CERT_RECURSION_MAX: u32 = 32;
+
+/// {x : f(x) = 0} is Lebesgue-null, for every value of any `<constant>`. Fail-closed.
+pub fn zero_set_null(tokens: &[String], ops: &Operators) -> bool {
+    if tokens.iter().any(|s| s == "<constant>") {
+        return false;
+    }
+    zsn(tokens, ops, 0)
+}
+
+fn zsn(t: &[String], ops: &Operators, d: u32) -> bool {
+    if d > CERT_RECURSION_MAX || t.is_empty() {
+        return false;
+    }
+    let tok = t[0].as_str();
+    if !ops.is_operator(tok) {
+        if var_index(tok).is_some() {
+            return true; // {x = 0} is a point
+        }
+        if tok == "<constant>" {
+            return false; // may BE 0 (belt-and-braces; the entry gate already refused)
+        }
+        // literal: never zero unless it IS zero. (A NaN literal has an EMPTY zero set.)
+        return crate::numeric::leaf_value(tok).is_some_and(|v| v != 0.0);
+    }
+    match (tok, ops.arity_of(tok)) {
+        // h(y) = 0 iff y = 0: the zero set equals the argument's
+        (
+            "neg" | "abs" | "pow2" | "pow3" | "pow4" | "pow5" | "pow1_2" | "pow1_3" | "pow1_4"
+            | "pow1_5" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5"
+            | "sinh" | "tanh" | "asinh" | "atan" | "asin" | "atanh",
+            Some(1),
+        ) => zsn(&t[1..], ops, d + 1),
+        // never zero on their real range
+        ("exp" | "cosh", Some(1)) => true,
+        // h(y) = 0 iff y = 1: shift and recurse
+        ("log" | "acos" | "acosh", Some(1)) => {
+            let mut shifted: Vec<String> = Vec::with_capacity(t.len() + 1);
+            shifted.push("-".into());
+            shifted.extend_from_slice(&t[1..]);
+            shifted.push("1".into());
+            zsn(&shifted, ops, d + 1)
+        }
+        // tan(g) = 0 iff sin(g) = 0
+        ("tan", Some(1)) => {
+            let mut s: Vec<String> = Vec::with_capacity(t.len());
+            s.push("sin".into());
+            s.extend_from_slice(&t[1..]);
+            zsn(&s, ops, d + 1)
+        }
+        // 1/g = 0 iff g = ±inf
+        ("inv", Some(1)) => nfn(&t[1..], ops, d + 1),
+        ("*", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            zsn(&t[1..ja], ops, d + 1) && zsn(&t[ja..], ops, d + 1)
+        }
+        // (a/b) = 0 only where a = 0 (b finite nonzero) or b = ±inf (a finite)
+        ("/", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            zsn(&t[1..ja], ops, d + 1) && nfn(&t[ja..], ops, d + 1)
+        }
+        // sums, sin, cos, and any other analytic composition: identity theorem + witness
+        _ => analytic_nonzero_witness(t, ops),
+    }
+}
+
+/// The identity-theorem witness: all ops entire-analytic, and ONE cell whose value
+/// interval is a positive-measure set excluding 0 -> f is not identically zero -> Z(f)
+/// is null. Fail-closed on budget/horizon like every certificate here.
+fn analytic_nonzero_witness(t: &[String], ops: &Operators) -> bool {
+    const WITNESS_BUDGET: u32 = 2_000;
+    if t.iter()
+        .any(|s| ops.is_operator(s) && !op_entire_analytic(s))
+    {
+        return false;
+    }
+    let (r, depth_per_dim, decidable) = horizon(&[t], &[&[]], ops);
+    if !decidable {
+        return false;
+    }
+    let used = distinct_vars(&[t]);
+    let width = n_var_slots(&[t]);
+    let n = used.len().max(1);
+    let mut bx = vec![(-r, r); n];
+    let mut budget = WITNESS_BUDGET;
+    let depth_max = depth_per_dim * n as u32;
+    #[allow(clippy::too_many_arguments)]
+    fn rec(
+        e: &[String],
+        ops: &Operators,
+        r: f64,
+        bx: &mut [(f64, f64)],
+        used: &[usize],
+        width: usize,
+        d: u32,
+        depth_max: u32,
+        budget: &mut u32,
+    ) -> bool {
+        if *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        let doms = doms_from_box(bx, used, width, (-r, r));
+        if let Some(v) = value_set_p(e, ops, &doms, &[]) {
+            if v.has_fin && !v.fin_null {
+                let zero_in = (v.lo < 0.0 || (v.lo == 0.0 && !v.lo_open))
+                    && (v.hi > 0.0 || (v.hi == 0.0 && !v.hi_open));
+                if !zero_in {
+                    return true; // positive-measure values, all nonzero
+                }
+            }
+        } else {
+            return false;
+        }
+        if d >= depth_max {
+            return false;
+        }
+        let i = (0..bx.len())
+            .max_by(|&a, &b| {
+                (bx[a].1 - bx[a].0)
+                    .partial_cmp(&(bx[b].1 - bx[b].0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        let (lo, hi) = bx[i];
+        let mid = 0.5 * (lo + hi);
+        bx[i] = (lo, mid);
+        let left = rec(e, ops, r, bx, used, width, d + 1, depth_max, budget);
+        bx[i] = (mid, hi);
+        let right = !left && rec(e, ops, r, bx, used, width, d + 1, depth_max, budget);
+        bx[i] = (lo, hi);
+        left || right
+    }
+    rec(t, ops, r, &mut bx, &used, width, 0, depth_max, &mut budget)
+}
+
+/// {x : f(x) not a finite real} is Lebesgue-null, for every `<constant>` value.
+/// Fail-closed.
+pub fn nonfinite_null(tokens: &[String], ops: &Operators) -> bool {
+    nfn(tokens, ops, 0)
+}
+
+fn nfn(t: &[String], ops: &Operators, d: u32) -> bool {
+    if d > CERT_RECURSION_MAX || t.is_empty() {
+        return false;
+    }
+    let tok = t[0].as_str();
+    if !ops.is_operator(tok) {
+        if var_index(tok).is_some() || tok == "<constant>" {
+            return true; // finite reals by contract
+        }
+        return crate::numeric::leaf_value(tok).is_some_and(f64::is_finite);
+    }
+    match (tok, ops.arity_of(tok)) {
+        ("+" | "-" | "*", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            nfn(&t[1..ja], ops, d + 1) && nfn(&t[ja..], ops, d + 1)
+        }
+        // poles(a/b) ⊆ nonfinite(a) ∪ nonfinite(b) ∪ Z(b); `zero_set_null` refuses a
+        // `<constant>`-bearing denominator, which keeps the claim ∀C-sound.
+        ("/", Some(2)) => {
+            let Some(ja) = subtree_end(t, 1, ops) else {
+                return false;
+            };
+            nfn(&t[1..ja], ops, d + 1)
+                && nfn(&t[ja..], ops, d + 1)
+                && (!t[ja..].iter().any(|s| s == "<constant>") && zsn(&t[ja..], ops, d + 1))
+        }
+        ("inv", Some(1)) => {
+            nfn(&t[1..], ops, d + 1)
+                && (!t[1..].iter().any(|s| s == "<constant>") && zsn(&t[1..], ops, d + 1))
+        }
+        // tan poles sit on {cos(g) = 0}
+        ("tan", Some(1)) => {
+            let mut c: Vec<String> = Vec::with_capacity(t.len());
+            c.push("cos".into());
+            c.extend_from_slice(&t[1..]);
+            nfn(&t[1..], ops, d + 1)
+                && (!t[1..].iter().any(|s| s == "<constant>") && zsn(&c, ops, d + 1))
+        }
+        // total-finite unaries pass the claim through
+        (op, Some(1)) if op_total_finite(op) => nfn(&t[1..], ops, d + 1),
+        // domain-restricted unaries: prove the argument's whole-space range inside the
+        // domain (with `<constant>` free over all reals, the proof is ∀C-valid)
+        ("log", Some(1)) => {
+            nfn(&t[1..], ops, d + 1)
+                && whole_range(&t[1..], ops).is_some_and(|v| {
+                    v.has_fin
+                        && !v.nan
+                        && !v.pinf
+                        && !v.ninf
+                        && (v.lo > 0.0 || (v.lo == 0.0 && v.lo_open))
+                })
+        }
+        ("pow1_2" | "pow1_4", Some(1)) => {
+            nfn(&t[1..], ops, d + 1)
+                && whole_range(&t[1..], ops)
+                    .is_some_and(|v| v.has_fin && !v.nan && !v.pinf && !v.ninf && v.lo >= 0.0)
+        }
+        ("asin" | "acos", Some(1)) => {
+            nfn(&t[1..], ops, d + 1)
+                && whole_range(&t[1..], ops).is_some_and(|v| {
+                    v.has_fin && !v.nan && !v.pinf && !v.ninf && v.lo >= -1.0 && v.hi <= 1.0
+                })
+        }
+        ("acosh", Some(1)) => {
+            nfn(&t[1..], ops, d + 1)
+                && whole_range(&t[1..], ops)
+                    .is_some_and(|v| v.has_fin && !v.nan && !v.pinf && !v.ninf && v.lo >= 1.0)
+        }
+        ("atanh", Some(1)) => {
+            nfn(&t[1..], ops, d + 1)
+                && whole_range(&t[1..], ops).is_some_and(|v| {
+                    v.has_fin
+                        && !v.nan
+                        && !v.pinf
+                        && !v.ninf
+                        && (v.lo > -1.0 || (v.lo == -1.0 && v.lo_open))
+                        && (v.hi < 1.0 || (v.hi == 1.0 && v.hi_open))
+                })
+        }
+        _ => false, // binary pow, unknown ops: fail-closed
+    }
+}
+
+/// The multiplicative group's regular domain: defined, finite AND nonzero a.e. -- the
+/// exact soundness domain of `A/A -> 1` (SELFCANCEL T1). Refuses `<constant>`-bearing
+/// trees via `zero_set_null`.
+pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators) -> bool {
+    zero_set_null(tokens, ops) && finite_ae(tokens, ops)
+}
+
+/// f > 0 a.e.: the pow-base predicate completing the algebra. Conservative v1 (no
+/// consumer yet -- the flatten-and-collect pass (proposal P4) is the intended one, hence
+/// the allow).
+#[allow(dead_code)]
+pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
+    if tokens.is_empty() {
+        return false;
+    }
+    match tokens[0].as_str() {
+        "exp" | "cosh" => nonfinite_null(&tokens[1..], ops),
+        // squares / abs of a null-zero-set argument: >= 0 with a null zero set
+        "pow2" | "pow4" | "abs" => {
+            zero_set_null(&tokens[1..], ops) && nonfinite_null(&tokens[1..], ops)
+        }
+        "inv" => positive_ae(&tokens[1..], ops),
+        _ => whole_range(tokens, ops).is_some_and(|v| {
+            v.has_fin && !v.nan && !v.ninf && (v.lo > 0.0 || (v.lo == 0.0 && v.lo_open))
+        }),
+    }
 }
 
 /// Can `cand` reach every value COMPONENT the `src` reaches on positive measure?
@@ -2426,6 +2820,11 @@ mod tests {
             vec!["+", "x0", "x1"],
             vec!["tanh", "*", "x0", "x1"],
             vec!["3.0"],
+            // pole-bearing but finite a.e.: certified by the STRUCTURAL path (the former
+            // stated-scope exclusion, closed by the certificate algebra)
+            vec!["inv", "x0"],
+            vec!["tan", "x0"],
+            vec!["/", "x0", "-", "x1", "cos", "x1"],
         ] {
             assert!(
                 finite_ae(&s(&expr.iter().map(|t| *t).collect::<Vec<_>>()), ops),
@@ -2438,13 +2837,119 @@ mod tests {
             vec!["pow", "x0", "float(\"inf\")"], // a.e. in {0, inf}
             vec!["float(\"inf\")"],
             vec!["float(\"nan\")"],
-            vec!["inv", "x0"],
+            vec!["/", "x0", "-", "x1", "x1"], // x/0: nonfinite a.e.
+            vec!["/", "x0", "*", "<constant>", "x1"], // C = 0 makes it nonfinite a.e.
         ] {
-            // finite a.e. but pole: stated scope
             assert!(
                 !finite_ae(&s(&expr.iter().map(|t| *t).collect::<Vec<_>>()), ops),
                 "{expr:?} must NOT certify"
             );
+        }
+    }
+
+    /// The certificate algebra: `zero_set_null` / `nonfinite_null` / `finite_nonzero_ae`
+    /// / `positive_ae`, including the poison battery (identically-zero composites,
+    /// abs-plateaus, `<constant>`-bearing trees).
+    #[test]
+    fn certificate_algebra() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let v = |expr: &[&str]| s(&expr.to_vec());
+
+        // zero_set_null: certified
+        for expr in [
+            vec!["x0"],
+            vec!["sin", "x0"],
+            vec!["-", "x0", "cos", "x0"],
+            vec!["cosh", "x0"],
+            vec!["*", "x0", "x1"],
+            vec!["inv", "x0"],
+            vec!["/", "x0", "-", "x1", "cos", "x1"],
+            vec!["tan", "x0"],
+            vec!["log", "cosh", "x0"], // zero only at x = 0
+        ] {
+            assert!(
+                zero_set_null(&v(&expr), ops),
+                "{expr:?} must have null zero set"
+            );
+        }
+        // zero_set_null: refused (poison battery)
+        for expr in [
+            vec!["0"],
+            vec!["-", "x0", "x0"], // identically zero
+            // sin^2 + cos^2 - 1: identically zero, no witness cell can exist
+            vec!["-", "+", "pow2", "sin", "x0", "pow2", "cos", "x0", "1"],
+            vec!["+", "abs", "x0", "x0"], // plateau: zero on the whole half-line
+            vec!["*", "<constant>", "x0"], // C = 0 zeroes it identically
+            vec!["sin", "*", "<constant>", "x0"],
+        ] {
+            assert!(!zero_set_null(&v(&expr), ops), "{expr:?} must NOT certify");
+        }
+
+        // nonfinite_null: certified
+        for expr in [
+            vec!["inv", "x0"],
+            vec!["tan", "x0"],
+            vec!["/", "x0", "-", "x1", "cos", "x1"],
+            vec!["log", "cosh", "x0"],
+            vec!["pow1_2", "pow2", "x0"], // sqrt(x^2): range proof [0, inf)
+            vec!["+", "<constant>", "x0"],
+        ] {
+            assert!(
+                nonfinite_null(&v(&expr), ops),
+                "{expr:?} must be finite a.e."
+            );
+        }
+        // nonfinite_null: refused
+        for expr in [
+            vec!["asin", "x0"], // region nan
+            vec!["log", "x0"],  // nan on half the line
+            vec!["pow1_2", "x0"],
+            vec!["atanh", "x0"],
+            vec!["/", "x0", "-", "x1", "x1"],         // x/0
+            vec!["/", "x0", "*", "<constant>", "x1"], // ∀C fails at C = 0
+            vec!["/", "x0", "+", "abs", "x1", "x1"],  // plateau denominator: 0/0 on half-line
+            // 1 / (sin^2 + cos^2 - 1): identically-zero denominator
+            vec![
+                "inv", "-", "+", "pow2", "sin", "x0", "pow2", "cos", "x0", "1",
+            ],
+            vec!["float(\"inf\")"],
+        ] {
+            assert!(!nonfinite_null(&v(&expr), ops), "{expr:?} must NOT certify");
+        }
+
+        // finite_nonzero_ae: the A/A -> 1 soundness domain
+        for expr in [
+            vec!["cosh", "x0"],
+            vec!["sin", "x0"],
+            vec!["x0"],
+            vec!["inv", "x0"],
+            vec!["-", "x0", "cos", "x0"],
+        ] {
+            assert!(finite_nonzero_ae(&v(&expr), ops), "{expr:?} must certify");
+        }
+        for expr in [
+            vec!["0"],
+            vec!["-", "x0", "x0"],
+            vec!["+", "abs", "x0", "x0"],
+            vec!["*", "<constant>", "x0"],
+            vec!["<constant>"],
+            vec!["asin", "x0"], // nonzero-a.e. but NOT finite a.e. -> refused
+        ] {
+            assert!(
+                !finite_nonzero_ae(&v(&expr), ops),
+                "{expr:?} must NOT certify"
+            );
+        }
+
+        // positive_ae v1
+        for expr in [vec!["exp", "x0"], vec!["cosh", "x0"], vec!["pow2", "x0"]] {
+            assert!(positive_ae(&v(&expr), ops), "{expr:?} must certify");
+        }
+        for expr in [vec!["x0"], vec!["sin", "x0"], vec!["pow2", "-", "x0", "x0"]] {
+            assert!(!positive_ae(&v(&expr), ops), "{expr:?} must NOT certify");
         }
     }
 

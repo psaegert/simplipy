@@ -1052,9 +1052,10 @@ def remove_pow1(prefix_expression: list[str]) -> list[str]:
     return filtered_expression
 
 
-# three sorts: `_N` any subtree, `!N` a subtree the interval engine certifies
-# defined-and-finite a.e., `?N` a variable leaf.
-_WILDCARD_RE = re.compile(r'^[_?!]\d+$')
+# four sorts: `_N` any subtree, `!N` a subtree the interval engine certifies
+# defined-and-finite a.e., `$N` a subtree certified defined-finite-AND-nonzero a.e.
+# (the multiplicative-cancellation sort), `?N` a variable leaf.
+_WILDCARD_RE = re.compile(r'^[_?!$]\d+$')
 
 
 def violates_wildcard_multiplicity(lhs: list[str] | tuple[str, ...], rhs: list[str] | tuple[str, ...]) -> bool:
