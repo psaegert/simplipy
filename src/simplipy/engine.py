@@ -1087,7 +1087,7 @@ class SimpliPyEngine:
         # An explicitly-given EMPTY batch still runs (and records all-zero outcome
         # counts): the sidecar must show the channel ran, not silently omit it.
         if proposal_entries is not None and not interrupted():
-            outcomes = self._certify_proposals(
+            outcomes, trail = self._certify_proposals(
                 proposal_entries, library,
                 leaf_nodes if leaf_nodes is not None else list(dummy_variables),
                 dummy_variables, X_data, X_confirm, max_target_pattern_length,
@@ -1095,6 +1095,9 @@ class SimpliPyEngine:
                 min_informative, mine_seed, confirm_seed, verbose)
             if provenance is not None and 'proposals' in provenance:
                 provenance['proposals']['outcomes'] = outcomes
+                # The per-candidate verdict trail travels WITH the artifact: an aggregate
+                # tally cannot be audited (it never says which candidate died at which gate).
+                provenance['proposals']['trail'] = trail
         if prune == 'covered':
             self.prune_covered_rules(verbose=verbose)
         elif prune:
@@ -1436,7 +1439,7 @@ class SimpliPyEngine:
             min_informative: int,
             mine_seed: int,
             confirm_seed: int,
-            verbose: bool) -> dict[str, int]:
+            verbose: bool) -> tuple[dict[str, int], list[dict[str, Any]]]:
         """The proposal channel of :meth:`find_rules`: certify externally proposed rules
         against the just-mined rule state and merge the survivors.
 
@@ -1460,9 +1463,22 @@ class SimpliPyEngine:
         The certified pairs then join the ruleset through the same
         :func:`~simplipy.utils.deduplicate_rules` path as mined rules (shortest target
         per canonical source). Mutates the engine in place (rules, compiled state, core
-        rules) and returns the per-outcome counts for the provenance sidecar:
-        ``certified`` / ``already_covered`` / ``rejected`` / ``duplicate`` (certified,
-        but canonically identical to an earlier certified proposal and not shorter).
+        rules) and returns ``(counts, trail)``.
+
+        ``counts`` is the per-outcome tally for the provenance sidecar: ``certified`` /
+        ``already_covered`` / ``rejected`` / ``duplicate`` (certified, but canonically
+        identical to an earlier certified proposal and not shorter).
+
+        ``trail`` is the PER-PROPOSAL verdict record, one entry per input proposal in file
+        order: ``{source, target, verdict, stage, certificate}``. A tally alone cannot be
+        audited -- "93 rejected" does not say WHICH candidates died or at WHICH gate, so a
+        reviewer cannot tell a correctly-killed hallucination from a wrongly-killed identity.
+        ``stage`` names the gate that decided: ``vocabulary`` (token outside the engine's
+        alphabet, or malformed), ``covered`` (the mined rules already shorten the source),
+        ``search`` (no target in the candidate library and no verifiable hint), ``confirm``
+        (failed independent stage-2 re-verification), ``merge`` (certified but folded away as
+        a duplicate), or ``accepted``. ``certificate`` is ``minimal`` (found by library scan)
+        or ``verified`` (the proposal's own hint, confirmed).
         """
         assert self._core is not None
         counts = {'certified': 0, 'already_covered': 0, 'rejected': 0, 'duplicate': 0}
@@ -1470,13 +1486,27 @@ class SimpliPyEngine:
         confirm_min = (max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
                        if X_confirm is not None else None)
         certified_pairs: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+        trail: list[dict[str, Any]] = []
+        # Index into `trail` for each certified pair, so the post-fold duplicate accounting
+        # below can flip that proposal's verdict without re-deriving which entry it was.
+        certified_trail_idx: list[int] = []
+
+        def record(source: tuple[str, ...], target: Any, verdict: str, stage: str,
+                   certificate: str | None = None) -> int:
+            trail.append({'source': list(source),
+                          'target': list(target) if target is not None else None,
+                          'verdict': verdict, 'stage': stage, 'certificate': certificate})
+            return len(trail) - 1
+
         for source, hint in proposal_entries:
             if not set(source) <= vocabulary or not self.is_valid(list(source)):
                 counts['rejected'] += 1
+                record(source, None, 'rejected', 'vocabulary')
                 continue
             simplified_length = len(self.simplify(list(source)))
             if simplified_length < len(source):
                 counts['already_covered'] += 1
+                record(source, None, 'already_covered', 'covered')
                 continue
             # Content-derived per-proposal seed offset (blake2b, not hash(): PYTHONHASHSEED
             # randomises str hashing per process; same policy as _confirm_mined_rules).
@@ -1501,6 +1531,7 @@ class SimpliPyEngine:
                     certificate = 'verified'
             if target is None:
                 counts['rejected'] += 1
+                record(source, None, 'rejected', 'search')
                 continue
             if X_confirm is not None and not self._confirm_mined_rules(
                     [(source, tuple(target))], dummy_variables, X_confirm,
@@ -1508,7 +1539,9 @@ class SimpliPyEngine:
                     int(confirm_min if confirm_min is not None else max(1, X_confirm.shape[0] // 8)),
                     confirm_seed):
                 counts['rejected'] += 1
+                record(source, target, 'rejected', 'confirm', certificate)
                 continue
+            certified_trail_idx.append(record(source, target, 'certified', 'accepted', certificate))
             certified_pairs.append((tuple(source), tuple(target)))
             if verbose:
                 print(f'Proposal certified ({certificate}): {list(source)} -> {list(target)}')
@@ -1524,12 +1557,13 @@ class SimpliPyEngine:
             key = tuple(canon_source)
             if key not in seen or len(canon_target) < seen[key]:
                 seen[key] = len(canon_target)
-        for source, target in certified_pairs:
+        for idx, (source, target) in zip(certified_trail_idx, certified_pairs):
             canon_source, mapping = remap_expression(list(source), dummy_variables, variable_prefix='?')
             canon_target, _ = remap_expression(list(target), dummy_variables, mapping, variable_prefix='?')
             key = tuple(canon_source)
             if key in seen and len(canon_target) >= seen[key]:
                 counts['duplicate'] += 1
+                trail[idx].update(verdict='duplicate', stage='merge')
             else:
                 counts['certified'] += 1
                 seen[key] = len(canon_target)
@@ -1543,7 +1577,7 @@ class SimpliPyEngine:
             print(f"Proposals: {len(proposal_entries)} processed -> "
                   f"{counts['certified']} certified, {counts['already_covered']} already covered, "
                   f"{counts['rejected']} rejected, {counts['duplicate']} duplicate")
-        return counts
+        return counts, trail
 
     def find_rules(
             self,

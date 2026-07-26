@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.1 — 2026-07-26
+
+### Added
+- **Per-candidate verdict trail for the proposal channel.** `find_rules(proposals=...)` now
+  writes `proposals.trail` into the provenance sidecar: one entry per proposal, in file order,
+  as `{source, target, verdict, stage, certificate}`. The aggregate tally it accompanies cannot
+  be audited on its own -- "93 rejected" never says which candidate died at which gate, so a
+  reviewer cannot separate a correctly killed hallucination from a wrongly killed identity.
+  `stage` names the deciding gate: `vocabulary` (token outside the alphabet, or malformed),
+  `covered` (the mined rules already shorten the source), `search` (no library target and no
+  verifiable hint), `confirm` (failed independent stage-2 re-verification), `merge` (certified
+  but folded away as a duplicate), or `accepted`. No certification semantics change.
+
 ## 0.10.0 — 2026-07-26
 
 ### Added
