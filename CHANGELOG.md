@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.0 (unreleased)
+## 0.10.0 — 2026-07-26
 
 ### Added
 - **The certificate algebra: structural null-measure certificates.** A new predicate family in
@@ -28,7 +28,7 @@
   the ruleset's own longest pattern, an intrinsic property rather than a caller knob. All
   deployed callers already passed `None`; passing the keyword now raises `TypeError`.
 
-## 0.9.1 (unreleased)
+## 0.9.1 — 2026-07-25
 
 ### Added
 - **Within-tier mining progress.** `find_rules(verbose=True)` now reports progress WHILE a length
@@ -110,7 +110,7 @@ enforce.
   unbounded-but-finite-a.e. folds (`1/C`, `tan C`, `cosh(C + 5)`) and refusing non-finite-a.e.
   ones (`C / 0`, `C * inv(0)`).
 
-## 0.8.0 (unreleased)
+## 0.8.0 — 2026-07-22
 
 Makes the public package produce the BEST rule sets from one command: mining now natively
 promotes every rule to the strongest sound sort, and a public verification API can
