@@ -672,6 +672,39 @@ class TestProposalChannel:
         assert not any(tuple(lhs)[:1] == ("+",) and "cosh" in lhs
                        for lhs, _ in eng.simplification_rules)
 
+    def test_provenance_carries_a_per_candidate_verdict_trail(self, tmp_path) -> None:
+        """The sidecar records ONE trail entry per proposal, in file order, naming the gate
+        that decided it. The aggregate tally cannot be audited on its own -- "N rejected"
+        never says WHICH candidate died WHERE, so a reviewer cannot separate a correctly
+        killed hallucination from a wrongly killed identity. Each verdict here is reached
+        through a different gate, so the trail is pinned end to end."""
+        proposals = [
+            {"source": ["*", "exp", "x0", "exp", "x0"]},                      # accepted
+            {"source": ["+", "x0", "0"]},                                     # already covered
+            {"source": ["sin", "x0"]},                                        # outside vocabulary
+            {"source": ["+", "exp", "x0", "cosh", "x0"],
+             "target": ["exp", "cosh", "x0"]},                                # false: no target
+            {"source": ["*", "exp", "x0", "exp", "x0"]},                      # duplicate of [0]
+        ]
+        _, sidecar, _ = self._mine(str(tmp_path), proposals)
+        trail = sidecar["proposals"]["trail"]
+        assert len(trail) == len(proposals), "one entry per proposal, no drops"
+        assert [e["source"] for e in trail] == [p["source"] for p in proposals], "file order"
+        assert [(e["verdict"], e["stage"]) for e in trail] == [
+            ("certified", "accepted"),
+            ("already_covered", "covered"),
+            ("rejected", "vocabulary"),
+            ("rejected", "search"),
+            ("duplicate", "merge"),
+        ]
+        # An admitted proposal carries the target it was admitted WITH and how it was certified.
+        assert trail[0]["target"] == ["pow2", "exp", "x0"]
+        assert trail[0]["certificate"] == "minimal"
+        # The trail and the tally are two views of one decision, never independently derived.
+        counts = sidecar["proposals"]["outcomes"]
+        for verdict, n in counts.items():
+            assert sum(1 for e in trail if e["verdict"] == verdict) == n, verdict
+
     def test_proposal_channel_is_deterministic(self, tmp_path) -> None:
         """Two runs from the same master seed and the same proposals FILE (bare-list
         schema) produce byte-identical rulesets and identical provenance counts --
