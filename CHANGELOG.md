@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.0 — 2026-07-30
+
+### Added
+- **Engines are picklable.** `SimpliPyEngine` now supports `pickle` round-trips,
+  `copy.deepcopy`, and `multiprocessing` spawn contexts. The compiled core
+  (`simplipy._core.Engine`) has no serialization surface, but it is derived state: the
+  pickle carries the construction recipe (operator config + rule list, including rules
+  added at runtime via `compile_rules`), and unpickling rebuilds the core exactly as
+  `__init__` would — realization modules first, then the compiled engine. Previously any
+  engine crossing a process boundary (for example inside a data-generation catalog handed
+  to spawn workers) failed with `TypeError: cannot pickle 'simplipy._core.Engine' object`.
+
 ## 0.10.1 — 2026-07-26
 
 ### Added

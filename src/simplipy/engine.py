@@ -238,6 +238,32 @@ class SimpliPyEngine:
         rules_text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules])
         return _RustEngine.from_strs(config_text, rules_text)
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Pickle support: the engine serializes WITHOUT its compiled core.
+
+        The core (``simplipy._core.Engine``) is a Rust object with no
+        serialization surface, but it is derived state -- fully determined by
+        the operator config and rule list this wrapper carries. Dropping it
+        here (and rebuilding it in :meth:`__setstate__`) makes engines work
+        with ``pickle``, ``copy.deepcopy`` and ``multiprocessing`` spawn
+        contexts, where every worker receives the recipe and builds its own
+        core.
+        """
+        state = self.__dict__.copy()
+        del state['_core']
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Rebuild the engine from pickled state, exactly as ``__init__`` would.
+
+        Mirrors the construction order: realization modules first (a spawn
+        worker unpickles into a fresh interpreter), then the compiled core from
+        the same in-memory config + rules.
+        """
+        self.__dict__.update(state)
+        self.import_modules()
+        self._core = self._build_core(self._operators_config, self.simplification_rules)
+
     def compile_rules(self) -> None:
         """Sync the compiled core's rule set from ``self.simplification_rules``.
 

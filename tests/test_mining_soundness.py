@@ -328,8 +328,12 @@ class TestEndToEndMineGate:
             " extra_internal_terms=['0','1','<constant>'], X=256, seed=7, verbose=False);"
             "print(json.dumps(sorted([[list(l), list(r)] for l, r in e.simplification_rules])))"
         )
-        env_base = {**os.environ, "PYTHONPATH": "src", "OMP_NUM_THREADS": "1",
-                    "RAYON_NUM_THREADS": "2"}
+        # Propagate the parent's import path: simplipy may be an editable install
+        # (src/ holds the compiled core) or a pip-installed package (site-packages);
+        # hardcoding either breaks the other.
+        env_base = {**os.environ,
+                    "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+                    "OMP_NUM_THREADS": "1", "RAYON_NUM_THREADS": "2"}
         outs = []
         for hashseed in ("0", "12345"):
             res = subprocess.run([sys.executable, "-c", prog],
