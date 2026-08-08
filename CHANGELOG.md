@@ -20,7 +20,7 @@
 ### Removed — the hyper-operator vocabulary
 - **`mult2..5`, `div2..5`, `pow2..5`, `pow1_2..pow1_5` are deleted from the vocabulary, once
   and for all.** The base operator config drops from 38 to 23 operators; coefficients and
-  exponents are explicit exact literals (`* 6 x`, `pow x 3`, `pow x 0.5`), and the general
+  exponents are explicit exact literals (`* 6 x`, `pow x 3`), and the general
   signed root `rootn(x, n)` — an engine BUILT-IN, independent of any config — replaces the
   odd-root family (`rootn x 3`, with arbitrary odd indices now expressible). Every layer
   understands `rootn` natively: the interval certificates, the f64 evaluator, and the
