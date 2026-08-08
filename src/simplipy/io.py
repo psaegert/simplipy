@@ -1,20 +1,27 @@
-"""Reading and writing of SimpliPy YAML configuration files.
+"""Reading of SimpliPy YAML configuration files.
 
 Provides :func:`load_config`, which loads a configuration from a dictionary or YAML
-file and optionally resolves referenced paths, and :func:`save_config`, which writes a
-configuration dictionary back to a YAML file with configurable path referencing and
-optional recursive saving of nested configs.
+file. (Its former sibling ``save_config`` was removed in 0.12.0: zero callers here or
+downstream, and its ``reference=`` switch was a no-op -- both branches wrote identical
+output.)
+
+Path resolution is deliberately NOT this module's job: which values are paths is
+SCHEMA knowledge, so each path-valued key is resolved by its consumer, key-aware
+(``rules`` against the config directory in ``SimpliPyEngine.from_config``;
+``snapshot_at`` against the output directory and ``proposals`` against the config
+directory in the ``find-rules`` CLI). The former ``resolve_paths`` value-sniffing pass
+(any string starting with ``.`` and ending ``.yaml``/``.json``) was removed in 0.12.0:
+it silently skipped equally-relative spellings like ``proposals.json`` while rewriting
+``./proposals.json``, so resolution depended on the SPELLING of a value instead of the
+meaning of its key.
 """
 import os
 from typing import Any
 
-import copy
 import yaml
 
-from simplipy.utils import apply_on_nested
 
-
-def load_config(config: dict[str, Any] | str, resolve_paths: bool = True) -> dict[str, Any]:
+def load_config(config: dict[str, Any] | str) -> dict[str, Any]:
     '''
     Load a configuration file.
 
@@ -22,18 +29,16 @@ def load_config(config: dict[str, Any] | str, resolve_paths: bool = True) -> dic
     ----------
     config : dict or str
         The configuration dictionary or path to the configuration file.
-    resolve_paths : bool, optional
-        Whether to resolve relative paths in the configuration file, by default True.
 
     Returns
     -------
     dict
-        The configuration dictionary.
+        The configuration dictionary. Path-valued entries are returned VERBATIM;
+        resolution is the consumer's job (see the module docstring).
     '''
 
     if isinstance(config, str):
         config_path = config
-        config_base_path = os.path.dirname(config_path)
 
         if not os.path.exists(config_path):
             raise FileNotFoundError(f'Config file {config_path} not found.')
@@ -42,70 +47,7 @@ def load_config(config: dict[str, Any] | str, resolve_paths: bool = True) -> dic
                 config_ = yaml.safe_load(config_file)
         else:
             raise ValueError(f'Config file {config_path} is not a valid file.')
-
-        def resolve_path(value: Any) -> str:
-            if isinstance(value, str) and (value.endswith('.yaml') or value.endswith('.json')) and value.startswith('.'):  # HACK: Find a way to check if a string is a path
-                return os.path.join(config_base_path, value)
-            return value
-
-        if resolve_paths:
-            config_ = apply_on_nested(config_, resolve_path)
-
     else:
         config_ = config
 
     return config_
-
-
-def save_config(config: dict[str, Any], directory: str, filename: str, reference: str = 'relative', recursive: bool = True, resolve_paths: bool = False) -> None:
-    '''
-    Save a configuration dictionary to a YAML file.
-
-    Parameters
-    ----------
-    config : dict
-        The configuration dictionary to save.
-    directory : str
-        The directory to save the configuration file to.
-    filename : str
-        The name of the configuration file.
-    reference : str, optional
-        How nested-config paths are written when ``recursive=True``. One of
-        - 'relative' (default): paths relative to the save directory
-        - 'absolute': absolute paths
-        Any other value raises ``ValueError``.
-    recursive : bool, optional
-        Save any referenced configs too
-    '''
-    config_ = copy.deepcopy(config)
-
-    def save_config_relative_func(value: Any) -> Any:
-        if isinstance(value, str) and value.endswith('.yaml'):
-            relative_path = value
-            if not value.startswith('.'):
-                relative_path = os.path.join('.', os.path.basename(value))
-            save_config(load_config(value, resolve_paths=resolve_paths), directory, os.path.basename(relative_path), reference=reference, recursive=recursive, resolve_paths=resolve_paths)
-        return value
-
-    def save_config_absolute_func(value: Any) -> Any:
-        if isinstance(value, str) and value.endswith('.yaml'):
-            relative_path = value
-            if not value.startswith('.'):
-                relative_path = os.path.abspath(value)
-            save_config(load_config(value, resolve_paths=resolve_paths), directory, os.path.basename(relative_path), reference=reference, recursive=recursive, resolve_paths=resolve_paths)
-        return value
-
-    if recursive:
-        match reference:
-            case 'relative':
-                apply_on_nested(config_, save_config_relative_func)
-            case 'absolute':
-                apply_on_nested(config_, save_config_absolute_func)
-            case _:
-                raise ValueError(f'Invalid reference type: {reference}')
-
-    save_path = os.path.join(directory, filename)
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-    with open(save_path, 'w') as config_file:
-        yaml.dump(config_, config_file, sort_keys=False)

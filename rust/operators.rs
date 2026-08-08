@@ -9,12 +9,66 @@
 use rustc_hash::FxHashMap;
 use serde::Deserialize;
 
+/// The AC CORE SERIALIZATION LANGUAGE: `(token, arity, infix precedence)` for every sugar
+/// operator the serializers emit REGARDLESS of the config vocabulary (`ac::convert`'s
+/// explicit/tagged emitters and the pretty-infix renderer). These are engine BUILT-INS,
+/// not config operators: every engine reads them unconditionally so it can always re-read
+/// its own output (emit alphabet <= parse alphabet) under ANY config -- without this, a
+/// config missing e.g. `neg` made `simplify(simplify(e))` raise on the engine's own
+/// output and made the mine's ordering acceptance silently refuse correct rules. A config
+/// MAY declare these tokens (supplying realizations/precedences for the legacy paths) but
+/// never with a conflicting arity, and never as an alias of another operator -- both are
+/// build-time config errors (`Engine::from_strs`).
+pub const CORE_SERIALIZATION_OPS: [(&str, u8, f64, Option<&str>); 8] = [
+    ("+", 2, 1.0, None),
+    ("-", 2, 1.0, None),
+    ("*", 2, 2.0, None),
+    ("/", 2, 2.0, Some("simplipy.operators.div")),
+    ("neg", 1, 2.5, Some("simplipy.operators.neg")),
+    ("inv", 1, 4.0, Some("simplipy.operators.inv")),
+    ("pow", 2, 3.0, Some("simplipy.operators.pow")),
+    ("rootn", 2, 3.0, Some("simplipy.operators.rootn")),
+];
+
+/// The built-in arity of a core serialization token (`None` for everything else).
+#[inline]
+pub fn core_arity(token: &str) -> Option<u8> {
+    CORE_SERIALIZATION_OPS
+        .iter()
+        .find(|(t, ..)| *t == token)
+        .map(|(_, a, ..)| *a)
+}
+
+/// The built-in PRECEDENCE of a core serialization token (`None` for everything else).
+///
+/// Load-bearing for the same reason as [`core_arity`]: the realization rendering is a
+/// string handed to PYTHON's `eval`, and Python's precedence is fixed. A config that
+/// declares `/` at precedence 0.5 renders `(x0+x1)/x2` as `x0 + x1 / x2`, which this
+/// engine re-parses correctly (its parser shares the same table) but Python evaluates as
+/// `x0 + (x1/x2)` -- 2.5 where the value is 2.0. A silent wrong answer at the eval
+/// boundary, which is exactly the closure the core-token guard exists to hold.
+#[inline]
+pub fn core_precedence(token: &str) -> Option<f64> {
+    CORE_SERIALIZATION_OPS
+        .iter()
+        .find(|(t, ..)| *t == token)
+        .map(|(_, _, p, _)| *p)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct OperatorSpec {
     #[serde(default)]
     pub realization: String,
     #[serde(default)]
     pub alias: Vec<String>,
+    /// PARSE-ONLY at 0.12.0 (D3): shipped configs declare `inverse:` entries, so the
+    /// field stays accepted for deserialization compatibility, but nothing derives from
+    /// it any more -- the `operator_inverses` map and its one (dead) intern site were
+    /// removed with the binary kernel's relic layer. The shipped acj configs' historic
+    /// typos (`acosh: cos`, `atanh: tan` -- missing the `h`) were FIXED 2026-08-05;
+    /// legacy configs in the wild still carry them (the legacy fixture reproduces one
+    /// verbatim), which is why `worker.rs::inverse_unary_name` keeps its own map
+    /// rather than trusting the field.
     #[serde(default)]
     pub inverse: Option<String>,
     pub arity: u8,
@@ -30,11 +84,10 @@ pub struct OperatorSpec {
 pub struct Operators {
     pub arity: FxHashMap<String, u8>,
     pub commutative: Vec<String>,
-    /// `operator_inverses`: `{k: v["inverse"]}` for operators with a declared
-    /// inverse. `cancel_terms` reads `operator_inverses["+"]` / `["*"]` to decide parity flips.
-    pub operator_inverses: FxHashMap<String, String>,
     /// `max_power`: `max(int(op[3:]) for op in operator_tokens if op matches
-    /// `^pow\d+` NOT followed by `_`)`, else 0. The factor ceiling for `cancel_terms`' factorization.
+    /// `^pow\d+` NOT followed by `_`)`, else 0. The factor ceiling for the LEGACY
+    /// conversion paths' power-chain factorization (`convert.rs`; the other historical
+    /// consumer, `cancel_terms`, is deleted).
     pub max_power: i64,
     /// `max_fractional_power`: `max(int(op[5:]) for op in operator_tokens if op
     /// matches `^pow1_\d+`)`, else 0. The factor ceiling for `convert_expression`'s fractional-power
@@ -46,11 +99,12 @@ pub struct Operators {
     /// f64 because `neg` declares the float precedence 2.5. The enum-index default never fires for
     /// dev_7-3 (all 38 ops declare a precedence) but is ported faithfully for config-robustness.
     pub operator_precedence_compat: FxHashMap<String, f64>,
-    /// `operator_arity_compat`: `deepcopy(operator_arity)` + `'**' -> 2`. The
-    /// arity table `sort_operands` consults (it adds the Python-style `**` power token).
+    /// `operator_arity_compat`: `deepcopy(operator_arity)` + `'**' -> 2` (the Python-style
+    /// power token). Consumed by the infix conversion paths; the historical consumer
+    /// (`sort_operands`, the deleted operand-sort pass) is gone.
     pub operator_arity_compat: FxHashMap<String, u8>,
     /// `operator_aliases`: `{alias: operator}` over every operator's `alias` list.
-    /// `sort_operands` resolves an input token to its canonical operator through this map.
+    /// The conversion paths resolve an input token to its canonical operator through it.
     pub operator_aliases: FxHashMap<String, String>,
     /// `operator_realizations`: `{name: realization}` (e.g. `sin` ->
     /// `simplipy.operators.sin`, `+` -> `+`). Used by `operators_to_realizations`.
@@ -68,10 +122,6 @@ impl Operators {
             .iter()
             .filter(|k| specs.get(*k).map(|s| s.commutative).unwrap_or(false))
             .cloned()
-            .collect();
-        let operator_inverses = specs
-            .iter()
-            .filter_map(|(k, v)| v.inverse.clone().map(|inv| (k.clone(), inv)))
             .collect();
         let max_power = order.iter().filter_map(|t| pow_power(t)).max().unwrap_or(0);
         let max_fractional_power = order
@@ -105,6 +155,17 @@ impl Operators {
             .collect();
         let mut operator_arity_compat: FxHashMap<String, u8> = arity.clone();
         operator_arity_compat.insert("**".to_string(), 2);
+        // The core serialization language joins the infix-compat maps too (the tables
+        // `infix_to_prefix`/`convert_expression` consult), insert-if-absent so a config's
+        // own declaration wins -- same mechanism as the '**'/'sqrt' overlays. Without
+        // this, a config missing '/' parsed the renderer's own 'x0 + 1/x0' as
+        // '(x0+1)/x0' (unknown operator -> precedence 0), silently changing the value.
+        for (tok, ar, prec, _) in CORE_SERIALIZATION_OPS {
+            operator_arity_compat.entry(tok.to_string()).or_insert(ar);
+            operator_precedence_compat
+                .entry(tok.to_string())
+                .or_insert(prec);
+        }
         // Build the realization maps in config (`order`) order so the inverse resolves last-wins.
         let mut operator_realizations: FxHashMap<String, String> = FxHashMap::default();
         let mut realization_to_operator: FxHashMap<String, String> = FxHashMap::default();
@@ -116,10 +177,29 @@ impl Operators {
             operator_realizations.insert(name.clone(), realization.clone());
             realization_to_operator.insert(realization, name.clone());
         }
+        // The core serialization language again, for the SAME reason as the arity and
+        // precedence fallbacks above: the projections can emit a core operator the config
+        // never declared (`x0 * x0` serializes as `pow x0 2` under a config whose only
+        // operator is `*`), and a realization map that lacks it renders the BARE name --
+        // which Python's builtins then read with the wrong semantics (`pow(-2.0, 1.5)` is
+        // a COMPLEX number where the engine gives NaN; `rootn` is a NameError; a bare `/`
+        // raises ZeroDivisionError where the engine gives inf). `or_insert` keeps a
+        // config's own declaration winning, exactly like the two loops above. `+`, `-`
+        // and `*` carry `None`: they render as Python infix operators whose semantics
+        // already match, so they need no realization.
+        for (tok, _, _, realization) in CORE_SERIALIZATION_OPS {
+            if let Some(r) = realization {
+                operator_realizations
+                    .entry(tok.to_string())
+                    .or_insert_with(|| r.to_string());
+                realization_to_operator
+                    .entry(r.to_string())
+                    .or_insert_with(|| tok.to_string());
+            }
+        }
         Self {
             arity,
             commutative,
-            operator_inverses,
             max_power,
             max_fractional_power,
             operator_precedence_compat,
@@ -132,18 +212,19 @@ impl Operators {
 
     #[inline]
     pub fn arity_of(&self, token: &str) -> Option<u8> {
+        // The core serialization language (see `CORE_SERIALIZATION_OPS`): engine
+        // built-ins, recognized before -- and identically regardless of -- the config
+        // vocabulary, so every engine re-reads its own output. The build-time guard in
+        // `Engine::from_strs` keeps a config from declaring one with another arity.
+        if let Some(a) = core_arity(token) {
+            return Some(a);
+        }
         self.arity.get(token).copied()
     }
 
     #[inline]
     pub fn is_operator(&self, token: &str) -> bool {
-        self.arity.contains_key(token)
-    }
-
-    /// `operator_inverses.get(token)`. `None` if the operator declares no inverse.
-    #[inline]
-    pub fn operator_inverse(&self, token: &str) -> Option<&str> {
-        self.operator_inverses.get(token).map(|s| s.as_str())
+        core_arity(token).is_some() || self.arity.contains_key(token)
     }
 
     /// `operator in self.commutative_operators`. dev_7-3: `{'+', '*'}`.
@@ -166,24 +247,6 @@ impl Operators {
     #[inline]
     pub fn is_operator_token(&self, token: &str) -> bool {
         self.arity.contains_key(token)
-    }
-
-    /// The `sort_operands` operator test: `token in operator_arity_compat or
-    /// token in operator_aliases`. Returns the resolved `(canonical_operator, arity)`, else `None`
-    /// (a leaf). `operator = operator_aliases.get(token, token)`; `arity = operator_arity_compat[operator]`.
-    pub fn sort_resolve(&self, token: &str) -> Option<(String, usize)> {
-        let in_compat = self.operator_arity_compat.contains_key(token);
-        let in_alias = self.operator_aliases.contains_key(token);
-        if !in_compat && !in_alias {
-            return None;
-        }
-        let operator = self
-            .operator_aliases
-            .get(token)
-            .cloned()
-            .unwrap_or_else(|| token.to_string());
-        let arity = *self.operator_arity_compat.get(&operator)? as usize;
-        Some((operator, arity))
     }
 }
 

@@ -12,7 +12,8 @@
 //!     A row-wise `eval_row` is kept for one-off use / small batches.
 //!
 //! Parity policy is `numeric.rs`'s: per-element f64 + the SYSTEM libm. Differences vs numpy are at
-//! most a last ULP (absorbed by the `allclose` decision gate, rtol=1e-5); the soundness-critical
+//! most a last ULP -- absorbed by the `allclose` decision gate at any deployed tolerance (the
+//! shipped mine runs rtol 1e-11, F4-audited in `mine.yaml`); the soundness-critical
 //! special values (div0 -> signed inf, sqrt(neg) -> nan) are bit-exact via the shared kernel.
 
 use crate::numeric::{binary_fn, unary_fn};
@@ -79,7 +80,7 @@ impl Tape {
     /// Row-wise evaluation (one row at a time) with a caller-owned scratch stack. Kept for small
     /// batches / one-off use; the miner hot path uses `eval_columns`.
     #[inline]
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))] // exercised by the tape-parity tests below
     pub fn eval_row(&self, x_row: &[f64], params: &[f64], stack: &mut Vec<f64>) -> f64 {
         stack.clear();
         for ins in &self.instrs {
@@ -258,8 +259,8 @@ pub fn allclose(a: &[f64], b: &[f64], rtol: f64, atol: f64) -> bool {
 /// the candidate (`b`) must be finite and within `atol + rtol*|b|` (numpy orientation, b =
 /// candidate = reference). The reverse direction stays REJECTED: a candidate that is NaN/inf where
 /// the source is finite loses a defined value (the `asin(cosh(_0)) -> nan` class).
-/// With ZERO source-finite rows this is vacuously true -- callers MUST separately require
-/// >= min_informative source-finite evidence rows (accumulated across challenge instances).
+/// With ZERO source-finite rows this is vacuously true -- callers MUST separately require at
+/// least `min_informative` source-finite evidence rows (accumulated across challenge instances).
 /// NaN source is undefined -> domain-extendable (`x/x -> 1`). An INF source row
 /// is only accepted at f64 if the candidate already reproduces the SAME infinity; otherwise the
 /// row fails here and the near-miss rescue re-judges it by ESCALATION -- a genuine pole/literal
@@ -379,7 +380,7 @@ mod tests {
         assert!(d[0].is_infinite() && d[0] > 0.0);
         assert!(d[1].is_infinite() && d[1] < 0.0);
         assert_eq!(
-            e.evaluate_batch(&s(&["pow2", "x0"]), &vars, &x, 2, &[])
+            e.evaluate_batch(&s(&["pow", "x0", "2"]), &vars, &x, 2, &[])
                 .unwrap(),
             vec![4.0, 1.0]
         );

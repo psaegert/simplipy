@@ -48,6 +48,7 @@ pub fn violates_wildcard_multiplicity(lhs: &[String], rhs: &[String]) -> bool {
 /// multiplicative one). Sign coverage `{-1,+1}` is kept (continuous, not an atom):
 /// `sqrt`/`log`/`pow` need both signs of C tested for domain reasons. Env
 /// `SIMPLIPY_ZERO_SIGN=1` restores the old `{-1,0,1}` grid (reference/repro only).
+// ARTIFACT-AFFECTING switch: listed in engine.py::ARTIFACT_ENV_SWITCHES (H-042).
 fn sign_combos(n: usize) -> Vec<Vec<f64>> {
     static WITH_ZERO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let signs: &[f64] = if *WITH_ZERO.get_or_init(|| std::env::var("SIMPLIPY_ZERO_SIGN").is_ok()) {
@@ -105,6 +106,8 @@ const POLE_GRID: [f64; 26] = [
 /// step-function artifacts (`pow(asin(C), inf) -> 0`, and its multi-constant scalings
 /// `* C1 pow(asin(C2), inf) -> 0`, which random sampling lands in only ~2%/draw). Fully-random
 /// rounds are appended for off-grid decorrelation and joint coverage.
+// ARTIFACT-AFFECTING switch (SIMPLIPY_POLE_GRID): listed in
+// engine.py::ARTIFACT_ENV_SWITCHES (H-042).
 fn source_const_magnitudes(rng: &mut Rng, n_const: usize, challenges: usize) -> Vec<Vec<f64>> {
     let mut out: Vec<Vec<f64>> = Vec::new();
     // A/B kill-switch (`SIMPLIPY_POLE_GRID=0`): random draws only, no grid sweep. Ablation only.
@@ -122,6 +125,327 @@ fn source_const_magnitudes(rng: &mut Rng, n_const: usize, challenges: usize) -> 
         out.push((0..n_const).map(|_| rng.const_magnitude()).collect());
     }
     out
+}
+
+/// §5 DIRAC REFUTER for a LITERAL target. Refuter ONLY: it can subtract a rule, never license
+/// one, so it is sound by construction and unsound only if read as a certificate.
+///
+/// WHY IT EXISTS. A variable-free `<constant>`-bearing source is quantified over its constants,
+/// and §5's proven theorem says a constant slot binds as a DIRAC: one disagreeing constant value
+/// carries FULL data measure, so R2's "where the source is DEFINED the target must be defined and
+/// exactly equal" applies with ZERO tolerance. The interval classifier answers a MEASURE question
+/// ("what is the value class almost everywhere?") and the all-constant short-circuit then
+/// republished that answer as an ATTAINABILITY claim ("the source is nan, full stop"). Measured
+/// consequences of that republication: `pow (-1) <constant> -> nan` (false at every integer C,
+/// where the source is +-1) and the IEEE absorption pairs `pow <constant> acos np.e -> nan`
+/// (false at C=1, since pow(1, nan) = 1) and `pow acos np.e <constant> -> nan` (false at C=0,
+/// since pow(nan, 0) = 1) -- 22 of which shipped in the queued production artifact.
+///
+/// A measure abstraction over C subset of R provably cannot express "C is an integer", so this
+/// question does not belong to the interval layer at all: it belongs to the EXACT-POINT layer.
+/// `battery::SPECIAL_CONSTS` already carries every witness needed (0, +-1, +-2, +-4, +-5, 3,
+/// pi/2, pi, e) -- the integer exponents AND both absorption points -- so this adds no new tuned
+/// constants, it routes an existing question to the instrument that can decide it.
+///
+/// SCOPE, deliberately narrow: LITERAL targets only. A `<constant>` target is NOT judged here.
+/// Under a strict §5 reading `inv <constant> -> <constant>` would die at the witness C = 0
+/// (inv(0) = +inf under the ratified one-zero convention, and +inf is DEFINED), taking the whole
+/// ratified `inv`/`log`/`atanh <constant>` family with it. Whether the constant axis inherits
+/// §9.8.3's data-null tolerance is an owner ratification, not a decision for this function.
+/// The exact mathematical inverse of each LIVE unary operator, BY NAME. Used only to widen the
+/// Dirac refuter's witness set; the engine already implements every one of these, so this is a
+/// name mapping and not new numerics. The retired hyper-operator ring (`mult3`, `div4`, `pow2`,
+/// `pow1_2`, …) is gone from this map with the vocabulary itself: its generation-2 spellings are
+/// BINARY nodes with a determined operand, handled tree-aware by `sections` below. The live odd
+/// roots `pow1_3`/`pow1_5` are also NOT here: their inverses have no unary spelling in any live
+/// vocabulary and are spelled with binary `pow` in `slot_witnesses`.
+///
+/// WHY: `battery::SPECIAL_CONSTS` holds the algebraic corner points of a value (0, ±1, π/2, e, …),
+/// but a source wraps its slot in operators, so the corner point of the WHOLE expression sits at
+/// the INVERSE IMAGE of a corner point, not at a corner point itself. `acosh(sin(C/3))` is finite
+/// only where sin(C/3) >= 1, i.e. at C = 3(π/2 + 2kπ) — an isolated set no sweep over the corner
+/// points, and no dense sampling, will ever hit. Evaluating instead at 3·(π/2) finds it exactly.
+/// The dev-era acceptance gate discovered this family (24 rules) precisely by composing inverses,
+/// so the refuter needs the same closure to see what the gate sees.
+///
+/// NOTE the engine's own operator table cannot serve here: it declares no inverse for `abs`,
+/// and its `acosh`/`atanh` entries say `cos`/`tan`, which are wrong.
+fn inverse_unary_name(op: &str) -> Option<&'static str> {
+    Some(match op {
+        "neg" => "neg",
+        "inv" => "inv",
+        "abs" => "abs", // abs(±s) = s: `abs` itself reaches every attainable value
+        "sin" => "asin",
+        "cos" => "acos",
+        "tan" => "atan",
+        "asin" => "sin",
+        "acos" => "cos",
+        "atan" => "tan",
+        "sinh" => "asinh",
+        "cosh" => "acosh",
+        "tanh" => "atanh",
+        "asinh" => "sinh",
+        "acosh" => "cosh",
+        "atanh" => "tanh",
+        "exp" => "log",
+        "log" => "exp",
+        _ => return None,
+    })
+}
+
+/// End of the prefix subtree starting at `start` (one past its last token). Saturates at
+/// `tokens.len()` on malformed input; the caller checks completeness.
+fn prefix_subtree_end(tokens: &[String], start: usize, ops: &Operators) -> usize {
+    let mut idx = start;
+    let mut need = 1usize;
+    while need > 0 && idx < tokens.len() {
+        need -= 1;
+        need += ops.arity_of(&tokens[idx]).unwrap_or(0) as usize;
+        idx += 1;
+    }
+    idx
+}
+
+/// A subtree the engine can fold to one value with no free axis: no `<constant>` slot and
+/// `evaluate_constant_subtree` succeeds (which excludes variables and wildcards -- their
+/// tokens are not resolvable leaves).
+fn determined_operand(tokens: &[String], ops: &Operators) -> bool {
+    !tokens.iter().any(|t| t == "<constant>")
+        && crate::numeric::evaluate_constant_subtree(tokens, ops).is_some()
+}
+
+/// One-operand SECTIONS of the source's binary nodes: a binary node `op(a, b)` with exactly one
+/// determined operand is the unary map x ↦ op(x, b̂) (or x ↦ op(â, x)) on its free side. The
+/// retired hyper-operator ring spelled exactly these sections as unary NAMES (`mult3(x)` for
+/// `* x 3`, `pow2(x)` for `pow x 2`); generation 2 spells them as trees, so the witness closure
+/// must read them from the tree. Returns `(op, determined-operand tokens, operand-is-first)`.
+fn sections(source: &[String], ops: &Operators) -> Vec<(String, Vec<String>, bool)> {
+    let mut out = Vec::new();
+    for i in 0..source.len() {
+        if ops.arity_of(&source[i]) != Some(2) {
+            continue;
+        }
+        let a0 = i + 1;
+        let a1 = prefix_subtree_end(source, a0, ops);
+        let b1 = prefix_subtree_end(source, a1, ops);
+        if b1 > source.len() || a1 > source.len() {
+            continue; // malformed tail: not a section
+        }
+        let (a, b) = (&source[a0..a1], &source[a1..b1]);
+        let (da, db) = (determined_operand(a, ops), determined_operand(b, ops));
+        // both determined -> the node folds whole (no free side); neither -> no section
+        if da != db {
+            let (lit, lit_first) = if da {
+                (a.to_vec(), true)
+            } else {
+                (b.to_vec(), false)
+            };
+            out.push((source[i].clone(), lit, lit_first));
+        }
+    }
+    out
+}
+
+/// Push a finite, not-yet-present witness value.
+fn push_witness(w: &mut Vec<f64>, v: f64) {
+    if v.is_finite() && !w.contains(&v) {
+        w.push(v);
+    }
+}
+
+/// Evaluate an inverse-image expression with the engine's own numerics; `None` = unevaluable,
+/// which simply contributes no witness (witnesses are sound by construction: every pushed value
+/// is a legitimate constant instantiation, however it was found).
+fn eval_witness(expr: Vec<String>, ops: &Operators) -> Option<f64> {
+    crate::numeric::evaluate_constant_subtree(&expr, ops)
+        .and_then(|t| crate::numeric::leaf_value(&t))
+}
+
+/// Witnesses for one `<constant>` slot: the special constants themselves, PLUS the inverse image
+/// of each special constant under every unary operator AND every one-operand binary section that
+/// appears in the source. One level of inversion is what the dev-era acceptance gate's `atom`
+/// tier used and what closes the observed family.
+fn slot_witnesses(source: &[String], ops: &Operators) -> Vec<f64> {
+    // CORNER VALUES first, then their inverse images. Keeping the two stages separate is what
+    // makes the closure reach `acosh(cos(exp(C)))`, whose witness is log(2*pi): 2*pi is a corner
+    // of `cos`, and the witness is that corner pulled back through `exp`. Enriching AFTER the
+    // inversion cannot produce it.
+    // The trig corners are k*pi/2 -- exactly the zeros and extrema of sin and cos, i.e. the
+    // operators' own structure. SPECIAL_CONSTS carries only pi/2 and pi, so `cos` never reaches
+    // its +1 corners (2k*pi) without this.
+    let mut corners: Vec<f64> = crate::battery::SPECIAL_CONSTS.to_vec();
+    for k in -5i32..=5 {
+        let c = f64::from(k) * std::f64::consts::FRAC_PI_2;
+        if !corners.contains(&c) {
+            corners.push(c);
+        }
+    }
+    let mut w: Vec<f64> = corners.clone();
+    for tok in source {
+        // LIVE odd roots: inverse spelled with BINARY pow (`pow3` is a retired name that no
+        // live engine evaluates; `pow s 3` is the same function on every engine).
+        let odd_power: Option<&str> = match tok.as_str() {
+            "pow1_3" => Some("3"),
+            "pow1_5" => Some("5"),
+            _ => None,
+        };
+        if let Some(k) = odd_power {
+            for &s in corners.iter() {
+                let expr = vec![
+                    "pow".to_string(),
+                    crate::numeric::py_float_repr(s),
+                    k.to_string(),
+                ];
+                if let Some(v) = eval_witness(expr, ops) {
+                    push_witness(&mut w, v);
+                }
+            }
+            continue;
+        }
+        let Some(inv) = inverse_unary_name(tok) else {
+            continue;
+        };
+        for &s in corners.iter() {
+            // Evaluate the inverse operator with the engine's own numerics.
+            let expr = vec![inv.to_string(), crate::numeric::py_float_repr(s)];
+            if let Some(v) = eval_witness(expr, ops) {
+                push_witness(&mut w, v);
+                // Inverting a PERIODIC operator returns only the principal branch, so add the
+                // period shifts too -- again the operator's own structure, not a tuned value.
+                let period = match inv {
+                    "asin" | "acos" => Some(std::f64::consts::TAU),
+                    "atan" => Some(std::f64::consts::PI),
+                    _ => None,
+                };
+                if let Some(p) = period {
+                    for k in [1.0f64, -1.0, 2.0] {
+                        push_witness(&mut w, v + k * p);
+                    }
+                }
+            }
+        }
+    }
+    // BINARY SECTIONS (the generation-2 spellings of the retired unary ring): pull each corner
+    // back through x ↦ op(x, ĉ) / x ↦ op(ĉ, x). The determined operand's tokens are spliced
+    // VERBATIM into the inverse expression so the engine evaluates exactly what the source
+    // spells (`np.pi`, `neg 2`, folded subtrees -- all resolve natively).
+    for (op, lit, lit_first) in sections(source, ops) {
+        for &s in corners.iter() {
+            let sr = crate::numeric::py_float_repr(s);
+            let mut exprs: Vec<Vec<String>> = Vec::new();
+            let prefix = |head: &[&str], tail_lit: bool| -> Vec<String> {
+                // tail_lit: [head..., lit...] ; else [head[0], lit..., head[1..]...]
+                let mut e: Vec<String> = Vec::new();
+                if tail_lit {
+                    e.extend(head.iter().map(|t| t.to_string()));
+                    e.extend(lit.iter().cloned());
+                } else {
+                    e.push(head[0].to_string());
+                    e.extend(lit.iter().cloned());
+                    e.extend(head[1..].iter().map(|t| t.to_string()));
+                }
+                e
+            };
+            match (op.as_str(), lit_first) {
+                // c*x and x*c: preimage s/c
+                ("*", _) => exprs.push(prefix(&["/", &sr], true)),
+                // x/c: preimage s*c;  c/x: preimage c/s
+                ("/", false) => exprs.push(prefix(&["*", &sr], true)),
+                ("/", true) => exprs.push(prefix(&["/", &sr], false)),
+                // c+x and x+c: preimage s-c
+                ("+", _) => exprs.push(prefix(&["-", &sr], true)),
+                // x-c: preimage s+c;  c-x: preimage c-s
+                ("-", false) => exprs.push(prefix(&["+", &sr], true)),
+                ("-", true) => exprs.push(prefix(&["-", &sr], false)),
+                // pow(x, c): integer c -> rootn(s, c); non-integer c -> pow(s, 1/c)
+                // (whichever arm applies evaluates; the other folds to nan and is dropped)
+                ("pow", false) => {
+                    exprs.push(prefix(&["rootn", &sr], true));
+                    exprs.push(prefix(&["pow", &sr, "/", "1"], true));
+                }
+                // pow(c, x): preimage log_c(s) = log(s)/log(c)
+                ("pow", true) => exprs.push(prefix(&["/", "log", &sr, "log"], true)),
+                // rootn(x, c): preimage pow(s, c). (rootn(c, x) needs only INTEGER witnesses
+                // -- the index is nan off the integers -- and SPECIAL_CONSTS carries those.)
+                ("rootn", false) => exprs.push(prefix(&["pow", &sr], true)),
+                _ => {}
+            }
+            for expr in exprs {
+                if let Some(v) = eval_witness(expr, ops) {
+                    push_witness(&mut w, v);
+                    // The even-power/even-root twin preimage: pow(-v, 2k) = pow(v, 2k). For the
+                    // other sections -v is merely one more sound probe value.
+                    push_witness(&mut w, -v);
+                }
+            }
+        }
+    }
+    w
+}
+
+fn dirac_refutes_literal(source: &[String], target: &[String], ops: &Operators) -> bool {
+    if target.len() != 1 {
+        return false;
+    }
+    let Some(want) = crate::numeric::leaf_value(&target[0]) else {
+        return false; // target is not a literal (e.g. `<constant>`): out of scope, see above
+    };
+    let slots: usize = source.iter().filter(|t| t.as_str() == "<constant>").count();
+    // Every `<constant>` occurrence is its own fitted parameter, so the witness set is a product.
+    // Capped at 2 slots: 18^2 = 324 folds is already generous for a mint-time refuter.
+    if slots == 0 || slots > 2 {
+        return false;
+    }
+    // One slot: the closed witness set (specials + inverse images). Two slots: the closure would
+    // be quadratic, so the cross product stays on the plain specials and the closure is applied to
+    // the first slot only -- the observed family is single-slot.
+    let closed = slot_witnesses(source, ops);
+    let w: &[f64] = if slots == 1 {
+        &closed
+    } else {
+        &crate::battery::SPECIAL_CONSTS
+    };
+    let sp = &crate::battery::SPECIAL_CONSTS;
+    let total = if slots == 1 {
+        w.len()
+    } else {
+        w.len() * sp.len()
+    };
+    for idx in 0..total {
+        let (a, b) = if slots == 1 {
+            (w[idx], 0.0)
+        } else {
+            (w[idx % w.len()], sp[idx / w.len()])
+        };
+        let mut seen = 0usize;
+        let mut toks: Vec<String> = Vec::with_capacity(source.len());
+        for t in source {
+            if t == "<constant>" {
+                toks.push(crate::numeric::py_float_repr(if seen == 0 { a } else { b }));
+                seen += 1;
+            } else {
+                toks.push(t.clone());
+            }
+        }
+        // Fold with the engine's own numeric semantics; `None` = unfoldable, which is no evidence.
+        let Some(tok) = crate::numeric::evaluate_constant_subtree(&toks, ops) else {
+            continue;
+        };
+        let Some(got) = crate::numeric::leaf_value(&tok) else {
+            continue;
+        };
+        // Extended equality: nan matches nan, an infinity must match SIGN included (R2 counts
+        // +-inf as DEFINED), and finite values must be exactly equal.
+        let agrees = if got.is_nan() || want.is_nan() {
+            got.is_nan() && want.is_nan()
+        } else {
+            got == want
+        };
+        if !agrees {
+            return true; // one Dirac witness disagrees => REFUTED
+        }
+    }
+    false
 }
 
 /// DIAGNOSTIC: `SIMPLIPY_GATE_TRACE="<source tokens>"` prints every gate rejection for that
@@ -226,6 +550,196 @@ fn adopt_snapped_witness(
     } else {
         fitted
     }
+}
+
+/// F3 literal resolution: pin a matched Const-bearing candidate's slots to literal
+/// tokens, for a const-FREE source (whose slot values are fixed reals, not existential
+/// families). The fit's witness only SEEDS the pin -- its last bits are least-squares
+/// noise (measured: the log-linear closed form landed ~20 ulp off `e^pi`) -- so the
+/// shipped value is found by ROOT-FINDING at the miner's arbiter precision
+/// (`hiprec::point_diff`, 1024 bits): on a probe row, `g(c) = target(c) - source` is
+/// sign-bisected over the f64 grid (monotone ulp-key space) inside a geometrically
+/// expanded bracket around the witness, converging to the adjacent f64 pair straddling
+/// the true constant; the smaller-residual side is the correctly-rounded literal. A
+/// SECOND probe row must then confirm the choice against both ulp neighbors.
+/// Deterministic: a pure function of (witness, candidate, source, X). Fail closed
+/// (`None`): a vacuous witness, a non-finite or multi-slot witness (a multi-slot fit on
+/// a const-free source carries no per-slot identifiability certificate), no bracketing
+/// probe row, or a confirm row that prefers a neighbor.
+fn resolve_const_slots(
+    cand_tokens: &[String],
+    witness: Option<&[f64]>,
+    source: &[String],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+    y_src: &[f64],
+) -> Option<Vec<String>> {
+    let w = witness?;
+    let n_slots = cand_tokens
+        .iter()
+        .filter(|t| t.as_str() == "<constant>")
+        .count();
+    if n_slots != 1 || w.len() != 1 || !w[0].is_finite() {
+        return None;
+    }
+    let g = |c: f64, row: usize| -> Option<crate::hiprec::ArbFloat> {
+        crate::hiprec::point_diff(source, &[], cand_tokens, &[c], ops, var_names, x_cols, row)
+    };
+    // Try to PIN on one row, CONFIRM on a later one; a row that cannot bracket (target
+    // locally insensitive to the slot, or unevaluable) is skipped. At most a handful of
+    // rows are consulted -- resolution runs once per accepted candidate.
+    const MAX_PIN_ROWS: usize = 8;
+    let mut pinned: Option<f64> = None;
+    let mut rows_tried = 0usize;
+    for (row, ys) in y_src.iter().enumerate() {
+        if !ys.is_finite() {
+            continue;
+        }
+        match pinned {
+            None => {
+                rows_tried += 1;
+                if rows_tried > MAX_PIN_ROWS {
+                    return None;
+                }
+                match pin_root_on_row(&g, w[0], row) {
+                    Some(c) => pinned = Some(c),
+                    None => {
+                        if gate_trace().is_some_and(|t| source.join(" ").starts_with(t.as_str())) {
+                            eprintln!("RESOLVE-DBG pin failed row={row} w={}", w[0]);
+                        }
+                    }
+                }
+            }
+            Some(c) => {
+                // Confirm: this row must not strictly prefer either ulp neighbor.
+                let (r, ru, rd) = (
+                    g(c, row)?,
+                    g(key_f64(f64_key(c).wrapping_add(1)), row)?,
+                    g(key_f64(f64_key(c).wrapping_sub(1)), row)?,
+                );
+                if crate::hiprec::residual_lt(&ru, &r) || crate::hiprec::residual_lt(&rd, &r) {
+                    if gate_trace().is_some_and(|t| source.join(" ").starts_with(t.as_str())) {
+                        eprintln!("RESOLVE-DBG confirm refused row={row} c={c}");
+                    }
+                    return None;
+                }
+                let tok = crate::numeric::py_float_repr(c);
+                return Some(
+                    cand_tokens
+                        .iter()
+                        .map(|t| {
+                            if t == "<constant>" {
+                                tok.clone()
+                            } else {
+                                t.clone()
+                            }
+                        })
+                        .collect(),
+                );
+            }
+        }
+    }
+    None
+}
+
+/// Monotone bijection f64 <-> u64 over the finite total order (negative floats' bit
+/// patterns order in reverse; flipping them makes ulp arithmetic a plain +-1 on keys).
+fn f64_key(x: f64) -> u64 {
+    let b = x.to_bits();
+    if b >> 63 == 1 {
+        !b
+    } else {
+        b | (1u64 << 63)
+    }
+}
+
+fn key_f64(k: u64) -> f64 {
+    if k >> 63 == 1 {
+        f64::from_bits(k & !(1u64 << 63))
+    } else {
+        f64::from_bits(!k)
+    }
+}
+
+/// Sign-bisection of `g` on one probe row: expand a bracket around the witness key
+/// geometrically (1, 2, 4, ... ulp, capped at 2^24 -- least-squares witnesses sit within
+/// rtol of the truth, orders of magnitude inside the cap) until the endpoints' signs
+/// differ, then bisect the integer key interval to the adjacent f64 pair and return the
+/// smaller-residual side. `None`: unevaluable g, a non-finite bracket endpoint, or no
+/// sign change inside the cap (this row cannot see the root).
+fn pin_root_on_row(
+    g: &dyn Fn(f64, usize) -> Option<crate::hiprec::ArbFloat>,
+    w: f64,
+    row: usize,
+) -> Option<f64> {
+    let sign = |v: &crate::hiprec::ArbFloat| -> i8 {
+        if v.is_zero() {
+            0
+        } else if v.is_negative() {
+            -1
+        } else {
+            1
+        }
+    };
+    let gw = g(w, row)?;
+    if sign(&gw) == 0 {
+        return Some(w); // exact at arbiter precision
+    }
+    let wk = f64_key(w);
+    let (mut lo, mut hi): (u64, u64);
+    let (mut g_lo, mut g_hi): (crate::hiprec::ArbFloat, crate::hiprec::ArbFloat);
+    let mut step = 1u64;
+    const MAX_STEP: u64 = 1 << 24;
+    loop {
+        let (nlo, nhi) = (wk.saturating_sub(step), wk.saturating_add(step));
+        let (clo, chi) = (key_f64(nlo), key_f64(nhi));
+        if !clo.is_finite() || !chi.is_finite() {
+            return None;
+        }
+        (g_lo, g_hi) = (g(clo, row)?, g(chi, row)?);
+        (lo, hi) = (nlo, nhi);
+        if sign(&g_lo) == 0 {
+            return Some(clo);
+        }
+        if sign(&g_hi) == 0 {
+            return Some(chi);
+        }
+        if sign(&g_lo) != sign(&g_hi) {
+            break;
+        }
+        if step >= MAX_STEP {
+            return None; // no bracket: this row cannot see the root
+        }
+        step <<= 1;
+    }
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        let gm = g(key_f64(mid), row)?;
+        match sign(&gm) {
+            0 => return Some(key_f64(mid)),
+            s if s == {
+                if g_lo.is_negative() {
+                    -1
+                } else {
+                    1
+                }
+            } =>
+            {
+                lo = mid;
+                g_lo = gm;
+            }
+            _ => {
+                hi = mid;
+                g_hi = gm;
+            }
+        }
+    }
+    Some(if crate::hiprec::residual_lt(&g_lo, &g_hi) {
+        key_f64(lo)
+    } else {
+        key_f64(hi)
+    })
 }
 
 /// Evaluate both sides of one certified instance on the special battery and apply the
@@ -449,11 +963,18 @@ pub fn equivalent_no_const_check(
 /// Winner selection: among matched candidates prefer the FEWEST `<constant>`s
 /// (stable -> discovery-order tiebreak), skip any that violate wildcard multiplicity, and if the
 /// chosen target is bare `<constant>` while the source is all-numeric, fold to the literal value.
+///
+/// `accept` is the CALLER's acceptance criterion (the serve-time reduction ordering in the
+/// mine and certify paths), threaded INTO the selection: a refused candidate asks for the
+/// next one instead of vetoing the whole selection (finding F2 -- the enumeration doctrine
+/// of finding F1 applied to candidate selection). It judges the candidate's FINAL spelling,
+/// i.e. after the bare-`<constant>` literal fold.
 #[allow(dead_code)] // rlib surface; exercised by tests
 pub fn select_best(
     source: &[String],
     mut matches: Vec<Vec<String>>,
     ops: &Operators,
+    accept: Option<AcceptFn<'_>>,
 ) -> Option<Vec<String>> {
     if matches.is_empty() {
         return None;
@@ -464,18 +985,28 @@ pub fn select_best(
         if violates_wildcard_multiplicity(source, &cand) {
             continue;
         }
-        if cand.len() == 1 && cand[0] == "<constant>" {
+        let mut chosen = cand;
+        if chosen.len() == 1 && chosen[0] == "<constant>" {
             let leaves: Vec<&String> = source.iter().filter(|t| !ops.is_operator(t)).collect();
             if !leaves.is_empty() && leaves.iter().all(|t| crate::utils::is_numeric_string(t)) {
                 if let Some(tok) = crate::numeric::evaluate_constant_subtree(source, ops) {
-                    return Some(vec![tok]);
+                    chosen = vec![tok];
                 }
             }
         }
-        return Some(cand);
+        if let Some(f) = accept {
+            if !f(&chosen) {
+                continue;
+            }
+        }
+        return Some(chosen);
     }
     None
 }
+
+/// A caller-supplied target-acceptance predicate (`find_rule_with_lib`'s `accept` /
+/// `accept_resolved`).
+pub type AcceptFn<'a> = &'a dyn Fn(&[String]) -> bool;
 
 /// A precompiled candidate (an entry of [`CandidateLibrary`]).
 struct CandEntry {
@@ -530,7 +1061,10 @@ fn var_mask(tokens: &[String], var_names: &[String]) -> u32 {
 /// Test one candidate against a source across the challenge/sign-combo loop. Const-free candidates
 /// use the `allclose` check (against the precomputed `y_const_free`); constant-bearing candidates
 /// use the fit (`exist_constants_fit_prepared`, `retries` restarts) per combo. Rejects on first
-/// failure.
+/// failure (`None`). A match returns the FIRST instance's target witness (`Some(c)` = the fitted
+/// constants for the candidate's `<constant>` slots, `None` = a vacuous instance that determined
+/// nothing) -- for a const-FREE source there is exactly one instance, so this IS the candidate's
+/// witness, which literal resolution (`resolve_const_slots`) pins to tokens.
 #[allow(clippy::too_many_arguments)]
 fn candidate_matches(
     y_src: &[(Vec<f64>, Vec<f64>)],
@@ -547,11 +1081,11 @@ fn candidate_matches(
     atol: f64,
     min_informative: usize,
     fit_seed: u64,
-) -> bool {
+) -> Option<Option<Vec<f64>>> {
     // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
     if cand.n_const == 0 && cand.finite_y < min_informative {
-        return false;
+        return None;
     }
     // EVIDENCE = UNIQUE rows where SOME instance's source is finite (BOTH arms; see
     // `equivalent_no_const` for why repetition across instances must not count).
@@ -660,7 +1194,19 @@ fn candidate_matches(
                 }
             }
         };
-        let Some(fitted) = ok else { return false };
+        let fitted = match ok {
+            Some(f) => f,
+            None => {
+                if gate_trace().is_some_and(|t| source.join(" ").starts_with(t.as_str())) {
+                    let nf = y.iter().filter(|v| v.is_finite()).count();
+                    eprintln!(
+                        "TRACE-CM fit-reject inst={inst} cand=[{}] n_finite={nf}",
+                        cand.tokens.join(" ")
+                    );
+                }
+                return None;
+            }
+        };
         // witness snapping before the domain gate (see `adopt_snapped_witness`)
         let fitted: Option<Vec<f64>> = fitted.map(|c| {
             if c.is_empty() {
@@ -785,7 +1331,7 @@ fn candidate_matches(
                                 crate::interval::defined_measure_p_at(source, inst_params, ops, gh_r, gh_d));
                         }
                     }
-                    return false;
+                    return None;
                 }
             }
         }
@@ -795,7 +1341,7 @@ fn candidate_matches(
         certified.push((inst_params.clone(), fitted));
     }
     if evidence.iter().filter(|&&e| e).count() < min_informative {
-        return false;
+        return None;
     }
     // SPECIAL-POINT PHASE (see `rust/battery.rs`): runs only for candidates
     // that certified everything above, so its cost is per accepted (source, candidate) pair.
@@ -817,7 +1363,7 @@ fn candidate_matches(
                 rtol,
                 atol,
             ) {
-                return false;
+                return None;
             }
         }
         // 2. The special source-constant battery: a pattern-bound source constant reaches
@@ -888,12 +1434,12 @@ fn candidate_matches(
                     rtol,
                     atol,
                 ) {
-                    return false;
+                    return None;
                 }
             }
         }
     }
-    true
+    Some(certified.into_iter().next().and_then(|(_, w)| w))
 }
 
 /// The source-side challenge instances, evaluated ONCE PER SOURCE and shared across every
@@ -949,6 +1495,12 @@ impl CandidateLibrary {
         self.n_rows
     }
 
+    /// The variable vocabulary the library was built over (for var-freeness tests on
+    /// sources, e.g. the mining acceptance's determined-source clause).
+    pub fn var_names(&self) -> &[String] {
+        &self.var_names
+    }
+
     /// Candidates kept in the library (post-filter).
     pub fn n_candidates(&self) -> usize {
         self.n_candidates
@@ -972,6 +1524,7 @@ impl CandidateLibrary {
     /// - const-free var-free (`exp(1)`, `neg(np.pi)`, ...): a fixed value; any match implies the
     ///   per-instance `<constant>` fit matches too (and its all-nonfinite members never match:
     ///   the finite-evidence gate rejects them).
+    ///
     /// Since `find_rule_with_lib` scans lengths SHORTEST-FIRST and returns at the first matching
     /// length, the length-1 `<constant>` match preempts every length>=2 var-free candidate, which
     /// is therefore never selectable and can be dropped without changing any mined rule. The one
@@ -1011,6 +1564,16 @@ impl CandidateLibrary {
             // var-free and wrongly dropped. The filter checks ALL var_names.
             let has_var = c.iter().any(|t| var_names.iter().any(|v| v == t));
             if filter_active && len >= 2 && !has_var {
+                // NOTE: this filter carries more weight than "candidate
+                // minimization". A var-free candidate of length >= 2 can be a UNIVERSAL ABSORBER:
+                // `log <constant>` ranges over every real AND nan, so under the rule semantics
+                // (for every source constant there EXISTS a target constant) it "matches" any
+                // constant-family source at all -- `cosh asin <constant> -> log <constant>` is
+                // formally sound and completely vacuous. Dropping these candidates is what keeps
+                // such matches out; an experiment that kept the non-`Finite`-class ones to
+                // preserve filtered/unfiltered parity promptly shipped exactly that rule and was
+                // reverted. Parity is now asserted as an INCLUSION, not an equality
+                // (tests/test_mining_soundness.py::TestFoldFilter).
                 n_filtered += 1;
                 continue;
             }
@@ -1060,8 +1623,29 @@ impl CandidateLibrary {
 
 /// The full native `find_rule_worker` decision over a RESIDENT library:
 /// guard -> all-numeric short-circuit -> scan candidates shortest-first (variable-subset filtered),
-/// dispatch const-free -> the no-constant test / const-bearing -> the constant fit, break on the
-/// first matching length, `select_best`.
+/// dispatch const-free -> the no-constant test / const-bearing -> the constant fit, stop at the
+/// first length with an ACCEPTED match, `select_best`.
+///
+/// `accept` (optional) is the caller's acceptance criterion, threaded into the scan: when every
+/// match at a length is refused, the scan CONTINUES to the next length -- token count is not the
+/// reduction ordering, so a longer spelling can still sit strictly below the caller's mark
+/// (finding F2: the old accept-after-scan shape returned one representative and let the caller
+/// veto the whole search).
+///
+/// `accept_resolved` (optional) is an ADDITIONAL criterion for COMPUTED-literal targets:
+/// literal-RESOLVED candidates (see `resolve_const_slots`) and the evaluate
+/// short-circuit's f64 answer alike. Mining passes strict-semantic-complexity-below-mark:
+/// both channels exist to recover values that must be computed
+/// (`exp(pi*x) -> pow(23.14..., x)`), never to respell literals -- without the strict
+/// gate the full lex ordering's literal tiers accept 1-ulp respells of the engine's own
+/// fold results (the arbiter's correctly-rounded constant can differ from the fold's
+/// libm value and happen to print SHORTER; the f64 evaluation of a source the engine
+/// folds by exact rational arithmetic can differ the same way, `+ 1 exp (-1)`) and
+/// reciprocal respells (`x * acos(0) -> x / 0.6366...`, whose canonical coefficient is
+/// a giant exact rational). Resolved targets are also DEFERRED behind same-length
+/// symbolic matches: when an exact spelling certifies
+/// (`abs(pow(x, np.e)) -> pow(x, np.e)`), it is preferred over materializing the
+/// constant.
 #[allow(clippy::too_many_arguments)]
 pub fn find_rule_with_lib(
     ops: &Operators,
@@ -1075,6 +1659,8 @@ pub fn find_rule_with_lib(
     rtol: f64,
     atol: f64,
     min_informative: usize,
+    accept: Option<AcceptFn<'_>>,
+    accept_resolved: Option<AcceptFn<'_>>,
 ) -> Result<Option<Vec<String>>, String> {
     // GUARD FIRST (BEFORE the all-constant short-circuit).
     let max_cand_len = match max_target {
@@ -1084,6 +1670,13 @@ pub fn find_rule_with_lib(
     if max_cand_len <= 1 {
         return Ok(None);
     }
+    // Every return path honors the caller's acceptance -- the short-circuits included: a
+    // refused short-circuit target falls through to the candidate scan instead of being
+    // returned for the caller to veto (there is no caller-side veto anymore).
+    let accepted = |t: &[String]| match accept {
+        Some(f) => f(t),
+        None => true,
+    };
     // all-constant short-circuit, reached only after the guard passes.
     // A leaf counts as constant when `leaf_value` resolves it to a FINITE value: numeric
     // literals AND the special constants (`np.pi`, `np.e`, `(-1)`). The previous
@@ -1091,15 +1684,141 @@ pub fn find_rule_with_lib(
     // (inf/nan literals stay excluded -- non-finite algebra is the explicit rules' domain,
     // e.g. `+ float("-inf") <constant> -> float("-inf")`, not absorption).
     let finite_leaf = |t: &str| crate::numeric::leaf_value(t).is_some_and(f64::is_finite);
+    // STAGE-1 GROUND-FOLD LICENCE, miner side (owner-ratified 2026-07-31; a future
+    // theorem of the unified measure, design/UNIFIED_SIMPLICITY_MEASURE.md §5): a
+    // special-bearing source never short-circuits to its f64 evaluation -- that literal
+    // is a ROUNDING of an exact symbolic value (`rootn np.e (-1) ->
+    // 0.36787944117144233`). The refusal is by CHANNEL, not by target shape: exact
+    // finite hits (`sin np.pi -> 0`) still mint through the candidate scan below, whose
+    // equivalence machinery reads specials at high precision (hiprec rescue), while a
+    // rounded value finds no alphabet literal to match. The non-finite class arms stay
+    // OPEN to special-bearing sources: nan/inf collapse is exact (the ratified
+    // nan/inf x special absorption rows), certified by intervals plus the dirac refuter.
+    // SPELLING-COMPLETE, not spelling-literal (2026-08-07). This tests whether the source
+    // DENOTES a special, and since 2026-08-07 the token scan alone no longer decides that:
+    // the constructor folds `exp 1` to the leaf `e` (`fun`, the write half of
+    // `compose_e_power`), so `* <constant> exp 1` is the canonical state
+    // `<mul> np.e <constant> </mul>` while carrying no `np.e` token. Testing the raw tokens
+    // alone let exactly that source through and the re-mine minted
+    // `* <constant> exp 1 -> <constant>` plus its +, - and / mirrors -- an absorption the
+    // licence forbids and the CONSTRUCTOR itself refuses, so the mine was routing around a
+    // ratified refusal through a second spelling of one value.
+    //
+    // `exp 1` is the ONLY spelling that needs adding, and that is a checkable claim rather
+    // than a hope: `Ex::Pi` has no constructor arm producing it at all, and `Ex::E` is
+    // produced by exactly one -- `exp(Num(1))`. In prefix a unary head is immediately
+    // followed by its argument, so consecutive `exp 1` IS the subterm.
+    //
+    // This guard covers the GROUND-FOLD channel (the short-circuit just below). The
+    // ABSORPTION channel has its own twin in `miner.rs`, and that one could not be fixed
+    // this way: `/ <constant> exp (-1)` denotes `<constant> * e` through no `exp 1` subterm
+    // at all, so the mint-side licence counts specials on the engine's own ENDPOINT for the
+    // source instead of on any spelling. Here the spelling test is enough and provably
+    // complete, because this channel only ever sees the source's own leaves.
+    //
+    // The general question both leave open is recorded in the audit (F49, register C1.20):
+    // a gate keyed on a spelling breaks whenever the canon unifies two spellings, and the
+    // miner has no mechanism that asks the engine "would you refuse this?" -- it only asks
+    // "do you already derive it?" (the mint-pristine property). The dual is missing.
+    let src_special = source.iter().any(|t| t == "np.pi" || t == "np.e")
+        || source.windows(2).any(|w| w[0] == "exp" && w[1] == "1");
+    let src_has_const = source.iter().any(|t| t == "<constant>");
     if source.len() > 1
         && source
             .iter()
             .all(|t| t == "<constant>" || ops.is_operator(t) || finite_leaf(t))
     {
         let non_ops: Vec<&String> = source.iter().filter(|t| !ops.is_operator(t)).collect();
-        if !non_ops.is_empty() && non_ops.iter().all(|t| finite_leaf(t)) {
+        if !src_special && !non_ops.is_empty() && non_ops.iter().all(|t| finite_leaf(t)) {
             if let Some(tok) = crate::numeric::evaluate_constant_subtree(source, ops) {
-                return Ok(Some(vec![tok]));
+                // DENOTES A SPECIAL BY VALUE, NOT BY SPELLING (2026-08-08; register B, and the
+                // dual C1.20 records above). The licence's own prose already states the right
+                // test -- whether the source DENOTES a special -- and its token scan cannot
+                // see one that arrives as a computed VALUE: `acos (-1)` carries no `np.pi`
+                // token and no `exp 1` subterm, yet it IS pi. So `exp 1 is the ONLY spelling
+                // that needs adding` above is complete for CONSTRUCTOR-PRODUCED leaves and
+                // silent about evaluated ones; this is the other half.
+                //
+                // Left alone, the short-circuit answers with the f64 decimal
+                // 3.141592653589793 -- a ROUNDING of an exact symbolic value, exactly what
+                // this licence exists to refuse -- and since that decimal is mu-expensive
+                // nothing descends, no rule mints, and the candidate scan never runs. The
+                // corpus paid for it in FORTY-EIGHT rules, every one a context of the single
+                // fact `acos(-1) = pi`: `* acos (-1) _0 -> * np.pi _0` and its +, -, /, pow
+                // and both-argument-order mirrors, `cos acos (-1) -> -1`, `/ acos (-1) np.pi
+                // -> 1` -- with no bare `acos (-1) -> np.pi` among them, because that is the
+                // one rule this channel prevented. Same shape as F49/F51/F52/F53: an arm the
+                // engine lacks shows up as rules.
+                //
+                // Declining routes the source to the CANDIDATE SCAN -- the channel that
+                // already mints `sin np.pi -> 0` -- whose equivalence machinery reads specials
+                // at high precision. The f64 comparison is only the TRIGGER; hiprec is the
+                // proof. A value that merely SHARES pi's f64 without being pi finds no
+                // alphabet match there and stays symbolic, so the failure direction is closed
+                // rather than open. Both signs trigger: the sign is carried by the same
+                // rounding argument, and which of them the mine actually reaches is left to
+                // the re-mine to answer rather than prescribed here.
+                let denotes_special = crate::numeric::leaf_value(&tok).is_some_and(|x| {
+                    x.abs() == std::f64::consts::PI || x.abs() == std::f64::consts::E
+                });
+                // A NON-FINITE f64 verdict must be corroborated by the honest interval
+                // CLASS (H-019/H-021, 2026-08-04): f64 evaluation cannot distinguish an
+                // exact boundary hit from a true domain escape -- `acosh(acos(cos 1))`
+                // evaluates nan at EVERY float precision (the argument rounds below 1)
+                // while its exact value is acosh(1) = 0. Under the old point-precision
+                // interval arms the engine's class fold unsoundly collapsed such grounds
+                // itself, so they never reached this short-circuit; the outward-rounded
+                // arms refuse (MIXED), the sources arrive here, and without this gate the
+                // same lie re-minted as sixteen explicit nan rules. On a class mismatch
+                // the source falls through: the class arms below cannot speak either
+                // (not a clean class), and the candidate scan's class-preservation guard
+                // refuses the literal -- fail closed, the ground stays symbolic.
+                let corroborated = match crate::numeric::leaf_value(&tok).filter(|x| !x.is_finite())
+                {
+                    None => true, // finite verdicts keep the existing channel semantics
+                    Some(x) => match crate::interval::value_class(source, ops) {
+                        // UNANALYZABLE: the honest layer has NO opinion (rootn's
+                        // non-integer-index nan family lives here) -- the channel keeps
+                        // its pre-H-019 semantics. A registered residual, strictly no
+                        // wider than the ungated channel ever was.
+                        None => true,
+                        // An analyzed class must AGREE. Mismatches are exactly the two
+                        // defect families: MIXED boundary grazes (`acosh(acos(cos 1))`
+                        // is 0, not the f64 nan) and rendered-overflow poles
+                        // (`cosh(tan(acos 0))` composes through tan's exact pole --
+                        // undefined -- while f64 renders tan(f64(pi/2)) as a huge
+                        // finite and overflows cosh to inf).
+                        Some(cls) => {
+                            (x.is_nan() && cls == crate::interval::Class::Nan)
+                                || (x == f64::INFINITY && cls == crate::interval::Class::PosInf)
+                                || (x == f64::NEG_INFINITY && cls == crate::interval::Class::NegInf)
+                        }
+                    },
+                };
+                if corroborated && !denotes_special {
+                    let t = vec![tok];
+                    // An f64-EVALUATED literal is a COMPUTED value, not an alphabet
+                    // spelling, so it answers to the caller's resolved-target criterion
+                    // exactly like the resolution channel below (mining passes
+                    // strict-semantic-complexity-below-mark). Without this, the full
+                    // ordering's literal tie tiers minted 1-ulp respells of the engine's
+                    // own fold results: the engine reduces `+ 1 exp (-1)` by EXACT
+                    // decimal-rational arithmetic to `1.36787944117144233`, f64
+                    // arithmetic gives the DIFFERENT value `1.3678794411714423`, and the
+                    // shorter print won the lit_size tier -- measured 2026-08-01 at
+                    // ~1.4k mint-then-drop rules per canonical mine, contained only by
+                    // sort promotion's UNSUPPORTED bucket (and `promote_sorts` defaults
+                    // to OFF, where they shipped as serve-time rounding rewrites).
+                    // Callers without the criterion (stage-2 confirmation, the public
+                    // query path) keep the short-circuit as-is.
+                    let resolved_ok = match accept_resolved {
+                        Some(f) => f(&t),
+                        None => true,
+                    };
+                    if resolved_ok && accepted(&t) {
+                        return Ok(Some(t));
+                    }
+                }
             }
         }
         // A variable-free <constant>-bearing source collapses to a single leaf ONLY when that
@@ -1115,17 +1834,61 @@ pub fn find_rule_with_lib(
         } else {
             None
         } {
+            // The Finite -> `<constant>` arm is gated on SPECIAL-FREE sources (stage-1
+            // Const-absorption licence at the channel, owner 2026-08-01): a special
+            // vanishing into a fitted constant is the absorption the policy forbids, for
+            // EVERY caller. This is also what makes stage-2 confirmation honest for the
+            // exact-collapse family: confirmation re-runs this function with the target
+            // as the only candidate, and this arm used to HIJACK the answer for
+            // `cos np.pi` (returning `<constant>` instead of testing `(-1)`), scoring
+            // every bare ground exact collapse "unconfirmed". Gated, the source falls
+            // through to the scan, which verifies the asked target -- exact hits
+            // (`cos np.pi -> (-1)`, owner: "cos(pi) should be simplified to -1") mint
+            // and confirm; inexact values still find no alphabet literal to match.
+            //
+            // ALSO gated on `<constant>`-BEARING sources -- the arm's contract as
+            // documented above ("a variable-free `<constant>`-bearing source"): a
+            // DETERMINED source (var-free, Const-free, all leaves finite literals) is
+            // its own reduction -- the engine folds it to its exact value and never
+            // absorbs a determined value into a mask -- so `<constant>` is not an
+            // answer for it. Determined sources only ever reached this arm shadowed:
+            // the evaluate short-circuit answered first (value-agreeing sources fell
+            // through when their answer equaled the mark; value-disagreeing ones fell
+            // through once the strict resolved-target gate closed the respell leak),
+            // and the arm minted `+ 1 exp (-1) -> <constant>` -- a Const-INTRODUCING
+            // ground rule that died only because confirmation's answer-shape differs
+            // (measured 2026-08-01 on the canonical mine). The mining acceptance
+            // carries the matching refusal so the candidate scan cannot re-mint what
+            // this arm no longer answers.
             Some(crate::interval::Class::Finite) => {
-                return Ok(Some(vec!["<constant>".to_string()]))
+                if !src_special && src_has_const {
+                    let t = vec!["<constant>".to_string()];
+                    if accepted(&t) {
+                        return Ok(Some(t));
+                    }
+                }
             }
+            // The three LITERAL arms publish a measure verdict as an attainability claim, so each
+            // is checked against the exact-point layer before it may speak. A disagreement does
+            // not just drop the literal -- it FALLS THROUGH to the candidate scan, where the same
+            // refuter guards whatever the scan proposes.
             Some(crate::interval::Class::Nan) => {
-                return Ok(Some(vec!["float(\"nan\")".to_string()]))
+                let t = vec!["float(\"nan\")".to_string()];
+                if !dirac_refutes_literal(source, &t, ops) && accepted(&t) {
+                    return Ok(Some(t));
+                }
             }
             Some(crate::interval::Class::PosInf) => {
-                return Ok(Some(vec!["float(\"inf\")".to_string()]))
+                let t = vec!["float(\"inf\")".to_string()];
+                if !dirac_refutes_literal(source, &t, ops) && accepted(&t) {
+                    return Ok(Some(t));
+                }
             }
             Some(crate::interval::Class::NegInf) => {
-                return Ok(Some(vec!["float(\"-inf\")".to_string()]))
+                let t = vec!["float(\"-inf\")".to_string()];
+                if !dirac_refutes_literal(source, &t, ops) && accepted(&t) {
+                    return Ok(Some(t));
+                }
             }
             _ => {} // Mixed / Empty / unevaluable -> not a clean collapse: candidate scan below
         }
@@ -1166,9 +1929,24 @@ pub fn find_rule_with_lib(
     let scan_max = max_cand_len.min(lib.by_len.len());
     for length in 1..scan_max {
         let mut matches: Vec<Vec<String>> = Vec::new();
+        // Resolved-literal matches rank BEHIND every symbolic match of the same length
+        // (appended after the loop): materializing a constant is the fallback, never
+        // preferred over an exact spelling that also certifies.
+        let mut resolved_matches: Vec<Vec<String>> = Vec::new();
         for cand in &lib.by_len[length] {
             if cand.var_mask & !src_mask != 0 {
                 continue; // candidate uses a variable the source lacks
+            }
+            // The Const-count invariant at the mint (its serve twin is the translate-time
+            // count gate; one invariant, both layers): a fire may never INCREASE the number
+            // of `<constant>` placeholders. For a const-BEARING source, a candidate with
+            // more slots than the source could only mint a count-increasing rule -- its
+            // slot values are per-challenge functions of the drawn source constants, not
+            // fixed reals, so literal resolution cannot apply either. For a const-FREE
+            // source, Const-bearing candidates stay IN the scan: their slots are fixed
+            // reals, resolved to literal tokens below.
+            if n_src_const > 0 && cand.n_const > n_src_const {
+                continue;
             }
             if let Some(sv) = &src_reach {
                 if let Some(cv) =
@@ -1179,7 +1957,7 @@ pub fn find_rule_with_lib(
                     }
                 }
             }
-            if candidate_matches(
+            if let Some(witness) = candidate_matches(
                 &y_src,
                 cand,
                 source,
@@ -1197,9 +1975,103 @@ pub fn find_rule_with_lib(
             ) {
                 // (the domain gate runs INSIDE `candidate_matches`, per instance, where the
                 // source's drawn constants and the fit's chosen constants are both in scope)
-                matches.push(cand.tokens.clone());
+                // LITERAL RESOLUTION (the Const-count invariant's constructive arm): a
+                // const-FREE source that matched a Const-bearing candidate did so at FIXED
+                // slot values -- abstraction manufactured at mint time, which is masking's
+                // job downstream, never the miner's. The slots are pinned to literal tokens
+                // (fail closed: an unpinnable slot skips the candidate and the scan
+                // continues), so the minted rule carries the VALUE, not a mask. The
+                // downstream guards and the caller's ordering acceptance then judge the
+                // RESOLVED spelling -- a resolution the engine already reaches natively
+                // (the fold family) lands on the mark's own state and is refused there.
+                let is_resolution = n_src_const == 0 && cand.n_const > 0;
+                let target: Vec<String> = if is_resolution {
+                    let resolved = y_src.first().and_then(|inst| {
+                        resolve_const_slots(
+                            &cand.tokens,
+                            witness.as_deref(),
+                            source,
+                            ops,
+                            &lib.var_names,
+                            &lib.cols,
+                            &inst.1,
+                        )
+                    });
+                    let resolved = resolved.filter(|t| match accept_resolved {
+                        Some(f) => f(t),
+                        None => true,
+                    });
+                    match resolved {
+                        Some(t) => t,
+                        None => {
+                            if let Some(t) = gate_trace() {
+                                if source.join(" ").starts_with(t.as_str()) {
+                                    eprintln!(
+                                        "RESOLVE-FAIL src=[{}] cand=[{}] witness={witness:?}",
+                                        source.join(" "),
+                                        cand.tokens.join(" ")
+                                    );
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    cand.tokens.clone()
+                };
+                // The scan reaches literal targets the short-circuit never sees: `finite_leaf`
+                // excludes any source carrying an inf/nan literal from the short-circuit
+                // entirely, so guarding only the arms would leave that whole family unjudged.
+                // Judged on the RESOLVED spelling: a resolved bare literal is exactly the
+                // single-token collapse this refuter exists for.
+                if dirac_refutes_literal(source, &target, ops) {
+                    continue;
+                }
+                // COLLAPSE-TO-`<constant>` guard, the ratified zoo-collapse predicate applied at
+                // the MINT rather than only at the online fold: a source may collapse to a free
+                // finite constant only if its finite part has POSITIVE MEASURE. `inv <constant>`
+                // qualifies (finite off the measure-zero pole, which is why the family is
+                // ratified); `pow (-1) <constant>` does not (finite only at the integers, a null
+                // set), and without this the literal refuter above merely diverts it into an
+                // equally false `-> <constant>`. Same predicate as the engine's value-set
+                // collapse fold (`engine/ac.rs::ac_fold`, `cls()==Finite && fin_pm()`), so
+                // the two paths cannot disagree about what "collapses to a constant" means.
+                // CLASS PRESERVATION for a VARIABLE-FREE source (ratified licence).
+                // Such a source is a constant-family: its whole behaviour is a function of its
+                // `<constant>` slots, so a rewrite must preserve the value CLASS, which is a
+                // measure statement over the constant axis. `reaches_all_of` above deliberately
+                // ignores nan (a nan row is extendable, "decided by measure rather than by
+                // reachability") -- this is where that measure decision is made.
+                //   `exp log <constant>` is MIXED (finite on C>0, undefined on C<0) while
+                //   `exp <constant>` is FINITE: the rewrite would DEFINE a positive-measure
+                //   undefined region, which §4 R3 and §9.8.3(b) put in the kill set.
+                //   `pow 0 <constant>` (MIXED: 0 on C>0, +inf on C<0) likewise cannot become a
+                //   bare `<constant>`, and `pow (-1) <constant>` (nan a.e.) cannot become
+                //   anything finite.
+                // Null-set exceptions stay tolerated because the CLASS ignores them: `inv
+                // <constant>` is FINITE (its +inf lives only at C=0) and keeps collapsing, per
+                // §9.8.3(c) and the §9.8.4 degenerate-literal carve-out.
+                if let Some(sv) = &src_reach {
+                    let same_class =
+                        crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
+                            .is_some_and(|cv| cv.cls() == sv.cls());
+                    if !same_class {
+                        continue;
+                    }
+                    // A source finite only on a NULL set additionally may not collapse to a free
+                    // constant (the ratified zoo-collapse predicate, mint-side).
+                    if target.len() == 1 && target[0] == "<constant>" && !sv.fin_pm() {
+                        continue;
+                    }
+                }
+                if is_resolution {
+                    resolved_matches.push(target);
+                } else {
+                    matches.push(target);
+                }
             }
         }
+        matches.extend(resolved_matches);
         if !matches.is_empty() {
             if let Some(t) = gate_trace() {
                 if source.join(" ").starts_with(t.as_str()) {
@@ -1212,7 +2084,12 @@ pub fn find_rule_with_lib(
                     );
                 }
             }
-            return Ok(select_best(source, matches, ops)); // shortest matching length wins
+            // Shortest ACCEPTED matching length wins. When select_best refuses every match
+            // at this length (wildcard multiplicity or the caller's acceptance), the scan
+            // continues: a longer spelling can still sit strictly below the caller's mark.
+            if let Some(best) = select_best(source, matches, ops, accept) {
+                return Ok(Some(best));
+            }
         }
     }
     if let Some(t) = gate_trace() {
@@ -1260,6 +2137,8 @@ pub fn find_rule(
         rtol,
         atol,
         min_informative,
+        None,
+        None,
     )
 }
 
@@ -1269,6 +2148,83 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// The generation-2 witness closure: the retired hyper-operator ring spelled fixed
+    /// scalings/shifts/powers as UNARY names (`mult3`, `div4`, `pow2`); generation 2 spells
+    /// them as BINARY nodes with a determined operand, so the pullback must read the TREE.
+    /// Every expected value below is computed with the engine's own numerics, so the
+    /// assertions cannot drift from the evaluator.
+    #[test]
+    fn slot_witnesses_generation2_sections() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let ev = |expr: &[&str]| {
+            crate::numeric::evaluate_constant_subtree(&s(expr), ops)
+                .and_then(|t| crate::numeric::leaf_value(&t))
+                .unwrap()
+        };
+        let has = |w: &[f64], v: f64| w.contains(&v);
+        let pi2 = std::f64::consts::FRAC_PI_2;
+        let pi2r = crate::numeric::py_float_repr(pi2);
+
+        // `* <constant> 4`: the corner pi/2 pulls back to (pi/2)/4 (exact: power-of-two scale)
+        let w = slot_witnesses(&s(&["sin", "*", "<constant>", "4"]), ops);
+        assert!(has(&w, pi2 / 4.0), "*-section pullback missing");
+        // `/ <constant> 4`: pulls back to (pi/2)*4
+        let w = slot_witnesses(&s(&["sin", "/", "<constant>", "4"]), ops);
+        assert!(has(&w, pi2 * 4.0), "/-section pullback missing");
+        // `+ <constant> 1`: pulls back to pi/2 - 1
+        let w = slot_witnesses(&s(&["sin", "+", "<constant>", "1"]), ops);
+        assert!(has(&w, pi2 - 1.0), "+-section pullback missing");
+        // `- <constant> 1`: pulls back to pi/2 + 1
+        let w = slot_witnesses(&s(&["sin", "-", "<constant>", "1"]), ops);
+        assert!(has(&w, pi2 + 1.0), "--section pullback missing");
+        // `pow <constant> 3`: pulls back to rootn(pi/2, 3)
+        let w = slot_witnesses(&s(&["sin", "pow", "<constant>", "3"]), ops);
+        assert!(
+            has(&w, ev(&["rootn", &pi2r, "3"])),
+            "pow-section pullback missing"
+        );
+        // `rootn <constant> 3`: pulls back to pow(pi/2, 3)
+        let w = slot_witnesses(&s(&["sin", "rootn", "<constant>", "3"]), ops);
+        assert!(
+            has(&w, ev(&["pow", &pi2r, "3"])),
+            "rootn-section pullback missing"
+        );
+        // exponent-side `pow 2 <constant>`: pulls back to log2(pi/2)
+        let w = slot_witnesses(&s(&["sin", "pow", "2", "<constant>"]), ops);
+        assert!(
+            has(&w, ev(&["/", "log", &pi2r, "log", "2"])),
+            "exponent-side pow-section pullback missing"
+        );
+        // LIVE odd root `pow1_3` (not retired): its inverse has no unary spelling in any
+        // live vocabulary and must be spelled with BINARY pow.
+        let w = slot_witnesses(&s(&["sin", "pow1_3", "<constant>"]), ops);
+        assert!(
+            has(&w, ev(&["pow", &pi2r, "3"])),
+            "pow1_3 live-spelled inverse missing"
+        );
+    }
+
+    /// End-to-end: `acosh(sin(4C))` is defined ONLY on the isolated set sin(4C) = 1
+    /// (value 0 there), so its a.e. class is nan -- but `-> nan` is REFUTED at the
+    /// witness C = (pi/2)/4, which only the *-section pullback reaches. Deterministic
+    /// in f64: the power-of-two scale round-trips exactly and sin(f64 pi/2) saturates
+    /// to 1.0, so acosh evaluates to 0.0 != nan.
+    #[test]
+    fn dirac_refuter_sees_generation2_spellings() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        assert!(dirac_refutes_literal(
+            &s(&["acosh", "sin", "*", "<constant>", "4"]),
+            &s(&["float(\"nan\")"]),
+            ops
+        ));
     }
 
     #[test]
@@ -1475,19 +2431,19 @@ mod tests {
         let n = 128usize;
         let xf: Vec<f64> = (0..n).map(|r| (r as f64) * 0.11 - 7.0).collect();
         // library incl. the bare <constant> (guard token), var-free const-bearing (sin(<c>),
-        // pow2(<c>)), var-free const-free (exp(1)), and var-bearing candidates
+        // pow(<c>, 2)), var-free const-free (exp(1)), and var-bearing candidates
         let cands = vec![
             s(&["x0"]),
             s(&["<constant>"]),
             s(&["sin", "<constant>"]),
-            s(&["pow2", "<constant>"]),
+            s(&["pow", "<constant>", "2"]),
             s(&["exp", "1"]),
             s(&["neg", "x0"]),
             s(&["*", "<constant>", "x0"]),
         ];
         let filtered = CandidateLibrary::build(ops, &cands, &vars, &xf, n, true).unwrap();
         let raw = CandidateLibrary::build(ops, &cands, &vars, &xf, n, false).unwrap();
-        assert_eq!(filtered.n_filtered(), 3); // sin(<c>), pow2(<c>), exp(1)
+        assert_eq!(filtered.n_filtered(), 3); // sin(<c>), pow(<c>, 2), exp(1)
         assert_eq!(filtered.n_candidates(), 4);
         assert_eq!(raw.n_filtered(), 0);
         assert_eq!(raw.n_candidates(), 7);
@@ -1515,6 +2471,8 @@ mod tests {
                 1e-9,
                 1e-12,
                 16,
+                None,
+                None,
             )
             .unwrap();
             let b = find_rule_with_lib(
@@ -1529,6 +2487,8 @@ mod tests {
                 1e-9,
                 1e-12,
                 16,
+                None,
+                None,
             )
             .unwrap();
             assert_eq!(a, b, "filtered vs raw decision diverged on {src:?}");
@@ -1567,7 +2527,104 @@ mod tests {
         let src = s(&["+", "*", "<constant>", "x0", "<constant>"]);
         // two matches: one with a constant, one without -> pick the const-free
         let m = vec![s(&["*", "<constant>", "x0"]), s(&["x0"])];
-        assert_eq!(select_best(&src, m, ops), Some(s(&["x0"])));
+        assert_eq!(select_best(&src, m, ops, None), Some(s(&["x0"])));
+    }
+
+    /// Finding F2: the caller's acceptance rides the selection -- a refused candidate
+    /// yields to the NEXT one instead of vetoing the whole selection (the old shape
+    /// returned one representative and let the caller throw the search away).
+    #[test]
+    fn select_acceptance_moves_to_the_next_candidate() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let src = s(&["*", "exp", "x0", "exp", "x0"]);
+        let m = vec![s(&["pow", "exp", "x0", "2"]), s(&["exp", "+", "x0", "x0"])];
+        // no acceptance: discovery order wins (both const-free, stable sort)
+        assert_eq!(
+            select_best(&src, m.clone(), ops, None),
+            Some(s(&["pow", "exp", "x0", "2"]))
+        );
+        // acceptance refuses the first: the second is selected, not None
+        let not_pow = |t: &[String]| t[0] != "pow";
+        assert_eq!(
+            select_best(&src, m.clone(), ops, Some(&not_pow)),
+            Some(s(&["exp", "+", "x0", "x0"]))
+        );
+        // acceptance refuses everything: None, honestly
+        let nothing = |_: &[String]| false;
+        assert_eq!(select_best(&src, m, ops, Some(&nothing)), None);
+        // the bare-<constant> literal fold happens BEFORE the acceptance judges: the
+        // acceptance sees the FINAL spelling (the folded literal), never the raw token
+        let all_num = s(&["+", "1", "1"]);
+        let folded = select_best(
+            &all_num,
+            vec![s(&["<constant>"])],
+            ops,
+            Some(&|t: &[String]| t == ["2.0"] || t == ["2"]),
+        );
+        assert!(
+            folded.is_some(),
+            "acceptance must judge the folded literal, not bare <constant>"
+        );
+    }
+
+    /// Finding F2, the across-length half: when every match at the shortest matching
+    /// length is refused, the scan CONTINUES -- token count is not the reduction
+    /// ordering, so a longer spelling can sit strictly below the caller's mark.
+    #[test]
+    fn scan_continues_past_a_fully_refused_length() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let n = 64usize;
+        let xf = grid_1var(n);
+        // Both candidates are numerically equivalent to the source x0+x0+x0 = 3*x0:
+        // `* 3 x0` at length 3, `neg * -3 x0` at length 4.
+        let cands = vec![s(&["*", "3", "x0"]), s(&["neg", "*", "-3", "x0"])];
+        let lib = CandidateLibrary::build(ops, &cands, &vars, &xf, n, true).unwrap();
+        let src = s(&["+", "+", "x0", "x0", "x0"]);
+        // Without acceptance the length-3 spelling wins.
+        let free = find_rule_with_lib(
+            ops,
+            &src,
+            src.len(),
+            None,
+            &lib,
+            16,
+            16,
+            7,
+            1e-9,
+            1e-12,
+            16,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(free, Some(s(&["*", "3", "x0"])));
+        // With an acceptance that refuses the length-3 spelling, the scan must
+        // continue and take the length-4 one.
+        let not_star_head = |t: &[String]| t[0] != "*";
+        let deep = find_rule_with_lib(
+            ops,
+            &src,
+            src.len(),
+            None,
+            &lib,
+            16,
+            16,
+            7,
+            1e-9,
+            1e-12,
+            16,
+            Some(&not_star_head),
+            None,
+        )
+        .unwrap();
+        assert_eq!(deep, Some(s(&["neg", "*", "-3", "x0"])));
     }
 
     /// Signed, mixed-magnitude 1-var grid: negatives probe domain extensions, positives feed
@@ -1682,13 +2739,20 @@ mod tests {
         //    3.0 is total on R -- a positive-measure domain extension (a 37-rule family in
         //    (4,3) mining runs before this phase existed).
         assert_eq!(
-            fr(&["exp", "log", "pow3", "x0"], &["pow", "x0", "<constant>"]),
+            fr(
+                &["exp", "log", "pow", "x0", "3"],
+                &["pow", "x0", "<constant>"]
+            ),
             None
         );
         // 2. a domain-PRESERVING constant witness stays minable: exp(log(x)/3) = x^(1/3) on
         //    x > 0, and the fitted 1/3 is far from every snap target -- pow(x, 1/3) is NaN
         //    on x < 0 exactly like the source (a certified live rule).
-        assert!(fr(&["exp", "div3", "log", "x0"], &["pow", "x0", "<constant>"]).is_some());
+        assert!(fr(
+            &["exp", "/", "log", "x0", "3"],
+            &["pow", "x0", "<constant>"]
+        )
+        .is_some());
         // 3. null-set completion stays allowed (x/x -> 1 at 0: the limit-completion doctrine).
         assert!(fr(&["/", "x0", "x0"], &["1"]).is_some());
         // 4. contract point x = pi/2: f64 sin(pi/2) is EXACTLY 1.0 and pow(1, inf) = 1, not
@@ -1730,12 +2794,12 @@ mod tests {
         // (x^3 + x^2 y)/(x + y) -> x^2: nan at (pi/2, -pi/2) in f64 (both spellings of x^3
         // round identically) but residue/0 = inf at 50 decimal digits: a precision seam.
         let seam = s(&[
-            "/", "+", "pow3", "x0", "*", "pow2", "x0", "x1", "+", "x0", "x1",
+            "/", "+", "pow", "x0", "3", "*", "pow", "x0", "2", "x1", "+", "x0", "x1",
         ]);
         assert!(!e
             .equivalent_no_const_check(
                 &seam,
-                &s(&["pow2", "x0"]),
+                &s(&["pow", "x0", "2"]),
                 &vars,
                 &xf,
                 n,
@@ -1748,7 +2812,9 @@ mod tests {
             .unwrap());
         // (x+y)^3/(x+y)^2 -> x+y: the cancellation is spelled ONCE, cancels exactly at every
         // precision, 0/0 = nan stably -- the ratified null-set-completion class stays.
-        let stable = s(&["/", "pow3", "+", "x0", "x1", "pow2", "+", "x0", "x1"]);
+        let stable = s(&[
+            "/", "pow", "+", "x0", "x1", "3", "pow", "+", "x0", "x1", "2",
+        ]);
         assert!(e
             .equivalent_no_const_check(
                 &stable,

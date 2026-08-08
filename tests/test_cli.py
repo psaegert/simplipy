@@ -67,7 +67,7 @@ class TestCLI:
         the proposals file, its sha256, and the per-outcome counts."""
         (tmp_path / "rules.json").write_text("[]")
         engine_cfg = tmp_path / "engine.yaml"
-        engine_cfg.write_text(yaml.safe_dump({"operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
+        engine_cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
         proposals_file = tmp_path / "proposals.json"
         proposals_file.write_text(json.dumps({
             "schema": "llm-proposals-v1",
@@ -84,18 +84,26 @@ class TestCLI:
             "constants_fit_retries": 16,
             "seed": 7,
             "proposals": str(proposals_file),
+            # MINT-level pin; the smoke vocabulary also carries hyper-operators,
+            # whose Python realizations left simplipy.operators in 0.12, so the
+            # promotion oracle (default-on since 2026-08-01) cannot realize them.
+            "promote_sorts": False,
         }))
         out = tmp_path / "out" / "mined.json"
         main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out)])
 
+        # exp(t)*exp(t) collects to pow(exp t, 2): the SAME state respelled, which the
+        # serve ordering does not count as a reduction, and nothing expressible at this
+        # target budget beats that state -- honest verdict 'rejected' (search
+        # exhausted), never a coverage claim. No rule is minted for it.
         rules = {tuple(tuple(side) for side in rule) for rule in json.load(open(out))}
-        assert (("*", "exp", "?0", "exp", "?0"), ("pow2", "exp", "?0")) in rules
+        assert not any(lhs[:1] == ("*",) and "exp" in lhs for lhs, _ in rules)
         sidecar = json.load(open(str(out) + ".provenance.json"))
         assert sidecar["proposals"]["file"] == str(proposals_file)
         assert sidecar["proposals"]["sha256"] == hashlib.sha256(proposals_file.read_bytes()).hexdigest()
         assert sidecar["proposals"]["count"] == 1
         assert sidecar["proposals"]["outcomes"] == {
-            "certified": 1, "already_covered": 0, "rejected": 0, "duplicate": 0}
+            "certified": 0, "already_covered": 0, "rejected": 1, "duplicate": 0}
 
     def test_find_rules_config_prune_and_relaxed_kruskal_honored(self, tmp_path) -> None:
         """The config is the single source of truth for the mine: `prune`,
@@ -104,7 +112,7 @@ class TestCLI:
         that did not match its config's claims)."""
         (tmp_path / "rules.json").write_text("[]")
         engine_cfg = tmp_path / "engine.yaml"
-        engine_cfg.write_text(yaml.safe_dump({"operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
+        engine_cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
         mine_cfg = tmp_path / "find_rules.yaml"
         mine_cfg.write_text(yaml.safe_dump({
             "max_source_pattern_length": 3,
@@ -117,6 +125,8 @@ class TestCLI:
             "confirm": False,
             "relaxed_kruskal": False,
             "prune": "covered",
+            # MINT-level pin; see test_find_rules_forwards_proposals_config_key.
+            "promote_sorts": False,
         }))
         out = tmp_path / "mined.json"
         main(["find-rules", "-e", str(engine_cfg), "-c", str(mine_cfg), "-o", str(out)])
@@ -130,7 +140,7 @@ class TestCLI:
         never a silent no-op."""
         (tmp_path / "rules.json").write_text("[]")
         engine_cfg = tmp_path / "engine.yaml"
-        engine_cfg.write_text(yaml.safe_dump({"operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
+        engine_cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _SMOKE_OPERATORS, "rules": "rules.json"}))
         mine_cfg = tmp_path / "find_rules.yaml"
         mine_cfg.write_text(yaml.safe_dump({
             "max_source_pattern_length": 2,

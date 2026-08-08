@@ -94,7 +94,10 @@ pub fn prefix_to_infix(
         // operands_data = [stack.pop() for _ in range(arity)] -> [0]=left, [1]=right.
         let operands_data: Vec<Item> = (0..arity).map(|_| stack.pop().unwrap()).collect();
 
-        // write_operator: realization ? realization_map[canonical] : canonical.
+        // write_operator: realization ? realization_map[canonical] : canonical. The map is
+        // CLOSED over the core serialization language (`Operators::from_specs` fills any the
+        // config omitted from `CORE_SERIALIZATION_OPS`), so a projection can never emit an
+        // operator this lookup misses.
         let write_operator: String = if realization {
             ops.operator_realizations
                 .get(canonical)
@@ -127,6 +130,19 @@ pub fn prefix_to_infix(
             let (mut right_str, right_prec, _right_root) = operands_data[1].clone();
             let mut write_operator = write_operator;
 
+            // `rootn` is a FUNCTION in every dialect: the infix parser reads
+            // `rootn(x, n)` as a call, so the generic binary-infix rendering it used to
+            // fall into (`x0 rootn 3`) is not merely ugly -- it does not round-trip.
+            // Now that even indices survive canonicalization instead of turning into
+            // `pow(x, 1/n)`, this path is reached constantly.
+            if canonical == "rootn" {
+                stack.push((
+                    format!("{write_operator}({left_str}, {right_str})"),
+                    INF,
+                    Some(canonical.to_string()),
+                ));
+                continue;
+            }
             // pow under power='func' -> func-form.
             if canonical == "pow" && power == Power::Func {
                 stack.push((
@@ -285,11 +301,17 @@ fn tokenize_infix(s: &str) -> Vec<String> {
         } else if i + 1 < n && chars[i] == '*' && chars[i + 1] == '*' {
             tokens.push("**".to_string());
             i += 2;
-        } else if matches!(chars[i], '-' | '+' | '*' | '/' | '^' | '(' | ')') {
+        } else if matches!(chars[i], '-' | '+' | '*' | '/' | '^' | '(' | ')' | ',') {
+            // ',' is the 2-ary call-syntax argument separator the pretty renderer
+            // emits (`rootn(x0, 3)`, `pow(a, b)`). It used to fall into the silent
+            // drop below, which FUSED the two arguments and let operators bind across
+            // the boundary: `rootn(x0, x1 - 1)` parsed as rootn(x0 - x1, 1)
+            // (hardening H-011, 2026-08-03 -- a round-trip break of the parser's own
+            // output language; 97/2000 fuzz rows).
             tokens.push(chars[i].to_string());
             i += 1;
         } else {
-            i += 1; // unmatched -> drop (no token, no error)
+            i += 1; // unmatched -> drop (no token, no error; pinned legacy parity)
         }
     }
     tokens
@@ -410,7 +432,18 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
         if is_number_fullmatch(&token) {
             prefix_expr.push(token);
         } else if is_ident_start(&token) || token == "<constant>" {
-            prefix_expr.push(token);
+            // RESERVED CONSTANT NAMES of the infix language: the pretty renderer spells
+            // the canonical constants as bare `pi`/`e`/`inf`/`nan` (`ac::convert::render_prec`),
+            // so the parser reads exactly these identifiers back as the constants --
+            // emit-parse closure for the leaf alphabet. Everything else (incl. the dotted
+            // `np.pi` spelling, one atomic ident) passes through unchanged.
+            prefix_expr.push(match token.as_str() {
+                "pi" => "np.pi".to_string(),
+                "e" => "np.e".to_string(),
+                "inf" => "float(\"inf\")".to_string(),
+                "nan" => "float(\"nan\")".to_string(),
+                _ => token,
+            });
         } else if token == ")" {
             stack.push(token);
         } else if token == "(" {
@@ -419,6 +452,13 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
             }
             if stack.last().is_some_and(|t| t == ")") {
                 stack.pop();
+            }
+        } else if token == "," {
+            // Argument separator: flush the just-finished argument's pending operators
+            // down to the enclosing ')' (the paren boundary WITHOUT consuming it), so
+            // each argument of a 2-ary call parses independently (H-011).
+            while stack.last().is_some_and(|t| t != ")") {
+                prefix_expr.push(stack.pop().unwrap());
             }
         } else {
             // operator. Unary-minus detection: on the REVERSED stream, tokens[i+1] is the
@@ -433,6 +473,7 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
             if token == "-"
                 && (next_raw.is_none()
                     || next_norm == Some("(")
+                    || next_norm == Some(",")  // `pow(x0, -2)`: unary after a separator (H-011)
                     || next_norm
                         .map(|t| ops.precedence_get(t).is_some())
                         .unwrap_or(false))
@@ -545,95 +586,11 @@ fn int_chain_exp(op: &str) -> Option<i128> {
     rest[..end].parse::<i128>().ok()
 }
 
-/// `Fraction(x).as_integer_ratio()` reduced (`Fraction(abs(float(s)))`): the EXACT
-/// dyadic ratio of the f64 (NOT a decimal parse of the source string). `None` if the exact ratio
-/// exceeds the i128 domain (pathological subnormals / huge magnitudes -- documented out-of-domain;
-/// they never occur on the deployment distribution, which doesn't reach this branch at all).
-fn exact_ratio(x: f64) -> Option<(i128, i128)> {
-    if x == 0.0 {
-        return Some((0, 1));
-    }
-    if !x.is_finite() {
-        return None;
-    }
-    let bits = x.to_bits();
-    let exp_field = ((bits >> 52) & 0x7ff) as i64;
-    let mant = (bits & 0x000f_ffff_ffff_ffff) as i128;
-    let (num0, e) = if exp_field == 0 {
-        (mant, -1074i64) // subnormal: value = mant * 2^-1074
-    } else {
-        (mant + (1i128 << 52), exp_field - 1075) // normal: (1.mant) * 2^(exp-1023-52)
-    };
-    if e >= 0 {
-        if e >= 127 {
-            return None;
-        }
-        Some((num0 << e, 1))
-    } else {
-        let shift = (-e) as u32;
-        if shift >= 127 {
-            return None;
-        }
-        // reduce by the common power of two
-        let tz = num0.trailing_zeros().min(shift);
-        Some((num0 >> tz, 1i128 << (shift - tz)))
-    }
-}
-
-/// `Fraction(num, den).limit_denominator(1_000_000)` (CPython Lib/fractions.py). Returns the closest
-/// fraction with denominator <= 1e6, in lowest terms.
-fn limit_denominator(num: i128, den: i128) -> (i128, i128) {
-    const M: i128 = 1_000_000;
-    if den <= M {
-        return reduce(num, den);
-    }
-    let (mut p0, mut q0, mut p1, mut q1) = (0i128, 1i128, 1i128, 0i128);
-    let (mut n, mut d) = (num, den);
-    loop {
-        let a = n / d;
-        let q2 = q0 + a * q1;
-        if q2 > M {
-            break;
-        }
-        (p0, q0, p1, q1) = (p1, q1, p0 + a * p1, q2);
-        (n, d) = (d, n - a * d);
-    }
-    let k = (M - q0) / q1;
-    // bound2 = p1/q1 ; bound1 = (p0+k*p1)/(q0+k*q1). Pick bound2 iff |bound2-self| <= |bound1-self|,
-    // compared without floats: |p1*den - num*q1|*(q0+k*q1)  <=  |(p0+k*p1)*den - num*(q0+k*q1)|*q1.
-    let qa = q0 + k * q1;
-    let pa = p0 + k * p1;
-    let diff2 = (p1 * den - num * q1).abs();
-    let diff1 = (pa * den - num * qa).abs();
-    if diff2 * qa <= diff1 * q1 {
-        reduce(p1, q1)
-    } else {
-        reduce(pa, qa)
-    }
-}
-
-fn reduce(num: i128, den: i128) -> (i128, i128) {
-    let g = gcd_i128(num.abs(), den.abs());
-    if g == 0 {
-        (num, den)
-    } else {
-        (num / g, den / g)
-    }
-}
-
-fn gcd_i128(mut a: i128, mut b: i128) -> i128 {
-    while b != 0 {
-        (a, b) = (b, a % b);
-    }
-    a
-}
-
-/// `Fraction(abs(float(s))).limit_denominator()` reduced. `None` only on the
-/// documented out-of-i128-domain pathological inputs (never on the deployment distribution).
-fn fraction_limit_denominator(x: f64) -> Option<(i128, i128)> {
-    let (num, den) = exact_ratio(x)?;
-    Some(limit_denominator(num, den))
-}
+// The legacy float-approximation chain (`exact_ratio` -> `limit_denominator` ->
+// `fraction_limit_denominator`, the CPython `Fraction(float(s)).limit_denominator(1e6)`
+// port that H-044 patched) was RETIRED by H-047 (2026-08-05): the `**`-exponent fold
+// gate is now spelling-exact (`Rat::parse_decimal`), so nothing approximates. See the
+// register rows H-044/H-047 for the mechanisms; git history holds the port.
 
 /// `['pow', [base, exponent]]` -- the KEEP fallback (gate-fail / non-numeric exponent).
 fn pow_keep(base: Ir, exponent: Ir) -> Ir {
@@ -653,7 +610,15 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
             _ => return Ok(pow_keep(base, exponent)),
         };
         if is_int_string(&tok) {
-            let v: i128 = tok.parse().map_err(|_| "int overflow".to_string())?;
+            // H-049 (2026-08-05): a beyond-i128 integer spelling KEEPS the binary pow.
+            // The legacy CPython `int(tok)` was arbitrary-precision and NEVER failed on
+            // a digit string (the huge power then died at the factorize gate and kept
+            // binary pow anyway) -- the i128 parse error was PORT-MINTED (H-044's
+            // sibling), and it raised on the engine's OWN rendered infix
+            // (`^(170141183460469231731687303715884105728)`, extreme-lane P9 rows).
+            let Ok(v) = tok.parse::<i128>() else {
+                return Ok(pow_keep(base, exponent));
+            };
             if v == 0 {
                 return Ok(Ir::L(vec![Ir::S("1".into())])); // x**0 -> 1 (not 'pow0')
             }
@@ -677,28 +642,56 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
                 Ok(Ir::L(vec![Ir::S(pow_op), Ir::L(vec![base])])) // [pow_op, [base]]
             }
         } else if is_numeric_string(&tok) {
-            let fv: f64 = match tok.parse() {
-                Ok(v) => v,
-                Err(_) => return Err("could not convert to float".into()), // is_numeric_string but float() raises
+            // H-047 (2026-08-05): the fold gate is SPELLING-EXACT. The port (and the
+            // legacy CPython original) gated on `limit_denominator(1e6)` of the f64
+            // VALUE -- an APPROXIMATION: any exponent within ~5e-7 of 1 collapsed the
+            // pow entirely (`x**(1.0000000000000002) -> x`, `x**(0.9999995) -> x`),
+            // near-0 exponents folded to 1 (`x**(1e-9) -> 1`), near -1 to `inv`, and
+            // under a powN-declaring vocabulary any near-miss of a <=5/<=5 fraction
+            // snapped to the wrong function (`x**(0.5000000000000001) -> sqrt(x)`).
+            // The (1,1) case emitted NO token, so no vocabulary gate protected it in
+            // ANY config -- a silent value change on the DEFAULT parse path, found by
+            // the extreme-literal fuzz lane (P7-infix, 146/2k smoke rows). The exact
+            // decimal denotation now decides: every legacy-intended fold survives
+            // (nice spellings ARE exact -- "0.5", "0.2", "1.0", "2.5"), every
+            // approximation keeps the verbatim binary pow (the AC core reads the
+            // decimal exponent exactly). Beyond-i128 spellings refuse -> keep.
+            let Some(r) = crate::ac::rat::Rat::parse_decimal(&tok) else {
+                return Ok(pow_keep(base, exponent));
             };
-            match fraction_limit_denominator(fv.abs()) {
-                Some((num, den)) if num <= 5 && den <= 5 => {
-                    if num == 0 {
-                        return Ok(Ir::L(vec![Ir::S("1".into())])); // x**0.0 -> 1
-                    }
-                    let mut new_expr = Ir::L(vec![base]); // [base]
-                    if num != 1 {
-                        new_expr = Ir::L(vec![Ir::S(format!("pow{num}")), new_expr]);
-                    }
-                    if den != 1 {
-                        new_expr = Ir::L(vec![Ir::S(format!("pow1_{den}")), new_expr]);
-                    }
-                    if fv < 0.0 {
-                        new_expr = Ir::L(vec![Ir::S("inv".into()), new_expr]);
-                    }
-                    Ok(new_expr)
+            if r.is_zero() {
+                return Ok(Ir::L(vec![Ir::S("1".into())])); // x**0.0 -> 1 (exact zero)
+            }
+            let (num, den) = (r.num().unsigned_abs(), r.den().unsigned_abs());
+            if num <= 5 && den <= 5 {
+                let (num, den) = (num as i128, den as i128);
+                // VOCABULARY GATE (the p/q branch below has the same one): the
+                // `pow{num}`/`pow1_{den}` spellings exist only in configs that declare
+                // the hyper-op family; a clean-vocab config keeps the binary `pow`
+                // (the AC core reads the decimal exponent exactly). Gated per factor
+                // actually EMITTED (num==1/den==1 need no token), so legacy configs
+                // keep byte-identical conversions.
+                if (num != 1
+                    && crate::utils::factorize_to_at_most(num, ops.max_power, 1000).is_err())
+                    || (den != 1
+                        && crate::utils::factorize_to_at_most(den, ops.max_fractional_power, 1000)
+                            .is_err())
+                {
+                    return Ok(pow_keep(base, exponent));
                 }
-                _ => Ok(pow_keep(base, exponent)), // gate-fail / out-of-domain -> KEEP
+                let mut new_expr = Ir::L(vec![base]); // [base]
+                if num != 1 {
+                    new_expr = Ir::L(vec![Ir::S(format!("pow{num}")), new_expr]);
+                }
+                if den != 1 {
+                    new_expr = Ir::L(vec![Ir::S(format!("pow1_{den}")), new_expr]);
+                }
+                if r.is_negative() {
+                    new_expr = Ir::L(vec![Ir::S("inv".into()), new_expr]);
+                }
+                Ok(new_expr)
+            } else {
+                Ok(pow_keep(base, exponent)) // gate-fail / out-of-domain -> KEEP
             }
         } else {
             Ok(pow_keep(base, exponent)) // non-numeric exponent -> KEEP
@@ -715,8 +708,11 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
         match (op0_is_div, num_tok, den_tok) {
             (true, Some(nt), Some(dt)) if is_numeric_string(nt) && is_numeric_string(dt) => {
                 if is_int_string(nt) && is_int_string(dt) {
-                    let numerator: i128 = nt.parse().map_err(|_| "int overflow".to_string())?;
-                    let denominator: i128 = dt.parse().map_err(|_| "int overflow".to_string())?;
+                    // H-049: beyond-i128 operands keep binary pow (see the unary arm).
+                    let (Ok(numerator), Ok(denominator)) = (nt.parse::<i128>(), dt.parse::<i128>())
+                    else {
+                        return Ok(pow_keep(base, exponent));
+                    };
                     if numerator == 0 {
                         return Ok(Ir::L(vec![Ir::S("1".into())])); // x**(0/N) -> 1
                     }
@@ -741,14 +737,21 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
                     // [den_power, [[num_power, [base]]]]
                     let inner = Ir::L(vec![Ir::S(num_power), Ir::L(vec![base])]);
                     let dnode = Ir::L(vec![Ir::S(den_power), Ir::L(vec![inner])]);
-                    if numerator * denominator < 0 {
+                    // Sign via comparison, not the product: `numerator * denominator`
+                    // can overflow i128 (H-049 collateral; wrapping would flip the inv).
+                    if (numerator < 0) != (denominator < 0) {
                         Ok(Ir::L(vec![Ir::S("inv".into()), Ir::L(vec![dnode])]))
                     } else {
                         Ok(dnode)
                     }
                 } else {
-                    // dead float-division branch: int('2.0') raises BEFORE limit_denominator.
-                    Err("invalid literal for int()".into())
+                    // H-049: the legacy dead branch RAISED here (`int('2.0')`
+                    // failure-parity) -- but the ENGINE'S OWN infix can render an
+                    // exponent as a float division (divisor-side literal spelling,
+                    // extreme-lane P9 row 355), and the engine's own serialization
+                    // must always re-parse. KEEP binary pow; the AC core reads the
+                    // division exactly.
+                    Ok(pow_keep(base, exponent))
                 }
             }
             _ => Ok(pow_keep(base, exponent)), // else -> KEEP
@@ -790,10 +793,9 @@ pub fn convert_expression(prefix_expr: &[String], ops: &Operators) -> Result<Vec
                     let s = s.to_string();
                     let mut top = stack.pop().ok_or("neg: empty stack")?;
                     // Toggle ONE leading '-' (strip if already negative, else prepend).
-                    let new = if s.starts_with('-') {
-                        s[1..].to_string()
-                    } else {
-                        format!("-{s}")
+                    let new = match s.strip_prefix('-') {
+                        Some(rest) => rest.to_string(),
+                        None => format!("-{s}"),
                     };
                     set_first(&mut top, new);
                     stack.push(top);
@@ -959,6 +961,32 @@ pub fn parse(
     mask_numbers: bool,
 ) -> Result<Vec<String>, String> {
     let parsed = infix_to_prefix(infix_expression, ops);
+    // H-043/D4: the tokenize + shunting stages above are iterative, but
+    // `convert_expression` below recurses (its IR flatten) -- cap the TOKENIZED length
+    // exactly like the token-list boundary caps its input, or a deep infix string
+    // aborts the process where the equivalent token list would raise.
+    if parsed.len() > crate::MAX_TOKENS {
+        return Err(format!(
+            "prefix expression too long ({} tokens > {}); refusing to risk a \
+             deep-recursion stack overflow",
+            parsed.len(),
+            crate::MAX_TOKENS
+        ));
+    }
+    // H-007: the tokenizer reads `inf`/`nan`/`1_000` as NAME tokens; refuse them HERE,
+    // before `numbers_to_constant` (whose `float()` semantics WOULD read them) can
+    // silently absorb a reserved spelling into `<constant>`. Same ruling as the token-list
+    // boundary (`ensure_tokens_are_tokens`).
+    if let Some(t) = parsed
+        .iter()
+        .find(|t| crate::utils::reserved_numeric_spelling(t))
+    {
+        return Err(format!(
+            "invalid token {t:?}: reserved numeric spelling -- numeric to Python but not a \
+             simplipy numeric literal (H-007); use the canonical spelling ('5', '0.5', \
+             '1e-05', '1/3', float(\"inf\"), float(\"-inf\"), float(\"nan\"))"
+        ));
+    }
     let parsed = if convert {
         convert_expression(&parsed, ops)?
     } else {
@@ -977,8 +1005,12 @@ mod tests {
     use super::Power;
     use crate::Engine;
 
+    /// The conversion layer's subject is the INPUT LANGUAGE of a table that declares the
+    /// legacy sugar (unary hyper-operators, `**`, chain combining) -- exactly what the
+    /// in-repo legacy-vocabulary fixture provides (audit Tier-1 #3: no asset dependence;
+    /// the historical expectations below are unchanged, dev_7-3's table verbatim).
     fn engine() -> Option<Engine> {
-        crate::test_engine()
+        Some(crate::legacy_sugar_engine())
     }
 
     fn p2i(e: &Engine, toks: &[&str], power: Power, realization: bool) -> Result<String, String> {
@@ -1095,11 +1127,81 @@ mod tests {
         assert_eq!(i2p(&e, ""), Vec::<String>::new());
         // scientific notation single token.
         assert_eq!(i2p(&e, "1.5e-2 * x1"), v(&["*", "1.5e-2", "x1"]));
+        // 2-ary CALL SYNTAX (H-011): the comma is a real argument separator -- it
+        // used to be silently dropped, fusing the arguments (`rootn(x0, x1 - 1)`
+        // parsed as rootn(x0 - x1, 1)). Composite args on either side, nesting,
+        // and unary minus directly after the separator.
+        assert_eq!(i2p(&e, "rootn(x0, 3)"), v(&["rootn", "x0", "3"]));
+        assert_eq!(
+            i2p(&e, "rootn(x0, x1 - 1)"),
+            v(&["rootn", "x0", "-", "x1", "1"])
+        );
+        assert_eq!(
+            i2p(&e, "pow(x0 + 1, x1 - 2)"),
+            v(&["pow", "+", "x0", "1", "-", "x1", "2"])
+        );
+        assert_eq!(
+            i2p(&e, "rootn(pow(x0, 2), x1 + 1)"),
+            v(&["rootn", "pow", "x0", "2", "+", "x1", "1"])
+        );
+        assert_eq!(i2p(&e, "pow(x0, -2)"), v(&["pow", "x0", "neg", "2"]));
         assert_eq!(i2p(&e, "<constant> * x1"), v(&["*", "<constant>", "x1"]));
         // round-trip identity (parse half; paired with the paren-keeping render).
         let pre = v(&["*", "a", "*", "b", "c"]);
         let inf = e.prefix_to_infix(&pre, Power::StarStar, false).unwrap();
         assert_eq!(e.parse(&inf, false, false).unwrap(), pre);
+    }
+
+    /// RESERVED CONSTANT NAMES of the infix language (emit-parse closure): the pretty
+    /// renderer spells the canonical constants as bare `pi`/`e`/`inf`/`nan`, so the infix
+    /// parser reads exactly those identifiers back as the constants -- previously they
+    /// re-parsed as free VARIABLES and the value silently changed on feed-back.
+    #[test]
+    fn infix_reserved_constant_names() {
+        let Some(e) = engine() else { return };
+        let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(i2p(&e, "x0 + pi"), v(&["+", "x0", "np.pi"]));
+        assert_eq!(i2p(&e, "e*x0"), v(&["*", "np.e", "x0"]));
+        assert_eq!(i2p(&e, "inf"), v(&["float(\"inf\")"]));
+        assert_eq!(i2p(&e, "nan"), v(&["float(\"nan\")"]));
+        assert_eq!(i2p(&e, "-inf"), v(&["neg", "float(\"inf\")"]));
+        // The dotted spellings stay atomic idents and pass through unmapped.
+        assert_eq!(i2p(&e, "np.pi + x0"), v(&["+", "np.pi", "x0"]));
+        // Prefixed/suffixed identifiers are NOT reserved (`pie`, `inf2` stay variables).
+        assert_eq!(i2p(&e, "pie + inf2"), v(&["+", "pie", "inf2"]));
+    }
+
+    /// `**` conversion under a CLEAN config (no `pow{N}`/`pow1_{N}` in the vocabulary):
+    /// every exponent keeps the core binary `pow` -- the legacy hyper-op spellings exist
+    /// only in configs that declare them (the dev_7-3 pins above stay byte-identical).
+    /// Previously the float-fraction branch emitted `pow1_2` unconditionally, so
+    /// `x0^0.5` produced a token the clean engine then rejected as malformed.
+    #[test]
+    fn power_conversion_keeps_binary_pow_without_the_hyper_vocabulary() {
+        use crate::operators::{OperatorSpec, Operators};
+        let mut specs: rustc_hash::FxHashMap<String, OperatorSpec> = Default::default();
+        let mut order = Vec::new();
+        for (name, arity, prec) in [("+", 2, 1.0), ("*", 2, 2.0), ("pow", 2, 3.0)] {
+            order.push(name.to_string());
+            specs.insert(
+                name.to_string(),
+                OperatorSpec {
+                    realization: name.to_string(),
+                    alias: vec![],
+                    inverse: None,
+                    arity,
+                    precedence: Some(prec),
+                    commutative: arity == 2 && name != "pow",
+                },
+            );
+        }
+        let ops = Operators::from_specs(order, specs);
+        let p = |s: &str| super::parse(s, &ops, true, false).unwrap();
+        let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(p("x0^2"), v(&["pow", "x0", "2"]));
+        assert_eq!(p("x0^0.5"), v(&["pow", "x0", "0.5"]));
+        assert_eq!(p("x0^(-0.5)"), v(&["pow", "x0", "-0.5"]));
+        assert_eq!(p("x0^2.0"), v(&["pow", "x0", "2.0"]));
     }
 
     fn conv(e: &Engine, toks: &[&str]) -> Result<Vec<String>, String> {
@@ -1191,11 +1293,31 @@ mod tests {
             conv(&e, &["**", "x1", "/", "-2", "3"]).unwrap(),
             v(&["inv", "pow1_3", "pow2", "x1"])
         );
+        // H-044 pin: a float exponent whose exact ratio exceeds i128 KEEPS binary pow.
+        // 2^128 / 2^129 wrapped `num0 << e` to numerator 0 and folded x**3.4e38 to `1`;
+        // 3*2^127 wrapped to i128::MIN (debug: abs() overflow panic in `reduce`).
+        for huge in [
+            "3.402823669209385e38",
+            "6.80564733841877e38",
+            "5.104235503814077e38",
+        ] {
+            assert_eq!(
+                conv(&e, &["**", "x1", huge]).unwrap(),
+                v(&["pow", "x1", huge]),
+                "out-of-i128-domain exponent {huge} must KEEP"
+            );
+        }
         // Raw unconfigured powN tokens no longer KeyError: kept (pow7) / combined away (pow1).
         assert_eq!(conv(&e, &["pow7", "x1"]).unwrap(), v(&["pow7", "x1"]));
         assert_eq!(conv(&e, &["pow1", "x1"]).unwrap(), v(&["x1"]));
-        // crash-parity: the dead float-division branch still raises.
-        assert!(conv(&e, &["**", "x1", "/", "2.0", "3.0"]).is_err());
+        // H-049 (2026-08-05): the dead float-division branch KEEPS binary pow now --
+        // the legacy raise (int('2.0') failure-parity) fired on the engine's OWN
+        // divisor-side rendered infix, and the engine's own output must always
+        // re-parse.
+        assert_eq!(
+            conv(&e, &["**", "x1", "/", "2.0", "3.0"]).unwrap(),
+            v(&["pow", "x1", "/", "2.0", "3.0"])
+        );
     }
 
     /// parse traps pinning the high-level parse contract in CI.

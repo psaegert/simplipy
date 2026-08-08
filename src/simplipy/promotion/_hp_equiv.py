@@ -18,6 +18,8 @@ Wildcards `_k` are treated as variables x{k}. `<constant>` leaves bind to fitted
 import numpy as np
 from mpmath import mp, mpf, isnan, isinf, nan, inf
 
+from simplipy.utils import reserved_numeric_spelling
+
 
 def _num(x):
     return mpf(str(x)) if not isinstance(x, mpf) else x
@@ -86,13 +88,35 @@ def _pow(a, b):
         return inf
 
 
+def _rootn(a, b):
+    # IEEE rootn (the 0.12 general root operator), lifted to mp -- one semantics, all
+    # surfaces (numeric.rs rootn_f64, operators.py rootn, verify._contract.c_rootn): the
+    # index must be a finite nonzero integer (else nan); n == 1 is the identity; a
+    # negative index is 1/rootn(a, -n) (one zero: rootn(0, -n) = +inf); odd n is the
+    # signed total root, even n the principal root (nan on negatives, including -inf).
+    # nan operands never reach here (the BIN dispatcher propagates them first).
+    if isinf(b) or b != int(b) or b == 0:
+        return nan
+    ni = int(b)
+    if ni < 0:
+        return UN['inv'](_rootn(a, mpf(-ni)))
+    if ni == 1:
+        return a
+    return _odd_root(a, ni) if ni % 2 else _even_root(a, ni)
+
+
 UN = {
     'neg': lambda x: -x, 'abs': lambda x: abs(x),
     'inv': lambda x: (inf if x >= 0 else -inf) if x == 0 else 1 / x,
+    # -- retired generation-1 vocabulary (simplipy <= 0.11) below the live entries: kept
+    # deliberately so this INSTRUMENT stays vocabulary-complete for cross-generation audits
+    # and for the ladder's legacy-spelled positive controls. The engine itself refuses
+    # generation-1 artifacts at load (simplipy.compat); nothing generation-2 spells these.
     'mult2': lambda x: 2 * x, 'mult3': lambda x: 3 * x, 'mult4': lambda x: 4 * x, 'mult5': lambda x: 5 * x,
     'div2': lambda x: x / 2, 'div3': lambda x: x / 3, 'div4': lambda x: x / 4, 'div5': lambda x: x / 5,
     'pow2': lambda x: x ** 2, 'pow3': lambda x: x ** 3, 'pow4': lambda x: x ** 4, 'pow5': lambda x: x ** 5,
     'pow1_2': lambda x: _even_root(x, 2), 'pow1_4': lambda x: _even_root(x, 4),
+    # (pow1_3/pow1_5 are LIVE: the real odd roots, not retired)
     'pow1_3': lambda x: _odd_root(x, 3), 'pow1_5': lambda x: _odd_root(x, 5),
     'sin': mp.sin, 'cos': mp.cos, 'tan': mp.tan,
     'asin': lambda x: nan if abs(x) > 1 else mp.asin(x),
@@ -106,7 +130,7 @@ UN = {
 BIN = {
     '+': lambda a, b: a + b, '-': lambda a, b: a - b, '*': lambda a, b: a * b,
     '/': lambda a, b: ((nan if a == 0 else (-inf if (a < 0) != (b < 0) else inf)) if b == 0 else a / b),
-    'pow': _pow,
+    'pow': _pow, 'rootn': _rootn,
 }
 
 
@@ -141,8 +165,14 @@ def _ev(tokens, i, env, consts, ci):
         return LEAF[t](), i, ci
     if t in env:
         return env[t], i, ci
-    # numeric literal
-    return _num(float(t)), i, ci
+    # numeric literal, including the paren-wrapped negative form ('(-8.0)') that the
+    # valuation pools emit -- same grammar as the sibling f64 oracle (_f64_eval._num).
+    # H-007: never bare float() -- a reserved spelling ('inf', '1_000') would be silently
+    # misread as a value; the boundary forbids such tokens, so seeing one is a defect.
+    core = t.strip('()')
+    if reserved_numeric_spelling(core):
+        raise ValueError(f"reserved numeric spelling {t!r} reached the hp oracle (H-007)")
+    return _num(float(core)), i, ci
 
 
 def evaluate(tokens, env, consts):

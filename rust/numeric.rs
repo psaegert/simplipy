@@ -91,7 +91,7 @@ fn eval_node(tokens: &[String], idx: &mut usize, ops: &Operators) -> Option<f64>
             let mut args = [0.0f64; 2];
             let arity = arity as usize;
             if arity > 2 {
-                return None; // no arity>2 operator exists in dev_7-3
+                return None; // the evaluator handles arity <= 2 (every supported vocabulary)
             }
             for a in args.iter_mut().take(arity) {
                 *a = eval_node(tokens, idx, ops)?;
@@ -122,14 +122,88 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
         "float(\"nan\")" => return Some(f64::NAN),
         _ => {}
     }
-    if let Some(v) = parse_pyfloat(tok) {
+    // Bare or parenthesized, decimal or exact-fraction: the wrapping composes with
+    // both grammars. The old paren branch `return`ed parse_pyfloat(inner) EVEN ON
+    // None, so "(-1/3)" never reached the fraction arm below it (hardening H-012,
+    // 2026-08-03 -- the engine-side reader had the same hole, kept aligned).
+    fn bare_value(t: &str) -> Option<f64> {
+        if let Some(v) = parse_pyfloat(t) {
+            return Some(v);
+        }
+        // The AC core's exact-fraction literal `p/q` (`1/3`): evaluate as f64
+        // division, matching what Python's `float(p)/float(q)` would produce.
+        if let Some((p, q)) = t.split_once('/') {
+            if let (Ok(pv), Ok(qv)) = (p.parse::<f64>(), q.parse::<f64>()) {
+                if p.chars().all(|c| c.is_ascii_digit() || c == '-')
+                    && q.chars().all(|c| c.is_ascii_digit())
+                    && !q.is_empty()
+                {
+                    return Some(pv / qv);
+                }
+            }
+        }
+        None
+    }
+    if let Some(v) = bare_value(tok) {
         return Some(v);
     }
-    // a parenthesized literal such as "(-1)" (Python evals "(-1)" -> -1.0).
     if let Some(inner) = tok.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
-        return parse_pyfloat(inner);
+        return bare_value(inner);
     }
     None
+}
+
+/// H-045-R (owner Option B, 2026-08-05): sign and parity of an INTEGER-denoting decimal
+/// literal, read from the SPELLING -- exact at every magnitude, no `i128`/f64 limit.
+/// `Some((negative, odd))` iff the token is a decimal/e-notation literal whose denoted
+/// value is a nonzero integer: the digit string `D` with decimal shift `s` denotes
+/// `sign * D * 10^s`; an integer iff `s >= 0` or the last `|s|` digits are all zero.
+/// Parity: any positive shift makes it even (a factor of 10); at shift 0 the last
+/// effective digit decides. Zero mantissas, non-integers, fractions `p/q`, and anything
+/// outside the plain decimal grammar return `None` -- callers refuse (fail closed).
+pub(crate) fn integer_literal_parity(tok: &str) -> Option<(bool, bool)> {
+    let t = tok
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(tok);
+    let (neg, t) = match t.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
+    };
+    let (mant, exp) = match t.find(['e', 'E']) {
+        Some(i) => (&t[..i], t[i + 1..].parse::<i64>().ok()?),
+        None => (t, 0i64),
+    };
+    let (int_part, frac_part) = match mant.find('.') {
+        Some(i) => (&mant[..i], &mant[i + 1..]),
+        None => (mant, ""),
+    };
+    if int_part.is_empty() && frac_part.is_empty() {
+        return None;
+    }
+    if !int_part.bytes().all(|b| b.is_ascii_digit())
+        || !frac_part.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let digits: Vec<u8> = int_part.bytes().chain(frac_part.bytes()).collect();
+    if digits.iter().all(|&b| b == b'0') {
+        return None; // zero: no parity claim, callers refuse
+    }
+    let shift = exp.checked_sub(frac_part.len() as i64)?;
+    let effective_last = if shift >= 0 {
+        if shift > 0 {
+            return Some((neg, false)); // a positive power of 10 factor: even
+        }
+        *digits.last().unwrap()
+    } else {
+        let drop = usize::try_from(-shift).ok()?;
+        if drop >= digits.len() || digits[digits.len() - drop..].iter().any(|&b| b != b'0') {
+            return None; // trailing digits carry mass: not an integer
+        }
+        digits[digits.len() - drop - 1]
+    };
+    Some((neg, (effective_last - b'0') % 2 == 1))
 }
 
 /// Python `float(token)` for the literal forms `is_numeric_string` admits. Handles a trailing dot
@@ -176,7 +250,8 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
         // pow1_2 / pow1_4 = `x ** 0.5` / `x ** 0.25`: negative base (incl. -inf) -> NaN.
         "pow1_2" => |x| aligned_pow(x, 0.5),
         "pow1_4" => |x| aligned_pow(x, 0.25),
-        // pow1_3 / pow1_5: real cube/fifth root (operators.py:121,164) -- sign-folded, always real
+        // pow1_3 / pow1_5: real cube/fifth root, sign-folded, always real (retired-vocabulary
+        // input support; the live spelling is `rootn`, whose odd arm matches this exactly)
         "pow1_3" => |x| real_odd_root(x, 1.0 / 3.0),
         "pow1_5" => |x| real_odd_root(x, 1.0 / 5.0),
         // transcendentals via the SYSTEM libm (same functions Python's `math` calls)
@@ -204,10 +279,12 @@ pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
         "+" => |a, b| a + b,
         "-" => |a, b| a - b,
         "*" => |a, b| a * b,
-        // `/` realization is `operators.div`: scalar zero-divisor -> signed inf / nan (operators.py:29)
+        // `/` realization is `operators.div`: scalar zero-divisor -> signed inf / nan
         "/" => op_div,
         // binary `pow` = `x ** y` = C pow (invalid -> NaN, overflow -> inf)
         "pow" => aligned_pow,
+        // `rootn(x, n)`: IEEE-754 rootn, honest for EVERY integer index.
+        "rootn" => rootn_f64,
         _ => return None,
     })
 }
@@ -231,7 +308,37 @@ fn op_div(x: f64, y: f64) -> f64 {
     x / y
 }
 
-/// `pow1_3`/`pow1_5` real odd root (operators.py:121,164): `x<0 -> -(-x)**r` else `x**r`.
+/// IEEE-754 `rootn(x, n)`, honest for every integer index:
+/// odd index = the signed root (total on R); even = the principal root (NaN on negatives,
+/// identical to `pow(x, 1/n)`); n == 1 = the identity; n < 0 = the reciprocal of the
+/// positive-index root; n == 0 or a non-integer index = NaN (invalid operation).
+/// One semantics, five surfaces: this table, `operators.py::rootn`, `interval.rs`, and
+/// both `hiprec.rs` evaluators -- pinned against each other by the parity tests.
+fn rootn_f64(x: f64, n: f64) -> f64 {
+    if n.fract() != 0.0 || n == 0.0 || !n.is_finite() {
+        return f64::NAN;
+    }
+    let k = n.abs();
+    // Parity via exact float remainder: every representable float >= 2^53 is an even
+    // integer (spacing >= 2), so `% 2.0` is exact at every magnitude.
+    let root = if k == 1.0 {
+        x
+    } else if k % 2.0 == 1.0 {
+        real_odd_root(x, 1.0 / k)
+    } else if x < 0.0 {
+        f64::NAN
+    } else {
+        x.powf(1.0 / k)
+    };
+    if n < 0.0 {
+        1.0 / root
+    } else {
+        root
+    }
+}
+
+/// The real odd root (`rootn`'s odd arm; the retired `pow1_3`/`pow1_5` spellings):
+/// `x<0 -> -(-x)**r` else `x**r`.
 fn real_odd_root(x: f64, r: f64) -> f64 {
     if x < 0.0 {
         -cpow(-x, r)
@@ -340,10 +447,10 @@ mod tests {
         assert_eq!(ev(&e, &["-", "3", "5"]).as_deref(), Some("-2"));
         assert_eq!(ev(&e, &["/", "7", "2"]).as_deref(), Some("3.5"));
         assert_eq!(ev(&e, &["neg", "-5"]).as_deref(), Some("5"));
-        assert_eq!(ev(&e, &["pow2", "-3"]).as_deref(), Some("9"));
-        assert_eq!(ev(&e, &["pow1_2", "4"]).as_deref(), Some("2"));
-        assert_eq!(ev(&e, &["pow1_3", "-8"]).as_deref(), Some("-2"));
-        assert_eq!(ev(&e, &["mult2", "3"]).as_deref(), Some("6"));
+        assert_eq!(ev(&e, &["pow", "-3", "2"]).as_deref(), Some("9"));
+        assert_eq!(ev(&e, &["rootn", "4", "2"]).as_deref(), Some("2"));
+        assert_eq!(ev(&e, &["rootn", "-8", "3"]).as_deref(), Some("-2"));
+        assert_eq!(ev(&e, &["*", "2", "3"]).as_deref(), Some("6"));
         // fold to the IEEE-754 f64 result, including inf/nan tokens.
         assert_eq!(ev(&e, &["/", "1", "0"]).as_deref(), Some("float(\"inf\")"));
         assert_eq!(
@@ -352,7 +459,10 @@ mod tests {
         );
         assert_eq!(ev(&e, &["/", "0", "0"]).as_deref(), Some("float(\"nan\")"));
         assert_eq!(ev(&e, &["inv", "0"]).as_deref(), Some("float(\"inf\")"));
-        assert_eq!(ev(&e, &["pow1_2", "-1"]).as_deref(), Some("float(\"nan\")"));
+        assert_eq!(
+            ev(&e, &["rootn", "-1", "2"]).as_deref(),
+            Some("float(\"nan\")")
+        );
         // sqrt(-1) = nan
     }
 

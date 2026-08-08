@@ -70,7 +70,7 @@ output, a **provenance sidecar** (`<output>.provenance.json`) records every para
 derived seed, the evaluation-matrix specification, and per-length universe coverage, so a
 published ruleset is reproducible from its artifact alone.
 
-## Rule sorts: `_`, `?`, and `!`
+## Rule sorts: `_`, `?`, `!`, and `$`
 
 Every placeholder in a shipped rule carries a *sort* — the binding claim its sigil
 encodes, enforced by the matcher at apply time:
@@ -82,14 +82,22 @@ encodes, enforced by the matcher at apply time:
   only when a match-time certificate proves it defined and finite almost everywhere
   (an adaptive interval analysis over the reals). Fail-closed: what cannot be
   certified is not bound.
+- **`$i` — mult-certified subtree.** Binds a variable leaf freely; a composite subtree
+  binds only when the certificate proves it finite **and nonzero** almost everywhere.
+  This is the licence behind cancelling a factor against its own inverse
+  (`$0 / $0 → 1`, `$0 * inv($0) → 1`): where the bound subtree is zero the source is
+  `0/0` while the target says `1`, so nonzero-a.e. is exactly the extra obligation
+  beyond `!`. Fail-closed like `!`.
 
-The three claims nest — everything a narrower sort binds, the wider sorts bind too:
+The four claims nest — everything a narrower sort binds, the wider sorts bind too:
 
 ```mermaid
 flowchart TB
     subgraph ANY["_i — any subtree (widest claim)"]
         subgraph BANG["!i — subtree certified finite almost everywhere"]
-            Q["?i — bare variable leaf only (narrowest claim)"]
+            subgraph DOLLAR["$i — certified finite AND nonzero almost everywhere"]
+                Q["?i — bare variable leaf only (narrowest claim)"]
+            end
         end
     end
 ```
@@ -103,18 +111,11 @@ per-engine cache), which makes `!`-bearing rulesets fast at scale with identical
 verdicts.
 
 These sort gates define the default **`SOUND`** apply-time contract. `Mode.LOSSY`
-(see [Soundness Modes](index.md#soundness-modes)) relaxes them together — every `!`
+(see [Soundness Modes](index.md#soundness-modes)) relaxes them together — every `!`/`$`
 placeholder then binds any subtree with the certificate skipped — which recovers extra
 reductions for training-data canonicalization at the cost of equivalence. Mined rules are
 always *certified* under the sound gates regardless; the mode only changes how they bind
 at apply time.
-
-### Diagnostics
-
-Setting the environment variable `SIMPLIPY_LEAF_WILDCARDS=1` makes every `_i`
-placeholder bind variable leaves only (demoting all wildcards to `?`-sort semantics),
-which isolates whether a behavior difference comes from composite wildcard bindings;
-default off restores the deployed subtree semantics.
 
 ## Running a mine
 
@@ -159,6 +160,11 @@ max_target_pattern_length: 4
 # Universe policy: lengths whose complete universe is infeasible to enumerate
 # are drawn uniformly from the complete universe instead. With the operator
 # set above, lengths through 5 are enumerable; 6 and 7 are sampled.
+# The sample size is a coverage-vs-cost dial. It is cheaper than it looks: the
+# per-source rate is roughly FLAT from length 5 upward (measured ~36 src/s at
+# length 5 vs ~31 at length 6, where length 4 runs at ~4,800), so the exhaustive
+# length-5 tier dominates the run and raising 6/7 from 200k to 1M costs hours on
+# a multi-day climb, not days.
 source_sample_per_length:
   6: 1000000
   7: 1000000
@@ -173,8 +179,11 @@ constants_fit_challenges: 16
 # Optimizer restarts per constant fit (accounts for non-convergence)
 constants_fit_retries: 16
 
-# Acceptance tolerances (relative / absolute, per row)
-rtol: 1.0e-9
+# Acceptance tolerances (relative / absolute, per row). The 2026-08 sensitivity
+# audit of the published mines characterized the rtol window: 1e-9 admitted a
+# tanh-saturation near-miss family (residuals ~2e-10, lossy), 1e-7 admits the
+# next shelf AND degrades literal resolution; 1e-11 is the audited value.
+rtol: 1.0e-11
 atol: 1.0e-12
 
 # Master seed: reproduces the entire mine, byte-for-byte
@@ -264,14 +273,14 @@ To certify proposals against an already-built engine without re-mining, use the
 import simplipy as sp
 from simplipy.utils import deduplicate_rules
 
-engine = sp.SimpliPyEngine.load("4-3")
+engine = sp.SimpliPyEngine.load("acj-4-3")
 
 proposals = [
-    ["+", "pow2", "sin", "x0", "pow2", "cos", "x0"],   # sin^2 + cos^2
-    ["mult2", "*", "sin", "x0", "cos", "x0"],          # 2 sin cos
-    ["*", "-", "x0", "x1", "-", "x1", "x0"],           # (x-y)(y-x)
+    ["+", "pow", "sin", "x0", "2", "pow", "cos", "x0", "2"],           # sin^2 + cos^2
+    ["*", "2", "*", "sin", "x0", "cos", "x0"],                         # 2 sin cos
+    ["-", "pow", "+", "x0", "x1", "2", "pow", "-", "x0", "x1", "2"],   # (x+y)^2 - (x-y)^2
 ]
-hints = [None, None, ["neg", "pow2", "-", "x0", "x1"]]  # optional target suggestions
+hints = [None, None, ["*", "4", "*", "x0", "x1"]]  # optional target suggestions
 
 extra_terms = ['<constant>', '0', '1', '(-1)', 'np.pi', 'np.e']  # target vocabulary
 certified = engine.certify_rules(proposals, hints,
@@ -323,8 +332,7 @@ certified-minimal target about 85–90% of the time.
    samples at lengths 6 and 7 is a week-scale run on a busy many-core CPU, with length 5
    dominating the cost; the provenance sidecar records everything needed to reproduce the
    run from its seed, including the proposal file's sha256 and per-outcome counts.
-3. **Post-process** (optional): `prune-rules` / `prune-covered-rules` /
-   `resolve-rules`, below.
+3. **Post-process** (optional): `prune-covered-rules` / `resolve-rules`, below.
 
 Steps 2–3 are deterministic given the seed and the proposals file; step 1 is
 inherently not, so keep the proposals file under version control — it, not the model
@@ -332,37 +340,27 @@ transcript, is the reproducible artifact.
 
 # Post-processing Rules
 
-Three commands refine an existing rule set loaded from an engine and write the
+Two commands refine an existing rule set loaded from an engine and write the
 result to a JSON file (they do not modify the installed asset in place):
 
 ```sh
-# Remove explicit rules that are already subsumed by wildcard-pattern rules
-simplipy prune-rules -e "4-3" -o "path/to/pruned_rules.json" -v
-
 # Remove rules that the remaining rules already cover compositionally
-simplipy prune-covered-rules -e "4-3" -o "path/to/pruned_rules.json" -v
+simplipy prune-covered-rules -e "acj-4-3" -o "path/to/pruned_rules.json" -v
 
 # Replace <constant> placeholders with concrete numeric values in all-numeric rules
-simplipy resolve-rules -e "4-3" -o "path/to/resolved_rules.json" -v
+simplipy resolve-rules -e "acj-4-3" -o "path/to/resolved_rules.json" -v
 ```
 
-- `-e` is the engine name (e.g. `4-3`) or a path to an engine configuration file
+- `-e` is the engine name (e.g. `acj-4-3`) or a path to an engine configuration file
 - `-o` is the output path for the post-processed rules
 - `-v` enables verbose progress output
 
 ## Pruning rulesets
 
-Two prunes shrink a ruleset without changing what the engine can simplify, under
-different criteria:
+One prune shrinks a ruleset without changing what the engine can simplify:
 
-- **`SimpliPyEngine.prune_redundant_rules`** (CLI: `prune-rules`) removes *explicit*
-  rules (no placeholders) that are shadowed by wildcard-pattern rules: an explicit rule
-  is dropped only if the engine without it still simplifies the rule's source to
-  **exactly** the same target (an *equality* criterion — constant folding and term
-  cancellation count toward coverage). Rules are tested and removed serially, so two
-  rules that are each redundant only in the other's presence are never both dropped.
 - **`SimpliPyEngine.prune_covered_rules`** (CLI: `prune-covered-rules`) is the
-  stronger, compositional prune: it removes **any** rule — pattern rules included —
+  compositional prune: it removes **any** rule — pattern rules included —
   whose effect the remaining rules achieve on their own. A rule is covered only if
   every instantiation variant of its source still simplifies to **at most** the length
   of the corresponding target (a *≤-length* criterion): each slot is instantiated as a
@@ -374,9 +372,12 @@ different criteria:
   rules, so the result is **deterministic** for a given rule list — and greedy: valid,
   not necessarily minimal.
 
-Both are also available at the end of a mine through the `prune` parameter:
-`find_rules(prune=True)` runs the redundant-rule prune after discovery, and
-`find_rules(prune='covered')` runs the covered-rule prune instead.
+(The former `prune_redundant_rules` — explicit rules shadowed by pattern rules under
+an equality criterion — died with the legacy kernel and is gone; `find_rules(prune=True)`
+now fails fast.)
+
+The prune is also available at the end of a mine through the `prune` parameter:
+`find_rules(prune='covered')`, or a `prune: 'covered'` key in the mine configuration.
 
 Note that the covered prune trades ruleset size against one-step reachability: a
 covered rule's source still simplifies at least as short, but possibly through
@@ -391,10 +392,14 @@ already installed locally:
 
 ```sh
 simplipy list --type engine
-# --- Available Assets ---
-# - 2-1             [installed]  Complete rule mine (sources to length 2, targets to length 1) + certified LLM proposals.
-# - 3-2             [installed]  Complete rule mine (sources to length 3, targets to length 2) + certified LLM proposals.
-# - 4-3             [installed]  Complete rule mine (sources to length 4, targets to length 3) + certified LLM proposals.
+# --- Available engine assets ---
+# - acj-4-3  [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
+#                         (sources to length 4, targets to length 3), ... Pairs with simplipy >= 0.12.
+# - acj-3-2  [installed]  Complete AC-judged rule mine ... (sources to length 3, targets to length 2), ...
+# - acj-2-1  [installed]  Complete AC-judged rule mine ... (sources to length 2, targets to length 1), ...
+# - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
+#                         starting point for fresh mining. Pairs with simplipy >= 0.12.
+# - ...                   (pre-0.12 assets remain listed for older installs; they refuse to load on 0.12)
 
 simplipy list --installed        # only assets already downloaded
 ```
@@ -402,8 +407,8 @@ simplipy list --installed        # only assets already downloaded
 Install or remove an asset by name:
 
 ```sh
-simplipy install 4-3         # download an asset from Hugging Face (--force to reinstall)
-simplipy remove 4-3          # remove a locally installed asset
+simplipy install acj-4-3         # download an asset from Hugging Face (--force to reinstall)
+simplipy remove acj-4-3          # remove a locally installed asset
 ```
 
 The same operations are available from Python (this is also what the engine loader uses under the hood):
@@ -411,10 +416,10 @@ The same operations are available from Python (this is also what the engine load
 ```python
 import simplipy as sp
 
-sp.install("4-3")     # download an asset from Hugging Face
-sp.uninstall("4-3")   # remove a locally installed asset
-sp.get_path("4-3", install=True)  # resolve a local path, installing if needed
+sp.install("acj-4-3")     # download an asset from Hugging Face
+sp.uninstall("acj-4-3")   # remove a locally installed asset
+sp.get_path("acj-4-3", install=True)  # resolve a local path, installing if needed
 ```
 
-`sp.SimpliPyEngine.load("4-3", install=True)` installs the engine
+`sp.SimpliPyEngine.load("acj-4-3", install=True)` installs the engine
 on demand as part of loading.

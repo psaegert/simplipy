@@ -6,8 +6,11 @@ import pytest
 
 # --- Test Constants ---
 # These tests use real, known assets from the psaegert/simplipy-assets-test manifest.
-# An active internet connection is required to run them.
-VALID_ENGINE = "dev_7-3"
+# An active internet connection is required to run them. The asset MANAGER is
+# generation-agnostic (mirroring/inspection is a sanctioned-open boundary), but the
+# suite exercises it on the CURRENT generation-2 artifact (audit Tier-1 #3: no test
+# depends on a legacy asset).
+VALID_ENGINE = "acj-4-3"
 VALID_TEST_DATA = "expressions_10k"
 INVALID_ASSET = "this-asset-does-not-exist"
 
@@ -33,7 +36,7 @@ def test_install_and_remove_asset(tmp_path: Path):
     assert install_success is True
     expected_dir = tmp_path / "engines" / VALID_ENGINE
     assert expected_dir.is_dir()
-    # Based on the manifest for 'dev_7-3', these files should exist.
+    # Based on the manifest for 'acj-4-3', these files should exist.
     assert (expected_dir / "config.yaml").is_file()
     assert (expected_dir / "rules.json").is_file()
 
@@ -87,7 +90,7 @@ def test_get_asset_path_auto_install(tmp_path: Path):
 
     # Assert: A valid path string is returned and the asset is now installed.
     assert path_str is not None
-    # The manifest for 'dev_7-3' has entrypoint 'engines/dev_7-3/config.yaml'.
+    # The manifest for 'acj-4-3' has entrypoint 'engines/acj-4-3/config.yaml'.
     expected_path = tmp_path / "engines" / VALID_ENGINE / "config.yaml"
     assert path_str == str(expected_path)
     assert expected_path.is_file()
@@ -144,7 +147,7 @@ def test_list_assets_installed_and_available(capsys, tmp_path: Path):
     captured = capsys.readouterr()
     output = captured.out
 
-    assert "--- Available Assets ---" in output
+    assert "--- Available engine assets ---" in output
     assert VALID_ENGINE in output
     assert "[installed]" not in output  # Should not be marked as installed
 
@@ -154,11 +157,17 @@ def test_list_assets_installed_and_available(capsys, tmp_path: Path):
     captured = capsys.readouterr()
     output = captured.out
 
-    assert "--- Installed Assets ---" in output
+    assert "--- Installed engine assets ---" in output
     assert VALID_ENGINE in output
     assert "[installed]" in output
     # A known asset that wasn't installed should not be in the output.
     assert "cis-benchmark-v1" not in output
+
+    # --- 3. The empty installed view names the type it is empty OF ---
+    sp.list_assets('test-data', installed_only=True, local_dir=tmp_path, repo_id=HF_MANIFEST_REPO, manifest_filename=HF_MANIFEST_FILENAME)
+    output = capsys.readouterr().out
+    assert "--- Installed test-data assets ---" in output
+    assert "No test-data assets installed." in output
 
 
 def test_force_reinstall(tmp_path: Path):

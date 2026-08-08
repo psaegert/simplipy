@@ -1,9 +1,7 @@
-import os
-
 import pytest
 import yaml
 
-from simplipy.io import load_config, save_config
+from simplipy.io import load_config
 
 
 class TestLoadConfig:
@@ -16,8 +14,18 @@ class TestLoadConfig:
         with open(path, "w") as f:
             yaml.dump(cfg, f)
 
-        result = load_config(str(path), resolve_paths=False)
+        result = load_config(str(path))
         assert result == cfg
+
+    def test_path_values_returned_verbatim(self, tmp_path) -> None:
+        """Path-valued entries are NOT rewritten: resolution is the consumer's job
+        (the 0.12 removal of the resolve_paths value-sniffing pass)."""
+        cfg = {"rules": "./rules.json", "proposals": "proposals.json"}
+        path = tmp_path / "config.yaml"
+        with open(path, "w") as f:
+            yaml.dump(cfg, f)
+
+        assert load_config(str(path)) == cfg
 
     def test_load_from_dict(self) -> None:
         """Passing a dict returns it unchanged."""
@@ -33,20 +41,3 @@ class TestLoadConfig:
         """A directory path raises ValueError."""
         with pytest.raises(ValueError):
             load_config(str(tmp_path))
-
-
-class TestSaveConfig:
-    """Tests for save_config()."""
-
-    def test_roundtrip(self, tmp_path) -> None:
-        """save_config then load_config returns the same dict."""
-        cfg = {"a": 1, "b": [2, 3]}
-        save_config(cfg, str(tmp_path), "out.yaml", recursive=False)
-        loaded = load_config(str(tmp_path / "out.yaml"), resolve_paths=False)
-        assert loaded == cfg
-
-    def test_creates_directory(self, tmp_path) -> None:
-        """save_config creates missing parent directories."""
-        subdir = str(tmp_path / "sub" / "dir")
-        save_config({"x": 1}, subdir, "cfg.yaml", recursive=False)
-        assert os.path.isfile(os.path.join(subdir, "cfg.yaml"))

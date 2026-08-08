@@ -32,21 +32,33 @@ JUDGE_TIMEOUT_S = 30   # per-rule budget. A gate that can HANG is not a gate: mp
                        # silently skipped.
 
 POISONS = [
+    # legacy-vocabulary spellings (the gate keeps judging pre-0.12 artifacts)
     ('pow1_2 pow2 ?0'.split(), '?0'.split(), 'KILL',
      'clause (a): sqrt(x^2)->x changes real values on x<0'),
     ('pow4 pow5 pow1_2 !0'.split(), 'pow !0 <constant>'.split(), 'KILL',
      'clause (b): even-root half-line domain extension'),
     ('pow1_2 pow float("-inf") ?0'.split(), 'pow float("inf") ?0'.split(), 'KILL',
      'clause (b): pow(-inf, data) undefined a.e.'),
+    # live 0.12-vocabulary spellings (rootn + the $ mult-certified sort)
+    ('pow rootn !0 2 2'.split(), '!0'.split(), 'KILL',
+     'clause (b): even-root round-trip extends the x<0 half-line (rootn spelling)'),
+    ('/ $0 $0'.split(), '0'.split(), 'KILL',
+     'clause (a): x/x -> 0 is wrong on the whole nonzero line'),
 ]
-PHANTOM = ('neg inv neg !0'.split(), 'inv !0'.split(), 'TOLERATED',
-           'clause (c): must NOT be killed')
+PHANTOMS = [
+    ('neg inv neg !0'.split(), 'inv !0'.split(), 'TOLERATED',
+     'clause (c): must NOT be killed'),
+    ('rootn exp _0 (-1)'.split(), 'exp neg _0'.split(), 'CERTIFIED',
+     'sound rootn identity (from the shipping artifact): must NOT be killed'),
+    ('/ $0 $0'.split(), '1'.split(), 'TOLERATED',
+     '$-sort licence f/f -> 1: nan events only at null-excused atoms (0, +-inf)'),
+]
 
 
 def selftest():
     print('=== rule-complete gate poison self-test ===')
     ok = True
-    for lhs, rhs, want, why in POISONS + [PHANTOM]:
+    for lhs, rhs, want, why in POISONS + PHANTOMS:
         r = judge_rule(lhs, rhs)
         got = r['verdict']
         good = (got == want)
@@ -59,8 +71,32 @@ def selftest():
     return ok
 
 
-def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOUT_S):
-    signal.signal(signal.SIGALRM, _alarm)
+def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOUT_S,
+          announce_report=True):
+    # Install the timeout handler for the duration of the sweep ONLY: the process may
+    # have its own SIGALRM use (a host harness, another timeout wrapper), and clobbering
+    # it without restore leaks our handler past this call (audit Tier-2, 2026-08-03).
+    # MAIN THREAD ONLY: `signal.signal` raises anywhere else, which made every
+    # off-main-thread mine crash in its finalize gate (hardening H-010, 2026-08-03).
+    # Off the main thread the sweep runs with timeouts DISARMED (judge_timeout_s=0
+    # makes every per-rule `signal.alarm(0)` a harmless cancel; arming a real alarm
+    # off-main would deliver SIGALRM to an unhandled main thread and kill the process).
+    import threading
+    on_main = threading.current_thread() is threading.main_thread()
+    if not on_main:
+        print('off-main-thread sweep: judge timeout protection unavailable '
+              '(SIGALRM is main-thread-only)', flush=True)
+        return _sweep_inner(rules, report_path, build_path, 0, announce_report)
+    prev_handler = signal.signal(signal.SIGALRM, _alarm)
+    try:
+        return _sweep_inner(rules, report_path, build_path, judge_timeout_s,
+                            announce_report)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev_handler)
+
+
+def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_report):
     buckets = {'CERTIFIED': [], 'TOLERATED': [], 'KILL': [],
                'ENGINE-MISALIGN': [], 'NO-WITNESS': [],
                'UNRESOLVED-COVERAGE': [], 'UNSUPPORTED-SHAPE': [], 'JUDGE-TIMEOUT': []}
@@ -95,7 +131,12 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
     if report_path:
         json.dump({'buckets': buckets, 'detail': detail}, open(report_path, 'w'),
                   default=str)
-        print(f'report -> {report_path}')
+        # Announced only when the CALLER chose the path: verify_ruleset routes its
+        # read-back through an anonymous tempdir, and printing that random path
+        # makes otherwise byte-identical mine stdout differ across processes
+        # (found by the determinism-across-PYTHONHASHSEED pin, 2026-08-02).
+        if announce_report:
+            print(f'report -> {report_path}')
     if build_path:
         keep = [rules[i] for i in sorted(buckets['CERTIFIED'] + buckets['TOLERATED'])]
         json.dump(keep, open(build_path, 'w'))

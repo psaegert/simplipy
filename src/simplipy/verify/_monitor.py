@@ -5,8 +5,12 @@ This monitor is deliberately independent of the certifier's own judges. Its eval
 operator semantics, probe machinery, and corpus are written from the simplification
 contract alone, so it can catch violations that a checker sharing the certifier's own
 machinery would structurally miss. It exercises the DEPLOYED engine end-to-end
-(``simplify`` on real expression shapes, with default constant masking) and judges every
-rewrite under REAL (exact) semantics:
+(``simplify`` on real expression shapes; masking is EXPLICIT in 0.12, so the corpus
+carries both literal and pre-masked shapes) and judges every rewrite under REAL (exact)
+semantics. The judge speaks the engine's full 0.12 output language: n-ary bag tags
+(``<add> .. <sub> .. </add>``, ``<mul> .. <div> .. </mul>``), ``rootn``, and one-token
+exact-rational coefficients (``1/3``). Tokens OUTSIDE that language fail CLOSED
+(UNSCORED) -- an output the judge cannot read must never silently pass as OK.
 
   Values are compared in mpmath (no float64 saturation/overflow); a single unsigned zero;
   1/0 = +inf; IEEE pow specials (pow(+-1, +-inf) = 1, pow(0, 0) = 1); literal folding
@@ -16,9 +20,9 @@ rewrite under REAL (exact) semantics:
   fraction of continuum draws is a positive-measure violation.
 
 Verdict classes per rewrite: OK | VIOLATION (value change / shrink / positive-measure
-extension) | UNSCORED (multi-slot outputs). A violation that is ALSO present under the
-rules-empty engine is bucketed NATIVE-LINE (pre-existing engine behavior, not attributable
-to the ruleset under test).
+extension) | UNSCORED (multi-slot outputs, unknown tokens, no evaluable probes). A
+violation that is ALSO present under the rules-empty engine is bucketed NATIVE-LINE
+(pre-existing engine behavior, not attributable to the ruleset under test).
 
 Self-test: :func:`selftest` poisons a copy of the ruleset with known-unsound rules and
 reports failure loudly unless the monitor flags all of them.
@@ -32,6 +36,7 @@ Importable API:
 """
 import json
 import os
+import re
 import tempfile
 
 import numpy as np
@@ -64,7 +69,8 @@ MEASURE_FRACTION = 0.15   # extension-layer disagreements (nan<->defined and inf
                           # end-to-end sweep is the realization check; the rule-complete gate is
                           # the primary measure instrument. Null events (atom probes incl
                           # +-inf) are tolerated and tallied (TOL_COUNTS) per the null-event
-                          # doctrine.
+                          # doctrine, as are correlated all-equal (diagonal) draws for DATA
+                          # variables -- a Lebesgue-null subset (see judge_pair).
 
 TOL_COUNTS = {'shrink-null': 0, 'inf-null': 0, 'ext-null': 0}
 N_DRAWS = 40                # continuum draws per variable set
@@ -91,11 +97,32 @@ def _pole_guard(denom):
     return abs(denom) < mpf(10) ** (-(DPS - 10))
 
 
+def _residue_guard(x):
+    """A nonzero finite value indistinguishable from an exact ZERO at working precision.
+    A symbolic cancellation (x17 + x15 - x15 - x17) leaves a ~1e-50 residue whose SIGN is
+    rounding noise; feeding it to a domain-edged or root-amplifying function fabricates
+    verdicts two ways (both observed, 2026-07-29 corpus adjudication):
+      * even root / non-integer pow: the noise sign decides defined-vs-nan, so ~half the
+        draws report 'input undefined' -- a fabricated positive-measure EXTENSION;
+      * odd root: |residue|^(1/k) AMPLIFIES 1e-50 to 1e-10, a 'stable value change' that
+        the dps-120 recheck cannot clear (the amplified residue shrinks too slowly).
+    Same precision-honesty doctrine as _pole_guard: skip (Unresolved), never convict."""
+    return x != 0 and not isinf(x) and abs(x) < mpf(10) ** (-(DPS - 10))
+
+
 def c_div(a, b):
     if isnan(a) or isnan(b):
         return _nan()
     if isinf(a) and isinf(b):
         return _nan()
+    if b != 0 and not isinf(b) and _pole_guard(b):
+        # A denominator indistinguishable from an EXACT pole at working precision: a
+        # symbolic cancellation (log(exp(x)) - x) leaves a ~1e-50 residue whose SIGN is
+        # rounding noise, and 1/residue then differs from the exact 1/0 = +inf by that
+        # noise sign -- a fabricated stable 'violation' against a sound fold (audit
+        # finding). Same precision-honesty doctrine as the atanh/acosh bands: skip,
+        # never convict.
+        raise Unresolved()
     if b == 0:                               # ONE zero; c/0 = sign(c)*inf, 0/0 = nan
         if a == 0:
             return _nan()
@@ -107,19 +134,44 @@ def c_div(a, b):
     return a / b
 
 
-PARITY_CAP = mpf('1e15')  # beyond this an exponent's integrality/parity is unresolvable at any
-                          # reasonable precision -- and int(mpf) on an exponent like exp(exp(700))
-                          # (a 10^304-bit integer) is a bignum operation that can hang the
-                          # process. Precision-honest verdict for parity-dependent branches:
-                          # nan (symmetric).
-
-
 def _int_or_none(b):
-    """b as an exact int, None if non-integer, nan-sentinel if parity is unresolvable."""
-    if abs(b) > PARITY_CAP:
+    """b as an exact int, None if non-integer, 'unresolvable' when integrality is
+    unknowable at working precision (H-050, extreme-literal lane 2026-08-05; refined
+    after 1M row 294377).
+
+    The resolvability criterion is REPRESENTATIONAL: mpmath normalizes the mantissa
+    ODD, so for finite nonzero b = (-1)^s * man * 2^exp with bc = bitcount(man), the
+    value's full integer part occupies bc + max(exp, 0) bits. While that fits the
+    working precision (with guard bits), the mpf IS the exact value it claims and
+    exp < 0 <=> non-integer, exp >= 0 <=> integer with parity read off man/exp --
+    exact for every literal the token grammar carries (9007199254740993 at 54 bits,
+    10^19+1 at 67, 2^127 at 127, 1e40 at 133: all resolve at dps 50 / prec 166,
+    fixing the convictions of sound spelling-parity engine folds, smoke rows
+    32/301/796). BEYOND the precision budget the mpf is in general a ROUNDING of its
+    true value, and representation-integrality says nothing: exp(2.703^5) ~ 6e63 is
+    PROVABLY irrational (Lindemann) yet its 166-bit mpf reads as an even integer --
+    the read fabricated definedness for pow(-1, <that>) and convicted the engine's
+    correct Nan (1M row 294377). Those return 'unresolvable' -> nan, the old
+    PARITY_CAP's honest verdict, now stated in representation terms instead of a
+    magnitude constant (int(b) is precision-bounded, so the bignum hang the old cap
+    also guarded against cannot occur).
+    """
+    _sign, man, exp, bc = b._mpf_
+    if man == 0:
+        return None  # zero/specials (callers pre-filter)
+    if bc + max(exp, 0) > mp.prec - 10:
         return 'unresolvable'
-    ib = int(b)
-    return ib if b == ib else None
+    if exp < 0:
+        return None
+    return int(b)
+
+
+def _int_value_or_none(b):
+    """The exact int VALUE of b; None when non-integer or unresolvable at working
+    precision. Consumers that compute WITH the integer (c_rootn's index) refuse
+    honestly on the unresolvable class."""
+    ib = _int_or_none(b)
+    return ib if isinstance(ib, int) else None
 
 
 def c_pow(a, b):
@@ -140,12 +192,21 @@ def c_pow(a, b):
         if b > 0:
             return mpf('inf') if aa > 1 else mpf(0)
         return mpf(0) if aa > 1 else mpf('inf')
+    if _residue_guard(a):
+        # a base indistinguishable from an exact ZERO: only a positive-integer exponent
+        # is noise-immune (residue^k is a yet-smaller residue, exact-zero-consistent).
+        # A non-integer exponent turns the residue's noise SIGN into defined-vs-nan
+        # (fabricated measure events); a negative exponent turns it into a noise-signed
+        # huge value where the exact base gives 0^-k = +inf (fabricated INF-CHANGE).
+        ib = _int_or_none(b)
+        if not (isinstance(ib, int) and ib > 0):
+            raise Unresolved()
     if isinf(a):
         if a > 0:
             return mpf('inf') if b > 0 else mpf(0)
         ib = _int_or_none(b)
         if ib == 'unresolvable':
-            return _nan()
+            return _nan()                    # integrality unknowable at working precision
         if ib is None:
             return _nan()                    # REAL semantics: (-inf)^non-integer is undefined
         if b > 0:
@@ -254,6 +315,8 @@ def _odd_root(k):
             return _nan()
         if isinf(x):
             return x
+        if _residue_guard(x):
+            raise Unresolved()
         r = mp.power(abs(x), mpf(1) / k)
         return -r if x < 0 else r
     return g
@@ -261,12 +324,32 @@ def _odd_root(k):
 
 def _even_root(k):
     def g(x):
+        if not isnan(x) and _residue_guard(x):
+            raise Unresolved()               # residue sign decides defined-vs-nan: unknowable
         if isnan(x) or x < 0:                # sign check FIRST: even root of -inf is nan
             return _nan()                    # (isinf-first returned +inf for -inf: a live bug)
         if isinf(x):
             return mpf('inf')
         return mp.power(x, mpf(1) / k)
     return g
+
+
+def c_rootn(x, n):
+    """IEEE rootn (the 0.12 general root operator): the index must be a finite nonzero
+    integer -- n == 0 or a non-integer index is an invalid operation (nan); n == 1 is
+    the identity; a negative index is 1/rootn(x, -n) (one zero: rootn(0, -n) = +inf);
+    odd n is the signed total root, even n the principal root (nan on negatives,
+    including -inf)."""
+    if isnan(x) or isnan(n) or isinf(n):
+        return _nan()
+    ni = _int_value_or_none(n)  # the index is COMPUTED WITH: value-strict (H-050)
+    if ni is None or ni == 0:
+        return _nan()
+    if ni < 0:
+        return c_inv(c_rootn(x, mpf(-ni)))
+    if ni == 1:
+        return x
+    return (_even_root(ni) if ni % 2 == 0 else _odd_root(ni))(x)
 
 
 def _tot(f, dom=None, lo=None, hi=None):
@@ -297,6 +380,7 @@ OPS = {
     '*': (2, lambda a, b: _nan() if (isnan(a) or isnan(b)) else (_nan() if ((a == 0 and isinf(b)) or (b == 0 and isinf(a))) else a * b)),
     '/': (2, c_div),
     'pow': (2, c_pow),
+    'rootn': (2, c_rootn),
     'neg': (1, lambda x: _nan() if isnan(x) else -x),
     'abs': (1, lambda x: _nan() if isnan(x) else abs(x)),
     'inv': (1, c_inv),
@@ -324,6 +408,10 @@ OPS = {
     'atanh': (1, lambda x: _nan() if isnan(x)
               else (_raise_unresolved() if abs(abs(x) - 1) < mpf(10) ** (-mp.dps + 10)
                     else (_nan() if abs(x) > 1 else mp.atanh(x)))),
+    # -- retired generation-1 vocabulary (simplipy <= 0.11) below (except the live odd
+    # roots pow1_3/pow1_5): kept so the monitor INSTRUMENT stays vocabulary-complete for
+    # auditing legacy-spelled rule sets (raw-table construction is a sanctioned boundary;
+    # the engine itself refuses generation-1 artifacts at load, simplipy.compat).
     'pow2': (1, lambda x: c_pow(x, mpf(2))), 'pow3': (1, lambda x: c_pow(x, mpf(3))),
     'pow4': (1, lambda x: c_pow(x, mpf(4))), 'pow5': (1, lambda x: c_pow(x, mpf(5))),
     'pow1_2': (1, _even_root(2)), 'pow1_3': (1, _odd_root(3)),
@@ -338,6 +426,19 @@ LITS = {'0': lambda: mpf(0), '1': lambda: mpf(1), '(-1)': lambda: mpf(-1),
         'np.pi': lambda: +mp.pi, 'np.e': lambda: +mp.e,
         'float("inf")': lambda: mpf('inf'), 'float("-inf")': lambda: mpf('-inf'),
         'float("nan")': _nan}
+
+# The 0.12 engine's n-ary output grammar: `<add> pos.. [<sub> mag..] </add>` (a bag never
+# contains negative literals; subtracted terms sit behind `<sub>` as magnitudes) and
+# `<mul> num.. [<div> den..] </mul>` (negative-rational-exponent factors sit behind
+# `<div>` with the exponent flipped). Coefficients are one-token exact rationals
+# (`7`, `1.2`, `1/3`).
+BAG_OPEN = {'<add>': ('<sub>', '</add>', '+', '-'),
+            '<mul>': ('<div>', '</mul>', '*', '/')}
+BAG_TOKENS = frozenset(BAG_OPEN) | {'<sub>', '</add>', '<div>', '</mul>'}
+
+RAT_RE = re.compile(r'^-?\d+/\d+$')      # the exact-rational coefficient spelling
+VAR_RE = re.compile(r'^x\d+$')
+SORT_RE = re.compile(r'^[_?!$]\d+$')     # rule-sort slots, judged as quantified reals
 
 
 def _raise_unresolved():
@@ -354,13 +455,46 @@ def _slot_token(v):
 
 
 def evaluate(tokens, env):
-    """Contract-semantics value of a prefix expression at env (variable name -> mp value)."""
+    """Contract-semantics value of a prefix expression at env (variable name -> mp value).
+    Speaks both the binary spelling and the engine's n-ary bag grammar."""
     pos = 0
 
     def walk():
         nonlocal pos
         t = tokens[pos]
         pos += 1
+        if t in BAG_OPEN:
+            marker, close, fold_op, _join_op = BAG_OPEN[t]
+            fold = OPS[fold_op][1]
+            main, sec = [], []
+            cur = main
+            while pos < len(tokens) and tokens[pos] != close:
+                if tokens[pos] == marker:
+                    pos += 1
+                    cur = sec
+                    continue
+                cur.append(walk())
+            if pos >= len(tokens):
+                raise ValueError(f'unclosed {t}: {tokens}')
+            pos += 1                                       # the close tag
+            # The sections denote PER-MEMBER inverse elements folded into ONE flat bag --
+            # the internal form is Mul[num.., Pow(d1,-1), Pow(d2,-1)] / Add[pos.., -m1..],
+            # never num/(d1*d2). The grouping matters at extension points: with d2 = 0 and
+            # d1 < 0, d1^-1 * d2^-1 = -inf while num/(d1*d2) = num/0 = +inf (the sign of
+            # d1 is erased through d1*0 = 0) -- the grouped spelling fabricated a
+            # positive-measure INF-CHANGE verdict against a sound rewrite (observed, 1M
+            # corpus row 26797). Negation distributes totally over the clause-guarded
+            # addition, so the <sub> section may negate per member for the same
+            # faithfulness. Folds within the flat bag are order-invariant on the
+            # special-value lattice {0, +-inf, nan}.
+            inv_member = c_inv if fold_op == '*' else (lambda v: OPS['neg'][1](v))
+            neutral = mpf(0) if fold_op == '+' else mpf(1)
+            acc = main[0] if main else neutral
+            for v in main[1:]:
+                acc = fold(acc, v)
+            for v in sec:
+                acc = fold(acc, inv_member(v))
+            return acc
         if t in OPS:
             ar, f = OPS[t]
             args = [walk() for _ in range(ar)]
@@ -369,7 +503,11 @@ def evaluate(tokens, env):
             return env[t]
         if t in LITS:
             return LITS[t]()
-        return mpf(t.strip('()'))
+        s = t.strip('()')
+        if RAT_RE.match(s):
+            p, q = s.split('/')
+            return mpf(p) / mpf(q)                         # exact int/int at working dps
+        return mpf(s)
     v = walk()
     if pos != len(tokens):
         raise ValueError(f'trailing tokens: {tokens}')
@@ -396,16 +534,102 @@ def probe_points(rng):
 
 
 def variables(tokens):
-    return sorted({t for t in tokens if t not in OPS and t not in LITS
-                   and t != '<constant>' and not _is_num(t)})
+    """STRICT variable classification (x-vars and rule-sort slots only). The pre-fix
+    catch-all -- 'anything not an op/literal is a variable' -- silently turned unknown
+    OPERATOR tokens into free variables and judged garbage; unknowns now go through
+    unknown_tokens() and fail closed."""
+    return sorted({t for t in tokens if VAR_RE.match(t) or SORT_RE.match(t)})
+
+
+def unknown_tokens(tokens):
+    """Tokens outside the judge's language. The fail-closed hinge: anything unknown must
+    surface as UNSCORED, never quietly become a free variable or a skipped probe (the
+    pre-fix judge OK'd every bag-tagged AC output through exactly that hole)."""
+    return sorted({t for t in tokens
+                   if t not in OPS and t not in LITS and t not in BAG_TOKENS
+                   and t != '<constant>' and not VAR_RE.match(t)
+                   and not SORT_RE.match(t) and not _is_num(t)})
 
 
 def _is_num(t):
+    s = t.strip('()')
+    if RAT_RE.match(s):
+        return True
     try:
-        float(t.strip('()'))
+        float(s)
         return True
     except ValueError:
         return False
+
+
+def _var_free_spans(tokens, min_len=2):
+    """Maximal variable-free subtree spans [s, e) of a prefix token list (bag grammar
+    included), scanned left to right; spans never overlap."""
+    n = len(tokens)
+    ends = [0] * n
+
+    def walk(i):
+        j = i + 1
+        if tokens[i] in BAG_OPEN:
+            marker, close = BAG_OPEN[tokens[i]][:2]
+            while j < n and tokens[j] != close:
+                if tokens[j] == marker:
+                    j += 1
+                else:
+                    j = walk(j)
+            if j < n:
+                j += 1                       # the close tag
+        else:
+            for _ in range(OPS.get(tokens[i], (0,))[0]):
+                j = walk(j)
+        ends[i] = j
+        return j
+    walk(0)
+
+    def var_free(i):
+        return all(tokens[k] in OPS or tokens[k] in LITS or tokens[k] in BAG_TOKENS
+                   or _is_num(tokens[k]) for k in range(i, ends[i]))
+    spans, i = [], 0
+    while i < n:
+        if var_free(i) and ends[i] - i >= min_len:
+            spans.append((i, ends[i]))
+            i = ends[i]
+        else:
+            i += 1
+    return spans
+
+
+def _fold_noise_floor(tokens, env, base):
+    """The pair's own f64 fold-noise floor at this probe. The engine's constant folder
+    works in DOUBLES, so every printed non-integer numeric literal in its output carries
+    ulp-scale fold rounding (correctly rounded: <= 0.5 ulp; multi-op folds a few ulp) --
+    and the fold SOURCE need not be a variable-free subtree the judge could canonicalize
+    (observed: asin(x14/x14) -> the f64 pi/2 literal, via a licensed x/x -> 1 rewrite
+    first). By local linearity, the summed response to a 2^-52-relative wiggle of each
+    such literal (4x the correctly-rounded bound) is an upper envelope of what fold
+    rounding alone can move the value -- co-scaling with any downstream condition
+    number, which a fixed end-to-end band cannot (observed: asin-1's 1.2e-17 offset
+    amplified to a stable 1e-14 'value change' by a tan-cos composition). Exact
+    integers and exact-rational coefficients ride the engine's exact paths: no noise."""
+    noise = mpf(0)
+    eps = mpf(2) ** -52
+    for k, t in enumerate(tokens):
+        s = t.strip('()')
+        if not _is_num(t) or RAT_RE.match(s):
+            continue
+        v = mpf(s)
+        if v == 0 or v == mp.nint(v):
+            continue                         # exact in f64: the fold adds no rounding
+        toks2 = list(tokens)
+        toks2[k] = mp.nstr(v * (1 + eps), 40)
+        try:
+            v2 = evaluate(toks2, env)
+        except Exception:
+            continue
+        if isnan(v2) or isinf(v2):
+            continue
+        noise += abs(v2 - base)
+    return noise
 
 
 def _snap_literal_zeros(tokens):
@@ -413,29 +637,8 @@ def _snap_literal_zeros(tokens):
     denotes exact zero (sin(np.pi)) evaluates to a precision residue (1e-51 at dps 50), which
     turns 0*inf = nan into +-inf and fabricates violations (observed). Two-rung test: residue
     that SHRINKS quadratically with dps is an exact zero; a stable tiny value is left alone."""
-    n = len(tokens)
-    ends = [0] * n
-
-    def walk(i):
-        j = i + 1
-        for _ in range(OPS.get(tokens[i], (0,))[0]):
-            j = walk(j)
-        ends[i] = j
-        return j
-    walk(0)
-
-    def var_free(i):
-        return all(tokens[k] in OPS or tokens[k] in LITS or _is_num(tokens[k])
-                   for k in range(i, ends[i]))
-    out, i = list(tokens), 0
-    spans = []
-    while i < n:
-        if var_free(i) and ends[i] - i > 1:
-            spans.append((i, ends[i]))
-            i = ends[i]
-        else:
-            i += 1
-    for s, e in reversed(spans):
+    out = list(tokens)
+    for s, e in reversed(_var_free_spans(tokens, min_len=2)):
         try:
             with mp.workdps(50):
                 a = evaluate(out[s:e], {})
@@ -457,6 +660,11 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
     artifact of a DEGENERATE first fit (pow(c, x) at x = 0 fits every c). One refit at the
     violating probe is allowed, re-judging from scratch with that c substituted; a second
     disagreement means no single constant exists -- a genuine violation."""
+    unk = unknown_tokens(list(inp) + list(out))
+    if unk:
+        # FAIL CLOSED on language gaps: a token the judge cannot read must surface, never
+        # silently skip every probe and fall through to OK (the E1 blindness mechanism).
+        return 'UNSCORED', 'unknown tokens: ' + ' '.join(unk)
     inp, out = _snap_literal_zeros(list(inp)), _snap_literal_zeros(list(out))
     if '<constant>' in inp:
         # PRE-MASKED input (deployed traffic arrives masked): an input-side <constant>
@@ -489,27 +697,40 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
         return 'VIOLATION', msg + cinfo
 
     def envs():
+        # yields (env_builder, point_builder, is_atom, is_diag); is_diag marks the
+        # correlated all-variables-EQUAL continuum draws, a codimension >= 1 subset
+        # whenever more than one variable exists
         for b in sym:
-            yield ({v: b for v in vs} if len(vs) <= 1 else None), b, True
+            yield ({v: b for v in vs} if len(vs) <= 1 else None), b, True, False
         # independent + correlated draw grids (frozen rationals wrapped as builders)
         for i, p in enumerate(draws):
             if len(vs) <= 1:
-                yield {v: (lambda q=p: q) for v in vs}, (lambda q=p: q), False
+                yield {v: (lambda q=p: q) for v in vs}, (lambda q=p: q), False, False
             else:
                 e = {v: (lambda q=draws[(i + j * 7) % len(draws)]: q) for j, v in enumerate(vs)}
-                yield e, (lambda q=p: q), False
+                yield e, (lambda q=p: q), False, False
                 if i % 4 == 0:
-                    yield {v: (lambda q=p: q) for v in vs}, (lambda q=p: q), False
+                    yield {v: (lambda q=p: q) for v in vs}, (lambda q=p: q), False, True
         if len(vs) > 1:
             for b in sym:
-                yield {v: b for v in vs}, b, True           # correlated atoms
+                yield {v: b for v in vs}, b, True, False    # correlated atoms
 
+    # Rule-sort slots (SORT_RE) are quantified REALS: their all-equal diagonal is in
+    # scope and keeps measure authority. DATA variables (x-vars) get the contract's
+    # null-set tolerance (R3): the correlated all-equal draws are a Lebesgue-null
+    # subset, and counting their 10 copies in the measure denominator let any
+    # variable-coincidence artifact score 10/50 = 20% > MEASURE_FRACTION -- fabricated
+    # positive-measure verdicts (observed, 2026-07-29 corpus adjudication). The strict
+    # value-change clause is untouched: it is pointwise (R2), so diagonal draws still
+    # feed it.
+    has_sort = any(SORT_RE.match(v) for v in vs)
     slot_val = None
     ext_draws = 0
     shrink_draws = 0
     inf_draws = 0
     tot_draws = 0
-    for envb, pb, is_atom in envs():
+    judged = 0            # probes where BOTH sides evaluated (incl. nan results)
+    for envb, pb, is_atom, is_diag in envs():
         if envb is None:
             continue
         env = {k: f() for k, f in envb.items()}
@@ -598,24 +819,28 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
             b = evaluate(b_tokens, env)
         except Exception:
             continue
+        judged += 1
         an, bn = isnan(a), isnan(b)
-        if not is_atom:
+        null_probe = is_atom or (is_diag and not has_sort)
+        if not null_probe:
             tot_draws += 1
         if an and bn:
             continue
         if an and not bn:
-            if not is_atom:
+            if not null_probe:
                 ext_draws += 1               # extension on the continuum: count the measure
-            else:
-                TOL_COUNTS['ext-null'] += 1  # extension at an atom: tolerated (null set)
+            else:                            # atom or data-variable diagonal: null set
+                key = 'ext-null' if is_atom else 'ext-diag-null'
+                TOL_COUNTS[key] = TOL_COUNTS.get(key, 0) + 1
             continue
         if bn:
             # defined->undefined is judged by MEASURE over data. A null event (atom probe,
             # incl +-inf) is tolerated + tallied; continuum draws count.
             # (NB the slot-refit escape does not apply on the measure path -- the two-point
             # fit validation above already rejects degenerate constants.)
-            if is_atom:
-                TOL_COUNTS['shrink-null'] += 1
+            if null_probe:
+                key = 'shrink-null' if is_atom else 'shrink-diag-null'
+                TOL_COUNTS[key] = TOL_COUNTS.get(key, 0) + 1
                 continue
             shrink_draws += 1
             continue
@@ -625,8 +850,9 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
             # an infinity-involved disagreement is an extension-layer artifact, judged by
             # MEASURE; null events tolerated (null-event doctrine). Both-sides-REAL
             # disagreements (the strict value-change clause) never reach here and stay strict.
-            if is_atom:
-                TOL_COUNTS['inf-null'] += 1
+            if null_probe:
+                key = 'inf-null' if is_atom else 'inf-diag-null'
+                TOL_COUNTS[key] = TOL_COUNTS.get(key, 0) + 1
                 continue
             inf_draws += 1
             continue
@@ -661,8 +887,35 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
                     raise ValueError
                 if abs(a2 - b2) <= tol * max(1, abs(a2), abs(b2)):
                     continue                              # rounding artifact: cleared
+            except Unresolved:
+                continue                     # the recheck landed in a residue/pole band:
+                                             # unknowable at higher precision -- skip,
+                                             # never convict on a degenerate recheck
             except Exception:
                 pass
+            if n_slots == 0 and not _slot_bound:
+                # F64_FOLD -- the engine's compile-time constant folds are DOUBLES
+                # (asin -1 -> the f64 pi/2 literal, rel ~1.2e-17; see _slot_token),
+                # which this mp instrument resolves as a stable value change. Two
+                # certificates, either suffices; a named class, not a conviction --
+                # and rules keep strict authority (slot paths and bound-slot rejudges
+                # still return VIOLATION):
+                #  * magnitude: the stable offset sits below f64 fold resolution at
+                #    the observed values -- nothing an f64 consumer can see;
+                #  * sensitivity: the offset sits within the output's own fold-noise
+                #    floor (_fold_noise_floor) -- fold-attributable even when a
+                #    downstream condition number amplifies it past any fixed band.
+                rel = abs(a - b) / max(1, abs(a), abs(b))
+                if rel <= mpf('1e-15'):
+                    return 'F64_FOLD', (f'f64 constant fold at {_fmt(p)}: '
+                                        f'{_fmt(a)} -> {_fmt(b)} (rel {_fmt(rel)})')
+                try:
+                    if abs(a - b) <= _fold_noise_floor(b_tokens, env, b):
+                        return 'F64_FOLD', (f'f64 constant fold at {_fmt(p)}: '
+                                            f'{_fmt(a)} -> {_fmt(b)} (rel {_fmt(rel)}, '
+                                            f'within fold-noise floor)')
+                except Exception:
+                    pass
             return _viol(env, f'value change at {_fmt(p)}: {_fmt(a)} -> {_fmt(b)}')
     if tot_draws:
         for cnt, label in ((ext_draws, 'EXTENSION: undefined->defined'),
@@ -671,6 +924,11 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
             if cnt / tot_draws > MEASURE_FRACTION:
                 return 'VIOLATION', (f'positive-measure {label} on {cnt}/{tot_draws} '
                                      f'continuum draws (measure clause)')
+    if judged == 0:
+        # every probe was skipped: the judge never actually compared the two sides.
+        # FAIL CLOSED -- 'OK' here is exactly the E1 blindness (a pair whose output threw
+        # at every probe silently passed).
+        return 'UNSCORED', 'no evaluable probes'
     return 'OK', None
 
 
@@ -762,9 +1020,13 @@ def _fmt(v):
 # ---------------------------------------------------------------------------------------
 
 ADVERSARIAL = [
+    # Spelled in the LIVE 0.12 vocabulary (23 operators + rootn). The pre-fix list spoke
+    # the deleted hyper-op vocabulary (mult4, pow1_2, ...), which the 0.12 parser rejects:
+    # 7 rows raised ValueError on EVERY sweep, polluting the report with self-inflicted
+    # '<RAISED>' violations while the shapes they were built to exercise went untested.
     ['+', 'x0', 'pow', 'sin', 'x0', 'float("inf")'],
     ['pow', 'sin', 'x0', 'float("inf")'],
-    ['mult4', 'pow', 'x0', 'float("inf")'],
+    ['*', '4', 'pow', 'x0', 'float("inf")'],
     ['-', 'exp', 'x0', 'exp', 'x0'],
     ['-', 'log', 'x0', 'log', 'x0'],
     ['inv', '*', '0', 'x0'],
@@ -772,37 +1034,52 @@ ADVERSARIAL = [
     ['atanh', 'tanh', 'sinh', 'x0'],
     ['*', 'x0', 'pow', 'cos', 'x1', 'float("inf")'],
     ['+', 'pow', 'tanh', 'x0', 'float("inf")', 'x1'],
-    ['pow', 'div5', '7.0', 'float("nan")'],
+    ['pow', '/', '7.0', '5', 'float("nan")'],
     ['*', 'sin', 'np.pi', 'x0'],
-    ['abs', 'pow', 'x0', 'mult3', '1'],
+    ['abs', 'pow', 'x0', '*', '3', '1'],
     ['tan', '+', 'x0', 'np.pi'],
-    ['inv', '+', '0', 'neg', 'pow2', 'pow2', 'x0'],
-    ['pow', 'float("-inf")', 'pow1_3', '3.0'],
-    # triggers for the measure-clause poison (even-root half-line extension)
-    ['pow4', 'pow5', 'pow1_2', 'x0'],
-    ['mult2', 'pow4', 'pow5', 'pow1_2', 'x1'],
-    # PRE-MASKED shapes (realization fidelity: deployed traffic arrives with literals
-    # already masked to <constant>; also guarantees the masked-scale poison a trigger on
-    # ANY ruleset -- on a small ruleset the poison had no fold-created triggers and the
-    # self-test failed closed, observed in practice)
+    ['inv', '+', '0', 'neg', 'pow', 'x0', '4'],
+    ['pow', 'float("-inf")', 'rootn', '3.0', '3'],
+    # triggers for the measure-clause poison (even-root round-trip via rootn)
+    ['pow', 'rootn', 'x0', '2', '2'],
+    ['*', '2', 'pow', 'rootn', 'x1', '2', '2'],
+    # trigger for the bag-output poison (a product over a sum: the rewrite's output
+    # keeps mul/add structure, so the engine emits it bag-tagged)
+    ['*', 'x0', '+', 'x1', 'x2'],
+    # PRE-MASKED shapes (realization fidelity: deployed flash-ansr traffic arrives with
+    # literals already masked to <constant> -- 0.12 masking is explicit, upstream of
+    # simplify; also guarantees the masked-scale poisons a trigger on ANY ruleset -- on
+    # a small ruleset the poison had no fold-created triggers and the self-test failed
+    # closed, observed in practice)
     ['*', '<constant>', 'x0'],
     ['+', '*', '<constant>', 'x1', 'x0'],
     ['sin', '*', '<constant>', 'x0'],
+    ['*', '<constant>', 'pow', 'x0', 'float("inf")'],
 ]
 
 # Default leaf vocabulary used to sample the random half of the corpus.
 DEFAULT_LEAVES = ['x0', 'x1', '0', '1', 'np.pi', '2.0', '(-0.5)', '3.0']
 
-# Known-unsound rules for the poison self-test. Each must be a DEPLOYABLE spelling: the
-# engine masks numeric literals to <constant> before matching, so a rule keyed on a bare
-# literal can never fire on real traffic. Catch requires ATTRIBUTION: a flagged input whose
-# output CHANGED versus the unpoisoned engine.
-POISON = [((u'pow', u'sin', u'?0', u'float("inf")'), (u'0',)),
-          ((u'*', u'<constant>', u'?0'), (u'?0',)),
-          ((u'mult4', u'pow', u'?0', u'float("inf")'), (u'pow', u'?0', u'float("inf")')),
-          # measure-clause poison: even-root half-line extension -- must be caught via
-          # the positive-measure counters
-          ((u'pow4', u'pow5', u'pow1_2', u'?0'), (u'pow', u'?0', u'<constant>'))]
+# Known-unsound rules for the poison self-test, spelled in the LIVE 0.12 vocabulary.
+# Each must be DEPLOYABLE end-to-end: the AC translation must accept it (reduction-ordered,
+# no <constant>-introducing RHS -- the ratified translation gate refuses those) and a
+# trigger shape must exist in ADVERSARIAL. Catch requires ATTRIBUTION: a flagged input
+# whose output CHANGED versus the unpoisoned engine.
+POISON = [
+    # value change at a spike: pow(sin x, inf) -> 0 is wrong on the sin(x) = +-1 lattice
+    (('pow', 'sin', '?0', 'float("inf")'), ('0',)),
+    # masked-scale: drops the coefficient of pre-masked traffic
+    (('*', '<constant>', '?0'), ('?0',)),
+    # structural coefficient drop (fires on the pre-masked pow shape)
+    (('*', '<constant>', 'pow', '?0', 'float("inf")'), ('pow', '?0', 'float("inf")')),
+    # measure-clause poison: the even-root round-trip pow(rootn(x,2),2) -> x extends the
+    # x < 0 half-line -- must be caught via the positive-measure counters
+    (('pow', 'rootn', '?0', '2', '2'), ('?0',)),
+    # BAG-OUTPUT poison: x*(y+z) -> y+z drops a factor and its output RETAINS additive
+    # structure, so the engine emits it bag-tagged (`<add> y z </add>`). This is the
+    # output class the pre-fix judge silently OK'd (E1); it guards the bag evaluator.
+    (('*', '?0', '+', '?1', '?2'), ('+', '?1', '?2')),
+]
 
 
 def build_engine(rules, config_path):
@@ -852,10 +1129,34 @@ JUDGE_TIMEOUT_S = 10   # a single expression may not eat the sweep. mpmath has q
 
 def sweep(rules, corpus, rng, baseline_engine, config_path, tag='',
           judge_timeout_s=JUDGE_TIMEOUT_S):
+    # Timeout protection is SIGALRM-based and therefore main-thread-only. Install for
+    # the duration of the sweep and RESTORE on the way out (hardening H-010,
+    # 2026-08-03: this used to clobber the process handler permanently, and to crash
+    # any off-main-thread caller -- e.g. a worker-thread mine's finalize gate, whose
+    # sweep now runs WITHOUT per-expression timeouts; the mpmath hang class is rare
+    # and a wedged worker mine is recoverable, an always-crashing one is not).
     import signal
-    signal.signal(signal.SIGALRM, _alarm)
+    import threading
+    on_main = threading.current_thread() is threading.main_thread()
+    if on_main:
+        prev_handler = signal.signal(signal.SIGALRM, _alarm)
+    else:
+        print(f'  [{tag}] off-main-thread sweep: judge timeout protection unavailable '
+              f'(SIGALRM is main-thread-only)', flush=True)
+    try:
+        return _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag,
+                            judge_timeout_s if on_main else 0)
+    finally:
+        if on_main:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, prev_handler)
+
+
+def _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag,
+                 judge_timeout_s):
+    import signal
     eng = build_engine(rules, config_path)
-    viol, native, unscored, changed, timeouts = [], [], 0, 0, 0
+    viol, native, unscored, changed, timeouts, f64_folds = [], [], 0, 0, 0, 0
     for i, expr in enumerate(corpus):
         if tag and (i + 1) % 500 == 0:
             print(f'  [{tag} {i+1}/{len(corpus)}] changed={changed} viol={len(viol)} '
@@ -879,6 +1180,11 @@ def sweep(rules, corpus, rng, baseline_engine, config_path, tag='',
             signal.alarm(0)
         if v == 'UNSCORED':
             unscored += 1
+        elif v == 'F64_FOLD':
+            # the named f64 constant-fold class (see judge_pair): tolerated, counted.
+            # These rows previously surfaced as native-line entries via the rules-empty
+            # attribution below, so the native count drops by exactly this population.
+            f64_folds += 1
         elif v == 'VIOLATION':
             try:
                 base_out = list(baseline_engine.simplify(list(expr)))
@@ -906,7 +1212,7 @@ def sweep(rules, corpus, rng, baseline_engine, config_path, tag='',
                     viol.append((expr, out, detail))
             else:
                 viol.append((expr, out, detail))
-    return viol, native, unscored, changed
+    return viol, native, unscored, changed, f64_folds
 
 
 def selftest(rules, config_path, corpus, baseline, seed, poison=None,
@@ -919,14 +1225,19 @@ def selftest(rules, config_path, corpus, baseline, seed, poison=None,
     clean_eng = build_engine(rules, config_path)
     caught = 0
     for p in poison:
-        v, _, _, _ = sweep(rules + [p], corpus[:600], np.random.default_rng(seed),
-                           baseline, config_path, tag="poison", judge_timeout_s=judge_timeout_s)
+        v, *_ = sweep(rules + [p], corpus[:600], np.random.default_rng(seed),
+                      baseline, config_path, tag="poison", judge_timeout_s=judge_timeout_s)
         attributed = []
         for expr, out, detail in v:
             try:
-                if list(clean_eng.simplify(list(expr))) != list(out):
-                    attributed.append((expr, out, detail))
+                clean_out = list(clean_eng.simplify(list(expr)))
             except Exception:
+                clean_out = ['<RAISED>']
+            # attribution = the poisoned engine BEHAVES DIFFERENTLY from the clean one on
+            # this input. Both raising is the SAME behavior: the pre-fix version counted
+            # a clean-side raise as attribution unconditionally, which let corpus rows
+            # that crash EVERY engine launder uncatchable poisons into 'CAUGHT'.
+            if clean_out != list(out):
                 attributed.append((expr, out, detail))
         hit = len(attributed) > 0
         caught += hit
@@ -941,6 +1252,15 @@ class MonitorSelfTestError(RuntimeError):
 
     A self-test failure means the monitor cannot be trusted to catch an unsound ruleset, so
     the main sweep is not run: the gate has lost its own guarantee."""
+
+
+class MonitorLivenessError(RuntimeError):
+    """Raised by :func:`monitor` when the main sweep rewrites NOTHING on a non-trivial corpus.
+
+    A sweep that judges only rewrites is vacuous when no rewrites happen: `changed == 0`
+    over hundreds of sampled expressions means the engine under test is not applying
+    anything (broken asset load, dead core plumbing) -- an instrument failure that must
+    not be reported as 'clean' (0 violations of 0 rewrites)."""
 
 
 def monitor(rules, config_path, corpus_n=6000, seed=20260718, run_selftest=False,
@@ -977,13 +1297,20 @@ def monitor(rules, config_path, corpus_n=6000, seed=20260718, run_selftest=False
                 'poison self-test failed: a known-unsound rule was not flagged')
         print('SELF-TEST PASSED (all poisons caught, attribution-verified)\n', flush=True)
 
-    viol, native, unscored, changed = sweep(rules, corpus, rng, baseline, config_path,
-                                            tag="main", judge_timeout_s=judge_timeout_s)
+    viol, native, unscored, changed, f64_folds = sweep(
+        rules, corpus, rng, baseline, config_path,
+        tag="main", judge_timeout_s=judge_timeout_s)
+    if changed == 0 and len(corpus) >= 100:
+        raise MonitorLivenessError(
+            f'main sweep rewrote 0 / {len(corpus)} expressions: the engine under test '
+            f'applied nothing (broken asset load or dead core plumbing) -- a sweep that '
+            f'judges only rewrites is vacuous here and must not report clean')
     print(f'\n=== INDEPENDENT MONITOR  {label} ===')
     print(f'  rewritten     {changed:7,} / {len(corpus):,}')
     print(f'  VIOLATIONS    {len(viol):7,}  (artifact-attributed)')
     print(f'  native-line   {len(native):7,}  (present with rules=[]; pre-existing engine behavior)')
-    print(f'  unscored      {unscored:7,}  (multi-slot outputs)')
+    print(f'  unscored      {unscored:7,}  (multi-slot / unknown-token / no-evaluable-probe)')
+    print(f'  f64-folds     {f64_folds:7,}  (correctly-rounded f64 constant folds; tolerated)')
     print(f'  tolerated     {dict(TOL_COUNTS)}  (null-event doctrine)')
     for expr, out, detail in viol[:15]:
         print(f'    VIOL {" ".join(expr)}  ->  {" ".join(out)}   [{detail}]')
@@ -996,6 +1323,7 @@ def monitor(rules, config_path, corpus_n=6000, seed=20260718, run_selftest=False
         'violations': viol,
         'native': native,
         'unscored': unscored,
+        'f64_folds': f64_folds,
         'tolerated': dict(TOL_COUNTS),
         'selftest_passed': selftest_passed,
     }

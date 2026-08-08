@@ -17,6 +17,7 @@ from . import normalization
 from .normalization import (
     normalize_variable_token, normalize_skeleton, normalize_expression
 )
+from . import masking
 from .asset_manager import (
     get_path, install_asset as install, uninstall_asset as uninstall, list_assets
 )

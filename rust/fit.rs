@@ -11,6 +11,11 @@
 //! closed-form, nonlinear -> LM). The accept/reject gate stays `allclose` (crate::eval), so soundness
 //! is identical to scipy's: the optimizer only PROPOSES constants, `allclose` DISPOSES.
 
+// LAPACK-style numerics throughout: `a[r][c]` subscripts over explicit row/column ranges
+// mirror the algebra (Householder QR, normal equations, damped LM steps); iterator forms
+// would obscure which axis each loop walks.
+#![allow(clippy::needless_range_loop)]
+
 use crate::eval::{allclose_extends, columns_from_row_major, Tape};
 use crate::operators::Operators;
 
@@ -27,13 +32,13 @@ pub enum Linearity {
 }
 
 /// Operators that are LINEAR maps in their (single) operand: `op(a*x+b) = a*op(x)+op(b)`-compatible
-/// for the purpose of constant-degree, i.e. they preserve the affine/constfree/nonlinear class of the
-/// operand. `neg` and the fixed scalar multiples/divisors. (NOT `abs` -- abs is nonlinear.)
+/// for the purpose of constant-degree, i.e. they preserve the affine/constfree/nonlinear class of
+/// the operand. In the generation-2 vocabulary only `neg` qualifies: the retired fixed scalar
+/// multiples/divisors (`mult2..5`/`div2..5`) are spelled as binary `*`/`/` nodes with a literal
+/// operand, which `combine_mul`/`combine_div` already classify (a literal is ConstFree, so
+/// `* 3 C` and `/ C 3` are Affine with no unary special case). (NOT `abs` -- abs is nonlinear.)
 fn is_linear_unary(op: &str) -> bool {
-    matches!(
-        op,
-        "neg" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5"
-    )
+    op == "neg"
 }
 
 fn combine_add(l: Linearity, r: Linearity) -> Linearity {
@@ -99,7 +104,7 @@ fn classify_node(tokens: &[String], idx: &mut usize, ops: &Operators) -> Result<
             ("*", 2) => combine_mul(children[0], children[1]),
             ("/", 2) => combine_div(children[0], children[1]),
             (op, 1) if is_linear_unary(op) => children[0],
-            // any other operator (sin/exp/log/pow*/abs/inv/binary pow): constant-free if all operands
+            // any other operator (sin/exp/log/abs/inv/pow/rootn): constant-free if all operands
             // are constant-free, else nonlinear.
             _ => {
                 if children.iter().all(|c| *c == Linearity::ConstFree) {
@@ -417,6 +422,7 @@ const TRIM_ROUNDS: usize = 3;
 const TRIM_KAPPA: f64 = 5.0;
 const TRIM_MAX_FRAC: f64 = 0.5;
 
+#[allow(clippy::too_many_arguments)] // solver plumbing: tape + design matrix + gate params
 pub(crate) fn refit_robust(
     tape: &Tape,
     lin: Linearity,
@@ -648,6 +654,7 @@ fn householder_lstsq(qr: Vec<Vec<f64>>, t: Vec<f64>, m: usize, k: usize) -> Opti
 /// Native `exist_constants_that_fit` for the AFFINE case. Returns `Some(decision)` if the
 /// candidate is affine in its constants (handled here), or `None` if it is nonlinear-in-params
 /// (the native-LM path). `Err` only on a malformed candidate / shape mismatch.
+#[allow(clippy::too_many_arguments)] // mirrors the deployed exist_constants_that_fit call shape
 pub fn exist_constants_fit_linear(
     ops: &Operators,
     candidate: &[String],
@@ -884,6 +891,7 @@ pub(crate) fn detect_log_linear(
 /// integer-power cases). The log-space fit is UNWEIGHTED, so on a heavy-tailed X its ~1e-10 base
 /// error is amplified by large exponents past rtol; the caller therefore treats `Some((false, c))`
 /// as an LM SEED, not a verdict, and only `Some((true, _))` short-circuits.
+#[allow(clippy::too_many_arguments)] // solver plumbing: two tapes + design matrix + gate params
 fn try_log_linear_fit(
     form: LogLinForm,
     g_tape: &Tape,
@@ -1121,6 +1129,12 @@ mod tests {
         assert_eq!(c(&["/", "<constant>", "_0"]), Linearity::Affine); // C/_0 = C*(1/_0) affine
         assert_eq!(c(&["pow", "<constant>", "2"]), Linearity::Nonlinear); // C in pow base
         assert_eq!(c(&["sin", "_0"]), Linearity::ConstFree);
+        // The generation-2 spellings of the retired fixed scalings: a literal operand is
+        // ConstFree, so the binary arms classify them without any unary special case.
+        assert_eq!(c(&["*", "3", "<constant>"]), Linearity::Affine); // 3*C == mult3(C)
+        assert_eq!(c(&["/", "<constant>", "3"]), Linearity::Affine); // C/3 == div3(C)
+        assert_eq!(c(&["/", "3", "<constant>"]), Linearity::Nonlinear); // 3/C: C in denominator
+        assert_eq!(c(&["rootn", "<constant>", "2"]), Linearity::Nonlinear); // C under a root
     }
 
     #[test]

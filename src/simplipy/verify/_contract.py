@@ -39,15 +39,26 @@ from mpmath import mp, mpf, isnan as misnan, isinf as misinf
 np.seterr(all='ignore')
 F = np.float64
 
-ARITY = {'+': 2, '-': 2, '*': 2, '/': 2, 'pow': 2,
-         'neg': 1, 'inv': 1, 'abs': 1, 'exp': 1, 'log': 1,
+try:  # the CORE serialization language, read from the engine's own table (C1.10):
+    from simplipy._core import core_serialization_ops as _core_ops  # type: ignore[attr-defined]
+    _CORE_ARITY = {t: s['arity'] for t, s in _core_ops().items()}
+except Exception:  # pragma: no cover  (missing/unbuilt extension)
+    _CORE_ARITY = {}
+
+#: The judge's vocabulary is DELIBERATELY broader than the engine's: it keeps the deleted
+#: 0.11 hyper-operator spellings so legacy-engine rewrites stay judgeable (pinned by
+#: `test_legacy_hyperop_spellings_remain_judgeable`). Only the CORE half is derived --
+#: that is the half that must never drift from the engine; the rest is this module's own
+#: and is listed explicitly.
+ARITY = {**_CORE_ARITY,
+         'abs': 1, 'exp': 1, 'log': 1,
          'sin': 1, 'cos': 1, 'tan': 1, 'asin': 1, 'acos': 1, 'atan': 1,
          'sinh': 1, 'cosh': 1, 'tanh': 1, 'asinh': 1, 'acosh': 1, 'atanh': 1,
          'pow2': 1, 'pow3': 1, 'pow4': 1, 'pow5': 1,
          'pow1_2': 1, 'pow1_3': 1, 'pow1_4': 1, 'pow1_5': 1,
          'div2': 1, 'div3': 1, 'div4': 1, 'div5': 1,
          'mult2': 1, 'mult3': 1, 'mult4': 1, 'mult5': 1}
-SLOT_RE = re.compile(r'^([?!_])(\d+)$')
+SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
 
 
 class Unresolved(Exception):
@@ -239,6 +250,32 @@ def _oddroot(k):
     return g
 
 
+def c_rootn(a, b):
+    """IEEE rootn (the 0.12 general root operator) under the contract. The index must be
+    a finite nonzero integer -- n == 0 or a non-integer index is an invalid operation
+    (nan); n == 1 is the identity; a negative index is 1/rootn(a, -n) (one zero:
+    rootn(0, -n) = +inf); odd n is the signed total root; even n is the principal root,
+    nan on negatives including -inf."""
+    if misnan(a) or misnan(b):
+        return NAN
+    ib = _int_or_none(b)
+    if ib is None or ib == 0:
+        return NAN
+    if ib < 0:
+        return c_div(mpf(1), c_rootn(a, mpf(-ib)))
+    if ib == 1:
+        return a
+    if ib % 2 == 0:
+        if a < 0:
+            return NAN
+        if misinf(a):
+            return PINF
+        return _z(mp.power(a, mpf(1) / ib))
+    if misinf(a):
+        return a
+    return _z(mp.sign(a) * mp.power(abs(a), mpf(1) / ib))
+
+
 OPS = {
     '+': lambda a, b: NAN if (misnan(a) or misnan(b)) else
          (NAN if (misinf(a) and misinf(b) and mp.sign(a) != mp.sign(b)) else _z(a + b)),
@@ -246,7 +283,7 @@ OPS = {
          (NAN if (misinf(a) and misinf(b) and mp.sign(a) == mp.sign(b)) else _z(a - b)),
     '*': lambda a, b: NAN if (misnan(a) or misnan(b)) else
          (NAN if ((a == 0 and misinf(b)) or (b == 0 and misinf(a))) else _z(a * b)),
-    '/': c_div, 'inv': lambda a: c_div(mpf(1), a), 'pow': c_pow,
+    '/': c_div, 'inv': lambda a: c_div(mpf(1), a), 'pow': c_pow, 'rootn': c_rootn,
     'neg': lambda a: NAN if misnan(a) else _z(-a),
     'abs': lambda a: NAN if misnan(a) else _z(abs(a)),
     'exp': lambda a: NAN if misnan(a) else
@@ -338,6 +375,24 @@ def _wrap_arr(f):
     return g
 
 
+def _legacy_even_root(p):
+    # pre-0.12 pow1_2/pow1_4: x**p with an explicit nan branch for a -inf base
+    # (IEEE (-inf)**0.5 is +inf; the realization was contract-aligned real semantics)
+    def g(a):
+        with np.errstate(invalid='ignore'):
+            return F(np.where(np.isneginf(a), np.nan, np.asarray(a, dtype=F) ** F(p)))
+    return g
+
+
+def _legacy_odd_root(p):
+    # pre-0.12 pow1_3/pow1_5: the real-valued (sign-preserving) root
+    def g(a):
+        a = np.asarray(a, dtype=F)
+        with np.errstate(invalid='ignore'):
+            return F(np.where(a < 0, -(-a) ** F(p), a ** F(p)))
+    return g
+
+
 DEP_OPS = {
     '+': lambda a, b: a + b, '-': lambda a, b: a - b, '*': lambda a, b: a * b,
     '/': lambda a, b: F(np.divide(F(a), F(b))),
@@ -347,6 +402,15 @@ DEP_OPS = {
     'div4': lambda a: a / F(4), 'div5': lambda a: a / F(5),
     'mult2': lambda a: a * F(2), 'mult3': lambda a: a * F(3),
     'mult4': lambda a: a * F(4), 'mult5': lambda a: a * F(5),
+    # The hyper-op realizations were deleted from simplipy.operators at 0.12 ("the
+    # hyper-operator vocabulary is deleted, once and for all"), which silently emptied
+    # these DEP_OPS slots via the getattr fallback below and let a planted gate poison
+    # evaporate into NO-WITNESS (E1). Hand-coded here, transplanted from the pre-0.12
+    # module, so the gate keeps judging LEGACY artifacts and its legacy-spelled poisons.
+    'pow2': lambda a: F(a) ** F(2), 'pow3': lambda a: F(a) ** F(3),
+    'pow4': lambda a: F(a) ** F(4), 'pow5': lambda a: F(a) ** F(5),
+    'pow1_2': _legacy_even_root(0.5), 'pow1_4': _legacy_even_root(0.25),
+    'pow1_3': _legacy_odd_root(1 / 3), 'pow1_5': _legacy_odd_root(1 / 5),
 }
 for _n in ARITY:
     _fn = getattr(_spo, _n, None)
@@ -421,6 +485,14 @@ def battery_for(sort):
         return reals + [((lambda: PINF), 'dirac-inf'), ((lambda: NINF), 'dirac-inf')]
     if sort == '!':
         return reals + [((lambda: PINF), 'nullx'), ((lambda: NINF), 'nullx')]
+    if sort == '$':
+        # the mult-certified sort: expressions certified FINITE AND NONZERO a.e.
+        # (`mult_certified` -- the licence behind f/f -> 1). The quantifier's bulk is
+        # nonzero reals; 0 and +-inf occur on null sets only, so events there are
+        # null-excused (same doctrine as `!`'s +-inf atoms).
+        nz = [(b, t) for b, t in reals if b() != 0]
+        return nz + [((lambda: mpf(0)), 'nullx'),
+                     ((lambda: PINF), 'nullx'), ((lambda: NINF), 'nullx')]
     raise ValueError(sort)
 
 
@@ -529,7 +601,11 @@ def fit_witness(tl, tr, shared, cl_val=None):
         return None
     for c in [1., -1., 2., -2., 3., -3., 0.5, -0.5, math.e, -math.e, math.pi, -math.pi,
               round(best), round(best * 2) / 2]:
-        if abs(c - best) < max(1e-6, 1e-9 * abs(best)):
+        # RELATIVE snap only (1e-15 floor = f64 fit noise around an exact zero): the old
+        # absolute 1e-6 tolerance flattened every tiny TRUE witness to round(best) = 0
+        # (pow(exp(-5), pi) = 1.5e-7 snapped to 0), fabricating clause-(a) kills of
+        # sound constant-space rules
+        if abs(c - best) < max(1e-9 * max(abs(best), abs(c)), 1e-15):
             best = float(c)
             break
     for k in (2, 3):
@@ -579,9 +655,19 @@ def mp_polish(tl, tr, nvars, clb, c0):
             return v - target
 
         if c0 == 0:
-            return mpf(0)   # an exact-zero witness stays exact: the secant otherwise
-                            # drifts to ~1e-62 and crosses pow's discontinuity at (0,0),
-                            # fabricating phantom events on identities
+            # an exact-zero witness stays exact (the secant otherwise drifts to ~1e-62
+            # and crosses pow's discontinuity at (0,0), fabricating phantom events on
+            # identities) -- but only VERIFIED: f64 saturation flattens tiny TRUE
+            # witnesses to 0.0 (acos(tanh(cosh(4))) = 2.2e-12 reads exactly 0 in f64;
+            # tanh saturates at ~19), and freezing that zero fabricated clause-(a)
+            # kills. If the contract rejects 0, fall through to the secant (the
+            # +-1e-12 bracket recovers a tiny witness; h is linear for a
+            # bare-<constant> RHS).
+            try:
+                if abs(h(mpf(0))) <= mpf('1e-45') * max(1, abs(target)):
+                    return mpf(0)
+            except Unresolved:
+                return mpf(0)
         try:
             a, b = mpf(c0) * (1 - mpf('1e-8')) - mpf('1e-12'), mpf(c0) * (1 + mpf('1e-8')) + mpf('1e-12')
             fa, fb = h(a), h(b)
@@ -664,9 +750,14 @@ def judge_rule(lhs, rhs, deployed_check=True):
         return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': 'multiple LHS <constant>'}
 
     # cl battery entries: (builder, f64key). builder() gives the EXACT value at the
-    # current dps (symbolic atoms rebuild per rung); f64key indexes the witness map
-    # and feeds the f64 fitter / deployed check.
+    # current dps (symbolic atoms rebuild per rung); f64key indexes the witness maps
+    # and feeds the f64 fitter / deployed check. TWO witness maps, one per algebra:
+    # the contract compares against the mp-polished witness, the deployed check against
+    # the raw f64 fit -- deployment fits its OWN constant, so judging the f64 algebra
+    # with the mp witness manufactures false ENGINE-MISALIGNs across f64 saturation
+    # cliffs (asin(tanh(exp(3))): f64 sees exactly pi/2, the contract pi/2 - 2.3e-9).
     witness = {}
+    witness_f64 = {}
     if has_cl:
         cl_battery = [(b, float(b())) for b in judge_cl_battery()]
     else:
@@ -698,6 +789,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
                 continue
             any_fit = True
             witness[key] = mp_polish(tl, tr, nvars, b, w)
+            witness_f64[key] = w
             kept_cl.append((b, key))
         if has_cr and not any_fit:
             return {'verdict': 'NO-WITNESS', 'detail': 'no cl with a finite LHS/witness'}
@@ -725,6 +817,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
             combos = [combos[i] for i in rng.choice(len(combos), 500, replace=False)]
     for clb, clkey in cl_battery:
         cr = witness.get(clkey) if has_cr else None
+        crd = witness_f64.get(clkey) if has_cr else None
         for combo in combos:
             tags = {n: t for n, (b, t) in combo.items()}
 
@@ -763,8 +856,9 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     ed = {n: F(float(b())) for n, (b, t) in combo.items()}
                     if clkey is not None:
                         ed['<C_L>'] = F(clkey)
-                    if cr is not None:
-                        ed['<C_R>'] = F(float(cr))
+                    if crd is not None:
+                        ed['<C_R>'] = F(crd)   # the f64-fitted witness: each algebra
+                                               # is judged with its OWN constant
                     dv = compare(cls_np(d_eval(tl, ed)), cls_np(d_eval(tr, ed)))
                     if dv != 'eq':
                         dep_div.append((dv, point))

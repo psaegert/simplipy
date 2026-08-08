@@ -49,19 +49,23 @@ Since 0.7.0 there is a single compiled engine line, and the published ruleset ar
 always considers every pattern in the loaded artifact (the former `max_pattern_length`
 knob was removed in 0.10.0).
 
-![Simplification time and ratio ECDFs: SimpliPy 0.9.1 vs SymPy across mined rulesets, safe vs aggressive, and search budget, on 64k Lample-Charton expressions from the Flash-ANSR v23.0 prior](https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplipy_vs_sympy.svg)
+![Simplification time and ratio ECDFs: SimpliPy 0.11.0 vs SymPy across mined rulesets, safe vs aggressive, and search budget, on 64k Lample-Charton expressions from the Flash-ANSR v23.0 prior](https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplipy_vs_sympy.svg)
 
 ECDFs of simplification wall-clock time (**top row**) and simplification ratio `|simp|/|orig|` in
 prefix tokens (**bottom row**, inset: low-ratio tail), over 65,536 randomly generated
 Lample-Charton expressions from the Flash-ANSR v23.0 training prior. Three axes vary SimpliPy
 (green) against a fixed **SymPy** reference (orange `ratio=None` / red `ratio=1`): **Mined
-Rulesets** — the published `2-1`/`3-2`/`4-3` artifacts, every pattern active
+Rulesets** — the `2-1`/`3-2`/`4-3` ruleset artifacts, every pattern active
 (darker = larger); **Safe vs Aggressive** — `4-3` in the deployed `SOUND` mode vs the training-only
 `LOSSY` mode; **Search Budget** — `4-3` SOUND at node budgets 1 to 48. SimpliPy is timed per call
 (`perf_counter`, gc off); SymPy is given each `<constant>` as a free symbol and simplified
 symbolically inside a per-expression worker with a 1 s timeout, then scored by its native prefix
-length. The measured quantities are the two ECDFs; the plot, not this caption, reports what they
-show.
+length; SymPy's workers run 24-wide while SimpliPy is timed single-threaded. Expressions SymPy
+does not finish inside its budget are scored as what they are — infinite time, ratio 1 (not
+simplified) — and stay in the denominator, so its time curve plateaus at the fraction it
+completed and its ratio curve carries a step at exactly 1; renormalising over only its successes
+would inflate its low-ratio tail. The measured quantities are the two ECDFs; the plot, not this
+caption, reports what they show.
 
 
 ## Simplification Pipeline (Pseudo-Algorithm)
@@ -86,15 +90,17 @@ the constant-fold fallback — preserves the function almost everywhere, so the 
 never longer than the input (the input is the first candidate), and idempotent by construction.
 The search replaces the old fixed cancel→rules order: cancellation is non-confluent (taking one
 candidate can destroy another), so the kernel searches a bounded move graph instead of guessing
-(`node_budget` caps how many nodes it expands; `SIMPLIPY_SEARCH_BUDGET` overrides the default).
+(the `node_budget` parameter caps how many nodes it expands; default 48).
 
 **Masking is not part of `simplify`.** Relabelling numeric literals to the generic `<constant>`
 placeholder is a *representation* step for a downstream model that cannot consume literals, not
-an equivalence-preserving rewrite. It is a separate terminal method — apply it to `simplify`'s
-output and never re-`simplify` the result:
+an equivalence-preserving rewrite. It is a separate terminal step (the `simplipy.masking`
+module) — apply it to `simplify`'s output and never re-`simplify` the result:
 
 ```python
-tokens = engine.mask(engine.simplify(expr))   # literals -> <constant>, then one sort
+from simplipy import masking
+tokens = masking.mask(engine.simplify(expr), engine,
+                      masking.mask_values_keep_structure)   # literals -> <constant>
 ```
 
 The `mode` argument selects the soundness/recall trade-off; see **Soundness Modes** below.
@@ -159,9 +165,13 @@ Two rungs are implemented; `EXACT` and `AE` are reserved positions in the decide
 ```python
 from simplipy import Mode
 
-# <constant>/0 is ±inf/nan for every constant: SOUND keeps it, LOSSY folds it.
-engine.simplify(['/', '<constant>', '0'], mode=Mode.SOUND)   # -> ['/', '<constant>', '0']
-engine.simplify(['/', '<constant>', '0'], mode=Mode.LOSSY)   # -> ['<constant>']
+# log(C) is undefined for C <= 0: SOUND keeps the composition, LOSSY collapses it.
+engine.simplify(['exp', 'log', '<constant>'], mode=Mode.SOUND)  # -> ['exp', 'log', '<constant>']
+engine.simplify(['exp', 'log', '<constant>'], mode=Mode.LOSSY)  # -> ['<constant>']
+
+# (x^2)^0.5 equals |x|, not x: SOUND refuses the flattening, LOSSY takes it.
+engine.simplify(['pow', 'pow', 'x0', '2', '0.5'], mode=Mode.SOUND)  # -> unchanged
+engine.simplify(['pow', 'pow', 'x0', '2', '0.5'], mode=Mode.LOSSY)  # -> ['x0']
 
 # A finite-a.e. subtree (pole at a single measure-zero constant) folds in BOTH modes:
 engine.simplify(['inv', '<constant>'])                       # -> ['<constant>']   (1/C)
@@ -175,7 +185,7 @@ uses each mode on a different side of its pipeline:
   data is then generated *from that simplified form* — so the target the model learns and the data
   it is trained on are the *same* expression (`target == data`). There is no external ground-truth
   function for LOSSY to violate, so the aggressive reductions are safe here and they give the model
-  the shortest, most canonical target. (A structural `<constant>/0` that survives cancellation, for
+  the shortest, most canonical target. (An `exp(log(<constant>))` that survives cancellation, for
   instance, becomes a plain `<constant>`, which is what the generated data reflects.)
 
 - **Inference and recovery scoring use `Mode.SOUND`.** At test time the data comes from an unknown
@@ -215,23 +225,31 @@ pip install simplipy
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("4-3", install=True)   # a published ruleset artifact
+engine = sp.SimpliPyEngine.load("acj-4-3", install=True)   # the published AC-engine artifact
 
 # Simplify prefix expressions
 engine.simplify(['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'])
-# -> ['/', '<constant>', 'log', 'x3']
+# -> ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']   (the native tagged form: C/log(x3))
+
+# The `form` parameter re-projects the same canonical answer: 'infix' renders it,
+# 'explicit' gives the binary-prefix dialect that is_valid / prefix_to_infix consume
+# (tagged output itself is accepted back as input by simplify/complexity/masking)
+engine.simplify(['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'], form='infix')
+# -> '<constant>/log(x3)'
 
 # Simplify infix expressions
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
-# -> '<constant> / x3'
+# -> '<constant>/x3'
 
 # Mask numeric literals to <constant> AFTER simplifying (for models that need placeholders)
-engine.mask(engine.simplify(['+', 'x1', '3.14']))
-# -> ['+', '<constant>', 'x1']
+from simplipy import masking
+masking.mask(engine.simplify(['+', 'x1', '3.14']), engine,
+             masking.mask_values_keep_structure)
+# -> ['<add>', 'x1', '<constant>', '</add>']
 
 # Aggressive canonicalization for training targets (see Soundness Modes)
 from simplipy import Mode
-engine.simplify(['/', '<constant>', '0'], mode=Mode.LOSSY)   # -> ['<constant>']
+engine.simplify(['exp', 'log', '<constant>'], mode=Mode.LOSSY)   # -> ['<constant>']
 ```
 
 Available engines can be browsed and downloaded from Hugging Face.
@@ -239,10 +257,14 @@ The SimpliPy Asset Manager handles listing, installing, and uninstalling assets:
 
 ```python
 sp.list_assets("engine")
-# --- Available Assets ---
-# - 2-1             [installed]  Complete rule mine (sources to length 2, targets to length 1) + certified LLM proposals.
-# - 3-2             [installed]  Complete rule mine (sources to length 3, targets to length 2) + certified LLM proposals.
-# - 4-3             [installed]  Complete rule mine (sources to length 4, targets to length 3) + certified LLM proposals.
+# --- Available engine assets ---
+# - acj-4-3  [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
+#                         (sources to length 4, targets to length 3), ... Pairs with simplipy >= 0.12.
+# - acj-3-2  [installed]  Complete AC-judged rule mine ... (sources to length 3, targets to length 2), ...
+# - acj-2-1  [installed]  Complete AC-judged rule mine ... (sources to length 2, targets to length 1), ...
+# - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
+#                         starting point for fresh mining. Pairs with simplipy >= 0.12.
+# - ...                   (pre-0.12 assets remain listed for older installs; they refuse to load on 0.12)
 ```
 
 ## Normalization

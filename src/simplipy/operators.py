@@ -1,11 +1,13 @@
 """Numerically safe realizations of the mathematical operators.
 
 Provides the element-wise Python/NumPy functions that back the engine's operator
-tokens: unary maps (e.g. ``neg``, ``inv``, ``sin``, ``exp``, ``log``), the binary
-operators ``div`` (``x / y``) and ``pow`` (``x ** y``), and families of unary
-scale-by-constant operators (``mult2``..``mult5`` multiply by n; ``div2``..``div5``
-divide by n), integer powers (``pow2``..``pow5`` raise to the power n), and integer
-roots (``pow1_2``..``pow1_5`` take the nth root).
+tokens: the unary maps (``neg``, ``inv``, ``abs``, the trig/hyperbolic families,
+``exp``, ``log``) and the binary operators ``div`` (``x / y``), ``pow`` (``x ** y``,
+IEEE/numpy conventions incl. the negative-base non-integer-exponent NaN mask) and
+``rootn`` (the deployed n-th-root convention: finite nonzero integer index, odd
+signed / even principal). The retired hyper-operator families (``mult2``..``div5``,
+``pow2``..``pow5``, ``pow1_2``..``pow1_5``) were deleted with the 0.12 clean
+vocabulary -- their spellings are handled at the conversion boundary, never realized.
 The functions handle singular inputs (such as division by zero) by returning signed
 infinities or NaN rather than raising, and operate on both scalars and array-likes.
 """
@@ -62,162 +64,6 @@ def div(x: float, y: float) -> float:
 
     # All safe
     return x / y
-
-
-def mult2(x: float) -> float:
-    """Multiply x by 2."""
-    return 2 * x
-
-
-def mult3(x: float) -> float:
-    """Multiply x by 3."""
-    return 3 * x
-
-
-def mult4(x: float) -> float:
-    """Multiply x by 4."""
-    return 4 * x
-
-
-def mult5(x: float) -> float:
-    """Multiply x by 5."""
-    return 5 * x
-
-
-def div2(x: float) -> float:
-    """Divide x by 2."""
-    return x / 2
-
-
-def div3(x: float) -> float:
-    """Divide x by 3."""
-    return x / 3
-
-
-def div4(x: float) -> float:
-    """Divide x by 4."""
-    return x / 4
-
-
-def div5(x: float) -> float:
-    """Divide x by 5."""
-    return x / 5
-
-
-def pow2(x: float) -> float:
-    """Return x raised to the power of 2."""
-    return x ** 2
-
-
-def pow3(x: float) -> float:
-    """Return x raised to the power of 3."""
-    return x ** 3
-
-
-def pow4(x: float) -> float:
-    """Return x raised to the power of 4."""
-    return x ** 4
-
-
-def pow5(x: float) -> float:
-    """Return x raised to the power of 5."""
-    return x ** 5
-
-
-def pow1_2(x: float) -> float:
-    """Return the square root of x (NaN for a -inf base: contract-aligned real semantics)."""
-    if isinstance(x, np.ndarray):
-        with np.errstate(invalid='ignore'):
-            return np.where(np.isneginf(x), np.nan, x ** 0.5)
-    if isinstance(x, float) and np.isneginf(x):
-        return float('nan')
-    return x ** 0.5
-
-
-def pow1_3(x: float) -> float:
-    """Return the real-valued cube root of x."""
-    global _torch_module, _torch_checked
-    if isinstance(x, np.ndarray):
-        # Handle numpy arrays
-        if np.iscomplexobj(x):
-            # Handle complex numbers
-            return x ** (1 / 3)
-        x = np.asarray(x)
-        x = np.where(x < 0, -(-x) ** (1 / 3), x ** (1 / 3))
-        return x
-
-    if type(x).__module__ == 'torch' and type(x).__name__ == 'Tensor':
-        if not _torch_checked:
-            try:
-                import torch  # type:ignore
-                _torch_module = torch
-            except ImportError:
-                _torch_module = None
-            _torch_checked = True
-
-        if _torch_module is None:
-            raise ImportError("PyTorch is required to process torch tensors")
-
-        # Handle torch tensors
-        if x.dtype == torch.complex64 or x.dtype == torch.complex128:  # type:ignore
-            # Handle complex numbers
-            return x ** (1 / 3)
-        x = torch.where(x < 0, -(-x) ** (1 / 3), x ** (1 / 3))
-        return x
-
-    if not isinstance(x, complex) and x < 0:
-        # Discard imaginary component
-        return - (-x) ** (1 / 3)
-    else:
-        return x ** (1 / 3)
-
-
-def pow1_4(x: float) -> float:
-    """Return the fourth root of x (NaN for a -inf base: contract-aligned real semantics)."""
-    if isinstance(x, np.ndarray):
-        with np.errstate(invalid='ignore'):
-            return np.where(np.isneginf(x), np.nan, x ** 0.25)
-    if isinstance(x, float) and np.isneginf(x):
-        return float('nan')
-    return x ** 0.25
-
-
-def pow1_5(x: float) -> float:
-    """Return the real-valued fifth root of x."""
-    global _torch_module, _torch_checked
-    if isinstance(x, np.ndarray):
-        # Handle numpy arrays
-        if np.iscomplexobj(x):
-            # Handle complex numbers
-            return x ** (1 / 5)
-        x = np.asarray(x)
-        x = np.where(x < 0, -(-x) ** (1 / 5), x ** (1 / 5))
-        return x
-
-    if type(x).__module__ == 'torch' and type(x).__name__ == 'Tensor':
-        if not _torch_checked:
-            try:
-                import torch  # type:ignore
-                _torch_module = torch
-            except ImportError:
-                _torch_module = None
-            _torch_checked = True
-
-        if _torch_module is None:
-            raise ImportError("PyTorch is required to process torch tensors")
-
-        # Handle torch tensors
-        if x.dtype == torch.complex64 or x.dtype == torch.complex128:  # type:ignore
-            # Handle complex numbers
-            return x ** (1 / 5)
-        x = torch.where(x < 0, -(-x) ** (1 / 5), x ** (1 / 5))
-        return x
-
-    if not isinstance(x, complex) and x < 0:
-        # Discard imaginary component
-        return - (-x) ** (1 / 5)
-    else:
-        return x ** (1 / 5)
 
 
 def abs(x: float) -> float:
@@ -589,6 +435,37 @@ def _neginf_nonint_pow_mask(x: 'np.ndarray | float', y: 'np.ndarray | float') ->
     magnitude-step semantics.)"""
     yf = np.asarray(y, dtype=float)
     return np.isneginf(np.asarray(x, dtype=float)) & np.isfinite(yf) & (np.mod(yf, 1.0) != 0.0)
+
+
+def rootn(x: float, n: float) -> float:
+    """Return the real n-th root of x: IEEE-754 rootn, honest for EVERY integer index.
+
+    * n odd:  the signed root, total on R (``rootn(-8, 3) = -2``);
+    * n even: the principal root, NaN on negatives (identical to ``pow(x, 1/n)``);
+    * n == 1: the identity; n negative: ``1 / rootn(x, -n)``; n == 0 or a non-integer
+      index: NaN (invalid operation).
+
+    One semantics, five surfaces: this realization, ``numeric.rs``, ``interval.rs`` and
+    both ``hiprec.rs`` evaluators implement the same table, pinned against each other by
+    the cross-evaluator parity tests.
+    """
+    n_arr = np.asarray(n, dtype=float)
+    is_int = (n_arr == np.floor(n_arr)) & np.isfinite(n_arr)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        xa = np.asarray(x, dtype=float)
+        k = np.where(is_int & (n_arr != 0), np.abs(n_arr), np.nan)  # |index|, NaN if invalid
+        r = 1.0 / k
+        odd = np.mod(k, 2) == 1
+        mag = np.abs(xa) ** r
+        signed = np.where(xa < 0, -mag, mag)                    # odd: sign-preserving
+        principal = np.where(xa < 0, np.nan, mag)               # even: NaN on negatives
+        root = np.where(odd, signed, principal)
+        root = np.where(k == 1, xa, root)                       # unit index: identity, exactly
+        out = np.where(n_arr < 0, 1.0 / root, root)             # negative index: reciprocal
+        out = np.where(np.isnan(k), np.nan, out)
+    if isinstance(x, np.ndarray) or isinstance(n, np.ndarray):
+        return out
+    return float(out)
 
 
 def pow(x: float, y: float) -> float:

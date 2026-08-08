@@ -1,0 +1,103 @@
+{
+ "rows_changed": 4583,
+ "rows_changed_const_free": 3718,
+ "judge_verdicts_const_free": {
+  "OK": 3708,
+  "VIOLATION": 10
+ },
+ "judge_verdicts_const_bearing_E3_unreliable": {
+  "VIOLATION": 554,
+  "OK": 303,
+  "F64_FOLD": 8
+ },
+ "const_free_alarms": {
+  "2129": [
+   "VIOLATION",
+   "value change at 1.0: 1.0 -> -1.0"
+  ],
+  "17274": [
+   "VIOLATION",
+   "value change at -1.0: 1.0 -> -1.0"
+  ],
+  "18288": [
+   "VIOLATION",
+   "value change at 1.0: 1.5707963 -> -1.5707963"
+  ],
+  "25199": [
+   "VIOLATION",
+   "value change at 1.0: 6.8182598 -> 9.9598524"
+  ],
+  "28977": [
+   "VIOLATION",
+   "value change at 0.37719066: 0.0028798497 -> -0.0028798497"
+  ],
+  "48838": [
+   "VIOLATION",
+   "value change at -1.0: 0.0 -> -0.5"
+  ],
+  "50383": [
+   "VIOLATION",
+   "value change at 0.37719066: -0.60074515 -> 0.60074515"
+  ],
+  "53748": [
+   "VIOLATION",
+   "value change at -1.0: 1.0 -> -1.0"
+  ],
+  "55045": [
+   "VIOLATION",
+   "value change at 1.0: -1.5707963 -> 1.5707963"
+  ],
+  "62203": [
+   "VIOLATION",
+   "value change at 1.0: -0.5 -> -1.5"
+  ]
+ },
+ "unlock_bare_mu": {
+  "B-division-tower": {
+   "n": 884,
+   "reach_011": 428,
+   "improved_vs_old": 458
+  },
+  "A-stuck-zero": {
+   "n": 59,
+   "reach_011": 47,
+   "improved_vs_old": 50
+  },
+  "C-inf-tower": {
+   "n": 28,
+   "reach_011": 14,
+   "improved_vs_old": 15
+  },
+  "D-other": {
+   "n": 39,
+   "reach_011": 15,
+   "improved_vs_old": 14
+  }
+ },
+ "bare_mu": {
+  "ratio_mean_new": 0.9591756580379064,
+  "ratio_mean_old": 0.9669615549517698,
+  "ratio_mean_011": 0.9966980930462466,
+  "frac_below_1_new": 0.3977813720703125,
+  "frac_below_1_old": 0.3561553955078125,
+  "frac_below_1_011": 0.1682891845703125,
+  "frac_below_0.9_new": 0.115631103515625,
+  "frac_below_0.9_old": 0.0892486572265625,
+  "frac_below_0.9_011": 0.0713348388671875,
+  "corpus_total_new": 16175188.0,
+  "corpus_total_old": 16279961.0,
+  "corpus_total_011": 16545687.0
+ },
+ "paired_vs_011_bare": {
+  "win_012_new": 0.3262176513671875,
+  "tie": 0.6222686767578125,
+  "win_011": 0.051513671875,
+  "win_012_old": 0.2869873046875,
+  "win_011_old": 0.063568115234375
+ },
+ "deep_region_bare": {
+  "rows": 6261,
+  "win_012_new": 0.6411116435074269,
+  "win_011": 0.09215780226800831
+ }
+}

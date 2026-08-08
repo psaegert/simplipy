@@ -6,12 +6,16 @@ the surrounding (correct) behavior is unchanged (no over-fix).
 """
 import pytest
 
-from simplipy import SimpliPyEngine
+from simplipy import SimpliPyEngine  # noqa: F401  (re-exported for the suite's historical imports)
 
 
 @pytest.fixture(scope="module")
 def engine():
-    return SimpliPyEngine.load("dev_7-3", install=True)
+    # Raw legacy TABLE from the in-repo fixture (conversion input-language tests
+    # need no rules and no asset); the public artifact-load path refuses
+    # generation 1 (see tests/conftest.py).
+    from conftest import construct_legacy_table
+    return construct_legacy_table()
 
 
 # -- #1: fractional power no longer silently dropped (the serious one) ----------------------------
@@ -99,15 +103,42 @@ def test_non_smooth_exponents_keep_binary_pow(engine):
     assert engine.parse("v1 ** (4/3)", mask_numbers=False) == ["pow1_3", "pow4", "v1"]
 
 
-def test_high_degree_polynomial_chain_realizes(engine):
-    """End-to-end regression for the original failure (Nonic / Livermore-9/-22): a chain
-    containing x**7 must parse, realize, codify, and evaluate."""
-    import numpy as np
-    from simplipy.utils import codify
+# -- H-047 (2026-08-05): the **-exponent fold gate is SPELLING-EXACT --------------------------
+# The port (and the legacy original) gated folds on limit_denominator(1e6) of the f64
+# VALUE: exponents within ~5e-7 of 1 collapsed the pow entirely (x**(1+ulp) -> x, with NO
+# vocabulary gate protecting the emit-nothing case), near-0 folded to 1, near -1 to inv,
+# and near-misses of <=5/<=5 fractions snapped to the wrong powN/pow1_N function under a
+# powN-declaring vocabulary. The exact decimal denotation now decides; every fold on an
+# EXACT spelling survives.
+def test_h047_near_one_exponent_keeps_pow(engine):
+    assert engine.parse("v1 ** (1.0000000000000002)", mask_numbers=False) == ["pow", "v1", "1.0000000000000002"]
+    assert engine.parse("v1 ** (0.9999995)", mask_numbers=False) == ["pow", "v1", "0.9999995"]
+    assert engine.parse("v1 ** (1e-9)", mask_numbers=False) == ["pow", "v1", "1e-9"]
+    assert engine.parse("v1 ** (-1.0000000000000002)", mask_numbers=False) == ["pow", "v1", "-1.0000000000000002"]
 
-    chain = " + ".join([f"v1 ** {k}" for k in range(9, 1, -1)] + ["v1"])
-    prefix = engine.parse(chain, mask_numbers=False)
-    realized = engine.operators_to_realizations(prefix)
-    fn = engine.code_to_lambda(codify(engine.prefix_to_infix(realized, realization=True), ["v1"]))
-    x = np.linspace(-1.0, 1.0, 7)
-    assert np.allclose(fn(x), sum(x ** k for k in range(2, 10)) + x)
+
+def test_h047_exact_spellings_still_fold(engine):
+    assert engine.parse("v1 ** (1.0)", mask_numbers=False) == ["v1"]
+    assert engine.parse("v1 ** (0.0)", mask_numbers=False) == ["1"]
+    assert engine.parse("v1 ** (-1.0)", mask_numbers=False) == ["inv", "v1"]
+    assert engine.parse("v1 ** (0.5)", mask_numbers=False) == ["pow1_2", "v1"]
+
+
+def test_h047_near_fraction_no_longer_snaps(engine):
+    # pre-fix: limit_denominator approximated to 1/2 and emitted pow1_2 = sqrt (value change)
+    assert engine.parse("v1 ** (0.5000000000000001)", mask_numbers=False) == ["pow", "v1", "0.5000000000000001"]
+
+
+# -- H-049 (2026-08-05): beyond-i128 exponent spellings KEEP binary pow, never raise ----------
+# The legacy CPython int() was arbitrary-precision and never failed on a digit string; the
+# i128 parse error was port-minted and raised on the engine's OWN rendered infix.
+def test_h049_beyond_i128_integer_exponent_keeps_pow(engine):
+    huge = "170141183460469231731687303715884105728"  # 2^127
+    assert engine.parse(f"v1 ** {huge}", mask_numbers=False) == ["pow", "v1", huge]
+    assert engine.parse(f"v1 ** ({huge}/3)", mask_numbers=False) == ["pow", "v1", "/", huge, "3"]
+
+
+def test_h049_float_division_exponent_keeps_pow(engine):
+    # the legacy dead branch RAISED here (int('2.0') failure-parity); the engine's own
+    # divisor-side infix can render this shape, and its own output must always re-parse
+    assert engine.parse("v1 ** (2.0/4.0)", mask_numbers=False) == ["pow", "v1", "/", "2.0", "4.0"]

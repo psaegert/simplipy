@@ -1,0 +1,62 @@
+{
+ "scope": "const-free rows only (judge-adjudicable subset)",
+ "n_const_free": 43672,
+ "n_const_bearing_uncompared": 21864,
+ "judge_verdicts": {
+  "v0.11": {
+   "OK": 41741,
+   "F64_FOLD": 775,
+   "VIOLATION": 33,
+   "UNSCORED": 37
+  },
+  "v0.12": {
+   "OK": 9494,
+   "VIOLATION": 12
+  },
+  "sympy": {
+   "OK": 32976,
+   "VIOLATION": 5700
+  }
+ },
+ "refused_unsound": {
+  "v0.11": 70,
+  "v0.12": 12,
+  "sympy": 5700
+ },
+ "sound_only": {
+  "v0.11": {
+   "ratio_mean": 1.0178929275882576,
+   "frac_below_1": 0.06995328814801245,
+   "frac_below_0.9": 0.03720919582341088
+  },
+  "v0.12": {
+   "ratio_mean": 0.9915847499469909,
+   "frac_below_1": 0.10320113573914637,
+   "frac_below_0.9": 0.017471148562007693
+  },
+  "sympy": {
+   "ratio_mean": 1.0492017671223677,
+   "frac_below_1": 0.1943350430481773,
+   "frac_below_0.9": 0.0879739879098736
+  }
+ },
+ "paired_012_vs_011": {
+  "win_012": 0.1062007693716798,
+  "tie": 0.8456906026744825,
+  "win_011": 0.0481086279538377
+ },
+ "deep_region_below_0.9": {
+  "rows": 1857,
+  "win_012": 0.14001077005923532,
+  "win_011": 0.6106623586429726
+ },
+ "instrument_caveat": "judge_pair was validated only on screen-flagged rows (E4/E5); applied wholesale it shows a ~0.1% false-conviction floor. Verified by hand 2026-08-02: row 4078's two spellings are algebraically IDENTICAL (judge sign-flip on reordered subtraction + odd-function pull -> false VIOLATION); row 54373 convicts on the ratified null set (sampled exactly x4=-1, the finite-nonzero-ae licence's measure-zero exception). The v0.12 (12) and v0.11 (33+37) refusal counts sit AT this floor and are not evidence of unsoundness (consistent with the 64k gate record: 343 flagged, all OK); sympy's 5,700 (14.7% of changed rows) sits two orders above it and is real in bulk. Follow-up filed: judge defect class on unflagged equal-spelling pairs.",
+ "output_vs_output_probe": {
+  "scope": "const-free rows where sympy completed+converted (38,848; sympy-favorable: its convicted rows included)",
+  "ours_strictly_better": 0.5026,
+  "equal": 0.2546,
+  "sympy_strictly_better": 0.2428,
+  "sympy_median_gain_when_better_mu_units": 16,
+  "note": "Direct per-row mu(our output) vs mu(sympy output) -- denominator-free. The sound-only ECDF measures improvement BEYOND OUR CERT-CANON: our canonicalization work is priced into the denominator (definitionally ratio 1 on our side) while sympy canon-equivalent work shows as wins; this probe is the correct \"who simplifies better\" comparison."
+ }
+}

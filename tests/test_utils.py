@@ -4,7 +4,6 @@ import math
 import pytest
 import numpy as np
 from types import CodeType
-from copy import deepcopy
 
 # Import all functions from the utils module to be tested
 from simplipy import utils
@@ -137,6 +136,9 @@ def test_flatten_nested_list():
     (4, False),
     (30, False),
     (91, False),  # 7 * 13
+    (1, False),   # D2: vacuous `all` over the empty divisor range said True
+    (0, False),
+    (-7, False),
 ])
 def test_is_prime(n, expected):
     """Tests the primality test function."""
@@ -311,22 +313,6 @@ def test_factorize_to_at_most_max_iter_guard_triggers():
 def test_factorize_to_at_most_respects_large_max_iter():
     factors = utils.factorize_to_at_most(3 ** 8, 27, max_iter=20)
     _assert_factorization(3 ** 8, 27, factors)
-
-
-def test_mask_elementary_literals():
-    """Tests masking of all numeric string literals."""
-    expr = ['+', 'x', '3.14', '*', 'y', '-5.2e3']
-    expected = ['+', 'x', '<constant>', '*', 'y', '<constant>']
-
-    # Test not in-place
-    original_expr = deepcopy(expr)
-    result = utils.mask_elementary_literals(expr, inplace=False)
-    assert result == expected
-    assert expr == original_expr  # Ensure original is not modified
-
-    # Test in-place
-    utils.mask_elementary_literals(expr, inplace=True)
-    assert expr == expected
 
 
 def test_construct_expressions():

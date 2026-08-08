@@ -1,5 +1,309 @@
 # Changelog
 
+## 0.12.0 — 2026-08-08
+
+### Removed — the legacy kernel (the clean release)
+- **The binary simplify kernel is deleted; the AC engine IS the engine.** `simplify_ac`
+  becomes `SimpliPyEngine.simplify` (same signature: `form` ∈ tagged/infix/explicit,
+  `mode`, `node_budget`); the old best-first tree-search kernel, `cancel_terms`, the
+  operand-sort pass (except inside `mask`), the old pattern matcher, `apply_rules`,
+  `cancel_only`, `sort_only`, `prune_redundant_rules`/`prune-rules` (the wildcard-shadow
+  prune), the old-kernel counters and the `free_coefficients` axis are all gone. The
+  hyper-operator realization functions left `simplipy.operators` with them, so LEGACY
+  CONFIGS NO LONGER LOAD: cross-version comparison runs against a pip-pinned previous
+  release in a separate environment, never against embedded legacy code. Masking survives
+  as a current feature applied downstream of simplify, rebuilt as the `simplipy.masking`
+  module (see below). The supported pairing is the AC-JUDGED artifact family
+  (`acj-2-1`/`acj-3-2`/`acj-4-3`, published on the Hugging Face assets repository); the
+  test suites run on `acj-4-3`.
+
+### Removed — the hyper-operator vocabulary
+- **`mult2..5`, `div2..5`, `pow2..5`, `pow1_2..pow1_5` are deleted from the vocabulary, once
+  and for all.** The base operator config drops from 38 to 23 operators; coefficients and
+  exponents are explicit exact literals (`* 6 x`, `pow x 3`, `pow x 0.5`), and the general
+  signed root `rootn(x, n)` — an engine BUILT-IN, independent of any config — replaces the
+  odd-root family (`rootn x 3`, with arbitrary odd indices now expressible). Every layer
+  understands `rootn` natively: the interval certificates, the f64 evaluator, and the
+  high-precision battery all gained a first-class binary arm (odd integer index, everything
+  else fail-closed NaN), so the former `rootn -> pow1_3/pow1_5` re-sugaring in the explicit
+  projection is deleted along with the **entire bounded projection** (`form="bounded"`),
+  whose only purpose was hyper-operator re-sugaring.
+
+  STRICTLY CLEAN: legacy spellings have NO config-independent reading. They parse only
+  under a legacy CONFIG that still declares them (dying with the legacy kernel in the
+  clean release), and legacy corpora convert ONCE at the boundary instead —
+  `benchmarks/corpus/convert_nv.py` is the pure respeller (`mult3 t -> * 3 t`,
+  `pow5 t -> pow t 5`, `pow1_3 t -> rootn t 3`; no simplification, every raw redex kept),
+  and `raw_skeletons_nv.json` is the converted benchmark corpus. A new-vocabulary engine
+  REFUSES legacy input outright. Downstream data and model-output migration is
+  flash-ansr's side of the boundary. Re-mining under the new vocabulary confirmed the
+  economics: most of the legacy ruleset was vocabulary artifact — the shipped counts are
+  under "Published artifacts" below.
+
+### Added — the AC engine: n-ary associative-commutative simplification
+- **`+` and `*` become flat, sorted n-ary bags with EXACT rational coefficients** composed
+  explicitly (`* 7 x`, `pow x 3`); `-`, `/`, `neg`, `inv` and the hyper-operator family
+  desugar at the boundary and do not exist in the core. Rules are widened to SUB-MULTISET
+  matching with the unmatched remainder preserved, so a rule fires wherever the algebra
+  permits, independent of operand order and bracketing:
+
+  * both axes of the binary engine's commutative-order invariance defect are removed at the
+    representation level — `* cos A tan A` and `* tan A cos A` both give `sin A`, and
+    `x3 + (x8 + x3/5)` collects the two `x3` terms across the bracketing;
+  * `simplify` output is invariant under permutation of commutative operands and idempotent
+    by construction within the exact-coefficient boundary (verified corpus-wide; see "Known
+    boundary" below for the one documented exception class at i128-overflow literal scales);
+  * coefficient arithmetic is exact rational computation instead of mined rules, so the
+    arithmetic-identity rule families of earlier artifacts are simply derived;
+  * like-term/like-factor collection (the AC form of term cancellation) runs inside the
+    canonical constructors under the SAME soundness certificates as the rule matcher
+    (finite-a.e. for sign-cancelling addition, finite-and-nonzero-a.e. for exponent-cancelling
+    multiplication), each gate documented with its counterexample — including the branch-cut
+    gate (`x^(1/2) * x^(1/2)` does not merge to `x`) and the sign-erasure gate
+    (`(x^2)^(1/2)` does not become `x`);
+  * pole identities resolve exactly under the supported pairing — `inf - inf` is `nan`,
+    `inf / inf` is `nan` on every spelling — via the certificate sorts plus the exact fold;
+    ground (variable- and constant-free) expressions are additionally never licensed by the
+    a.e. collection gates (an expression with no measure space has nothing for "almost
+    everywhere" to quantify over), keeping ground soundness independent of certificate edge
+    behavior;
+  * the native prefix serialization is the STRICT TAGGED form (default for token inputs):
+    n-ary bags are delimited (`<add> ... </add>`, `<mul> ... </mul>`) and carry their group
+    inverse as a SECTION — terms after `<sub>` subtract, factors after `<div>` divide, so
+    `(2*x1)/(x2*x3)` is `<mul> 2 x1 <div> x2 x3 </mul>` and bags contain no negative
+    literals and no inverse operators; `pow` and the unary functions stay plain prefix;
+    `neg`/`inv` remain only as the standalone unary spellings (`tan neg x0`, `inv x0`).
+    Integer literals are one token each; a non-unit in-vocabulary fraction spells
+    STRUCTURALLY through the bag's divide section (`2/3 * x0` is
+    `<mul> 2 x0 <div> 3 </mul>`), so a tokenized consumer never needs fraction tokens,
+    and out-of-vocabulary rationals fall back to the cheapest atomic spelling
+    (`0.12345`); the structural-fraction bound is the declared integer vocabulary
+    (default 10, `SIMPLIPY_TAGGED_FRACTION_MAX`). Tagged output is accepted back
+    as input (one shared, liberal parser: in-bag `neg`, negative literals and `pow x -1`
+    spellings all parse to the same canonical state). Two further
+    projections of the same canonical answer: `form='infix'` — a PRETTY human-readable
+    rendering (`x8 + 1.2*x3`, `-x0/3`, `(x0 + 1)^2`; the default for `str` inputs);
+    `form='explicit'` — the binary-chain diagnostic form with literal coefficients.
+    `Mode.LOSSY` relaxes every certificate exactly as in the strict mode.
+
+  The internal canonical form is UNIQUE: bags order by STRIPPED keys (Add terms by their
+  coefficient-stripped structural key with constant-like terms last — `x + 1`, the polynomial
+  convention; Mul factors by exponent-stripped base), and every canonical sum is PRIMITIVE —
+  positive lead coefficient, no unanimous coefficient magnitude, the extracted content
+  wrapping the sum (`-a - b` is `-1 * (a + b)`; `a/3 + b/3` is `1/3 * (a + b)`; sums with no
+  unanimous content, like `x8 + 1.2*x3`, are untouched, so extraction never inflates tokens).
+  Factored sums entering an addition unfactor, so the form is independent of association
+  order; sign and grouping spellings of one function converge in the constructors themselves,
+  and parse -> canonicalize -> serialize is the identity on every canonical state (asserted
+  corpus-wide in debug builds).
+
+  **Supported pairing.** The engine is supported with SORT-PROMOTED rulesets: their
+  cancellation rules carry the certificate sorts, so pole identities resolve exactly
+  (`inf - inf -> nan`) under the AC matcher. In this release that means the published
+  `acj-2-1`/`acj-3-2`/`acj-4-3` artifacts (see "Published artifacts" below); the pre-0.12
+  artifacts (`2-1`/`3-2`/`4-3`, `dev_*`) use the retired hyper-operator vocabulary and no
+  longer load at all (see the artifact-generation gate below).
+
+### Changed — the reduction ordering is a description length (μ)
+- **`SimpliPyEngine.complexity()` and the search objective price the canonical state by μ,
+  its coding cost in milli-bits under the token grammar.** A variable costs 8.000 bits, a
+  magnitude-1 coefficient is free, and a rational prices as its fraction code
+  (`1/2` = 2.585 bits, `355/113` = 15.309 bits); `<constant>` prices at the free-constant
+  bound. The decimal code is PRINT-only — it never enters the measure — and the printer
+  follows the cheaper code, so `0.5*x0` emits `x0/2` and `1/2` emits `/ 1 2` in the explicit
+  dialect, while `0.2` and `0.12345` keep their decimal spelling. Every rewrite must
+  strictly descend in (μ, tie-break) — a Knuth–Bendix orientation that makes termination a
+  theorem and `μ(simplify(e)) <= μ(e)` a corpus-verified property. Loaded rules are
+  re-oriented under μ at load time, so rules mined under any earlier ordering stay aligned
+  with the ordering the engine actually fires under.
+
+### Changed — the mining alphabet is the deployed literal vocabulary
+- The mine's source AND target alphabet is now the integers −10..10, `np.e`, `np.pi` and
+  the IEEE specials — the same literal vocabulary downstream tokenized consumers declare —
+  instead of a nine-term development alphabet. Adopted over a measured cost, deliberately:
+  the full alphabet costs about 10% simplify throughput for a 7x larger ruleset, and
+  completeness over the deployed vocabulary is the goal, not the margin. The complete
+  mining universes at the shipped tier are 13,427 length-3 and 399,823 length-4 sources.
+
+### Added — `simplipy.masking`: role-aware literal masking as a module
+- **`SimpliPyEngine.mask` is deleted; masking is representation, applied downstream of
+  simplify, and lives in `simplipy.masking`.** The module provides `literal_sites` — a
+  role-aware walk over both prefix dialects classifying every literal position
+  (COEFFICIENT / ADDEND / EXPONENT / ROOT_INDEX / VALUE, with `neg`/`inv` transparent) —
+  plus `mask(tokens, engine, policy)`, `mask_all`, and `mask_values_keep_structure`.
+  Policies decide per (value, role); the engine's operator table is read directly, never
+  through a silent default.
+
+### Added — the artifact-generation gate: generation-1 artifacts refuse at load
+- The 0.12 compatibility claim ("legacy configs no longer load") is ENFORCED, not
+  aspirational (`simplipy.compat`): artifacts carry an explicit `engine_generation` pin in
+  `config.yaml` (generation 2 = the AC engine's clean 23-operator vocabulary; the acj-*
+  family and `base` are pinned), the package carries the allowlist
+  (`SUPPORTED_ENGINE_GENERATIONS = {2}`), and the refusal is MUTUAL with a actionable
+  message in both directions (an older artifact points at `pip install "simplipy<0.12"`,
+  a newer one at upgrading simplipy). Un-pinned configs are classified by vocabulary —
+  any retired hyper-operator token means generation 1 — so every already-published legacy
+  artifact refuses without republishing.
+
+### Added — soundness and measure provenance ships with every artifact
+- Every mined `rules.json` is accompanied by `rules.json.provenance.json` carrying the mine
+  parameters, the core build stamp (version + git revision), the soundness state — the
+  certificate kill-switch states, every artifact-affecting environment override recorded
+  verbatim (a registered, single-place switch list), and the interval fail-closed miss
+  counters — and the measure fingerprint (unit, the μ constants, probe values, digest), so
+  artifacts mined under different orderings are distinguishable from provenance alone.
+
+### Fixed — soundness hardening across the numeric stack
+- **The interval layer is rigorous in rounding.** Every computed endpoint steps outward
+  (IEEE arithmetic by 1 ulp, libm calls by 8, integer powers exponent-scaled); exact values
+  never step (semantic constants, exact libm hits, a-priori range bounds applied as
+  post-widening clamps). This retired a class of f64-precision verdicts the engine itself
+  used to ship: exact-zero compositions such as `acosh(acos(cos 1))` no longer fold to
+  `nan`, and the rendered-overflow pole rules that overflow at f64's `tan(f64(π/2))` are
+  gone from the published family.
+- **Ground expressions classify exactly.** Integer literals of any magnitude read sign and
+  parity from the spelling (`(-inf)^1e40` is `+inf`; a finite negative base at an integer
+  exponent refuses instead of asserting `nan`); a non-finite f64 verdict inside the miner
+  must be corroborated by the honest interval class before it may mint.
+- **Special constants never round into bits.** A ground source that denotes π or e — by
+  spelling or by computed VALUE (`acos(-1)`) — stays symbolic; exact collapses ship as
+  certified rules, never as f64 decimals.
+- **Every token-taking entry is guarded.** The recursion cap covers all FFI entries and the
+  deep-infix parser (interpreter aborts on ~200k-deep chains became `ValueError`s); mode
+  strings validate strictly; malformed tagged or `rootn` input raises instead of passing
+  through unchanged; `load_config` returns values VERBATIM (path resolution moved to each
+  key's consumer — a small public API break).
+- **The verify judges speak the full 0.12 language** (tagged bags, rationals, `rootn`) and
+  fail closed on anything they cannot read; the shipping family carries zero killed
+  verdicts under the ruleset gate.
+
+### Changed — rule families become derivations
+- The constructors now derive natively what earlier artifacts said as rule families, each
+  landed only after the contract judge certified the family and each verified by triple
+  byte-identical re-mines with unchanged scale-gate outcomes: sign-blindness as a
+  propagating CONTEXT (an even head plants it, an odd function carries it inward, `abs` is
+  a no-op inside it, an integer power passes it through — one recursion replacing thirty
+  rules, reaching depths the mine cannot); powers of `exp` compose
+  (`(e^a)^b = e^(a*b)` wherever the product folds, reached from both `pow` and `rootn`,
+  including `exp(1) = e`); the inverse pairs `f(g(t)) = t` per a certified table; the
+  reciprocal-base power arms; and the half-period shift `f(t ± π)` for sin/cos/tan at
+  coefficient exactly ±1. Across the arc the 4-3 artifact went from 7,153 rules at the
+  alphabet expansion to 6,661 shipped — every drop a rule the engine now simply derives.
+
+### Published artifacts
+- **`acj-2-1` (26 rules), `acj-3-2` (106), `acj-4-3` (6,661)** on the Hugging Face assets
+  repository — the complete AC-judged mines of the clean 23-operator vocabulary at their
+  tiers, covered-pruned and sort-promoted, byte-deterministic from the co-located
+  `mine.yaml` with one command (three independent mines byte-identical per cell). Each
+  ships `config.yaml` (generation-pinned), `rules.json`, the provenance sidecar and
+  `mine.yaml`. The hosted family was republished 2026-08-08, superseding an earlier upload
+  that predated the interval-rounding hardening and still contained 13 rules since retired
+  as uncertifiable or unsound. `base` is the bare 23-operator starting config for fresh
+  mining. All pair with simplipy >= 0.12; `load(name, install=True)` fetches and verifies
+  by manifest.
+
+### Verified
+- Structural gates at 65,536 and 1,000,000 expressions: 0 errors, 0 idempotence failures,
+  0 permutation failures, every numeric-divergence flag adjudicated sound; the tracked
+  400-row reference corpus pinned exactly; 129 Rust tests (release and debug profiles) and
+  650 Python tests green; clippy clean.
+- **Known boundary (documented, unchanged in practice):** when two literals *both* refuse
+  to fold because their exact sum or product would overflow i128, their relative bag order
+  can depend on construction history; randomized fuzzing at ≥ 1e19-scale literal pairs
+  shows 2 idempotence violations in 50,000 calls (none reachable from mining, corpus, or
+  deployment literal scales; the cure — arbitrary-precision coefficients — is a design
+  decision deferred until it matters).
+
+### Docs
+- `docs/formal.md` — the formal specification of the engine as a normalized term-rewriting
+  system modulo AC: the canonical form, the μ ordering, the licence ledger with each
+  claim's status (theorem / by-construction / enforced / empirical), and a change-impact
+  map. README and quickstarts run on the acj family with executed outputs.
+
+## 0.11.0 — 2026-07-26
+
+### Fixed
+- **The mine no longer certifies rules that disagree with their source at a constant binding.**
+  A `<constant>` slot is chosen by the fitter, not drawn from a continuum, so a single
+  disagreeing value carries the full data measure: where the source is defined, the target must
+  be defined and exactly equal, with no measure tolerance. Four defects let violations through,
+  all now closed:
+  - **Stage-2 confirmation was vacuous for constant-bearing sources.** It asked "does a target
+    exist?" instead of "is it the target we mined?", because the search's all-constant
+    short-circuit returns a class literal without reading the candidate list. It now compares
+    the returned target against the one under confirmation.
+  - **A refuter for literal targets.** Variable-free constant-bearing sources are evaluated at
+    exact witnesses and must agree in the extended reals (NaN with NaN, sign-exact infinities,
+    exact finite values) before a literal target can be minted.
+  - **A collapse licence.** A source may collapse to a single term only where its behaviour is
+    unambiguous: the candidate must preserve the source's value class, and a bare `<constant>`
+    target additionally requires the source to be finite on a set of positive measure. This
+    replaces a narrower special-case guard.
+  - **Witness closure under inverse images.** Some sources are finite only at the *preimage* of
+    a corner point (`acosh(sin(C/3))` only where `sin(C/3) >= 1`, i.e. `C = 3pi/2 + 6k·pi`),
+    which no amount of dense sampling reaches. Witnesses are now closed by pulling operator
+    corners back through each unary in the source, with period shifts for periodic inverses.
+
+  Measured on a complete enumeration of every variable-free `<constant>`-bearing source at
+  length <= 4 (45,560 sources): **0 rules disagree with their source**, against 24 in the
+  previously published rule set. Freshly mined cells are correspondingly cleaner; deployed
+  artifacts change only when re-mined.
+
+### Added
+- **Ladder re-use: `find_rules(snapshot_at={length: path})`.** The cells of one
+  `max_target_pattern_length` form a prefix chain -- mining `(7,4)` already does all the work of
+  `(5,4)` and `(6,4)` on the way up, because lengths are mined shortest-first, each source's
+  seed is indexed by its length alone rather than by how far the climb goes, the master seeds
+  are drawn before the universe is built, and enumeration consumes no randomness. A climb can
+  now emit each shorter cell as it passes through: the full post-pass (proposals, prune,
+  promotion) runs on a copy of the mine, that cell's artifact and sidecar are written, and the
+  raw un-pruned state is restored so the climb continues unaffected. Each snapshot's sidecar
+  carries a `ladder_snapshot` record naming the climb it came from, and its parameters and
+  universe census describe the cell rather than the climb. Verified byte-identical to one-shot
+  mines of the same cells, including with a sampled length above the snapshot. Also exposed as
+  the `snapshot_at:` key in the find-rules config.
+- **Peak memory during mining is lower.** Each length's source universe is released as soon as
+  it has been linearised; at the top lengths that set is the largest object in the process.
+- **Ladder seed `* 0 !0 -> 0`** (the multiplicative zero absorber), certified through the same
+  `judge_bang` bar as the other seeds. Commutative operands are canonically ordered
+  variable < number < composite, so the enumerable carrier `* 0 x0` canonicalises to `* x0 0`
+  and the mine only ever mints the right-hand form. But "zero times a *composite*" is
+  canonically literal-first, so the left form is the shape that actually occurs, and the only
+  carriers a cell can enumerate for it (`* 0 <unary> <leaf>`) mint per-operator rules that miss
+  every binary operand. Without the seed, 213 of 65,536 corpus expressions simplified less --
+  one 27-token expression reaching 17 tokens instead of 1. This restores it: mean length ratio
+  0.8999 -> 0.8989, with 213 regressed rows falling to 18. Same situation as the additive-cancel
+  seeds, whose carriers are pre-cancelled rather than canonicalised away.
+
+### Changed
+- **`simplify()` is ~4% faster: the hot-path observability is now a compile-time feature, off by
+  default.** `simplify_counters()`'s counters sat in the innermost loops of the released wheel --
+  `pattern_attempts` alone is one relaxed `fetch_add` per candidate rule tried, ~2.1k per
+  expression on the published 4-3 rule set -- and the `nanos_*` phase timers cost two clock reads
+  per bracket. Two independent measurements, both on the published 4-3 rule set: min-of-30 over 6
+  interleaved rounds at two corpus sizes gave 99.4 -> 94.7 us/expr at n=8192 and 99.4 -> 94.5 at
+  n=2048 (**-4.6%**, faster in 6/6 rounds at both sizes, counters ~4.0 us and timers ~0.5 us of
+  that); an independent min-of-7 on n=6000 gave 99.80 -> 95.75 us/expr (**-4.1%**, median
+  103.41 -> 100.67). Take the effect as **4-5%**: the interleaved protocol is the better one, and
+  the weaker protocol lands slightly lower, as expected. Output is token-identical -- one sha256
+  over 5,000 corpus rows agrees across HEAD, the default build and the `profiling` build, while
+  `simplify_counters()` reads all zeros in the default build and non-zero under `profiling`.
+  `simplify_counters()` therefore reads all zeros in a released wheel; build the profiling
+  extension to read it: `maturin develop --release --features profiling` (or the individual
+  `stats-counters` / `stats-timers`). The mining-progress counters are untouched -- they are off
+  the simplify hot path.
+
+### Fixed
+- **`nanos_rules` is recorded again.** The counter was declared and exported but had no recording
+  site since the tree-search refactor deleted the block its timer lived in, so
+  `simplify_counters()` reported the rule-application pass as 0 ns while every other phase
+  reported honestly, and share-of-runtime readings silently attributed the whole rules pass to the
+  unaccounted remainder. It is now bracketed at the same site as `nanos_cancel`, which makes the
+  two edge generators directly comparable: on the published 4-3 rule set the rules pass is 55.2 of
+  95.2 us/expr (58%), cancellation 24.5 (26%), mask+sort 9.0 (9%), leaving 6.5 us (7%)
+  unaccounted; that works out to ~27 ns per candidate-rule attempt, and the same ~27 ns on the
+  much larger dev 7-3 rule set at 10x the attempts per expression.
+
 ## 0.10.1 — 2026-07-26
 
 ### Added

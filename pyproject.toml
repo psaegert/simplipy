@@ -6,7 +6,7 @@ authors = [
     ]
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.10.1"
+version = "0.12.0"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 keywords = ["symbolic-regression", "simplification", "expression", "prefix", "rewriting", "rust"]
@@ -83,6 +83,33 @@ build-backend = "maturin"
 python-source = "src"
 module-name = "simplipy._core"
 features = ["pyo3/extension-module"]
+# The sdist ships what building and testing the package needs. Of the tracked mining
+# workspace (remine/) that is exactly the acj artifact family the test suites load
+# (config.yaml, mine.yaml, rules.json and its provenance sidecar); the mining and
+# verification harness scripts, their result records, the campaign documents, the
+# specification, the mine logs, and superseded interim artifacts all stay out.
+#
+# The prose-file exclusions are NOT cosmetic. Without them the sdist carried the
+# campaign register, the release-train TODO, four internal audits and the normative
+# contract -- 30 remine/ files, verified by building the sdist and listing it. A PyPI
+# upload is irrevocable and mirrored, so this list is a disclosure boundary, not a
+# packaging preference. VERIFY BY BUILDING, never by reading the globs:
+#     python -m maturin sdist -o dist/ && tar tzf dist/*.tar.gz | grep remine/
+exclude = [
+    "design/**",
+    "remine/d9/**",
+    "remine/nv-2-1/**",
+    "remine/nv-3-2/**",
+    "remine/nv-4-3/**",
+    "remine/2-1/**",
+    "remine/3-2/**",
+    "remine/4-3/**",
+    "remine/*.py",
+    "remine/*.json",
+    "remine/**/*.md",
+    "remine/**/*.log",
+    "remine/spec/**",
+]
 
 
 [tool.flake8]
@@ -127,4 +154,5 @@ ignore_errors = true
 [tool.pytest.ini_options]
 markers = [
     "integration: marks tests as integration tests",
+    "invariance: engine-invariance property gates (commutative operand order). Some are known-failing xfail(strict=True) gates that document a defect; the accompanying ratchet tests are green and fire on regression. Run alone with `pytest -m invariance -rxX`.",
 ]

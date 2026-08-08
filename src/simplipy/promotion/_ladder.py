@@ -1,9 +1,12 @@
 # mypy: ignore-errors
-"""The subtree-sort promotion ladder driver: `_` -> `!` -> `?`.
+"""The subtree-sort promotion ladder driver: `_` -> `!` -> `?` (+ the `$`-seeded twins).
 
 Certifies each mined rewrite rule against the strongest wildcard sort it can soundly
-bind at, stepping DOWN a three-rung ladder of progressively weaker bindings when a
-stronger rung's bar is not met. The atom lattice (see `._pointwise.ATOMS`: 0, +-1,
+bind at, stepping DOWN a three-rung descent ladder of progressively weaker bindings
+when a stronger rung's bar is not met. (The shipped artifact's FOURTH sort, `$`, is not
+a descent rung: it enters only through the seeded multiplicative-cancellation
+identities at the bottom of this module, certified by `judge_bang_mult` on the
+finite-nonzero atom lattice.) The atom lattice (see `._pointwise.ATOMS`: 0, +-1,
 integers, half-integers, +-pi, +-e, +-inf, nan) is the finite set of exact probe points;
 on it, exact value equality is required INCLUDING definedness: a nan/defined mismatch in
 EITHER direction is an exact kill (`_pointwise.judge`: `an != bn -> DEMOTE`), so a
@@ -40,6 +43,7 @@ from ._pointwise import (ATOMS, MAX_PRODUCT, judge, prefold,  # noqa: E402
                          correlated_valuations)
 from ._const_bearing import certify_rule  # noqa: E402
 from ._hp_equiv import evaluate as hp_eval  # noqa: E402
+from simplipy.utils import reserved_numeric_spelling  # noqa: E402
 from mpmath import mp, mpf, isnan, isinf  # noqa: E402
 
 SEED = 20260718
@@ -455,6 +459,9 @@ def judge_bang(lhs, rhs, rng):
 
 
 def _is_zero_token(t):
+    # H-007: a reserved spelling is not a legal zero token ('0_0' would float() to 0.0).
+    if isinstance(t, str) and reserved_numeric_spelling(t):
+        return False
     try:
         return float(t) == 0.0
     except (TypeError, ValueError):
@@ -556,7 +563,36 @@ def run_controls(rng, core):
         # a sign-clean survivor: c * inf = +inf is spelled inf, no zero involved
         ('ground', (['+', '<constant>', 'atanh', '1'], ['float("inf")']), 'PASS'),
     ]
+    # The controls are written in the CANONICAL vocabulary; under a reduced engine
+    # (promotion runs on every mine since promote_sorts defaulted on, 2026-08-01) a
+    # control whose operators the engine does not define cannot be judged -- its
+    # tokens parse as garbage (an all-infix engine read `sin` as an unknown leaf and
+    # "killed" `* sin np.pi ?0 -> 0` at the inf atom). Such controls are SKIPPED:
+    # the self-test enforces exactly the expressible subset, and the canonical
+    # pipeline (which defines every control operator) still runs the full battery.
+
+    def _vocab_covers(tokens):
+        from ._f64_eval import ARITY, LITERALS
+        for t in tokens:
+            if t in ARITY or t in LITERALS or t == '<constant>':
+                continue
+            if t[:1] in '?_!$' and t[1:].isdigit():
+                continue
+            if t.startswith('float("'):
+                continue
+            # H-007: a reserved spelling ('inf', '1_000') is not an evaluable literal.
+            if reserved_numeric_spelling(t.strip('()')):
+                return False
+            try:
+                float(t.strip('()'))
+                continue
+            except ValueError:
+                return False
+        return True
+
     for tier, (lhs, rhs), want in ctrl:
+        if not _vocab_covers(list(lhs) + list(rhs)):
+            continue
         if tier == '?':
             v, info = judge_r2prime(lhs, rhs, atom_valuations(wildcards(lhs + rhs), rng))
         elif tier == 'spike':
@@ -739,10 +775,23 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
     # Seeded canonical identities: the additive-cancel family cannot be MINED -- its sources
     # (`- x0 x0`) are pre-canceled at enumeration, so no rule carrier ever exists. Seeds are
     # certified through the SAME judge_bang bar as everything else, never trusted by fiat.
+    # `* 0 !0 -> 0` is the same story with a different cause: its carrier is canonicalized away
+    # rather than pre-canceled. `sort.rs` orders commutative operands var(0) < num(1) <
+    # composite(2), so the enumerable carrier `* 0 x0` canonicalizes to `* x0 0` and the mine
+    # mints only the RIGHT-hand form (-> `* !0 0 -> 0`). But "zero times a COMPOSITE" is
+    # canonically literal-FIRST (num < composite), so the left form is exactly the shape that
+    # occurs in practice and the only carriers the cell can enumerate for it are
+    # `* 0 <unary> <leaf>` -- which mint 25 per-operator rules that miss every BINARY operand.
+    # Measured consequence of its absence on the 64k corpus: 213 rows simplify less, some
+    # drastically (a 27-token expression reaching 17 tokens instead of 1). The published 0.7.1
+    # artifact carries the rule, so leaving it out is a REGRESSION, not a soundness gain: at the
+    # `!` bar the slot is finite a.e., 0 * finite = 0, and the null set where the operand is
+    # +-inf/nan is licensed by R3. Certified through judge_bang like every other seed.
     lhs_seen = {tuple(l) for l, _ in kept}
     for lhs, rhs in [(('-', '!0', '!0'), ('0',)),
                      (('+', '!0', 'neg', '!0'), ('0',)),
-                     (('+', 'neg', '!0', '!0'), ('0',))]:
+                     (('+', 'neg', '!0', '!0'), ('0',)),
+                     (('*', '0', '!0'), ('0',))]:
         if tuple(lhs) in lhs_seen:
             continue
         bv, _ = judge_bang(lhs, rhs, rng)

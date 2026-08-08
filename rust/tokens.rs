@@ -2,11 +2,9 @@
 //!
 //! The hot path used to shuttle `String` tokens through every tree clone, flatten, memo key and
 //! hash lookup. This module replaces the token representation with an interned `Copy` id
-//! ([`Tok`]) plus per-id PRECOMPUTED properties (arity, leaf value, sigil class, ...), so the
+//! ([`Tok`]) plus per-id PRECOMPUTED properties (arity, sigil class), so the
 //! kernel compares/copies `u32`s and consults property vectors instead of re-running string
-//! predicates. Outputs are BYTE-IDENTICAL: interning is injective (same string <-> same id within
-//! a call), and every property is computed by the exact same function that previously ran on the
-//! string at use time.
+//! predicates. Interning is injective: same string <-> same id within a call.
 //!
 //! ## Two-level store: per-Engine table + per-call overlay (NO locks)
 //! * [`TokenTable`] -- built once in `Engine::from_strs` (operators, aliases, `**`, every rule
@@ -40,24 +38,9 @@ pub struct TokProps {
     /// `Operators::arity_of` (None = leaf). Every operator name is interned into the TABLE at
     /// build, so overlay tokens are never operators (arity None by construction).
     pub arity: Option<u8>,
-    /// `numeric::leaf_value` -- the shared literal table (numerics, np.pi/np.e, float("..."), (-1)).
-    pub leaf_value: Option<f64>,
-    /// `token.parse::<f64>().ok()` -- the sort `operand_key` numeric test (Python `float(token)`;
-    /// DISTINCT from `leaf_value`, faithfully so).
-    pub sort_float: Option<f64>,
-    /// `utils::is_numeric_string` -- the `mask_elementary_literals` predicate.
-    pub is_num_str: bool,
     /// First-character sigil class: b'_' / b'?' / b'!' / b'$' or 0. Placeholder classification is
     /// BY FIRST CHARACTER (Python keys on the sigil prefix, not the full `^[_?!$]\d+$` regex).
     pub sigil: u8,
-    /// `rules::is_wildcard` (the full sigil+digits check) -- rule-compile classification.
-    pub is_wildcard: bool,
-    /// `Operators::is_commutative`.
-    pub commutative: bool,
-    /// `Operators::sort_resolve` (alias-canonicalized operator + compat arity), with the canonical
-    /// operator interned. Every alias / compat key is interned into the table at build, so overlay
-    /// tokens always resolve to None here (they cannot be aliases).
-    pub sort_resolve: Option<(Tok, u8)>,
 }
 
 impl TokProps {
@@ -65,13 +48,7 @@ impl TokProps {
     fn leaf_only(s: &str) -> Self {
         Self {
             arity: None,
-            leaf_value: crate::numeric::leaf_value(s),
-            sort_float: s.parse::<f64>().ok(),
-            is_num_str: crate::utils::is_numeric_string(s),
             sigil: sigil_of(s),
-            is_wildcard: crate::rules::is_wildcard(s),
-            commutative: false,
-            sort_resolve: None,
         }
     }
 }
@@ -84,53 +61,43 @@ fn sigil_of(s: &str) -> u8 {
     }
 }
 
-/// Per-Engine interner: strings, ids, properties, plus the handful of distinguished tokens the
-/// kernel compares against by id (`<constant>`, the connection-class operators/neutrals, ...).
+/// Per-Engine interner: strings, ids, properties.
+///
+/// (The deleted binary kernel's distinguished-token FIELDS -- `constant`/`nan`/`plus`/
+/// .../`cc_inverse_op`, its id-comparison anchors -- were removed in D3, 2026-08-05:
+/// zero consumers since the 0.12.0 kernel deletion. The AC core interns through
+/// `TokenView::intern` and compares by string, never against stored ids. Their eager
+/// `intern` CALLS survive at the FRONT of [`TokenTable::build`]'s literal list, in the
+/// ORIGINAL order, so table ids are unchanged by the removal.)
 #[derive(Debug, Default)]
 pub struct TokenTable {
     strings: Vec<Box<str>>,
     ids: FxHashMap<Box<str>, Tok>,
     props: Vec<TokProps>,
-    /// `<constant>` -- the abstract-constant token, keyed everywhere by this id.
-    pub constant: Tok,
-    /// `float("nan")` -- the NaN literal (numeric-line propagation).
-    pub nan: Tok,
-    pub plus: Tok,
-    pub minus: Tok,
-    pub star: Tok,
-    pub slash: Tok,
-    /// The connection-class neutrals `0` / `1` (cancel emission).
-    pub zero: Tok,
-    pub one: Tok,
-    /// The class inverse prefixes `neg` / `inv` and the `pow` fallback head (cancel emission).
-    pub neg: Tok,
-    pub inv: Tok,
-    pub pow: Tok,
-    /// `operator_inverses["+"]` / `["*"]` interned -- cancel's parity-flip comparison
-    /// (`ops.operator_inverse(operator_set0) == Some(operator)`), per connection class.
-    pub cc_inverse_op: [Option<Tok>; 2],
 }
 
 impl TokenTable {
-    /// Build the per-Engine table: distinguished tokens, the literal vocabulary, x0..x63, every
-    /// operator (config order, deterministic ids), every alias, `**`, and the two class inverses.
+    /// Build the per-Engine table: the eagerly-interned common tokens, the literal vocabulary,
+    /// x0..x63, every operator (config order, deterministic ids), every alias, and `**`.
     /// Rule LHS/RHS tokens are interned by `CompiledRules::compile` (which receives `&mut self`).
     pub fn build(operator_order: &[String], ops: &Operators) -> Self {
         let mut t = TokenTable::default();
-        t.constant = t.intern("<constant>", ops);
-        t.nan = t.intern("float(\"nan\")", ops);
-        t.plus = t.intern("+", ops);
-        t.minus = t.intern("-", ops);
-        t.star = t.intern("*", ops);
-        t.slash = t.intern("/", ops);
-        t.zero = t.intern("0", ops);
-        t.one = t.intern("1", ops);
-        t.neg = t.intern("neg", ops);
-        t.inv = t.intern("inv", ops);
-        t.pow = t.intern("pow", ops);
-        // Literal vocabulary the hot path (masking / folding / cancel emission) commonly meets.
-        // Membership here is PERFORMANCE-only (a missing literal just lands in the overlay).
+        // Eager membership is PERFORMANCE-only (a missing literal just lands in the
+        // per-call overlay) -- except `rootn`, see below. The first eleven entries are
+        // the deleted kernel's distinguished tokens, kept FIRST in their historical
+        // order so the D3 field removal left every table id unchanged.
         for s in [
+            "<constant>",
+            "float(\"nan\")",
+            "+",
+            "-",
+            "*",
+            "/",
+            "0",
+            "1",
+            "neg",
+            "inv",
+            "pow",
             "float(\"inf\")",
             "float(\"-inf\")",
             "np.pi",
@@ -153,6 +120,10 @@ impl TokenTable {
             "10",
             "-1",
             "-2",
+            // The AC core's general signed-root operator (IEEE rootn): rule translation
+            // desugars pow1_3/pow1_5 into it and stores the resulting expressions
+            // per-Engine, so the token must be a TABLE id, never an overlay id.
+            "rootn",
         ] {
             t.intern(s, ops);
         }
@@ -169,12 +140,13 @@ impl TokenTable {
         for a in aliases {
             t.intern(a, ops);
         }
-        let inv_add = ops.operator_inverse("+").map(str::to_string);
-        let inv_mult = ops.operator_inverse("*").map(str::to_string);
-        t.cc_inverse_op = [
-            inv_add.map(|s| t.intern(&s, ops)),
-            inv_mult.map(|s| t.intern(&s, ops)),
-        ];
+        // (The former cc_inverse_op tail interned the config's +/* inverse names here.
+        // For every real config that is a no-op on table contents -- `-` and `/` are
+        // eagerly interned above, and an inverse naming another OPERATOR is interned
+        // via operator_order; only a malformed non-operator inverse name ever added a
+        // token, and such a string now simply lands in per-call overlays, where the
+        // string-based comparisons treat it identically. Removed in D3 with the dead
+        // field it fed.)
         t
     }
 
@@ -186,19 +158,10 @@ impl TokenTable {
         let id = Tok(self.strings.len() as u32);
         self.strings.push(s.into());
         self.ids.insert(s.into(), id);
-        // Placeholder first: `sort_resolve` may recursively intern the canonical operator, and the
-        // canonical operator of an alias may be... this very token (self-resolution).
-        self.props.push(TokProps::leaf_only(s));
-        let sort_resolve = ops.sort_resolve(s).map(|(op, ar)| {
-            let target = if op == s { id } else { self.intern(&op, ops) };
-            (target, ar as u8)
-        });
-        self.props[id.0 as usize] = TokProps {
+        self.props.push(TokProps {
             arity: ops.arity_of(s),
-            commutative: ops.is_commutative(s),
-            sort_resolve,
             ..TokProps::leaf_only(s)
-        };
+        });
         id
     }
 
@@ -222,31 +185,8 @@ impl TokenTable {
     }
 
     #[inline]
-    pub fn lookup(&self, s: &str) -> Option<Tok> {
-        self.ids.get(s).copied()
-    }
-
-    /// Look up a whole token sequence; `None` if ANY token is absent from the table (in which
-    /// case the sequence cannot equal any table-token key, e.g. a compiled-rule LHS).
-    pub fn lookup_seq(&self, tokens: &[String]) -> Option<Vec<Tok>> {
-        tokens.iter().map(|s| self.lookup(s)).collect()
-    }
-
-    #[inline]
     fn props(&self, t: Tok) -> &TokProps {
         &self.props[t.0 as usize]
-    }
-
-    /// `arity` for a TABLE token (rule compilation, where every token is interned here).
-    #[inline]
-    pub fn arity(&self, t: Tok) -> Option<u8> {
-        self.props(t).arity
-    }
-
-    /// Per-id `rules::is_wildcard` for a TABLE token.
-    #[inline]
-    pub fn is_wildcard_tok(&self, t: Tok) -> bool {
-        self.props(t).is_wildcard
     }
 }
 
@@ -314,11 +254,32 @@ impl<'a> TokenView<'a> {
 
     /// Resolve to an owned `String` (boundary conversions only -- FFI exit, `finite_ae`,
     /// `evaluate_constant_subtree`).
-    pub fn to_string(&self, t: Tok) -> String {
+    pub fn resolve_owned(&self, t: Tok) -> String {
         if self.table.is_table_id(t) {
             self.table.resolve(t).to_string()
         } else {
             self.overlay.borrow().str_of(t).to_string()
+        }
+    }
+
+    /// Name equality WITHOUT resolving to an owned string (constructor hot paths --
+    /// `fun`'s head dispatch must not allocate per construction).
+    pub fn tok_is(&self, t: Tok, s: &str) -> bool {
+        if self.table.is_table_id(t) {
+            self.table.resolve(t) == s
+        } else {
+            self.overlay.borrow().str_of(t) == s
+        }
+    }
+
+    /// Run a closure over a token's string WITHOUT resolving to an owned string
+    /// (the mu Leaf arm sits on the ordering hot path -- pricing a numeric-string
+    /// leaf must not allocate per comparison).
+    pub fn with_str<R>(&self, t: Tok, f: impl FnOnce(&str) -> R) -> R {
+        if self.table.is_table_id(t) {
+            f(self.table.resolve(t))
+        } else {
+            f(self.overlay.borrow().str_of(t))
         }
     }
 
@@ -354,37 +315,7 @@ impl<'a> TokenView<'a> {
     }
 
     #[inline]
-    pub fn is_operator(&self, t: Tok) -> bool {
-        self.props(t).arity.is_some()
-    }
-
-    #[inline]
-    pub fn leaf_value(&self, t: Tok) -> Option<f64> {
-        self.props(t).leaf_value
-    }
-
-    #[inline]
-    pub fn sort_float(&self, t: Tok) -> Option<f64> {
-        self.props(t).sort_float
-    }
-
-    #[inline]
-    pub fn is_num_str(&self, t: Tok) -> bool {
-        self.props(t).is_num_str
-    }
-
-    #[inline]
     pub fn sigil(&self, t: Tok) -> u8 {
         self.props(t).sigil
-    }
-
-    #[inline]
-    pub fn commutative(&self, t: Tok) -> bool {
-        self.props(t).commutative
-    }
-
-    #[inline]
-    pub fn sort_resolve(&self, t: Tok) -> Option<(Tok, u8)> {
-        self.props(t).sort_resolve
     }
 }

@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from simplipy.utils import reserved_numeric_spelling
+
 if TYPE_CHECKING:
     from ..engine import SimpliPyEngine
 
@@ -59,7 +61,8 @@ def build_oracle(engine: "SimpliPyEngine"):
 
     from .. import operators as spo
 
-    infix = {'+': _op.add, '-': _op.sub, '*': _op.mul, '/': _op.truediv}
+    infix = {'+': _op.add, '-': _op.sub, '*': _op.mul, '/': _op.truediv,
+             '**': _op.pow}
     fns = {}
     for tok, real in engine.operator_realizations.items():
         if real in infix:
@@ -67,7 +70,28 @@ def build_oracle(engine: "SimpliPyEngine"):
         elif real.startswith('simplipy.operators.'):
             fns[tok] = getattr(spo, real.rsplit('.', 1)[1])
         else:
-            raise RuntimeError(f'unresolved realization for {tok!r}: {real!r}')
+            # General dotted realization, resolved the way the ENGINE resolves it
+            # (import the leading module, walk the attribute path; `np` is the
+            # numpy alias the configs use). The engine accepts `np.cos`-style
+            # realizations, so the oracle must too -- with promotion on by
+            # default (2026-08-01) every small non-canonical config takes this
+            # path. Anything unresolvable still raises: no token is silently
+            # dropped.
+            parts = real.split('.')
+            obj = {'np': np, 'numpy': np, 'math': math}.get(parts[0])
+            if obj is None:
+                import importlib
+                try:
+                    obj = importlib.import_module(parts[0])
+                except ImportError:
+                    obj = None
+            for attr in parts[1:]:
+                if obj is None:
+                    break
+                obj = getattr(obj, attr, None)
+            if obj is None or not callable(obj):
+                raise RuntimeError(f'unresolved realization for {tok!r}: {real!r}')
+            fns[tok] = obj
     return engine.operator_arity, fns
 
 
@@ -93,6 +117,14 @@ def configure(engine: "SimpliPyEngine"):
     ar, fns = build_oracle(engine)
     ARITY.clear(); ARITY.update(ar)
     FNS.clear(); FNS.update(fns)
+    # Engine-DEPENDENT caches must die with the old oracle: the prefold zero-snap
+    # parses spans through ARITY, so an entry computed under one vocabulary is
+    # WRONG under another (measured 2026-08-01, promotion-on-by-default: an
+    # all-infix mini engine cached `* sin np.pi ?0` UNSNAPPED -- `sin` absent from
+    # its ARITY -- and the canonical promote later replayed the stale entry,
+    # killing its own positive control at the inf atom with 1.2246e-16 * inf).
+    from . import _pointwise
+    _pointwise._PREFOLD_CACHE.clear()
     return ARITY, FNS
 
 
@@ -103,8 +135,13 @@ LITERALS = {
 
 
 def _num(tok):
+    # H-007: never bare float() -- a reserved spelling ('inf', '1_000') is neither a
+    # literal nor a symbol; the boundary forbids it, so seeing one here is a defect.
+    core = tok.strip('()')
+    if reserved_numeric_spelling(core):
+        raise ValueError(f"reserved numeric spelling {tok!r} reached the f64 oracle (H-007)")
     try:
-        return float(tok.strip('()'))
+        return float(core)
     except ValueError:
         return None
 

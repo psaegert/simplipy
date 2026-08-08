@@ -22,14 +22,14 @@ import json
 from . import _contract, _gate, _monitor
 
 
-def _load(rules):
+def _load(rules: list | str) -> list:
     """Accept a rule list ([lhs, rhs] pairs) or a path to a JSON rule file."""
     if isinstance(rules, str):
-        rules = json.load(open(rules))
+        return json.load(open(rules))
     return rules
 
 
-def verify_rule(lhs, rhs, deployed_check=True):
+def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> dict:
     """Judge a single ``lhs -> rhs`` rule at its symbolic trigger points.
 
     Returns a dict with ``verdict`` (CERTIFIED / TOLERATED / KILL / ENGINE-MISALIGN /
@@ -38,7 +38,8 @@ def verify_rule(lhs, rhs, deployed_check=True):
     return _contract.judge_rule(list(lhs), list(rhs), deployed_check=deployed_check)
 
 
-def verify_ruleset(rules, *, report_path=None, build_path=None, judge_timeout_s=30):
+def verify_ruleset(rules: list | str, *, report_path: str | None = None,
+                   build_path: str | None = None, judge_timeout_s: int = 30) -> dict:
     """Gate a whole rule set: judge every rule at its own trigger points.
 
     ``rules``: a list of ``[lhs, rhs]`` token-list pairs, or a path to such a JSON file.
@@ -55,7 +56,8 @@ def verify_ruleset(rules, *, report_path=None, build_path=None, judge_timeout_s=
     import os
     tmp = report_path or os.path.join(tempfile.mkdtemp(), 'gate_report.json')
     code = _gate.sweep(_load(rules), report_path=tmp, build_path=build_path,
-                       judge_timeout_s=judge_timeout_s)
+                       judge_timeout_s=judge_timeout_s,
+                       announce_report=report_path is not None)
     report = json.load(open(tmp))
     dirty = any(report['buckets'].get(k) for k in
                 ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
@@ -65,8 +67,9 @@ def verify_ruleset(rules, *, report_path=None, build_path=None, judge_timeout_s=
     return report
 
 
-def monitor_ruleset(rules, engine_config, *, corpus_n=6000, seed=20260718,
-                    run_selftest=False, judge_timeout_s=10, label=''):
+def monitor_ruleset(rules: list | str, engine_config: str, *, corpus_n: int = 6000,
+                    seed: int = 20260718, run_selftest: bool = False,
+                    judge_timeout_s: int = 10, label: str = '') -> dict:
     """Sweep the deployed engine over a corpus and attribute any violation to a rule.
 
     ``rules``: a list of ``[lhs, rhs]`` pairs or a path to a JSON rule file.
@@ -84,7 +87,7 @@ def monitor_ruleset(rules, engine_config, *, corpus_n=6000, seed=20260718,
                             label=label)
 
 
-def selftest():
+def selftest() -> bool:
     """Run the gate + contract judge poison self-tests. Returns True iff both pass."""
     return _gate.selftest() and _contract.selftest(verbose=False)
 

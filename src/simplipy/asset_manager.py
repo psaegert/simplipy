@@ -357,7 +357,10 @@ def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: 
     if not manifest:
         return
 
-    print(f"--- {'Installed' if installed_only else 'Available'} Assets ---")
+    # Name the type in the header: `list --type all` prints one section per type,
+    # and two identical "--- Installed Assets ---" banners read as a glitch (B1).
+    label = 'assets' if asset_type == 'all' else f'{asset_type} assets'
+    print(f"--- {'Installed' if installed_only else 'Available'} {label} ---")
 
     if local_dir is None:
         local_dir = get_default_cache_dir()
@@ -368,8 +371,9 @@ def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: 
     for name, info in manifest.items():
         if asset_type != 'all' and info.get('type') != asset_type:
             continue
-        local_path = local_dir / info['directory']
-        is_installed = local_path.exists()
+        # COMPLETE install only (D3, unifying with get_path): a bare directory-existence
+        # test showed "[installed]" for partial downloads that get_path would refuse.
+        is_installed = _asset_files_present(local_dir, info)
 
         if installed_only and not is_installed:
             continue
@@ -379,4 +383,4 @@ def list_assets(asset_type: AssetType, installed_only: bool = False, local_dir: 
         found_any = True
 
     if not found_any:
-        print(f"No {asset_type}s found.")
+        print(f"No {label} {'installed' if installed_only else 'available'}.")

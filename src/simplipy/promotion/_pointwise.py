@@ -2,7 +2,8 @@
 """Pointwise certifier for the `_`-sort (subtree-sort) promotion bar.
 
 Soundness bar: a rule whose slots are subtree-sort is sound iff S(v) = T(v) for
-EVERY consistent valuation v of its wildcards over R u {+-0, +-inf, nan}, where
+EVERY consistent valuation v of its wildcards over R u {+-inf, nan} (ONE zero --
+the -0.0 atom died with the section-9.2 one-zero ratification, see ATOMS), where
 nan == nan counts as equal, in BOTH directions (a nan hole may not be filled; a
 value may not be lost or changed). There is no measure tolerance in the subtree
 sort: a constant subtree is a Dirac, so a single disagreeing valuation refutes.
@@ -90,6 +91,12 @@ MAX_CORRELATED = 512   # cap on the per-rule correlated-atom product
 # points special -- e.g. `pow float("-inf") div4 _0 -> pow float("inf") _0` is
 # killed exactly at _0 = 4 (pow(-inf, 1) = -inf vs pow(inf, 4) = +inf), a value
 # no literal in the rule spells -- so those embedded constants must be probed too.
+#
+# RETIRED generation-1 vocabulary only (simplipy <= 0.11), kept so this instrument
+# stays vocabulary-complete for legacy-spelled rules (cross-generation audits, the
+# ladder's positive controls). A generation-2 rule spells these numbers as literal
+# TOKENS (`/ _0 4`), which the literal scan in `correlated_valuations` collects
+# directly -- for live rules this table never fires.
 OP_CONSTANTS = {
     'mult2': 2.0, 'mult3': 3.0, 'mult4': 4.0, 'mult5': 5.0,
     'div2': 2.0, 'div3': 3.0, 'div4': 4.0, 'div5': 5.0,

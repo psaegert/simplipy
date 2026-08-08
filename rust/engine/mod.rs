@@ -2,15 +2,15 @@
 //! `SimpliPyEngine.simplify` and its callees, ported as ONE FFI unit (see lib.rs).
 //! The kernel runs on interned `Tok` ids (see `crate::tokens`); the string boundary is the public
 //! `&[String]` methods (intern once at entry, resolve once at exit). Submodules: [`stats`]
-//! (hot-path counters), `memo` (cache/ctx state), `simplify` (the kernel), `miner` (the OFFLINE
+//! (hot-path counters), `memo` (cache/ctx state), `ac` (THE engine), `miner` (the OFFLINE
 //! mining surface); config deserialization, the `Engine` struct and constructors live here.
+//! The old binary kernel is deleted (clean 0.12); masking is the PYTHON-side
+//! `simplipy.masking` module, downstream of simplify, never a kernel pass.
 
+mod ac;
 mod memo;
 mod miner;
-mod simplify;
 pub mod stats;
-#[cfg(test)]
-mod tests;
 
 use std::error::Error;
 use std::fs;
@@ -23,6 +23,22 @@ use crate::tokens::{Tok, TokenTable, TokenView};
 
 use memo::{BangCache, SimplifyCtx};
 
+pub use ac::AcForm;
+
+/// Test-only plumbing for the serialization-stability probes (a per-call ctx + view + intern).
+#[cfg(test)]
+fn memo_ctx_for_tests(e: &Engine) -> SimplifyCtx {
+    SimplifyCtx::new(e.tokens.len())
+}
+#[cfg(test)]
+fn intern_for_tests(e: &Engine, tokens: &[String], ctx: &SimplifyCtx) -> Vec<Tok> {
+    e.intern_seq(tokens, ctx)
+}
+#[cfg(test)]
+fn view_for_tests<'a>(e: &'a Engine, ctx: &'a SimplifyCtx) -> TokenView<'a> {
+    e.view(ctx)
+}
+
 /// The on-disk engine config: the operator block + a relative path to rules.json
 /// (the config.yaml in `simplipy-assets/engines/dev_7-3/` has `rules: "./rules.json"`).
 ///
@@ -33,15 +49,17 @@ use memo::{BangCache, SimplifyCtx};
 #[derive(serde::Deserialize)]
 struct EngineConfig {
     operators: serde_yaml_ng::Mapping,
+    // Schema completeness only, never read here: a config.yaml may carry a `rules:`
+    // path, but rule RESOLUTION is the Python shim's job (the core receives rules text).
     #[allow(dead_code)]
     rules: Option<String>,
 }
 
+/// (insertion-ordered operator names, name -> spec), preserving config.yaml order.
+type OperatorTable = (Vec<String>, FxHashMap<String, OperatorSpec>);
+
 impl EngineConfig {
-    /// (insertion-ordered operator names, name -> spec), preserving config.yaml order.
-    fn into_operators(
-        self,
-    ) -> Result<(Vec<String>, FxHashMap<String, OperatorSpec>), Box<dyn Error>> {
+    fn into_operators(self) -> Result<OperatorTable, Box<dyn Error>> {
         let mut order = Vec::with_capacity(self.operators.len());
         let mut specs = FxHashMap::default();
         for (k, v) in self.operators {
@@ -60,7 +78,6 @@ pub struct Engine {
     /// Per-Engine token interner: immutable under `&self`; extended append-only by the
     /// `&mut self` entry points (`set_rules`), so ids are stable for the Engine's lifetime.
     tokens: TokenTable,
-    engine_id: String,
     /// Memo for the `!`-sort match-time certificate (`interval::finite_ae` by subtree tokens).
     /// Per-ENGINE, not global: certificates depend on this engine's operator semantics, and
     /// tests build many engines with different op sets in one process. Generational (see
@@ -68,6 +85,9 @@ pub struct Engine {
     bang_cache: std::sync::Mutex<BangCache>,
     /// The `$`-sort twin (`interval::finite_nonzero_ae`), same discipline.
     mult_cache: std::sync::Mutex<BangCache>,
+    /// The AC core's translated ruleset, built lazily on first `ac_simplify` (see `engine/ac.rs`)
+    /// so consumers that never opt in pay nothing at construction.
+    ac_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
 }
 
 impl Engine {
@@ -91,13 +111,61 @@ impl Engine {
         let cfg: EngineConfig = serde_yaml_ng::from_str(cfg_text)?;
 
         // rules.json: a JSON list of [lhs_tokens, rhs_tokens] pairs; serde_json maps each
-        // 2-element array onto the (Vec<String>, Vec<String>) tuple. Compile splits the list into
-        // pattern/wildcard rules and explicit rules; no dev_7-3 pattern rule has a wildcard at
-        // operand[0], so the first-operand index is fully applicable.
+        // 2-element array onto the (Vec<String>, Vec<String>) tuple. Compile interns the
+        // pairs in asset order (`CompiledRules::raw`); bucketing/gating happens at the lazy
+        // AC translation (`ac::rules::AcRules::translate`), not here.
         let raw: Vec<(Vec<String>, Vec<String>)> = serde_json::from_str(rules_text)?;
 
         // Operators FIRST: their arity drives parsing each rule's lhs/rhs into a tree at compile.
         let (order, specs) = cfg.into_operators()?;
+        // CORE-LANGUAGE GUARD: the serializers emit the core tokens with FIXED meanings
+        // (`crate::operators::CORE_SERIALIZATION_OPS`), so a config may declare them --
+        // supplying realizations/precedences -- but never repurpose them: a conflicting
+        // arity or an alias shadowing a core token would silently change what the engine's
+        // own output means. Fail loudly at build instead.
+        for (name, spec) in &specs {
+            if let Some(core_a) = crate::operators::core_arity(name) {
+                if spec.arity != core_a {
+                    return Err(format!(
+                        "config error: {name:?} is a core serialization token with arity \
+                         {core_a}, but the config declares arity {}; core tokens cannot \
+                         be repurposed",
+                        spec.arity
+                    )
+                    .into());
+                }
+            }
+            // ...and its PRECEDENCE, for the same reason. The guard used to check arity
+            // and aliases only, which left the closure breach open from the other side:
+            // the realization rendering is a string PYTHON evaluates, and Python's
+            // precedence is fixed. A config declaring `/` at 0.5 renders `(x0+x1)/x2` as
+            // `x0 + x1 / x2` -- which this engine re-parses correctly, because its parser
+            // shares the same table, while Python reads `x0 + (x1/x2)`: 2.5 where the
+            // value is 2.0. All eight shipped precedences already match.
+            if let Some(core_p) = crate::operators::core_precedence(name) {
+                if spec.precedence.is_some_and(|p| p != core_p) {
+                    return Err(format!(
+                        "config error: {name:?} is a core serialization token with \
+                         precedence {core_p}, but the config declares {}; core tokens \
+                         cannot be repurposed (the realization rendering is evaluated by \
+                         Python, whose precedence is fixed, so a divergent precedence \
+                         silently changes the VALUE)",
+                        spec.precedence.unwrap()
+                    )
+                    .into());
+                }
+            }
+            for alias in &spec.alias {
+                if crate::operators::core_arity(alias).is_some() {
+                    return Err(format!(
+                        "config error: operator {name:?} declares the alias {alias:?}, \
+                         which is a core serialization token; core tokens cannot be \
+                         shadowed by aliases"
+                    )
+                    .into());
+                }
+            }
+        }
         let operators = Operators::from_specs(order.clone(), specs);
         // The per-Engine token table (operators + aliases + vocab), then compile interns
         // every rule token into it.
@@ -108,9 +176,9 @@ impl Engine {
             operators,
             rules: compiled,
             tokens,
-            engine_id: concat!("simplipy-", env!("CARGO_PKG_VERSION")).to_string(),
             bang_cache: std::sync::Mutex::new(BangCache::new()),
             mult_cache: std::sync::Mutex::new(BangCache::new()),
+            ac_rules_cell: std::sync::OnceLock::new(),
         })
     }
 
@@ -128,11 +196,7 @@ impl Engine {
 
     fn resolve_seq(&self, toks: &[Tok], ctx: &SimplifyCtx) -> Vec<String> {
         let view = self.view(ctx);
-        toks.iter().map(|&t| view.to_string(t)).collect()
-    }
-
-    pub fn engine_id(&self) -> &str {
-        &self.engine_id
+        toks.iter().map(|&t| view.resolve_owned(t)).collect()
     }
 
     /// Crate-internal accessor for the operator tables (used by `crate::eval` tests/benches).
@@ -168,13 +232,15 @@ impl Engine {
 
         let mut depth: usize = 0;
         for token in expression.iter().rev() {
-            // A numeric-looking token that is not `<constant>` must actually parse as a float
-            // (catches malformed numerics like `--5` / `1e` that pass `is_numeric_string`). Rust
-            // `f64::from_str` agrees with Python `float()` on every `is_numeric_string`-true token
-            // (the underscore/whitespace divergences are filtered out by `is_numeric_string` itself).
+            // A numeric-looking token that is not `<constant>` must actually RESOLVE to a
+            // value (catches malformed numerics like `--5` / `1e` that pass
+            // `is_numeric_string`). Resolution goes through the evaluator's own leaf table
+            // (`numeric::leaf_value`), so every literal the engine can evaluate -- floats
+            // AND the AC core's exact `p/q` fractions -- validates by the same rule it is
+            // later read by.
             if token != "<constant>"
                 && crate::utils::is_numeric_string(token)
-                && token.parse::<f64>().is_err()
+                && crate::numeric::leaf_value(token).is_none()
             {
                 return false;
             }
@@ -190,26 +256,6 @@ impl Engine {
         }
 
         depth == 1
-    }
-
-    /// The term-cancellation unit `cancel_terms(*collect_multiplicities(x))`,
-    /// as invoked once per `simplify` fixpoint iteration. Cancel does not
-    /// consult the ruleset's pattern lengths.
-    pub fn cancel_terms(&self, expression: &[String]) -> Vec<String> {
-        let ctx = SimplifyCtx::new(self.tokens.len(), false);
-        let toks = self.intern_seq(expression, &ctx);
-        let out = crate::cancel::cancel_terms_unit(&toks, &self.operators, &self.view(&ctx));
-        self.resolve_seq(&out, &ctx)
-    }
-
-    /// `sort_operands` + `operand_key`: the canonical
-    /// commutative-operand ordering, the final stage of the `simplify` fixpoint (runs once, after the
-    /// loop).
-    pub fn sort_operands(&self, expression: &[String]) -> Vec<String> {
-        let ctx = SimplifyCtx::new(self.tokens.len(), false);
-        let toks = self.intern_seq(expression, &ctx);
-        let out = crate::sort::sort_operands_unit(&toks, &self.view(&ctx));
-        self.resolve_seq(&out, &ctx)
     }
 
     /// `prefix_to_infix`: render a prefix token list to infix. `Err` mirrors Python's `ValueError`

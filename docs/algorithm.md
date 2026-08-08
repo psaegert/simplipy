@@ -11,6 +11,19 @@ certification exactly as specified here).
 Downloads: [PDF](assets/algorithm/simplipy_mining_algorithm.pdf) ·
 [LaTeX source](assets/algorithm/simplipy_mining_algorithm.tex)
 
+**0.12 status.** The typeset pages remain accurate for the discovery loop's *shape*
+(enumerate → certify → dedup per length) and for Algorithm 2's numeric certification,
+but 0.12 layers four stages the pages predate: acceptance now **rides the serve-time
+reduction ordering** (a target must strictly descend the unified simplicity measure
+below the engine's own mark for the source — see [formal.md](formal.md) §5), matched
+`<constant>` slots on constant-free sources are **resolved to literal tokens** at the
+1024-bit arbiter (with a structural respell guard), every mined rule passes **stage-2
+confirmation** on an independent matrix, and the surviving set is **covered-pruned and
+sort-promoted** before it ships. The prose walkthrough in
+[Creating Rulesets](rules.md) describes the full current pipeline; the per-parameter
+sensitivity of the published mines is audited (seeds, sample size, tolerances,
+alphabet, dummy count — 2026-08).
+
 ![SimpliPy Rule Discovery — Algorithm 1](assets/algorithm/page1.svg)
 
 ![Expression Equivalence Check — Algorithm 2 and historical note](assets/algorithm/page2.svg)

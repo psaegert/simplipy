@@ -426,6 +426,10 @@ def is_prime(n: int) -> bool:
     >>> is_prime(30)
     False
     """
+    if n < 2:
+        # Not prime. Without this guard, 0 and 1 hit an empty divisor range below and
+        # `all` vacuously said True; a negative n raised at `math.sqrt` (D2 finding).
+        return False
     if n % 2 == 0 and n > 2:
         return False
     return all(n % i for i in range(3, int(math.sqrt(n)) + 1, 2))
@@ -593,7 +597,64 @@ def is_numeric_string(s: str) -> bool:
     >>> is_numeric_string("abc")
     False
     """
-    return isinstance(s, str) and s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e', '', 1).isdigit()
+    if not isinstance(s, str):
+        return False
+    # The ``e+`` arm closes the predicate under the engine's own emissions:
+    # ``py_float_repr`` spells big magnitudes ``1e+16`` exactly as Python ``repr``
+    # does (H-007). Kept in sync with the Rust ``is_numeric_string``.
+    if s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e+', '', 1).replace('e', '', 1).isdigit():
+        return True
+    # The AC core's exact-fraction literal ``p/q`` (``1/3``, ``-7/4``): integer '/'
+    # integer, one slash -- kept in sync with the Rust ``is_numeric_string``.
+    if s.count('/') == 1:
+        p, q = s.split('/')
+        return p.lstrip('-').isdigit() and q.isdigit()
+    return False
+
+
+_RADIX_DIGITS = {'0x': '0123456789abcdef', '0o': '01234567', '0b': '01'}
+
+
+def reserved_numeric_spelling(t: str) -> bool:
+    """H-007: a spelling a STANDARD numeric reader interprets but the engine's symbolic
+    core does not -- refused at every semantic boundary (kept in sync with the Rust
+    ``reserved_numeric_spelling``).
+
+    Such a token has two contradictory readings: the AC canon would treat it as a free
+    symbol and apply symbol algebra (``inf - inf -> 0``) while Python ``float()`` reads a
+    value (``inf - inf = nan``). Three families: textual non-finites (``inf``/
+    ``infinity``/``nan``, any case, optional sign), underscore digit groupings
+    (``1_000``), and base-prefixed integer literals (``0x10``/``0o17``/``0b101``).
+    Canonical numeric literals (``5``, ``+5``, ``1e-05``, ``1/3``, ``np.pi``,
+    ``float("inf")``) and genuine free symbols (``x0``, ``_0``, ``x_0``) are NOT
+    reserved.
+    """
+    core = t[1:] if t[:1] in '+-' else t
+    # Family 1: textual non-finites.
+    if core.lower() in ('inf', 'infinity', 'nan'):
+        return True
+    # Family 3: base-prefixed integer literals (loose underscore grouping: fail closed).
+    lower = core.lower()
+    for prefix, digits_ok in _RADIX_DIGITS.items():
+        if lower.startswith(prefix):
+            digits = lower[len(prefix):].replace('_', '')
+            if digits and all(c in digits_ok for c in digits):
+                return True
+    # Family 2: underscore digit groupings -- every ``_`` strictly between two ASCII
+    # digits (Python's float-literal placement rule), and the cleaned spelling must be
+    # a float literal (non-finite words were handled above).
+    if '_' in t:
+        placed = all(
+            0 < i < len(t) - 1 and t[i - 1].isdigit() and t[i + 1].isdigit()
+            for i, c in enumerate(t) if c == '_'
+        )
+        if placed:
+            try:
+                float(t.replace('_', ''))
+                return True
+            except ValueError:
+                pass
+    return False
 
 
 def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[int]:
@@ -690,38 +751,6 @@ def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[
     flush_current()
 
     return factors
-
-
-def mask_elementary_literals(prefix_expression: list[str], inplace: bool = False) -> list[str]:
-    """Replace all numeric string literals with the '<constant>' token.
-
-    Scans a prefix expression and replaces any token that represents a number
-    (e.g., "0", "1", "3.14") with the generic placeholder "<constant>". This is
-    used to abstract away specific numbers for general simplification rules.
-
-    Parameters
-    ----------
-    prefix_expression : list[str]
-        The prefix expression to modify.
-    inplace : bool, optional
-        If True, modifies the list in-place; otherwise, returns a new list.
-        Defaults to False.
-
-    Returns
-    -------
-    list[str]
-        The expression with numeric literals masked.
-    """
-    if inplace:
-        modified_prefix_expression = prefix_expression
-    else:
-        modified_prefix_expression = prefix_expression.copy()
-
-    for i, token in enumerate(prefix_expression):
-        if is_numeric_string(token):
-            modified_prefix_expression[i] = '<constant>'
-
-    return modified_prefix_expression
 
 
 def compositions(total: int, k: int) -> Generator[tuple[int, ...], None, None]:

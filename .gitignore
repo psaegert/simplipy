@@ -166,3 +166,6 @@ cython_debug/
 /target
 src/simplipy/_core*.so
 /rust/target
+remine/
+benchmarks/ecdf_vs_sympy_results.pkl
+benchmarks/ecdf_011_results.pkl

@@ -15,7 +15,11 @@ STRESS_POINTS = [
 
 @pytest.fixture(scope="module")
 def engine() -> SimpliPyEngine:
-    return SimpliPyEngine.load("dev_7-3", install=True)
+    # Raw legacy TABLE from the in-repo fixture (conversion input-language tests
+    # need no rules and no asset); the public artifact-load path refuses
+    # generation 1 (see tests/conftest.py).
+    from conftest import construct_legacy_table
+    return construct_legacy_table()
 
 
 @pytest.mark.parametrize(
@@ -34,24 +38,13 @@ def engine() -> SimpliPyEngine:
         (['*', 'x1', '*', 'x2', 'x3'], {}, 'x1 * (x2 * x3)'),
         (['+', 'x1', '+', 'x2', 'x3'], {}, 'x1 + (x2 + x3)'),
         (['+', 'x1', '-', 'x2', 'x3'], {}, 'x1 + (x2 - x3)'),
-        (['+', 'x', '*', 'y', '/', 'z', '-', 'pow1_2', '+', 'x', 'y', 'pow1_3', 'z'], {}, 'x + y * (z / (pow1_2(x + y) - pow1_3(z)))'),
-        (['-', '*', 'pow1_2', '+', 'x', 'y', '+', '/', '1', '-', 'x', 'y', 'pow1_3', 'z', '*', 'x', '+', 'y', 'z'], {}, 'pow1_2(x + y) * (1 / (x - y) + pow1_3(z)) - x * (y + z)'),
-        (['-', 'x', '+', 'y', '*', 'pow1_2', 'z', '-', 'x', '/', '1', '+', 'y', 'z'], {}, 'x - (y + pow1_2(z) * (x - 1 / (y + z)))'),
-        (['+', '*', 'pow1_2', '+', 'x', 'y', 'pow1_3', 'z', '*', 'x', '-', 'y', '/', '1', '+', 'z', 'x'], {}, 'pow1_2(x + y) * pow1_3(z) + x * (y - 1 / (z + x))'),
-        (['+', '/', 'pow', '+', 'x', 'y', '3', '*', 'pow1_2', 'z', '-', 'x', 'y', '/', '1', '+', 'x', 'y'], {'power': '**'}, '(x + y) ** 3 / (z**(1/2) * (x - y)) + 1 / (x + y)'),
         (['/', 'x', '*', 'y', 'z'], {}, 'x / (y * z)'),
         (['neg', '+', 'x', 'y'], {}, '-(x + y)'),
         (['inv', '+', 'x', 'y'], {}, '1/(x + y)'),
-        (['pow1_2', 'x'], {}, 'pow1_2(x)'),
-        (['pow1_2', '+', 'x', 'y'], {}, 'pow1_2(x + y)'),
-        (['pow1_3', '+', 'x', 'y'], {'power': '**'}, '(x + y)**(1/3)'),
-        (['pow2', '+', 'x', 'y'], {'power': '**'}, '(x + y)**2'),
-        (['pow3', '*', 'x', 'y'], {'power': '**'}, '(x * y)**3'),
         (['**', 'x', '3'], {'power': '**'}, 'x ** 3'),
         (['pow', 'x', '3'], {'power': 'func'}, 'pow(x, 3)'),
         (['pow', 'x', '3'], {'power': '**'}, 'x ** 3'),
         (['pow', '+', 'x', 'y', '3'], {'power': '**'}, '(x + y) ** 3'),
-        (['pow', 'pow1_2', 'x', '3'], {'power': '**'}, '(x**(1/2)) ** 3'),
         (['sin', '+', 'x', 'y'], {}, 'sin(x + y)'),
         (
             ['sin', '+', 'x', 'y'],
@@ -78,9 +71,6 @@ def test_prefix_to_infix_expected_output(
         ['neg', '+', 'x', 'y'],
         ['/', 'x', '+', 'y', 'z'],
         ['/', '+', 'x', 'y', 'z'],
-        ['pow1_2', 'x'],
-        ['pow1_3', 'x'],
-        ['pow2', '+', 'x', 'y'],
         ['**', 'x', '3'],
         ['sin', '+', 'x', 'y'],
     ],
@@ -100,6 +90,30 @@ def test_prefix_to_infix_raises_on_extra_operands(engine: SimpliPyEngine) -> Non
 
     with pytest.raises(ValueError, match='Malformed prefix expression'):
         engine.prefix_to_infix(malformed_prefix)
+
+
+def test_prefix_to_infix_names_the_tagged_dialect(engine: SimpliPyEngine) -> None:
+    # simplify's default token output is the TAGGED serialization; this converter reads
+    # the explicit binary-prefix dialect. The refusal must name the dialect and both
+    # escapes, not fail with a bare arity error (B1).
+    tagged = ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']
+    with pytest.raises(ValueError, match='tagged-serialization tokens') as exc_info:
+        engine.prefix_to_infix(tagged)
+    message = str(exc_info.value)
+    assert "form='infix'" in message
+    assert "form='explicit'" in message
+
+
+def test_is_valid_verbose_names_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:
+    # Same seam on the validity side: the verdict stays False (core-owned, explicit
+    # dialect only), but the verbose diagnostic must name the tagged dialect instead of
+    # the misleading 'Variable must be leaf node' (B1).
+    tagged = ['<add>', '<mul>', '2', 'x0', '</mul>', '1', '</add>']
+    assert engine.is_valid(tagged, verbose=True) is False
+    out = capsys.readouterr().out
+    assert 'tagged-serialization' in out
+    assert "form='explicit'" in out
+    assert 'Variable must be leaf node' not in out
 
 
 @pytest.mark.parametrize(
@@ -147,7 +161,6 @@ def test_parse_handles_caret_power(engine: SimpliPyEngine) -> None:
     # between engines), but the canonical converted form must represent a power
     # and the roundtrip infix must be a power expression.
     canonical = engine.parse('x1 ^ 3')
-    # After conversion the engine should use its internal power operators (e.g. 'pow3')
     assert isinstance(canonical, list) and len(canonical) >= 1
 
     rendered = engine.prefix_to_infix(canonical, power='**')
@@ -175,13 +188,8 @@ def evaluate_prefix(
     ("prefix", "kwargs"),
     [
         (['inv', '*', 'x', 'y'], {}),
-        (['inv', 'pow2', 'x'], {}),
         (['pow', 'x', '3'], {'power': '**'}),
-        (['pow1_2', '+', 'x', 'y'], {'power': '**'}),
-        (['pow1_3', '+', 'x', 'y'], {'power': 'func'}),
-        (['pow3', '*', 'x', 'y'], {'power': '**'}),
         (['pow', '+', 'x', 'y', '3'], {'power': '**'}),
-        (['pow', 'pow1_2', 'x', '3'], {'power': '**'}),
         (['**', 'x', '3'], {'power': '**'}),
     ],
 )
@@ -197,37 +205,3 @@ def test_prefix_to_infix_roundtrip_functionally_equivalent(
     reconstructed_value = evaluate_prefix(engine, reconstructed, VARIABLES, TEST_POINT, kwargs)
 
     assert reconstructed_value == pytest.approx(original_value, rel=1e-9, abs=1e-9)
-
-
-COMPLEX_PREFIX_CASES = [
-    (
-        ['+', '*', '-', 'x', 'pow2', 'y', '/', '1', '-', 'sin', 'x', 'pow1_2', 'z', '*', 'cos', 'y', 'pow1_3', '+', 'x', 'z'],
-        {'power': '**'},
-    ),
-    (
-        ['-', '**', '+', 'x', 'y', '3', '/', 'pow1_3', '*', 'x', 'z', '+', 'y', 'pow2', 'neg', 'x'],
-        {'power': '**'},
-    ),
-    (
-        ['/', '1', '*', '+', 'x', 'pow1_2', 'y', '**', 'neg', 'x', '+', 'pow1_3', 'y', 'pow1_2', 'z'],
-        {'power': '**'},
-    ),
-]
-
-
-@pytest.mark.parametrize(("prefix", "kwargs"), COMPLEX_PREFIX_CASES)
-def test_prefix_to_infix_complex_stress(engine: SimpliPyEngine, prefix: list[str], kwargs: dict) -> None:
-    infix = engine.prefix_to_infix(prefix, **({'power': '**'} | kwargs))
-    reconstructed = engine.parse(infix, convert_expression=False)
-
-    canonical_original = tuple(engine.convert_expression(prefix.copy()))
-    canonical_roundtrip = tuple(engine.convert_expression(reconstructed.copy()))
-    assert canonical_roundtrip == canonical_original
-
-    canonical_original_list = list(canonical_original)
-    canonical_roundtrip_list = list(canonical_roundtrip)
-
-    for point in STRESS_POINTS:
-        original_value = evaluate_prefix(engine, canonical_original_list, VARIABLES, point, kwargs)
-        reconstructed_value = evaluate_prefix(engine, canonical_roundtrip_list, VARIABLES, point, kwargs)
-        assert reconstructed_value == pytest.approx(original_value, rel=1e-8, abs=1e-8)

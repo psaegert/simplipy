@@ -11,6 +11,7 @@ import importlib
 import os
 import warnings
 import signal
+import threading
 from itertools import product
 from types import CodeType, FunctionType
 from typing import Callable
@@ -29,8 +30,7 @@ from simplipy.utils import (
     deduplicate_rules,
     enumerate_expressions, count_expressions, sample_expression,
     remap_expression,
-    violates_wildcard_multiplicity,
-    _WILDCARD_RE)
+    violates_wildcard_multiplicity)
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
@@ -39,9 +39,11 @@ try:
     # + the offline miner. REQUIRED (see the module docstring): a missing/unbuilt extension is a
     # hard error at engine construction.
     from simplipy._core import Engine as _RustEngine  # type: ignore[attr-defined]
+    from simplipy._core import core_serialization_ops as _core_serialization_ops  # type: ignore[attr-defined]
     _CORE_IMPORT_ERROR: Exception | None = None
 except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
     _RustEngine = None  # type: ignore[assignment, misc]
+    _core_serialization_ops = None  # type: ignore[assignment]
     _CORE_IMPORT_ERROR = _exc
 
 
@@ -75,6 +77,111 @@ def _coverage_variants(
 
         variants.append((substitute(lhs), substitute(rhs)))
     return variants
+
+
+# The core serialization language's arities (config-independent built-ins): the
+# canonical explicit projection emits these regardless of the config vocabulary,
+# so any walk over projection output needs them alongside `operator_arity`.
+# One mine per process, enforced (hardening H-002/H-008, 2026-08-03): the interval
+# soundness counters the provenance sidecar reads are PROCESS-GLOBAL, so a second
+# concurrent mine would cross-contaminate both sidecars' per-mine deltas -- and would
+# only contend for the cores the first mine already saturates. Serve traffic is safe
+# alongside a mine (measured: `simplify` never touches the counters).
+_MINE_LOCK = threading.Lock()
+
+# THE ARTIFACT-AFFECTING SWITCH REGISTRY (H-042, doctrine-propagation sweep D4).
+# Every environment switch that can change a MINED ARTIFACT or a CERTIFICATION VERDICT,
+# in ONE place: the mine's provenance writer records every SET entry verbatim
+# (`soundness.env_overrides`), so a switch added here is recorded automatically.
+# Adding an artifact-affecting switch ANYWHERE (a rust OnceLock or a python read)
+# without listing it here violates the kill-switch recording doctrine: a mine run
+# under a non-default instrument must say so in its own sidecar. Pure observability
+# switches (the *_TRACE family, SIMPLIPY_MINE_PROGRESS_INTERVAL) do NOT belong here.
+# Caveat: the rust side reads its switches ONCE per process (OnceLock at first use),
+# so the record is faithful unless the caller mutates os.environ between first engine
+# use and the mine -- do not do that.
+ARTIFACT_ENV_SWITCHES = (
+    'SIMPLIPY_IVL_GATE',          # interval domain gate layer (recorded as bool too)
+    'SIMPLIPY_IVL_CLASS',         # interval value-class layer (bool too)
+    'SIMPLIPY_IVL_REACH',         # interval reachability layer (bool too)
+    'SIMPLIPY_SPECIAL_BATTERY',   # special-point battery layer (bool too)
+    'SIMPLIPY_IVL_NODE_BUDGET',   # interval node-budget override (raw too)
+    'SIMPLIPY_AC_ABSORB_FIRST',   # bag-match attempt order (serve outputs + mined rules)
+    'SIMPLIPY_MU_SYM',            # mu symbol unit (the reduction ordering itself)
+    'SIMPLIPY_MU_FREE',           # mu <constant> cost (the ordering)
+    'SIMPLIPY_ZERO_SIGN',         # miner sign-combo grid (reference/repro)
+    'SIMPLIPY_POLE_GRID',         # miner magnitude-grid ablation
+    'SIMPLIPY_HIPREC_FRAC',       # hiprec near-miss escalation gate (calibration)
+    'SIMPLIPY_TAGGED_FRACTION_MAX',  # tagged structural-fraction bound: changes MINED output
+)
+
+#: Arities of the CORE SERIALIZATION LANGUAGE, read from the engine's own table rather
+#: than restated here. The audit counted five hand-maintained copies of this data
+#: (C1.10) -- and a copy that drifts is a soundness problem, not a tidiness one: the
+#: masking walk treats an unknown operator as a LEAF, so its operands inherit the
+#: enclosing bag's role and a `pow` exponent can be masked, exactly the accident the
+#: role API exists to make impossible.
+#: Empty only when the extension is missing, in which case engine construction raises
+#: anyway (`_CORE_IMPORT_ERROR`) -- so there is never a stale literal to drift.
+_CORE_SERIALIZATION_ARITIES = (
+    {tok: spec['arity'] for tok, spec in _core_serialization_ops().items()}
+    if _core_serialization_ops is not None else {})
+# Constlike LEAF spellings a `<constant>` promise-slot may bind: named constants and
+# the poles/nan, plus (checked separately) any numeric literal. NEVER a compound
+# variable-free subtree: collapsing `acos(cos(C))` to one Const leaf is a strict
+# serve-ordering descent (real rule content), while renaming a LEAF constant to
+# `<constant>` is a complexity tie (pure abstraction -- masking's job, downstream).
+_CONSTLIKE_LEAVES = {'<constant>', 'np.e', 'np.pi',
+                     'float("inf")', 'float("-inf")', 'float("nan")'}
+
+# The bag delimiters and inverse-section markers of the TAGGED serialization --
+# `simplify`'s default token output (`<add> ... <sub> ... </add>`). The explicit-dialect
+# entry points (`is_valid`, `prefix_to_infix`) do not read this form; they use this set
+# to NAME the dialect in their diagnostics instead of failing with a bare arity error (B1).
+_TAGGED_DIALECT_TOKENS = frozenset({'<add>', '</add>', '<mul>', '</mul>', '<sub>', '<div>'})
+
+
+def _tokens_in_vocabulary(tokens: Any, vocabulary: set) -> bool:
+    """Vocabulary test for proposal/hint token sequences: numeric and constant-like
+    literals are valid leaves everywhere (the generation-2 spellings carry their
+    numbers as literal TOKENS -- `pow x0 2` where the retired ring spelled
+    `pow2 x0` -- so a bare vocabulary-set test silently skipped every such
+    proposal; audit Tier-1 #3)."""
+    return all(t in vocabulary or t in _CONSTLIKE_LEAVES or is_numeric_string(t)
+               for t in tokens)
+
+
+def _fulfills_constant_promise(pattern: list[str], subject: list[str],
+                               arity: dict[str, int]) -> bool:
+    """Does ``subject`` instantiate ``pattern``, reading each ``<constant>`` leaf as
+    an EXISTENTIAL promise for some constant VALUE (the forall/exists Const
+    doctrine)? Both sides are canonical explicit projections of canonical states, so
+    exact token agreement outside the Const slots is state agreement; a ``<constant>``
+    in ``pattern`` binds exactly one constlike LEAF of the subject (a numeric
+    literal, a named constant, a pole, or ``<constant>`` itself). Any other
+    disagreement is a plain non-match -- the caller treats that conservatively
+    (the rule is NOT covered)."""
+
+    def walk(pi: int, si: int) -> 'tuple[int, int] | None':
+        if pi >= len(pattern) or si >= len(subject):
+            return None
+        token = pattern[pi]
+        if token == '<constant>':
+            leaf = subject[si]
+            if leaf in _CONSTLIKE_LEAVES or is_numeric_string(leaf):
+                return pi + 1, si + 1
+            return None
+        if token != subject[si]:
+            return None
+        pi, si = pi + 1, si + 1
+        for _ in range(arity.get(token, 0)):
+            step = walk(pi, si)
+            if step is None:
+                return None
+            pi, si = step
+        return pi, si
+
+    return walk(0, 0) == (len(pattern), len(subject))
 
 
 def _validate_ndarray_input(expression: 'np.ndarray', inplace: bool) -> None:
@@ -238,6 +345,34 @@ class SimpliPyEngine:
         rules_text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules])
         return _RustEngine.from_strs(config_text, rules_text)
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Pickle support: the engine serializes WITHOUT its compiled core.
+
+        The core (``simplipy._core.Engine``) is a Rust object with no
+        serialization surface, but it is derived state -- fully determined by
+        the operator config and rule list this wrapper carries. Dropping it
+        here (and rebuilding it in :meth:`__setstate__`) makes engines work
+        with ``pickle``, ``copy.deepcopy`` and ``multiprocessing`` spawn
+        contexts, where every worker receives the recipe and builds its own
+        core. Rules pushed to the core directly (bypassing
+        ``simplification_rules`` + :meth:`compile_rules`) are not part of the
+        recipe, matching the documented mutation contract.
+        """
+        state = self.__dict__.copy()
+        del state['_core']
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Rebuild the engine from pickled state, exactly as ``__init__`` would.
+
+        Mirrors the construction order: realization modules first (a spawn
+        worker unpickles into a fresh interpreter), then the compiled core from
+        the same in-memory config + rules.
+        """
+        self.__dict__.update(state)
+        self.import_modules()
+        self._core = self._build_core(self._operators_config, self.simplification_rules)
+
     def compile_rules(self) -> None:
         """Sync the compiled core's rule set from ``self.simplification_rules``.
 
@@ -247,72 +382,18 @@ class SimpliPyEngine:
         """
         self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules])
 
-    def simplify_counters(self) -> dict[str, int]:
-        """Snapshot of the process-global simplify hot-path counters.
-
-        Counts (calls, iterations, exact hits, pattern attempts/fires, certificate
-        calls/hits) plus coarse nanosecond accounting (cancel / rules / cert /
-        mask+sort). Aggregates across all engines and threads in the process; pair
-        with :meth:`reset_simplify_counters` around a batch to profile it.
-        """
-        return self._core.simplify_counters()
-
-    def reset_simplify_counters(self) -> None:
-        """Zero all :meth:`simplify_counters` counters."""
-        self._core.reset_simplify_counters()
-
-    def prune_redundant_rules(self, verbose: bool = False) -> int:
-        """Remove explicit rules that are subsumed by wildcard-pattern rules.
-
-        An explicit rule ``(e, r_e)`` is *redundant* if the engine still
-        simplifies ``e`` to ``r_e`` when that single rule is removed.  This
-        happens when a wildcard-pattern rule already covers the same
-        transformation, or when constant folding / term cancellation achieve
-        the same result.
-
-        Rules are tested and removed serially: once a rule is found redundant
-        it stays removed for all subsequent tests.  This avoids over-pruning
-        in the case where two explicit rules each appear redundant in the
-        presence of the other but neither is covered by a pattern rule alone.
-
-        Parameters
-        ----------
-        verbose : bool, optional
-            If True, shows a progress bar and prints a summary.
-            Defaults to False.
-
-        Returns
-        -------
-        int
-            The number of rules that were pruned.
-        """
-        # The redundancy test removes each explicit `lhs` from the RUST rule set (the compiled
-        # rules `simplify` actually uses): `_core.prune_explicit` re-simplifies with the single
-        # rule removed and keeps it removed iff the transformation is still derivable, serially,
-        # in the deployed config (mask_elementary_literals=False).
-        explicit_lhs = [
-            list(lhs) for lhs, _rhs in self.simplification_rules
-            if not any(_WILDCARD_RE.match(t) for t in lhs)
-        ]
-        pruned_lhs = self._core.prune_explicit(explicit_lhs, False)
-        pruned_set = {tuple(lhs) for lhs in pruned_lhs}
-        if pruned_set:
-            self.simplification_rules = [
-                rule for rule in self.simplification_rules
-                if tuple(rule[0]) not in pruned_set
-            ]
-            self.compile_rules()
-        if verbose:
-            print(f'Pruned {len(pruned_set)} redundant explicit rules '
-                  f'({len(self.simplification_rules)} rules remaining)')
-        return len(pruned_set)
-
     def prune_covered_rules(self, verbose: bool = False) -> int:
         """Remove rules that the remaining rules already cover behaviorally.
 
         A rule ``(lhs, rhs)`` is *covered* if the engine WITHOUT it still
-        simplifies every instantiation variant of its ``lhs`` to at most
-        ``len(rhs-variant)`` tokens. Variants: each slot instantiated as a
+        reaches, on every instantiation variant of its ``lhs``, a state at most
+        the promised ``rhs``-variant in the serve-time reduction ordering
+        (semantic complexity, literal size, canonical total order) -- the same
+        ordering the rewrite pass fires under and mint acceptance judges by
+        (ONE coverage ordering, everywhere). Equality in that total order is
+        state identity, so "covered" means the probe engine literally reaches
+        the promise or better, never merely something that SCORES the same.
+        Variants: each slot instantiated as a
         distinct variable leaf ``x{i}``, with ``<constant>`` kept LITERAL
         (native constant folding must not fake coverage), plus every subset of
         up to 3 wide slots (``_``/``!`` sigils) probed with the composite
@@ -330,10 +411,11 @@ class SimpliPyEngine:
         abandoned (re-added), so every removal stands verified against the
         final rule set. Greedy: the result is valid, not necessarily minimal.
 
-        Complementary to :meth:`prune_redundant_rules`: that method removes
-        explicit rules shadowed by wildcard-pattern rules under an EQUALITY
-        criterion; this one removes ANY rule (pattern rules included) that the
-        other rules cover compositionally under a <=-length criterion.
+        Removes ANY rule (pattern rules included) that the other rules cover
+        compositionally under a <=-length criterion. (Its former sibling
+        ``prune_redundant_rules`` -- explicit rules shadowed by pattern rules
+        under an equality criterion -- died with the legacy kernel; this is
+        the one prune.)
 
         Pruning is intentionally corpus-free. Pair it with a closure-quality
         check on a benchmark corpus of your own (verify outputs do not
@@ -356,10 +438,33 @@ class SimpliPyEngine:
         if not full:
             return 0
 
+        arity = {**_CORE_SERIALIZATION_ARITIES, **self.operator_arity}
+
         def covered(core: Any, lhs: tuple[str, ...], rhs: tuple[str, ...]) -> bool:
-            return all(
-                len(core.simplify(variant_lhs, 5, True)) <= len(variant_rhs)
-                for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
+            # State-coverage in the serve-time reduction ordering: the probe engine
+            # must reach at most the promised rhs-state -- probe_out <= rhs, spelled
+            # !(rhs < probe_out) in the total order. The complexity-score judge this
+            # replaces was blind on the tie tier (equal-score DIFFERENT states:
+            # `abs neg ?0 -> abs ?0` read 2 <= 2 "covered" while nothing performed
+            # the rewrite), deleting rules mint acceptance had certified as strict
+            # improvements. One tier needs more than the ordering: `<constant>` in a
+            # promise is EXISTENTIAL, so a probe reaching an INSTANCE of the promise
+            # (each Const slot bound to a ground subterm -- `0` fulfills
+            # `<constant>`, `* 2.71... x0` fulfills `* <constant> x0`) has fulfilled
+            # it, though the total order sees only unrelated leaf kinds there.
+            # (ac_judge/ac_ordered_below: the AC parser is the arbiter, no
+            # config-vocabulary gate; an undecidable ordering raises.)
+            def fulfilled(variant_lhs: list[str], variant_rhs: list[str]) -> bool:
+                probe_out = core.ac_judge(variant_lhs, 5)[2]
+                if not core.ac_ordered_below(list(variant_rhs), probe_out):
+                    return True
+                if '<constant>' in variant_rhs:
+                    promise = core.ac_judge(list(variant_rhs), 0)[2]
+                    return _fulfills_constant_promise(promise, probe_out, arity)
+                return False
+
+            return all(fulfilled(variant_lhs, variant_rhs)
+                       for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
 
         kept = set(full)
         for wave_length in range(max(len(lhs) for lhs, _ in full), 2, -1):
@@ -480,6 +585,13 @@ class SimpliPyEngine:
         """
         config_path = os.path.abspath(config_path)
         config = load_config(config_path)
+        # ARTIFACT-GENERATION GATE (owner ruling 2026-08-03): generation-1 artifacts
+        # (retired hyper-operator vocabulary) serve only on simplipy <= 0.11; refusing
+        # here -- the choke point of every artifact-loading path, including
+        # SimpliPyEngine.load -- is what makes the compatibility matrix TRUE. Raw
+        # in-memory construction stays open (see simplipy.compat).
+        from .compat import check_config
+        check_config(config, source=config_path)
         rules = []
         rules_path = None
         rules_file = config.get('rules')
@@ -526,6 +638,11 @@ class SimpliPyEngine:
         SimpliPyEngine
             A new instance of the engine.
         """
+        # Known generation-1 names refuse BEFORE any download (the config-level gate
+        # in from_config covers everything else, including local paths).
+        if not os.path.exists(path):
+            from .compat import check_asset_name
+            check_asset_name(path)
         return cls.from_config(get_path(path, install=install, local_dir=local_dir, repo_id=repo_id, manifest_filename=manifest_filename))
 
     def is_valid(self, prefix_expression: list[str], verbose: bool = False) -> bool:
@@ -557,6 +674,16 @@ class SimpliPyEngine:
     def _explain_invalid(self, prefix_expression: list[str]) -> None:
         """Print WHY an expression failed :meth:`is_valid` (diagnostics only, no verdict)."""
         stack: list[str] = []
+        tagged = _TAGGED_DIALECT_TOKENS.intersection(prefix_expression)
+        if tagged:
+            # Without this check the walk below misreads the bag delimiters as variables
+            # and prints 'Variable must be leaf node' -- actively misleading (B1).
+            print(f'Invalid expression {prefix_expression}: carries tagged-serialization '
+                  f'tokens {sorted(tagged)} (simplify\'s default token output). is_valid '
+                  f'reads the explicit binary-prefix dialect; tagged output is re-accepted '
+                  f'by simplify()/complexity()/masking, or re-projected via '
+                  f"simplify(expr, form='explicit').")
+            return
         if len(prefix_expression) > 1 and prefix_expression[0] not in self.operator_arity:
             print(f'Invalid expression {prefix_expression}: Variable must be leaf node')
             return
@@ -601,8 +728,20 @@ class SimpliPyEngine:
         Raises
         ------
         ValueError
-            If the provided tokens do not form a well-formed prefix expression.
+            If the provided tokens do not form a well-formed prefix expression --
+            including the TAGGED serialization (``simplify``'s default token output),
+            which this converter does not read: render the canonical state with
+            ``simplify(expr, form='infix')``, or request the binary-chain form with
+            ``simplify(expr, form='explicit')``.
         """
+        tagged = _TAGGED_DIALECT_TOKENS.intersection(tokens)
+        if tagged:
+            raise ValueError(
+                f"prefix_to_infix reads the explicit binary-prefix dialect, but the input "
+                f"carries tagged-serialization tokens {sorted(tagged)} (simplify's default "
+                f"token output). Render the canonical state directly with "
+                f"simplify(expr, form='infix'), or request the binary-chain form with "
+                f"simplify(expr, form='explicit').")
         return self._core.prefix_to_infix(list(tokens), power, realization)
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
@@ -683,64 +822,106 @@ class SimpliPyEngine:
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             node_budget: int = 48,
-            apply_simplification_rules: bool = True,
             inplace: bool = False,
-            mode: Mode = Mode.SOUND) -> str | list[str] | tuple[str, ...] | np.ndarray:
-        """Performs a full, EQUIVALENCE-preserving simplification of an expression.
+            mode: Mode | str = Mode.SOUND,
+            form: str | None = None) -> str | list[str] | tuple[str, ...] | np.ndarray:
+        """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
-        This is the main public method for simplification. The whole fixpoint
-        (term cancellation, rule application, constant folding, operand sorting)
-        runs in the compiled core as ONE call, and is idempotent by construction.
+        The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
+        coefficients composed explicitly (``* 7 x``, ``pow x 3``) instead of the hyper-operator
+        vocabulary (``mult2..5``, ``div2..5``, ``pow2..5``, ``pow1_2/1_4``; the real odd roots
+        ``pow1_3``/``pow1_5`` remain genuine operators). Rules are widened to SUB-MULTISET
+        matching with the unmatched remainder preserved, so a rule fires wherever the algebra
+        permits, regardless of operand order or bracketing -- both axes of the binary engine's
+        commutative-order invariance defect are removed at the representation level, and the
+        result is invariant under permutation of commutative operands by construction.
 
-        ``simplify`` does NOT mask literals. Masking (replacing numeric literals with the
-        generic ``<constant>`` placeholder) is a REPRESENTATION step for a downstream model
-        that cannot consume literals, not an equivalence-preserving rewrite -- it is carved out
-        into :meth:`mask`. A caller that needs placeholders applies ``mask`` to this output,
-        e.g. ``engine.mask(engine.simplify(expr))``. Masking was removed from ``simplify``
-        because folding a freshly-masked literal is unsound (a structural ``x-x -> 0`` masked to
-        a free ``<constant>`` can be re-folded into a denominator, dropping the reachable ``0``
-        and making the result non-equivalent) and was the sole cause of non-idempotence.
+        Like-term/like-factor collection (the AC form of term cancellation) runs inside the
+        canonical constructors under the same soundness certificates as the rule matcher
+        (finite-a.e. for sign-cancelling addition, finite-and-nonzero-a.e. for
+        exponent-cancelling multiplication), and coefficient arithmetic is exact rational
+        computation rather than mined rules. The output is idempotent
+        (``simplify(simplify(x)) == simplify(x)``).
+
+        .. note::
+            Pair this engine with SORT-PROMOTED rulesets (the ``2-1``/``3-2``/``4-3``
+            artifact family and later). The legacy ``dev_7-3`` asset predates the certificate
+            sorts (its pattern rules are uniformly ``_``-sorted, gated only by mining-time
+            sampling); it is supported only by simplipy <= 0.11 as a separate pinned install,
+            and its certificate-free cancellation rules are unsound on pole spellings that the
+            AC core's unified representation makes reachable.
 
         Parameters
         ----------
-        expression : str or list[str] or tuple[str, ...] or np.ndarray
-            The expression to simplify, given as an infix string, a prefix
-            token list/tuple, or a one-dimensional numpy array of tokens.
+        expression : str | list[str] | tuple[str, ...] | np.ndarray
+            The expression to simplify: a ``str`` is parsed as infix; a list, tuple or
+            1-D ``ndarray`` is a prefix token sequence (old grammar and tagged form are
+            both accepted -- one shared parser).
         node_budget : int, optional
-            How many nodes the simplification tree search may EXPAND before it stops and
-            returns the shortest expression it reached. Defaults to 48, the measured elbow of
-            the returns curve: below it an extra microsecond buys several output tokens, above
-            it a fraction of one. Raise it for offline corpus canonicalisation. Note that 0
-            disables the SEARCH only: operand sorting still runs, so the result is the
-            sort-canonicalised input rather than the input verbatim.
-        apply_simplification_rules : bool, optional
-            If False, skips the rule-based simplification step. Defaults to True.
+            Bound on the outer rewrite iterations. The default is far above the typical
+            fixpoint depth (2-4 iterations).
         inplace : bool, optional
-            If the input is a list, this modifies it directly. Defaults to False.
-        mode : Mode, optional
-            The soundness mode (see :class:`Mode`). ``Mode.SOUND`` (default) is
-            equivalence-preserving and idempotent -- the deployed inference/scoring path.
-            ``Mode.LOSSY`` trades soundness for recall: rule placeholders bind any subtree
-            (the ``!``-sort finite-a.e. certificate is skipped) and the constant-fold's
-            finiteness gate is relaxed (so e.g. ``<constant>/0`` collapses to ``<constant>``).
-            Use ``Mode.LOSSY`` ONLY for training-corpus canonicalisation, never on an inference
-            or scoring path.
+            Mutate a list input in place (the returned list is the same object).
+        mode : Mode or str, optional
+            The soundness mode (see :class:`Mode`). ``Mode.LOSSY`` relaxes every
+            certificate -- training-corpus canonicalisation only. The enum's names are
+            accepted as strings, any case (``mode='lossy'``); an unknown string raises
+            rather than silently running SOUND.
+        form : str, optional
+            Output projection of the canonical answer; the simplification itself is
+            identical in every case.
+
+            * ``'tagged'`` -- the STRICT prefix form, the AC engine's native serialization
+              (default for token inputs): n-ary bags are delimited (``<add> ... </add>``,
+              ``<mul> ... </mul>``) and carry their group inverse as a SECTION -- terms
+              after ``<sub>`` subtract, factors after ``<div>`` divide, so
+              ``(2*x1)/(x2*x3)`` is ``<mul> 2 x1 <div> x2 x3 </mul>``. ``pow`` and the
+              unary functions stay plain prefix; ``neg``/``inv`` exist only as the
+              standalone unary spellings (``tan neg x0``, ``inv x0``) -- inside bags the
+              sections own all inverses. Exact literals are one token each: ``7``, ``0.2``,
+              ``1/3``. Tagged output is accepted back as input (one shared, liberal parser).
+            * ``'infix'`` -- the PRETTY human-readable rendering (default for ``str``
+              inputs; always returns ``str``): ``x8 + 1.2*x3``, ``-x0/3``, ``(x0 + 1)^2``.
+              Round-trips: feeding the rendering back as a ``str`` input reaches the same
+              canonical state. The bare names ``pi``, ``e``, ``inf`` and ``nan`` are
+              RESERVED constant spellings of the infix language (the renderer emits them
+              for the canonical constants, so the parser reads them back as constants,
+              never as variables).
+            * ``'explicit'`` -- the binary-chain form (``* 6 x``, ``- a b``, literal
+              coefficients only -- the hyper-operator vocabulary is deleted). This is
+              the project's INTERNAL dialect, not a recommended consumer format:
+              rule artifacts are stored in it, the miner's enumeration universe and
+              the certificate tapes are defined on it, and it stays available here
+              for debugging and compatibility. ``'tagged'`` and ``'infix'`` are the
+              public output forms. Sign placement follows the same doctrine as the
+              tagged form: a sign lives in the numeric coefficient literal whenever
+              one is emitted (``* -2 x``), additive term signs are structural
+              (binary ``-``), and ``neg`` spells only the pure sign (``neg x0``,
+              ``neg * np.pi x0``).
 
         Returns
         -------
-        str or list[str] or tuple[str, ...] or np.ndarray
+        str | list[str] | tuple[str, ...] | np.ndarray
             The simplified expression, in the same format as the input.
-
-        Notes
-        -----
-        As of 0.3.0, all-numeric subtrees are folded to their ``f64`` value as a
-        fallback after rule matching, including non-finite results
-        (``1/0`` -> ``float("inf")``, ``sqrt(-1)`` -> ``float("nan")``). The
-        resulting ``float("inf")`` / ``float("-inf")`` / ``float("nan")`` tokens
-        are atomic and round-trip through the prefix/infix conversions.
         """
-        # Normalize the input to a prefix token list (per type), then ONE core call, then
-        # denormalize back to the input type.
+        if node_budget < 0:
+            # would otherwise surface as a raw pyo3 OverflowError at the usize
+            # conversion (hardening H-006, 2026-08-03)
+            raise ValueError(f"node_budget must be non-negative, got {node_budget}")
+        # A STRING mode must coerce, never silently compare unequal to the enum:
+        # `mode='lossy'` used to run SOUND because `'lossy' == Mode.LOSSY` is False
+        # (audit Tier-2, 2026-08-03). Accept the enum, its names (any case), and its
+        # integer values; everything else raises.
+        if isinstance(mode, str):
+            try:
+                mode = Mode[mode.upper()]
+            except KeyError:
+                raise ValueError(
+                    f"unknown mode {mode!r}: expected one of "
+                    f"{[m.name for m in Mode]} (or a simplipy.Mode)") from None
+        elif not isinstance(mode, Mode):
+            mode = Mode(mode)  # ints Mode(1)/Mode(3); anything else raises ValueError
+
         if isinstance(expression, str):
             tokens = self._core.parse(expression, True, False)
         elif isinstance(expression, np.ndarray):
@@ -749,58 +930,56 @@ class SimpliPyEngine:
         else:
             tokens = list(expression)
 
-        out = self._core.simplify(tokens, node_budget,
-                                  apply_simplification_rules, mode == Mode.LOSSY)
+        if form is None:
+            form = 'infix' if isinstance(expression, str) else 'tagged'
+        # Reject an unknown form HERE, where all three are visible. The core only ever sees
+        # 'tagged'/'explicit' (infix is dispatched just below), so its own message named two
+        # of the three and a caller who mistyped `form='INFIX'` was told 'infix' was not an
+        # option (C1.13's sibling in the audit register, C1.16).
+        if form not in ('tagged', 'explicit', 'infix'):
+            raise ValueError(
+                f"unknown form {form!r}: expected 'tagged', 'explicit' or 'infix'")
+        if form == 'infix':
+            return self._core.ac_simplify_infix(tokens, node_budget, mode == Mode.LOSSY)
 
+        out = self._core.ac_simplify(tokens, node_budget, mode == Mode.LOSSY, form)
+
+        if isinstance(expression, str):
+            # The old infix converter cannot render the tagged form; a str input asking for
+            # a token form gets the token list.
+            return out
         return self._denormalize(out, expression, inplace)
 
-    def mask(
+    def complexity(
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
-            inplace: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
-        """The REPRESENTATION pass, carved out of :meth:`simplify`.
+            certified: bool = True) -> int:
+        """The SEMANTIC COMPLEXITY of an expression, measured on its canonical form.
 
-        Relabels every numeric-literal token (``0``, ``1``, ``3.14``, ...) to the generic
-        ``<constant>`` placeholder and sorts, so a downstream model that cannot consume literals
-        sees placeholders. Apply to the output of :meth:`simplify`; do NOT re-``simplify`` the
-        result (a masked form re-fed to the search can collect redundant constants and, on
-        structural-zero inputs, fold unsoundly -- which is why masking is not part of
-        ``simplify``). ``mask`` is a pure widening and is idempotent.
+        This is the functional :meth:`simplify` minimizes (the unified measure mu),
+        measured by default on the CERTIFIED canonical state -- the same
+        certificate-carrying canonicalization the simplify chain runs on, so
+        ``complexity(simplify(e)) <= complexity(e)`` is a THEOREM (chain descent,
+        docs/formal.md L3). With ``certified=False`` the expression is priced on the
+        bare (certificate-less, fail-closed) canonicalization instead: still invariant
+        to operand order, bracketing and serialization sugar, but a certificate-licensed
+        respelling the bare context cannot re-derive keeps its own measure, so a
+        simplify output can price ABOVE its input (measured live: 0.48% of 64k corpus
+        rows, in quanta of one symbol unit; the certified default closes exactly this).
 
-        Total relabeling is deliberate (owner-ratified 2026-07-26): EVERY numeric literal is
-        relabelled, including class-critical ones -- e.g. a structural zero in pole position,
-        ``/ <constant> 0`` -> ``/ <constant> <constant>``, whose generic reading is finite
-        a.e. while the original is not (the witness sits at the singular ``C2=0``, which a
-        numeric fitter will not reach). Downstream consumers rely on the all-placeholder
-        contract, and masked skeletons feed training-grade pipelines where strict a.e.
-        equivalence is not required; the affected class is degenerate ``x-x``-style inputs
-        that real corpora essentially never produce (~15/65,536 on the reference corpus).
-        Callers that need the singular witness must keep the UNMASKED ``simplify`` output,
-        which is fully sound.
-
-        Parameters
-        ----------
-        expression : str or list[str] or tuple[str, ...] or np.ndarray
-            The expression to mask, in any of the accepted input formats.
-        inplace : bool, optional
-            If the input is a list, this modifies it directly. Defaults to False.
-
-        Returns
-        -------
-        str or list[str] or tuple[str, ...] or np.ndarray
-            The masked expression, in the same format as the input.
+        Invariant either way: mu prices structure and information, not spelling --
+        signs and magnitude-1 coefficient/exponent slots are free, literals pay their
+        description length on the exact value, symbols pay one symbol unit.
         """
         if isinstance(expression, str):
             tokens = self._core.parse(expression, True, False)
         elif isinstance(expression, np.ndarray):
-            _validate_ndarray_input(expression, inplace)
             tokens = expression.tolist()
         else:
             tokens = list(expression)
-
-        out = self._core.mask(tokens)
-
-        return self._denormalize(out, expression, inplace)
+        if certified:
+            return self._core.ac_complexity_certified(tokens)
+        return self._core.ac_complexity(tokens)
 
     def _denormalize(
             self,
@@ -900,7 +1079,17 @@ class SimpliPyEngine:
                 list(source), len(source), None, [list(target)], list(dummy_variables),
                 x_flat, n_rows, constants_fit_challenges, constants_fit_retries,
                 rule_seed, rtol, atol, min_informative)
-            if result is not None:
+            # The result must be THE TARGET WE ASKED ABOUT, not merely "something".
+            # `find_rule` does not always answer the question it was asked: its all-constant
+            # short-circuit classifies a variable-free `<constant>`-bearing source and returns
+            # that CLASS LITERAL without ever reading the candidate list. Testing only
+            # `result is not None` therefore made stage-2 confirmation VACUOUS for every such
+            # source -- measured: `exp <constant> -> 0`, `exp <constant> -> float("nan")` and
+            # `+ <constant> 1 -> float("-inf")` all "confirmed", while the control
+            # `+ x0 x0 -> 0` (which does not hit the short-circuit) correctly failed. Since the
+            # candidate list here holds exactly one entry, any other answer is the short-circuit
+            # speaking, and the honest verdict is "not confirmed".
+            if result is not None and list(result) == list(target):
                 confirmed.append((source, target))
         return confirmed
 
@@ -996,7 +1185,9 @@ class SimpliPyEngine:
             provenance: dict | None = None,
             proposal_entries: list[tuple[tuple[str, ...], tuple[str, ...] | None]] | None = None,
             leaf_nodes: list[str] | None = None,
-            promote_sorts: bool = False) -> None:
+            promote_sorts: bool = True,
+            symbolic_gate: bool = True,
+            snapshot_at: dict[int, str] | None = None) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
@@ -1012,6 +1203,10 @@ class SimpliPyEngine:
         same prune), each proposal is certified against the just-mined state via
         :meth:`_certify_proposals`, reusing this mine's candidate library, evaluation
         matrices and seeds.
+
+        ``snapshot_at`` emits the SHORTER CELLS the climb passes through (see
+        :meth:`find_rules`). The post-mine stages are factored into one closure precisely
+        so that every cell -- snapshotted or final -- goes through the identical block.
         """
         assert self._core is not None
 
@@ -1041,13 +1236,154 @@ class SimpliPyEngine:
         # final deduplicated set, like the pure-Python path.
         rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.simplification_rules]
 
+        # --- The post-pass: what turns a raw mined rule set into a CELL ARTIFACT ---
+        # A closure, because the ladder runs it MORE THAN ONCE. A (7,4) climb passes through
+        # the (5,4) and (6,4) cells on its way up and each of those is a publishable artifact
+        # in its own right (see `snapshot_at`). Running the IDENTICAL block for every cell is
+        # what makes a snapshot equal to a one-shot mine of that cell; a second copy of these
+        # stages would be free to drift from this one.
+        def _finalize(mined: list, out_path: str | None, prov: dict | None) -> list:
+            self.simplification_rules = list(mined)
+            self.compile_rules()
+            self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in mined])
+            # Proposal channel: certify externally proposed rules against the just-mined
+            # state, BEFORE the optional prune. Skipped on interrupt: a partial mine is not
+            # the rule state the proposals were aimed at, and a clean abort must stay cheap.
+            # An explicitly-given EMPTY batch still runs (and records all-zero outcome
+            # counts): the sidecar must show the channel ran, not silently omit it.
+            if proposal_entries is not None and not interrupted():
+                outcomes, trail = self._certify_proposals(
+                    proposal_entries, library,
+                    leaf_nodes if leaf_nodes is not None else list(dummy_variables),
+                    dummy_variables, X_data, X_confirm, max_target_pattern_length,
+                    constants_fit_challenges, constants_fit_retries, rtol, atol,
+                    min_informative, mine_seed, confirm_seed, verbose)
+                if prov is not None and 'proposals' in prov:
+                    prov['proposals']['outcomes'] = outcomes
+                    # The per-candidate verdict trail travels WITH the artifact: an aggregate
+                    # tally cannot be audited (it never says which candidate died at which gate).
+                    prov['proposals']['trail'] = trail
+            # SYMBOLIC GATE (the third authority; owner-approved 2026-08-02): every
+            # confirmed rule is re-judged by the independent symbolic verifier
+            # (`simplipy.verify`) at exact symbolic trigger points with the
+            # precision-stability discriminator -- a residual that COLLAPSES as
+            # precision doubles is computational rounding (exact identity,
+            # CERTIFIED); one that is STABLE is a real gap between two functions
+            # (KILL), however small. This is the only instrument that can separate
+            # `sin pi -> 0` (true) from `tanh(exp pi) -> 1` (false by 1.5e-20):
+            # every numeric acceptance is tolerance-bounded, and the impostor
+            # family lives below any usable tolerance. KILLs are dropped here,
+            # BEFORE the prune and promotion see the set; TOLERATED (null-set
+            # extension doctrine, matching the engine's own licences) passes.
+            if symbolic_gate and not interrupted() and self.simplification_rules:
+                from .verify import verify_ruleset
+                _rep = verify_ruleset(
+                    [[list(lhs), list(rhs)] for lhs, rhs in self.simplification_rules])
+                _detail = _rep['detail'] if isinstance(_rep, dict) else _rep
+                # detail entries carry lhs/rhs as SPACE-JOINED strings.
+                _kills = {(tuple(d['lhs'].split()), tuple(d['rhs'].split()))
+                          for d in _detail if d.get('verdict') == 'KILL'}
+                if _kills:
+                    self.simplification_rules = [
+                        (lhs, rhs) for lhs, rhs in self.simplification_rules
+                        if (tuple(lhs), tuple(rhs)) not in _kills]
+                    self.compile_rules()
+                    self._core.set_rules(
+                        [(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules])
+                if verbose:
+                    print(f'Symbolic gate: {len(_kills)} killed, '
+                          f'{len(self.simplification_rules)} remain')
+                if prov is not None:
+                    prov['symbolic_gate'] = {
+                        'killed': sorted([list(kl), list(kr)] for kl, kr in _kills),
+                        'kept': len(self.simplification_rules)}
+            if prune == 'covered':
+                self.prune_covered_rules(verbose=verbose)
+            elif prune:
+                raise ValueError(
+                    "prune=True (the redundant-rule prune) died with the legacy kernel; "
+                    "use prune='covered' (AC-judged behavioral coverage) or prune=False")
+            # Sort promotion: re-certify every rule (mined + proposed) at the stronger `_`/`!`
+            # sorts and ship it at the strongest sound one (see `simplipy.promotion`). Runs AFTER
+            # the prune so promotion works on the already-reduced rule set (the promotion carries
+            # its own subsumption/derivability refund for the instances a promoted rule newly
+            # covers). Emits the deployment-strength ruleset directly.
+            if promote_sorts and not interrupted():
+                from .promotion import promote
+                kept, promotion_report = promote(self.simplification_rules, self)
+                self.simplification_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept]
+                self.compile_rules()
+                self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules])
+                if verbose:
+                    print(f'Sort promotion: {promotion_report.get("stage_counts")}')
+                if prov is not None:
+                    prov['sort_promotion'] = promotion_report.get('stage_counts')
+                # POST-PROMOTION covered-prune (fold unification, 2026-08-02): the
+                # ladder's seeded identities (`* 0 !0 -> 0`, the multiplicative
+                # twins) and the promoted sorts only exist AFTER promotion, so the
+                # pre-promotion prune cannot see that thousands of pure-literal
+                # ground rows (`* 0 cos 1 -> 0`) are wildcard-derivable instances.
+                # A second prune with the final ruleset live removes exactly the
+                # redundant instances; genuinely novel ground rules (`cos 0 -> 1`)
+                # have no wildcard cover and survive.
+                if prune == 'covered':
+                    self.prune_covered_rules(verbose=verbose)
+            # SOUNDNESS PROVENANCE, second half (audit Tier-1 #4): the interval layer's
+            # three fail-closed miss counters, read AFTER the mine as deltas over this
+            # mine's baseline -- the exposure ("how often could the gate not decide?")
+            # is a recorded number, never assumed zero. The counters mark UNDECIDED
+            # verdicts whose callers rejected (lost recall, not lost soundness).
+            if prov is not None:
+                prov['soundness']['interval_undecided'] = {
+                    'horizon': self._core.interval_horizon_misses() - _ivl_baseline[0],
+                    'node_budget': self._core.interval_node_budget_misses() - _ivl_baseline[1],
+                    'unanalyzable': self._core.interval_unanalyzable_misses() - _ivl_baseline[2],
+                }
+            if out_path is not None:
+                with open(out_path, 'w') as file:
+                    json.dump(self.simplification_rules, file, indent=4)
+                self._write_provenance(out_path, prov, self.simplification_rules, final=True)
+            return [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.simplification_rules]
+
+        snapshot_at = dict(snapshot_at or {})
+
+        # SOUNDNESS PROVENANCE, first half (audit Tier-1 #4): the four default-ON
+        # soundness kill-switches (ablation/repro escape hatches; `<var>=0` disables a
+        # LAYER) ship recorded in the artifact -- a mine run with a layer off must say
+        # so -- plus the node-budget override if any. Recorded up front so interrupted
+        # mines carry it; the switch semantics mirror the rust side exactly
+        # (on unless the variable is literally "0").
+        _ivl_baseline = (self._core.interval_horizon_misses(),
+                         self._core.interval_node_budget_misses(),
+                         self._core.interval_unanalyzable_misses())
+        if provenance is not None:
+            provenance['soundness'] = {
+                'kill_switches': {
+                    var: os.environ.get(var) != '0'
+                    for var in ('SIMPLIPY_IVL_GATE', 'SIMPLIPY_IVL_CLASS',
+                                'SIMPLIPY_IVL_REACH', 'SIMPLIPY_SPECIAL_BATTERY')},
+                'node_budget_env': os.environ.get('SIMPLIPY_IVL_NODE_BUDGET'),
+                # EVERY set entry of the artifact-affecting switch registry, raw (H-042):
+                # a default run records {}, any override is visible verbatim.
+                'env_overrides': {
+                    var: os.environ[var]
+                    for var in ARTIFACT_ENV_SWITCHES if var in os.environ},
+                'interval_undecided': None,  # filled at finalize (deltas over this mine)
+            }
+
         # Sources: lengths up to max_source_pattern_length only (`construct_expressions`
         # over-produces a tail of longer expressions beyond the documented contract).
-        for length in sorted(k for k in expressions_of_length if k <= max_source_pattern_length):
+        for length in sorted(k for k in list(expressions_of_length) if k <= max_source_pattern_length):
             if interrupted():
                 break
             self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
             sources = [list(expression) for expression in sorted(expressions_of_length[length])]
+            n_sources = len(sources)
+            # Release this length's source UNIVERSE as soon as it has been linearised: at the
+            # top lengths that set of tuples is the largest object in the process (length 5
+            # alone is ~7e6 expressions) and nothing reads it again -- the candidate library
+            # was built up front, above, and holds its own copy on the Rust side.
+            del expressions_of_length[length]
             # Per-length seed block: lengths are spaced by 2^40 (far above any per-length
             # source count) so the per-source streams (seed + index) never collide.
             found = self._mine_tier_with_progress(
@@ -1072,55 +1408,94 @@ class SimpliPyEngine:
                     rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found],
                     dummy_variables, verbose=verbose)
             if verbose:
-                print(f'Length {length}: {len(sources):,} sources, {len(found):,} new rules, {len(rules):,} total')
+                print(f'Length {length}: {n_sources:,} sources, {len(found):,} new rules, {len(rules):,} total')
             if output_file is not None:
                 with open(output_file, 'w') as file:
                     json.dump(rules, file, indent=4)
                 self._write_provenance(output_file, provenance, rules, completed_length=length)
+            # LADDER SNAPSHOT: finishing this length also finishes the shorter cell
+            # (length, max_target_pattern_length) of the same ladder. Emit it as a completed
+            # artifact, then restore the RAW state and keep climbing -- the taller cell must
+            # continue from the un-pruned, un-promoted mine, which is exactly what a one-shot
+            # run of it does.
+            if length in snapshot_at and length < max_source_pattern_length:
+                if verbose:
+                    print(f'--- ladder snapshot: cell ({length},{max_target_pattern_length})'
+                          f' -> {snapshot_at[length]}')
+                _finalize(list(rules), snapshot_at[length],
+                          self._snapshot_provenance(provenance, length, max_source_pattern_length))
+                # `_finalize` prunes/promotes the engine's own rule state; put the raw mine back.
+                self.simplification_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
+                self.compile_rules()
+                self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
 
-        self.simplification_rules = list(rules)
-        self.compile_rules()
-        self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
-        # Proposal channel: certify externally proposed rules against the just-mined
-        # state, BEFORE the optional prune. Skipped on interrupt: a partial mine is not
-        # the rule state the proposals were aimed at, and a clean abort must stay cheap.
-        # An explicitly-given EMPTY batch still runs (and records all-zero outcome
-        # counts): the sidecar must show the channel ran, not silently omit it.
-        if proposal_entries is not None and not interrupted():
-            outcomes, trail = self._certify_proposals(
-                proposal_entries, library,
-                leaf_nodes if leaf_nodes is not None else list(dummy_variables),
-                dummy_variables, X_data, X_confirm, max_target_pattern_length,
-                constants_fit_challenges, constants_fit_retries, rtol, atol,
-                min_informative, mine_seed, confirm_seed, verbose)
-            if provenance is not None and 'proposals' in provenance:
-                provenance['proposals']['outcomes'] = outcomes
-                # The per-candidate verdict trail travels WITH the artifact: an aggregate
-                # tally cannot be audited (it never says which candidate died at which gate).
-                provenance['proposals']['trail'] = trail
-        if prune == 'covered':
-            self.prune_covered_rules(verbose=verbose)
-        elif prune:
-            self.prune_redundant_rules(verbose=verbose)
-        # Sort promotion: re-certify every rule (mined + proposed) at the stronger `_`/`!`
-        # sorts and ship it at the strongest sound one (see `simplipy.promotion`). Runs AFTER
-        # the prune so promotion works on the already-reduced rule set (the promotion carries
-        # its own subsumption/derivability refund for the instances a promoted rule newly
-        # covers). Emits the deployment-strength ruleset directly.
-        if promote_sorts and not interrupted():
-            from .promotion import promote
-            kept, promotion_report = promote(self.simplification_rules, self)
-            self.simplification_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in kept]
-            self.compile_rules()
-            self._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules])
-            if verbose:
-                print(f'Sort promotion: {promotion_report.get("stage_counts")}')
-            if provenance is not None:
-                provenance['sort_promotion'] = promotion_report.get('stage_counts')
-        if output_file is not None:
-            with open(output_file, 'w') as file:
-                json.dump(self.simplification_rules, file, indent=4)
-            self._write_provenance(output_file, provenance, self.simplification_rules, final=True)
+        _finalize(rules, output_file, provenance)
+
+    @staticmethod
+    def _snapshot_provenance(provenance: dict | None, length: int, climb_max: int) -> dict | None:
+        """Provenance for a LADDER SNAPSHOT -- the sidecar of cell ``(length, j)`` as emitted
+        mid-climb by a taller mine (see ``snapshot_at`` in :meth:`find_rules`).
+
+        The rule set is identical to a one-shot mine of the cell, so ``params`` describes the
+        CELL rather than the climb (and the universe census is trimmed to the lengths this
+        cell actually covers -- it must not claim to have sampled a length above its own).
+        But the sidecar also states plainly that it came from a climb: an artifact may never
+        overstate how it was produced.
+        """
+        if provenance is None:
+            return None
+        prov = deepcopy(provenance)
+        prov['params']['max_source_pattern_length'] = length
+        prov['params']['source_sample_per_length'] = {
+            k: v for k, v in prov['params'].get('source_sample_per_length', {}).items()
+            if int(k) <= length}
+        prov['universe'] = {k: v for k, v in prov.get('universe', {}).items() if int(k) <= length}
+        prov['ladder_snapshot'] = {
+            'emitted_at_source_length': length,
+            'climb_max_source_pattern_length': climb_max,
+            'equivalence': 'Lengths are mined shortest-first, the per-source seed is '
+                           'mine_seed + (length << 40), and the candidate library is bounded by '
+                           'max_target_pattern_length -- so this prefix does not depend on how far '
+                           'the climb continues, and the rule set equals a one-shot mine of this cell.',
+        }
+        return prov
+
+    #: Probe expressions whose complexities identify the MEASURE. Chosen to separate the
+    #: changes the measure has actually undergone: an integer (the L-formula), a unit
+    #: fraction and a non-unit one (the fraction code and the inversion bit), a decimal
+    #: whose denominator carries a five (the print/argmin split), a `<constant>` (mu_free),
+    #: and a bare symbol (mu_sym).
+    _MEASURE_PROBES = (('1000',), ('1/2',), ('355/113',), ('0.2',), ('<constant>',), ('x0',))
+
+    def _measure_fingerprint(self) -> dict:
+        """A fingerprint of the REDUCTION MEASURE, for the provenance sidecar.
+
+        Without it an artifact mined under one measure is indistinguishable from one mined
+        under another: the sidecar records the version, the build and the parameters, and
+        every one of those can be identical across a measure change (worse, uncommitted
+        work stamps the same `-dirty` build string). Audit C1.4 flagged this as a BLOCKER to
+        fix BEFORE a re-mine; three artifacts were re-mined without it, so the values here
+        are also what identifies those retroactively.
+
+        The fingerprint is BEHAVIOURAL, not a version string: it records what the measure
+        actually charges on probes chosen to separate the changes it has undergone. Any
+        change to `L`, to the fraction/decimal codes, to `mu_free` or to `mu_sym` moves at
+        least one entry.
+        """
+        probes: dict[str, int | None] = {}
+        for tokens in self._MEASURE_PROBES:
+            try:
+                probes[tokens[0]] = int(self.complexity(list(tokens)))
+            except Exception:  # a config that cannot express a probe records it as absent
+                probes[tokens[0]] = None
+        return {
+            'unit': 'milli-bits',
+            'mu_sym': probes.get('x0'),
+            'mu_free': probes.get('<constant>'),
+            'probes': probes,
+            'digest': hashlib.sha256(
+                repr(sorted(probes.items())).encode()).hexdigest()[:16],
+        }
 
     @staticmethod
     def _write_provenance(output_file: str, provenance: dict | None, rules: list,
@@ -1269,6 +1644,7 @@ class SimpliPyEngine:
             'host': platform.node(),
             'simplipy_version': _simplipy_version,
             'core_build': _core_build,
+            'measure': self._measure_fingerprint(),
             'params': {
                 'max_source_pattern_length': max_source_pattern_length,
                 'max_target_pattern_length': max_target_pattern_length,
@@ -1288,7 +1664,10 @@ class SimpliPyEngine:
                 str(length): {
                     'complete_count': int(counts[length]),
                     'used': len(expressions_of_length[length]),
-                    'coverage': len(expressions_of_length[length]) / counts[length],
+                    # An empty universe cell (e.g. even lengths under a binary-only
+                    # alphabet) is vacuously covered: all zero of its expressions were used.
+                    'coverage': (len(expressions_of_length[length]) / counts[length]
+                                 if counts[length] else 1.0),
                     'sampled': length in source_sample_per_length,
                 } for length in sorted(expressions_of_length)
             },
@@ -1331,13 +1710,17 @@ class SimpliPyEngine:
         """Certify externally proposed simplification rules with the mining gates.
 
         For each proposed ``source`` expression this runs the exact certification chain
-        the miner uses: validity check, pruning against the engine's current rules
-        (already-reducible sources are skipped), a shortest-first scan of the complete
-        candidate library up to ``max_target_pattern_length`` (yielding a certified
-        MINIMAL target), and re-verification on an independent, twice-as-wide evaluation
+        the miner uses: validity check, then a shortest-first scan of the complete
+        candidate library up to ``max_target_pattern_length`` with the engine's OWN
+        result as the mark to beat -- only targets strictly below that mark in the
+        serve-time reduction ordering are selectable (yielding a certified MINIMAL
+        target) -- and re-verification on an independent, twice-as-wide evaluation
         matrix. If no library target exists and a parallel ``targets`` hint is given,
-        the specific (source, target) pair is verified instead -- sound, but without a
-        minimality certificate.
+        the specific (source, target) pair is verified instead (against the same
+        ordering mark) -- sound, but without a minimality certificate. A source the
+        engine already reduces is still SEARCHED: coverage is decided by the search,
+        never by the reduction alone (a canon respell used to read as "covered" and
+        silently discarded certifiable proposals, finding F2).
 
         Intended for LLM- or human-proposed identities: proposals only ever ADD source
         expressions, so certified output is exactly as sound as mined rules.
@@ -1368,7 +1751,10 @@ class SimpliPyEngine:
         mine_seed = int(_rng.integers(2 ** 62))
         confirm_seed = int(_rng.integers(2 ** 62))
         if min_informative is None:
-            min_informative = X_data.shape[0] // 8
+            # Floor at 1 (mirrors the rust FFI default `(n_rows/8).max(1)`): a small X
+            # (< 8 rows) must never yield 0, which would disable the evidence gate and
+            # re-admit the vacuous all-NaN/inf accepts it exists to kill.
+            min_informative = max(X_data.shape[0] // 8, 1)
 
         leaf_nodes = list(dummy_variables) + [t for t in extra_internal_terms
                                               if t not in dummy_variables]
@@ -1390,22 +1776,37 @@ class SimpliPyEngine:
         certified: list = []
         confirm_min = max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
         for index, (source, hint) in enumerate(zip(sources, hint_list)):
-            if not set(source) <= vocabulary or not self.is_valid(list(source)):
+            if not _tokens_in_vocabulary(source, vocabulary) or not self.is_valid(list(source)):
                 continue
-            simplified_length = len(self.simplify(list(source)))
-            if simplified_length < len(source):
-                continue  # the current rules already reduce it
+            # The engine's own result is the MARK TO BEAT, never a reason to skip
+            # (finding F2): a source canon merely RESPELLS shorter used to read as
+            # "already covered" and was never searched, losing e.g.
+            # exp(t)*exp(t) -> exp(t+t) forever (the respelled form speaks tokens
+            # outside the mining alphabet, so no later tier picks it up). The
+            # serve-time ordering acceptance rides the candidate scan via `mark`.
+            _, _, ac_out = self._core.ac_judge(list(source), 48)
             target = self._core.find_rule_lib(
-                list(source), simplified_length, max_target_pattern_length, library,
+                list(source), len(source), max_target_pattern_length, library,
                 challenges=constants_fit_challenges, retries=constants_fit_retries,
                 seed=mine_seed + (len(source) << 40) + index, rtol=rtol, atol=atol,
-                min_informative=min_informative)
+                min_informative=min_informative, mark=ac_out)
             certificate = 'minimal'
             if target is None and hint is not None:
                 hint = [str(t) for t in hint]
-                if (set(hint) <= vocabulary and len(hint) < len(source)
+                if (_tokens_in_vocabulary(hint, vocabulary) and len(hint) < len(source)
                         and self.is_valid(list(hint))
                         and not violates_wildcard_multiplicity(list(source), list(hint))
+                        # the Const-count invariant (one invariant, every layer: the
+                        # scan's mint gate, the translate-time count gate, and this hint
+                        # arm): a hint may never INCREASE the number of `<constant>`
+                        # placeholders -- abstraction is masking's job downstream. A
+                        # count-increasing hint is dead on arrival at translation; the
+                        # library scan may still find (and literal-resolve) a target.
+                        and hint.count('<constant>') <= list(source).count('<constant>')
+                        # the hint too must sit strictly below the engine's own
+                        # result, or the minted rule is dead on arrival (the serving
+                        # pass would refuse it; translation would drop it)
+                        and self._core.ac_ordered_below(list(hint), ac_out)
                         and self._confirm_mined_rules(
                             [(source, tuple(hint))], dummy_variables, X_data,
                             constants_fit_challenges, constants_fit_retries, rtol, atol,
@@ -1444,10 +1845,10 @@ class SimpliPyEngine:
         against the just-mined rule state and merge the survivors.
 
         PLUMBING ONLY -- no new certification semantics. Each proposal runs the exact
-        chain of :meth:`certify_rules` (vocabulary/validity check; already-covered skip
-        when the mined rules shorten the source, exactly like an already-reducible mined
-        source; shortest-first scan of THIS mine's candidate library for a minimal
-        target; hint verification as the fallback; independent stage-2 confirmation)
+        chain of :meth:`certify_rules` (vocabulary/validity check; shortest-first scan
+        of THIS mine's candidate library with the engine's own result as the ordering
+        mark to beat; hint verification against the same mark as the fallback;
+        independent stage-2 confirmation)
         with THIS mine's evaluation matrices, challenge counts and tolerances, so a
         certified proposal is precisely as sound as a mined rule. ``X_confirm`` is None
         exactly when the mine ran with ``confirm=False``; proposals then skip stage-2
@@ -1474,7 +1875,8 @@ class SimpliPyEngine:
         audited -- "93 rejected" does not say WHICH candidates died or at WHICH gate, so a
         reviewer cannot tell a correctly-killed hallucination from a wrongly-killed identity.
         ``stage`` names the gate that decided: ``vocabulary`` (token outside the engine's
-        alphabet, or malformed), ``covered`` (the mined rules already shorten the source),
+        alphabet, or malformed), ``covered`` (SEARCH-VERIFIED: the engine already reduces
+        the source and neither the library nor the hint beats the engine's own result),
         ``search`` (no target in the candidate library and no verifiable hint), ``confirm``
         (failed independent stage-2 re-verification), ``merge`` (certified but folded away as
         a duplicate), or ``accepted``. ``certificate`` is ``minimal`` (found by library scan)
@@ -1499,15 +1901,26 @@ class SimpliPyEngine:
             return len(trail) - 1
 
         for source, hint in proposal_entries:
-            if not set(source) <= vocabulary or not self.is_valid(list(source)):
+            if not _tokens_in_vocabulary(source, vocabulary) or not self.is_valid(list(source)):
                 counts['rejected'] += 1
                 record(source, None, 'rejected', 'vocabulary')
                 continue
-            simplified_length = len(self.simplify(list(source)))
-            if simplified_length < len(source):
-                counts['already_covered'] += 1
-                record(source, None, 'already_covered', 'covered')
-                continue
+            # The engine's own result is the MARK TO BEAT, never a reason to skip
+            # (finding F2): the serve-time ordering acceptance rides the candidate
+            # scan via `mark`, so 'already_covered' below is a SEARCH-VERIFIED
+            # verdict ("the engine reduces it and nothing expressible beats its
+            # result"), not a guess from a spelling shrink.
+            _, _, ac_out = self._core.ac_judge(list(source), 48)
+            # "The engine already reduces it" is judged in the serve ordering (ONE
+            # coverage ordering, everywhere): the walk strictly descends, or the
+            # result is atomic (nothing mintable sits strictly below a single-token
+            # state -- canon-owned collapses like `+ x0 0` land here). A respell --
+            # same state, shorter spelling -- is neither: if the search also comes
+            # back empty-handed, the honest verdict below is 'rejected', never a
+            # coverage claim nothing backs.
+            engine_reduces = (len(ac_out) == 1
+                              or self._core.ac_ordered_below(ac_out, list(source)))
+            simplified_length = len(source)
             # Content-derived per-proposal seed offset (blake2b, not hash(): PYTHONHASHSEED
             # randomises str hashing per process; same policy as _confirm_mined_rules).
             offset = int.from_bytes(
@@ -1516,13 +1929,19 @@ class SimpliPyEngine:
                 list(source), simplified_length, max_target_pattern_length, library,
                 challenges=constants_fit_challenges, retries=constants_fit_retries,
                 seed=mine_seed + offset, rtol=rtol, atol=atol,
-                min_informative=min_informative)
+                min_informative=min_informative, mark=ac_out)
             certificate = 'minimal'
             if target is None and hint is not None:
                 hint_tokens = [str(token) for token in hint]
-                if (set(hint_tokens) <= vocabulary and len(hint_tokens) < len(source)
+                if (_tokens_in_vocabulary(hint_tokens, vocabulary) and len(hint_tokens) < len(source)
                         and self.is_valid(list(hint_tokens))
                         and not violates_wildcard_multiplicity(list(source), list(hint_tokens))
+                        # the Const-count invariant (same gate as certify_rules' hint
+                        # arm): a count-increasing hint is dead on arrival at translation
+                        and hint_tokens.count('<constant>') <= list(source).count('<constant>')
+                        # the hint too must sit strictly below the engine's own
+                        # result, or the minted rule is dead on arrival
+                        and self._core.ac_ordered_below(list(hint_tokens), ac_out)
                         and self._confirm_mined_rules(
                             [(source, tuple(hint_tokens))], dummy_variables, X_data,
                             constants_fit_challenges, constants_fit_retries, rtol, atol,
@@ -1530,8 +1949,12 @@ class SimpliPyEngine:
                     target = hint_tokens
                     certificate = 'verified'
             if target is None:
-                counts['rejected'] += 1
-                record(source, None, 'rejected', 'search')
+                if engine_reduces:
+                    counts['already_covered'] += 1
+                    record(source, None, 'already_covered', 'covered')
+                else:
+                    counts['rejected'] += 1
+                    record(source, None, 'rejected', 'search')
                 continue
             if X_confirm is not None and not self._confirm_mined_rules(
                     [(source, tuple(target))], dummy_variables, X_confirm,
@@ -1602,7 +2025,9 @@ class SimpliPyEngine:
             candidate_fold_filter: bool = True,
             relaxed_kruskal: bool = True,
             proposals: str | list | dict | None = None,
-            promote_sorts: bool = False) -> None:
+            promote_sorts: bool = True,
+            symbolic_gate: bool = True,
+            snapshot_at: dict[int, str] | None = None) -> None:
         """Systematically discovers new simplification rules.
 
         This powerful method automates the discovery of simplification rules.
@@ -1642,12 +2067,11 @@ class SimpliPyEngine:
         reset_rules : bool, optional
             If True, clears existing rules before starting.
         prune : bool or str, optional
-            If True, runs :meth:`prune_redundant_rules` after discovery to
-            remove explicit rules that are subsumed by wildcard-pattern rules.
-            If ``'covered'``, runs :meth:`prune_covered_rules` INSTEAD after
-            the length loop, removing any rule the remaining rules cover
-            behaviorally (a strictly more aggressive, compositional prune).
-            Either can be expensive for large rule sets. Defaults to False.
+            If ``'covered'``, runs :meth:`prune_covered_rules` after the
+            length loop, removing any rule the remaining rules cover
+            behaviorally (compositional, can be expensive for large rule
+            sets). ``True`` (the retired redundant-rule prune, which died
+            with the legacy kernel) raises immediately. Defaults to False.
         verbose : bool, optional
             If True, shows progress bars and status updates.
         rtol : float, optional
@@ -1700,15 +2124,16 @@ class SimpliPyEngine:
             sources -- without changing any mined rule. Set False only for a
             reference mine (e.g. the filtered-vs-unfiltered parity gate).
         relaxed_kruskal : bool, optional
-            If True (the default), a source the current rules
-            already shorten is STILL searched, with the target bound tightened to
-            its simplified length -- only targets strictly shorter than what
-            ``simplify`` already reaches are accepted. False restores strict
-            Kruskal pruning (skip such sources entirely). The relaxed mine finds
-            one-step shortcut rules the strict mine provably cannot (degenerate
-            constant collapses like ``C * acos(np.e) -> <constant>`` and
-            value-specific structural rewrites like ``pow(_0, mult5(1)) ->
-            pow5(_0)``).
+            If True (the default), EVERY source is searched with the engine's own
+            result as the mark to beat: only targets strictly below that mark in
+            the serve-time reduction ordering are selectable (the acceptance rides
+            the candidate scan itself). False restores strict Kruskal pruning:
+            a source the engine already reduces is skipped entirely -- including
+            sources canonicalization merely RESPELLS shorter, whose respelled form
+            may never re-enter the ladder (a documented recall loss). The relaxed
+            mine finds one-step shortcut rules the strict mine provably cannot
+            (degenerate constant collapses like ``C * acos(np.e) -> <constant>``
+            and diagonal-collection shortcuts like ``exp(t)*exp(t) -> exp(t+t)``).
         proposals : str or list or dict or None, optional
             The PROPOSAL CHANNEL (LLM- or human-proposed identities): a path to a
             proposals JSON file, or the equivalent in-memory object. Two schemas are
@@ -1719,14 +2144,36 @@ class SimpliPyEngine:
             BEFORE the optional prune, every proposal runs the exact certification
             chain of :meth:`certify_rules` against the just-mined rule state, with
             this mine's evaluation matrices, challenges, tolerances and
-            master-seed-derived seeds: a proposal the mined rules already shorten is
-            skipped exactly like an already-reducible source, and a certified
+            master-seed-derived seeds: every proposal is SEARCHED with the engine's
+            own result as the ordering mark to beat (``already_covered`` is a
+            search-verified verdict, never a spelling-shrink guess), and a certified
             proposal joins the ruleset through the same
             :func:`~simplipy.utils.deduplicate_rules` path. Deterministic: file
             order, content-derived per-proposal seeds (the stage-2-confirm policy).
             The provenance sidecar records the proposals file, its sha256, and the
             per-outcome counts (``certified`` / ``already_covered`` / ``rejected``
             / ``duplicate``). Config key ``proposals:`` in the find-rules YAML.
+        promote_sorts : bool, optional
+            Run the sort-promotion ladder after the prune, re-certifying every rule at the
+            stronger ``_``/``!``/``$`` sorts and shipping it at the strongest sound one.
+            ON by default (owner ruling 2026-08-01: features do not ship disabled) -- a
+            default mine emits the deployment-strength ruleset. Pass ``False`` for a raw,
+            entirely ``?``-sorted mine (promotion is fail-safe, so ``False`` costs only
+            composite-subtree recall, never soundness).
+        snapshot_at : dict[int, str] or None, optional
+            LADDER RE-USE: ``{source_length: output_path}``. The cells of one ``j`` form a
+            PREFIX CHAIN -- mining ``(7, 4)`` does all the work of ``(5, 4)`` and ``(6, 4)``
+            on its way up, because lengths are mined shortest-first, the per-source seed is
+            ``mine_seed + (length << 40)`` (indexed by length alone, not by how far the climb
+            goes), the master seeds are drawn BEFORE the universe is built, and enumeration
+            consumes no randomness. So a climb can emit each shorter cell as it passes
+            through it: at the end of a listed length the full post-pass (proposals, prune,
+            promotion) runs on a COPY of the mine and writes that cell's artifact plus a
+            sidecar recording its ladder origin, then the raw un-pruned state is restored and
+            the climb continues. This makes one ``(7, 4)`` run produce ``(5, 4)``, ``(6, 4)``
+            and ``(7, 4)`` for the price of the tallest -- worth roughly two exhaustions of
+            lengths <= 5 (days of wall-clock). A snapshot at or above
+            ``max_source_pattern_length`` is refused: that cell is the run's own output.
 
         Notes
         -----
@@ -1739,6 +2186,12 @@ class SimpliPyEngine:
         """
         if not isinstance(prune, bool) and prune != 'covered':
             raise ValueError(f"prune must be a bool or 'covered', got {prune!r}")
+        if prune is True:
+            # Fail HERE, not after the length loop: the old late raise fired at the END
+            # of a potentially week-scale mine (audit Tier-2, 2026-08-03).
+            raise ValueError(
+                "prune=True (the redundant-rule prune) died with the legacy kernel; "
+                "use prune='covered' (AC-judged behavioral coverage) or prune=False")
 
         # Proposal channel: load + normalize FIRST (a malformed proposals file must fail
         # here, before any mining compute is spent). None stays None: only an explicitly
@@ -1759,9 +2212,6 @@ class SimpliPyEngine:
             interrupted = True
             print("\nInterrupt received, cleaning up...")
 
-        # Set up signal handler in main process
-        old_handler = signal.signal(signal.SIGINT, signal_handler)
-
         # All the initialization from the sequential version
         extra_internal_terms = extra_internal_terms or []
 
@@ -1773,6 +2223,16 @@ class SimpliPyEngine:
             return dummies
 
         dummy_variables = self._resolve_dummy_variables(dummy_variables, default=_default_dummy_variables)
+
+        # Ladder snapshots: fail closed on a length this climb never completes, rather than
+        # silently writing nothing (a missing artifact would be discovered days later).
+        snapshot_at = {int(k): str(v) for k, v in (snapshot_at or {}).items()}
+        for _length in sorted(snapshot_at):
+            if not 1 <= _length < max_source_pattern_length:
+                raise ValueError(
+                    f'snapshot_at length {_length} must satisfy 1 <= length < '
+                    f'max_source_pattern_length ({max_source_pattern_length}); the top cell is '
+                    f'written to output_file.')
 
         if reset_rules:
             self.simplification_rules = []
@@ -1790,7 +2250,10 @@ class SimpliPyEngine:
         else:
             X_data = np.asarray(X, dtype=np.float64)
         if min_informative is None:
-            min_informative = X_data.shape[0] // 8
+            # Floor at 1 (mirrors the rust FFI default `(n_rows/8).max(1)`): a small X
+            # (< 8 rows) must never yield 0, which would disable the evidence gate and
+            # re-admit the vacuous all-NaN/inf accepts it exists to kill.
+            min_informative = max(X_data.shape[0] // 8, 1)
 
         # Independent, wider confirm matrix + derived integer seeds (drawn from the same
         # master stream, so one `seed` reproduces the whole mine).
@@ -1835,6 +2298,25 @@ class SimpliPyEngine:
             provenance['proposals'] = proposal_record
 
         # --- Phase 2: mine natively on the Rust engine (the only mining path since 0.5.0) ---
+        # SINGLE-FLIGHT: fail fast if another mine is active in this process (see
+        # _MINE_LOCK). Acquired HERE, directly above the try whose finally releases it
+        # -- the validation/prep above may raise (that is its job), and acquiring any
+        # earlier would leak the lock on those paths (hardening H-002/H-009).
+        if not _MINE_LOCK.acquire(blocking=False):
+            raise RuntimeError(
+                "another find_rules mine is active in this process; mines are "
+                "single-flight (the interval soundness counters recorded in the "
+                "provenance sidecar are process-global)")
+        # Graceful-interrupt handler: MAIN THREAD ONLY -- `signal.signal` raises
+        # ValueError anywhere else (hardening H-008: this used to make find_rules
+        # unusable from worker threads, and installing it before the prep code could
+        # leak it past an early raise, H-009). Off the main thread the mine runs
+        # without interrupt cleanup; `interrupted` then simply never fires.
+        handler_installed = False
+        old_handler = None
+        if threading.current_thread() is threading.main_thread():
+            old_handler = signal.signal(signal.SIGINT, signal_handler)
+            handler_installed = True
         try:
             self._find_rules_native(
                 expressions_of_length,
@@ -1860,9 +2342,13 @@ class SimpliPyEngine:
                 proposal_entries=proposal_entries,
                 leaf_nodes=leaf_nodes,
                 promote_sorts=promote_sorts,
+                symbolic_gate=symbolic_gate,
+                snapshot_at=snapshot_at,
             )
         finally:
-            signal.signal(signal.SIGINT, old_handler)
+            if handler_installed:
+                signal.signal(signal.SIGINT, old_handler)
+            _MINE_LOCK.release()
 
     def operators_to_realizations(self, prefix_expression: list[str] | tuple[str, ...]) -> list[str]:
         """Convert canonical operator names to their runtime realizations (e.g. ``'sin'`` -> ``'np.sin'``)."""

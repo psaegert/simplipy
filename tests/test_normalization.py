@@ -35,3 +35,20 @@ def test_renamed_skeletons_compare_equal():
     assert normalize_skeleton(["mul", "v1", "v2"]) == normalize_skeleton(["mul", "x1", "x2"])
     # different concrete constants collapse to the same skeleton
     assert normalize_skeleton(["add", "x1", "2.0"]) == normalize_skeleton(["add", "x1", "99"])
+
+
+def test_reserved_spellings_are_not_constants():
+    # H-046 (D2', 2026-08-05): constant-hood is decided by the normative token grammar
+    # (is_numeric_string), not a bare float() probe. float() also accepts the RESERVED
+    # spellings -- bare inf/nan (any case/sign) and underscore groupings -- and masking
+    # those minted a finite-by-doctrine <constant> for a non-finite literal: a skeleton
+    # carrying `inf` compared equal to a finite-constant skeleton (fake coverage).
+    assert normalize_skeleton(["add", "x0", "inf"]) == ["add", "x0", "inf"]
+    assert normalize_skeleton(["sub", "NAN", "v1"]) == ["sub", "NAN", "x1"]
+    assert normalize_skeleton(["mul", "-Infinity", "x0"]) == ["mul", "-Infinity", "x0"]
+    assert normalize_skeleton(["mul", "1_000", "x0"]) == ["mul", "1_000", "x0"]
+    # The canonical special spellings stay themselves too (policy-owned sites).
+    assert normalize_skeleton(["sin", 'float("nan")']) == ["sin", 'float("nan")']
+    # Grammar-admitted literals still mask: exact fractions and e-notation.
+    assert normalize_skeleton(["mul", "1/3", "1e19"]) == ["mul", "<constant>", "<constant>"]
+    assert normalize_skeleton(["add", "x1", "1e+16"]) == ["add", "x1", "<constant>"]

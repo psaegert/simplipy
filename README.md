@@ -38,15 +38,29 @@ pip install simplipy
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("4-3", install=True)   # a published ruleset artifact
+engine = sp.SimpliPyEngine.load("acj-4-3", install=True)   # a published ruleset artifact
 
 # Simplify prefix expressions
 engine.simplify(('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'))
-# > ('/', '<constant>', 'log', 'x3')
+# > ('<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>')
 
 # Simplify infix expressions
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
-# > '<constant> / x3'
+# > '<constant>/x3'
+```
+
+Token input returns the engine's native **tagged** form by default (n-ary `+`/`*` bags are
+delimited: `<add> ... </add>`, `<mul> ... </mul>`; tagged output is accepted back as input).
+The `form` parameter selects a different projection of the same canonical answer:
+
+```python
+expr = ('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3')
+
+engine.simplify(expr, form='infix')      # the pretty rendering (a str)
+# > '<constant>/log(x3)'
+
+engine.simplify(expr, form='explicit')   # binary prefix -- what is_valid / prefix_to_infix read
+# > ('/', '<constant>', 'log', 'x3')
 ```
 
 ## Normalization
@@ -83,11 +97,11 @@ More examples can be found in the [documentation](https://simplipy.readthedocs.i
 As of 0.6.0 the simplify hot path defers match-time certificates to completed matches
 (memoized generationally, never stopping memoization), memoizes whole fixpoint passes and
 rule-normal subtrees, and runs on interned token ids (~20× fewer allocations per call) —
-all at byte-identical outputs. On a 65,536-expression training-prior benchmark, large
-certificate-bearing rulesets simplify ~59× faster than 0.5.0 and certificate-free
-rulesets ~2.3× faster; see the [CHANGELOG](https://github.com/psaegert/simplipy/blob/main/CHANGELOG.md)
+all at byte-identical outputs. On a 65,536-expression training-prior benchmark (measured
+at 0.11.0), large certificate-bearing rulesets simplify ~59× faster than 0.5.0 and
+certificate-free rulesets ~2.3× faster; see the [CHANGELOG](https://github.com/psaegert/simplipy/blob/main/CHANGELOG.md)
 for details. Since 0.7.0 there is a single compiled engine line; the published ruleset
-artifacts (`2-1`, `3-2`, `4-3`, …) are the distinguishing factor between engines. Rule
+artifacts (`acj-2-1`, `acj-3-2`, `acj-4-3`, …) are the distinguishing factor between engines. Rule
 application always considers every pattern in the loaded artifact (the former
 `max_pattern_length` knob was removed in 0.10.0). (To reproduce the historical dev_7-3 /
 v23.0-era behavior byte-for-byte, install `simplipy<=0.6.0`.)
@@ -95,8 +109,8 @@ v23.0-era behavior byte-for-byte, install `simplipy<=0.6.0`.)
 <table>
   <tr>
     <td align="center">
-      <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplipy_vs_sympy.svg" alt="Simplification time and ratio ECDFs: SimpliPy 0.9.1 vs SymPy across three axes (mined rulesets, safe vs aggressive, search budget) on 64k Lample-Charton expressions from the Flash-ANSR v23.0 prior" width="900">
-      <p>Empirical Cumulative Distribution Functions (ECDFs) of simplification wall-clock time (<strong>top row</strong>) and simplification ratio <code>|simp| / |orig|</code> in prefix tokens (<strong>bottom row</strong>, inset: zoom on the low-ratio tail), over 65,536 randomly generated Lample-Charton expressions sampled from the Flash-ANSR v23.0 training prior (0 to 17 unique variables, 1 to 35 symbols <a href="https://arxiv.org/abs/2602.08885">[Saegert & Köthe 2026]</a>). Three axes vary SimpliPy (green) while <strong>SymPy</strong> <a href="https://peerj.com/articles/cs-103/">[Meurer et al. 2017]</a> (orange <code>ratio=None</code> / red <code>ratio=1</code>) is the fixed reference: <strong>Mined Rulesets</strong> — the published <code>2-1</code>/<code>3-2</code>/<code>4-3</code> artifacts, every pattern active (darker = larger); <strong>Safe vs Aggressive</strong> — <code>4-3</code> in the deployed <code>SOUND</code> mode vs the training-only <code>LOSSY</code> mode; <strong>Search Budget</strong> — <code>4-3</code> SOUND at node budgets 1 to 48. SimpliPy is timed per call (<code>perf_counter</code>, gc off); SymPy is given each <code>&lt;constant&gt;</code> as a free symbol and simplified symbolically inside a per-expression worker with a 1 s timeout, then scored by its native prefix length. The measured quantities are the two ECDFs; the plot, not this caption, reports what they show.</p>
+      <img src="https://raw.githubusercontent.com/psaegert/simplipy/main/assets/images/simplipy_vs_sympy.svg" alt="Simplification time and ratio ECDFs: SimpliPy 0.11.0 vs SymPy across three axes (mined rulesets, safe vs aggressive, search budget) on 64k Lample-Charton expressions from the Flash-ANSR v23.0 prior" width="900">
+      <p>Empirical Cumulative Distribution Functions (ECDFs) of simplification wall-clock time (<strong>top row</strong>) and simplification ratio <code>|simp| / |orig|</code> in prefix tokens (<strong>bottom row</strong>, inset: zoom on the low-ratio tail), over 65,536 randomly generated Lample-Charton expressions sampled from the Flash-ANSR v23.0 training prior (0 to 17 unique variables, 1 to 35 symbols <a href="https://arxiv.org/abs/2602.08885">[Saegert & Köthe 2026]</a>). Three axes vary SimpliPy (green) while <strong>SymPy</strong> <a href="https://peerj.com/articles/cs-103/">[Meurer et al. 2017]</a> (orange <code>ratio=None</code> / red <code>ratio=1</code>) is the fixed reference: <strong>Mined Rulesets</strong> — the <code>2-1</code>/<code>3-2</code>/<code>4-3</code> ruleset artifacts, every pattern active (darker = larger); <strong>Safe vs Aggressive</strong> — <code>4-3</code> in the deployed <code>SOUND</code> mode vs the training-only <code>LOSSY</code> mode; <strong>Search Budget</strong> — <code>4-3</code> SOUND at node budgets 1 to 48. SimpliPy is timed per call (<code>perf_counter</code>, gc off); SymPy is given each <code>&lt;constant&gt;</code> as a free symbol and simplified symbolically inside a per-expression worker with a 1 s timeout, then scored by its native prefix length; SymPy&#39;s workers run 24-wide while SimpliPy is timed single-threaded. Expressions SymPy does not finish inside its budget are scored as what they are &mdash; infinite time, ratio 1 (not simplified) &mdash; and stay in the denominator, so its time curve plateaus at the fraction it completed and its ratio curve carries a step at exactly 1; renormalising over only its successes would inflate its low-ratio tail. The measured quantities are the two ECDFs; the plot, not this caption, reports what they show.</p>
     </td>
   </tr>
 </table>
@@ -143,7 +157,7 @@ pytest tests --cov src --cov-report html -m "not integration"
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2026,
     publisher = {GitHub},
-    version = {0.9.1},
+    version = {0.12.0},
     url = {https://github.com/psaegert/simplipy}
 }
 ```

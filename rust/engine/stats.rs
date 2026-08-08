@@ -1,38 +1,11 @@
-//! ONLINE simplify observability: process-global counters over the simplify hot path, plus
-//! coarse nanosecond accounting on the phase boundaries (cancel / rules / cert / mask+sort).
-//! Relaxed atomics, no locks, no control-flow effect. Aggregates across engines and threads;
-//! read/reset between batch runs via `simplify_counters()` / `reset_simplify_counters()`
-//! (lib.rs). Caveat: the certificate timer brackets the whole `bang_certified` call, so
-//! memo-HIT time includes the timer overhead itself -- fine for share-of-runtime ranking,
-//! not for ns-exact hit-path costing.
+//! Mining observability. (The deleted binary kernel's twelve simplify-hot-path counters,
+//! phase timers, `bump`/`Timer` plumbing and the `snapshot`/`reset` FFI schema were
+//! removed in D3, 2026-08-05, together with the `stats-counters`/`stats-timers`/
+//! `profiling` feature gates that existed only for them: their bump sites went with the
+//! kernel, so every read was 0 under any build -- schema without signal. Everything below
+//! is LIVE and unconditional: once-per-mined-source frequency, off any hot path.)
 
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-
-pub static SIMPLIFY_CALLS: AtomicU64 = AtomicU64::new(0);
-pub static SIMPLIFY_ITERS: AtomicU64 = AtomicU64::new(0);
-pub static EXACT_HITS: AtomicU64 = AtomicU64::new(0);
-pub static PATTERN_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
-pub static PATTERN_FIRES: AtomicU64 = AtomicU64::new(0);
-pub static CERT_CALLS: AtomicU64 = AtomicU64::new(0);
-pub static CERT_HITS: AtomicU64 = AtomicU64::new(0);
-pub static NANOS_CANCEL: AtomicU64 = AtomicU64::new(0);
-pub static NANOS_RULES: AtomicU64 = AtomicU64::new(0);
-pub static NANOS_CERT: AtomicU64 = AtomicU64::new(0);
-pub static NANOS_MASK_SORT: AtomicU64 = AtomicU64::new(0);
-
-pub static ALL: [(&str, &AtomicU64); 11] = [
-    ("simplify_calls", &SIMPLIFY_CALLS),
-    ("simplify_iters", &SIMPLIFY_ITERS),
-    ("exact_hits", &EXACT_HITS),
-    ("pattern_attempts", &PATTERN_ATTEMPTS),
-    ("pattern_fires", &PATTERN_FIRES),
-    ("cert_calls", &CERT_CALLS),
-    ("cert_hits", &CERT_HITS),
-    ("nanos_cancel", &NANOS_CANCEL),
-    ("nanos_rules", &NANOS_RULES),
-    ("nanos_cert", &NANOS_CERT),
-    ("nanos_mask_sort", &NANOS_MASK_SORT),
-];
 
 // --- OFFLINE mining progress: a within-tier "sources done / total" signal a driver can poll
 // while `mine_one_length` (one blocking, rayon-parallel call) is running, so a length tier is no
@@ -60,22 +33,9 @@ pub fn mine_progress() -> (u64, u64) {
     )
 }
 
-#[inline]
-pub fn bump(c: &AtomicU64) {
-    c.fetch_add(1, Relaxed);
-}
-
-#[inline]
-pub fn add(c: &AtomicU64, v: u64) {
-    c.fetch_add(v, Relaxed);
-}
-
-pub fn snapshot() -> Vec<(&'static str, u64)> {
-    ALL.iter().map(|(k, c)| (*k, c.load(Relaxed))).collect()
-}
-
-pub fn reset() {
-    for (_, c) in ALL.iter() {
-        c.store(0, Relaxed);
-    }
-}
+/// Mining ordering-acceptance decisions REFUSED because `ac_ordered_below` could not parse
+/// a side. The core serialization language is config-independent, so the engine's own
+/// output and every library candidate always parse -- any nonzero count is a BUG tripwire
+/// (the F0 dormancy lesson: a silent conservative arm hides its own trigger), asserted
+/// loudly in debug builds at the refusal site.
+pub static ACCEPT_UNDECIDED_REFUSALS: AtomicU64 = AtomicU64::new(0);

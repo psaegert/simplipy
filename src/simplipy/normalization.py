@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from typing import Any, Sequence
 
+from .utils import is_numeric_string
+
 __all__ = ["normalize_variable_token", "normalize_skeleton", "normalize_expression"]
 
 _VAR_TOKEN_PATTERN = re.compile(r"^[vx](\d+)$", re.IGNORECASE)
@@ -53,13 +55,19 @@ def normalize_skeleton(tokens: Sequence[str | Any] | None) -> list[str] | None:
         if token_str in {"<constant>", "<c>"}:
             normalized.append("<constant>")
             continue
-        # numeric literal -> constant placeholder
-        try:
-            float(token_str)
-        except ValueError:
-            normalized.append(token_str)
-        else:
+        # Numeric literal -> constant placeholder. Classified by the NORMATIVE token
+        # grammar (H-046, D2': `is_numeric_string` = decimal/e-notation/`p/q`), not a
+        # bare `float()` probe: `float()` also accepts the RESERVED spellings (bare
+        # inf/nan any case/sign, underscore groupings), and masking those minted a
+        # finite-by-doctrine `<constant>` for a non-finite literal -- a skeleton
+        # carrying `inf` then compared equal to a finite-constant skeleton (fake
+        # coverage in holdout matching/recovery scoring). Reserved and unknown
+        # spellings now pass through verbatim and can never compare equal to a
+        # genuinely numeric site.
+        if is_numeric_string(token_str):
             normalized.append("<constant>")
+        else:
+            normalized.append(token_str)
     return normalized
 
 

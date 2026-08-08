@@ -52,6 +52,7 @@ nav:
   - API-Reference: api.md
   - Creating Rulesets: rules.md
   - The Mining Algorithm (Formal): algorithm.md
+  - The Simplification Engine (Formal): formal.md
 
 # Plugin configurations
 plugins:

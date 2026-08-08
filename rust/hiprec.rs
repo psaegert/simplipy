@@ -42,6 +42,10 @@
 use crate::operators::Operators;
 use astro_float::{BigFloat, Consts, RoundingMode, INF_NEG, INF_POS, NAN};
 
+/// Re-export for callers that rank arbiter values without naming the backing crate
+/// (worker's literal resolution).
+pub use astro_float::BigFloat as ArbFloat;
+
 /// Working precision in bits (refutations are confirmed at `2*P`).
 const P: usize = 1024;
 /// BASE precision for the pole-vs-saturation escalation LADDER (`judge_row` climbs P_INF ->
@@ -63,6 +67,8 @@ const RM: RoundingMode = RoundingMode::ToEven;
 /// Experiment override: env `SIMPLIPY_HIPREC_FRAC` (calibration only, not a config surface).
 const NEAR_MISS_FRAC: f64 = 0.5;
 
+// ARTIFACT-AFFECTING switch (SIMPLIPY_HIPREC_FRAC): listed in
+// engine.py::ARTIFACT_ENV_SWITCHES (H-042).
 fn near_miss_frac() -> f64 {
     static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -306,6 +312,46 @@ pub fn rescue(
         }
     }
     true
+}
+
+/// The literal-resolution arbiter (worker's `resolve_const_slots`):
+/// `target(tgt_params) − source(src_params)` on one X row at the working precision, as a
+/// SIGNED difference (the resolver bisects on its sign and ranks on its magnitude).
+/// Params are f64, each lifted EXACTLY (an f64 literal token denotes a dyadic rational,
+/// so evaluating a candidate literal at `P` bits carries no rendering error; the
+/// transcendental leaves `np.pi`/`np.e` render at `P` bits, the arbiter convention).
+/// `None` = either side unevaluable or non-finite on this row: the row cannot judge
+/// literal candidates and the caller must pick another probe row.
+#[allow(clippy::too_many_arguments)]
+pub fn point_diff(
+    source: &[String],
+    src_params: &[f64],
+    target: &[String],
+    tgt_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+    row: usize,
+) -> Option<BigFloat> {
+    let mut cc = Consts::new().ok()?;
+    let s = eval_prefix(source, ops, var_names, x_cols, src_params, row, P, &mut cc)?;
+    let t = eval_prefix(target, ops, var_names, x_cols, tgt_params, row, P, &mut cc)?;
+    if !is_fin(&s) || !is_fin(&t) {
+        return None;
+    }
+    Some(t.sub(&s, P, RM))
+}
+
+/// Strict BigFloat `|a| < |b|` (residual ranking; incomparable = false, fail closed).
+/// Zeros are judged explicitly: astro-float keeps a SIGNED zero whose `cmp` orders
+/// `-0 < +0`, which would rank a negative-zero residual strictly below an exact-zero
+/// one and refuse a perfect pin.
+pub fn residual_lt(a: &BigFloat, b: &BigFloat) -> bool {
+    match (a.is_zero(), b.is_zero()) {
+        (_, true) => false,
+        (true, false) => true,
+        (false, false) => a.abs().cmp(&b.abs()).is_some_and(|o| o < 0),
+    }
 }
 
 /// Evaluate a prefix expression at `p` bits on row `r`. Leaves: variables (index into
@@ -909,9 +955,80 @@ fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<
         }
         "/" => Some(ct_div(a, b, p)),
         "pow" => ct_pow(a, b, ctx),
+        // `rootn(x, n)`: IEEE-754 rootn, honest for every integer index.
+        "rootn" => Some(rootn_hiprec(a, b, p, &mut ctx.cc)),
         _ => return None,
     };
     Some(v)
+}
+
+/// Exact integer extraction from a BigFloat index by BINARY SEARCH over integer BigFloats
+/// (no lossy float conversion; magnitudes up to i64::MAX, ~63 comparisons). `None` for
+/// non-integers, zero, infinities, NaN and out-of-range magnitudes -- the invalid-index
+/// cases IEEE rootn maps to NaN. Replaces the former scan-to-99 shortcut, which silently
+/// refused legal larger indices.
+fn integer_index(b: &BigFloat, p: usize) -> Option<i64> {
+    if !b.is_int() || b.is_inf() || b.is_nan() || b.is_zero() {
+        return None;
+    }
+    let mag = b.abs();
+    if cmp_gt(&mag, &small_int(i64::MAX as u64, p)) {
+        return None;
+    }
+    let (mut lo, mut hi) = (1u64, i64::MAX as u64);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if cmp_gt(&mag, &small_int(mid, p)) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if !mag.sub(&small_int(lo, p), p, RM).is_zero() {
+        return None; // defensive: is_int and the search should always agree here
+    }
+    Some(if b.is_negative() {
+        -(lo as i64)
+    } else {
+        lo as i64
+    })
+}
+
+/// IEEE-754 `rootn(x, n)`, honest for every integer index:
+/// odd index = the signed root, even = the principal root (NaN on negatives), n == 1 =
+/// the identity, n < 0 = the reciprocal, n == 0 or non-integer = NaN. One semantics,
+/// five surfaces (see `operators.py::rootn` and `numeric.rs::rootn_f64`).
+fn rootn_hiprec(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
+    let Some(n) = integer_index(b, p) else {
+        return NAN;
+    };
+    let k = n.unsigned_abs();
+    let root = if a.is_nan() {
+        NAN
+    } else if k == 1 || a.is_zero() {
+        a.clone() // index 1 is the identity; and the root of 0 is 0 for every index magnitude
+    } else if a.is_inf() {
+        if !a.is_negative() || k % 2 == 1 {
+            a.clone() // +inf always, -inf under odd roots: fixed points
+        } else {
+            NAN // even root of -inf
+        }
+    } else if k % 2 == 1 {
+        odd_root(a, k, p, cc)
+    } else if a.is_negative() {
+        NAN // even root of a negative
+    } else {
+        let r = one(p).div(&small_int(k, p), p, RM);
+        pow_pos_base(a, &r, p, cc)
+    };
+    if n < 0 {
+        if root.is_nan() {
+            return NAN;
+        }
+        ct_div(&one(p), &root, p)
+    } else {
+        root
+    }
 }
 
 /// Evaluate `tokens` under the CONTRACT semantics at the rung context. Outer `None` =
@@ -1296,6 +1413,8 @@ fn apply_binary(
                 pow_pos_base(a, b, p, cc) // see pow_pos_base: BigFloat::pow can stall
             }
         }
+        // `rootn(x, n)`: IEEE-754 rootn, same table as the ct_binary arm.
+        "rootn" => rootn_hiprec(a, b, p, cc),
         _ => return None,
     };
     Some(v)
@@ -1313,6 +1432,61 @@ mod tests {
     /// literal from f64 made `sin(np.pi)` read 1.2246e-16 at EVERY precision -- the arbiter
     /// inherited the denotation error and no rung could remove it. Rendered at working precision,
     /// sin(pi at 256 bits) is ~1e-77: the arbiter can finally see that the identity is exact.
+    /// ONE SEMANTICS, FIVE SURFACES: the high-precision rootn must
+    /// agree with the f64 evaluator cell-for-cell across the full index table --
+    /// odd/even/unit/negative/zero indices, negative bases, zero, infinities, NaN. This
+    /// is the parity gate that makes the D2 class (divergent surfaces for one operator)
+    /// structurally impossible to reintroduce silently.
+    #[test]
+    fn rootn_parity_with_the_f64_evaluator() {
+        let p = 96;
+        let mut cc = Consts::new().unwrap();
+        let f64_rootn = crate::numeric::binary_fn("rootn").expect("f64 arm exists");
+        let xs: [f64; 10] = [
+            -8.0,
+            -2.0,
+            -0.5,
+            0.0,
+            0.5,
+            2.0,
+            8.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        let ns: [f64; 12] = [
+            -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 64.0,
+        ];
+        fn agree(want: f64, got: &BigFloat, p: usize) -> bool {
+            if want.is_nan() {
+                return got.is_nan();
+            }
+            if got.is_nan() {
+                return false;
+            }
+            if want.is_infinite() {
+                return got.is_inf() && (want > 0.0) != got.is_negative();
+            }
+            if got.is_inf() {
+                return false;
+            }
+            let w = bf(want, p);
+            let diff = got.sub(&w, p, RM).abs();
+            let tol = bf(want.abs().max(1e-300) * 1e-12, p);
+            !cmp_gt(&diff, &tol)
+        }
+        for &x in &xs {
+            for &n in &ns {
+                let want = f64_rootn(x, n);
+                let got = rootn_hiprec(&bf(x, p), &bf(n, p), p, &mut cc);
+                assert!(
+                    agree(want, &got, p),
+                    "rootn({x}, {n}): f64 gives {want}, hiprec disagrees"
+                );
+            }
+        }
+    }
+
     #[test]
     fn np_pi_is_rendered_at_working_precision() {
         let Some(e) = crate::test_engine() else {
@@ -1587,30 +1761,34 @@ mod magnitude_probe {
         let ops = e.operators_ref();
         let vars: Vec<String> = vec!["x0".to_string(), "x1".to_string()];
         let pt = [ProbeAtom::PiFrac(1, 2), ProbeAtom::PiFrac(-1, 2)];
-        let pow2x = s(&["pow2", "x0"]);
-        // (x^3 + x^2 y)/(x + y) at (pi/2, -pi/2): pow3(x) and pow2(x)*x round APART at the
+        let pow2x = s(&["pow", "x0", "2"]);
+        // (x^3 + x^2 y)/(x + y) at (pi/2, -pi/2): pow(x,3) and pow(x,2)*x round APART at the
         // rungs -> residue/0 = +-inf vs nan: rung disagreement, unresolved.
         let seam = s(&[
-            "/", "+", "pow3", "x0", "*", "pow2", "x0", "x1", "+", "x0", "x1",
+            "/", "+", "pow", "x0", "3", "*", "pow", "x0", "2", "x1", "+", "x0", "x1",
         ]);
         let (v, _) = contract_point_verdict(&seam, &[], &pow2x, &[], ops, &vars, &pt);
         assert_eq!(v, None, "seam must be unresolved");
         // the minus variant at (pi/2, pi/2) (its own seam points)
         let seam_minus = s(&[
-            "/", "-", "pow3", "x0", "*", "pow2", "x0", "x1", "-", "x0", "x1",
+            "/", "-", "pow", "x0", "3", "*", "pow", "x0", "2", "x1", "-", "x0", "x1",
         ]);
         let pt_mm = [ProbeAtom::PiFrac(1, 2), ProbeAtom::PiFrac(1, 2)];
         let (v, _) = contract_point_verdict(&seam_minus, &[], &pow2x, &[], ops, &vars, &pt_mm);
         assert_eq!(v, None, "minus-variant seam must be unresolved");
         // (x+y)^3/(x+y)^2 at the same point: spelled ONCE -> exact 0 at every precision ->
         // 0/0 = nan stably: a confirmed EXT event (tolerated).
-        let stable = s(&["/", "pow3", "+", "x0", "x1", "pow2", "+", "x0", "x1"]);
+        let stable = s(&[
+            "/", "pow", "+", "x0", "x1", "3", "pow", "+", "x0", "x1", "2",
+        ]);
         let tgt = s(&["+", "x0", "x1"]);
         let (v, _) = contract_point_verdict(&stable, &[], &tgt, &[], ops, &vars, &pt);
         assert_eq!(v, Some(PointCmp::Ext));
         // (x^2 - y^2)/(x + y) at (pi/2, -pi/2): pow2(x) and pow2(-x) are the SAME correctly-
         // rounded square -> exact 0 at every precision -> EXT (a certified 2-1 artifact rule).
-        let even = s(&["/", "-", "pow2", "x0", "pow2", "x1", "+", "x0", "x1"]);
+        let even = s(&[
+            "/", "-", "pow", "x0", "2", "pow", "x1", "2", "+", "x0", "x1",
+        ]);
         let tgt2 = s(&["-", "x0", "x1"]);
         let (v, _) = contract_point_verdict(&even, &[], &tgt2, &[], ops, &vars, &pt);
         assert_eq!(v, Some(PointCmp::Ext));
@@ -1644,7 +1822,7 @@ mod magnitude_probe {
         // sec^2 - tan^2 = 1 at pi/2: the pole-proximity snap fires (the f64 algebra
         // evaluates a DIFFERENT point there) -- the row must come back snapped, whatever
         // the class, so the caller must tolerate it (a snapped point is measurement error).
-        let sec = s(&["-", "inv", "pow2", "cos", "x0", "pow2", "tan", "x0"]);
+        let sec = s(&["-", "inv", "pow", "cos", "x0", "2", "pow", "tan", "x0", "2"]);
         let (v, snapped) = contract_point_verdict(
             &sec,
             &[],
