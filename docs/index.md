@@ -267,6 +267,28 @@ sp.list_assets("engine")
 # - ...                   (pre-0.12 assets remain listed for older installs; they refuse to load on 0.12)
 ```
 
+## Artifacts, provenance and compatibility
+
+Every published engine asset is four files: `config.yaml` (the operator table and
+engine configuration), `rules.json` (the mined ruleset), `mine.yaml` (the exact mine
+configuration — each artifact is byte-deterministically reproducible from it with one
+`simplipy find-rules` command), and `rules.json.provenance.json`. The provenance
+sidecar records how the ruleset came to be: the mine parameters, the core build stamp
+(package version plus git revision of the compiled core), the soundness state at mine
+time (certificate kill-switch states, every artifact-affecting environment override
+recorded verbatim, and the interval layer's fail-closed miss counters), and the
+measure fingerprint (the μ constants and probe values with a digest) — so artifacts
+mined under different orderings are distinguishable from provenance alone.
+
+Compatibility is enforced at load, not documented and hoped for (`simplipy.compat`):
+artifacts carry an `engine_generation` pin in `config.yaml` (generation 2 is the AC
+engine's clean 23-operator vocabulary), the package carries the allowlist of
+generations it serves, and the refusal is mutual and actionable — a generation-1
+artifact on 0.12 raises with `pin the legacy package to load it: pip install
+"simplipy<0.12"`, and a too-new artifact points at upgrading simplipy. Configs
+without a pin are classified by vocabulary: any retired hyper-operator token means
+generation 1, so already-published legacy artifacts refuse without republishing.
+
 ## Normalization
 
 Besides the engine, SimpliPy exports pure-string normalization helpers at the

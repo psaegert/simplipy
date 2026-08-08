@@ -1,12 +1,18 @@
 # The Mining Algorithm (Formal)
 
-This page is the formally typeset specification of `SimpliPyEngine.find_rules` — the
-companion to the prose walkthrough in [Creating Rulesets](rules.md). The two algorithms
-below are the current implementation's ground truth: Algorithm 1 is the discovery loop,
-Algorithm 2 the per-pair equivalence certification (`Equivalent⁺`). Both were typeset at
-0.6.0 and are unchanged through 0.9.x (later releases add within-tier progress reporting
-and tighten the `simplify` subroutine's soundness gates, but leave the discovery loop and
-certification exactly as specified here).
+This page is the formally typeset specification of `SimpliPyEngine.find_rules` **as of
+the 0.6.0–0.9.x kernel** — the companion to the prose walkthrough in
+[Creating Rulesets](rules.md): Algorithm 1 is the discovery loop, Algorithm 2 the
+per-pair equivalence certification (`Equivalent⁺`).
+
+**Scope note for 0.12.** The discovery loop's shape (complete source universes per
+length, constant fitting, pairwise certification, covered-pruning) survives, but 0.12's
+miner certifies against the AC engine under the μ ordering with substantially stronger
+gates than the ones typeset here — interval-corroborated ground folds, the
+special-constant policy, class preservation, and sort promotion, all specified in
+[The Simplification Engine (Formal)](formal.md) and summarized in the 0.12.0 CHANGELOG.
+Treat this page as the loop's skeleton and the historical certification; a full
+re-typeset against the 0.12 miner is pending.
 
 Downloads: [PDF](assets/algorithm/simplipy_mining_algorithm.pdf) ·
 [LaTeX source](assets/algorithm/simplipy_mining_algorithm.tex)
