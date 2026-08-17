@@ -1,5 +1,12 @@
 # The unified simplicity measure: description length as the one objective
 
+> **2026-08-08 amendment note (contract §10.11):** "mask × special stays unabsorbed" is
+> SUPERSEDED — the owner confirmed the deferred leaning-ruling the other way. Specials
+> now absorb into an existing `<constant>` at the bijective bag sites (Add-shift /
+> Mul-scale), exactly like every other finite ground; introduced masks and non-bag
+> positions (`pi^C`) still refuse. The stage-1/stage-2 "stays unabsorbed" language
+> below is kept as the historical record.
+
 **Status: STAGE 2 IMPLEMENTED 2026-08-01** — μ is the ordering (mu + canonical order,
 lit_size absorbed), the fold is μ-governed, the resolution licence is deleted (a
 theorem now, on every channel incl. the hint channel stage 1 left open), the
@@ -81,7 +88,7 @@ stays exact and the order is discrete — no float comparisons anywhere in the o
 | special constant (π, e) | 8 | one vocabulary symbol, zero dof |
 | numeric literal q = p/q′ (exact value, spelling-independent) | max(2, bits(p) + bits(q′)) | its description length; small ints ≈ 2–4, a 52-bit dyadic ≈ 105 |
 | bag COEFFICIENT slot (the Rat riding a Mul/Add) | the literal cost above, NOT free | removes the current coefficient-rides-free asymmetry |
-| `<constant>` | c_free = 128 | a free real dof; the priciest atom (owner floor: ≥ special) |
+| `<constant>` | c_free = 128 → **1133 (amended 2026-08-06: DERIVED, not floored** — sup over f64 round-trip spellings = 1131.931 bits at 5.5605781537525765e-308, + 1 sign bit, ceiled; the 128 floor was beaten 8× by μ(1e308) = 1024.154)** | a free real dof; the priciest atom by construction |
 
 Two structural decisions worth pinning:
 

@@ -16,9 +16,13 @@ use crate::operators::Operators;
 
 /// The transcendentals are evaluated through the SYSTEM libm (the same `<math.h>` functions Python's
 /// `math` module calls), NOT Rust's `f64::*` methods. Rust's std calls the platform libm for most of
-/// them (so they already match Python at 0 ULP), but `f64::atanh` is Rust's OWN implementation and
-/// differs from glibc by up to ~86 ULP. Binding the C symbols directly guarantees Python==Rust on every
-/// platform (both use that platform's libm) -- the determinism the f64+libm folding spec needs.
+/// them (so they already match Python at 0 ULP), but `f64::atanh` is Rust's OWN composition
+/// (`0.5 * ln_1p(2x/(1-x))`), and its divergence from glibc is UNBOUNDED in ulps toward the domain
+/// edges: measured 2026-08-15 (audit B6), 161 ulps at -0.999 and 1.5e13 ulps at -(1 - 1e-15) --
+/// the 4th significant digit -- with 39% of a dense (-1,1) grid differing. (`asinh`/`acosh`
+/// measured 0-ulp identical to libm over 2.2M points on the same build.) Binding the C symbols
+/// directly guarantees Python==Rust on every platform (both use that platform's libm) -- the
+/// determinism the f64+libm folding spec needs.
 mod cmath {
     extern "C" {
         pub fn sin(x: f64) -> f64;
@@ -51,6 +55,17 @@ mod cmath {
 #[inline]
 fn cpow(x: f64, y: f64) -> f64 {
     unsafe { cmath::pow(std::hint::black_box(x), std::hint::black_box(y)) }
+}
+
+/// The libm `atanh`, for the ONE consumer outside this module's own kernels: the interval
+/// arm (`interval.rs::u_atanh`) must evaluate endpoint images with the SAME function the
+/// fold ships, because its outward-rounding budget (`ULP_LIBM` = 8 ulps) only covers
+/// libm's own rounding error -- not the unbounded std-vs-libm composition gap documented
+/// on `cmath` above (audit B6: the fold at -0.999 sat 161 ulps below the std-computed
+/// box's lower bound, an enclosure violation).
+#[inline]
+pub(crate) fn libm_atanh(x: f64) -> f64 {
+    unsafe { cmath::atanh(x) }
 }
 
 /// Contract-aligned power: `pow(negative base — including −∞ — , finite non-integer

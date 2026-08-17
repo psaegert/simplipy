@@ -165,6 +165,17 @@ pub fn prefix_to_infix(
             {
                 left_str = format!("({left_str})");
             }
+            // X10 (2026-08-15): a LEADING UNARY MINUS must parenthesize under '**'
+            // regardless of precedence bookkeeping -- a bare negative literal is one
+            // atomic-precedence token, so the generic rule above never fires, yet the
+            // re-parse (this engine, Python, and SymPy 1.14 alike) binds '**' TIGHTER
+            // than the minus: '-2 ** x0' reads as -(2 ** x0), a value change. Measured
+            // as an exact bijection: 59/5,494 canonical outputs broke, every one a
+            // `pow <negative literal>` base (verify_X10). Composites are already
+            // wrapped by the generic rule and never start with '-'.
+            if write_operator == "**" && left_str.starts_with('-') {
+                left_str = format!("({left_str})");
+            }
             // right paren: right_prec < cur OR (== AND assoc left). An equal-precedence right
             // operand always keeps its parens (no flattening) -- paired with the left-assoc parse
             // in `infix_to_prefix`, this preserves prefix<->infix round-trip identity.
@@ -214,7 +225,9 @@ pub fn prefix_to_infix(
             if power == Power::StarStar && (is_pow_op || is_frac_pow_op) {
                 // x**N / x**(1/N); operand parens iff operand_prec <= power_prec.
                 let power_precedence = ops.precedence_get("**").unwrap_or(current_precedence);
-                if operand_prec <= power_precedence {
+                if operand_prec <= power_precedence || operand_str.starts_with('-') {
+                    // the leading-minus arm is X10's render site 2: same defect,
+                    // same re-parse inversion -- see the binary '**' site's comment.
                     operand_str = format!("({operand_str})");
                 }
                 let rendered = if is_pow_op {

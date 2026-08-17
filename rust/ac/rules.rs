@@ -80,6 +80,28 @@ pub struct AcRules {
     /// sign and every admission gate passes. Counted separately so the asset-rule
     /// accounting (`n_subsumed`/`n_dropped`) keeps its meaning.
     pub n_twins: usize,
+    /// Rules refused by the licence registry's load consumer (C1.20, SWEEP row 3): the
+    /// rule changes a DEFINED extended-real value at a constructed exceptional point.
+    /// The engine pre-filters the raw rules BEFORE translate (the caller sets this
+    /// count); 0 for every artifact the mint-side registry produced -- a nonzero count
+    /// means a stale or foreign artifact carried a violation past its own mine.
+    pub n_registry_dropped: usize,
+    /// C36: the PER-REASON drop census -- the six translate-time drop reasons (plus
+    /// the registry's, filled by the caller) used to collapse into `n_dropped` with
+    /// no accessor, so a user could not find out what was dropped from their own
+    /// mine. Keys are stable strings; the FFI exposes this as a dict.
+    pub drop_census: Vec<(&'static str, usize)>,
+}
+
+impl AcRules {
+    /// Count a drop under its reason (and in the aggregate `n_dropped`).
+    fn note_drop(&mut self, reason: &'static str) {
+        self.n_dropped += 1;
+        match self.drop_census.iter_mut().find(|(r, _)| *r == reason) {
+            Some((_, n)) => *n += 1,
+            None => self.drop_census.push((reason, 1)),
+        }
+    }
 }
 
 /// Fold the concrete atoms of an expression into a 64-bit signature. Wildcard leaves contribute
@@ -162,7 +184,7 @@ impl AcRules {
         for (lhs_t, rhs_t) in raw {
             let (Some(lhs0), Some(rhs0)) = (from_prefix(lhs_t, &cx), from_prefix(rhs_t, &cx))
             else {
-                out.n_dropped += 1;
+                out.note_drop("unparseable-side");
                 continue;
             };
             let lhs = canon(lhs0, &cx);
@@ -186,18 +208,18 @@ impl AcRules {
             // counts are judged on the CANONICAL sides (canon may absorb Const arithmetic,
             // e.g. `C+C -> C`, changing the spelled count).
             if const_count(&rhs) > const_count(&lhs) {
-                out.n_dropped += 1;
+                out.note_drop("const-count-increase");
                 continue;
             }
             // An LHS that canon collapsed to a NON-COMPOSITE (a bare wildcard, leaf, literal or
             // `Const`) is a catch-all: every mined LHS was composite, so the rule's distinctions
             // live below the arithmetic waterline and the arithmetic already owns them.
             if !matches!(&lhs, Ex::Add(_) | Ex::Mul(_) | Ex::Pow(..) | Ex::Fun(..)) {
-                out.n_dropped += 1;
+                out.note_drop("catch-all-lhs");
                 continue;
             }
             if seen_pairs.contains(&(rhs.clone(), lhs.clone())) {
-                out.n_dropped += 1; // the exact inverse of an earlier rule: ping-pong fuel
+                out.note_drop("inverse-of-earlier-rule"); // the exact inverse of an earlier rule: ping-pong fuel
                 continue;
             }
             // Sixth drop reason: an RHS wildcard the canonical LHS does not bind would
@@ -208,7 +230,7 @@ impl AcRules {
             collect_wildcards(&lhs, view, &mut lhs_wilds);
             collect_wildcards(&rhs, view, &mut rhs_wilds);
             if !rhs_wilds.is_subset(&lhs_wilds) {
-                out.n_dropped += 1;
+                out.note_drop("unbound-rhs-wildcard");
                 continue;
             }
             // Seventh drop reason: the Knuth-Bendix orientation, checked statically on
@@ -219,7 +241,7 @@ impl AcRules {
             // ordering the pass fires under, and re-vets every asset on every load (an
             // order change re-judges the rules automatically).
             if !ordered_below(&rhs, &lhs, view) {
-                out.n_dropped += 1;
+                out.note_drop("not-ordered-below");
                 continue;
             }
             seen_pairs.insert((lhs.clone(), rhs.clone()));

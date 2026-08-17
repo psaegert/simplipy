@@ -169,3 +169,7 @@ src/simplipy/_core*.so
 remine/
 benchmarks/ecdf_vs_sympy_results.pkl
 benchmarks/ecdf_011_results.pkl
+
+# Regenerable benchmark figure outputs (audit A4/D31: tracked renders shipped 2.9 MB
+# of stale figures in every sdist; the scripts write here instead).
+benchmarks/out/

@@ -90,13 +90,22 @@ class TestDivisorSideSpelling:
         check(eng, ['/', 'x0', '-0.3333333333333333'],
               ['<mul>', '-1', 'x0', '<div>', '0.3333333333333333', '</mul>'])
 
-    def test_guard_needs_plain_numerator_factor(self, eng):
-        # (1/3)/x0: only coefficient + inverse factor -- the coefficient STAYS in the
-        # numerator, which is the guard. It renders there structurally (a nested bag)
-        # rather than as the atomic `1/3` token, both components being inside the
-        # tagged vocabulary bound.
+    def test_coefficient_split_fires_without_plain_factor(self, eng):
+        # F80 (owner-ruled spelling law, 2026-08-10): the split is UNCONDITIONAL for
+        # in-bound fractions. (1/3)/x0 -- coefficient + inverse factor, no plain
+        # numerator member -- dissolves into the bag: q joins <div>, and the unit
+        # numerator's `1` is KEPT as the numerator member the ratified table pins
+        # (the pre-F80 emitter demanded a plain factor here and rendered the
+        # coefficient as a NESTED structural fraction, the census's 8,918-event
+        # family at 1M).
         check(eng, ['/', '1/3', 'x0'],
-              ['<mul>', '<mul>', '1', '<div>', '3', '</mul>', '<div>', 'x0', '</mul>'])
+              ['<mul>', '1', '<div>', '3', 'x0', '</mul>'])
+        # The sign rides the numerator (H-020: <div> members stay positive).
+        check(eng, ['/', '(-2/3)', 'x0'],
+              ['<mul>', '-2', '<div>', '3', 'x0', '</mul>'])
+        # Coefficient-FREE den-only bags keep the established empty-numerator
+        # spelling -- the F80 ruling did not touch them (see
+        # TestLossyReciprocalRejoinProjection::test_certified_pair_stays_distributed).
 
     def test_joins_existing_divisor_section(self, eng):
         # x0 / (0.3333333333333333 * x1): reciprocal token leads the den members.

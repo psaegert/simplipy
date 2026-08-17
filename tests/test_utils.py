@@ -84,16 +84,19 @@ def test_apply_variable_mapping():
 
 
 def test_numbers_to_constant():
-    """Tests replacing numeric literals with '<constant>'."""
+    """The deprecated shadow masker still behaves, and it WARNS (its replacement is
+    simplipy.masking with an explicit role-aware policy)."""
     expr = ['+', 'x', '3.14', '*', 'y', '-2', '5e-3']
     expected = ['+', 'x', '<constant>', '*', 'y', '<constant>', '<constant>']
     # Test not in-place
-    result = utils.numbers_to_constant(expr, inplace=False)
+    with pytest.warns(DeprecationWarning, match="masking"):
+        result = utils.numbers_to_constant(expr, inplace=False)
     assert result == expected
     assert expr[2] == '3.14'  # Original should be unchanged
 
     # Test in-place
-    utils.numbers_to_constant(expr, inplace=True)
+    with pytest.warns(DeprecationWarning, match="masking"):
+        utils.numbers_to_constant(expr, inplace=True)
     assert expr == expected
 
 
@@ -102,21 +105,21 @@ def test_explicit_constant_placeholders():
     expr = ['*', '<constant>', '+', 'x', '2.5']
     expected_expr = ['*', 'C_0', '+', 'x', '2.5']
     expected_constants = ['C_0']
-    result_expr, result_constants = utils.explicit_constant_placeholders(expr)
+    result_expr, result_constants = utils.explicit_constant_placeholders(expr, convert_numbers_to_constant=False)
     assert result_expr == expected_expr
     assert sorted(result_constants) == sorted(expected_constants)
 
 
 def test_explicit_constant_placeholders_reuses_provided_constants():
     expr = ['+', 'C_3', '<constant>']
-    result_expr, result_constants = utils.explicit_constant_placeholders(expr, constants=['K'])
+    result_expr, result_constants = utils.explicit_constant_placeholders(expr, constants=['K'], convert_numbers_to_constant=False)
     assert result_expr == ['+', 'K', 'C_0']
     assert result_constants == ['K', 'C_0']
 
 
 def test_explicit_constant_placeholders_discards_unused_constants():
     expr = ['+', '<constant>']
-    result_expr, result_constants = utils.explicit_constant_placeholders(expr, constants=['K', 'L'])
+    result_expr, result_constants = utils.explicit_constant_placeholders(expr, constants=['K', 'L'], convert_numbers_to_constant=False)
     assert result_expr == ['+', 'K']
     assert result_constants == ['K']
 
@@ -389,3 +392,76 @@ def test_remove_pow1():
     expected = ['x', '+', 'y', 'inv', 'z']
     result = utils.remove_pow1(expr)
     assert result == expected
+
+
+def test_explicit_constant_placeholders_leaves_numerals_alone_by_default():
+    # The mechanical contract since 0.13.0: only explicit placeholder slots are renamed.
+    # Digit-only literals -- including pow exponents, whose integrality controls the
+    # DOMAIN -- stay concrete; abstraction is simplipy.masking's decision, made upstream.
+    expr = ['*', '2', 'pow', 'x1', '3']
+    result_expr, result_constants = utils.explicit_constant_placeholders(expr, convert_numbers_to_constant=False)
+    assert result_expr == expr
+    assert result_constants == []
+
+
+def test_explicit_constant_placeholders_renumbers_ci_unconditionally():
+    # C_i re-numbering is codegen mechanics, NOT gated by the deprecated numeral flag
+    # (before 0.13.0 the flag conflated the two).
+    expr = ['+', 'C_3', '<constant>', '7']
+    result_expr, result_constants = utils.explicit_constant_placeholders(expr, convert_numbers_to_constant=False)
+    assert result_expr == ['+', 'C_0', 'C_1', '7']
+    assert result_constants == ['C_0', 'C_1']
+
+
+def test_explicit_constant_placeholders_numeral_conversion_is_deprecated():
+    expr = ['*', '2', 'pow', 'x1', '3']
+    with pytest.warns(DeprecationWarning, match="masking"):
+        result_expr, result_constants = utils.explicit_constant_placeholders(
+            expr, convert_numbers_to_constant=True)
+    # legacy behavior preserved under the flag: digit-only spellings convert ('2', '3'),
+    # while '-3' / '2.0' / '3.14' would not -- the incoherence that got it deprecated
+    assert result_expr == ['*', 'C_0', 'pow', 'x1', 'C_1']
+    assert result_constants == ['C_0', 'C_1']
+
+
+def test_substitute_constants_canonical_name_and_alias():
+    expr = ['*', '<constant>', '+', 'x', 'C_2']
+    assert utils.substitute_constants(expr, [3.5, 2.0]) == ['*', '3.5', '+', 'x', '2.0']
+    # The historic alias warns from 0.13.0 (D11 column R19) but keeps the
+    # exact behaviour; full deprecation coverage lives in test_public_api.py.
+    with pytest.warns(DeprecationWarning):
+        assert utils.substitude_constants(expr, [3.5, 2.0]) == ['*', '3.5', '+', 'x', '2.0']
+
+
+def test_is_constant_placeholder_predicate():
+    assert utils.is_constant_placeholder('<constant>')
+    assert utils.is_constant_placeholder('C_0') and utils.is_constant_placeholder('C_17')
+    assert not utils.is_constant_placeholder('3')
+    assert not utils.is_constant_placeholder('x1')
+    assert not utils.is_constant_placeholder('k1')
+    assert utils.is_constant_placeholder('k1', ['k1'])
+
+
+class TestD12ConvertNumbersRequired:
+    """D12 / N1-B2 REVERSED (L6): removing `convert_numbers_to_constant` would break
+    symbolic-data 0.15.0 at five sites -- the only downstream that migrated
+    correctly -- while doing nothing for flash-ansr's two unflagged call sites. The
+    substitute: the parameter STAYS, keyword-only and REQUIRED for one release, so
+    an unflagged caller gets a loud TypeError instead of a silently flipped
+    masking decision."""
+
+    def test_flag_is_required_and_keyword_only(self):
+        from simplipy.utils import explicit_constant_placeholders
+        with pytest.raises(TypeError):
+            explicit_constant_placeholders(['+', 'x0', '2.5'])          # unflagged
+        with pytest.raises(TypeError):
+            explicit_constant_placeholders(['+', 'x0', '2.5'], None, False, True)  # positional
+
+    def test_both_explicit_choices_work(self):
+        from simplipy.utils import explicit_constant_placeholders
+        out, consts = explicit_constant_placeholders(
+            ['+', '<constant>', '2.5'], convert_numbers_to_constant=False)
+        assert '2.5' in out and len(consts) == 1
+        out2, consts2 = explicit_constant_placeholders(
+            ['+', '<constant>', '25'], convert_numbers_to_constant=True)
+        assert '25' not in out2 and len(consts2) == 2  # digit-only tokens convert

@@ -31,9 +31,11 @@ against a 10-unit symbolic state) -- which dissolves the stage-1 symbol/literal 
 (finding (b)): exp(1) stays symbolic. What does NOT change: the special-READ refusal
 (f64 cannot certify that a special-bearing evaluation is exact, and mu cannot either
 -- an f64-accidental short hit would be a value change; exact collapses stay MINED,
-hiprec-certified rules), the Const-absorption licence (mask x special stays unabsorbed
-is POLICY against mu's own gradient: mu(C*pi) = MU_FREE + 16 > mu(C)), the
-determined-source clause (contract), and the e^C exception (exact identity first).
+hiprec-certified rules), the determined-source clause (contract), and the e^C
+exception (exact identity first). AMENDED 2026-08-08 (contract 10.11): the
+Const-absorption licence no longer beats the gradient at bag sites -- C*pi -> C
+absorbs like every ground; only non-bag positions (pi^C) still hold a special
+against mu.
 """
 import math
 from fractions import Fraction
@@ -181,6 +183,39 @@ class TestMuValues:
         assert c(eng, ['-', 'x0', 'x1']) == c(eng, ['+', 'x0', 'x1']) + MU_SYM
 
 
+class TestB22AstronomicSaturation:
+    """B22 at the public surface: the ceiling is not a price, and no sum wraps.
+
+    The exact linear schedule |scale| * log2(10) exhausts u64 at |scale| ~ 5.553e15.
+    The old arms saturated there, so `1e5553000000000000` priced exactly 2^64 - 1,
+    every larger scale (and every beyond-i64 exponent) collided on that one price,
+    and the poisoned leaf overflowed the tree sums downstream. The knee schedule
+    (rust/ac/expr.rs::MU_SCALE_KNEE) keeps every f64-reachable literal on the exact
+    linear price -- the knee sits nine orders of magnitude past |scale| = 324 -- and
+    orders the absurd by the exponent's own magnitude. The core-level property tests
+    live in expr.rs (astronomic_literals_stay_ordered_and_sums_never_wrap); these
+    pin the same facts through `ac_complexity`, the surface the mine and the gates
+    actually price with.
+    """
+
+    def test_the_plan_acceptance_line(self, eng):
+        # the B22 acceptance criterion, verbatim
+        assert c(eng, ['1e5553000000000000']) != 2**64 - 1
+
+    def test_astronomic_scales_stay_strictly_ordered(self, eng):
+        ladder = ['1e308', '1e4294967296', '1e5553000000000000',
+                  '1e9223372036854775807', '1e99999999999999999999']
+        prices = [c(eng, [t]) for t in ladder]
+        assert prices == sorted(set(prices)), (
+            f'astronomic scales collided or inverted: {dict(zip(ladder, prices))}')
+
+    def test_a_composite_never_prices_below_a_part(self, eng):
+        part = c(eng, ['1e5553000000000000'])
+        comp = c(eng, ['+', '1e5553000000000000', 'x0'])
+        assert comp >= part
+        assert comp >= c(eng, ['x0'])
+
+
 class TestT7Termination:
     """The dense-literal chain ascends: Mul[3/2^k, x] grows in mu with k, so the
     chain cannot be a reduction sequence (the audit's O1 hang class)."""
@@ -245,7 +280,61 @@ class TestMuGovernedFold:
         assert 'np.e' in out
 
     def test_policy_keeps_beating_mu_where_ratified(self, eng):
-        # mask x special stays unabsorbed even though mu(C*pi) > mu(C):
-        # the Const-absorption licence is POLICY against the measure's gradient.
-        out = eng.simplify(['*', '<constant>', 'np.pi'])
+        # Contract 10.11 (2026-08-08) RETIRED the one bag-site policy that beat the
+        # measure: C*pi -> C now follows mu's gradient like every ground absorption.
+        assert eng.simplify(['*', '<constant>', 'np.pi']) == ['<constant>']
+        # The surviving against-the-gradient refusal is positional, not special-wide:
+        # pi^C keeps the special although mu(pow(pi, C)) > mu(C) -- pow is not an
+        # absorption site (value set (0, inf), not "anything").
+        out = eng.simplify(['pow', 'np.pi', '<constant>'])
         assert 'np.pi' in out and '<constant>' in out
+
+
+class TestB10CfreeDerivation:
+    """B10: c_free = 1133 is DERIVED, not asserted — and the docs now say so in four
+    places (formal.md §5, the .tex, the design doc, expr.rs). This pin recomputes the
+    derivation from first principles: the supremum over f64 round-trip spellings of
+    the decimal model L(significand) + |decimal scale|·log2(10), plus one sign bit,
+    ceiled. If the measure's literal model or the published number ever drifts, this
+    recomputation and `engine.complexity(['<constant>'])` stop agreeing."""
+
+    @staticmethod
+    def _decimal_model_bits(x: float) -> float:
+        s = repr(abs(x))
+        if 'e' in s:
+            mant, exp = s.split('e')
+            exp = int(exp)
+        else:
+            mant, exp = s, 0
+        intpart, _, frac = mant.partition('.')
+        digits = (intpart + frac).lstrip('0')
+        scale = exp - len(frac)
+        stripped = digits.rstrip('0')
+        scale += len(digits) - len(stripped)
+        d = int(stripped or '0')
+        return math.log2(1 + d) + abs(scale) * math.log2(10)
+
+    def test_c_free_recomputes_from_the_f64_supremum(self, eng):
+        sup, argmax = 0.0, None
+        mantissas = (1.0, 1.5, 1.0 + 2**-52, 2.0 - 2**-52, 1.2345678901234567)
+        for be in range(-1074, 1024):
+            for m in mantissas:
+                x = math.ldexp(m, be)
+                if x == 0.0 or math.isinf(x):
+                    continue
+                b = self._decimal_model_bits(x)
+                if b > sup:
+                    sup, argmax = b, x
+        # The recorded attained value reproduces the recorded supremum exactly.
+        rec = self._decimal_model_bits(5.5605781537525765e-308)
+        assert abs(rec - 1131.931) < 1e-3, rec
+        # SAFETY direction -- the load-bearing assert: nothing in the sweep may price
+        # ABOVE the recorded supremum, or 1133 is no longer a supremum and the
+        # published constant is falsified. (The coarse 5-mantissa grid does not hit
+        # the exact 17-digit argmax spelling; it must get within a bit of the family,
+        # which is the anti-vacuity that the sweep reaches the extreme region at all.)
+        assert sup <= rec + 1e-6, (sup, argmax)
+        assert sup > rec - 1.0, (sup, argmax)
+        derived_bits = math.ceil(rec + 1.0)  # + the sign bit, ceiled
+        assert derived_bits == 1133
+        assert c(eng, ['<constant>']) == derived_bits * MILLI

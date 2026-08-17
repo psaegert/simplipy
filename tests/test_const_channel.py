@@ -114,14 +114,25 @@ class TestMintCountInvariant:
     def test_const_preserving_family_still_mints(self, tmp_path) -> None:
         """Anti-vacuity: the servable SPECIAL-FREE Const algebra must keep minting --
         `(e^C1)^C2 = e^(C1*C2)` collapses to one fitted constant. The special-bearing
-        twin `pow exp <constant> np.pi -> <constant>` is REFUSED since the stage-1
-        Const-absorption licence (owner 2026-08-01): pi may not vanish into a fitted
-        constant (mask x special stays unabsorbed)."""
-        engine, _ = _mine(tmp_path, {'exp': EXP, 'pow': POW, '*': MUL},
-                          ['np.pi', '<constant>'])
+        twin `pow exp <constant> np.pi -> <constant>` is REFUSED by the mint-side
+        Const-absorption licence: the canon respells the source to `pow <constant>
+        np.pi` (exp(C) -> C), where pi sits in a NON-absorbable pow position -- the
+        2026-08-08 amendment (contract 10.11) absorbs specials only at the bijective
+        bag sites, so the pow-position refusal stands."""
+        engine, out = _mine(tmp_path, {'exp': EXP, 'pow': POW, '*': MUL},
+                            ['np.pi', '<constant>'])
         rules = [(list(lhs), list(rhs)) for lhs, rhs in engine.simplification_rules]
         assert (['pow', 'exp', '<constant>', '<constant>'], ['<constant>']) in rules
         assert (['pow', 'exp', '<constant>', 'np.pi'], ['<constant>']) not in rules
+        # The B7/D36 jurisdiction carve-out, pinned where it bites: the symbolic gate
+        # drops every fatal bucket, and a multi-<constant> LHS is the ONE exempted
+        # shape (the judge's own non-jurisdiction sentinel; this family's soundness
+        # authority is the Const-channel chain). The exemption must be VISIBLE in the
+        # sidecar, not silent -- and must not widen: nothing else may ride it.
+        gate = json.load(open(out + '.provenance.json'))['symbolic_gate']
+        assert [['pow', 'exp', '<constant>', '<constant>'], ['<constant>']] \
+            in gate['const_channel']
+        assert gate['unsupported_shape'] == []
 
 
 class TestTranslationCountGate:

@@ -36,7 +36,10 @@ import re
 import numpy as np
 from mpmath import mp, mpf, isnan as misnan, isinf as misinf
 
-np.seterr(all='ignore')
+# C35: no `np.seterr(all='ignore')` here -- that call is PROCESS-WIDE and ran at
+# import, silently changing the embedder's numpy error handling because this module
+# was imported. The deployed-check evaluator scopes `np.errstate` around its own
+# operator applications instead (see `d_eval`); the host's configuration survives.
 F = np.float64
 
 try:  # the CORE serialization language, read from the engine's own table (C1.10):
@@ -70,6 +73,64 @@ SNAP_EVENTS = [0]  # incremented when a symbolic-cancellation snap / pole-guard 
                    # (a measurement artifact), so the deployed check is skipped
 
 
+#: The judge's statement of NON-JURISDICTION over the multi-Const family (B7/D36):
+#: a rule whose LHS binds more than one independent `<constant>` is outside what the
+#: one-shared-symbol contract can model, and is refused before judging with exactly
+#: this detail. The engine's gate sites exempt this detail -- and ONLY this detail --
+#: from the fatal-bucket drop, because the family's soundness authority is the
+#: Const-channel chain, not this instrument.
+CONST_CHANNEL_DETAIL = 'multiple LHS <constant>'
+
+
+# ---------------------------------------------------------------- literal acceptor
+class UnsupportedToken(ValueError):
+    """a leaf token outside the accepted numeric grammar -- REFUSED, never evaluated.
+
+    This module adjudicates rule sets it did not produce (`verify_ruleset` documents a
+    path to a JSON file as input), so a leaf token is untrusted data, not code. The
+    grammar below is the whole of what a literal may be; anything else is refused
+    fail-closed and the rule is bucketed UNSUPPORTED-SHAPE."""
+
+
+# `1`, `-1`, `0.5`, `-1e-09`, `.5`  -- sign, digits, optional exponent. Nothing else.
+_NUM_RE = re.compile(r'^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$')
+# `(-10)`: the parenthesized-negative spelling. 26.98% of literal occurrences in the
+# shipped artifact carry it (3,981 of 6,803 rules) -- an acceptor without it refuses
+# the majority of the corpus it exists to gate.
+_PAREN_NEG_RE = re.compile(r'^\(-((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\)$')
+# `float("inf")` / `float('-inf')` / `float("nan")` -- the canonical special spellings.
+_FLOAT_CALL_RE = re.compile(r'^float\((["\'])([^"\']*)\1\)$')
+_SPECIALS = {'inf': math.inf, '+inf': math.inf, '-inf': -math.inf, 'nan': math.nan}
+_NAMED = {'np.pi': math.pi, 'np.e': math.e}
+
+
+def literal_value(t):
+    """The accepted numeric grammar, evaluated without `eval`. Total: value or refusal."""
+    if t in _NAMED:
+        return _NAMED[t]
+    m = _FLOAT_CALL_RE.match(t)
+    if m:
+        inner = m.group(2).strip()
+        if inner in _SPECIALS:
+            return _SPECIALS[inner]
+        if _NUM_RE.match(inner):
+            return float(inner)
+        raise UnsupportedToken(f'float() of a non-numeric literal: {t!r}')
+    m = _PAREN_NEG_RE.match(t)
+    if m:
+        return -float(m.group(1))
+    if _NUM_RE.match(t):
+        return float(t)
+    if t.count('/') == 1:  # `p/q`: not in the shipped artifact, legal in a foreign one
+        p, q = t.split('/')
+        if _NUM_RE.match(p.strip()) and _NUM_RE.match(q.strip()):
+            den = float(q)
+            if den == 0.0:
+                raise UnsupportedToken(f'zero denominator: {t!r}')
+            return float(p) / den
+    raise UnsupportedToken(f'not an accepted literal: {t!r}')
+
+
 # ---------------------------------------------------------------- parse
 def parse(tokens, cname='<C>'):
     toks = [cname if t == '<constant>' else t for t in tokens]
@@ -84,8 +145,7 @@ def parse(tokens, cname='<C>'):
             return ('slot', t)
         if t in ('x0', 'x1', 'x2'):
             return ('slot', '?' + t[1:])
-        v = eval(t, {'np': np, 'float': float})
-        return ('lit', float(v))
+        return ('lit', literal_value(t))
 
     tree = rec()
     if pos != len(toks):
@@ -195,21 +255,6 @@ def c_pow(a, b):
     if abs(b) > mpf('1e6'):
         raise Unresolved()
     return _z(mp.power(a, b))
-
-
-def _dom(fn, lo=None, hi=None, lo_open=False, hi_open=False):
-    def g(a):
-        if misnan(a):
-            return NAN
-        if lo is not None and (a < lo or (lo_open and a == lo)):
-            return NAN
-        if hi is not None and (a > hi or (hi_open and a == hi)):
-            return NAN
-        v = fn(a)
-        if isinstance(v, mp.mpc):
-            return NAN
-        return _z(v)
-    return g
 
 
 def _trig(fn):
@@ -359,7 +404,31 @@ def c_eval(tree, env):
         if op == 'acosh' and lv == 1.0:
             return mpf(0)
     args = [c_eval(c, env) for c in tree[1:]]
-    return OPS[op](*args)
+    v = OPS[op](*args)
+    if _NODE_SINK and misinf(v):
+        _NODE_SINK[-1][0] = True
+    return v
+
+
+_NODE_SINK: list = []
+
+
+def lhs_singular(tree, env):
+    """True iff evaluating `tree` at env crosses an internal +-inf (a COMPUTED node,
+    not a written literal): the point lies on the expression's singular manifold.
+
+    The twin of ``_monitor._input_singular``; both instruments implement the same
+    9.8.3(a) boundary and must move together. Exceptions fail False -- toward strict
+    authority."""
+    flag = [False]
+    _NODE_SINK.append(flag)
+    try:
+        c_eval(tree, env)
+    except Exception:
+        return False
+    finally:
+        _NODE_SINK.pop()
+    return flag[0]
 
 
 # ---------------------------------------------------------------- deployed evaluator
@@ -426,7 +495,10 @@ def d_eval(tree, env):
     if op == 'lit':
         return F(tree[1])
     args = [d_eval(c, env) for c in tree[1:]]
-    return F(DEP_OPS[op](*args))
+    # C35: the ignore-everything float semantics this judge needs are SCOPED to the
+    # operator application, never set process-wide at import.
+    with np.errstate(all='ignore'):
+        return F(DEP_OPS[op](*args))
 
 
 # ---------------------------------------------------------------- comparison
@@ -735,8 +807,12 @@ def judge_rule(lhs, rhs, deployed_check=True):
              structurally diverges at a non-gap battery point / on the grid;
       TOLERATED else-if any null-event disagreement exists (documented class);
       CERTIFIED otherwise."""
-    tl = parse(lhs, '<C_L>')
-    tr = parse(rhs, '<C_R>')
+    try:
+        tl = parse(lhs, '<C_L>')
+        tr = parse(rhs, '<C_R>')
+    except UnsupportedToken as ex:
+        # a token outside the numeric grammar: refuse the SHAPE, do not evaluate it
+        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
     sl = slots_of(lhs, '<C_L>')
     sr = slots_of(rhs, '<C_R>')
     slots = dict(sl)
@@ -746,8 +822,14 @@ def judge_rule(lhs, rhs, deployed_check=True):
     if lhs.count('<constant>') > 1:
         # the deployed matcher binds multiple <constant> leaves INDEPENDENTLY; this
         # judge models one shared symbol (diagonal only) -- rather than silently
-        # under-judging the off-diagonal, the shape is refused fail-closed
-        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': 'multiple LHS <constant>'}
+        # under-judging the off-diagonal, the shape is refused fail-closed. The
+        # detail is the SENTINEL the gate sites key their jurisdiction carve-out on
+        # (B7/D36): this return is a statement of non-jurisdiction made BEFORE any
+        # judging (parse has already succeeded, so an unknown token cannot reach it
+        # -- that raises UnsupportedToken above with its own detail), and the
+        # multi-Const family's soundness authority is the Const-channel chain
+        # (constant fitting + the translation count gate + the licence registry).
+        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': CONST_CHANNEL_DETAIL}
 
     # cl battery entries: (builder, f64key). builder() gives the EXACT value at the
     # current dps (symbolic atoms rebuild per rung); f64key indexes the witness maps
@@ -840,7 +922,21 @@ def judge_rule(lhs, rhs, deployed_check=True):
                 point['<C_R>'] = float(cr)
             if v == 'REAL-CHANGE':
                 if all(t == 'real' for t in tags.values()):
-                    a_kills.append(point)
+                    # SINGULAR-INPUT gate (2026-08-11), the twin of the monitor's:
+                    # clause (a)'s authority is REAL points where mathematics answers.
+                    # A real INPUT BINDING can still land on the LHS's own singular
+                    # manifold (x1 = x3 zeroes a denominator); there the LHS value is a
+                    # convention-completion, spelling-dependent under ANY +-inf-valued
+                    # extension, and a bounded compressor above it renders the
+                    # disagreement real-vs-real. Clause (c) territory, like @ext.
+                    try:
+                        singular = lhs_singular(tl, env_mp())
+                    except Exception:
+                        singular = False
+                    if singular:
+                        tolerated.append(('REAL-CHANGE@singular', point, tags))
+                    else:
+                        a_kills.append(point)
                 else:
                     # a real-VALUED disagreement at an extension-INPUT point (+-inf
                     # binding) is convention-mediated (it arose through extended ops:
@@ -890,6 +986,31 @@ def judge_rule(lhs, rhs, deployed_check=True):
                 if res:
                     bad = sum(1 for c in res if c != 'eq') / len(res)
                     meas = max(meas, bad)
+        # D15 (X11's opposite-polarity hole): the DIAGONAL lane -- every wildcard
+        # slot bound to ONE varying value. Independent-slot sampling makes
+        # {_i = _j} a null event, but for a REWRITE RULE the diagonal is an
+        # engine-reachable instance family: with _0 = _1 = log(x0) the collector
+        # refuses the nan-capable t - t -> 0, the pattern (a-b)/(b-a) still
+        # matches, and the engine rewrote a nan-EVERYWHERE expression to -1 while
+        # this scan read the event as null-tolerated EXT. An off-'eq' fraction on
+        # the diagonal is positive measure ON THAT FAMILY, judged by the same bar.
+        if len(names) >= 2:
+            res = []
+            for g in GRID:
+                e = {m: mpf(float(g)) for m in names}
+                if has_cl:
+                    e['<C_L>'] = mpf(CONSTS[0])
+                if has_cr:
+                    wv = witness.get(float(CONSTS[0]) if has_cl else None)
+                    if wv is None:
+                        continue
+                    e['<C_R>'] = +wv
+                try:
+                    res.append(compare(cls_mp(c_eval(tl, e)), cls_mp(c_eval(tr, e))))
+                except Unresolved:
+                    pass
+            if res:
+                meas = max(meas, sum(1 for c in res if c != 'eq') / len(res))
     finally:
         mp.dps = old
 

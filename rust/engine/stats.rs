@@ -39,3 +39,10 @@ pub fn mine_progress() -> (u64, u64) {
 /// (the F0 dormancy lesson: a silent conservative arm hides its own trigger), asserted
 /// loudly in debug builds at the refusal site.
 pub static ACCEPT_UNDECIDED_REFUSALS: AtomicU64 = AtomicU64::new(0);
+
+/// Candidates refused by the registry's POLE entry (refusals.rs, SWEEP row 3): the
+/// candidate changed a DEFINED extended-real value at a constructed exceptional point.
+/// Expected 0 at the (4,3) tiers (the mirror family needs one extra token); a nonzero
+/// count at raised tiers is the registry doing exactly its job -- report it, never
+/// silence it.
+pub static REGISTRY_POLE_REFUSALS: AtomicU64 = AtomicU64::new(0);

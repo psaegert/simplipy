@@ -216,6 +216,24 @@ pub(crate) fn legacy_sugar_engine() -> Engine {
 #[pyclass(name = "Engine", module = "simplipy._core")]
 struct PyEngine {
     inner: engine::Engine,
+    /// C1.9: a digest of the rules AS PUSHED (from_strs' initial set or the last
+    /// `set_rules`), echoed back through [`PyEngine::rules_in_sync`] so the Python
+    /// shim's `__getstate__` can refuse to pickle an engine whose rule list and
+    /// compiled core have silently diverged. The digest is over the PUSHED
+    /// representation (the raw (lhs, rhs) token lists), deliberately not the core's
+    /// translated/registry-filtered internal set -- the question is "does the recipe
+    /// match what was pushed", not "what did the core keep".
+    pushed_rules_digest: u64,
+}
+
+/// C1.9: deterministic digest of a pushed rule list (std SipHash with fixed keys --
+/// `DefaultHasher::new()` -- stable across processes of one build; both storers and
+/// the checker share this one function, so representation drift is impossible).
+fn pushed_rules_digest(rules: &[(Vec<String>, Vec<String>)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    rules.hash(&mut h);
+    h.finish()
 }
 
 /// OFFLINE miner: a resident candidate library (built once per mine), passed back to
@@ -247,9 +265,25 @@ impl PyEngine {
     /// attaches a core here, filesystem-free (there is no pure-Python fallback).
     #[staticmethod]
     fn from_strs(config_yaml: &str, rules_json: &str) -> PyResult<Self> {
+        // threatmodel-3: parse and CAP the rules BEFORE the engine build -- rule
+        // compile walks each side recursively, and this was the one token-taking
+        // FFI entry the H-043 cap never reached: a ~1e5-deep chain in a hostile or
+        // corrupt rules.json aborted the whole process (SIGSEGV, not a Python
+        // exception) at plain `load()`. Same cap, same choke-point doctrine.
+        let rules: Vec<(Vec<String>, Vec<String>)> = serde_json::from_str(rules_json)
+            .map_err(|e| PyValueError::new_err(format!("rules JSON: {e}")))?;
+        for (lhs, rhs) in &rules {
+            ensure_tokens_are_tokens(lhs)?;
+            ensure_tokens_are_tokens(rhs)?;
+        }
         let inner = engine::Engine::from_strs(config_yaml, rules_json)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(Self { inner })
+        // C1.9: digest the initial rules exactly as `set_rules` digests later pushes --
+        // the same (lhs, rhs) list representation the shim serialized into the JSON.
+        Ok(Self {
+            inner,
+            pushed_rules_digest: pushed_rules_digest(&rules),
+        })
     }
 
     /// Simplify through the AC CORE: n-ary add/mul bags with exact rational coefficients,
@@ -363,6 +397,69 @@ impl PyEngine {
     /// minted). Forces the lazy translation.
     fn ac_rules_info(&self, py: Python<'_>) -> PyResult<(usize, usize, usize, usize)> {
         Ok(py.detach(|| self.inner.ac_rules_info()))
+    }
+
+    /// Licence-registry load-consumer audit (C1.20): rules refused at AC load by the
+    /// pole entry (a defined extended-real value changed at a constructed exceptional
+    /// point). 0 for every artifact the mint-side registry produced; nonzero means a
+    /// stale or foreign artifact carried a violation past its own mine. Forces the
+    /// lazy translation.
+    fn ac_registry_dropped(&self, py: Python<'_>) -> PyResult<usize> {
+        Ok(py.detach(|| self.inner.ac_registry_dropped()))
+    }
+
+    /// C36: the per-reason rule-drop census as a dict -- what happened to every
+    /// non-kept rule of the loaded asset, by name.
+    fn ac_rules_drop_census(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<std::collections::HashMap<String, usize>> {
+        Ok(py
+            .detach(|| self.inner.ac_rules_drop_census())
+            .into_iter()
+            .collect())
+    }
+
+    /// The licence registry for one would-be rule (C1.20): the HINT/PROPOSAL channels'
+    /// entry point -- a hint that passes vocabulary/ordering/numeric confirmation is
+    /// still a mint, and every mint channel consults the registry. Returns the refusal
+    /// name (`"const_introduction"` / `"special_absorption"` / `"pole_class_change"`)
+    /// or None. `mark` is the engine's endpoint for the source (the special count is
+    /// taken on the max of both sides, F49's spelling-independence); wildcard-shaped
+    /// tokens (`_i`/`!i`/`?i`) in the patterns are treated as variables alongside
+    /// `var_names`.
+    fn registry_mint_refusal(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        mark: Vec<String>,
+        target: Vec<String>,
+        var_names: Vec<String>,
+    ) -> PyResult<Option<String>> {
+        Ok(py.detach(|| {
+            let mut vars = var_names;
+            for t in source.iter().chain(target.iter()) {
+                let wild = t.len() >= 2
+                    && (t.starts_with('_') || t.starts_with('!') || t.starts_with('?'))
+                    && t[1..].chars().all(|c| c.is_ascii_digit());
+                if wild && !vars.contains(t) {
+                    vars.push(t.clone());
+                }
+            }
+            if let Some(r) = engine::refusals::mint_refusals(&source, &mark, &target, &vars) {
+                return Some(r.name().to_string());
+            }
+            if self.inner.mint_pole_refusal(&source, &target, &vars) {
+                engine::stats::REGISTRY_POLE_REFUSALS
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Some(
+                    engine::refusals::Refusal::PoleClassChange
+                        .name()
+                        .to_string(),
+                );
+            }
+            None
+        }))
     }
 
     /// `is_valid`: is the prefix expression syntactically valid?
@@ -553,6 +650,56 @@ impl PyEngine {
         ))
     }
 
+    /// OFFLINE instrument (F80 E2 design read): the zero-set certificate exactly as
+    /// the odd-negative distribution licence consumes it (`zero_set_null_generic_const`,
+    /// E1 semantics: `<constant>` as a generic parameter in the joint space). Lets the
+    /// design-read scripts ask the LIVE walker+witness about transformed factor
+    /// spellings instead of mirroring the machinery in python. Read-only diagnostics.
+    fn interval_zero_set_null_generic_const(&self, tokens: Vec<String>) -> PyResult<bool> {
+        ensure_tokens_are_tokens(&tokens)?;
+        Ok(crate::interval::zero_set_null_generic_const(
+            &tokens,
+            self.inner.operators_ref(),
+        ))
+    }
+
+    /// OFFLINE instrument (F80 E2 design read): the witness path's entire-analyticity
+    /// gate alone (`entire_analytic_composition`), for splitting gate refusals from
+    /// witness/horizon failures in the design read. Read-only diagnostics.
+    fn interval_entire_analytic_composition(&self, tokens: Vec<String>) -> PyResult<bool> {
+        ensure_tokens_are_tokens(&tokens)?;
+        Ok(crate::interval::entire_analytic_composition_probe(
+            &tokens,
+            self.inner.operators_ref(),
+        ))
+    }
+
+    /// OFFLINE instrument (F80 E3 read): kept negative-exponent bag carriers
+    /// `Pow(Mul[..], n<0)` in the sound simplify endpoint, with per-factor licence
+    /// verdicts (`nz_ae_certified`, `certainly_nonneg`) re-asked under the deployed
+    /// certificates. Rows `(carrier_prefix, exp_token, odd_neg_int, has_div_factor,
+    /// [(factor_prefix, nzae, nonneg), ..])` -- the F80 nesting classification's
+    /// bridge. Read-only diagnostics; nothing feeds the chain.
+    #[pyo3(signature = (tokens, node_budget=48))]
+    fn ac_odd_neg_carriers(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        node_budget: usize,
+    ) -> PyResult<
+        Vec<(
+            Vec<String>,
+            String,
+            bool,
+            bool,
+            Vec<(Vec<String>, bool, bool)>,
+        )>,
+    > {
+        ensure_ac_well_formed(&self.inner, &tokens)?;
+        py.detach(|| self.inner.ac_odd_neg_carriers(&tokens, node_budget))
+            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+    }
+
     /// OFFLINE: EXACT value-class of an expression by interval analysis (`rust/interval.rs`) --
     /// the deterministic replacement for the sampled pole grid / classify probe. Returns one of
     /// FINITE / POSINF / NEGINF / NAN / MIXED / EMPTY, or ERROR if unevaluable.
@@ -622,6 +769,15 @@ impl PyEngine {
     /// instead of only the end-of-tier summary. `(0, 0)` before the first tier starts.
     fn mining_progress(&self) -> (u64, u64) {
         crate::engine::stats::mine_progress()
+    }
+
+    /// Licence-registry observability (C1.20): the process-wide count of candidates
+    /// the pole entry refused, across every mint channel. A raised-tier mine that
+    /// reaches a pole-mirror candidate INCREMENTS this while minting nothing -- the
+    /// falsification tests read it to prove the gate FIRED rather than the candidate
+    /// never being enumerated ("report it, never silence it", `engine::stats`).
+    fn registry_pole_refusals(&self) -> u64 {
+        crate::engine::stats::REGISTRY_POLE_REFUSALS.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// OFFLINE / TEST HOOK: the value set of `tokens` over an explicit per-variable BOX --
@@ -830,18 +986,33 @@ impl PyEngine {
             }
         }
         py.detach(|| {
-            // Mining semantics ride the mark (see engine::miner::mine_one_length): a
-            // DETERMINED source (var-free, Const-free) never accepts a
-            // Const-INTRODUCING target -- the engine folds such a source to its value
-            // and never masks it.
-            let src_determined = !source.iter().any(|t| t == "<constant>")
-                && !source.iter().any(|t| lib.var_names().contains(t));
-            let accept = mark.as_ref().map(|m| {
-                move |t: &[String]| {
-                    if src_determined && t.iter().any(|x| x == "<constant>") {
-                        return false;
-                    }
-                    match self.inner.ac_ordered_below(t, m) {
+            // THE LICENCE REGISTRY RUNS ON EVERY MINT CHANNEL (C1.20, 2026-08-08).
+            // This is the python-facing single-source channel (the hint/proposal
+            // paths of `find_rules` -- the exact channel family F49's seven
+            // absorptions came through), and it used to carry only the determined-
+            // source gate: the special-count licence and the pole entry existed
+            // solely in `mine_one_length`'s closure. A channel gated by "the LLM
+            // channel is off in the acj configs" is a channel gated by coincidence
+            // -- the C1.20 pattern itself -- so the registry now runs here
+            // unconditionally: `mint_refusals` with the caller's mark as the
+            // endpoint (its absence degrades the special count to the raw source
+            // side, never below it), and the pole entry after the ordering, exactly
+            // as in the native path. No-mark calls previously ran UNGATED; they now
+            // carry the registry too (the ordering acceptance still requires a
+            // mark, as before).
+            let empty: Vec<String> = Vec::new();
+            let mark_for_count: &Vec<String> = mark.as_ref().unwrap_or(&empty);
+            let src_ref: &Vec<String> = &source;
+            let mark_opt: Option<&Vec<String>> = mark.as_ref();
+            let inner = &self.inner;
+            let accept = Some(move |t: &[String]| {
+                if engine::refusals::mint_refusals(src_ref, mark_for_count, t, lib.var_names())
+                    .is_some()
+                {
+                    return false;
+                }
+                if let Some(m) = mark_opt {
+                    let below = match inner.ac_ordered_below(t, m) {
                         Some(below) => below,
                         None => {
                             // The mark parses (validated above) and candidates are library
@@ -855,8 +1026,17 @@ impl PyEngine {
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             false
                         }
+                    };
+                    if !below {
+                        return false;
                     }
                 }
+                if inner.mint_pole_refusal(src_ref, t, lib.var_names()) {
+                    engine::stats::REGISTRY_POLE_REFUSALS
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return false;
+                }
+                true
             });
             // Resolved-literal targets additionally need a STRICT mu descent below
             // the mark AND a DIFFERENT literal-skeleton (see engine::miner): under mu
@@ -902,8 +1082,18 @@ impl PyEngine {
             ensure_tokens_are_tokens(lhs)?;
             ensure_tokens_are_tokens(rhs)?;
         }
+        self.pushed_rules_digest = pushed_rules_digest(&rules);
         self.inner.set_rules(rules);
         Ok(())
+    }
+
+    /// C1.9: does `rules` match what was last PUSHED into this core (`from_strs` or
+    /// `set_rules`)? The Python shim's `__getstate__` calls this with the current
+    /// `simplification_rules` and refuses to pickle on a mismatch -- a pickle rebuilds
+    /// the worker from the LIST, so a diverged parent would otherwise silently spawn
+    /// workers running different rules.
+    fn rules_in_sync(&self, rules: Vec<(Vec<String>, Vec<String>)>) -> bool {
+        pushed_rules_digest(&rules) == self.pushed_rules_digest
     }
 
     /// OFFLINE (mine driver): mine ONE source-length IN PARALLEL (rayon, all cores) -- Kruskal-

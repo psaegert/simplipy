@@ -30,6 +30,7 @@ import numpy as np
 import pytest
 import yaml
 
+from simplipy import Mode
 from simplipy.engine import SimpliPyEngine
 from simplipy.verify._monitor import judge_pair
 from conftest import acj_config_path
@@ -71,6 +72,26 @@ class TestPowDistributionLicence:
         # of the sound generic case must not regress
         out = check(eng, 'inv neg x0'.split())
         assert out == ['neg', 'inv', 'x0']
+
+    def test_f83_odd_negative_power_magnitude_guard(self, eng):
+        # F83 (owner-ruled NARROW 2026-08-11): sound mode refuses distributing an
+        # odd negative power over a product with a MAGNITUDE-carrying negative
+        # coefficient (|c| != 1) when a non-Num factor may vanish -- the 508487
+        # conviction: at x0 = 0 the source 1/((-x0)/3) folds the product to the
+        # unsigned zero first, inv(0) = +inf, while the distributed -3/x0 lands on
+        # -inf; through the row's exp/pow that was a finite 0-vs-1 change. The
+        # pure-sign c = -1 case is SS9.8.4's own priced residue and stays licensed
+        # (test_generic_distribution_preserved pins it).
+        out = check(eng, 'pow / neg x0 3 -1'.split())
+        assert out == eng.simplify('inv / neg x0 3'.split()), f'{out}'
+        # arrival spellings of the kept atom converge on one canonical fixpoint
+        assert eng.simplify('pow / * -1 x0 3 -1'.split()) == out
+        # provably nonvanishing factors have no pole: distribution stays licensed
+        lo = check(eng, 'pow * -3 exp x1 -1'.split())
+        assert lo.count('inv') + lo.count('/') + lo.count('<div>') <= 1
+        # LOSSY is licensed for a.e. changes and still distributes the magnitude
+        assert eng.simplify('pow / neg x0 3 -1'.split(), mode=Mode.LOSSY) == \
+            eng.simplify('/ -3 x0'.split(), mode=Mode.LOSSY)
 
     def test_asin_class_factors_are_licensed(self, eng):
         # zero-set-null is the licence, NOT finite-nonzero-a.e.: asin has a fat NaN
@@ -214,12 +235,24 @@ class TestCertificateCompletenessTowers:
         out = check(eng, '/ x8 / x8 - pow x8 2 x8'.split())
         assert out == eng.simplify('- pow x8 2 x8'.split()), f'tower kept: {out}'
 
-    def test_pow5_reciprocal_factor_cancels(self, eng):
-        # row-56488 fragment: x5^5/(-0.0009765625*x5^5*(x3-exp x10)^-5) -- the x5^5
-        # pair must cancel and the dyadic coefficient invert exactly.
-        out = check(eng, '/ pow x5 5 * -0.0009765625 * pow x5 5 pow - x3 exp x10 -5'.split())
-        assert 'x5' not in out, f'x5^5 pair kept: {out}'
-        assert out == eng.simplify('* -1024 pow - x3 exp x10 5'.split()), f'{out}'
+    def test_pow5_reciprocal_pair_kept_sound_cancels_lossy(self, eng):
+        # row-56488 fragment: x5^5/(-0.0009765625*x5^5*(x3-exp x10)^-5). Until F83
+        # the x5^5 pair cancelled here in SOUND mode -- but that cancel is an a.e.
+        # REPAIR: the source is NaN at x5 = 0 (0/0), the cancelled form finite. F83
+        # (owner-ruled NARROW 2026-08-11: an odd negative power refuses to
+        # distribute over a product carrying a magnitude negative coefficient,
+        # |c| != 1, when a factor may vanish; the pure-sign c = -1 residue stays
+        # priced by SS9.8.4) closes the distribution route that exposed the
+        # reciprocal factor, so sound mode keeps the pair, value-identical to the
+        # source everywhere (judge OK via check). The repair is not lost: LOSSY is
+        # licensed for a.e. changes, still distributes, and the cancel fires there.
+        src = '/ pow x5 5 * -0.0009765625 * pow x5 5 pow - x3 exp x10 -5'.split()
+        out = check(eng, src)
+        assert 'x5' in out, f'pair unexpectedly cancelled in sound mode: {out}'
+        lossy = eng.simplify(list(src), mode=Mode.LOSSY)
+        assert 'x5' not in lossy, f'lossy cancel lost: {lossy}'
+        assert lossy == eng.simplify('* -1024 pow - x3 exp x10 5'.split(),
+                                     mode=Mode.LOSSY), f'{lossy}'
 
     def test_fat_nan_acosh_tower_cancels(self, eng):
         # x8/(x8/(x8 - acosh(2 x8))) (row-9624 shape): A has a FAT NaN domain but is

@@ -111,7 +111,7 @@ per-engine cache), which makes `!`-bearing rulesets fast at scale with identical
 verdicts.
 
 These sort gates define the default **`SOUND`** apply-time contract. `Mode.LOSSY`
-(see [Soundness Modes](index.md#soundness-modes)) relaxes them together — every `!`/`$`
+(see [Soundness modes](guides/simplify.md#soundness-modes)) relaxes them together — every `!`/`$`
 placeholder then binds any subtree with the certificate skipped — which recovers extra
 reductions for training-data canonicalization at the cost of equivalence. Mined rules are
 always *certified* under the sound gates regardless; the mode only changes how they bind
@@ -293,14 +293,20 @@ engine.simplification_rules = deduplicate_rules(
 engine.compile_rules()
 ```
 
-For each proposal, `certify_rules` checks validity, skips sources the engine already
-reduces, searches the complete candidate library for a certified-**minimal** target,
-and re-verifies the winning pair on an independent evaluation matrix. If no
-library-sized target exists, an optional per-proposal **hint** is verified instead —
-sound, but marked `'verified'` rather than `'minimal'` since no shorter form was ruled
-out. Targets certified this way may have any length, as long as they are shorter than
-the source. The mining channel above runs this same chain per proposal; the only
-difference is bookkeeping (the mine's matrices and seeds, and the provenance record).
+For each proposal, `certify_rules` checks validity, searches the complete candidate
+library for a certified-**minimal** target (a source the engine already reduces is
+still searched — coverage is decided by the search, with the engine's own result as
+the ordering mark to beat), and re-verifies the winning pair on an independent
+evaluation matrix. If no library-sized target exists, an optional per-proposal
+**hint** is verified instead — sound, but marked `'verified'` rather than `'minimal'`
+since no shorter form was ruled out. Targets certified this way may have any length,
+as long as they are shorter than the source. Finally, every accepted pair is
+re-judged by the independent symbolic verifier (`verify_ruleset`, the
+precision-stability discriminator) and KILLs are dropped — the instrument that
+separates true exact identities from impostors below every usable numeric tolerance,
+such as `tanh(exp(e)) → 1`, false by a stable `1.37e-13`. The mining channel above
+runs this same chain per proposal; the only difference is bookkeeping (the mine's
+matrices and seeds, and the provenance record).
 
 ### How we use this (and what to expect)
 
@@ -413,6 +419,7 @@ simplipy remove acj-4-3          # remove a locally installed asset
 
 The same operations are available from Python (this is also what the engine loader uses under the hood):
 
+<!-- docs-example: skip: cache-mutating -- uninstall/install rewrite the user's shared asset cache; each call is covered by tests/test_asset_manager.py -->
 ```python
 import simplipy as sp
 

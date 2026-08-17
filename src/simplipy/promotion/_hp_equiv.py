@@ -198,6 +198,19 @@ def _wild_to_var(tokens):
     return ['x' + t[1:] if (t.startswith('_') and t[1:].isdigit()) else t for t in tokens]
 
 
+def _restores_dps(fn):
+    """C35: a certifier picks its own working precision; the HOST's mp.dps must
+    survive the call -- a library must not mutate its embedder's numeric state."""
+    def _wrap(*a, **k):
+        old = mp.dps
+        try:
+            return fn(*a, **k)
+        finally:
+            mp.dps = old
+    return _wrap
+
+
+@_restores_dps
 def equiv(lhs, rhs, dps=200, n_rows=48, challenges=6, seed=0, rtol=1e-12, atol=1e-15,
           min_binding=6):
     """Independent generic-equivalence verdict for lhs -> rhs. Returns a dict."""

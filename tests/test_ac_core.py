@@ -480,7 +480,9 @@ class TestContracts:
         # They translate as subsumed (dropped at load, behavior unchanged) until the next
         # re-mine, whose fresh artifact pins 0 again -- which happened at the 2026-08-01
         # mu refresh: the 1942-rule artifact is mint-time clean, 1943/0/0 + 1 twin.
-        assert subsumed == 0, f"refreshed 8-01: mint-time clean artifact; got {subsumed}"
+        # G2 REPUBLISH (2026-08-15): the full-lane re-mine ships and the pin returns
+        # to pristine -- the 6,594-rule artifact is mint-time clean, 6602/0/0 + 8 twins.
+        assert subsumed == 0, f"republished artifact must be mint-time clean; got {subsumed}"
 
 
 class TestMatcherAssignmentCompleteness:
@@ -560,11 +562,14 @@ class TestApiFootguns:
         with pytest.raises(ValueError, match='unknown mode'):
             engine.simplify(['+', 'x0', 'x0'], mode='aggressive')
 
-    def test_mode_int_coerces_and_garbage_raises(self, engine: SimpliPyEngine) -> None:
+    def test_mode_ints_refuse(self, engine: SimpliPyEngine) -> None:
+        # SUPERSEDED PIN (api-1/fmux-mode-1, 2026-08-16): int coercion used to be
+        # blessed here (mode=1 -> SOUND) -- and it is exactly how a config-sourced
+        # mode=3 silently selected LOSSY. Only Mode members and names bind now.
         expr = ['+', 'x0', 'x0']
-        assert engine.simplify(list(expr), mode=1) == engine.simplify(list(expr))
-        with pytest.raises(ValueError):
-            engine.simplify(list(expr), mode=2)  # a reserved, unimplemented rung
+        for bad in (1, 2, 3):
+            with pytest.raises(TypeError):
+                engine.simplify(list(expr), mode=bad)
 
     def test_malformed_tagged_raises(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError):
@@ -827,6 +832,220 @@ class TestLossyReciprocalRejoinProjection:
             assert engine.simplify(list(once), mode=Mode.LOSSY) == once, x
 
 
+class TestF68ConstructionRouteConfluence:
+    """F68 (2026-08-09): two F63 regressions visible only above the 200k fuzz horizon
+    (the 1M base lane was last run 2026-08-05; every ladder since fuzzed 200k rows).
+
+    * KEPT-ZERO MIRROR FREEZE (fuzz rows 392777/647852, sound P7): `mul`'s kept-zero
+      arm assembled `Mul[0, ..]` raw, freezing whichever mirror of a trade-site
+      factor arrived -- the direct build and the parse of its own rendering shipped
+      two states. The arm now routes through `sign_place` with the zero as a
+      sign-eating carrier (`0*X == 0*(-X)` in every case: finite -> 0, inf -> nan,
+      nan -> nan), so both arrivals file the orbit argmin.
+    * REJOIN FUNNEL vs CONSTRUCTION ROUTE (fuzz rows 303116/472156/603382, then
+      59022/194208/308376/593418/713415/790992 under the first-cut fix; lossy P1/P7):
+      the reciprocal join was priced against the WORKING state, but parse rebuilds a
+      joined base's inner bag POSITIVELY (trade sites re-oriented by the orbit or the
+      H-020 Free flip) while the division route keeps sites HIDDEN inside `^-1`
+      wrappers -- two routes, two working states, and the join's strict win could
+      evaporate into a tie on the second pass. The decision is now additionally
+      gated on the candidate's RE-SETTLE IMAGE: a join ships only when it strictly
+      beats what it provably re-parses to, making the shipped spelling a fixpoint
+      by construction.
+    """
+
+    # minimal reproducers, delta-debugged from the frozen fuzz stream
+    SOUND_ROWS = [
+        ('392777', '* - 0.5 acos x4 * pow x1 x0 0'),
+        ('647852', '* * log x3 0 - 2 - + x3 pow x1 x4 x0'),
+    ]
+    LOSSY_ROWS = [
+        ('303116', '/ / x0 - 1 x2 - log x4 x1'),
+        ('472156', '/ / x3 - -1 x4 + pow x3 np.e neg x3'),
+        ('603382', '/ / x2 - asin x2 x3 + - x2 x3 x2'),
+        ('59022-joined', 'inv * asinh - * x1 x4 x4 + rootn x2 3 pow x2 <constant>'),
+    ]
+
+    @pytest.mark.parametrize('row,src', SOUND_ROWS, ids=[r for r, _ in SOUND_ROWS])
+    def test_sound_explicit_roundtrip_is_a_fixpoint(
+            self, engine: SimpliPyEngine, row: str, src: str) -> None:
+        out = engine.simplify(src.split(), form='explicit')
+        assert engine.simplify(list(out), form='explicit') == out, out
+
+    @pytest.mark.parametrize('row,src', LOSSY_ROWS, ids=[r for r, _ in LOSSY_ROWS])
+    def test_lossy_is_a_fixpoint(self, engine: SimpliPyEngine, row: str, src: str) -> None:
+        once = engine.simplify(src.split(), mode=Mode.LOSSY)
+        assert engine.simplify(list(once), mode=Mode.LOSSY) == once, once
+
+    def test_kept_zero_files_one_state_for_both_mirrors(self, engine: SimpliPyEngine) -> None:
+        # 0 * (1/2 - acos x4) and 0 * (acos x4 - 1/2) are value-equal (the zero eats
+        # the sign); pre-F68 each arrival froze its own spelling.
+        a = engine.simplify('* 0 - / 1 2 acos x4'.split(), form='explicit')
+        b = engine.simplify('* 0 - acos x4 / 1 2'.split(), form='explicit')
+        assert a == b, (a, b)
+        nested_a = engine.simplify('* 0 * pow x1 x0 - / 1 2 acos x4'.split(), form='explicit')
+        nested_b = engine.simplify('* 0 * pow x1 x0 - acos x4 / 1 2'.split(), form='explicit')
+        assert nested_a == nested_b, (nested_a, nested_b)
+
+    def test_both_mirror_classes_of_the_distributed_form_are_stable(
+            self, engine: SimpliPyEngine) -> None:
+        # The two pole-distinct arrival spellings settle SEPARATELY (the odd-negative
+        # refusal keeps them apart) and each must be its own lossy fixpoint.
+        for spelling in (
+            '<mul> x0 <div> <add> x1 <sub> log x4 </add> <add> x2 <sub> 1 </add> </mul>',
+            '<mul> x0 <div> <add> log x4 <sub> x1 </add> <add> 1 <sub> x2 </add> </mul>',
+        ):
+            once = engine.simplify(spelling.split(), mode=Mode.LOSSY)
+            assert engine.simplify(list(once), mode=Mode.LOSSY) == once, spelling
+
+
+class TestF72ArrivalInvariantSignDecisions:
+    """F72 (2026-08-09): two arrival-order leaks in the sign machinery, exposed by the
+    extreme lane's first fresh census after F62..F71 (extreme-lane campaign,
+    remine/EXTREME_CENSUS_2026-08-09.md).
+
+    * INTERNING-ORDER TIE-BREAK (P2 rows 829655/866090 -- the census's only NEW kind,
+      a regression of the F62..F71 window itself): sign_place's residual equal-mu tie
+      broke on a comparator that read Leaf/Fun tokens by raw interning id, so on a
+      fully mu-tied orbit (`-1 * (a-b) * (c-d)`; a -1 coefficient rides mu-free) the
+      winning mirror pairing followed whichever literal the input happened to intern
+      first. The tie now breaks on cmp_ex, the one canonical string-based total order.
+    * PARTITION SIGN HOST (P1-idempotence 88 -> 30 rows at 1M): with the rational
+      content partitioned across several Num members (the product overflows i128),
+      the sign rode whichever member carried it on arrival -- `-N * P` and the
+      re-parse of its own rendering hosted it on different partials, two stable
+      states for one value. `mul()` now runs the accumulation on ABSOLUTE values
+      (the partition is a function of the unsigned multiset) with the net sign on
+      the final coefficient, sign_place's slot; `term_join` routes Num-bearing keys
+      through `mul()` instead of raw coefficient-first inserts.
+    """
+
+    B = '- 1e40 5e-324'
+    C = '- 1.7976931348623157e308 np.pi'
+    P = '1/170141183460469231731687303715884105727'
+
+    def test_mirror_decision_is_arrival_invariant(self, engine: SimpliPyEngine) -> None:
+        # the 9-token minimal pair, shrunk from row 829655
+        a = engine.simplify(f'* -1 * {self.B} {self.C}'.split())
+        b = engine.simplify(f'* -1 * {self.C} {self.B}'.split())
+        assert a == b, (a, b)
+
+    P2_ROWS = [
+        ('829655',
+         'rootn - 92233720368547758/7 * - 1e40 5e-324'
+         ' - 1.7976931348623157e308 np.pi -2',
+         'rootn - 92233720368547758/7 * - 1.7976931348623157e308 np.pi'
+         ' - 1e40 5e-324 -2'),
+        ('866090',
+         '* / - x1 170141183460469231731687303715884105728 np.pi'
+         ' * -1 * - x3 3.402823669209385e38 / float("inf") 1e19',
+         '* * * / float("inf") 1e19 - x3 3.402823669209385e38 -1'
+         ' / - x1 170141183460469231731687303715884105728 np.pi'),
+    ]
+
+    @pytest.mark.parametrize('row,src,swapped', P2_ROWS, ids=[r for r, _, _ in P2_ROWS])
+    def test_p2_rows_are_permutation_invariant(
+            self, engine: SimpliPyEngine, row: str, src: str, swapped: str) -> None:
+        assert engine.simplify(src.split()) == engine.simplify(swapped.split())
+        assert (engine.simplify(src.split(), mode=Mode.LOSSY)
+                == engine.simplify(swapped.split(), mode=Mode.LOSSY))
+
+    def test_partition_sign_host_is_route_invariant(self, engine: SimpliPyEngine) -> None:
+        a = engine.simplify(['*', '-0.9999999999999999', self.P])
+        b = engine.simplify(['neg', '*', '0.9999999999999999', self.P])
+        assert a == b, (a, b)
+
+    def test_extracted_sign_reorders_the_partition_bag(self, engine: SimpliPyEngine) -> None:
+        # the 7-token minimal P1 reproducer: the add-bag absorbs the product's minus,
+        # and the now-unsigned bag must file the unsigned canonical member order.
+        src = (f'+ * -0.9999999999999999 {self.P}'
+               ' pow 6.80564733841877e38 5.104235503814077e38')
+        once = engine.simplify(src.split())
+        assert engine.simplify(list(once)) == once, once
+
+    P1_ROWS = [
+        ('10783',
+         'rootn rootn atanh * x3 np.e 2.552117751907039e38 pow'
+         ' + * -0.9999999999999999 1/170141183460469231731687303715884105727'
+         ' pow 6.80564733841877e38 5.104235503814077e38'
+         ' + rootn (-92233720368547758/7) 1e19 x2'),
+        ('27599',
+         '+ log 5.104235503814077e38'
+         ' - / -0.9999999999999999 170141183460469231731687303715884105727 atan 2'),
+        ('33168', '* / -1e40 1.0000000000000002 neg 170141183460469231731687303715884105727'),
+        ('40331',
+         '- + / -0.9999999999999999 1.2379400392853803e27'
+         ' rootn 1/170141183460469231731687303715884105727 9007199254740991'
+         ' pow / x3 x0 (-92233720368547758/7)'),
+    ]
+
+    @pytest.mark.parametrize('row,src', P1_ROWS, ids=[r for r, _ in P1_ROWS])
+    def test_p1_rows_settle_at_pass_one(
+            self, engine: SimpliPyEngine, row: str, src: str) -> None:
+        once = engine.simplify(src.split())
+        assert engine.simplify(list(once)) == once, once
+
+
+class TestF73PartitionAtomRendering:
+    """F73 (2026-08-09, owner-approved plan B): an i128-overflow PARTITION's atoms
+    survive every dialect's round-trip.
+
+    When folding a bag's exact rational content would overflow i128, canon keeps the
+    content SPLIT across several Num members -- and those atom boundaries are
+    load-bearing. The gathering emitters pooled them into shared num/den chains
+    (`* a/3 a/3` printed `/ (a*a) (3*3)` in explicit, `a*a/3/3` in infix, and split
+    den entries into the tagged `<div>` section), so the re-parse pooled the pieces
+    and re-CUT them: one value, a different partition per dialect -- 884 of the
+    extreme lane's 900 post-F72 hard rows, including the 30 P1 "div-section
+    aliasing" rows. Bags with >= 2 Num members now render each rational as a
+    self-contained spelling (one token, a local `/ p q`, or a parenthesized infix
+    atom); the sorted accumulation is cut-stable on preserved atoms, so the
+    round-trip is the identity. Bags with at most one rational member render
+    exactly as before.
+    """
+
+    A3 = '170141183460469231731687303715884105727/3'
+
+    def test_minimal_pair_stable_in_every_dialect(self, engine: SimpliPyEngine) -> None:
+        src = ['*', self.A3, self.A3]
+        t = engine.simplify(list(src))
+        assert engine.simplify(list(t)) == t, t
+        x = engine.simplify(list(src), form='explicit')
+        assert engine.simplify(list(x), form='explicit') == x, x
+        infix = engine.simplify(list(src), form='infix')
+        back = engine._core.parse(infix, True, False)
+        assert engine.simplify(list(back)) == t, infix
+
+    def test_reparse_pool_state_is_its_own_fixpoint(self, engine: SimpliPyEngine) -> None:
+        # `(a*a)/9` pools to the {a/9, a} cut; its rendering must reproduce that cut.
+        a = '170141183460469231731687303715884105727'
+        x = engine.simplify(['/', '*', a, a, '9'], form='explicit')
+        assert engine.simplify(list(x), form='explicit') == x, x
+
+    def test_safe_fraction_rendering_is_unchanged(self, engine: SimpliPyEngine) -> None:
+        # A single rational member is no partition: the pretty forms stay.
+        assert engine.simplify(['*', '1/3', 'x0'], form='explicit') == ['/', 'x0', '3']
+        assert engine.simplify(['*', '1/3', 'x0'], form='infix') == 'x0/3'
+
+    HEALED_ROWS = [
+        ('5215',
+         'rootn - * 170141183460469231731687303715884105727/3'
+         ' 170141183460469231731687303715884105727/3'
+         ' pow rootn + -1e19 2.2250738585072014e-308 1/3 5e-324 5e-324'),
+        ('50380',
+         '* / 1/170141183460469231731687303715884105727 pow -2 x3'
+         ' * - 9007199254740993 np.e rootn 3 -1'),
+    ]
+
+    @pytest.mark.parametrize('row,src', HEALED_ROWS, ids=[r for r, _ in HEALED_ROWS])
+    def test_healed_rows_are_fixpoints_in_both_prefix_dialects(
+            self, engine: SimpliPyEngine, row: str, src: str) -> None:
+        once = engine.simplify(src.split())
+        assert engine.simplify(list(once)) == once, once
+        exp = engine.simplify(src.split(), form='explicit')
+        assert engine.simplify(list(exp), form='explicit') == exp, exp
+
+
 class TestConstSumSignAbsorption:
     """Hardening H-020 (2026-08-04, owner-ruled): a negative coefficient never coexists
     with a Const-bearing Add factor -- the sign folds INTO the sum (Const-carrying terms
@@ -894,9 +1113,14 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
     def test_coefficient_reciprocates_into_joined_base(self, engine: SimpliPyEngine) -> None:
         x = ['*', '0.5', 'inv', '*', 'x4', '+', 'x3', '+', 'tan', 'x0', '/', '1', '3']
         out = engine.simplify(list(x), mode=Mode.LOSSY)
-        # The joined 1/3 addend renders structurally in the tagged form; the
-        # reciprocation-into-the-joined-base behaviour this guards is unchanged.
-        assert out == ['inv', '<mul>', '2', 'x4', '<add>', 'x3', 'tan', 'x0',
+        # RE-PINNED 2026-08-11 (E2, audit F81): the tan-bearing sum now passes the
+        # zero-set licence (denominator clearing), so the kept carrier DISTRIBUTES
+        # and renders in the flat F80 spelling. The guarded behaviour is unchanged:
+        # 0.5 still reciprocates to the `2`, now a member of the flat `<div>`
+        # section. Adjudicated with the rust twin: two-route convergence (the old
+        # spelling re-simplifies to this same state), fixpoint, 0/1000 value
+        # mismatches vs the raw input under the deployed evaluator.
+        assert out == ['<mul>', '1', '<div>', '2', 'x4', '<add>', 'x3', 'tan', 'x0',
                        '<mul>', '1', '<div>', '3', '</mul>',
                        '</add>', '</mul>'], out
         assert engine.simplify(list(out), mode=Mode.LOSSY) == out
@@ -907,3 +1131,37 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
         assert out == ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3',
                        'x4', '</add>', '</mul>'], out
         assert engine.simplify(list(out), mode=Mode.LOSSY) == out
+
+
+class TestC36DropCensus:
+    """C36: six rule-drop reasons collapsed into one counter with no accessor -- a
+    user could not find out what was dropped from their own mine. The census names
+    every non-kept disposition."""
+
+    def test_census_names_each_reason(self) -> None:
+        rules = [
+            (("+", "?0", "0"), ("?0",)),                       # kept
+            (("+", "?0", "0"), ("+", "?0", "0")),              # arithmetic-subsumed (lhs==rhs)
+            (("sin", "?0"), ("+", "?0", "<constant>")),        # const-count-increase
+            (("?0",), ("sin", "?0")),                          # catch-all lhs
+            (("+", "?0", "1"), ("+", "?0", "?1")),             # unbound rhs wildcard
+            (("sin", "sin", "?0"), ("+", "sin", "sin", "?0", "1")),  # not ordered below
+        ]
+        ops = {'+': {'realization': '+', 'alias': [], 'inverse': '-', 'arity': 2,
+                     'precedence': 1, 'commutative': True},
+               'sin': {'realization': 'np.sin', 'alias': [], 'inverse': None,
+                       'arity': 1, 'precedence': 3, 'commutative': False}}
+        engine = SimpliPyEngine(operators=ops, rules=list(rules))
+        census = engine._core.ac_rules_drop_census()
+        assert census.get('const-count-increase') == 1, census
+        assert census.get('catch-all-lhs') == 1, census
+        assert census.get('unbound-rhs-wildcard') == 1, census
+        assert census.get('not-ordered-below', 0) >= 1, census
+        assert census.get('arithmetic-subsumed', 0) >= 1, census
+        kept, subsumed, dropped, _ = engine._core.ac_rules_info()
+        assert dropped == sum(v for k, v in census.items()
+                              if k not in ('arithmetic-subsumed', 'registry-pole-class-change')), \
+            'census must reconcile with the aggregate counter'
+
+    def test_clean_artifact_census_is_empty(self, engine: SimpliPyEngine) -> None:
+        assert engine._core.ac_rules_drop_census() == {}

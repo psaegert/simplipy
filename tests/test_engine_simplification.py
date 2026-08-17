@@ -834,6 +834,66 @@ class TestBangSort:
         assert list(engine.simplify(["-", "inv", "x0", "inv", "x0"])) == ["0"]
 
 
+class TestB2TailArm:
+    """B2 (ruling D9): `finite_ae`'s subdivision arm proved finiteness over
+    `[-R, R]^n` only (R >= 64) and nothing looked outside, so a nan onset past the
+    horizon was invisible: `- !0 !0 -> 0` cancelled `log(1-0.001*x1) - log(1-0.001*x1)`
+    -- nan for EVERY x1 > 1000 -- and `A/A -> 1` collapsed the asin twin. The tail arm
+    conjoins slab evaluations over `{|x_i| > R}` onto the subdivision path (predicate
+    T3: bounded or pole-free), and these pins state the acceptance through the public
+    API. Scope honesty: the arm removes the HORIZON class only -- dependency-loss
+    unsoundness remains, and the D9 wording obligation forbids "finite_ae is sound"."""
+
+    @pytest.fixture(scope='class')
+    def eng(self):
+        return SimpliPyEngine.from_config(acj_config_path())
+
+    def test_tail_nan_no_longer_cancels(self, eng) -> None:
+        assert eng.simplify('log(1 - 0.001*x1) - log(1 - 0.001*x1)') != '0'
+        assert eng.simplify('asin(0.001*x1)/asin(0.001*x1)') != '1'
+
+    def test_in_box_control_and_flagship_unchanged(self, eng) -> None:
+        # onset 1/0.0157 = 63.69 sits INSIDE the box: was refused before, stays refused
+        ctl = 'log(1 - 0.0157*x1) - log(1 - 0.0157*x1)'
+        assert eng.simplify(ctl) == ctl
+        # pole-free unbounded growth is T3's whole point: the flagship binder still fires
+        assert eng.simplify('exp(x0) - exp(x0)') == '0'
+
+
+class TestB5B19OddSignFusion:
+    """B5+B19: one owner for the odd-function literal sign, on every route. Before
+    the hoist, the Add-collector's rebuild fused `-5*sin(2)` to `5*sin(-2)` while
+    `mul()`'s direct assembly did not -- two fixpoints for one value, distinguished
+    only by construction history -- and the collector could not split the sign back
+    out, so `sin(-2) + sin(2)` needed a render/re-parse cycle to cancel. Both routes
+    now price one sign-trade orbit (I4's direction: the literal owns the sign), and
+    the split half lifts the literal sign into the coefficient so the pair cancels
+    at collection. Artifact effect, measured: 400-corpus row-identical; 30 shipped
+    rules subsume at translation (0 dropped), twins 10 -> 8 -- the dated interim
+    pins live in gate_acj.py and ac_translation_stats until the G2 republish."""
+
+    @pytest.fixture(scope='class')
+    def eng(self):
+        return SimpliPyEngine.from_config(acj_config_path())
+
+    def test_routes_agree_on_the_ratified_spelling(self, eng) -> None:
+        via_mul = list(eng.simplify(['*', '-5', 'sin', '2']))
+        via_add = list(eng.simplify(['+', '0', '*', '-5', 'sin', '2']))
+        assert via_mul == via_add == ['<mul>', '5', 'sin', '-2', '</mul>']
+        # I4's other example: the -1 case dissolves the product node entirely.
+        assert list(eng.simplify(['*', '-1', 'sin', '2'])) == ['sin', '-2']
+
+    def test_odd_literal_pair_cancels_in_one_pass(self, eng) -> None:
+        assert eng.simplify('sin(-2) + sin(2)') == '0'
+
+    def test_ground_product_stays_stable(self, eng) -> None:
+        # sin(-2)*sin(2): flipping one literal beside its twin would mint an unmerged
+        # duplicate-base bag; the orbit's collision guard skips such masks, so the
+        # spelling is stable and idempotent.
+        out = eng.simplify('sin(-2)*sin(2)')
+        assert eng.simplify(out) == out
+
+
 class TestMultSort:
     """The `$` fourth sort: `$N` binds a variable leaf freely, or a SUBTREE only when the
     interval engine certifies it defined, finite AND nonzero a.e. (`finite_nonzero_ae` --
@@ -932,3 +992,107 @@ class TestMultSort:
         assert v_mult == 'PROMOTE'
         v_zero, _ = judge_bang_mult(('/', '0', '$0'), ('0',), rng)
         assert v_zero == 'PROMOTE'
+
+
+class TestB9MuGuarantee:
+    """B9: the only length-shaped claim docs/index.md makes is the mu-guarantee --
+    `complexity(simplify(e)) <= complexity(e)`, sound, idempotent -- because the
+    token-count claims it replaced were FALSE: outputs can be longer in explicit
+    tokens (a mu-cheaper literal can take more tokens to spell) and the tagged
+    serialization adds bag delimiters on top. This pins the guarantee the page now
+    states, over the same 400-skeleton corpus the page cites, with an anti-vacuity
+    check that the replaced claim really was false (some output IS token-longer)."""
+
+    def test_mu_non_increase_and_idempotence_hold_400_of_400(self):
+        import json
+        import os
+        corpus_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                   'benchmarks', 'corpus', 'raw_skeletons_nv.json')
+        if not os.path.exists(corpus_path):
+            pytest.skip('reference corpus not present')
+        eng = SimpliPyEngine.from_config(acj_config_path())
+        corpus = json.load(open(corpus_path))
+        assert len(corpus) == 400
+        token_longer = 0
+        for expr in corpus:
+            out = list(eng.simplify(expr, form='explicit'))
+            assert eng.complexity(out) <= eng.complexity(list(expr)), \
+                f'mu INCREASED on {expr}'
+            assert list(eng.simplify(out, form='explicit')) == out, \
+                f'not idempotent on {expr}'
+            if len(out) > len(expr):
+                token_longer += 1
+        # the claim this replaced ("never longer than the input") must remain false,
+        # or the docs' whole caveat paragraph is vacuous
+        assert token_longer > 0, 'no token-longer output: re-measure the docs numbers'
+
+
+class TestApi1ModeParameter:
+    """api-1 + fmux-mode-1: the `mode` parameter accepted things it must refuse and
+    then silently selected DIFFERENT semantics. `simplify(expr, Mode.LOSSY)` bound
+    the Mode POSITIONALLY to node_budget and ran SOUND; `mode=3` and
+    `mode=np.float64(3.0)` silently selected LOSSY -- a caller whose mode came out
+    of a JSON config got the mode that trades soundness for recall. node_budget /
+    mode / form are keyword-only now, and mode accepts only Mode members and their
+    documented string names."""
+
+    @pytest.fixture(scope='class')
+    def eng(self):
+        return SimpliPyEngine.from_config(acj_config_path())
+
+    def test_positional_arguments_are_refused(self, eng) -> None:
+        from simplipy import Mode
+        with pytest.raises(TypeError):
+            eng.simplify(['exp', 'log', '<constant>'], Mode.LOSSY)
+        with pytest.raises(TypeError):
+            eng.simplify(['+', 'x0', 'x0'], 48)
+
+    def test_non_mode_values_are_refused(self, eng) -> None:
+        import numpy as np
+        for bad in (3, np.float64(3.0), 1.0, None, 'aggressive'):
+            with pytest.raises((TypeError, ValueError, KeyError)):
+                eng.simplify(['exp', 'log', '<constant>'], mode=bad)
+
+    def test_mode_members_and_names_still_work(self, eng) -> None:
+        from simplipy import Mode
+        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.LOSSY)) == ['<constant>']
+        assert list(eng.simplify(['exp', 'log', '<constant>'], mode='LOSSY')) == ['<constant>']
+        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.SOUND)) \
+            == ['exp', 'log', '<constant>']
+
+
+class TestConc12CopyOnWrite:
+    """conc-1/conc-2: `compile_rules` pushed into the SAME core object, so a
+    concurrent reader mid-`simplify` raced a half-updated ruleset; and the shim
+    mutators rewrote `simplification_rules` BEFORE the push, so a failed push left
+    the wrapper and the core silently diverged. `compile_rules` is copy-on-write
+    now (build a fresh core, swap the reference atomically -- a reader holding the
+    old core finishes on a consistent set), and the mutators go through
+    build-first-or-unchanged."""
+
+    def test_compile_rules_swaps_a_fresh_core(self) -> None:
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        old_core = engine._core
+        engine.simplification_rules = [(("sin", "sin", "?0"), ("?0",))]
+        engine.compile_rules()
+        assert engine._core is not old_core, 'compile_rules must swap, not mutate in place'
+        # a reader that captured the old core keeps a consistent (old) view
+        assert old_core.ac_rules_info()[0] == 0
+        assert engine._core.ac_rules_info()[0] == 1
+
+    def test_failed_mutator_push_leaves_rules_unchanged(self, monkeypatch) -> None:
+        engine = SimpliPyEngine(
+            operators=_MINIMAL_OPERATORS,
+            rules=[(("sin", "sin", "?0"), ("?0",)),
+                   (("sin", "sin", "sin", "?0"), ("sin", "?0"))])
+        before = list(engine.simplification_rules)
+        core_before = engine._core
+
+        def boom(*a, **k):
+            raise RuntimeError('injected core-build failure')
+        monkeypatch.setattr(SimpliPyEngine, '_build_core', staticmethod(boom))
+        with pytest.raises(RuntimeError, match='injected'):
+            engine.prune_covered_rules()
+        assert engine.simplification_rules == before, \
+            'a failed push must leave the wrapper list unchanged (loud, not diverged)'
+        assert engine._core is core_before

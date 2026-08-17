@@ -55,14 +55,21 @@ ENGINE_GENERATION = 2
 SUPPORTED_ENGINE_GENERATIONS = frozenset({2})
 
 #: The retired hyper-operator vocabulary (deleted from the engine in 0.12.0). The
-#: real odd roots ``pow1_3``/``pow1_5`` are NOT retired -- they remain genuine
-#: generation-2 operators (a different function from the rational power on
-#: negative bases).
+#: real odd roots ``pow1_3``/``pow1_5`` are retired WITH the family: the built-in
+#: ``rootn(x, n)`` is their generation-2 replacement (the same signed-root function),
+#: and the legacy spellings survive only as input-side sugar the parser accepts --
+#: no generation-2 config declares them as operators.
 RETIRED_OPERATOR_TOKENS = frozenset({
     "mult2", "mult3", "mult4", "mult5",
     "div2", "div3", "div4", "div5",
     "pow2", "pow3", "pow4", "pow5",
-    "pow1_2", "pow1_4",
+    "pow1_2", "pow1_3", "pow1_4", "pow1_5",
+    # D12 (owner-ratified 2026-08-16): the identity/reciprocal sugar spellings.
+    # A config declaring them was ACCEPTED while the parser unconditionally
+    # rewrote their tokens away (`remove_pow1`) -- one engine, two answers for
+    # one expression. Refused at load like the rest of the family; the parser
+    # contract (legacy INPUT rewriting) is untouched.
+    "pow1", "pow_1",
 })
 
 #: Published asset names known to be generation 1 -- refused by name BEFORE any

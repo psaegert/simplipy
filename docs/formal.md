@@ -81,11 +81,32 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   token boundary) is an owner-level decision.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
-  all-literal composite that the constructors fold. **An EVEN index is canonical** (corrected
+  all-literal composite that the constructors fold — and the sign placement between a
+  product's coefficient slot and an odd function's literal argument is decided by ONE
+  shared pricing orbit on every construction route (the sign-trade owner; B5+B19,
+  2026-08-15): $\mu$ picks the cheaper spelling, exact ties resolve to the
+  non-negative coefficient. So $-1 \cdot \sin(2)$ files as $\sin(-2)$ (the product
+  node itself dissolves) and $-5 \cdot \sin(2)$ as $5 \cdot \sin(-2)$ — while a
+  magnitude-1 coefficient beside *other* factors keeps the sign, because it rides
+  $\mu$-free where the literal's sign bit would cost ($-1 \cdot x_0 \cdot \sin(2)$ is
+  canonical as spelled). **An EVEN index is canonical** (corrected
   2026-08-07): `rootn(t, 2)` and `rootn(t, 4)` are normal forms, not reducible ones --
   `rootn` is the canonical spelling of a principal even root and $\mu$ ties it with
   $\mathrm{Pow}(t, 1/k)$, so neither orientation is forced. The earlier wording ("or even
   $k$") predates that change and contradicted §5 of this same page.
+
+**Route invariance** [EMPIRICAL, D7 — deliberately *not* claimed as a theorem]:
+$\mathrm{nf}$ is deterministic *per route*, but a state built incrementally through
+the constructors and the same value's parse-route canon are kept equal by shared-owner
+design plus a live instrument, not by proof. The instrument: every pass output must
+round-trip (serialize → parse → canon) onto the *same state*, debug-asserted on every
+`simplify` call and exercised by the full suite and the corpus gates. The one measured
+divergence class (the odd-function literal-sign pair: `mul()`-built vs collector-built
+spellings of one value) was removed in 0.13.0 by the shared sign-trade owner; zero
+specimens remain. A route-invariant `canon()` proof is deferred with a named trigger
+(D7): a *value-changing* divergence at entry canon reopens it immediately; a μ-equal
+divergence reopens the deferred route-invariance work. The assert's failure
+diagnostics classify any future specimen along exactly that line.
 
 $T_{\mathrm{can}} \subset T$ denotes the terms satisfying I1–I4. Serialization
 (`to_prefix`) and parsing (`from_prefix`) connect $T_{\mathrm{can}}$ to token sequences;
@@ -135,9 +156,44 @@ the same function lands in the same flat bag. Probed with a 2,000-case orientati
 (every sum against its negated-flip spelling): zero divergence, at head *and* on the
 pre-hardening build — the "canonical doublet" once conjectured here never existed; the
 defensive infinity handling inside `primitive_sum` was dead on arrival and has been
-removed. Two conventions coexist knowingly: finite mixed-orientation sums may carry a
-$-1$ wrapper (orientation-maximal inner spelling), infinity-bearing sums never do; each
-family has a single representative, so no canonicity is at stake.
+removed. Two conventions coexist knowingly: a finite
+mixed-orientation sum files in whichever of its two orientations prices LOWER under
+$\mu$ — the $-1$ wrapper appears exactly when the wrapped spelling is the cheaper one.
+Ruled 2026-08-08: mirrored subtractions score equal, and a strictly larger expression
+never scores the same as a smaller one through a hidden wrapper surcharge.
+Infinity-bearing sums never wrap; each family has a single representative, so no
+canonicity is at stake.
+
+**Convention (sign placement, three tiers — owner-ruled 2026-08-08, full family).**
+Signs in a product trade legally across ODD carriers — a bare mixed-sign `Add` factor,
+$\mathrm{Pow}(S, n)$ for odd integer $n \ge 3$, $\mathrm{rootn}(S, m)$ for odd
+$m \ge 3$, and the eight odd functions — because $f(-S) = -f(S)$ is total on those
+carriers (negative odd exponents are NOT carriers: the pole trilemma). The
+sign-placement owner (`ac::expr::sign_place`, shared by `mul()`'s final assembly and
+`term_join`'s negative joins so the priced spelling is always the built spelling)
+materializes every reachable placement and keeps the $\mu$-argmin. The decision is
+three-tier:
+
+1. $\mu$ decides where it can (strict argmin over the materialized orbit);
+2. an exact $\mu$ tie at a SIGN-TRADE site goes to the structurally distinguished
+   member — the positive-coefficient / bare spelling ("what you typed survives; a
+   leading minus is only ever minted when strictly cheaper");
+3. the historical sorted-coefficient lexicographic comparison survives ONLY at
+   free-orientation sites (even carriers: even integer powers and the even functions
+   `abs`/`cos`/`cosh`, whose argument orientation is value-free), where neither
+   spelling is structurally distinguished.
+
+The toggle rides the bag's SIGN CARRIER, mirroring the absorption arms: a Const
+carrier dominates (the forall-exists refit eats every sign — coefficient and bare
+infinities normalize positive, orientations are then free), else a bare-infinity
+factor carries the sign itself, else an absorbing sum takes it member-wise, else the
+rational coefficient. Sums under the absorption owners (Const-bearing, absorbing-member,
+or holding a bare-infinity term) are never trade sites — absorption owns their signs.
+At the one boundary where a licensed a.e. rewrite meets a refused carrier —
+distributing $\mathrm{Pow}(\mathrm{Mul}, n)$ for negative odd $n$ — a negative bag
+coefficient pre-folds into the first trade site before distribution, so the
+pole-different spellings $(S)^{-n}$ and $-(-S)^{-n}$ are chosen entry-independently
+and never conflated.
 
 **Convention (factored vs. flat scaling, finite and infinite alike).** Content extraction
 is deliberately restricted to the unanimity case (it must never lengthen a term), so a
@@ -165,9 +221,9 @@ applies seven load-time gates:
 | G6 | RHS wildcards not bound by the **canonical** LHS | an unbound wildcard would panic substitution at rewrite time; canon can erase LHS wildcards, so the raw check is insufficient |
 | G7 | $\mathrm{nf}(\rho) \not<_o \mathrm{nf}(\ell)$ (disoriented patterns) | keep every loaded rule aligned with the ordering the pass fires under (§5) |
 
-All seven are counted; the shipped asset (`acj-4-3`, 6,661 raw rules, mined under
+All seven are counted; the shipped asset (`acj-4-3`, 6,671 raw rules, mined under
 $\mu$ itself on the deployed literal alphabet) loses **zero** rules
-and gains ten orientation twins, keeping 6,671
+and gains ten orientation twins, keeping 6,681
 [EMPIRICAL — re-verified on every load, since translation runs the gates each time; a
 mine whose acceptance rides the serve ordering produces an artifact the serve ordering
 fully admits].
@@ -215,15 +271,27 @@ never predicted from the pattern (see §5 for why prediction is impossible).
 $$ a <_o b \iff \big(\mu(a), a\big) <_{\mathrm{lex}} \big(\mu(b), b\big) $$
 
 where $\mu$ is the **unified simplicity measure** (`ac::expr::complexity` — description
-length under an exactness-respecting cost model, in exact integer units of 1/8 of a
-grammar symbol): a structural node (bag, `Pow`, function head), a variable leaf, and a
-special constant ($\pi$, $e$, the infinities, NaN) each cost $8$; a numeric literal
-$p/q$ costs $\max(2, \mathrm{bits}(|p|) + \mathrm{bits}(q) - 1)$ **on its exact
-value**, spelling-free; a magnitude-$1$ coefficient or rational-exponent slot is a bare
-sign and costs $0$, every other such slot pays its literal cost; a numeric literal whose
+length under an exactness-respecting cost model). The integer carrier is the
+**milli-bit** ($\tfrac{1}{1000}$ bit; §10.10, 2026-08-06): a literal's cost is the real
+quantity $L(n) = \log_2(1+|n|)$ rather than a bit count — bit lengths quantise exactly
+where the ordering must discriminate — while the ordering stays integer, no float ever
+entering a comparison. In bits: a structural node (bag, `Pow`, function head), a
+variable leaf, and a special constant ($\pi$, $e$, the infinities, NaN) each cost $8$;
+a numeric literal $p/q$ costs $\max(2,\; L(|p|) + [q \neq 1]\,L(q) + [p < 0])$ **on
+its exact value**, spelling-free — an integer's denominator is implicit and free, a
+genuine fraction pays both components, a negative literal pays one **sign bit** (the
+former blanket "sign is free" doctrine is revoked for literals: $\mu$ must tell a
+number from its negation), and the two-bit floor covers $0, \pm 1, 2$; a magnitude-$1$
+coefficient or rational-exponent slot is a bare sign and costs $0$, every other such
+slot pays its literal cost; a numeric literal whose
 exact rational exceeds `i128` lives as a token string and pays a description length
-parsed from its canonical print (`mu_numeric_str`); and the free placeholder
-$\diamond$ costs $c_{\mathrm{free}} = 128$, the priciest atom. Final ties are broken
+parsed from its canonical print (`mu_numeric_str`, monotone in significand and scale,
+with the astronomic knee at scale $2^{32}$ keeping the codomain inside `u64`); and the
+free placeholder $\diamond$ costs $c_{\mathrm{free}} = 1133$ — **derived, not
+chosen** (§10.10(5)): the supremum of $\mu$ over f64 round-trip spellings
+($1131.931$ bits, attained at $5.5605781537525765 \times 10^{-308}$) plus the sign
+bit, ceiled — the priciest atom by construction (the former asserted floor of $128$
+was beaten $8\times$ by $\mu(10^{308}) = 1024.154$). Final ties are broken
 by the canonical total order `cmp_ex` (rank, then structural lexicographic comparison,
 with *exact* rational comparison — the 256-bit `cmp_exact`). The former middle
 literal-size tier is **absorbed**: $\mu$'s literal component carries its content, so
@@ -238,8 +306,9 @@ the ordering is a pair, not a triple.
 
 **Lemma L5 (finite level sets)** [THEOREM]. For every $\mu_0$, only finitely many
 canonical terms $t$ have $\mu(t) = \mu_0$. *Proof.* $\mu$ bounds the node count
-(every node and leaf contributes $\geq 2$ except at most one zero-cost coefficient slot
-per bag and one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \leq 2\mu_0$),
+(every node and leaf contributes $\geq 2$ bits except at most one zero-cost coefficient
+slot per bag and one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \leq \mu_0$
+in bits — the carrier being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
 vocabulary are finite; $\mu_0$ bounds every in-range literal's bit size; and a
 beyond-`i128` numeric-string leaf pays a cost that grows with its digit count

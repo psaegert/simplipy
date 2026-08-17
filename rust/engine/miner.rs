@@ -150,6 +150,18 @@ impl Engine {
         )
     }
 
+    /// The registry's pole entry with the engine's own operator table -- the FFI
+    /// channel's entry point (`find_rule_lib`'s accept closure); the native mine
+    /// path calls `refusals::pole_refusal` directly with the same table.
+    pub fn mint_pole_refusal(
+        &self,
+        src: &[String],
+        target: &[String],
+        var_names: &[String],
+    ) -> bool {
+        super::refusals::pole_refusal(src, target, &self.operators, var_names).is_some()
+    }
+
     /// OFFLINE (mine driver): replace the engine's rules (recompile). Used by the mine driver
     /// to GROW the Kruskal-prune rule set length-by-length (the Python outer loop dedups/canonicalizes
     /// the found rules into wildcard patterns, then sets them here before the next length's inner loop).
@@ -276,62 +288,51 @@ impl Engine {
                         // complexity canonicalization rules mint iff they fire and a
                         // longer-but-lower spelling is still reachable.
                         //
-                        // STAGE-1 CONST-ABSORPTION LICENCE, mint-side twin (owner-ratified
-                        // 2026-08-01, mask x special stays unabsorbed; a future theorem of
-                        // the unified measure, design/UNIFIED_SIMPLICITY_MEASURE.md §5): a
-                        // special may never vanish INTO a fitted constant, so for a
-                        // special-bearing source a `<constant>`-bearing target must
-                        // preserve every special occurrence. This closes the rules-channel
-                        // resurrection of the engine-side licence: without it the scan
-                        // minted `+ <constant> np.pi -> <constant>` (plain candidate,
-                        // Const-count non-increasing, complexity strictly below the
-                        // no-longer-collapsing mark) and the artifact would absorb what
-                        // the constructor now refuses. Special-count-preserving targets
-                        // and Const-free exact hits (`sin np.pi -> 0`) are untouched.
-                        let n_special = |ts: &[String]| {
-                            ts.iter().filter(|t| *t == "np.pi" || *t == "np.e").count()
-                        };
-                        // COUNTED ON THE STATE THE MASK ACTUALLY MEETS (2026-08-07), not on
-                        // the source's SPELLING. `exp(1) -> E` in the constructor gave `e` a
-                        // second spelling, and `* <constant> exp 1` and `/ <constant> exp (-1)`
-                        // carry no `np.e` token while canonicalizing to
-                        // `<mul> np.e <constant> </mul>`. The raw scan passed them and the
-                        // re-mine minted SEVEN absorptions this very licence forbids -- the
-                        // rules channel resurrecting the engine-side refusal a second time,
-                        // through a spelling rather than through a channel.
+                        // STAGE-1 CONST-ABSORPTION LICENCE, mint-side twin. Doctrine as
+                        // AMENDED 2026-08-08 (contract 10.11, supersedes the 2026-08-01
+                        // blanket refusal): a special absorbs into an EXISTING `<constant>`
+                        // through the bijective constructor sites (Add-shift / Mul-scale;
+                        // `C + pi -> C'` folds in the engine now), so such sources reach an
+                        // ATOMIC endpoint and never arrive here. What this licence still
+                        // refuses is the NON-absorbable remainder: a `<constant>`-bearing
+                        // target eating a special the constructor's site list would not
+                        // (introduced masks -- `* np.pi _0 -> * <constant> _0`; and
+                        // non-bijective positions -- `pow np.pi <constant> -> <constant>`,
+                        // whose value set is (0,inf), not "anything"). Historical incident
+                        // this closed: the scan minted `+ <constant> np.pi -> <constant>`
+                        // (2026-08-01) while the then-doctrine refused it engine-side --
+                        // the rules channel resurrecting a constructor refusal, C1.20's
+                        // first recorded instance. Special-count-preserving targets and
+                        // Const-free exact hits (`sin np.pi -> 0`) are untouched.
+                        // THE LICENCE REGISTRY (C1.20's dual, 2026-08-08): the two
+                        // syntactic licences that lived inline here -- the determined-
+                        // source Const-introduction gate and the special-absorption
+                        // count (its full incident history: tokens -> spellings ->
+                        // `ac_out` endpoints, F49/F55) -- are RELOCATED verbatim into
+                        // `engine::refusals::mint_refusals` (single home, shared with
+                        // the AC load consumer). Behavior-identical by construction;
+                        // the relocation's falsifier is the triple re-mine's byte
+                        // identity. The endpoint-count subtlety (max of raw source and
+                        // `ac_out` counts, spelling independence) lives with the
+                        // registry now -- see refusals.rs.
                         //
-                        // `ac_out` is the engine's own endpoint for this source, i.e. exactly
-                        // the state a bare `<constant>` target would replace, so counting
-                        // there is spelling-INDEPENDENT: it closes the channel for every
-                        // spelling of a special the canon may grow, not for the ones we
-                        // happened to enumerate. The raw count stays in the max because a
-                        // rule fires on the SOURCE too, and a special the engine's own pass
-                        // removes must still not be absorbed by the target.
-                        let src_specials = n_special(src).max(n_special(&ac_out));
-                        // DETERMINED sources (var-free, Const-free) never accept a
-                        // Const-INTRODUCING target: such a source is a single value
-                        // the engine folds for itself (or a special-exact state whose
-                        // collapses mint as exact alphabet literals) -- `<constant>`
-                        // for it is vacuous abstraction the engine's own semantics
-                        // refuse (fold materializes values; it never masks them).
-                        // Mirrors the Finite-arm contract gate in worker.rs; without
-                        // this the candidate scan's bare-`<constant>` const-fit
-                        // re-mints what that arm no longer answers. Variable-bearing
-                        // abstraction (`* asin (-1) _0 -> * <constant> _0`, the
-                        // artifact-only translation-dropped family) is untouched.
-                        let src_determined = !src.iter().any(|x| x == "<constant>")
-                            && !src.iter().any(|x| lib.var_names().contains(x));
+                        // The POLE entry (SWEEP row 3) runs LAST, only on candidates
+                        // that pass the cheap licences AND the ordering acceptance:
+                        // it constructs the exceptional points of both sides (affine
+                        // denominators, exact rational roots) and refuses a candidate
+                        // that changes a DEFINED extended-real value there under the
+                        // contract evaluator. This is the gate that keeps the a.e.
+                        // pole-mirror family (`neg inv - 1 _0 -> inv - _0 1`, verified
+                        // mu-descending and otherwise gate-invisible) out of the
+                        // artifact when the tiers rise past (4,3). A refused candidate
+                        // yields to the next one, exactly like every other licence.
                         let accept = |t: &[String]| {
-                            if src_determined && t.iter().any(|x| x == "<constant>") {
-                                return false;
-                            }
-                            if src_specials > 0
-                                && t.iter().any(|x| x == "<constant>")
-                                && n_special(t) < src_specials
+                            if super::refusals::mint_refusals(src, &ac_out, t, lib.var_names())
+                                .is_some()
                             {
                                 return false;
                             }
-                            match self.ac_ordered_below(t, &ac_out) {
+                            let below = match self.ac_ordered_below(t, &ac_out) {
                                 Some(below) => below,
                                 None => {
                                     // Candidates and the engine's own result always parse
@@ -347,7 +348,23 @@ impl Engine {
                                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     false
                                 }
+                            };
+                            if !below {
+                                return false;
                             }
+                            if super::refusals::pole_refusal(
+                                src,
+                                t,
+                                &self.operators,
+                                lib.var_names(),
+                            )
+                            .is_some()
+                            {
+                                super::stats::REGISTRY_POLE_REFUSALS
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                return false;
+                            }
+                            true
                         };
                         // Literal-RESOLVED targets must beat the mark in STRICT mu
                         // (fail closed on an unmeasurable side): resolution recovers

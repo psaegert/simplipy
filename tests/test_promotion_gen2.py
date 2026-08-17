@@ -115,3 +115,57 @@ class TestPowConventionStillHolds:
         assert abs(ev(['sin', 'np.pi'])) < mpf('1e-50')
         assert abs(float(ev(['log', 'np.e'])) - 1.0) < 1e-15
         assert abs(float(ev(['*', '2.0', 'x0'], {'x0': mpf(3)})) - 6.0) < 1e-15
+
+
+class TestC23cLoud:
+    """C23c-loud (the G2 gate, audit N3): `solve_witness`'s scipy import failure
+    silently degraded the mine -- a certifiable rule read NO-WITNESS instead of
+    PROMOTE (`+ <constant> * <constant> _0 -> * <constant> + _0 <constant>` flips
+    verdict on scipy's presence alone) and the artifact changed with no record and
+    no error. The mine's numeric stack is part of the artifact's identity
+    (C23c-prov records it); a missing member must be a hard failure."""
+
+    def test_scipy_absence_is_fatal_not_silent(self, monkeypatch):
+        import sys
+        import numpy as np
+        from simplipy.promotion import _const_bearing as cb
+        # make `from scipy.optimize import least_squares` fail inside the call
+        monkeypatch.setitem(sys.modules, 'scipy', None)
+        monkeypatch.setitem(sys.modules, 'scipy.optimize', None)
+        with pytest.raises(RuntimeError, match='scipy'):
+            cb.solve_witness(
+                ['<constant>'], ['<constant>'], [], 1,
+                np.ones(16), np.zeros((16, 1)), np.random.default_rng(0))
+
+
+class TestC35NoHostStateMutation:
+    """C35 (G4 prerequisite): a library must not mutate its embedder's numeric state.
+    `import simplipy.verify` used to call `np.seterr(all='ignore')` process-wide, and
+    the promotion certifiers set `mp.dps` without restoring -- an embedder's numpy
+    error handling and mpmath precision silently changed because a rule was judged."""
+
+    def test_import_leaves_host_numeric_state_alone(self):
+        import subprocess
+        import sys
+        code = (
+            "import numpy as np\n"
+            "from mpmath import mp\n"
+            "err0, dps0 = np.geterr(), mp.dps\n"
+            "import simplipy.verify\n"
+            "import simplipy.promotion\n"
+            "assert np.geterr() == err0, f'np.seterr leaked: {np.geterr()} != {err0}'\n"
+            "assert mp.dps == dps0, f'mp.dps leaked: {mp.dps} != {dps0}'\n"
+            "print('CLEAN')\n")
+        r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+        assert r.returncode == 0 and 'CLEAN' in r.stdout, r.stdout + r.stderr
+
+    def test_judging_restores_host_state(self):
+        import numpy as np
+        from mpmath import mp
+        from simplipy.verify import verify_rule
+        from simplipy.promotion._hp_equiv import equiv
+        err0, dps0 = np.geterr(), mp.dps
+        verify_rule(['+', 'x0', '0'], ['x0'])
+        equiv(['+', 'x0', '0'], ['x0'])
+        assert np.geterr() == err0, np.geterr()
+        assert mp.dps == dps0, mp.dps

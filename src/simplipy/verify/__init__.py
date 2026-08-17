@@ -21,6 +21,19 @@ import json
 
 from . import _contract, _gate, _monitor
 
+#: Every bucket that is NOT sound to ship: all verdicts but CERTIFIED / TOLERATED.
+#: THE single source of truth for "fatal" (audit B7) -- consumed by this module's
+#: ``is_clean``, by the mining gate in ``engine._finalize`` and by the
+#: ``certify_rules`` gate, so the three sites cannot drift apart. A rule the judge
+#: cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) is exactly as
+#: unshippable as a KILL: the second authority never passed it.
+FATAL_BUCKETS = ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
+                 'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT')
+
+#: The one exemption from the fatal drop (B7/D36): the judge's own non-jurisdiction
+#: sentinel for the multi-`<constant>` family (see `_contract.CONST_CHANNEL_DETAIL`).
+CONST_CHANNEL_DETAIL = _contract.CONST_CHANNEL_DETAIL
+
 
 def _load(rules: list | str) -> list:
     """Accept a rule list ([lhs, rhs] pairs) or a path to a JSON rule file."""
@@ -59,9 +72,7 @@ def verify_ruleset(rules: list | str, *, report_path: str | None = None,
                        judge_timeout_s=judge_timeout_s,
                        announce_report=report_path is not None)
     report = json.load(open(tmp))
-    dirty = any(report['buckets'].get(k) for k in
-                ('KILL', 'ENGINE-MISALIGN', 'NO-WITNESS', 'UNRESOLVED-COVERAGE',
-                 'UNSUPPORTED-SHAPE', 'JUDGE-TIMEOUT'))
+    dirty = any(report['buckets'].get(k) for k in FATAL_BUCKETS)
     report['is_clean'] = not dirty
     report['exit_code'] = code
     return report
@@ -92,4 +103,5 @@ def selftest() -> bool:
     return _gate.selftest() and _contract.selftest(verbose=False)
 
 
-__all__ = ['verify_rule', 'verify_ruleset', 'monitor_ruleset', 'selftest']
+__all__ = ['CONST_CHANNEL_DETAIL', 'FATAL_BUCKETS', 'verify_rule', 'verify_ruleset',
+           'monitor_ruleset', 'selftest']

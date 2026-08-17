@@ -124,8 +124,16 @@ def solve_witness(lhs_b, rhs, ws, nt, y_src, V, rng):
     """Bounded least-squares fallback: fit c_t so T reproduces y_src on the finite draws."""
     try:
         from scipy.optimize import least_squares
-    except ImportError:
-        return []
+    except ImportError as ex:
+        # C23c-loud (audit N3, G2 gate): this `return []` used to be SILENT, and
+        # scipy's absence then changed the mined artifact with no record and no
+        # error -- a certifiable rule read NO-WITNESS instead of PROMOTE. The
+        # mine's numeric stack is part of the artifact's identity (the sidecar's
+        # `environment` block records it, R5/C23c-prov); a missing member is a
+        # hard failure, never a silent degradation.
+        raise RuntimeError(
+            'simplipy.promotion requires scipy for witness solving; refusing to '
+            'silently mine a different artifact without it (C23c-loud)') from ex
     defined = ~np.isnan(y_src) & np.isfinite(y_src)
     if defined.sum() < max(4, nt + 2):
         return []

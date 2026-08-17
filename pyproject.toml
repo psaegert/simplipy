@@ -5,8 +5,8 @@ authors = [
     {name = "Paul Saegert"},
     ]
 readme = "README.md"
-requires-python = ">=3.11"
-version = "0.12.0"
+requires-python = ">=3.12"
+version = "0.13.0"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 keywords = ["symbolic-regression", "simplification", "expression", "prefix", "rewriting", "rust"]
@@ -18,7 +18,6 @@ classifiers = [
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
@@ -29,15 +28,28 @@ classifiers = [
 # the OFFLINE phase (rule mining) stays pure Python. numpy/mpmath/scipy are offline-only at
 # runtime (mining + sort promotion), huggingface_hub powers asset resolution, platformdirs
 # resolves the asset cache directory.
+#
+# FLOORS, and what they are NOT. Every bound below is a floor we have reason to state; none
+# is a tested minimum, and there are deliberately no ceilings (a ceiling that is not measured
+# ages into a false constraint). The numpy floor is the load-bearing one: NEP 50 (numpy 2.0)
+# changed scalar promotion, and the deployed evaluation path's f64 semantics are what the
+# equivalence contract is stated against -- below 2.0 the promotion rules differ.
+#
+# PYTHON >= 3.12 (D35, owner-resolved 2026-08-16): numpy 2.5.2 and scipy 1.18.0 both
+# declare >=3.12, so a 3.11 environment silently resolved an OLDER numeric stack than
+# every developer and every other CI job -- a real difference in the f64 algebra the
+# equivalence contract is stated against. The floor now matches the dependency
+# reality. Standing policy (owner, same ruling): prefer NEW BUT STABLE versions;
+# floors stay reasoned floors, no unmeasured ceilings.
 dependencies = [
-    "filelock",
-    "huggingface_hub",
-    "mpmath",
-    "numpy",
-    "platformdirs",
-    "pyyaml",
-    "scipy",
-    "tqdm",
+    "filelock>=3.12",
+    "huggingface_hub>=0.30",
+    "mpmath>=1.3",
+    "numpy>=2.0",
+    "platformdirs>=4.0",
+    "pyyaml>=6.0",
+    "scipy>=1.11",
+    "tqdm>=4.65",
 ]
 
 [project.urls]
@@ -56,11 +68,8 @@ dev = [
     "pytest-cov",
     "mypy",
     "flake8",
-    "pygount",
     "types-tqdm",
-    "types-toml",
     "types-PyYAML",
-    "radon",
     "mkdocs",
     "mkdocs-material",
     "mkdocs-autorefs",
@@ -85,31 +94,41 @@ module-name = "simplipy._core"
 features = ["pyo3/extension-module"]
 # The sdist ships what building and testing the package needs. Of the tracked mining
 # workspace (remine/) that is exactly the acj artifact family the test suites load
-# (config.yaml, mine.yaml, rules.json and its provenance sidecar); the mining and
-# verification harness scripts, their result records, the campaign documents, the
-# specification, the mine logs, and superseded interim artifacts all stay out.
+# (config.yaml, mine.yaml, rules.json and its provenance sidecar); the harness scripts,
+# their result records, the campaign documents, the specification, the mine logs and
+# every superseded interim artifact stay out. A PyPI upload is irrevocable and mirrored,
+# so this list is a disclosure boundary, not a packaging preference.
 #
-# The prose-file exclusions are NOT cosmetic. Without them the sdist carried the
-# campaign register, the release-train TODO, four internal audits and the normative
-# contract -- 30 remine/ files, verified by building the sdist and listing it. A PyPI
-# upload is irrevocable and mirrored, so this list is a disclosure boundary, not a
-# packaging preference. VERIFY BY BUILDING, never by reading the globs:
-#     python -m maturin sdist -o dist/ && tar tzf dist/*.tar.gz | grep remine/
+# THE BOUNDARY IS ASSERTED BY A TEST, NOT BY THESE GLOBS (audit R4/B15). The old list
+# denied by extension at a single level (`remine/*.py`, `remine/*.json`) while allowing
+# recursion elsewhere, so every other extension and every deeper directory fell through:
+# measured 2026-08-15, the sdist carried 491 remine/ entries at 19.2 MB (439 of them the
+# private pre-release audit corpus). A deny-everything/allow-twelve list cannot regress
+# that way -- a new file under remine/ is out by default, forever.
+#
+# The allow half is spelled as gitignore-style `!` NEGATIONS inside exclude, not as an
+# `include` list: measured 2026-08-15, `include` does NOT override `exclude` in maturin
+# (all twelve files vanished from the build). The twelve are the acj artifact family the
+# test suites load -- three cells x {config, mine spec, rules, provenance sidecar}. The
+# sdist-guard job in publish.yml asserts BOTH halves on every build: no remine path
+# outside this list, and none of the twelve missing.
 exclude = [
     "design/**",
-    "remine/d9/**",
-    "remine/nv-2-1/**",
-    "remine/nv-3-2/**",
-    "remine/nv-4-3/**",
-    "remine/2-1/**",
-    "remine/3-2/**",
-    "remine/4-3/**",
-    "remine/*.py",
-    "remine/*.json",
-    "remine/**/*.md",
-    "remine/**/*.log",
-    "remine/spec/**",
+    "remine/**",
+    "!remine/acj-2-1/config.yaml",
+    "!remine/acj-2-1/mine.yaml",
+    "!remine/acj-2-1/rules.json",
+    "!remine/acj-2-1/rules.json.provenance.json",
+    "!remine/acj-3-2/config.yaml",
+    "!remine/acj-3-2/mine.yaml",
+    "!remine/acj-3-2/rules.json",
+    "!remine/acj-3-2/rules.json.provenance.json",
+    "!remine/acj-4-3/config.yaml",
+    "!remine/acj-4-3/mine.yaml",
+    "!remine/acj-4-3/rules.json",
+    "!remine/acj-4-3/rules.json.provenance.json",
 ]
+
 
 
 [tool.flake8]
@@ -154,5 +173,4 @@ ignore_errors = true
 [tool.pytest.ini_options]
 markers = [
     "integration: marks tests as integration tests",
-    "invariance: engine-invariance property gates (commutative operand order). Some are known-failing xfail(strict=True) gates that document a defect; the accompanying ratchet tests are green and fire on regression. Run alone with `pytest -m invariance -rxX`.",
 ]

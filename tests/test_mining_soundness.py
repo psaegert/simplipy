@@ -25,6 +25,7 @@ import pytest
 import yaml
 
 from simplipy import SimpliPyEngine
+from simplipy.mining import RuleMiner
 from simplipy.utils import compositions, count_expressions, enumerate_expressions, sample_expression
 
 # Arithmetic + the transcendental operators needed to express the known defect cases
@@ -56,7 +57,7 @@ def engine(tmp_path) -> SimpliPyEngine:
 
 @pytest.fixture()
 def mining_x(engine):
-    X = engine._mining_sample_x(1024, 1, np.random.default_rng(0))
+    X = RuleMiner(engine)._mining_sample_x(1024, 1, np.random.default_rng(0))
     return X.flatten(order='C').tolist(), X.shape[0]
 
 
@@ -251,12 +252,12 @@ class TestMiningSampleX:
     """The mine's evaluation matrix: seeded, heavy-tailed, corner-bearing."""
 
     def test_deterministic(self, engine) -> None:
-        a = engine._mining_sample_x(256, 3, np.random.default_rng(5))
-        b = engine._mining_sample_x(256, 3, np.random.default_rng(5))
+        a = RuleMiner(engine)._mining_sample_x(256, 3, np.random.default_rng(5))
+        b = RuleMiner(engine)._mining_sample_x(256, 3, np.random.default_rng(5))
         assert np.array_equal(a, b)
 
     def test_covers_corners_and_tails(self, engine) -> None:
-        X = engine._mining_sample_x(4096, 2, np.random.default_rng(0))
+        X = RuleMiner(engine)._mining_sample_x(4096, 2, np.random.default_rng(0))
         assert X.shape == (4096, 2)
         assert (X == 0.0).any(), "exact zero corner missing"
         # tail upper magnitude is ~1e3 (capped from 1e6 so the constant-fit stays well
@@ -363,15 +364,22 @@ class TestEndToEndMineGate:
         # hardcoding either breaks the other.
         env_base = {**os.environ,
                     "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
-                    "OMP_NUM_THREADS": "1", "RAYON_NUM_THREADS": "2"}
+                    "OMP_NUM_THREADS": "1"}
+        # missed-007: docs/rules.md promises reproducibility independent of process,
+        # hash randomization AND thread count -- this test used to pin
+        # RAYON_NUM_THREADS=2 in BOTH arms, leaving the thread-count leg of the
+        # published promise untested. The arms now vary it (1 vs 4) alongside the
+        # hash seed, so one comparison covers all three legs.
         outs = []
-        for hashseed in ("0", "12345"):
+        for hashseed, rayon in (("0", "1"), ("12345", "4")):
             res = subprocess.run([sys.executable, "-c", prog],
-                                 env={**env_base, "PYTHONHASHSEED": hashseed},
+                                 env={**env_base, "PYTHONHASHSEED": hashseed,
+                                      "RAYON_NUM_THREADS": rayon},
                                  capture_output=True, text=True, cwd=os.getcwd())
             assert res.returncode == 0, res.stderr
             outs.append(res.stdout.strip())
-        assert outs[0] == outs[1], "ruleset differs across PYTHONHASHSEED -> non-reproducible"
+        assert outs[0] == outs[1], \
+            "ruleset differs across PYTHONHASHSEED/RAYON_NUM_THREADS -> non-reproducible"
         assert outs[0] != "[]"
 
 
@@ -637,6 +645,35 @@ class TestProvenance:
         assert set(undecided) == {"horizon", "node_budget", "unanalyzable"}
         assert all(isinstance(v, int) and v >= 0 for v in undecided.values())
 
+    def test_sidecar_records_the_environment(self, tmp_path) -> None:
+        """R5 + C23c-prov (the G2 gate): the artifact's identity includes the numeric
+        stack that minted it -- scipy's PRESENCE alone changes mined output (N3:
+        a rule reads PROMOTE with scipy and NO-WITNESS without), at least 5 shipped
+        rules exist only because glibc 2.43 is 1 ulp wrong (L9), and none of it was
+        recorded anywhere. The sidecar now carries the environment and a
+        `libm_fingerprint` computed through the folder's OWN FFI path, so two
+        machines can tell whether their mines are even comparable."""
+        (tmp_path / "rules.json").write_text(json.dumps([]))
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
+        eng = SimpliPyEngine.from_config(str(cfg))
+        out = str(tmp_path / "mined.json")
+        eng.find_rules(max_source_pattern_length=2, dummy_variables=1,
+                       X=64, seed=7, verbose=False, output_file=out,
+                       promote_sorts=False)
+        env = json.load(open(out + ".provenance.json"))["environment"]
+        import platform
+        assert env["python"] == platform.python_version()
+        assert env["platform"] == platform.platform()
+        for pkg in ("numpy", "scipy", "mpmath"):
+            from importlib.metadata import version
+            assert env[pkg] == version(pkg), f"{pkg} version missing or wrong"
+        # the fingerprint is a sha256 over a fixed probe battery evaluated through
+        # the deployed folding path -- 64 hex chars, deterministic on one host
+        assert isinstance(env["libm_fingerprint"], str)
+        assert len(env["libm_fingerprint"]) == 64
+        assert env["libm_fingerprint"] == eng.libm_fingerprint()
+
     def test_empty_universe_length_is_vacuously_covered(self, tmp_path) -> None:
         """A binary-only alphabet has NO expressions of even length (a full binary tree
         over binary operators always has an odd token count), so the universe carries an
@@ -669,8 +706,8 @@ class TestStageTwoConfirmation:
         artifact's bare `nan` is refused at the alphabet boundary, pinned above):
         asin(cosh(x0)) -> nan is rejected by the confirm X, so _confirm_mined_rules
         drops it while keeping a genuine rule."""
-        x_confirm = engine._mining_sample_x(2048, 1, np.random.default_rng(99))
-        kept = engine._confirm_mined_rules(
+        x_confirm = RuleMiner(engine)._mining_sample_x(2048, 1, np.random.default_rng(99))
+        kept = RuleMiner(engine)._confirm_mined_rules(
             [(('asin', 'cosh', 'x0'), ('float("nan")',)), (('+', 'x0', '0'), ('x0',))],
             ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 123)
         assert (('asin', 'cosh', 'x0'), ('float("nan")',)) not in kept
@@ -690,17 +727,17 @@ class TestStageTwoConfirmation:
         Each absurd pair below was measured to "confirm" before the fix; the control does not
         hit the short-circuit and failed correctly even then, which is what made the defect
         invisible to the existing test above."""
-        x_confirm = engine._mining_sample_x(2048, 1, np.random.default_rng(99))
+        x_confirm = RuleMiner(engine)._mining_sample_x(2048, 1, np.random.default_rng(99))
         absurd = [
             (('exp', '<constant>'), ('0',)),
             (('exp', '<constant>'), ('float("nan")',)),
             (('+', '<constant>', '1'), ('float("-inf")',)),
         ]
-        kept = engine._confirm_mined_rules(
+        kept = RuleMiner(engine)._confirm_mined_rules(
             absurd, ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 99)
         assert kept == [], f"stage-2 confirmation is vacuous: it confirmed {kept}"
         # Power check: a genuine rule must still survive the same call.
-        assert engine._confirm_mined_rules(
+        assert RuleMiner(engine)._confirm_mined_rules(
             [(('+', 'x0', '0'), ('x0',))], ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 99)
 
 
@@ -726,6 +763,104 @@ class TestCertifyRules:
                           seed=7, verbose=False, promote_sorts=False)
         out = engine.certify_rules([["+", "x0", "0"]], X=256, seed=7)
         assert out == []
+
+    def test_the_instrument_convicts_the_saturation_impostor(self) -> None:
+        """The premise of the symbolic-gate test below, pinned on its own: the
+        precision-stability discriminator KILLs `tanh(exp(e)) -> 1` as a REAL change
+        (mpmath dps=50: 1 - tanh(exp(e)) = 1.37e-13 -- stable as precision doubles,
+        so a genuine gap between two functions, not rounding)."""
+        from simplipy.verify import verify_rule
+        v = verify_rule(["tanh", "exp", "np.e"], ["1"])
+        assert v["verdict"] == "KILL"
+        assert v["clause"] == "a-real-change"
+
+    def test_symbolic_gate_kills_what_the_tolerance_cannot_see(self, engine) -> None:
+        """B3: the docstring promises certified output "exactly as sound as mined
+        rules", and the mining path earns that at the symbolic gate in `_finalize`
+        (KILLs dropped before anything downstream sees the set). The public API ran
+        no such gate, so `tanh(exp(e)) -> 1` -- false by 1.37e-13, below every usable
+        numeric tolerance -- came back certified 'verified'. The control identity in
+        the same call must still certify: the impostor's absence is then the GATE's
+        verdict, not an upstream refusal."""
+        out = engine.certify_rules(
+            [["tanh", "exp", "np.e"], ["log", "*", "exp", "x0", "exp", "x1"]],
+            [["1"], None],
+            dummy_variables=2, extra_internal_terms=["np.e"], X=256, seed=7)
+        by_src = {tuple(s): (t, c) for s, t, c in out}
+        assert by_src.get(("log", "*", "exp", "x0", "exp", "x1")) \
+            == (("+", "x0", "x1"), "minimal"), "control identity failed upstream"
+        assert ("tanh", "exp", "np.e") not in by_src, \
+            f"a symbolically-KILLed pair was certified: {out}"
+
+
+class TestSymbolicGateFatalBuckets:
+    """B7: the symbolic gate dropped only `verdict == 'KILL'`; the other six non-sound
+    buckets (ENGINE-MISALIGN / NO-WITNESS / UNRESOLVED-COVERAGE / UNSUPPORTED-SHAPE /
+    JUDGE-TIMEOUT) passed silently -- so a rule the judge COULD NOT EVALUATE shipped
+    with the same standing as a certified one, and the sidecar recorded nothing. The
+    instrument's own `is_clean` already declares all six dirty; the mine must not ship
+    what its second authority cannot pass.
+
+    Today the mine's kernel vocabulary is fully covered by the contract, so the
+    coverage gap is simulated the way it would really arise -- an operator the mine
+    evaluates but the judge does not -- by withdrawing `log` from the contract's
+    arity table: every log-bearing rule then buckets UNSUPPORTED-SHAPE, exactly as a
+    future vocabulary extension without a matching contract arm would."""
+
+    def _withdraw_log(self, monkeypatch) -> None:
+        from simplipy.verify import _contract
+        monkeypatch.delitem(_contract.ARITY, "log")
+
+    def test_the_simulated_gap_buckets_unsupported_shape(self, monkeypatch) -> None:
+        """Premise pin: with `log` withdrawn the instrument refuses log-bearing rules
+        as UNSUPPORTED-SHAPE (and still certifies a log-free identity)."""
+        from simplipy.verify import verify_rule
+        self._withdraw_log(monkeypatch)
+        assert verify_rule(["log", "exp", "1"], ["1"])["verdict"] == "UNSUPPORTED-SHAPE"
+        assert verify_rule(["+", "x0", "0"], ["x0"])["verdict"] == "CERTIFIED"
+
+    def test_mine_refuses_what_the_judge_cannot_evaluate(self, tmp_path, monkeypatch) -> None:
+        """The plan's acceptance: mining a config with an operator the judge cannot
+        evaluate refuses the rule instead of shipping it, and the sidecar carries the
+        full bucket census alongside killed/kept. The unpatched fixture mine mints
+        five log-bearing rules (log 1 -> 0, log exp 1 -> 1, ...), so a zero census
+        here would be a vacuous pass -- the census >= 1 assertion is the anti-vacuity."""
+        self._withdraw_log(monkeypatch)
+        (tmp_path / "rules.json").write_text(json.dumps([]))
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
+        eng = SimpliPyEngine.from_config(str(cfg))
+        out = str(tmp_path / "mined.json")
+        eng.find_rules(max_source_pattern_length=3, dummy_variables=1,
+                       extra_internal_terms=["0", "1", "<constant>"], X=256, seed=7,
+                       verbose=False, output_file=out, promote_sorts=False)
+        mined = json.load(open(out))
+        shipped_unjudgeable = [r for r in mined if "log" in r[0] or "log" in r[1]]
+        assert shipped_unjudgeable == [], (
+            f"rules the judge cannot evaluate shipped: {shipped_unjudgeable}")
+        gate = json.load(open(out + ".provenance.json"))["symbolic_gate"]
+        assert len(gate["unsupported_shape"]) >= 1, "vacuous: no log rule reached the gate"
+        assert gate["killed"] == []
+        assert gate["no_witness"] == []  # present even when empty: the channel ran
+        census = gate["census"]
+        assert census["UNSUPPORTED-SHAPE"] == len(gate["unsupported_shape"])
+        assert census["CERTIFIED"] == gate["kept"]
+        assert gate["kept"] == len(mined)
+
+    def test_certify_rules_refuses_the_same_buckets(self, engine, monkeypatch) -> None:
+        """The B3 gate site must apply the same fatal set: a certification the judge
+        cannot evaluate is refused, not returned 'minimal'. The log-free control in
+        the same call proves the refusal is the gate's."""
+        self._withdraw_log(monkeypatch)
+        out = engine.certify_rules(
+            [["log", "*", "exp", "x0", "exp", "x1"],
+             ["*", "exp", "x0", "exp", "x1"]],
+            dummy_variables=2, X=256, seed=7)
+        by_src = {tuple(s): (t, c) for s, t, c in out}
+        assert by_src.get(("*", "exp", "x0", "exp", "x1")) \
+            == (("exp", "+", "x0", "x1"), "minimal"), "control identity failed upstream"
+        assert ("log", "*", "exp", "x0", "exp", "x1") not in by_src, \
+            "a certification the judge cannot evaluate was returned"
 
 
 class TestCoverageGateSearches:
@@ -815,7 +950,7 @@ def dev():
 
 @pytest.fixture(scope="module")
 def dev_x1(dev):
-    X = dev._mining_sample_x(1024, 1, np.random.default_rng(0))
+    X = RuleMiner(dev)._mining_sample_x(1024, 1, np.random.default_rng(0))
     return X.flatten(order='C').tolist(), X.shape[0]
 
 
@@ -1169,3 +1304,71 @@ class TestMineSingleFlight:
         assert signal.getsignal(signal.SIGINT) is before
         assert engine_mod._MINE_LOCK.acquire(blocking=False)
         engine_mod._MINE_LOCK.release()
+
+
+class TestD25MeasureFingerprintAtLoad:
+    """D25 (R6's warn-on-mismatch half): the sidecar records the measure fingerprint
+    but nothing ever READ it back -- recording-without-reading is the inert-control
+    pattern (R2.2 confirmed write-only at HEAD). A ruleset mined under one measure
+    served silently under another is exactly what the fingerprint exists to catch;
+    the load path now compares digests and warns loudly on mismatch."""
+
+    def _asset(self, tmp_path, digest):
+        (tmp_path / "rules.json").write_text(json.dumps([]))
+        (tmp_path / "rules.json.provenance.json").write_text(json.dumps(
+            {"measure": {"digest": digest}}))
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS,
+                                       "rules": "rules.json"}))
+        return str(cfg)
+
+    def test_mismatch_warns(self, tmp_path) -> None:
+        with pytest.warns(UserWarning, match="measure fingerprint"):
+            SimpliPyEngine.from_config(self._asset(tmp_path, "0" * 16))
+
+    def test_match_stays_silent(self, tmp_path) -> None:
+        import warnings as _w
+        probe = SimpliPyEngine.from_config(self._asset(tmp_path, "0" * 16))
+        good = probe._measure_fingerprint()["digest"]
+        with _w.catch_warnings():
+            _w.simplefilter("error", UserWarning)
+            SimpliPyEngine.from_config(self._asset(tmp_path, good))
+
+
+class TestMissed003SingleFlightPreservesRules:
+    """missed-003: `find_rules` cleared the ruleset BEFORE acquiring the single-flight
+    lock, so a call REJECTED by single-flight had already destroyed the caller's rules
+    (measured in the audit: 6,671 -> RuntimeError -> 0, with `simplify` silently
+    answering from native arithmetic afterwards). The reset now happens under the
+    lock: a rejected call must leave the engine exactly as it found it."""
+
+    def test_rejected_mine_leaves_rules_untouched(self, engine) -> None:
+        import simplipy.engine as em
+        engine.simplification_rules = [(("+", "?0", "0"), ("?0",))]
+        engine.compile_rules()
+        before = list(engine.simplification_rules)
+        assert em._MINE_LOCK.acquire(blocking=False), 'lock unexpectedly held'
+        try:
+            with pytest.raises(RuntimeError, match='single-flight'):
+                engine.find_rules(max_source_pattern_length=2, dummy_variables=1,
+                                  X=64, seed=7, reset_rules=True, promote_sorts=False)
+        finally:
+            em._MINE_LOCK.release()
+        assert engine.simplification_rules == before, \
+            'a rejected mine destroyed the caller rules'
+
+
+class TestD28CertifyLock:
+    """D28: one-miner-per-process is doctrine, and `certify_rules` was found
+    UNGUARDED -- it runs the same certification machinery (and mutates the same
+    process-global interval counters the sidecar records) as a mine, so it must
+    hold the same single-flight lock."""
+
+    def test_certify_rejected_while_a_mine_is_active(self, engine) -> None:
+        import simplipy.engine as em
+        assert em._MINE_LOCK.acquire(blocking=False)
+        try:
+            with pytest.raises(RuntimeError, match='single-flight'):
+                engine.certify_rules([["+", "x0", "0"]], X=64, seed=7)
+        finally:
+            em._MINE_LOCK.release()

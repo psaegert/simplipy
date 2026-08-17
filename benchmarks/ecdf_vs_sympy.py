@@ -31,7 +31,7 @@ mismatch is confined to the negative branch of odd roots.
 Usage: ecdf_vs_sympy.py [--sympy-only | --simplipy-only | --plot-only] [--limit N]
 Artifacts: benchmarks/ecdf_vs_sympy_results.pkl (untracked, regenerable),
            benchmarks/ecdf_vs_sympy_summary.json (tracked),
-           assets/images/simplipy_vs_sympy_012_mu.{png,svg}.
+           benchmarks/out/simplipy_vs_sympy_012_mu.{png,svg}.
 """
 import gc
 import json
@@ -342,10 +342,11 @@ def make_figure(scored):
                  'ratios scored by the internal description-length measure mu for BOTH systems',
                  fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
+    os.makedirs(os.path.join(REPO, 'benchmarks', 'out'), exist_ok=True)
     for ext in ('png', 'svg'):
-        fig.savefig(os.path.join(REPO, 'assets', 'images',
+        fig.savefig(os.path.join(REPO, 'benchmarks', 'out',
                                  f'simplipy_vs_sympy_012_mu.{ext}'), dpi=160)
-    print('figure -> assets/images/simplipy_vs_sympy_012_mu.{png,svg}')
+    print('figure -> benchmarks/out/simplipy_vs_sympy_012_mu.{png,svg}')
 
 
 def summarize(scored):

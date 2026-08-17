@@ -16,13 +16,17 @@ the unified measure and gets DELETED when the measure ships):
    fold's (whose ``sin(np.pi) = 1.2246e-16`` wart this licence retires). Ground
    compounds with +-inf/nan literals never folded to begin with (the evaluator is
    finite-only), so absorption behavior is untouched.
-2. CONST-ABSORPTION LICENCE (mask x special STAYS UNABSORBED, owner 2026-08-01): a
-   special never joins the ``<constant>`` value-set collapse -- ``C*pi``, ``C+e``,
-   ``pi^C`` keep their structure for the post-fit rationalizer. Rationals still absorb
-   (``2.5*C -> C``, the contract's forall-exists direction). ``e^C`` is the one
-   deliberate exception: ``pow(e, t) == exp(t)`` is an EXACT identity that eliminates
-   the special losslessly first, after which ``exp(C) -> C`` is ordinary special-free
-   absorption.
+2. CONST-ABSORPTION LICENCE (as AMENDED by contract 10.11, owner 2026-08-08): a
+   special absorbs into an EXISTING ``<constant>`` through the bijective bag sites
+   exactly like every other finite ground -- ``C*pi -> C``, ``C+e -> C`` (the same
+   ``C + g -> C'`` reparametrization P3' ships for ``cosh(1)``). The 2026-08-01
+   blanket refusal ("for the post-fit rationalizer") is superseded. What STAYS
+   refused: a special may never vanish into an INTRODUCED ``<constant>`` (bare
+   ``pi -> C`` and ``pi*x0 -> C*x0`` -- determined-source licence at mint,
+   Const-count invariant at load), and non-bag positions never absorb a special
+   (``pi^C`` keeps its structure; its value set is (0, inf), not "anything").
+   ``e^C`` collapses as before via the EXACT identity ``pow(e, t) == exp(t)``,
+   after which ``exp(C) -> C`` is ordinary special-free absorption.
 3. RESOLUTION LICENCE (miner): literal resolution never materializes a special-bearing
    source -- see ``TestResolutionLicence``.
 
@@ -240,23 +244,31 @@ class TestExactCollapsesMint:
 
 
 class TestConstAbsorptionLicence:
-    """mask x special stays unabsorbed: specials never join the `<constant>` collapse."""
+    """Contract 10.11 (owner 2026-08-08): specials absorb into an EXISTING mask at
+    the bijective bag sites; introduced masks and non-bag positions still refuse."""
 
-    def test_const_times_special_stays(self, eng):
-        out = eng.simplify(['*', '<constant>', 'np.pi'])
-        assert out != ['<constant>'], 'C*pi absorbed the special'
-        assert 'np.pi' in out and '<constant>' in out
-        assert eng.simplify(list(out)) == out
+    def test_const_times_special_absorbs(self, eng):
+        # C*pi -> C: the Mul-scale bijection (c' = c*pi), same family as C*cosh(1).
+        check(eng, ['*', '<constant>', 'np.pi'], ['<constant>'])
+        check(eng, ['*', '*', '<constant>', 'np.pi', 'x0'],
+              ['<mul>', '<constant>', 'x0', '</mul>'])
 
-    def test_const_plus_special_stays(self, eng):
-        out = eng.simplify(['+', '<constant>', 'np.e'])
-        assert out != ['<constant>'], 'C+e absorbed the special'
-        assert 'np.e' in out and '<constant>' in out
-        assert eng.simplify(list(out)) == out
+    def test_const_plus_special_absorbs(self, eng):
+        # C+e -> C, C-pi -> C: the Add-shift bijection (c' = c+g), both signs.
+        check(eng, ['+', '<constant>', 'np.e'], ['<constant>'])
+        check(eng, ['-', '<constant>', 'np.pi'], ['<constant>'])
+        # A special-BEARING ground member absorbs as a whole: C + 2*pi -> C.
+        check(eng, ['+', '<constant>', '*', '2', 'np.pi'], ['<constant>'])
+
+    def test_bare_special_never_masked(self, eng):
+        # The introduced-mask direction stays refused: pi alone, and pi beside
+        # variables with no mask present, keep their exact structure.
+        check(eng, ['np.pi'], ['np.pi'])
+        assert eng.simplify(['*', 'np.pi', 'x0']) == ['<mul>', 'np.pi', 'x0', '</mul>']
 
     def test_special_base_pow_const(self, eng):
-        # pi^C keeps its structure: the special and the mask meet with no exact
-        # elimination available, so the licence holds them apart.
+        # pi^C keeps its structure: pow is not an absorption site -- the family's
+        # value set is (0, inf), not "anything", so the mask may not claim it.
         out = eng.simplify(['pow', 'np.pi', '<constant>'])
         assert out != ['<constant>'], 'pi^C absorbed the special'
         assert 'np.pi' in out and '<constant>' in out

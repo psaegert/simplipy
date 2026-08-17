@@ -36,17 +36,26 @@ OPS_FULL = {
     "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
     "inv": {"realization": "simplipy.operators.inv", "alias": ["inverse"], "inverse": "inv", "arity": 1, "precedence": 4, "commutative": False},
     "pow": {"realization": "simplipy.operators.pow", "alias": ["power"], "inverse": None, "arity": 2, "precedence": 3, "commutative": False},
+    # C1.18: rootn was the ONE core sugar token no config in the suite declared.
+    "rootn": {"realization": "simplipy.operators.rootn", "alias": [], "inverse": None, "arity": 2, "precedence": 3, "commutative": False},
     "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
     "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
     "sin": {"realization": "np.sin", "alias": [], "inverse": "asin", "arity": 1, "precedence": 3, "commutative": False},
     "abs": {"realization": "simplipy.operators.abs", "alias": [], "inverse": None, "arity": 1, "precedence": 3, "commutative": False},
+    # C1.18: a non-core BINARY operator (every non-core op used to be unary) and an
+    # ARITY-3 operator -- both stay opaque nodes with call rendering, and the battery
+    # proves the emit-parse closure survives them anywhere in a term.
+    "hypot2": {"realization": "np.hypot", "alias": [], "inverse": None, "arity": 2, "precedence": 3, "commutative": False},
+    "fma3": {"realization": "math.fma", "alias": [], "inverse": None, "arity": 3, "precedence": 3, "commutative": False},
 }
 
 LEAVES = ["x0", "x1", "2", "-1", "<constant>"]
 MAX_LEN = 4
 
-# Each core sugar spelling individually missing from an otherwise-full config, plus two
+# Each core sugar spelling individually missing from an otherwise-full config, plus
 # minimal vocabularies: the adversarial configs the emit side must survive.
+# (C1.18 additions: no_pow and no_rootn complete the per-core-token family, and
+# minimal_call_ops is a vocabulary of pure call-rendered operators.)
 DEGENERATE = {
     "no_neg": [k for k in OPS_FULL if k != "neg"],
     "no_inv": [k for k in OPS_FULL if k != "inv"],
@@ -54,8 +63,11 @@ DEGENERATE = {
     "no_div": [k for k in OPS_FULL if k != "/"],
     "no_add": [k for k in OPS_FULL if k != "+"],
     "no_mul": [k for k in OPS_FULL if k != "*"],
+    "no_pow": [k for k in OPS_FULL if k != "pow"],
+    "no_rootn": [k for k in OPS_FULL if k != "rootn"],
     "minimal_add_mul": ["+", "*", "exp", "sin"],
     "minimal_mul_inv": ["*", "inv", "log"],
+    "minimal_call_ops": ["fma3", "hypot2", "exp"],
 }
 
 
@@ -71,24 +83,31 @@ def make_engine(op_names: list[str], operators: dict | None = None) -> SimpliPyE
 
 
 def universe(op_names: list[str], max_len: int) -> list[list[str]]:
-    """The COMPLETE set of prefix expressions over ops+LEAVES with <= max_len tokens."""
+    """The COMPLETE set of prefix expressions over ops+LEAVES with <= max_len tokens.
+
+    n-ary (C1.18): the old generator hard-assumed arity <= 2 and would emit
+    malformed prefixes for a ternary operator.
+    """
     arity = {k: OPS_FULL[k]["arity"] for k in op_names}
 
+    def args(n: int, budget: int):
+        """All n-tuples of subtrees with total length <= budget."""
+        if n == 0:
+            yield ()
+            return
+        for first in gen(budget - (n - 1)):
+            for rest in args(n - 1, budget - len(first)):
+                yield (first,) + rest
+
     def gen(budget: int):
+        if budget < 1:
+            return
         for leaf in LEAVES:
             yield (leaf,)
         for op, a in arity.items():
-            if budget < 1 + a:
-                continue
-            if a == 1:
-                for sub in gen(budget - 1):
-                    yield (op,) + sub
-            else:
-                for left in gen(budget - 2):
-                    rem = budget - 1 - len(left)
-                    if rem >= 1:
-                        for right in gen(rem):
-                            yield (op,) + left + right
+            if budget >= 1 + a:
+                for tup in args(a, budget - 1):
+                    yield (op,) + tuple(t for sub in tup for t in sub)
 
     return [list(e) for e in dict.fromkeys(gen(max_len))]
 
@@ -174,7 +193,8 @@ class TestInfixClosure:
         assert referee.infix_to_prefix("inf") == ['float("inf")']
         assert referee.infix_to_prefix("nan") == ['float("nan")']
 
-    @pytest.mark.parametrize("config", ["no_div", "no_add", "no_mul", "minimal_add_mul", "minimal_mul_inv"])
+    @pytest.mark.parametrize("config", ["no_div", "no_add", "no_mul", "no_pow", "no_rootn",
+                                        "minimal_add_mul", "minimal_mul_inv", "minimal_call_ops"])
     def test_degenerate_config_feedback(self, config: str, referee: SimpliPyEngine) -> None:
         """Core infix symbols parse with their standard precedences even when the config
         does not declare them (a missing '/' used to parse 'x0 + 1/x0' as '(x0+1)/x0')."""
@@ -225,6 +245,64 @@ class TestCoreTokenGuard:
     def test_declaring_core_tokens_normally_is_fine(self) -> None:
         engine = make_engine(list(OPS_FULL))
         assert engine.simplify(["+", "x0", "x0"], form="explicit") == ["*", "2", "x0"]
+
+    def test_core_token_without_precedence_gets_the_core_value(self) -> None:
+        """C1.18 guard hole: a core token declared WITHOUT `precedence:` used to slip
+        past the C1.8 conflicting-precedence guard entirely (it compares only present
+        values). Absence now means the core's own value -- verified through the one
+        consumer that would silently corrupt: the infix rendering Python evaluates."""
+        ops = {"+": OPS_FULL["+"],
+               "/": {k: v for k, v in OPS_FULL["/"].items() if k != "precedence"}}
+        engine = make_engine(["+", "/"], operators=ops)
+        assert engine.simplify(["/", "+", "x0", "x1", "x2"], form="infix") == "(x0 + x1)/x2"
+
+
+class TestOperatorSpecValidation:
+    """C1.18: the configs the DEGENERATE battery never built, at the load boundary.
+
+    A spec missing a key used to die as a bare ``KeyError: 'alias'`` naming neither
+    the operator nor the file; ``commutative: true`` on a non-core operator was
+    consumed by NOTHING (only ``+``/``*`` are AC bags), so ``f(a, b)`` and
+    ``f(b, a)`` stayed two canonical states while the config claimed one value.
+    """
+
+    def test_missing_keys_are_a_loud_config_error(self) -> None:
+        ops = {"+": OPS_FULL["+"],
+               "sq": {"realization": "np.square", "arity": 1, "precedence": 3}}
+        with pytest.raises(Exception, match=r"'sq'.*'alias'"):
+            make_engine(["+", "sq"], operators=ops)
+
+    def test_commutative_on_a_non_core_operator_is_refused(self) -> None:
+        # The one honest answer for a flag the engine cannot honor: refusal at load.
+        # (Measured before ruling: is_commutative has no consumer for non-core
+        # tokens, and 0 of 50 repo configs declare a non-core binary at all.)
+        ops = {"+": OPS_FULL["+"], "hypot2": {**OPS_FULL["hypot2"], "commutative": True}}
+        with pytest.raises(Exception, match="cannot honor"):
+            make_engine(["+", "hypot2"], operators=ops)
+
+    def test_precedence_is_optional_for_non_core_operators(self) -> None:
+        # Call rendering never consults precedence, so its absence is not an error.
+        ops = {"+": OPS_FULL["+"],
+               "sq": {"realization": "np.square", "alias": [], "inverse": None,
+                      "arity": 1, "commutative": False}}
+        engine = make_engine(["+", "sq"], operators=ops)
+        assert engine.simplify(["sq", "+", "x0", "x1"], form="infix") == "sq(x0 + x1)"
+
+    def test_declared_rootn_realization_wins_and_evaluates(self) -> None:
+        # rootn was the one core sugar token no suite config DECLARED (C1.18): a
+        # declared realization must win over the core fallback and evaluate.
+        from simplipy import codify
+        engine = make_engine(list(OPS_FULL))
+        rendered = engine.prefix_to_infix(["rootn", "x0", "3"], realization=True)
+        assert rendered == "simplipy.operators.rootn(x0, 3)"
+        assert engine.code_to_lambda(codify(rendered, ["x0"]))(8.0) == pytest.approx(2.0)
+
+    def test_arity3_operator_realization_evaluates(self) -> None:
+        from simplipy import codify
+        engine = make_engine(list(OPS_FULL))
+        rendered = engine.prefix_to_infix(["fma3", "x0", "x1", "2"], realization=True)
+        assert rendered == "math.fma(x0, x1, 2)"
+        assert engine.code_to_lambda(codify(rendered, ["x0", "x1"]))(2.0, 3.0) == pytest.approx(8.0)
 
 
 class TestSignedNumericLeafSplit:

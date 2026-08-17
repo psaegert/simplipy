@@ -3,14 +3,25 @@
 Hand-written to mirror the ``#[pymethods]`` surface in ``rust/lib.rs``; keep in sync on changes.
 Compiled extensions are opaque to static type-checkers, so this stub is what makes the ``Engine``
 surface (and the module constants) visible to mypy/pyright downstream and in this package.
+(Re-synced 2026-08-09, extreme-lane campaign: the file had drifted several methods behind the
+FFI -- ``from_strs`` among them, which mypy flagged on ``engine.py`` -- and the drift class is
+exactly what this header warns about.)
 """
-from typing import Literal
+from typing import Any, Literal
 
 __build__: str
+
+class CandidateLibrary:
+    @property
+    def n_candidates(self) -> int: ...
+    @property
+    def n_filtered(self) -> int: ...
 
 class Engine:
     @staticmethod
     def from_paths(config_yaml_path: str, rules_json_path: str) -> Engine: ...
+    @staticmethod
+    def from_strs(config_yaml: str, rules_json: str) -> Engine: ...
     @property
     def engine_id(self) -> str: ...
     def ac_simplify(
@@ -31,7 +42,13 @@ class Engine:
         self, tokens: list[str], node_budget: int
     ) -> tuple[int, int, list[str]]: ...
     def ac_complexity(self, tokens: list[str]) -> int: ...
+    def ac_complexity_certified(self, tokens: list[str]) -> int: ...
     def ac_rules_info(self) -> tuple[int, int, int, int]: ...
+    def ac_registry_dropped(self) -> int: ...
+    def registry_mint_refusal(
+        self, source: list[str], mark: list[str], target: list[str], var_names: list[str]
+    ) -> str | None: ...
+    def registry_pole_refusals(self) -> int: ...
     def is_valid(self, tokens: list[str]) -> bool: ...
     def prefix_to_infix(
         self, tokens: list[str], power: Literal["func", "**"] = ..., realization: bool = ...
@@ -46,3 +63,104 @@ class Engine:
     def evaluate_constant_subtree(self, tokens: list[str]) -> str | None: ...
     @staticmethod
     def py_float_repr(x: float) -> str: ...
+    def evaluate_batch(
+        self,
+        tokens: list[str],
+        var_names: list[str],
+        x_flat: list[float],
+        n_rows: int,
+        params: list[float],
+    ) -> list[float]: ...
+    @staticmethod
+    def allclose(
+        a: list[float], b: list[float], rtol: float = ..., atol: float = ...
+    ) -> bool: ...
+    def equivalent_no_const(
+        self,
+        source: list[str],
+        candidate: list[str],
+        var_names: list[str],
+        x_flat: list[float],
+        n_rows: int,
+        challenges: int = ...,
+        rtol: float = ...,
+        atol: float = ...,
+        min_informative: int | None = ...,
+        seed: int = ...,
+    ) -> bool: ...
+    def interval_finite_ae(self, tokens: list[str]) -> bool: ...
+    def interval_class(self, tokens: list[str]) -> str: ...
+    def interval_value_components(
+        self, tokens: list[str]
+    ) -> tuple[bool, bool, bool, bool] | None: ...
+    def interval_horizon_misses(self) -> int: ...
+    def interval_node_budget_misses(self) -> int: ...
+    def interval_unanalyzable_misses(self) -> int: ...
+    def interval_value_set_box(
+        self, tokens: list[str], los: list[float], his: list[float]
+    ) -> tuple[bool, bool, bool, bool, float, float] | None: ...
+    def interval_domain_extension(
+        self, source: list[str], target: list[str]
+    ) -> float | None: ...
+    def mining_progress(self) -> tuple[int, int]: ...
+    def build_candidate_library(
+        self,
+        candidates: list[list[str]],
+        var_names: list[str],
+        x_flat: list[float],
+        n_rows: int,
+        fold_filter: bool = ...,
+    ) -> CandidateLibrary: ...
+    def find_rule_lib(
+        self,
+        source: list[str],
+        simplified_length: int,
+        max_target: int | None,
+        library: CandidateLibrary,
+        challenges: int = ...,
+        retries: int = ...,
+        seed: int = ...,
+        rtol: float = ...,
+        atol: float = ...,
+        min_informative: int | None = ...,
+        mark: list[str] | None = ...,
+    ) -> list[str] | None: ...
+    def set_rules(self, rules: list[tuple[list[str], list[str]]]) -> None: ...
+    def rules_in_sync(self, rules: list[tuple[list[str], list[str]]]) -> bool: ...
+    def mine_one_length(
+        self,
+        sources: list[list[str]],
+        library: CandidateLibrary,
+        max_target: int | None,
+        challenges: int = ...,
+        retries: int = ...,
+        seed: int = ...,
+        rtol: float = ...,
+        atol: float = ...,
+        min_informative: int | None = ...,
+        relaxed_kruskal: bool = ...,
+    ) -> list[tuple[list[str], list[str]]]: ...
+    def exist_constants_fit_linear(
+        self,
+        candidate: list[str],
+        var_names: list[str],
+        x_flat: list[float],
+        n_rows: int,
+        y_target: list[float],
+        rtol: float = ...,
+        atol: float = ...,
+    ) -> bool | None: ...
+    def exist_constants_fit(
+        self,
+        candidate: list[str],
+        var_names: list[str],
+        x_flat: list[float],
+        n_rows: int,
+        y_target: list[float],
+        rtol: float = ...,
+        atol: float = ...,
+        n_restarts: int = ...,
+        seed: int = ...,
+    ) -> bool: ...
+
+def core_serialization_ops() -> dict[str, dict[str, Any]]: ...

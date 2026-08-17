@@ -1,5 +1,327 @@
 # Changelog
 
+## 0.13.0 — 2026-08-17
+
+### Added — the declared public API (`__all__`) and the compatibility policy
+- **The public surface is now declared**: `__all__` at the package root and in
+  `simplipy.utils` / `simplipy.io` / `simplipy.asset_manager` /
+  `simplipy.engine` / `simplipy.mining`. What is declared is what the
+  compatibility policy stabilizes; reachable-but-undeclared names carry no
+  promise (being rendered by the docs generator never was one, and the API
+  reference now renders only the declared surface). `from simplipy import *`
+  no longer injects eight submodules into the caller's namespace — one of
+  which (`simplipy.io`) shadowed the stdlib's `io`.
+- **`simplipy.mining.RuleMiner`** — mining/certification now lives in its own
+  module as an explicit object over an engine (`RuleMiner(engine)`).
+  `SimpliPyEngine.find_rules` / `certify_rules` remain as delegators with
+  identical signatures and semantics: the split is architectural (gated
+  byte-identical mines), not a surface change. One miner per process, as
+  before.
+- **Deprecated**: `substitude_constants` (the historic misspelling) now warns;
+  use `substitute_constants`. Removal not before 0.15.0. `numbers_to_constant`
+  (warning since 0.12.0) is removed in 0.14.0; use
+  `explicit_constant_placeholders`.
+
+### Changed — clean-cut config rulings (D12, owner-ratified)
+- **`pow1`/`pow_1` join `RETIRED_OPERATOR_TOKENS`.** A config declaring them was
+  accepted while the parser unconditionally rewrote their tokens away — one engine,
+  two answers for one expression. Artifact loading refuses them like the rest of the
+  retired family; the parser contract (legacy *input* rewriting) is untouched.
+- **The `inverse` operator-spec key is optional.** Nothing has read it since the
+  relic layer's deletion — a required key that was pure ceremony made every wild
+  config fail construction. Declared values are still accepted silently; the shipped
+  acj configs no longer carry the key (their digests updated with the republish).
+- **The torch shim stays** — its deletion was gated on a published-source grep, and
+  the grep refused it: flash-ansr compiles simplipy expressions into torch-callable
+  functions and feeds tensors through the operator realizations
+  (`flash_ansr/utils/metrics.py`). The `[torch]` extra remains a documented opt-in.
+
+### Removed — Python 3.11 support (floor moves to 3.12)
+- **`requires-python` is `>=3.12`** (D35, owner-resolved). numpy 2.5 and scipy 1.18 both
+  declare `>=3.12`, so a 3.11 environment silently resolved an *older* numeric stack
+  than every developer and every other CI job — a real difference in the f64 algebra
+  the equivalence contract is stated against, and it was invisible until CI began
+  printing the resolved stack per job. The floor now matches the dependency reality;
+  the abi3 wheel tag moves to `cp312`. Standing version policy recorded with the
+  ruling: new-but-stable versions, reasoned floors, no unmeasured ceilings.
+
+### Fixed — SOUND `simplify` no longer fabricates values it cannot certify
+- **Fabricated `nan` for finite contract values.** With a `±1` base and an exponent whose
+  enclosure reaches an infinity, the interval magnitude-step arms omitted the genuinely
+  attained value 1 (`pow(t, ±inf) = 1` at `|t| = 1`), so `x0 + (-1)**(3/sin(np.pi))`
+  returned `nan` where the contract value is `x0 + 1` — and the nan escaped into any
+  enclosing expression. Measured 78 fabricating rows on the 61,200-ground judged sweep;
+  now 0 in both SOUND and LOSSY.
+- **Fabricated definite infinities.** A base the intervals could only bracket
+  (`cos(np.pi)` encloses `[-1, -0.9999999999999991]`) drove the same arms to assert a
+  definite `+inf` where the true value is 1: `x0 + pow(cos(np.pi), float("-inf"))`
+  returned `inf`, annihilating `x0`. 46 rows measured; now 0 across the full
+  1,560-row family sweep.
+- **The `A − A → 0` certificate looked only inside a bounded box.** `finite_ae` proved
+  finiteness over `[-R, R]^n` (R ≥ 64) and nothing looked outside, so
+  `log(1 - 0.001*x1) - log(1 - 0.001*x1)` simplified to `0` — an expression that is nan
+  for every `x1 > 1000`. A tail arm now discharges the complement (the claim covers the
+  horizon failure class only; certificates lost to interval dependency loss remain out
+  of scope, deliberately).
+- **The interval box for odd negative exponents came back reflected** (Rust `%`
+  truncates, so `k % 2 == 1` is false for negative odd k): `pow(x, -1)` over a range
+  straddling zero missed its lower pole, and cancellations fired on nan-bearing
+  expressions. An enclosure fuzz (every unary operator, dense grids, degenerate boxes)
+  now pins the property.
+- **`atanh` folds and boxes disagreed by up to 1.5e13 ulp.** The interval arm evaluated
+  endpoints with Rust std's own `atanh` composition while the fold ships the system
+  libm's; near ±1 the gap reaches the fourth significant digit, so the box could exclude
+  the fold's own value. Both now call the same libm symbol.
+- **Net recall cost, accepted deliberately:** a handful of grounds that used to fold by
+  numerical luck now stay symbolic (`pow((-1), exp(40))`, `exp(-100000)`); an engine may
+  over-refuse, an instrument may not convict.
+
+### Changed — one owner for the odd-function literal sign (canonical spellings move)
+- `-5 * sin(2)` and the same term built through a sum used to reach two different
+  fixpoints (`-5·sin(2)` vs `5·sin(-2)`) — one value, two canonical states, decided by
+  construction history. The sign placement is now priced by one shared orbit on every
+  route: μ picks the cheaper spelling, exact ties resolve to the non-negative
+  coefficient (`-1·sin(2)` files as `sin(-2)`; `-1·x0·sin(2)` keeps its free `-1`).
+- The collector also learned the inverse: `sin(-2) + sin(2)` cancels to `0` in one pass
+  (it previously needed a render/re-parse cycle).
+- **Effect:** canonical spellings move on odd-function-of-literal shapes; the
+  400-skeleton reference corpus is row-identical, and 30 of the previous artifact's
+  rules become redundant respells (see Published artifacts).
+
+### Changed — the complexity measure saturates instead of overflowing
+- μ's linear literal schedule exhausts u64 around scale 5.5e15; both saturation
+  entrances collided every larger literal at one price (`u64::MAX`), and a poisoned
+  leaf overflowed the tree sums — a debug panic, or a release-mode wrap that priced a
+  composite below its own parts (the direction that licenses wrong rewrites). Literals
+  now price on a two-regime schedule (exact up to scale 2^32 — nine orders beyond any
+  f64-derived literal — then ordered by the exponent's own digits), and accumulation
+  saturates at the top, which can only refuse a rewrite, never license one.
+
+### Changed — certification gates refuse what their judge cannot pass
+- **`certify_rules` runs the same symbolic gate as the mine.** It certified
+  `tanh(exp(e)) → 1` — false by a stable 1.37e-13, below any numeric tolerance — while
+  the mining path killed the same pair. Accepted pairs are now re-judged and fatal
+  verdicts refused, so "certified output is exactly as sound as mined rules" is earned,
+  not asserted.
+- **Every non-sound verdict is fatal at the gates, not only KILL.** A rule the judge
+  cannot evaluate (`NO-WITNESS`, `UNSUPPORTED-SHAPE`, `JUDGE-TIMEOUT`) or cannot
+  reconcile (`ENGINE-MISALIGN`, `UNRESOLVED-COVERAGE`) no longer ships with a
+  certified rule's standing; the provenance sidecar records the full bucket census
+  (every bucket, present even when empty). One scoped exemption: the multi-`<constant>`
+  family the judge explicitly declares outside its jurisdiction (its soundness
+  authority is the constant-fitting chain), recorded under its own sidecar key.
+- **scipy's absence is a hard error in the miner, never a silent degradation** — it
+  used to change mined artifacts with no record (a certifiable promotion read
+  NO-WITNESS instead of PROMOTE purely on scipy's presence).
+
+### Added — artifact identity: recorded environment, digests, and read-back checks
+- **Every mine's provenance sidecar records its environment**: python, platform, libc,
+  numpy/scipy/mpmath versions, and a `libm_fingerprint` — a digest of a fixed probe
+  battery evaluated through the deployed folding path. The transcendental folds go
+  through the system libm, which resolves on the running machine: measured, glibc 2.43
+  is 1 ulp wrong on `cosh(acosh(2))` and mints a rule other hosts do not, so
+  "byte-deterministically reproducible" is now stated — and checkable — *at the
+  recorded environment*.
+- **The asset manifest carries per-file `sha256` and a pinned `revision`, and both are
+  enforced**: installs download at the pinned revision and verify what landed;
+  resolution re-verifies the cache, so corrupting a byte of a cached `rules.json`
+  raises instead of silently serving. (Manifest entries without digests remain
+  permissive, so older manifests keep working.)
+- **The measure fingerprint is read back at load**: an engine loading a ruleset mined
+  under a different μ now warns loudly (the rules stay sound; their minimality claims
+  are what a measure change voids).
+
+### Fixed — interval and certificate hardening (mining instrumentation)
+- Mixed-infinity products propagate their sign flags per-sign; a `b_mul` collapse could
+  previously flip a definite sign class on expressions reaching both infinities.
+- The certificate algebra widened (denominator-clearing certificates, unconditional
+  coefficient splits), moving a measured set of trapped towers to cheaper forms.
+- Masking policy left the mechanical helpers: `explicit_constant_placeholders` no longer
+  converts digit-only tokens by default (`convert_numbers_to_constant` flipped
+  `True → False` and is deprecated — masking decisions belong to `simplipy.masking`,
+  the helpers stay mechanical).
+
+### Published artifacts
+- **acj-4-3 re-mined and republished** under the 0.13.0-train engine: 6,671 → 6,594
+  rules. Every removed row is attributed: 60 odd-function sign-spelling twins made
+  redundant by the shared sign owner (their sources still reduce natively to the same
+  values), and 17 rules the widened symbolic gate refuses (`exp(pow((-10), k)) → 0`
+  shipped an f64 underflow-rounding as an exact rewrite; verdict UNRESOLVED-COVERAGE).
+  Minted on a correctly-rounding libm host — the previous interim mines on the dev box
+  carried a `cosh(acosh(2)) → 2` rule that exists only because its glibc is 1 ulp
+  wrong there — ×3 byte-identical, with the environment and `libm_fingerprint`
+  recorded in the sidecar and per-file `sha256` + pinned `revision` in the manifest.
+  The 400-skeleton reference corpus is row-identical under the new engine + artifact;
+  `μ`-non-increase and idempotence hold 400/400.
+- Interim (2026-08-11, superseded by the above): acj-4-3 6,661 → 6,671 (+10 adopted
+  post-F83 rules, each judge-verified with zero pointwise exceptional-point
+  disagreements).
+
+### Docs
+- **The "never longer than the input" guarantee was false and is gone.** `simplify`
+  guarantees μ-non-increase, soundness, and idempotence — never an output-token bound:
+  77 of 400 reference outputs are token-longer in the explicit form (71 exact μ ties,
+  6 strictly μ-cheaper yet longer), and the tagged form adds bag delimiters on top
+  (264/400). The pipeline page now states the μ-guarantee with the measured caveat,
+  and a test pins it 400/400.
+- The independent monitor's verdict vocabulary is API-visible and documented:
+  `UNSCORED` (an output the judge cannot read never silently passes as OK) and the
+  singular-scoped violation clause.
+
+### Known performance
+- The serve path carries a measured throughput regression (−32%/−43.7% on the
+  benchmark corpora) inherited with the certificate widening: the `ac_zsn` witness
+  is re-computed where the neighbouring `finite_ae` is doubly cached (4.78 ms vs
+  0.19 ms). Disclosed here deliberately and scheduled for a cache, not silently
+  carried.
+
+
+### Security — the realization trust model
+- **A config file is no longer executable input.** Operator realizations name Python
+  modules, and the engine imported every root it found — which runs that module's
+  top-level code, before any expression is evaluated, on every path including
+  `SimpliPyEngine.load` (which fetches a config from Hugging Face) and unpickling.
+  Realization module roots are now checked against an allowlist BEFORE anything is
+  imported: `math`, `np`, `scipy`, `simplipy`. Anything else refuses at construction,
+  naming the operator that asked for it.
+- **One spelling per module: `np`, not `numpy`.** `np.pi` and `np.e` are normative token
+  grammar, so `np` is the canonical form; a realization written `numpy.sin` is refused
+  with a hint pointing at `np.sin`.
+- **Trust is granted from outside the config, never by the config** (a `trusted_modules:`
+  key in the YAML would let a hostile file authorize itself, and is ignored). Two
+  surfaces: `SimpliPyEngine.from_config(path, trusted_modules=[...])` (also on `load`
+  and the constructor) and the `SIMPLIPY_TRUSTED_MODULES` environment variable. The
+  resolved trust travels with the engine through pickling, so a spawn worker imports
+  exactly what the parent was allowed to import.
+- **Each engine evaluates in its own namespace.** `code_to_lambda` bound expressions to
+  `simplipy.engine`'s module globals, so one engine's imports were reachable from another
+  engine's expressions, as were simplipy's own imports (`os`, `importlib`, `hashlib`, …).
+  Expressions now see only the modules their engine needed plus `np`.
+  **API note:** `code_to_lambda` is an instance method instead of a `staticmethod`.
+  Instance calls (`engine.code_to_lambda(code)` — the documented usage) are unaffected;
+  a call on the class now needs an instance.
+- **Rule files are data, never code.** `verify_ruleset`'s literal reader evaluated
+  rule-file tokens with `eval()`, so a hostile `rules.json` could execute Python at
+  verification time. Literals now go through a total, eval-free acceptor (numbers,
+  `(-N)`, `float("inf"/"-inf"/"nan")`, `np.pi`/`np.e`, `p/q`); anything else refuses
+  as `UNSUPPORTED-SHAPE`. Measured against the shipped artifact: 0.00% of 18,238
+  literal occurrences refused.
+- **Inline `lambda` realizations are refused at load.** A config could smuggle
+  arbitrary Python source into generated code through a `realization: 'lambda x: ...'`
+  string; realizations must now name a callable in a trusted module.
+- Scope, stated plainly: this makes a config safe to LOAD and scopes what a compiled
+  expression can SEE. It does not make `codify`/`code_to_lambda` safe against a hostile
+  EXPRESSION; evaluating attacker-supplied source is unsafe by construction in Python.
+
+### Removed — `simplify(inplace=...)`
+- **The `inplace` parameter of `SimpliPyEngine.simplify` is gone.** It had three
+  different behaviors behind one flag (mutate the input list, raise for ndarray input,
+  silently do nothing for `form='infix'`), no callers anywhere, and no performance
+  content — the compiled core produces a fresh result regardless, so `inplace=True` was
+  sugar for copying that result back into the caller's list. Passing it now raises
+  `TypeError` like any unknown keyword. The `inplace` parameters of the utils helpers
+  (`numbers_to_constant`, `substitude_constants`, `explicit_constant_placeholders`) are
+  unaffected — those are genuine in-place list rewrites and downstream code uses them.
+
+### Fixed — the independent monitor no longer fabricates verdicts on extreme-scale expressions
+- **`simplipy.verify` judges honestly at every magnitude the token grammar reaches.**
+  The independent monitor's judge (the end-to-end soundness gate) carried five
+  instrument defects that each fabricated violation verdicts against correct
+  rewrites once expressions carried extreme literals (`1e309`, `5e-324`,
+  `2^127`-scale rationals): a refused evaluation was converted into a fabricated
+  nan instead of a skipped probe; magnitudes beyond 10^(1e50) were refused although
+  they evaluate exactly in milliseconds (the cap is now 10^(1e2000), with measured
+  cost bounds); the literal zero-snap tested only outermost constant subtrees at two
+  hardcoded precisions, so a true nonzero difference spanning 272 digits read as an
+  exact zero — the judge then rewrote the input to `0` and convicted the correct
+  output — while inner exact zeros (`tan(pi)`) were never recognized; the working
+  precision was a flat 50 digits, so `cos(1e-320)` read as exactly 1; and values
+  that ROUND to a decision boundary at any precision (`tanh(9e15)` is 10^-8e15
+  below 1) fabricated the boundary value instead of refusing. The judge now folds
+  exact-rational subtrees in unbounded rational arithmetic, adapts its working
+  precision to each pair's own literal exponent span, resolves constant subtrees to
+  provable zeros/integers on an escalating precision ladder, and refuses honestly
+  (probe skipped, refusal recorded) where no finite precision can decide.
+  Small-literal expressions — everything a typical deployment sees — are judged at
+  the same precision and cost as before. On the ordinary 1M random-expression
+  corpus no row convicts that did not convict before, and 96 of the 98 previous
+  convictions plus 104 previous refusals now judge OK; on a 1M extreme-literal
+  stress stream, 164 of 229 convictions were measured to be instrument
+  fabrications and now judge OK, and 43 more become recorded refusals instead of
+  convictions.
+
+### Fixed — the tagged serialization could read back a different value on extreme states
+- **A sign could vanish in the tagged rendering of an overflow-partition state.** When
+  an expression's exact rational content is split across several members (folding it
+  would overflow the exact arithmetic — only reachable with extreme literals around
+  10^19-squared and beyond), the tagged emitter pooled their reciprocals into the
+  `<div>` section and tracked the sign with a per-member flag that a second signed
+  member silently overwrote. The rendering then re-parsed to a DIFFERENT value
+  (measured: six of one million random extreme expressions; e.g. an expression worth
+  −2/3 serialized to a spelling worth +2/3), while the engine's internal state and the
+  explicit/infix renders stayed correct. Partition members now serialize
+  self-contained in every dialect, the round-trip is the identity on them, and a new
+  fuzz battery permanently screens the tagged rendering's value against the input.
+  Ordinary expressions are unaffected (zero changed renders across 1M+64k
+  random-expression corpora; the shipped rule artifact re-mines byte-identical).
+
+### Changed — sign decisions are arrival-invariant (canonical forms move slightly)
+- **Two ways the canonical form could depend on HOW an expression arrived are gone.**
+  (1) When a sign placement was fully μ-tied (mirror pairings like
+  `-1 · (a-b)(c-d)` vs `(b-a)(d-c)` price identically), the tie broke on token
+  interning order — an artifact of which literal the input mentioned first — so the
+  same expression could canonize differently depending on operand order, and the same
+  config could canonize differently across vocabulary orderings. The tie now breaks on
+  the canonical content order (string-based). (2) When a product's exact rational
+  content is split across several members because folding it would overflow the exact
+  arithmetic, the minus sign stayed on whichever member carried it on arrival; the
+  split and the sign host are now functions of the value alone.
+- **Effect — the full upgrade differential, re-measured at publish time** (the
+  published 0.12.0 wheel + its artifact vs this release + the re-mined artifact,
+  split by cause under the current measure):
+  - *400-row reference corpus* (`benchmarks/corpus/raw_skeletons_nv.json`):
+    **140/400 = 35%** of outputs differ — 109 equal-μ mirror respells, 21 strictly
+    simplifying, 10 μ-costlier than the 0.12.0 output; 12 outputs are token-LONGER.
+  - *Frozen fuzz lane* (50,000 rows, the `fuzz_properties.py` generator, seeds fixed
+    since 2026-08-03): **1,926/50,000 = 3.85%** differ — 1,205 mirror respells,
+    575 strictly simplifying, 146 μ-costlier; 221 token-longer.
+  - Stated plainly: **some outputs get longer or less reduced.** The μ-costlier rows
+    are the deliberate soundness price — folds and cancellations this release refuses
+    to certify (fabricated-value fixes, the widened gates) leave those expressions
+    symbolic where 0.12.0 collapsed them. Within one engine the guarantee
+    `complexity(simplify(e)) ≤ complexity(e)` holds (400/400, pinned); the μ-costlier
+    rows above compare across releases, against outputs the old engine should not
+    have produced.
+  - A training corpus generated under 0.12.0 is NOT reproducible under 0.13.0 —
+    regenerate rather than mix.
+  - *Existing 0.12.0 installs are unaffected by the artifact republish alone*:
+    the 0.12.0 wheel loads the re-mined artifact loss-free (6,604 translations,
+    0 subsumed, 0 dropped) and its reference-corpus outputs are byte-identical
+    (0/400 moved) — the engine changes above require the new wheel.
+
+### Changed — pickling refuses a diverged rule state
+- **An engine whose `simplification_rules` and compiled core disagree no longer
+  pickles silently.** The documented contract is mutate-the-list-then-`compile_rules()`;
+  nothing verified it, and a pickle rebuilds workers from the list — so a diverged
+  parent could spawn workers running different rules with no warning (measured: 50 of
+  400 corpus expressions simplified differently between a parent and its own unpickled
+  worker). `pickle`/`deepcopy` now raise a `ValueError` naming the fix
+  (`compile_rules()`); engines that follow the documented contract are unaffected.
+
+### Changed — operator specs are validated loudly at load
+- **A spec missing a required key is a config error naming the operator and the key(s)**
+  (`realization`, `alias`, `inverse`, `arity`, `commutative`). It used to die as a bare
+  `KeyError: 'alias'` pointing at nothing. `precedence` is documented as optional for
+  non-core operators: they render as function calls, which never consult it.
+- **`commutative: true` on anything but `+`/`*` is refused at load.** The engine consumed
+  the flag for nothing else — only `+` and `*` canonicalize as AC bags — so `f(a, b)` and
+  `f(b, a)` stayed two distinct canonical states while the config claimed one value. A
+  declaration the engine silently ignores is worse than a refusal. (No known config
+  declares one: measured across every config in the repo and downstream.)
+- **A core serialization token declared without `precedence:` now gets the core's own
+  value** instead of slipping past the conflicting-precedence guard, which only compared
+  values that were present. A conflicting declared value still refuses, as before.
+
 ## 0.12.0 — 2026-08-08
 
 ### Removed — the legacy kernel (the clean release)
@@ -20,7 +342,7 @@
 ### Removed — the hyper-operator vocabulary
 - **`mult2..5`, `div2..5`, `pow2..5`, `pow1_2..pow1_5` are deleted from the vocabulary, once
   and for all.** The base operator config drops from 38 to 23 operators; coefficients and
-  exponents are explicit exact literals (`* 6 x`, `pow x 3`, `pow x 0.5`), and the general
+  exponents are explicit exact literals (`* 6 x`, `pow x 3`), and the general
   signed root `rootn(x, n)` — an engine BUILT-IN, independent of any config — replaces the
   odd-root family (`rootn x 3`, with arbitrary odd indices now expressible). Every layer
   understands `rootn` natively: the interval certificates, the f64 evaluator, and the

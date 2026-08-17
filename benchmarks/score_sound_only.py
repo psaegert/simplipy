@@ -17,7 +17,7 @@ our policy refuses) therefore does not enter the sound-only comparison either wa
 
 RUNS IN THE 0.12 ENV. Consumes the three results pickles.
 Artifacts: benchmarks/ecdf_sound_only_summary.json (tracked),
-           assets/images/simplipy_sound_only.{png,svg}.
+           benchmarks/out/simplipy_sound_only.{png,svg}.
 """
 import json
 import os
@@ -171,10 +171,11 @@ def main():
     ax.grid(alpha=0.25)
     ax.legend(fontsize=9, loc='upper left')
     fig.tight_layout()
+    os.makedirs(os.path.join(REPO, 'benchmarks', 'out'), exist_ok=True)
     for ext in ('png', 'svg'):
-        fig.savefig(os.path.join(REPO, 'assets', 'images',
+        fig.savefig(os.path.join(REPO, 'benchmarks', 'out',
                                  f'simplipy_sound_only.{ext}'), dpi=160)
-    print('figure -> assets/images/simplipy_sound_only.{png,svg}')
+    print('figure -> benchmarks/out/simplipy_sound_only.{png,svg}')
 
 
 if __name__ == '__main__':

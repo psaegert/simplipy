@@ -142,3 +142,25 @@ def test_h049_float_division_exponent_keeps_pow(engine):
     # the legacy dead branch RAISED here (int('2.0') failure-parity); the engine's own
     # divisor-side infix can render this shape, and its own output must always re-parse
     assert engine.parse("v1 ** (2.0/4.0)", mask_numbers=False) == ["pow", "v1", "/", "2.0", "4.0"]
+
+
+# -- X10 (2026-08-15): a negative-literal pow base parenthesizes under power='**' -------------
+# `['pow','-2','x0']` rendered as '-2 ** x0', which re-parses -- in this engine AND in
+# SymPy 1.14 -- as -(2 ** x0): '**' outbinds the unary minus, so the render changed the
+# value. Measured: an exact bijection, 59/5494 canonical outputs broke, every one a
+# `pow <negative literal>` base. The composite spelling was already correct.
+def test_x10_negative_literal_base_parenthesizes_under_starstar(engine):
+    out = engine.prefix_to_infix(['pow', '-2', 'x0'], power='**')
+    assert out == '(-2) ** x0', out
+    # the round trip must land back on the same expression, not its negation
+    assert engine.parse(out, mask_numbers=False) == ['pow', '-2', 'x0']
+
+
+def test_x10_composite_and_positive_bases_unchanged(engine):
+    assert engine.prefix_to_infix(['pow', 'neg', '2', 'x0'], power='**') == '(-2) ** x0'
+    assert engine.prefix_to_infix(['pow', '2', 'x0'], power='**') == '2 ** x0'
+
+
+def test_x10_site2_unary_pow_negative_literal_parenthesizes(engine):
+    # render site 2: the unary powN family (legacy vocabulary) had the identical defect
+    assert engine.prefix_to_infix(['pow2', '-2'], power='**') == '(-2)**2'

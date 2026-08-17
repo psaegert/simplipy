@@ -25,7 +25,6 @@ forall-exists witness map and are handled by a separate promotion stage.
 Acceptance is sampling-based: a PROMOTE is falsification-survival at these
 valuations, with the false-promote rate bounded by the valuation count.
 """
-import json
 
 import numpy as np
 
@@ -278,10 +277,3 @@ def valuations_for(ws, rng):
             # atom coverage (seeded), a stated bound, not a silent truncation.
             idx = rng.integers(0, len(ATOMS), size=(MAX_PRODUCT, k))
     return [{w: pool[j] for w, j in zip(ws, row)} for row in idx]
-
-
-def load_rules(path):
-    raw = json.load(open(path))
-    pairs = raw.items() if isinstance(raw, dict) else ((r[0], r[1]) for r in raw)
-    return [(tuple(k.split()) if isinstance(k, str) else tuple(k),
-             tuple(v.split()) if isinstance(v, str) else tuple(v)) for k, v in pairs]

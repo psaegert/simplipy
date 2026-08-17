@@ -247,3 +247,30 @@ class TestRealizationDialectIsClosed:
                        "arity": 2, "precedence": 3, "commutative": False}}
         eng = SimpliPyEngine(operators=ops, rules=[])
         assert eng.prefix_to_infix(["pow", "x0", "2"], realization=True) == "np.power(x0, 2)"
+
+
+class TestThreatmodel3FromStrsCap:
+    """threatmodel-3: a deep-chain rules.json SIGSEGV'd the interpreter through
+    `from_strs` -- the ONE token-taking FFI entry H-043's recursion cap never
+    reached (construction parses each rule side into a tree recursively, and the
+    cap ran only on the later per-call surfaces). A hostile-or-corrupt artifact
+    must refuse loudly at load, never abort the process."""
+
+    def test_deep_rule_refuses_instead_of_crashing(self):
+        import json
+        import subprocess
+        import sys
+        code = (
+            "import json\n"
+            "from simplipy import SimpliPyEngine\n"
+            "ops = {'neg': {'realization': 'simplipy.operators.neg', 'alias': [],\n"
+            "               'inverse': None, 'arity': 1, 'precedence': 2.5,\n"
+            "               'commutative': False}}\n"
+            "deep = ['neg'] * 120000 + ['?0']\n"
+            "try:\n"
+            "    SimpliPyEngine(operators=ops, rules=[(tuple(deep), ('?0',))])\n"
+            "except ValueError as ex:\n"
+            "    print('REFUSED:', str(ex)[:60])\n")
+        r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+        assert r.returncode == 0, f'process died (rc {r.returncode}): {r.stderr[-200:]}'
+        assert 'REFUSED' in r.stdout, r.stdout

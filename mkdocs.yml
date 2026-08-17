@@ -49,10 +49,27 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - API-Reference: api.md
-  - Creating Rulesets: rules.md
-  - The Mining Algorithm (Formal): algorithm.md
-  - The Simplification Engine (Formal): formal.md
+  - Getting started: getting-started.md
+  - Guides:
+    - Simplifying expressions: guides/simplify.md
+    - Artifacts and assets: guides/artifacts.md
+    - Masking: guides/masking.md
+    - Trust and deployment: guides/trust.md
+    - Mining rulesets: rules.md
+    - Verifying rulesets: guides/verify.md
+  - Reference:
+    - API: api.md
+    - Compatibility policy: compatibility.md
+    - Environment variables: environment.md
+  - Method:
+    - The simplification engine (formal): formal.md
+    - The mining algorithm (formal): algorithm.md
+    - Positioning and prior art: method/positioning.md
+    - Environment qualification: method/environment-qualification.md
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
 # Plugin configurations
 plugins:

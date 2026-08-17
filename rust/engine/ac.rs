@@ -43,18 +43,6 @@ use crate::tokens::{TokenOverlay, TokenView};
 use super::memo::SimplifyCtx;
 use super::Engine;
 
-/// Contains a special constant (pi / e) anywhere: the PERMANENT mask-x-special policy
-/// gate -- a special never vanishes into a fitted constant (owner-ratified 2026-08-01,
-/// held against mu's own gradient for the post-fit rationalizer).
-fn has_special(e: &Ex) -> bool {
-    match e {
-        Ex::Pi | Ex::E => true,
-        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(has_special),
-        Ex::Pow(b, ex) => has_special(b) || has_special(ex),
-        _ => false,
-    }
-}
-
 /// H-051 (2026-08-05): does this expression contain a `pow` whose exponent denotes
 /// an exact INTEGER the interval layer can only BRACKET -- a beyond-2^53 `Num`, a
 /// beyond-i128 literal spelling, or its structural negation? The composite-level
@@ -112,11 +100,54 @@ fn is_ground(e: &Ex, view: &TokenView) -> bool {
 
 impl Engine {
     /// The translated AC ruleset, built once on first use (never during construction).
+    ///
+    /// C1.20 LOAD CONSUMER (2026-08-08): before translate, every raw rule passes the
+    /// licence registry's pole entry (`engine::refusals::pole_refusal`) on its
+    /// mine-language sides -- defense in depth behind the mint-side gate, so a stale
+    /// or foreign artifact cannot smuggle a defined-value change at a constructed
+    /// exceptional point past serving. The raw sides are the right substrate: they
+    /// speak the same sugar the mint judged (`inv`, `/`, `pow`), and the walker's
+    /// arity guard keeps foreign vocabularies safe. The two SYNTACTIC registry
+    /// entries deliberately do NOT run here: the special count without the engine's
+    /// endpoint is exactly the spelling-keyed proxy F49 falsified, and the
+    /// Const-introduction case is already load-refused by the Const-count invariant.
+    /// Refusals are counted (`n_registry_dropped`), expected 0 for every artifact the
+    /// mint-side registry produced.
     pub(crate) fn ac_rules(&self) -> &AcRules {
         self.ac_rules_cell.get_or_init(|| {
             let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
             let view = TokenView::new(&self.tokens, &overlay);
-            AcRules::translate(&self.rules.raw, &view)
+            let is_wildcard = |s: &str| {
+                s.len() >= 2
+                    && (s.starts_with('_') || s.starts_with('!') || s.starts_with('?'))
+                    && s[1..].chars().all(|c| c.is_ascii_digit())
+            };
+            let mut n_registry_dropped = 0usize;
+            let kept: Vec<(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)> = self
+                .rules
+                .raw
+                .iter()
+                .filter(|(l, r)| {
+                    let lhs: Vec<String> = l.iter().map(|t| view.resolve_owned(*t)).collect();
+                    let rhs: Vec<String> = r.iter().map(|t| view.resolve_owned(*t)).collect();
+                    let mut vars: Vec<String> = Vec::new();
+                    for t in lhs.iter().chain(rhs.iter()) {
+                        if is_wildcard(t) && !vars.contains(t) {
+                            vars.push(t.clone());
+                        }
+                    }
+                    let refused =
+                        super::refusals::pole_refusal(&lhs, &rhs, &self.operators, &vars).is_some();
+                    if refused {
+                        n_registry_dropped += 1;
+                    }
+                    !refused
+                })
+                .cloned()
+                .collect();
+            let mut r = AcRules::translate(&kept, &view);
+            r.n_registry_dropped = n_registry_dropped;
+            r
         })
     }
 
@@ -127,6 +158,33 @@ impl Engine {
     pub fn ac_rules_info(&self) -> (usize, usize, usize, usize) {
         let r = self.ac_rules();
         (r.rules.len(), r.n_subsumed, r.n_dropped, r.n_twins)
+    }
+
+    /// Rules the licence registry's load consumer refused (see `ac_rules` above).
+    pub fn ac_registry_dropped(&self) -> usize {
+        self.ac_rules().n_registry_dropped
+    }
+
+    /// C36: the per-reason drop census -- every non-kept disposition of the loaded
+    /// asset's rules, named: the six translate-time reasons, the registry refusal,
+    /// and the arithmetic subsumption count, as (reason, count) pairs.
+    pub fn ac_rules_drop_census(&self) -> Vec<(String, usize)> {
+        let r = self.ac_rules();
+        let mut out: Vec<(String, usize)> = r
+            .drop_census
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect();
+        if r.n_registry_dropped > 0 {
+            out.push((
+                "registry-pole-class-change".to_string(),
+                r.n_registry_dropped,
+            ));
+        }
+        if r.n_subsumed > 0 {
+            out.push(("arithmetic-subsumed".to_string(), r.n_subsumed));
+        }
+        out
     }
 
     /// An AC-side certificate through the shared per-engine caches: serialize the expression
@@ -151,7 +209,7 @@ impl Engine {
             } else {
                 &self.bang_cache
             };
-            if let Some(b) = cache.lock().unwrap().get_promoting(&flat) {
+            if let Some(b) = cache.lock().unwrap().get_promoting(&flat, &self.tokens) {
                 scratch.borrow_mut().insert(flat, b);
                 return b;
             }
@@ -168,22 +226,24 @@ impl Engine {
             } else {
                 &self.bang_cache
             };
-            cache.lock().unwrap().insert(flat.clone(), b);
+            cache.lock().unwrap().insert(flat.clone(), b, &self.tokens);
         }
         scratch.borrow_mut().insert(flat, b);
         b
     }
 
     /// The zero-set certificate behind `Cx::cert_nzae`: NONZERO a.e., decided by the
-    /// structural zero-set analysis (`interval::zero_set_null` -- identity-theorem
-    /// witness for analytic compositions, fail-closed on everything else). Uncached:
-    /// the structural recursion is cheap and the witness budget is small.
+    /// structural zero-set analysis (`interval::zero_set_null_generic_const` --
+    /// identity-theorem witness for analytic compositions, `<constant>` analyzed as a
+    /// generic parameter in the joint space per the E1 lemma (F80, owner-ruled
+    /// 2026-08-10), fail-closed on everything else). Uncached: the structural
+    /// recursion is cheap and the witness budget is small.
     fn ac_zsn(&self, e: &Ex, ctx: &SimplifyCtx) -> bool {
         let view = self.view(ctx);
         let bare = Cx::bare(&view);
         let flat = to_prefix(e, &bare);
         let strs = self.resolve_seq(&flat, ctx);
-        crate::interval::zero_set_null(&strs, &self.operators)
+        crate::interval::zero_set_null_generic_const(&strs, &self.operators)
     }
 
     /// The nonconstant-entire certificate behind `Cx::cert_nce` (the symbolic-exponent
@@ -212,11 +272,13 @@ impl Engine {
     /// evaluation landing exactly on a cheap literal while truly differing at 1e-17
     /// can no longer fold at serve, because nothing transcendental folds at serve.
     ///
-    /// The `<constant>` arm's policy is unchanged (mask x special STAYS UNABSORBED --
-    /// permanent policy against mu's own gradient, for the post-fit rationalizer;
-    /// rationals still absorb; `e^C` via the exact exp identity is the one exception).
-    /// Structural exact symbol algebra (bag cancellation `pi/pi -> 1`) is outside the
-    /// fold and deliberately unaffected.
+    /// The `<constant>` arm admits Const-and-`Num` members only; specials are outside
+    /// its membership STRUCTURALLY (Pi/E are not `Num`), which since the 2026-08-08
+    /// mask-x-special amendment is an incidental fact, not doctrine -- special-bearing
+    /// grounds absorb through the Const-shift arm below, and every shape this arm
+    /// would newly see with specials admitted (pow(C, pi), pow(pi, C)) refuses on its
+    /// own range/nan certification anyway. Structural exact symbol algebra (bag
+    /// cancellation `pi/pi -> 1`) is outside the fold and deliberately unaffected.
     /// H-045-R (owner Option B, 2026-08-05): exact-parity classification for
     /// `pow(<negative ground>, <beyond-certification integer literal>)`. Returns
     /// `Some(verdict)` when this arm DECIDES -- `Some(Some(lit))` folds, `Some(None)`
@@ -369,20 +431,28 @@ impl Engine {
             return verdict;
         }
         // GENERALIZED CONST-SHIFT ABSORPTION (P3', owner-approved 2026-08-02): an
-        // Add/Mul bag holding a `<constant>` absorbs any SPECIAL-FREE GROUND member
-        // whose interval-certified value is finite (Add) resp. finite and provably
+        // Add/Mul bag holding a `<constant>` absorbs any GROUND member whose
+        // interval-certified value is finite (Add) resp. finite and provably
         // nonzero (Mul): `C + g -> C'` is a bijective reparametrization of the fitted
         // family for every finite real g, and `C * g -> C'` for every finite nonzero
         // g. The mined const-absorption rules cover only the SPELLINGS the length-4
         // enumeration reaches -- the family is structural and closed under signs and
         // nesting the enumerator never sees (found live: `C + cosh(1)` absorbed by a
-        // mined rule while `C - cosh(1)` survived for want of a sign twin). Members
-        // with specials NEVER absorb (mask-x-special, permanent policy); `<constant>`
-        // -bearing members are not ground and never qualify (Const-independence).
+        // mined rule while `C - cosh(1)` survived for want of a sign twin).
+        // SPECIAL-bearing grounds absorb exactly like every other ground (contract
+        // amendment, owner-ratified 2026-08-08: `C + pi -> C'` is the same bijection
+        // as `C + cosh(1) -> C'`; the 2026-08-01 mask-x-special carve-out held the
+        // structure for a post-fit rationalizer that remains unbuilt, and the fa
+        // vocabulary carries no specials -- superseded). What stays refused is
+        // UNCHANGED and lives elsewhere: a special may never be eaten by an
+        // INTRODUCED `<constant>` (determined-source licence at mint, Const-count
+        // invariant at load), and non-bijective positions (pow and kin) are not
+        // absorption sites. `<constant>`-bearing members are not ground and never
+        // qualify (Const-independence).
         if matches!(e, Ex::Add(_) | Ex::Mul(_)) && children.iter().any(|c| matches!(c, Ex::Const)) {
             let is_mul = matches!(e, Ex::Mul(_));
             let absorbable = |m: &Ex| -> bool {
-                if matches!(m, Ex::Const) || !is_ground(m, &view) || has_special(m) {
+                if matches!(m, Ex::Const) || !is_ground(m, &view) {
                     return false;
                 }
                 let flat = to_prefix(m, &bare);
@@ -575,6 +645,82 @@ impl Engine {
         Some(complexity(&canon(e, &cx), &view))
     }
 
+    /// OFFLINE instrument (F80 E3 read, 2026-08-11): the kept negative-exponent bag
+    /// carriers `Pow(Mul[..], n)`, n < 0, surviving in the SOUND simplify endpoint --
+    /// exactly the states the tagged emitter renders as a bag inside a `<div>` (the
+    /// nesting census's tower/content families). For each carrier, every base factor
+    /// is re-asked the two licence questions the deployed `pow` distribution consults
+    /// (`nz_ae_certified` under the full certificate context, `certainly_nonneg`
+    /// syntactically), so the classification runs on the DEPLOYED certificates, not a
+    /// re-derivation. Rows: `(carrier_prefix, exp_token, odd_neg_int, has_div_factor,
+    /// [(factor_prefix, nzae, nonneg), ..])`. `odd_neg_int` separates the
+    /// licence-refused population from the never-distributable non-integer negatives
+    /// (branch-cut kept); a row whose factor bits ALL pass marks a wiring gap.
+    /// Read-only diagnostics: nothing here feeds the chain.
+    pub fn ac_odd_neg_carriers(
+        &self,
+        tokens: &[String],
+        node_budget: usize,
+    ) -> Option<
+        Vec<(
+            Vec<String>,
+            String,
+            bool,
+            bool,
+            Vec<(Vec<String>, bool, bool)>,
+        )>,
+    > {
+        let (ctx, best) = self.ac_simplify_ex(tokens, node_budget, false);
+        let best = best?;
+        let view = self.view(&ctx);
+        let cf = |e: &Ex| self.ac_cert(e, &ctx, false);
+        let cfz = |e: &Ex| self.ac_cert(e, &ctx, true);
+        let czn = |e: &Ex| self.ac_zsn(e, &ctx);
+        let cnc = |e: &Ex| self.ac_nce(e, &ctx);
+        let cx = Cx {
+            view: &view,
+            cert_fin: Some(&cf),
+            cert_finnz: Some(&cfz),
+            cert_nzae: Some(&czn),
+            cert_nce: Some(&cnc),
+            lossy: false,
+            sentinels_expired: false,
+        };
+        let bare = Cx::bare(&view);
+        let mut out = Vec::new();
+        let mut stack: Vec<&Ex> = vec![&best];
+        while let Some(e) = stack.pop() {
+            match e {
+                Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => stack.extend(v.iter()),
+                Ex::Pow(b, ex) => {
+                    if let (Ex::Mul(v), Ex::Num(r)) = (&**b, &**ex) {
+                        if r.is_negative() {
+                            let odd_neg_int = r.as_integer().is_some_and(|n| n % 2 != 0);
+                            let has_div = v.iter().any(|f| {
+                                matches!(f, Ex::Pow(_, e2)
+                                    if matches!(&**e2, Ex::Num(rr) if rr.is_negative()))
+                            });
+                            let factors: Vec<(Vec<String>, bool, bool)> = v
+                                .iter()
+                                .map(|f| {
+                                    let ft = self.resolve_seq(&to_prefix(f, &bare), &ctx);
+                                    (ft, cx.nz_ae_certified(f), cx.certainly_nonneg(f))
+                                })
+                                .collect();
+                            let ct = self.resolve_seq(&to_prefix(e, &bare), &ctx);
+                            let et = self.resolve_seq(&to_prefix(ex, &bare), &ctx).join(" ");
+                            out.push((ct, et, odd_neg_int, has_div, factors));
+                        }
+                    }
+                    stack.push(&**b);
+                    stack.push(&**ex);
+                }
+                _ => {}
+            }
+        }
+        Some(out)
+    }
+
     /// Canonical skeleton equality MODULO literal content (`ac::expr::eq_mod_nums`),
     /// for the resolution respell guard: a resolved target skeleton-equal to its mark
     /// differs only in literal values -- a respell, never structural recovery.
@@ -671,14 +817,28 @@ impl Engine {
                 .map(|p| {
                     let p = canon(p, cxx);
                     if p != *e {
+                        // C34b/D7 (owner-ratified): this assert is the LIVE route-equality
+                        // instrument -- every constructor-built pass state must equal its
+                        // parse-route canon. The measured divergence class (the odd-literal
+                        // sign pair) was REMOVED by B5+B19; zero specimens remain, so the
+                        // hard failure stays (strictly sound). The diagnostics below carry
+                        // the D7 trigger decision for any future specimen: mu-equal
+                        // divergence = the deferred route-invariance work reopens;
+                        // mu-UNEQUAL divergence = treat as value-suspect and fix first.
                         let s = |v: &[crate::tokens::Tok]| {
                             v.iter()
                                 .map(|x| view.resolve_owned(*x))
                                 .collect::<Vec<_>>()
                                 .join(" ")
                         };
+                        let (me, mp) = (
+                            crate::ac::expr::complexity(e, cxx.view),
+                            crate::ac::expr::complexity(&p, cxx.view),
+                        );
+                        let reconverge = canon(p.clone(), cxx) == canon(e.clone(), cxx);
                         eprintln!(
-                            "STABLE-DIFF (state)\n  T : {}\n  T': {}\n  e : {e:?}\n  p : {p:?}",
+                            "STABLE-DIFF (state)  mu: {me} vs {mp} ({})  reconverges: {reconverge}\n                               T : {}\n  T': {}\n  e : {e:?}\n  p : {p:?}",
+                            if me == mp { "mu-equal: D7 route-invariance trigger" } else { "mu-UNEQUAL: value-suspect" },
                             s(&t),
                             s(&to_prefix(&p, cxx))
                         );
@@ -815,6 +975,54 @@ mod tests {
 
     fn t(s: &[&str]) -> Vec<String> {
         s.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// C1.11: the per-Engine certificate cache's no-overlay-ids invariant lives in
+    /// the TYPE (insert drops overlay-bearing keys; debug builds assert), not only in
+    /// `ac_cert`'s call-site guard. The breach the drop prevents: the token table is
+    /// append-only, so a poisoned overlay-keyed entry would not stay unreachable --
+    /// once the table grows past the overlay id, a later legitimate key collides with
+    /// it and reads a wrong cached certificate.
+    #[test]
+    fn c111_table_keyed_certificates_round_trip() {
+        let Some(e) = engine() else { return };
+        let ctx = crate::engine::memo_ctx_for_tests(&e);
+        let key = crate::engine::intern_for_tests(&e, &t(&["+", "x0", "x1"]), &ctx);
+        assert!(key.iter().all(|&tk| e.tokens.is_table_id(tk)));
+        let mut cache = e.bang_cache.lock().unwrap();
+        cache.insert(key.clone(), true, &e.tokens);
+        assert_eq!(cache.get_promoting(&key, &e.tokens), Some(true));
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn c111_overlay_keyed_insert_is_dropped() {
+        let Some(e) = engine() else { return };
+        let ctx = crate::engine::memo_ctx_for_tests(&e);
+        // A literal no table pre-interns: it lands in the per-call overlay.
+        let key = crate::engine::intern_for_tests(&e, &t(&["31415926535897932"]), &ctx);
+        assert!(
+            key.iter().any(|&tk| !e.tokens.is_table_id(tk)),
+            "precondition: the key must carry an overlay id"
+        );
+        let mut cache = e.bang_cache.lock().unwrap();
+        cache.insert(key.clone(), true, &e.tokens);
+        assert_eq!(cache.get_promoting(&key, &e.tokens), None);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "overlay id in a per-Engine certificate cache key")]
+    fn c111_overlay_keyed_insert_asserts_in_debug() {
+        let Some(e) = engine() else {
+            // Asset-gated environments skip the body (as the release twin returns
+            // early); satisfy the harness with the expected message.
+            panic!("overlay id in a per-Engine certificate cache key");
+        };
+        let ctx = crate::engine::memo_ctx_for_tests(&e);
+        let key = crate::engine::intern_for_tests(&e, &t(&["31415926535897932"]), &ctx);
+        assert!(key.iter().any(|&tk| !e.tokens.is_table_id(tk)));
+        e.bang_cache.lock().unwrap().insert(key, true, &e.tokens);
     }
 
     /// H-051 (2026-08-05, extreme-literal lane): `Ex::Num` exponents classify by the
@@ -1251,10 +1459,15 @@ mod tests {
             "published asset must translate loss-free; a drop means it lags the engine -- \
              republish, do not re-pin"
         );
+        // G2 REPUBLISH (2026-08-15): the full-lane re-mine ships (6,594 rules, x3
+        // byte-identical on solomon, D20's row-by-row accounting) and the pin returns
+        // to its PRISTINE form after the B5+B19 interim (6649/30/0, discharged). If
+        // either count moves off 0 again, the published asset lags the engine:
+        // REPUBLISH, do not re-pin.
         assert_eq!(
             subsumed, 0,
-            "published asset (2026-08-08) is mint-pristine against this engine; subsumption \
-             means the canon moved past it -- republish, do not re-pin"
+            "published asset (2026-08-15 re-mine) is mint-pristine against this engine; \
+             subsumption means the canon moved past it -- republish, do not re-pin"
         );
         let _ = twins;
     }
@@ -1605,6 +1818,12 @@ mod tests {
                     "x4",
                     "float(\"nan\")",
                 ],
+                // F63 (2026-08-08): pinned UNCHANGED through the sign-placement owner
+                // family. A mid-build over-wide site definition briefly traded this
+                // term's sign out of the inf-bearing sum (and this pin was briefly
+                // moved to match); the bare-infinity-term exclusion (the H-014
+                // absorber owns that sign) restored the absorbed spelling -- this pin
+                // is the ORIGINAL orientation and now also guards that exclusion.
                 &[
                     "<add>",
                     "<mul>",
@@ -1635,35 +1854,20 @@ mod tests {
                     "+", "0", "-", "*", "-", "atanh", "/", "x1", "x1", "pow", "pow", "x0", "x2",
                     "x3", "+", "pow", "x0", "cos", "x0", "+", "-", "1", "x3", "/", "x3", "3", "-2",
                 ],
+                // Re-pinned 2026-08-08 at the mu-argmin orientation ((b)) + the odd-literal
+                // sign fusion: the -atanh(1) term now spells atanh(-1) (same value, -inf;
+                // the boundary-fold rule is REFUSED here because firing it would rebuild
+                // into the structurally-inf sum spelling, which prices HIGHER than this
+                // state under the cheapest-orientation canon). Adjudicated: input-vs-state
+                // and old-vs-new spellings agree 400/400 on a random grid; idempotent.
+                // F63 (same day): pinned UNCHANGED through the sign-placement owner
+                // family -- a mid-build over-wide site definition briefly let the fold
+                // fire (and this pin briefly moved); the bare-infinity-term exclusion
+                // restored the refusal, and this pin now also guards it.
                 &[
-                    "<add>",
-                    "<mul>",
-                    "<add>",
-                    "pow",
-                    "pow",
-                    "x0",
-                    "x2",
-                    "x3",
-                    "<sub>",
-                    "float(\"inf\")",
-                    "</add>",
-                    "<add>",
-                    "<mul>",
-                    "2",
-                    "x3",
-                    "<div>",
-                    "3",
-                    "</mul>",
-                    "<sub>",
-                    "pow",
-                    "x0",
-                    "cos",
-                    "x0",
-                    "1",
-                    "</add>",
-                    "</mul>",
-                    "2",
-                    "</add>",
+                    "<add>", "2", "<sub>", "<mul>", "<add>", "atanh", "-1", "pow", "pow", "x0",
+                    "x2", "x3", "</add>", "<add>", "pow", "x0", "cos", "x0", "1", "<sub>", "<mul>",
+                    "2", "x3", "<div>", "3", "</mul>", "</add>", "</mul>", "</add>",
                 ],
             ),
             (
@@ -1950,19 +2154,136 @@ mod tests {
             "*", "0.5", "inv", "*", "x4", "+", "x3", "+", "tan", "x0", "/", "1", "3",
         ]);
         let lc = e.ac_simplify(&coeff, 48, true).unwrap();
+        // RE-PINNED 2026-08-11 (E2, audit F81): the tan-bearing sum now passes the
+        // zero-set licence (denominator clearing: N = (x3 + 1/3)*cos(x0) + sin(x0),
+        // witnessed nonzero), so the kept carrier DISTRIBUTES and renders in the
+        // flat F80 spelling. The completion behavior this test pins is unchanged --
+        // 0.5 still reciprocates to the `2`, now a member of the flat `<div>`
+        // section. Adjudicated: old spelling re-simplifies to this same state
+        // (two-route convergence), fixpoint holds, 0/1000 value mismatches vs the
+        // raw input under the deployed evaluator.
         assert_eq!(
             lc,
             t(&[
-                "inv", "<mul>", "2", "x4", "<add>", "x3", "tan", "x0", "<mul>", "1", "<div>", "3",
-                "</mul>", "</add>", "</mul>",
+                "<mul>", "1", "<div>", "2", "x4", "<add>", "x3", "tan", "x0", "<mul>", "1",
+                "<div>", "3", "</mul>", "</add>", "</mul>",
             ]),
-            "coefficient must reciprocate into the joined base"
+            "coefficient must reciprocate into the joined (now distributed) base"
         );
         for toks in [&sentinel, &mask, &coeff] {
             let once = e.ac_simplify(toks, 48, true).unwrap();
             let twice = e.ac_simplify(&once, 48, true).unwrap();
             assert_eq!(twice, once, "lossy not idempotent: {toks:?}");
         }
+    }
+
+    /// F83 (owner-ruled F75 group D, 2026-08-11; extreme row 508487): a negative
+    /// rational coefficient surviving the F63 pre-fold flips the pole sign at every
+    /// co-factor zero (`inv(0·c) = +inf` vs `sign(c)·inf` distributed) -- the
+    /// RealChange-at-constructed-exceptional-point class the licence registry (F66)
+    /// refuses for mined rules, now guarded at the constructor. The guard demands a
+    /// certainly-NONVANISHING co-factor set (zero-freeness, not zero-set-nullity):
+    /// positive coefficients, traded signs (F63), and zero-free bags stay licensed.
+    #[test]
+    fn f83_negative_coefficient_pole_guard() {
+        let Some(e) = engine() else { return };
+        // The 508487 subterm keeps: inv((-x0)/3) preserves inv(0) = +inf at the
+        // atom (neg(0) = 0, the one unsigned zero) where -3/x0 shipped -inf.
+        let kept = e
+            .ac_simplify_proj(
+                &t(&["rootn", "/", "x0", "-3", "-1"]),
+                48,
+                false,
+                crate::engine::AcForm::Explicit,
+            )
+            .unwrap();
+        assert_eq!(
+            kept,
+            t(&["inv", "/", "neg", "x0", "3"]),
+            "must refuse the distribution"
+        );
+        let again = e
+            .ac_simplify_proj(&kept, 48, false, crate::engine::AcForm::Explicit)
+            .unwrap();
+        assert_eq!(again, kept, "the kept carrier is a fixpoint");
+        // Positive coefficient: the atom agrees (+inf both ways) -- still licensed.
+        assert_eq!(
+            e.ac_simplify_proj(
+                &t(&["rootn", "/", "x0", "3", "-1"]),
+                48,
+                false,
+                crate::engine::AcForm::Explicit
+            )
+            .unwrap(),
+            t(&["/", "3", "x0"]),
+            "positive twin distributes"
+        );
+        // A sign-trade site absorbs the coefficient sign (F63) -- still licensed.
+        assert_eq!(
+            e.ac_simplify_proj(
+                &t(&["inv", "*", "-2", "-", "x1", "5"]),
+                48,
+                false,
+                crate::engine::AcForm::Explicit
+            )
+            .unwrap(),
+            t(&["/", "inv", "-", "5", "x1", "2"]),
+            "traded sign distributes"
+        );
+        // Zero-free co-factors (exp of a finite arg) have no exceptional point.
+        assert_eq!(
+            e.ac_simplify_proj(
+                &t(&["inv", "*", "-3", "exp", "x1"]),
+                48,
+                false,
+                crate::engine::AcForm::Explicit
+            )
+            .unwrap(),
+            t(&["/", "neg", "exp", "neg", "x1", "3"]),
+            "zero-free bag distributes"
+        );
+        // End-to-end, the full 508487 row: the exp argument keeps the reciprocal.
+        let row = t(&[
+            "pow",
+            "cos",
+            "/",
+            "-",
+            "x1",
+            "-3",
+            "rootn",
+            "9007199254740991",
+            "-3",
+            "exp",
+            "rootn",
+            "/",
+            "x0",
+            "-3",
+            "-1",
+        ]);
+        let out = e
+            .ac_simplify_proj(&row, 48, false, crate::engine::AcForm::Explicit)
+            .unwrap();
+        assert_eq!(
+            out,
+            t(&[
+                "pow",
+                "cos",
+                "*",
+                "rootn",
+                "9007199254740991",
+                "3",
+                "+",
+                "x1",
+                "3",
+                "exp",
+                "inv",
+                "/",
+                "neg",
+                "x0",
+                "3",
+            ]),
+            "the 508487 row keeps its pole-faithful spelling"
+        );
     }
 
     /// H-020 (2026-08-04, owner-ruled): the sign of a negative coefficient folds INTO a

@@ -374,14 +374,35 @@ fn has_plain_mul_factor(v: &[Ex]) -> bool {
 /// negated exponent is 1) to the denominator. A non-integer rational coefficient contributes
 /// its numerator and denominator to the respective sides -- unless the divisor-side rule
 /// (`divisor_side`) spells the whole coefficient as ONE reciprocal token in the denominator.
+/// F73: does this bag carry an i128-overflow PARTITION -- its exact rational content
+/// split across two or more `Num` members because folding them would overflow? The
+/// atoms of a partition are load-bearing: any gathering (p/q splits into shared
+/// num/den chains, divisor-side respells, section pooling) destroys the boundaries
+/// the arithmetic was forced to keep, and the re-parse pools the pieces and re-CUTS
+/// them -- one value, a different partition per dialect (the extreme lane's dominant
+/// hard class; `* a/3 a/3` with a = 2^127-1 rendered `/ (a*a) (3*3)` and re-parsed to
+/// `{a, a, 1/9}`). Partition members therefore render as SELF-CONTAINED spellings
+/// (one atom token, or a locally re-foldable division), never pooled -- the sorted
+/// accumulation is cut-stable on preserved atoms, so the round-trip is the identity.
+/// Bags with at most one rational member are unaffected: a single fraction re-forms
+/// uniquely from any of its spellings.
+fn is_partition_bag(v: &[Ex]) -> bool {
+    v.iter().filter(|f| matches!(f, Ex::Num(_))).count() >= 2
+}
+
 fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
     let mut num = Vec::new();
     // (member, original factor): the split into a GROUPED denominator is decided after
     // collection -- see below.
     let mut cand: Vec<(Ex, &Ex)> = Vec::new();
     let mut den = Vec::new();
+    let partition = is_partition_bag(v);
     for f in v {
         match f {
+            // F73: partition atoms stay whole members -- `emit_num` prints each as one
+            // token or a LOCAL `/ p q`, either of which re-folds to exactly this atom
+            // before the bag pools.
+            Ex::Num(r) if partition => num.push(Ex::Num(*r)),
             Ex::Num(r) => {
                 // H-020 amendment: the SIGN never enters the den group (a signed den
                 // literal re-parses the sign into the divisor bag, where the sign-fold
@@ -546,7 +567,7 @@ fn emit(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
             if v.len() == 2 {
                 if let (Ex::Num(r), Ex::Add(terms)) = (&v[0], &v[1]) {
                     if *r == Rat::NEG_ONE {
-                        if let Some(flipped) = flip_terms(terms) {
+                        if let Some(flipped) = flip_terms(terms, cx) {
                             emit(&Ex::Add(flipped), cx, out);
                             return;
                         }
@@ -784,7 +805,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                 if let Ex::Num(r) = &v[0] {
                     if *r == Rat::NEG_ONE {
                         if let Ex::Add(terms) = &v[1] {
-                            if let Some(flipped) = flip_terms(terms) {
+                            if let Some(flipped) = flip_terms(terms, cx) {
                                 emit_tagged(&Ex::Add(flipped), cx, out);
                                 return;
                             }
@@ -806,8 +827,18 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
             let mut num: Vec<&Ex> = Vec::new();
             let mut coeff_num: Option<Ex> = None; // the fraction's numerator, when split
             let mut neg_one = false; // H-020: the sign never enters `<div>` -- split it out
+            let mut unit_coeff_split = false; // F80: a p=1 coefficient split happened
+            let partition = is_partition_bag(v);
             for f in v {
                 match f {
+                    // F73: partition atoms render verbatim (`emit_rational_tagged`: one
+                    // token beyond the vocabulary bound, the nested structural fraction
+                    // inside it -- both re-fold locally to the atom before the bag
+                    // pools). The split and divisor-side arms below would pool their
+                    // pieces into the shared `<div>` section, where member-kind flips
+                    // across the round-trip reordered the section (the 30 residual
+                    // P1 rows of the post-F72 census).
+                    Ex::Num(_) if partition => num.push(f),
                     Ex::Num(r) => {
                         let mag = if r.is_negative() {
                             r.checked_neg()
@@ -821,9 +852,14 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                         // no atomic fraction or decimal token at all -- see
                         // `emit_rational_tagged`. A magnitude-1 numerator is the bare sign
                         // and is omitted; the sign itself is split out below.
-                        match mag
-                            .filter(|m| fraction_spells_structurally(m) && has_plain_mul_factor(v))
-                        {
+                        // F80 (owner-ruled spelling law, 2026-08-10): the split fires
+                        // UNCONDITIONALLY for in-bound fractions -- previously it demanded
+                        // a plain factor (`has_plain_mul_factor`), and the div-only case
+                        // fell through to the leaf renderer, whose structural spelling is
+                        // a mul bag: the same-type nesting the census measured at 8,918
+                        // events/1M. The grammar's >=1-numerator-member floor is kept by
+                        // the post-loop `1` (below); partition bags stay verbatim (F73).
+                        match mag.filter(|m| fraction_spells_structurally(m)) {
                             Some(m) => {
                                 if let Some(d) = Rat::new(m.den(), 1) {
                                     den.push(Ex::Num(d));
@@ -831,6 +867,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                                 if m.num() == 1 {
                                     // Bare sign: no numerator token to carry it.
                                     neg_one = r.is_negative();
+                                    unit_coeff_split = true;
                                 } else {
                                     // The sign rides the numerator (`-2` beats `-1 2`).
                                     let signed = if r.is_negative() { -m.num() } else { m.num() };
@@ -882,6 +919,18 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                     },
                     _ => num.push(f),
                 }
+            }
+            // F80: when the COEFFICIENT SPLIT emptied the numerator side (unit
+            // fraction, no plain factor, no sign to carry -- `(1/3)/x0`), the `1`
+            // is the numerator member the owner-ratified table pins:
+            // `<mul> 1 <div> 3 x0 </mul>`. With a sign, the split-out `-1` below
+            // already fills the slot (`(-1/3)/x0` -> `<mul> -1 <div> 3 x0 </mul>`).
+            // Coefficient-FREE den-only bags keep their established empty-numerator
+            // spelling (`inv(acos(x0)*atan(x1))` -> `<mul> <div> acos x0 atan x1
+            // </mul>`, pinned by TestLossyReciprocalRejoinProjection) -- that
+            // dialect predates F80 and the ruling did not touch it.
+            if unit_coeff_split && !neg_one && coeff_num.is_none() && num.is_empty() {
+                coeff_num = Some(Ex::Num(Rat::ONE));
             }
             out.push(view.intern("<mul>"));
             if neg_one {
@@ -1055,18 +1104,32 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             (format!("{base}^{expo}"), 3)
         }
         Ex::Add(v) => {
+            // Display rules (owner ruling 2026-08-08), DISPLAY-ONLY -- the bag order is
+            // the canonical one and stays untouched (tagged/explicit emit it verbatim),
+            // and the infix parse is permutation-invariant, so round-trip is unaffected:
+            //  1. POSITIVE terms print first, then negative ones, relative order
+            //     preserved within each group -- `2 - x0` must never print as `-x0 + 2`;
+            //  2. an ODD function's literal-argument sign hoists to the joiner -- a sum
+            //     never prints `+ sin(-2)` or `- sin(-2)`, always `+ sin(2)` / `- sin(2)`
+            //     (a standalone `sin(-2)` outside a sum keeps its canonical spelling).
+            let mut parts: Vec<(bool, Ex)> = v
+                .iter()
+                .map(|t| {
+                    let (neg, mag) = split_sign(t);
+                    odd_literal_hoist(neg, mag, cx)
+                })
+                .collect();
+            parts.sort_by_key(|(neg, _)| *neg); // stable: positives first, order kept
             let mut s = String::new();
-            for (i, term) in v.iter().enumerate() {
-                // Pull the sign of the term's coefficient into the joiner.
-                let (neg, mag) = split_sign(term);
+            for (i, (neg, mag)) in parts.iter().enumerate() {
                 if i == 0 {
-                    if neg {
+                    if *neg {
                         s.push('-');
                     }
                 } else {
-                    s.push_str(if neg { " - " } else { " + " });
+                    s.push_str(if *neg { " - " } else { " + " });
                 }
-                s.push_str(&render(&mag, cx, 2));
+                s.push_str(&render(mag, cx, 2));
             }
             (s, 1)
         }
@@ -1075,7 +1138,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             if v.len() == 2 {
                 if let (Ex::Num(r), Ex::Add(terms)) = (&v[0], &v[1]) {
                     if *r == Rat::NEG_ONE {
-                        if let Some(flipped) = flip_terms(terms) {
+                        if let Some(flipped) = flip_terms(terms, cx) {
                             return render_prec(&Ex::Add(flipped), cx);
                         }
                     }
@@ -1085,8 +1148,24 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
             let mut neg = false;
             let mut num_parts: Vec<String> = Vec::new();
             let mut den_parts: Vec<String> = Vec::new();
+            let partition = is_partition_bag(v);
             for f in v {
                 match f {
+                    // F73: partition atoms render as self-contained factors, PARENTHESIZED
+                    // when fractional -- `(a/3)*(a/3)` re-parses each atom locally, while
+                    // the bare chain `a/3*a/3` re-associates textually into a flat pool
+                    // that re-cuts. The display sign still hoists to the front: sign
+                    // hosting is value-determined since F72, so the re-parse re-hosts it
+                    // identically.
+                    Ex::Num(r) if partition => {
+                        let mut r = *r;
+                        if r.is_negative() {
+                            neg = !neg;
+                            r = r.checked_neg().unwrap();
+                        }
+                        let s = num_token(&r);
+                        num_parts.push(if s.contains('/') { format!("({s})") } else { s });
+                    }
                     Ex::Num(r) => {
                         let mut r = *r;
                         if r.is_negative() {
@@ -1181,8 +1260,31 @@ fn render_exponent(r: &Rat) -> String {
 
 /// Negate every term of a sum for DISPLAY sign redistribution (`None` on the i128 edge, in
 /// which case the caller falls back to the literal `-1` rendering).
-fn flip_terms(terms: &[Ex]) -> Option<Vec<Ex>> {
-    terms.iter().map(super::expr::negate_term).collect()
+fn flip_terms(terms: &[Ex], cx: &Cx) -> Option<Vec<Ex>> {
+    terms
+        .iter()
+        .map(|t| super::expr::negate_term(t, cx))
+        .collect()
+}
+
+/// Display-only odd-literal sign hoist (owner ruling 2026-08-08): inside a printed sum,
+/// a term whose magnitude is an odd function of a NEGATIVE literal moves that sign out to
+/// the joiner (`- sin(-2)` becomes `+ sin(2)`), so no printed sum ever carries a double
+/// negation. Literal arguments only: a non-literal argument's sign is structure, not a
+/// spelling choice.
+fn odd_literal_hoist(neg: bool, mag: Ex, cx: &Cx) -> (bool, Ex) {
+    if let Ex::Fun(f, args) = &mag {
+        if args.len() == 1 && cx.is_odd_fun(*f) {
+            if let Ex::Num(r) = &args[0] {
+                if r.is_negative() {
+                    if let Some(p) = r.checked_neg() {
+                        return (!neg, Ex::Fun(*f, vec![Ex::Num(p)]));
+                    }
+                }
+            }
+        }
+    }
+    (neg, mag)
 }
 
 /// Split an addend into (is-negative, magnitude form) for the `a - b` joiner.
@@ -1451,6 +1553,78 @@ mod tests {
                 }
                 assert_eq!(depth, 1, "unbalanced output {out:?}");
             }
+        });
+    }
+
+    /// F73: an i128-overflow PARTITION's atoms survive every dialect's round-trip.
+    /// The gathering emitters pooled the atoms into shared num/den chains, and the
+    /// re-parse re-CUT them (`* a/3 a/3` -> `/ (a*a) (3*3)` -> `{a, a, 1/9}` -- one
+    /// value, a different partition per dialect; 884 of the extreme lane's 900
+    /// post-F72 hard rows). Partition members now render self-contained.
+    #[test]
+    fn f73_partition_atoms_survive_every_dialect() {
+        with_view(|view| {
+            let cx = Cx::bare(view);
+            let a3 = "170141183460469231731687303715884105727/3";
+            // the canonical partition state, built directly
+            let state = crate::ac::expr::mul(
+                vec![
+                    Ex::Num(Rat::new(170141183460469231731687303715884105727, 3).unwrap()),
+                    Ex::Num(Rat::new(170141183460469231731687303715884105727, 3).unwrap()),
+                ],
+                &cx,
+            );
+            assert!(
+                matches!(&state, Ex::Mul(v) if is_partition_bag(v)),
+                "the probe pair must stay partitioned: {state:?}"
+            );
+
+            // TAGGED and EXPLICIT: parse(emit(state)) == state, member-exact.
+            let tagged = to_prefix_tagged(&state, &cx);
+            assert_eq!(
+                from_prefix(&tagged, &cx).expect("tagged parses"),
+                state,
+                "tagged round-trip re-cut the partition"
+            );
+            let mut explicit = Vec::new();
+            emit(&state, &cx, &mut explicit);
+            assert_eq!(
+                from_prefix(&explicit, &cx).expect("explicit parses"),
+                state,
+                "explicit round-trip re-cut the partition"
+            );
+            // The explicit spelling carries each atom as a LOCAL division, never a
+            // pooled chain.
+            let spelled: Vec<String> = strs(view, &explicit);
+            assert_eq!(
+                spelled,
+                vec![
+                    "*",
+                    "/",
+                    "170141183460469231731687303715884105727",
+                    "3",
+                    "/",
+                    "170141183460469231731687303715884105727",
+                    "3"
+                ],
+                "explicit gathering resurfaced"
+            );
+
+            // INFIX: atoms render parenthesized so the textual chain cannot re-associate.
+            let infix = to_infix_pretty(&state, &cx);
+            assert_eq!(infix, format!("({a3})*({a3})"));
+
+            // The SIGNED partition keeps the sign in an atom (tagged/explicit) or
+            // hoisted (infix) -- and still round-trips member-exact.
+            let signed = crate::ac::expr::mul(
+                vec![
+                    Ex::Num(Rat::new(-170141183460469231731687303715884105727, 3).unwrap()),
+                    Ex::Num(Rat::new(170141183460469231731687303715884105727, 3).unwrap()),
+                ],
+                &cx,
+            );
+            let tagged = to_prefix_tagged(&signed, &cx);
+            assert_eq!(from_prefix(&tagged, &cx).expect("tagged parses"), signed);
         });
     }
 }

@@ -22,6 +22,7 @@ emptied DEP_OPS slots. Each test here pins one of those failure modes shut:
    previously existed only for manual runs, now pinned into the wall.
 """
 import json
+import math
 import os
 
 import numpy as np
@@ -50,7 +51,9 @@ def rng():
 
 class TestMonitorSpeaksBagLanguage:
     def test_bag_evaluator_sections(self):
-        from mpmath import mpf
+        from mpmath import mp, mpf
+        from simplipy.verify._monitor import DPS
+        mp.dps = DPS  # direct-internal evaluator call: the caller owns the precision (C35)
         env = {'x0': mpf(3), 'x1': mpf(5), 'x2': mpf(7)}
         cases = [
             (['<add>', 'x0', 'x1', '</add>'], mpf(8)),
@@ -249,8 +252,9 @@ class TestJudgeParityExactness:
     VIOLATION pre-fix, all OK post-fix)."""
 
     def test_pow_parity_exact_beyond_2_53(self):
-        from mpmath import mpf
-        from simplipy.verify._monitor import c_pow
+        from mpmath import mp, mpf
+        from simplipy.verify._monitor import DPS, c_pow
+        mp.dps = DPS  # direct-internal call (C35)
         assert c_pow(mpf('-inf'), mpf('9007199254740993')) == mpf('-inf')  # odd
         assert c_pow(mpf('-inf'), mpf('9007199254740992')) == mpf('inf')   # even
         assert c_pow(mpf('-inf'), mpf('1e40')) == mpf('inf')               # even
@@ -270,8 +274,9 @@ class TestJudgeParityExactness:
         assert isnan(c_pow(mpf('-inf'), mpf('2.5')))
 
     def test_rootn_index_value_strict(self):
-        from mpmath import isnan, mpf
-        from simplipy.verify._monitor import c_rootn
+        from mpmath import isnan, mp, mpf
+        from simplipy.verify._monitor import DPS, c_rootn
+        mp.dps = DPS  # direct-internal call (C35)
         r = c_rootn(mpf(2), mpf('9007199254740993'))  # huge odd index resolves
         assert abs(r - 1) < mpf('1e-14') and r > 1
         assert isnan(c_rootn(mpf(2), mpf(10) ** 400))  # bignum-hazard index refuses
@@ -288,3 +293,68 @@ class TestJudgeParityExactness:
         for inp, out in cases:
             verd, _ = judge_pair(inp.split(), out.split(), np.random.default_rng(0))
             assert verd == "OK", (inp, verd)
+
+
+class TestRuleFilesAreDataNotCode:
+    """R2/B21: `verify_ruleset` adjudicates rule sets it did NOT produce -- so a leaf
+    token is untrusted DATA. It used to reach `eval(t, {'np': np, 'float': float})`,
+    whose globals dict omits __builtins__, so CPython injects the real ones and a token
+    becomes an arbitrary Python expression. Demonstrated end to end before the fix: a
+    rules.json whose lhs token was an __import__ payload WROTE ITS MARKER FILE through
+    the documented public entry point, and was then judged as if it were a rule."""
+
+    def test_a_rules_file_cannot_execute_code(self, tmp_path):
+        marker = tmp_path / 'PWNED'
+        payload = f'__import__("pathlib").Path("{marker}").write_text("pwned")'
+        path = tmp_path / 'hostile_rules.json'
+        path.write_text(json.dumps([[[payload], ['0']]]))
+        report = v.verify_ruleset(str(path))
+        assert not marker.exists(), 'a rules.json token executed as Python'
+        assert report['buckets']['UNSUPPORTED-SHAPE'] == [0], report['buckets']
+        for bucket in ('CERTIFIED', 'TOLERATED', 'KILL'):
+            assert report['buckets'][bucket] == [], f'payload reached the {bucket} path'
+
+    def test_every_shipped_literal_spelling_is_accepted(self):
+        """The acceptor must not refuse the corpus it exists to gate: `(-N)` alone is
+        26.98% of literal occurrences in the shipped artifact (3,981 of 6,803 rules)."""
+        from simplipy.verify._contract import literal_value
+        assert literal_value('(-10)') == -10.0
+        assert literal_value('-1e-09') == -1e-09
+        assert literal_value('.5') == 0.5 and literal_value('2.125') == 2.125
+        assert literal_value('np.pi') == math.pi and literal_value('np.e') == math.e
+        assert literal_value('float("inf")') == math.inf
+        assert literal_value("float('-inf')") == -math.inf
+        assert math.isnan(literal_value('float("nan")'))
+        assert literal_value('1/3') == 1.0 / 3.0  # legal in a foreign ruleset
+
+    @pytest.mark.parametrize('token', [
+        '__import__("os").system("true")', 'open("/etc/passwd")', 'np.pi + 1',
+        '(-1)*2', 'float("1/3")', 'x0.__class__', '1/0', '()', 'lambda: 1',
+        '[1,2]', 'np.__loader__', 'eval("1")',
+    ])
+    def test_anything_outside_the_grammar_is_refused(self, token):
+        from simplipy.verify._contract import UnsupportedToken, literal_value
+        with pytest.raises(UnsupportedToken):
+            literal_value(token)
+
+
+class TestD15DiagonalBinding:
+    """D15 / X11's opposite-polarity hole: `judge_rule` sampled wildcard slots
+    INDEPENDENTLY, so the diagonal binding {_0 = _1} was a null event to it -- yet
+    for a rewrite rule the diagonal is a real, engine-reachable instance family:
+    with _0 = _1 = log(x0) the collector refuses t - t -> 0 (nan-capable), the
+    pattern (a-b)/(b-a) matches, and the engine rewrote a nan-EVERYWHERE expression
+    to -1. judge_pair (instance-level) convicts the same pair; the two authorities
+    must not be disjointly blind. The judge now scans a diagonal lane."""
+
+    def test_diagonal_nan_rule_is_killed(self):
+        from simplipy.verify import verify_rule
+        v = verify_rule(['/', '-', '_0', '_1', '-', '_1', '_0'], ['(-1)'])
+        assert v['verdict'] == 'KILL', v
+
+    def test_sound_multislot_rules_stay_certified(self):
+        from simplipy.verify import verify_rule
+        # diagonal-safe multi-slot rules must not be collateral: x*y -> y*x is exact
+        # everywhere including the diagonal; (a-b)+(b-a) -> 0 is nan == nan there.
+        assert verify_rule(['*', '_0', '_1'], ['*', '_1', '_0'])['verdict'] in ('CERTIFIED', 'TOLERATED')
+        assert verify_rule(['+', '-', '_0', '_1', '-', '_1', '_0'], ['0'])['verdict'] != 'KILL'

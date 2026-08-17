@@ -86,7 +86,7 @@ Example (the flash-ansr-style policy)::
     skeleton = masking.mask(engine.simplify(tokens), engine, keep_structure)
 """
 import enum
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from simplipy.utils import is_numeric_string, reserved_numeric_spelling
 
@@ -220,7 +220,9 @@ def mask(tokens: list[str], engine: "SimpliPyEngine",
         if replacement is not None:
             out[idx] = replacement
     if collect and out != list(tokens):
-        out = engine.simplify(out, form="tagged" if _is_tagged(tokens) else "explicit")
+        # simplify mirrors the input container: a list in is a list out.
+        out = cast(list[str],
+                   engine.simplify(out, form="tagged" if _is_tagged(tokens) else "explicit"))
     return out
 
 

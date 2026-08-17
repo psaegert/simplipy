@@ -22,7 +22,7 @@ entirely from ``ATOMS`` before calling ``judge_exact``.
 import numpy as np
 
 from ._pointwise import ATOMS, wildcards, valuations_for
-from ._hp_equiv import evaluate as hp_eval
+from ._hp_equiv import evaluate as hp_eval, _restores_dps
 from mpmath import mp, mpf, isnan, isinf, inf, nan, fabs
 
 SEED = 20260717
@@ -48,6 +48,7 @@ def eq(a, b):
     return fabs(a - b) <= mpf('1e-30') * max(1, fabs(a), fabs(b))
 
 
+@_restores_dps
 def judge_exact(lhs, rhs, valuations):
     """Re-judge a rule over the supplied valuation set in mpmath.
 

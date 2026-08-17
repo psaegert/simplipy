@@ -42,7 +42,7 @@ from ._pointwise import (ATOMS, MAX_PRODUCT, judge, prefold,  # noqa: E402
                          substitute, eval_point, wildcards, valuations_for,
                          correlated_valuations)
 from ._const_bearing import certify_rule  # noqa: E402
-from ._hp_equiv import evaluate as hp_eval  # noqa: E402
+from ._hp_equiv import evaluate as hp_eval, _restores_dps  # noqa: E402
 from simplipy.utils import reserved_numeric_spelling  # noqa: E402
 from mpmath import mp, mpf, isnan, isinf  # noqa: E402
 
@@ -326,6 +326,7 @@ def mp_eq(a, b):
     return fabs(a - b) <= mpf('1e-30') * max(1, fabs(a), fabs(b))
 
 
+@_restores_dps
 def judge_ground(lhs, rhs, rng):
     """SKELETON semantics for `<constant>`-bearing ground rules: for-all c exists finite c_t."""
     ns = lhs.count('<constant>')

@@ -10,6 +10,7 @@
 mod ac;
 mod memo;
 mod miner;
+pub mod refusals;
 pub mod stats;
 
 use std::error::Error;
@@ -203,19 +204,6 @@ impl Engine {
     #[allow(dead_code)] // test/bench-only today
     pub(crate) fn operators_ref(&self) -> &Operators {
         &self.operators
-    }
-
-    /// The compiled rule set (buckets + operand index). Exposed for the stage-(a) parity tests.
-    #[allow(dead_code)] // test-only accessor (parity tests here and in rules.rs)
-    pub(crate) fn rules(&self) -> &CompiledRules {
-        &self.rules
-    }
-
-    /// The per-Engine token table. Exposed for the stage-(a) parity tests, which resolve
-    /// compiled-rule ids back to strings.
-    #[allow(dead_code)] // test-only accessor (parity tests here and in rules.rs)
-    pub(crate) fn token_table(&self) -> &TokenTable {
-        &self.tokens
     }
 
     /// `is_valid`: is the prefix expression syntactically valid

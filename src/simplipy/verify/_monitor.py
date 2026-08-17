@@ -19,6 +19,14 @@ exact-rational coefficients (``1/3``). Tokens OUTSIDE that language fail CLOSED
   NULL sets only: extension at isolated atoms is tolerated, while extension on a large
   fraction of continuum draws is a positive-measure violation.
 
+  F74 (2026-08-10, the honest-instrument upgrade): pure-rational variable-free spans fold
+  EXACTLY in Fraction arithmetic before any mpf sees them; each pair is judged at a working
+  precision adapted to its own literal exponent span; the exact-snap resolves variable-free
+  transcendental spans to provable zeros/small integers on an escalating precision ladder
+  (never at fixed rungs); refusals (Unresolved) propagate honestly out of c_pow instead of
+  fabricating nan; and values whose distance from a decision boundary is smaller than ANY
+  working precision (tanh saturation) refuse rather than fabricate the boundary value.
+
 Verdict classes per rewrite: OK | VIOLATION (value change / shrink / positive-measure
 extension) | UNSCORED (multi-slot outputs, unknown tokens, no evaluable probes). A
 violation that is ALSO present under the rules-empty engine is bucketed NATIVE-LINE
@@ -38,6 +46,8 @@ import json
 import os
 import re
 import tempfile
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 
 import numpy as np
 import yaml
@@ -72,9 +82,25 @@ MEASURE_FRACTION = 0.15   # extension-layer disagreements (nan<->defined and inf
                           # doctrine, as are correlated all-equal (diagonal) draws for DATA
                           # variables -- a Lebesgue-null subset (see judge_pair).
 
-TOL_COUNTS = {'shrink-null': 0, 'inf-null': 0, 'ext-null': 0}
+TOL_COUNTS = {'shrink-null': 0, 'inf-null': 0, 'ext-null': 0, 'singular-real-null': 0}
 N_DRAWS = 40                # continuum draws per variable set
-mp.dps = DPS
+
+
+def _ambient_dps(fn):
+    """C35: establish the monitor's working precision at the ENTRY POINTS and restore
+    the host's on exit -- the former module-level `mp.dps = DPS` mutated the embedder's
+    mpmath state at import. The evaluator deliberately reads the AMBIENT `mp.dps`
+    (F74: the bands ride it, so the adaptive ladder can flex precision mid-judgment);
+    this decorator is what makes 'ambient' start at DPS for every public entry.
+    Direct importers of `evaluate` (the fuzz harness) manage their own precision."""
+    def _wrap(*a, **k):
+        old = mp.dps
+        mp.dps = DPS
+        try:
+            return fn(*a, **k)
+        finally:
+            mp.dps = old
+    return _wrap
 
 
 # ---------------------------------------------------------------------------------------
@@ -93,8 +119,11 @@ class Unresolved(Exception):
 
 
 def _pole_guard(denom):
-    """A denominator indistinguishable from an exact pole at working precision is a pole."""
-    return abs(denom) < mpf(10) ** (-(DPS - 10))
+    """A denominator indistinguishable from an exact pole at working precision is a pole.
+    (F74: the band rides mp.dps, not the ambient DPS constant -- under the adaptive
+    per-pair precision the working dps is the pair's, and a band frozen at the ambient
+    value would be 10^600 too loose on an extreme-literal pair judged at dps 700.)"""
+    return abs(denom) < mpf(10) ** (-(mp.dps - 10))
 
 
 def _residue_guard(x):
@@ -107,7 +136,7 @@ def _residue_guard(x):
       * odd root: |residue|^(1/k) AMPLIFIES 1e-50 to 1e-10, a 'stable value change' that
         the dps-120 recheck cannot clear (the amplified residue shrinks too slowly).
     Same precision-honesty doctrine as _pole_guard: skip (Unresolved), never convict."""
-    return x != 0 and not isinf(x) and abs(x) < mpf(10) ** (-(DPS - 10))
+    return x != 0 and not isinf(x) and abs(x) < mpf(10) ** (-(mp.dps - 10))
 
 
 def c_div(a, b):
@@ -222,6 +251,14 @@ def c_pow(a, b):
         return -r if ib % 2 else r
     try:
         return _pow_mag_capped(a, b)
+    except Unresolved:
+        # F74 (D1): this catch-all used to SWALLOW the Unresolved refusal raised by
+        # _pow_mag_capped, converting "cannot evaluate at working precision" into a
+        # fabricated nan -- which then read as input-side undefinedness and convicted
+        # correct rewrites as positive-measure EXTENSION/SHRINK on every draw (~150
+        # of the 190 live extreme-lane convictions). The negative-base branch above
+        # always propagated; refusals now propagate on both branches.
+        raise
     except Exception:
         return _nan()
 
@@ -231,23 +268,33 @@ PHASE_CAP = mpf('1e25')   # a trig argument's phase mod 2pi is only knowable to 
                           # tokens, so phase is garbage beyond ~1e3x -- observed (cos at ~9e48
                           # under an older 1e50 cap flipped sign purely from slot rounding: a
                           # false violation). 1e25 leaves >= 1e14 phase margin for 40-digit
-                          # tokens. Beyond the cap: unresolved -> nan, SYMMETRICALLY on both
-                          # sides. (Also guards mpmath's quasi-unbounded argument reduction, one
-                          # of its uninterruptible paths.) Cost: huge-argument trig pairs go
-                          # unjudged (coverage loss, never a wrong verdict).
+                          # tokens. (Also guards mpmath's quasi-unbounded argument reduction,
+                          # one of its uninterruptible paths.) F74: beyond the cap the verdict
+                          # is Unresolved (probe skipped), NOT nan -- sin at a huge finite
+                          # exact literal is a defined real the instrument cannot COMPUTE, and
+                          # returning nan declared it UNDEFINED, feeding the extension-measure
+                          # clause: sin(huge_int * -2) * pow(0, y) convicted the engine's
+                          # correct 0 as positive-measure EXTENSION on every draw (extreme row
+                          # 966406). The old "symmetric nan" defense fails exactly when the
+                          # other side's structure never evaluates the trig at all. Cost:
+                          # huge-argument trig pairs go unjudged, never wrongly verdicted.
 
 
 def _trig_inf(f):
     def g(x):
-        if isnan(x) or isinf(x) or abs(x) > PHASE_CAP:
-            return _nan()
+        if isnan(x) or isinf(x):
+            return _nan()                    # no limit at +-inf: genuinely undefined
+        if abs(x) > PHASE_CAP:
+            raise Unresolved()               # uncomputable phase, never fabricated nan
         return f(x)
     return g
 
 
 def c_tan(x):
-    if isnan(x) or isinf(x) or abs(x) > PHASE_CAP:
+    if isnan(x) or isinf(x):
         return _nan()
+    if abs(x) > PHASE_CAP:
+        raise Unresolved()                   # see PHASE_CAP: uncomputable != undefined
     c = mp.cos(x)
     if _pole_guard(c):
         return _nan()                        # exact pole at working precision
@@ -258,12 +305,21 @@ def c_inv(x):
     return c_div(mpf(1), x)
 
 
-MAG_CAP = mpf('1e50')     # exponent-magnitude cap: a result beyond 10^(1e50) forces mpmath's
-                          # exponent INT to ~1e50 digits -- a single uninterruptible CPython
-                          # bignum op (an alarm cannot fire mid-op; observed via exp/pow
-                          # towers). Values beyond it are PRACTICALLY INFINITE for any
-                          # consumer; returned as +-inf/0 SYMMETRICALLY on both sides, so
-                          # comparisons at such magnitudes stay fair.
+MAG_CAP = mpf('1e2000')   # exponent-magnitude cap (F74, raised from 1e50): the cost driver
+                          # is the SIZE of the result's exponent integer, which mpmath's
+                          # pure-python backend manipulates during argument reduction --
+                          # measured on this host: mag 1e312 ~ 5-23 ms, 1e1000 ~ 0.1-0.2 s,
+                          # 1e2000 ~ 0.6-1.2 s, 1e4000 ~ 3.5-5 s, 1e9999 ~ 44 s (a
+                          # near-hang; SIGALRM cannot fire mid-bignum-op). 1e2000 keeps the
+                          # worst single op ~1 s while covering everything the extreme
+                          # token grammar builds (single extreme pow ~10^(3e311), and
+                          # 1e309-exponent towers stay under 1e2000 through four levels).
+                          # The old cap refused magnitudes the backend evaluates exactly in
+                          # milliseconds, and c_pow converted the refusal into a fabricated
+                          # nan (see c_pow) -- together the mechanism behind most of the
+                          # extreme lane's fabricated convictions. Beyond the cap: raise
+                          # Unresolved SYMMETRICALLY on both sides (probe skipped, never a
+                          # wrong verdict).
 
 
 def c_exp(x):
@@ -277,7 +333,17 @@ def c_exp(x):
         # the exp side capped to inf, the cosh side arrived finite -> false INF-CHANGE).
         # The only honest verdict at such probes is unresolved.
         raise Unresolved()
-    return mp.exp(x)
+    v = mp.exp(x)
+    if v == 1 and x != 0:
+        # F74 D5 sibling (found by the upgrade's own row-set diff, extreme row
+        # 924168): exp(x) = 1 iff x = 0 over the reals, so an EXACT 1 on a nonzero
+        # argument is always a rounding erasure -- exp(exp(-1e309)) sits
+        # 10^{-4.34e308} ABOVE 1, beyond any working precision, and the erased side
+        # decided asin's domain: the snap ladder accepted the span as exactly 1 and
+        # the judge convicted the engine's CORRECT nan. Refuse, never fabricate the
+        # boundary value (same provable-erasure argument as the tanh/cosh guards).
+        raise Unresolved()
+    return v
 
 
 def _hyp(f):
@@ -289,10 +355,24 @@ def _hyp(f):
                 return mpf('inf')
             return (mpf('inf') if x > 0 else mpf('-inf')) if f is mp.sinh else (mpf(1) if x > 0 else mpf(-1))
         if abs(x) > MAG_CAP:
-            if f is mp.tanh:
-                return mpf(1) if x > 0 else mpf(-1)  # saturation exact to any precision
-            raise Unresolved()                        # sinh/cosh: see c_exp rationale
-        return f(x)
+            raise Unresolved()   # sinh/cosh: see c_exp rationale; tanh: side erasure below
+        v = f(x)
+        # F74 (D5) saturation-side honesty: |tanh(x)| < 1 STRICTLY for every finite x,
+        # so mp.tanh returning EXACTLY +-1 is always a rounding erasure -- the true
+        # value sits 2e^{-2|x|} inside the boundary, below working precision (tanh(9e15)
+        # is 10^{-8e15} below 1: no dps resolves it). The erased side/gap decides
+        # side-sensitive consumers (pow with an infinite exponent reads pow(1,-inf)=1
+        # where the truth is pow(1-,-inf)=+inf; acosh reads 0 where the truth is nan) --
+        # both observed as fabricated convictions of correct engine outputs. Same for
+        # cosh(x) = 1 with x != 0 (cosh > 1 strictly off zero). Unresolved, never a
+        # fabricated boundary value; resolvable cases resolve under the adaptive
+        # per-pair precision before this fires. (The old tanh beyond-cap branch
+        # returned the exact limit +-1 -- the same erasure spelled at the cap.)
+        if f is mp.tanh and abs(v) == 1:
+            raise Unresolved()
+        if f is mp.cosh and v == 1 and x != 0:
+            raise Unresolved()
+        return v
     return g
 
 
@@ -306,7 +386,13 @@ def _pow_mag_capped(a, b):
         return _nan()
     if abs(mag) > MAG_CAP:
         raise Unresolved()                            # see c_exp rationale
-    return mp.power(a, b)
+    v = mp.power(a, b)
+    if v == 1:
+        # a^b = 1 with a != 1 (guarded above) iff b = 0, and b = 0 never reaches
+        # this helper (c_pow returns 1 first) -- an exact-1 result here is the same
+        # provable rounding erasure as c_exp's (pow(2, exp(exp(-1e309)))-shapes).
+        raise Unresolved()
+    return v
 
 
 def _odd_root(k):
@@ -454,9 +540,13 @@ def _slot_token(v):
     return s if v >= 0 else f'(-{s})'
 
 
-def evaluate(tokens, env):
+def evaluate(tokens, env, node_hook=None):
     """Contract-semantics value of a prefix expression at env (variable name -> mp value).
-    Speaks both the binary spelling and the engine's n-ary bag grammar."""
+    Speaks both the binary spelling and the engine's n-ary bag grammar. `node_hook`, when
+    given, receives every COMPUTED node value: op results, bag member-inverses and bag
+    fold intermediates. Leaves (env values, literals) are deliberately excluded -- a
+    literal float("inf") is a DENOTED conventional constant, not a singularity crossing
+    (see the singular-input gate)."""
     pos = 0
 
     def walk():
@@ -492,13 +582,23 @@ def evaluate(tokens, env):
             acc = main[0] if main else neutral
             for v in main[1:]:
                 acc = fold(acc, v)
+                if node_hook is not None:
+                    node_hook(acc)
             for v in sec:
-                acc = fold(acc, inv_member(v))
+                iv = inv_member(v)
+                if node_hook is not None:
+                    node_hook(iv)
+                acc = fold(acc, iv)
+                if node_hook is not None:
+                    node_hook(acc)
             return acc
         if t in OPS:
             ar, f = OPS[t]
             args = [walk() for _ in range(ar)]
-            return f(*args)
+            v = f(*args)
+            if node_hook is not None:
+                node_hook(v)
+            return v
         if t in env:
             return env[t]
         if t in LITS:
@@ -512,6 +612,30 @@ def evaluate(tokens, env):
     if pos != len(tokens):
         raise ValueError(f'trailing tokens: {tokens}')
     return v
+
+
+def _input_singular(tokens, env):
+    """True iff evaluating `tokens` at env crosses an internal +-inf: some COMPUTED node
+    (op result or bag fold step) is infinite. mpmath at working dps does not overflow to
+    inf at reachable magnitudes, so an internal inf marks a genuine singular manifold of
+    the expression (1/0 under one-zero, log 0, atanh +-1) -- the probe point carries NO
+    mathematical value for the expression, and any real number downstream is
+    convention-completion (9.8.1 one-zero + 9.8.2 limit-completion). Leaf literals
+    (float("inf")) do NOT taint: a denoted inf constant has its ratified limit-completed
+    value, so the strict clause keeps authority over it. Internal nan-to-real
+    (pow(nan, 0) = 1) is likewise NOT tainted: nan-pow cells are ratified DEFINED values
+    (v2 section 2), not completions. Exceptions fail False -- toward strict authority."""
+    seen = [False]
+
+    def hook(v):
+        if isinf(v):
+            seen[0] = True
+
+    try:
+        evaluate(list(tokens), env, node_hook=hook)
+    except Exception:
+        return False
+    return seen[0]
 
 
 # ---------------------------------------------------------------------------------------
@@ -562,9 +686,9 @@ def _is_num(t):
         return False
 
 
-def _var_free_spans(tokens, min_len=2):
-    """Maximal variable-free subtree spans [s, e) of a prefix token list (bag grammar
-    included), scanned left to right; spans never overlap."""
+def _subtree_ends(tokens):
+    """ends[i] = one past the last token of the subtree rooted at position i (bag
+    grammar included). Positions holding section markers / close tags keep ends[i]=0."""
     n = len(tokens)
     ends = [0] * n
 
@@ -585,17 +709,23 @@ def _var_free_spans(tokens, min_len=2):
         ends[i] = j
         return j
     walk(0)
+    return ends
+
+
+def _var_free_subtree_spans(tokens):
+    """EVERY variable-free subtree span [s, e) with at least two tokens, innermost
+    (shortest) first. F74: the pre-upgrade snap scanned MAXIMAL spans only, so an
+    inner exact zero (tan pi) was never snapped when the enclosing span evaluated
+    cleanly -- and its residue then propagated as a fabricated non-zero through
+    pow(nan, .) (extreme row 636919). Innermost-first ordering makes the caller's
+    snap-and-rescan loop settle inner exactness before outer spans are judged."""
+    ends = _subtree_ends(tokens)
 
     def var_free(i):
         return all(tokens[k] in OPS or tokens[k] in LITS or tokens[k] in BAG_TOKENS
                    or _is_num(tokens[k]) for k in range(i, ends[i]))
-    spans, i = [], 0
-    while i < n:
-        if var_free(i) and ends[i] - i >= min_len:
-            spans.append((i, ends[i]))
-            i = ends[i]
-        else:
-            i += 1
+    spans = [(i, e) for i, e in enumerate(ends) if e - i >= 2 and var_free(i)]
+    spans.sort(key=lambda se: (se[1] - se[0], se[0]))
     return spans
 
 
@@ -632,40 +762,330 @@ def _fold_noise_floor(tokens, env, base):
     return noise
 
 
-def _snap_literal_zeros(tokens):
-    """Literal zero-snap, independently implemented: a maximal VARIABLE-FREE subtree that
-    denotes exact zero (sin(np.pi)) evaluates to a precision residue (1e-51 at dps 50), which
-    turns 0*inf = nan into +-inf and fabricates violations (observed). Two-rung test: residue
-    that SHRINKS quadratically with dps is an exact zero; a stable tiny value is left alone."""
-    out = list(tokens)
-    for s, e in reversed(_var_free_spans(tokens, min_len=2)):
-        try:
-            with mp.workdps(50):
-                a = evaluate(out[s:e], {})
-            with mp.workdps(110):
-                b = evaluate(out[s:e], {})
-        except Exception:
-            continue
-        if isnan(a) or isnan(b) or isinf(a) or isinf(b):
-            continue
-        if (a == 0 and b == 0) or (abs(a) < mpf('1e-40') and abs(b) <= abs(a) * mpf('1e-20')):
-            out[s:e] = ['0']
+# -- F74: exact-rational folding + the adaptive exact-snap ------------------------------
+#
+# The pre-upgrade zero-snap tested maximal variable-free spans at HARDCODED dps 50/110.
+# Two measured defects (extreme lane, 2026-08-09/10):
+#   * a true nonzero difference whose resolution needs more digits than both rungs
+#     (1e309 + (-1e309 - 2.55e38): 272 digits) read EXACTLY zero on both, so the judge
+#     rewrote the input span to '0' and convicted the correct engine at any ambient
+#     precision (row 13391 and the whole value-change family);
+#   * only MAXIMAL spans were tested (row 636919, see _var_free_subtree_spans).
+# The replacement: PURE-RATIONAL spans fold exactly in Fraction arithmetic first
+# (unbounded integers: no rung can be fooled), and only transcendental-bearing spans
+# go to a precision LADDER that escalates until the span resolves -- snapping to '0'
+# or to a stable small integer (sinh(asinh 2) = 2: the mpf residue 2 +- 1e-49 read as
+# a non-integer rootn index and fabricated nan -- the base table's GAP class).
+
+FOLD_OPS = frozenset({'+', '-', '*', '/', 'neg', 'inv', 'abs', 'pow'})
+FOLD_BITS_BUDGET = 15900   # ~2400 decimal digits per side of the emitted p/q token:
+                           # bounded work, and safely under CPython's 4300-digit
+                           # int<->str conversion limit (emission uses str(int)).
+
+
+class _FoldRefused(Exception):
+    """A span whose exact-rational fold is out of scope (non-rational leaf, pole,
+    non-integer or over-budget exponent): left verbatim for the mpf/contract path."""
+
+
+def _rat_leaf(t):
+    """The exact Fraction a rational-literal token denotes, else None."""
+    s = t.strip('()')
+    if RAT_RE.match(s):
+        p, q = s.split('/')
+        return Fraction(int(p), int(q))
+    if not _is_num(t):
+        return None
+    try:
+        return Fraction(Decimal(s))          # exact for every decimal spelling
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _fold_budget(f):
+    if f.numerator.bit_length() + f.denominator.bit_length() > FOLD_BITS_BUDGET:
+        raise _FoldRefused()
+    return f
+
+
+def _fold_exact_rational_spans(tokens):
+    """Fold every variable-free PURE-RATIONAL subtree (>= 2 tokens) to its exact value
+    token, in unbounded Fraction arithmetic. Contract-semantics extension points stay
+    out of scope by construction -- division by an exact zero, non-integer or
+    over-budget pow exponents, and any span touching pi/e/inf/nan refuse and are left
+    verbatim for the mpf evaluator. Untouched leaves keep their original spelling."""
+    pos = 0
+
+    def emit(f):
+        if f.denominator == 1:
+            return str(f.numerator)
+        return f'{f.numerator}/{f.denominator}'          # RAT_RE spelling
+
+    def walk():
+        nonlocal pos
+        t = tokens[pos]
+        pos += 1
+        if t in BAG_OPEN:
+            marker, close = BAG_OPEN[t][:2]
+            is_mul = t == '<mul>'
+            parts, main, sec = [t], [], []
+            cur, ok = main, True
+            while pos < len(tokens) and tokens[pos] != close:
+                if tokens[pos] == marker:
+                    parts.append(marker)
+                    cur = sec
+                    pos += 1
+                    continue
+                sub, v = walk()
+                parts.extend(sub)
+                if v is None:
+                    ok = False
+                else:
+                    cur.append(v)
+            if pos < len(tokens):
+                parts.append(close)
+                pos += 1
+            if not ok:
+                return parts, None
+            try:
+                if is_mul:
+                    acc = Fraction(1)
+                    for v in main:
+                        acc = _fold_budget(acc * v)
+                    for v in sec:
+                        acc = _fold_budget(acc / v)      # exact nonzero: == per-member inv
+                else:
+                    acc = Fraction(0)
+                    for v in main:
+                        acc = _fold_budget(acc + v)
+                    for v in sec:
+                        acc = _fold_budget(acc - v)
+            except (_FoldRefused, ZeroDivisionError):
+                return parts, None
+            return [emit(acc)], acc
+        if t in OPS:
+            ar = OPS[t][0]
+            parts, vals = [t], []
+            for _ in range(ar):
+                sub, v = walk()
+                parts.extend(sub)
+                vals.append(v)
+            if t not in FOLD_OPS or any(v is None for v in vals):
+                return parts, None
+            try:
+                if t == '+':
+                    acc = _fold_budget(vals[0] + vals[1])
+                elif t == '-':
+                    acc = _fold_budget(vals[0] - vals[1])
+                elif t == '*':
+                    acc = _fold_budget(vals[0] * vals[1])
+                elif t == '/':
+                    acc = _fold_budget(vals[0] / vals[1])
+                elif t == 'neg':
+                    acc = -vals[0]
+                elif t == 'abs':
+                    acc = abs(vals[0])
+                elif t == 'inv':
+                    acc = _fold_budget(Fraction(1) / vals[0])
+                else:                                    # pow
+                    b = vals[1]
+                    if b.denominator != 1 or abs(b.numerator) > 10000:
+                        raise _FoldRefused()             # roots / unbounded: mpf path
+                    e = b.numerator
+                    base_bits = max(vals[0].numerator.bit_length(),
+                                    vals[0].denominator.bit_length(), 1)
+                    if abs(e) * base_bits > FOLD_BITS_BUDGET:
+                        raise _FoldRefused()
+                    acc = _fold_budget(vals[0] ** e)     # Fraction(0)**0 == 1: contract
+            except (_FoldRefused, ZeroDivisionError):
+                return parts, None
+            return [emit(acc)], acc
+        v = _rat_leaf(t)
+        return [t], v                                    # leaves keep their spelling
+    out, _v = walk()
+    if pos != len(tokens):
+        raise ValueError(f'trailing tokens: {tokens}')
     return out
 
 
+def _pair_dps(tokens):
+    """Working precision sufficient for this token list's literal exponent span.
+    F74 (D4): at a FIXED dps 50, cos(1e-320) rounds to exactly 1 (the true value is
+    1 - 5e-641), fabricating pow(1, -inf) = 1 against a correct +inf. The span
+    hi..lo covers each literal's leading exponent down to its last written place;
+    2x covers the squares that first-order compositions produce (cos ~ 1 - x^2/2),
+    a flat guard covers residue bands. Small-literal pairs keep the ambient dps
+    (the entire pre-F74 corpus population: byte-for-byte the old behavior)."""
+    hi, lo = 0, 0
+    for t in tokens:
+        s = t.strip('()')
+        if RAT_RE.match(s):
+            p, q = s.split('/')
+            top = len(p.lstrip('-')) - len(q) + 1
+            hi = max(hi, top)
+            lo = min(lo, top - (len(p.lstrip('-')) + len(q)) - 10)
+            continue
+        if not _is_num(t):
+            continue
+        try:
+            d = Decimal(s)
+        except (InvalidOperation, ValueError):
+            continue
+        if d == 0:
+            continue
+        hi = max(hi, d.adjusted())
+        lo = min(lo, d.as_tuple().exponent)
+    extra = hi - lo
+    if extra <= 20:
+        return mp.dps
+    return min(3000, 2 * extra + 70)
+
+
+SNAP_DPS_CAP = 6000        # ladder ceiling: an all-rungs-exact-zero span is accepted as
+                           # exact zero only after resolving nothing through ~6000 digits
+                           # -- cancellations engineered past that need pow towers beyond
+                           # the token grammar's reach. Short var-free spans only: the
+                           # dps-6000 rungs are microseconds (no display conversions).
+
+
+def _magnitude_resolved(v, dps) -> bool:
+    """Is `v`'s own MAGNITUDE resolved at `dps` digits?
+
+    An mpf carries `dps` significant digits of its decimal exponent as well as of its
+    mantissa. When |log10|v|| exceeds 10**dps the exponent's last digits are themselves
+    unresolved, so the value's magnitude is not pinned at this precision and any
+    cross-rung magnitude comparison is meaningless. Exact zeros are resolved by
+    definition (nothing to place). Fails CLOSED (returns False -> the caller refuses to
+    snap) if the logarithm cannot be taken."""
+    if v == 0:
+        return True
+    if isnan(v) or isinf(v):
+        return False
+    try:
+        return abs(mp.log10(abs(v))) <= mpf(10) ** dps
+    except Exception:
+        return False
+
+
+def _span_exact_token(toks):
+    """The exact-value token this variable-free span provably denotes ('0' or a small
+    integer), else None. A ladder of dps rungs starting at the working precision; at
+    each pair of cleanly-evaluated rungs (lower value `a` at r_lo, higher `v` at r):
+
+      * a > its rung floor and the offset to the nearest small integer SHRINKS by the
+        rung ratio -> that integer is exact (a precision residue dies with dps; a true
+        offset is rung-stable and refuses -- exp(-200) stays 1.4e-87 on every rung);
+      * a sits BELOW its own rung floor (reads exactly n, offset 0): undecidable at
+        this pair -- escalate so a true sub-floor offset gets RESOLVED and then fails
+        the shrink test at the next pair; exact-at-every-rung through the cap is
+        accepted as exact (a cancellation engineered past ~6000 digits is beyond the
+        token grammar's reach);
+      * nan/inf, values beyond small-integer scope, and rung-stable offsets: None.
+
+    Rungs that refuse (Unresolved) are skipped, not fatal -- a pole-guarded rung at
+    dps 50 may evaluate cleanly at 250. Pure-rational spans never reach this ladder
+    (they fold exactly in Fraction first)."""
+    prev = None
+    r = mp.dps
+    while True:
+        try:
+            with mp.workdps(r):
+                v = evaluate(list(toks), {})
+        except Exception:
+            v = None                          # refused rung: skip, not fatal
+        if v is not None and (isnan(v) or isinf(v)):
+            return None                       # semantic specials: never snapped
+        if v is not None and prev is not None:
+            a, r_lo = prev
+            with mp.workdps(r):
+                n = mp.nint(v)
+                # Scope: the integer must be FULLY RESOLVED at the lower rung (every
+                # digit inside r_lo - 20 precision) -- that guard is what refuses the
+                # provably-irrational-but-integer-reading trap (exp(2.703^5) ~ 6e63 at
+                # dps 50 has unresolved trailing digits, and its nint differs between
+                # rungs). 1e300 additionally bounds token emission (str(int)) well
+                # under CPython's 4300-digit conversion limit; extreme rootn indices
+                # ((A^A)^(1/A) = A ~ 1.2e27, row 690235) sit comfortably inside.
+                if abs(n) > mpf('1e300') or abs(a) > mpf(10) ** (r_lo - 20):
+                    return None
+                da, db = abs(a - n), abs(v - n)
+                if da > 0:
+                    # MAGNITUDE-RESOLUTION guard. The shrink test below reads a large
+                    # rung-to-rung ratio as "a precision residue dying with dps". That
+                    # inference is only licensed when each rung RESOLVED the value's
+                    # magnitude. A value whose own decimal exponent needs more digits
+                    # than the rung carries is not resolved at all: exp(-1e309) renders
+                    # as 10^(-4.34e308), and that exponent is correct to 50 digits at
+                    # dps 50 and to 121 at dps 121 -- so the two rungs differ by a
+                    # factor near 10^(1e258) and the ratio carries NO information about
+                    # residue-vs-value. Unguarded, the test read that as a dying residue
+                    # and snapped a provably POSITIVE value (exp > 0 everywhere) to '0';
+                    # reachable through judge_pair with small literals
+                    # (`exp(neg exp(1000)) -> 0` judged OK), and the source of the
+                    # ambient-precision dependence in the exp-erasure guard. Refuse:
+                    # unknowable at this precision, never a fabricated zero.
+                    if not _magnitude_resolved(a, r_lo) or not _magnitude_resolved(v, r):
+                        return None
+                    if da < max(1, abs(n)) * mpf(10) ** (-(r_lo - 10)) \
+                            and db <= da * mpf('1e-20'):
+                        return '0' if n == 0 else str(int(n))
+                    return None               # rung-stable offset: a true value
+                if db == 0 and r >= SNAP_DPS_CAP:
+                    return '0' if n == 0 else str(int(n))   # exact through the ladder
+                # da == 0: undecidable at this pair (see docstring) -- escalate
+        if v is not None:
+            prev = (v, r)
+        if r >= SNAP_DPS_CAP:
+            return None
+        r = min(int(r * 2.3) + 7, SNAP_DPS_CAP)
+
+
+def _snap_literal_exacts(tokens):
+    """Snap variable-free subtree spans that provably denote an exact zero or small
+    integer to that literal, innermost first, to a fixpoint. Exact-rational spans are
+    folded first in Fraction (see _fold_exact_rational_spans); the ladder then only
+    faces transcendental-bearing spans (sin(np.pi) -> '0', sinh(asinh 2) -> '2'),
+    whose precision residues would otherwise fabricate verdicts at extension points
+    (0*inf, pow(nan, 0), rootn index integrality)."""
+    out = _fold_exact_rational_spans(list(tokens))
+    while True:
+        for s, e in _var_free_subtree_spans(out):
+            if e - s == 1:
+                continue
+            rep = _span_exact_token(out[s:e])
+            if rep is not None:
+                out[s:e] = [rep]
+                break                          # token list moved: rescan
+        else:
+            return out
+
+
+@_ambient_dps
 def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
     """Judge one rewrite inp -> out under the contract. Returns (verdict, detail).
 
     `_refit_left`: on a violation while a fittable slot is bound, the bound c may be the
     artifact of a DEGENERATE first fit (pow(c, x) at x = 0 fits every c). One refit at the
     violating probe is allowed, re-judging from scratch with that c substituted; a second
-    disagreement means no single constant exists -- a genuine violation."""
+    disagreement means no single constant exists -- a genuine violation.
+
+    F74: exact-rational spans fold in Fraction first, and the whole judgment runs at a
+    working precision adapted to the pair's own literal exponent span (never below the
+    ambient mp.dps, so external escalation harnesses stay meaningful). Small-literal
+    pairs -- the entire pre-F74 corpus population -- keep the ambient precision."""
     unk = unknown_tokens(list(inp) + list(out))
     if unk:
         # FAIL CLOSED on language gaps: a token the judge cannot read must surface, never
         # silently skip every probe and fall through to OK (the E1 blindness mechanism).
         return 'UNSCORED', 'unknown tokens: ' + ' '.join(unk)
-    inp, out = _snap_literal_zeros(list(inp)), _snap_literal_zeros(list(out))
+    inp = _fold_exact_rational_spans(list(inp))
+    out = _fold_exact_rational_spans(list(out))
+    with mp.workdps(max(mp.dps, _pair_dps(list(inp) + list(out)))):
+        return _judge_pair_at(inp, out, rng, _refit_left, _slot_bound)
+
+
+def _judge_pair_at(inp, out, rng, _refit_left, _slot_bound):
+    inp, out = _snap_literal_exacts(list(inp)), _snap_literal_exacts(list(out))
     if '<constant>' in inp:
         # PRE-MASKED input (deployed traffic arrives masked): an input-side <constant>
         # is unevaluable, so every probe threw and the pair silently judged OK -- the
@@ -873,13 +1293,49 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
             TOL_COUNTS['inf-input-null'] = TOL_COUNTS.get('inf-input-null', 0) + 1
             continue
         if abs(a - b) > tol * max(1, abs(a), abs(b)):
-            # PRECISION-STABILITY gate: a finite mismatch may be dps-50 rounding amplified by
-            # a singularity (acos near 1 turns a 1e-50 roundtrip residue into 1e-25 --
-            # observed). Re-evaluate BOTH sides at the SAME point at dps 120: a true identity
+            # SINGULAR-INPUT gate (the 9.8.3(a) boundary, second rung; 2026-08-11).
+            # Clause (a)'s authority is "where mathematics has an answer". At a REAL
+            # probe on the INPUT's singular manifold -- its evaluation crosses an
+            # internal +-inf (1/0 under one-zero, log 0, atanh +-1) -- mathematics has
+            # none: the real the input evaluates to is a convention-completion, and
+            # two a.e.-identical spellings compose the conventions to DIFFERENT
+            # completions (1/(0/t) = +inf but (1/0)*t = -inf for t < 0; atan renders
+            # both REAL as -+pi/2).
+            #
+            # This is NOT fixable by choosing better conventions, which is why the
+            # clause must be scoped instead. Under any extension that gives poles
+            # +-inf values (the ratified one) the pole sign is spelling-dependent:
+            # 1/(x1-x3) vs -1/(x3-x1) are a.e. identical and give +inf vs -inf, and
+            # a bounded compressor above them (atan, tanh, exp+pow) turns that into a
+            # REAL-vs-REAL disagreement -- inside clause (a)'s own jurisdiction. IEEE's
+            # signed zero does NOT close it (x-x is +0 for every finite x, so the zero
+            # cannot record which spelling formed it); only nan-poisoning poles would,
+            # and that is excluded by the ratified limit-completion and the D1 folds.
+            # Verified against the engine's own deployed realizations: both spellings
+            # agree there, so the disagreement is an artifact of the abstraction, not
+            # of the rewrite.
+            #
+            # Routed exactly like the env-inf rung above (inf-input-null): null probes
+            # tolerated + tallied, continuum draws counted into the INF-CHANGE measure,
+            # so a POSITIVE-MEASURE singular disagreement still kills. An OUTPUT-side
+            # singularity with a CLEAN input keeps strict authority -- there the
+            # input's value IS mathematics' answer.
+            #
+            # ORDER: this fires LAST, on the path that would otherwise CONVICT -- after
+            # the precision and f64-fold classifiers below. A disagreement they can
+            # explain is rounding, not a completion clash, and routing it into the
+            # INF-CHANGE measure would let precision noise accumulate fake measure
+            # against a sound rewrite.
+            #
+            # PRECISION-STABILITY gate: a finite mismatch may be working-dps rounding
+            # amplified by a singularity (acos near 1 turns a 1e-50 roundtrip residue into
+            # 1e-25 -- observed). Re-evaluate BOTH sides at the SAME point at ~2.4x the
+            # working precision (F74: was a flat 120, which sat BELOW the working dps of
+            # extreme-literal pairs and could not clear anything there): a true identity
             # agrees at any fixed point, so a shrinking difference is rounding; a stable
             # difference is a real violation.
             try:
-                with mp.workdps(120):
+                with mp.workdps(max(240, mp.dps * 24 // 10)):
                     env2 = {k: f() for k, f in envb.items()}
                     a2 = evaluate(list(inp), env2)
                     b2 = evaluate(b_tokens, env2)
@@ -916,6 +1372,17 @@ def judge_pair(inp, out, rng, _refit_left=1, _slot_bound=False):
                                             f'within fold-noise floor)')
                 except Exception:
                     pass
+            # SINGULAR-INPUT gate (see the block above for the full derivation): the
+            # last classifier before a conviction. The disagreement survived the
+            # precision and fold explanations, so it is stable -- but if the INPUT is
+            # singular at this probe it is a completion clash, not a value change.
+            if _input_singular(inp, env):
+                if null_probe:
+                    TOL_COUNTS['singular-real-null'] = \
+                        TOL_COUNTS.get('singular-real-null', 0) + 1
+                else:
+                    inf_draws += 1
+                continue
             return _viol(env, f'value change at {_fmt(p)}: {_fmt(a)} -> {_fmt(b)}')
     if tot_draws:
         for cnt, label in ((ext_draws, 'EXTENSION: undefined->defined'),
@@ -1012,7 +1479,13 @@ def _fmt(v):
         return 'nan'
     if isinf(v):
         return '+inf' if v > 0 else '-inf'
-    return mp.nstr(v, 8)
+    try:
+        return mp.nstr(v, 8)
+    except Exception:
+        # CPython's 4300-digit int<->str limit trips nstr on very-high-dps mantissas;
+        # a display helper must never take the judge down with it.
+        _sign, _man, e, bc = v._mpf_
+        return f'~2^{e + bc}'
 
 
 # ---------------------------------------------------------------------------------------
@@ -1215,6 +1688,7 @@ def _sweep_inner(rules, corpus, rng, baseline_engine, config_path, tag,
     return viol, native, unscored, changed, f64_folds
 
 
+@_ambient_dps
 def selftest(rules, config_path, corpus, baseline, seed, poison=None,
              judge_timeout_s=JUDGE_TIMEOUT_S):
     """Poison a copy of the ruleset with known-unsound rules; return True iff EVERY poison is
@@ -1263,6 +1737,7 @@ class MonitorLivenessError(RuntimeError):
     not be reported as 'clean' (0 violations of 0 rewrites)."""
 
 
+@_ambient_dps
 def monitor(rules, config_path, corpus_n=6000, seed=20260718, run_selftest=False,
             adversarial=None, leaves=None, poison=None, judge_timeout_s=JUDGE_TIMEOUT_S,
             label=''):

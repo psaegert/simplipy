@@ -219,11 +219,51 @@ class TestCorpusGate:
         # 295,646,776 -> 295,599,928 at F51 (2026-08-07): the parity arm. FIRST canon
         # change in this arc to move a corpus, and it moves DOWN (-46,848). Every moved row
         # in the 64k/1M corpora audited; see the gate_acj REFS comment.
-        assert walk['complexity_out'] == 295599928, walk['complexity_out']
+        # 295,599,928 -> 295,148,608 at (b), 2026-08-08: the mu-argmin orientation
+        # ('mirrors equal; bigger scores bigger'); -451,320 milli-bits over 400 rows.
+        # 295,148,608 -> 294,961,873 at F63 (2026-08-08, owner-ruled FULL sign-owner
+        # family + tie convention A): the product-level sign-placement owner (Add /
+        # Pow-odd / rootn-odd / odd-Fun trade sites, materialize-and-price, ties to
+        # the positive coefficient), canonical negative joins in term_join, the
+        # odd-negative pow pre-fold (pole-faithful confluence), and even-carrier
+        # argument orientation. -194,735 milli-bits over 400 rows total (final census
+        # at the landed build): 79 rows moved (41 down, 33 equal-mu respells, 4 up --
+        # rows 3/199/256/310, the pole-orientation
+        # class, e.g. row 310's (1-x4) whose value class the one-zero contract
+        # forbids conflating with the cheaper mirror, plus lone-neg odd-fun ties).
+        # 294,961,873 -> 294,953,873 same day: the CARRIER-aware placement (the sign
+        # toggle rides a bare infinity / the Const refit / an absorbing sum, per
+        # H-014/H-020/H-030, instead of minting an illegal raw -1 -- found as 9/50
+        # idem failures at 64k/1M, all closed) lets one more row rest cheaper.
+        # 294,953,873 -> 294,945,873 at F68 (2026-08-09): the kept-zero bag joins the
+        # sign owner (`Mul[0, ..]` assembled through sign_place with the zero as a
+        # sign-eating carrier -- 0*X == 0*(-X) in every case -- instead of freezing
+        # the arrival mirror, which had made the direct build and the parse of its
+        # own rendering two states: fuzz rows 392777/647852, introduced by F63).
+        # ONE row moved, row 209 (0 * rootn(tan(u) - x3, 3)): the orbit files the
+        # mirror with the sign traded through the odd rootn/tan chain, -8,000
+        # milli-bits; value-equal by the kept-zero licence, re-screened in-walk.
+        # F80 E1 (2026-08-11): 294,945,873 -> 294,875,873 (-70,000, pure descent).
+        # NINE rows moved, all Const-bearing (the E1 fingerprint; counts preserved):
+        # 5 judge-OK; 4 shared-witness convictions adjudicated as sound Const-family
+        # moves with EXHIBITED witness maps (79: -c; 244: -c; 274: 1/c; 301: 1/c,
+        # maxrel 2e-15 on 311 deployed-evaluator draws); row 317 +16,000 is the
+        # H-015 greedy-endpoint phenomenon, judge-OK. Audit F80 BUILD 1 close.
+        # E2 (2026-08-11, audit F81): 294,875,873 -> 294,730,680 (-145,193). The
+        # denominator-clearing certificate licenses odd-negative distributions on
+        # analytic factors, so division towers restructure. NINETEEN rows moved
+        # (5, 54, 63, 75, 128, 130, 149, 191, 201, 242, 257, 268, 288, 328, 330,
+        # 337, 349, 372, 388); ALL adjudicated OK against the pre-E2 worktree
+        # baseline on 4,800 deployed-evaluator draws each (6 param sets x 800):
+        # zero NaN-vs-value, zero inf-sign, zero value mismatches, worst rel
+        # 6.5e-13; NaN domains matched where present; the four Const rows (54,
+        # 63, 337, 372) preserve occurrence counts. Row 288 +8,000 is the H-015
+        # greedy-endpoint phenomenon again; five rows respell at +-0.
+        assert walk['complexity_out'] == 294730680, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4-3":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 295599928, \
+            assert m and int(m.group(1)) == 294730680, \
                 'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):
@@ -275,3 +315,83 @@ class TestScreenSensitivity:
         assert flags(screen_disagreements(eng, src, dst, X))
         v, _ = judge_pair(list(src), list(dst), np.random.default_rng(0))
         assert v == 'VIOLATION'
+
+
+class TestB4IntervalParityAtRuntime:
+    """B4: the interval layer's truncating-remainder parity test, seen from `simplify()`.
+
+    `interval.rs` dropped the `-INF` pole candidate for every odd NEGATIVE exponent
+    (`k % 2 == 1` is false when Rust's `%` truncates: `(-1) % 2 == -1`), so the box for
+    `pow(x, -1)` over a range straddling zero came back REFLECTED -- an under-approximation,
+    the direction `rust/lib.rs:764` calls fatal. `finite_ae` then certified expressions that
+    are nan on positive measure, and the cancellation consumers fired on them.
+
+    The audit filed this as a mining-gate defect. It is not: it is a wrong `simplify()`
+    answer in SOUND mode, reachable through the public API. The literal below is 40 digits
+    so it exceeds i128 and stays an opaque leaf -- 39 digits folds to an integer exponent
+    and never reaches the branch."""
+
+    @staticmethod
+    def _nan_bearing():
+        # A = log(x0**(-1.0) + 1): nan across all of (-1, 0), finite elsewhere
+        return ['log', '+', 'pow', 'x0', '-1.' + '0' * 40, '1']
+
+    def test_a_minus_a_does_not_cancel_when_a_is_nan_on_positive_measure(self, eng):
+        engine = eng
+        a = self._nan_bearing()
+        assert engine.simplify(['-'] + a + a) != ['0']
+
+    def test_zero_times_a_does_not_absorb_when_a_is_nan_on_positive_measure(self, eng):
+        engine = eng
+        assert engine.simplify(['*', '0'] + self._nan_bearing()) != ['0']
+
+    def test_the_finite_control_still_cancels(self, eng):
+        """Recall control: the fix must refuse the nan-bearing case ONLY. `log(x0**2 + 1)`
+        is finite everywhere, so its self-difference must still reach 0."""
+        engine = eng
+        b = ['log', '+', 'pow', 'x0', '2', '1']
+        assert engine.simplify(['-'] + b + b) == ['0']
+
+
+class TestB1NanFabrication:
+    """B1 (numsem-1, ruling D8): SOUND `simplify` fabricated `nan` -- and in one family
+    a definite `inf` -- for grounds whose contract value is finite, and the fabrication
+    escaped into enclosing variable-bearing expressions. Two mechanisms, both fixed:
+
+    * the interval magnitude-step arms (`pow(t, +-inf)`) merged the attained value 1
+      only for an EXACT +-1 point base, so a BRACKETED base (H-019: `cos(np.pi)`
+      encloses `[-1, -0.9999999999999991]`) asserted a definite infinity where the
+      contract value is 1 -- the 46-row fabricated-Inf family (D8(iii)), an
+      under-approximation in the direction the module calls fatal;
+    * the ground-class fold trusted a `Class::Nan` verdict on composites containing a
+      `pow` with a certified-negative base whose exponent enclosure cannot rule out an
+      integer or an infinity -- the continuum convention asserts a.e.-nan there, but
+      the exponent's true value can be exactly the integer/infinity where pow is
+      defined (`(-1)^(3/sin(np.pi))`: judge value 1; 54 sweep rows).
+
+    Refusal counts as the fix (D8(i)): the engine may leave the ground symbolic; it
+    must never assert a value class the contract contradicts."""
+
+    def test_nan_no_longer_escapes_into_a_sum(self, eng):
+        # the plan's witness: contract value x0 + 1; shipped float("nan") pre-B1
+        out = eng.simplify(['+', 'x0', 'pow', '(-1)', '/', '3', 'sin', 'np.pi'])
+        assert list(out) != ['float("nan")']
+
+    def test_mixed_exponent_family_refuses(self, eng):
+        # exponent attains an infinity component: judge value 1; shipped nan pre-B1
+        out = eng.simplify(['pow', '-1', '/', 'float("inf")', 'sin', 'np.pi'])
+        assert list(out) != ['float("nan")']
+
+    def test_bracketed_base_no_longer_fabricates_a_definite_infinity(self, eng):
+        # D8(iii) falsifier: cos(np.pi) is exactly -1; pow(-1, -inf) = 1 (magnitude
+        # step at |t| = 1, ratified). The bracketed enclosure dips below 1 and the
+        # step arm asserted +inf -- and it ANNIHILATED x0 through the sum.
+        out = eng.simplify(['pow', 'cos', 'np.pi', 'float("-inf")'])
+        assert list(out) != ['float("inf")']
+        escape = eng.simplify(['+', 'x0', 'pow', 'cos', 'np.pi', 'float("-inf")'])
+        assert list(escape) != ['float("inf")'], "the fabricated infinity ate x0"
+
+    def test_honest_nan_still_folds(self, eng):
+        # recall control: a genuinely-nan ground keeps folding -- sqrt of a certified
+        # negative is nan for EVERY value, no pow-exponent uncertainty involved
+        assert list(eng.simplify(['pow', '-2', '0.5'])) == ['float("nan")']

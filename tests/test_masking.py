@@ -189,14 +189,24 @@ class TestSpecialConstantsAreSites:
         # keeping specials needs no toolkit change -- but owner ruling 2026-08-07: keeping
         # a symbolic constant beside a MASKED coefficient is pointless, because
         # `<constant> * np.pi` just fits an arbitrary float and an arbitrary float times
-        # pi is an arbitrary float. Only keep a symbol if the consumer can predict its
-        # coefficient exactly. See `test_symbolic_constant_folds_into_the_free_constant`.
+        # pi is an arbitrary float. Contract 10.11 (2026-08-08) promoted that ruling into
+        # the CANON: the engine itself absorbs a special beside a fitted mask (Mul-scale
+        # bijection), so a policy-kept special adjacent to a `<constant>` no longer
+        # survives canonicalization -- keeping a special is meaningful only where no
+        # mask lands beside it, pinned below on `sin(pi*x0)`.
+        # See `test_symbolic_constant_folds_into_the_free_constant`.
         def mask_all_keep_specials(value: str, role: masking.Role):
             return None if value in ("np.pi", "np.e") else "<constant>"
 
         out = engine.simplify(["*", "2", "*", "np.pi", "x0"])
-        # The kept `np.pi` SURVIVES the collect stage -- collect folds free constants
-        # together, it does not absorb a literal the policy chose to keep. Only the bag
-        # order moves (`<constant>` sorts after the symbol).
+        # The kept `np.pi` sits beside the mask the policy minted for `2`, and the
+        # canon's absorption folds them: pi * <constant> IS <constant>.
         assert masking.mask(out, engine, mask_all_keep_specials) == \
-            ["<mul>", "np.pi", "<constant>", "x0", "</mul>"]
+            ["<mul>", "<constant>", "x0", "</mul>"]
+        # Where the policy mints no adjacent mask, the kept special DOES survive
+        # (no other literal in the bag), while the shipped policies mask it:
+        out = engine.simplify(["sin", "*", "np.pi", "x0"])
+        assert masking.mask(list(out), engine, mask_all_keep_specials) == \
+            ["sin", "<mul>", "np.pi", "x0", "</mul>"]
+        assert masking.mask(list(out), engine, masking.mask_all) == \
+            ["sin", "<mul>", "<constant>", "x0", "</mul>"]

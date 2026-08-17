@@ -468,6 +468,11 @@ pub enum ProbeAtom {
     E,
     /// the non-dyadic decimal battery atom `-1.7` (rendered per rung)
     Dec17Neg,
+    /// an exact rational `n/d` rendered at the rung's precision (d > 0). The registry's
+    /// exceptional-point generator solves affine pole locations exactly as rationals
+    /// (`1 - 3*w = 0` -> `w = 1/3`), and a non-dyadic location must be HIT exactly at
+    /// every rung -- its f64 rounding sits beside the pole, not on it.
+    Rat(i64, u64),
 }
 
 impl ProbeAtom {
@@ -478,6 +483,7 @@ impl ProbeAtom {
             ProbeAtom::PiFrac(n, d) => *n as f64 * std::f64::consts::PI / *d as f64,
             ProbeAtom::E => std::f64::consts::E,
             ProbeAtom::Dec17Neg => -1.7,
+            ProbeAtom::Rat(n, d) => *n as f64 / *d as f64,
         }
     }
 }
@@ -505,6 +511,14 @@ fn render_atom(a: &ProbeAtom, p: usize, cc: &mut Consts) -> BigFloat {
         }
         ProbeAtom::E => cc.e(p, RM),
         ProbeAtom::Dec17Neg => small_int(17, p).div(&small_int(10, p), p, RM).neg(),
+        ProbeAtom::Rat(n, d) => {
+            let v = small_int(n.unsigned_abs(), p).div(&small_int(*d, p), p, RM);
+            if *n < 0 {
+                v.neg()
+            } else {
+                v
+            }
+        }
     }
 }
 

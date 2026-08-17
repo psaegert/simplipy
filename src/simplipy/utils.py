@@ -10,6 +10,7 @@ generic nested-container utilities.
 import re
 import time
 import math
+import warnings
 import itertools
 from collections import Counter
 from types import CodeType
@@ -17,6 +18,17 @@ from typing import Any, Generator, Callable
 from copy import deepcopy
 from tqdm import tqdm
 import numpy as np
+
+# The declared public surface of this module (D11 column R18, owner-ratified
+# 2026-08-16): the evidence-backed names. Everything else here is reachable
+# but carries no stability promise (see the compatibility policy).
+__all__ = [
+    'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
+    'remap_expression', 'substitute_constants', 'substitude_constants',
+    'construct_expressions', 'numbers_to_constant', 'is_numeric_string',
+    'enumerate_expressions', 'count_expressions', 'sample_expression',
+    'compositions',
+]
 
 
 def apply_on_nested(structure: list | dict, func: Callable) -> list | dict:
@@ -106,6 +118,12 @@ def codify(code_string: str, variables: list[str] | None = None) -> CodeType:
     converted into a lambda function. It wraps the expression in a lambda
     function signature.
 
+    .. warning::
+        This compiles arbitrary Python source: it is unsafe by construction
+        on attacker-supplied input. Only pass strings you trust — the
+        namespace scoping of :meth:`SimpliPyEngine.code_to_lambda` is not a
+        sandbox (:mod:`simplipy.trust`).
+
     Parameters
     ----------
     code_string : str
@@ -141,6 +159,12 @@ def get_used_modules(infix_expression: str) -> list[str]:
     their leading module names. The module ``numpy`` is always included so that
     downstream evaluation logic can rely on it being available.
 
+    .. note::
+       This is a plain string scanner and carries no trust decision. Since 0.13 the
+       engine derives its own realization roots and checks them against
+       :mod:`simplipy.trust` before importing anything (register C1.12) -- consult
+       that module, not this function, for what a config is allowed to import.
+
     Parameters
     ----------
     infix_expression : str
@@ -171,7 +195,22 @@ def get_used_modules(infix_expression: str) -> list[str]:
     return list(modules_set)
 
 
-def substitude_constants(prefix_expression: list[str], values: list | np.ndarray, constants: list[str] | None = None, inplace: bool = False) -> list[str]:
+_CONSTANT_ID_PATTERN = re.compile(r"C_\d+")
+
+
+def is_constant_placeholder(token: str, extra: "Any" = ()) -> bool:
+    """True iff ``token`` is an abstract-constant slot.
+
+    A slot is the generic ``"<constant>"`` placeholder, an indexed ``C_<n>`` identifier,
+    or one of the caller-declared names in ``extra``. This is the ONE definition of
+    "placeholder" shared by the mechanical codegen helpers (`explicit_constant_placeholders`,
+    `substitute_constants`); deciding which LITERALS become placeholders in the first
+    place is a masking-policy question and lives in ``simplipy.masking``.
+    """
+    return token == "<constant>" or bool(_CONSTANT_ID_PATTERN.match(token)) or token in extra
+
+
+def substitute_constants(prefix_expression: list[str], values: list | np.ndarray, constants: list[str] | None = None, inplace: bool = False) -> list[str]:
     """Substitute placeholders in a prefix expression with numeric values.
 
     This helper replaces constant placeholders such as ``"<constant>"`` or the
@@ -229,11 +268,25 @@ def substitude_constants(prefix_expression: list[str], values: list | np.ndarray
         constants = list(constants)
 
     for i, token in enumerate(prefix_expression):
-        if token == "<constant>" or re.match(r"C_\d+", token) or token in constants:
+        if is_constant_placeholder(token, constants):
             modified_prefix_expression[i] = str(values[constant_index])
             constant_index += 1
 
     return modified_prefix_expression
+
+
+# Historic alias: the function shipped under this misspelling for its whole life, and
+# released consumers (symbolic-data <= 0.14, flash-ansr v23) import it by this name.
+# Warns from 0.13.0 per the compatibility policy (D11 column R19); removal not before
+# 0.15.0, and never while a shipped downstream still imports it.
+def substitude_constants(*args: Any, **kwargs: Any) -> list[str]:
+    """Deprecated misspelling of :func:`substitute_constants` (removal not
+    before 0.15.0)."""
+    warnings.warn(
+        '`substitude_constants` is a deprecated misspelling; use '
+        '`substitute_constants` (removal not before 0.15.0)',
+        DeprecationWarning, stacklevel=2)
+    return substitute_constants(*args, **kwargs)
 
 
 def apply_variable_mapping(prefix_expression: list[str], variable_mapping: dict[str, str]) -> list[str]:
@@ -268,9 +321,17 @@ def apply_variable_mapping(prefix_expression: list[str], variable_mapping: dict[
 def numbers_to_constant(prefix_expression: list[str], inplace: bool = False) -> list[str]:
     """Replace all numeric literals in a prefix expression with '<constant>'.
 
-    This function standardizes an expression by replacing all tokens that can be
-    interpreted as numbers with a generic `<constant>` placeholder. This is
-    useful for structural comparison and rule matching.
+    .. deprecated::
+        This is a role-blind shadow of the masking module and is unsafe on two counts:
+        it decides WHICH literals become abstract (a masking-policy question -- it masks
+        ``pow`` exponents and ``rootn`` indices, whose integrality controls the domain),
+        and it classifies by a bare ``float()`` probe, which also accepts the RESERVED
+        spellings (``inf``/``nan`` any case/sign, underscore groupings) and so mints a
+        finite-by-doctrine ``<constant>`` for a non-finite literal. Use
+        ``simplipy.masking.mask(tokens, engine, policy)`` with the policy that states
+        your intent (``mask_fittable`` for "what a constant optimizer can fit",
+        ``mask_values_keep_structure`` for recovery skeletons, ``mask_all`` for the
+        legacy behavior); for structural HASHING use ``normalize_skeleton``.
 
     Parameters
     ----------
@@ -291,6 +352,11 @@ def numbers_to_constant(prefix_expression: list[str], inplace: bool = False) -> 
     >>> numbers_to_constant(expr)
     ['+', 'x', '<constant>', '*', 'y', '<constant>']
     """
+    warnings.warn(
+        "numbers_to_constant is deprecated: it is a role-blind masking decision with a "
+        "float()-probe classifier (accepts reserved inf/nan spellings). Use "
+        "simplipy.masking.mask(tokens, engine, policy) with an explicit policy instead.",
+        DeprecationWarning, stacklevel=2)
     if inplace:
         modified_prefix_expression = prefix_expression
     else:
@@ -306,13 +372,14 @@ def numbers_to_constant(prefix_expression: list[str], inplace: bool = False) -> 
     return modified_prefix_expression
 
 
-def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False, convert_numbers_to_constant: bool = True) -> tuple[list[str], list[str]]:
-    """Convert placeholder tokens to explicit constant names (for example ``C_0``, ``C_1``).
+def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False, *, convert_numbers_to_constant: bool) -> tuple[list[str], list[str]]:
+    """Rename abstract-constant slots to explicit identifiers (``C_0``, ``C_1``, ...).
 
-    ``"<constant>"`` tokens — and, when ``convert_numbers_to_constant`` is ``True``,
-    integer-like numeric strings or existing ``C_i`` tokens — are replaced with
-    explicit constant identifiers. This is useful for generating call signatures
-    where constants are passed as named arguments.
+    A purely MECHANICAL code-generation step: every placeholder slot -- ``"<constant>"``
+    or an existing ``C_i`` identifier (re-numbered) -- is renamed to a positional
+    constant name, so ``codify`` can build a call signature where constants are passed
+    as named arguments. This function decides NOTHING about which literals are
+    abstract; that is a masking-policy question and lives in ``simplipy.masking``.
 
     Parameters
     ----------
@@ -320,13 +387,18 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
         The prefix expression to process.
     constants : list[str] or None, optional
         Initial constant names to reuse before generating new ones. The returned
-        list includes these values plus any newly generated identifiers.
+        list includes the used values plus any newly generated identifiers.
     inplace : bool, optional
         If ``True``, modifies the input list; otherwise, works on a shallow copy.
         Defaults to ``False``.
     convert_numbers_to_constant : bool, optional
-        If ``True``, numeric strings consisting only of digits are also replaced.
-        Defaults to ``True``.
+        Deprecated. When ``True``, digit-only numeric tokens are ALSO converted into
+        fittable constants -- a masking decision smuggled into a mechanical helper, and
+        an incoherent one (``3`` converts, ``-3``/``2.0``/``3.14`` do not; a ``pow``
+        exponent's integrality controls the DOMAIN, so converting it silently changes
+        semantics). Kept accepted through this release so pinned consumers keep
+        working; decide abstraction upstream with ``simplipy.masking`` instead.
+        Defaults to ``False`` (it defaulted to ``True`` before 0.13.0).
 
     Returns
     -------
@@ -337,12 +409,21 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     Examples
     --------
     >>> expr = ['*', '<constant>', '+', 'x', '2']
-    >>> explicit_constant_placeholders(expr)
-    (['*', 'C_0', '+', 'x', 'C_1'], ['C_0', 'C_1'])
+    >>> explicit_constant_placeholders(expr, convert_numbers_to_constant=False)
+    (['*', 'C_0', '+', 'x', '2'], ['C_0'])
 
-    >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'])
+    >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'],
+    ...                                convert_numbers_to_constant=False)
     (['+', 'K', 'C_0'], ['K', 'C_0'])
     """
+    if convert_numbers_to_constant:
+        warnings.warn(
+            "explicit_constant_placeholders(convert_numbers_to_constant=True) is "
+            "deprecated: which literals become fittable constants is a masking-policy "
+            "decision -- apply simplipy.masking upstream and let this helper only "
+            "rename explicit placeholder slots.",
+            DeprecationWarning, stacklevel=2)
+
     if inplace:
         modified_prefix_expression = prefix_expression
     else:
@@ -354,7 +435,10 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     generated_index = 0
 
     for i, token in enumerate(prefix_expression):
-        if token == "<constant>" or (convert_numbers_to_constant and (re.match(r"C_\d+", token) or token.isnumeric())):
+        # C_i re-numbering is part of the MECHANICAL contract and is unconditional; the
+        # deprecated flag only gates the numeral conversion. (Before 0.13.0 the flag
+        # gated BOTH, conflating codegen renaming with a masking decision.)
+        if is_constant_placeholder(token) or (convert_numbers_to_constant and token.isnumeric()):
             if provided_index < len(provided_constants):
                 constant_name = provided_constants[provided_index]
                 provided_index += 1

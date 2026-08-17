@@ -20,6 +20,8 @@ from typing import Any
 
 import yaml
 
+__all__ = ['load_config']  # D11 column R22 (owner-ratified 2026-08-16)
+
 
 def load_config(config: dict[str, Any] | str) -> dict[str, Any]:
     '''

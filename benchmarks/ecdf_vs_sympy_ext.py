@@ -18,7 +18,7 @@ Consumes benchmarks/ecdf_vs_sympy_results.pkl (run ecdf_vs_sympy.py first).
 
 Usage: ecdf_vs_sympy_ext.py [--regions-only | --nodes-only]
 Artifacts: benchmarks/ecdf_vs_sympy_nodes_summary.json (tracked),
-           assets/images/simplipy_vs_sympy_012_nodes.{png,svg},
+           benchmarks/out/simplipy_vs_sympy_012_nodes.{png,svg},
            benchmarks/ecdf_region_examples.md (tracked).
 """
 import json
@@ -111,10 +111,11 @@ def nodes_figure(scored, res):
     fig.suptitle('Same outputs, node-count yardstick: explicit prefix nodes(simp)/nodes(orig) '
                  '— 64k nv corpus', fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
+    os.makedirs(os.path.join(REPO, 'benchmarks', 'out'), exist_ok=True)
     for ext in ('png', 'svg'):
-        fig.savefig(os.path.join(REPO, 'assets', 'images',
+        fig.savefig(os.path.join(REPO, 'benchmarks', 'out',
                                  f'simplipy_vs_sympy_012_nodes.{ext}'), dpi=160)
-    print('figure -> assets/images/simplipy_vs_sympy_012_nodes.{png,svg}')
+    print('figure -> benchmarks/out/simplipy_vs_sympy_012_nodes.{png,svg}')
 
 
 def nodes_summary(scored):

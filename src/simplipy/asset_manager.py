@@ -15,8 +15,11 @@ from typing import Literal
 
 import platformdirs
 from filelock import FileLock
-from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import HfHubHTTPError
+
+# D30 (ratified): huggingface_hub is imported inside the two functions that
+# talk to the hub, never at module scope -- its import chain was 122 ms of a
+# 282 ms `import simplipy`, paid by users who only ever call `simplify`. The
+# acceptance is structural and tested: hf absent from sys.modules on import.
 
 # --- Configuration ---
 # The central manifest file defining all official assets.
@@ -25,10 +28,9 @@ HF_MANIFEST_FILENAME = "manifest.json"
 
 AssetType = Literal['engine', 'test-data', 'all']
 
-ASSET_KEYS = {
-    'engine': 'engines',
-    'test-data': 'test-data'
-}
+# D11 column R21 (owner-ratified 2026-08-16). The deployment knobs
+# (HF_MANIFEST_REPO, ASSET_KEYS, ...) are deliberately undeclared.
+__all__ = ['get_path', 'install_asset', 'uninstall_asset', 'list_assets', 'AssetType']
 
 
 # --- Core Functions ---
@@ -73,16 +75,32 @@ def fetch_manifest(repo_id: str | None = None, manifest_filename: str | None = N
         if the download fails.
 
     """
+    kwargs = dict(
+        repo_id=repo_id or HF_MANIFEST_REPO,
+        filename=manifest_filename or HF_MANIFEST_FILENAME,
+        repo_type="dataset",
+    )
+    from huggingface_hub import hf_hub_download
+
+    # C51 + dep-4-hf-exception-miss: the online fetch used to be the ONLY path, and
+    # only HfHubHTTPError was caught -- a user on a plane with the asset fully
+    # installed got 23.5 s of retries and a raw LocalEntryNotFoundError. Any fetch
+    # failure (the hub raises several exception families for network/offline states)
+    # now falls back to the LAST CACHED manifest copy, so installed assets resolve
+    # offline; only a cold cache with no network reaches the empty-manifest failure.
     try:
-        manifest_path = hf_hub_download(
-            repo_id=repo_id or HF_MANIFEST_REPO,
-            filename=manifest_filename or HF_MANIFEST_FILENAME,
-            repo_type="dataset",
-        )
+        manifest_path = hf_hub_download(**kwargs)
         with open(manifest_path, 'r') as f:
             return json.load(f)
-    except HfHubHTTPError as e:
-        print(f"Error: Could not download the asset manifest from Hugging Face: {e}")
+    except Exception as e:  # noqa: BLE001 -- every failure class falls back to cache
+        online_error = e
+    try:
+        manifest_path = hf_hub_download(**kwargs, local_files_only=True)
+        with open(manifest_path, 'r') as f:
+            return json.load(f)
+    except Exception:
+        print(f"Error: Could not download the asset manifest from Hugging Face "
+              f"({online_error}), and no cached copy exists.")
         return {}
 
 
@@ -93,13 +111,65 @@ def _asset_files_present(local_dir: Path, asset_info: dict) -> bool:
     concurrent installs safe: a partially-downloaded asset is correctly treated as not-installed.
     Backward-compatible with caches installed before the completeness check existed.
     """
-    base = local_dir / asset_info['directory']
+    base = _asset_root(local_dir, asset_info)
     if not base.is_dir():
         return False
     files = asset_info.get('files')
     if not files:
         return (base / asset_info['entrypoint']).exists()
     return all((base / f).exists() for f in files)
+
+
+def _asset_root(local_dir: Path, asset_info: dict) -> Path:
+    """Resolve the asset's directory STRICTLY INSIDE `local_dir`, or refuse.
+
+    The manifest is DOWNLOADED DATA, and its `directory` reached every rmtree and
+    join unvalidated (missed-004/006, threatmodel-4). No `..` is needed for the
+    escape: `Path(cache) / '/etc/x'` IS `Path('/etc/x')` -- absolute paths defeat
+    any fix that only rejects traversal segments, so the rule is resolve-and-contain,
+    never segment filtering. Every consumer of `asset_info['directory']` (and the
+    per-file joins) goes through here before touching the filesystem.
+    """
+    root = (local_dir / asset_info['directory']).resolve()
+    base = Path(local_dir).resolve()
+    if not root.is_relative_to(base) or root == base:
+        raise ValueError(
+            f"manifest directory {asset_info['directory']!r} escapes the asset cache "
+            f"root {str(base)!r}; refusing (a manifest is data, not a path authority)")
+    for f in asset_info.get('files', []):
+        fp = (root / f).resolve()
+        if not fp.is_relative_to(root):
+            raise ValueError(
+                f"manifest file name {f!r} escapes the asset directory; refusing")
+    return root
+
+
+def _verify_asset_digests(local_dir: Path, asset_info: dict) -> None:
+    """Enforce the manifest's per-file `sha256` digests against the local copy (R6).
+
+    The audit watched the shared cache change MID-PYTEST-RUN, and the asset was
+    republished under the same name mid-audit -- the one defect class that changes
+    behaviour with no commit, which no later audit can catch. With digests in the
+    manifest, a corrupted or swapped cached file makes resolution RAISE rather than
+    silently serve. Entries without a `sha256` block (pre-R6 manifests) verify
+    nothing -- permissive by design, so old manifests keep working.
+    """
+    import hashlib
+    digests = asset_info.get('sha256')
+    if not digests:
+        return
+    base = _asset_root(local_dir, asset_info)
+    for name, expected in digests.items():
+        path = base / name
+        if not path.exists():
+            continue  # completeness is _asset_files_present's job
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            raise RuntimeError(
+                f"sha256 mismatch for cached asset file '{path}': expected {expected}, "
+                f"got {actual}. The local copy does not match the manifest "
+                f"(revision {asset_info.get('revision', '?')}); reinstall with "
+                f"install_asset(..., force=True).")
 
 
 def get_path(asset: str, install: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> str:
@@ -165,9 +235,10 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     elif isinstance(local_dir, str):
         local_dir = Path(local_dir)
 
-    entrypoint_path = local_dir / asset_info['directory'] / asset_info['entrypoint']
+    entrypoint_path = _asset_root(local_dir, asset_info) / asset_info['entrypoint']
 
     if _asset_files_present(local_dir, asset_info):
+        _verify_asset_digests(local_dir, asset_info)  # R6: raises on a corrupted cache
         return str(entrypoint_path)
 
     if install:
@@ -224,7 +295,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
     elif isinstance(local_dir, str):
         local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
-    local_path = local_dir / asset_info['directory']
+    local_path = _asset_root(local_dir, asset_info)
 
     # Serialize concurrent installs of the SAME asset across processes. Without this, multiple
     # workers racing on a cold cache observe a half-downloaded asset (the directory or entrypoint
@@ -246,15 +317,29 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
             shutil.rmtree(local_path, ignore_errors=True)
 
         print(f"Installing asset '{asset}' to {local_path}.")
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.utils import HfHubHTTPError
         try:
             for file in asset_info['files']:
-
+                # R6: pin the download to the manifest's recorded revision when it
+                # carries one -- "latest" is whatever the repo holds at that instant,
+                # which is how the served ruleset changed under a running process.
                 hf_hub_download(
                     repo_id=asset_info['repo_id'],
                     filename=f"{asset_info['directory']}/{file}",
                     repo_type="dataset",
                     local_dir=local_dir,
+                    revision=asset_info.get('revision'),
                 )
+            # R6: verify what actually landed on disk against the manifest digests.
+            # An integrity failure RAISES (distinct from the network-failure False):
+            # a corrupt artifact must never be reported as installed.
+            try:
+                _verify_asset_digests(local_dir, asset_info)
+            except RuntimeError:
+                if local_path.exists():
+                    shutil.rmtree(local_path, ignore_errors=True)
+                raise
             print(f"Successfully installed '{asset}'.")
             return True
         except HfHubHTTPError as e:
@@ -304,15 +389,19 @@ def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | Non
         local_dir = Path(local_dir)
 
     manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
-    if manifest:
-        asset_info = manifest.get(asset)
-        if not asset_info:
-            list_assets(asset_type='all', installed_only=True)
-            raise ValueError(f"Error: Unknown asset: '{asset}'. See above for installed assets.")
+    if not manifest:
+        # missed-004: this used to GUESS `local_dir / asset` and return True having
+        # deleted nothing -- a silent no-op sold as success on every manifest-fetch
+        # failure. A deleter that cannot resolve what it is deleting must say so.
+        raise RuntimeError(
+            'could not fetch the asset manifest; refusing to guess which directory '
+            f"to remove for {asset!r} (retry with network access)")
+    asset_info = manifest.get(asset)
+    if not asset_info:
+        list_assets(asset_type='all', installed_only=True)
+        raise ValueError(f"Error: Unknown asset: '{asset}'. See above for installed assets.")
 
-        local_path = local_dir / asset_info['directory']
-    else:
-        local_path = local_dir / asset
+    local_path = _asset_root(local_dir, asset_info)
 
     if not local_path.exists():
         if not quiet:

@@ -61,7 +61,9 @@ class TestConfigGate:
         config = load_config(ACJ_CONFIG)
         config.pop('engine_generation', None)
         config['operators']['mult3'] = {
-            'realization': 'lambda x: 3 * x', 'alias': [], 'inverse': None,
+            # R3: a realization is compiled into generated source, so the shape is
+            # validated at load -- a dotted name, not an inline lambda (audit B14).
+            'realization': 'np.tan', 'alias': [], 'inverse': None,
             'arity': 1, 'precedence': None, 'commutative': False}
         config.pop('rules', None)
         p = tmp_path / 'config.yaml'
@@ -89,7 +91,7 @@ class TestConfigGate:
         config = load_config(ACJ_CONFIG)
         config['engine_generation'] = 2
         config['operators']['pow2'] = {
-            'realization': 'lambda x: x ** 2', 'alias': [], 'inverse': None,
+            'realization': 'np.square', 'alias': [], 'inverse': None,
             'arity': 1, 'precedence': None, 'commutative': False}
         config.pop('rules', None)
         p = tmp_path / 'config.yaml'
@@ -134,3 +136,43 @@ class TestDeliberateBoundaries:
         _require_or_skip(LEGACY_CONFIG, 'legacy 4-3 asset not staged in ~/.cache')
         from simplipy.asset_manager import get_path
         assert get_path('4-3').endswith('config.yaml')
+
+
+class TestD12CleanCut:
+    """D12's clean-cut rulings, owner-ratified 2026-08-16: `pow1`/`pow_1` join
+    RETIRED_OPERATOR_TOKENS (a config declaring them was accepted while the parser
+    unconditionally rewrote their tokens away -- one engine, two answers for one
+    expression); the `inverse` spec key is no longer REQUIRED (nothing reads it --
+    parse-only ceremony that made every wild config fail construction)."""
+
+    def test_pow1_config_refuses_at_load(self, tmp_path):
+        # the refusal choke point is the ARTIFACT-LOADING path (from_config/load);
+        # raw in-memory construction stays open by design (0.12.0 contract)
+        import pytest as _pytest
+        import yaml
+        from simplipy import SimpliPyEngine
+        ops = {'pow1': {'realization': 'simplipy.operators.pow1', 'alias': [],
+                        'arity': 1, 'precedence': 3, 'commutative': False}}
+        cfg = tmp_path / 'config.yaml'
+        cfg.write_text(yaml.safe_dump({'operators': ops}))
+        with _pytest.raises(Exception, match='pow1|[Gg]eneration|retired'):
+            SimpliPyEngine.from_config(str(cfg))
+
+    def test_inverse_key_is_optional(self):
+        from simplipy import SimpliPyEngine
+        ops = {'+': {'realization': '+', 'alias': [], 'arity': 2,
+                     'precedence': 1, 'commutative': True}}
+        eng = SimpliPyEngine(operators=ops)  # no 'inverse' anywhere: must load
+        assert eng.simplify(['+', 'x0', '0']) is not None
+
+    def test_shipped_configs_carry_no_inverse_key(self):
+        import os
+        import yaml
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'remine')
+        for cell in ('acj-2-1', 'acj-3-2', 'acj-4-3'):
+            path = os.path.join(base, cell, 'config.yaml')
+            if not os.path.exists(path):
+                continue
+            cfg = yaml.safe_load(open(path))
+            for name, spec in cfg['operators'].items():
+                assert 'inverse' not in spec, f'{cell}:{name} still carries inverse:'
