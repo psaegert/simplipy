@@ -1,0 +1,35 @@
+# Publication artifact acj-4-3: complete AC-judged mine, LLM channel off (simplipy >= 0.12)
+# Reproduce with ONE command:
+#   simplipy find-rules -e config.yaml -c mine.yaml -o rules.json -v --reset-rules
+# ALPHABET EXPANDED 2026-08-06, OWNER-RULED ADOPT: "we should have the same literals in
+# the simplipy mine as in the flash-ansr vocabulary: -10 to 10, e, and pi",
+# chosen as BOTH source and target -- `leaf_nodes` (engine.py:1702) is a single list.
+#
+# ADOPTED OVER A MEASURED COST, deliberately. The A/B (2026-08-06) is -10.3% simplify
+# throughput for -0.0098% mu: 995 rules -> 7,153, a 7.2x ruleset, and the reductions do
+# not pay for the extra match attempts on a mu-per-second basis. The owner ruled ADOPT
+# anyway: COMPLETENESS over the deployed vocabulary is the goal, not the margin, and 10%
+# is affordable. Do not silently revert this on a future speed pass without re-reading
+# that ruling.
+#
+# Universe, computed and then confirmed to the digit by the run (u=17 unary, b=6 binary,
+# a = 29 leaves): len3 = u^2*a + b*a^2 = 13,427; len4 = u^3*a + 3*u*b*a^2 = 399,823.
+extra_internal_terms: ['<constant>', '(-10)', '(-9)', '(-8)', '(-7)', '(-6)', '(-5)', '(-4)', '(-3)', '(-2)', '(-1)', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+                       'np.e', 'np.pi',
+                       'float("inf")', 'float("-inf")', 'float("nan")']
+dummy_variables: 2  # >= ceil(max_source_pattern_length/2) suffices for an all-binary vocabulary (measured 2026-08-01: dummies beyond that only enumerate renamed duplicates; dummy2 arm byte-identical, universe -21%)
+max_source_pattern_length: 4
+max_target_pattern_length: 3
+source_sample_per_length: null        # complete universes at every length
+n_samples: 1024
+constants_fit_challenges: 16
+constants_fit_retries: 16
+rtol: 1.0e-11  # measured 2026-08-01: 1e-9 admitted the tanh-saturation near-miss family (residuals ~1.7e-10, lossy); 1e-11 refuses it with zero other movement (grid-measured)
+atol: 1.0e-12
+min_informative: null
+seed: 42
+confirm: true
+candidate_fold_filter: true
+relaxed_kruskal: true
+prune: covered
+promote_sorts: true       # native sort promotion (0.8.0): ship the strongest sound sort

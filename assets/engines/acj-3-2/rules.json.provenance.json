@@ -1,0 +1,271 @@
+{
+  "created": "2026-08-08 04:21:39 +0200",
+  "host": "Valkyrie-1",
+  "simplipy_version": "0.12.0",
+  "core_build": "0.12.0+gecc96b7e8158-dirty",
+  "measure": {
+    "unit": "milli-bits",
+    "mu_sym": 8000,
+    "mu_free": 1133000,
+    "probes": {
+      "1000": 9967,
+      "1/2": 2585,
+      "355/113": 15309,
+      "0.2": 3585,
+      "<constant>": 1133000,
+      "x0": 8000
+    },
+    "digest": "84a2bc8eac4a0df1"
+  },
+  "params": {
+    "max_source_pattern_length": 3,
+    "max_target_pattern_length": 2,
+    "dummy_variables": [
+      "x0",
+      "x1"
+    ],
+    "extra_internal_terms": [
+      "<constant>",
+      "(-10)",
+      "(-9)",
+      "(-8)",
+      "(-7)",
+      "(-6)",
+      "(-5)",
+      "(-4)",
+      "(-3)",
+      "(-2)",
+      "(-1)",
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "np.e",
+      "np.pi",
+      "float(\"inf\")",
+      "float(\"-inf\")",
+      "float(\"nan\")"
+    ],
+    "constants_fit_challenges": 16,
+    "constants_fit_retries": 16,
+    "rtol": 1e-11,
+    "atol": 1e-12,
+    "min_informative": 128,
+    "seed": 42,
+    "mine_seed": 2411932898932949783,
+    "confirm_seed": 1694434229496460644,
+    "confirm": true,
+    "candidate_fold_filter": true,
+    "relaxed_kruskal": true,
+    "prune": "covered",
+    "reset_rules": true,
+    "source_sample_per_length": {}
+  },
+  "X": {
+    "rows": 1024,
+    "cols": 2,
+    "source": "seeded_mixture (_mining_sample_x from `seed`)"
+  },
+  "universe": {
+    "1": {
+      "complete_count": 29,
+      "used": 29,
+      "coverage": 1.0,
+      "sampled": false
+    },
+    "2": {
+      "complete_count": 493,
+      "used": 493,
+      "coverage": 1.0,
+      "sampled": false
+    },
+    "3": {
+      "complete_count": 13427,
+      "used": 13427,
+      "coverage": 1.0,
+      "sampled": false
+    }
+  },
+  "operators": [
+    "*",
+    "+",
+    "-",
+    "/",
+    "abs",
+    "acos",
+    "acosh",
+    "asin",
+    "asinh",
+    "atan",
+    "atanh",
+    "cos",
+    "cosh",
+    "exp",
+    "inv",
+    "log",
+    "neg",
+    "pow",
+    "rootn",
+    "sin",
+    "sinh",
+    "tan",
+    "tanh"
+  ],
+  "soundness": {
+    "kill_switches": {
+      "SIMPLIPY_IVL_GATE": true,
+      "SIMPLIPY_IVL_CLASS": true,
+      "SIMPLIPY_IVL_REACH": true,
+      "SIMPLIPY_SPECIAL_BATTERY": true
+    },
+    "node_budget_env": null,
+    "env_overrides": {},
+    "interval_undecided": {
+      "horizon": 82,
+      "node_budget": 0,
+      "unanalyzable": 793
+    }
+  },
+  "progress": {
+    "updated": "2026-08-08 04:21:45 +0200",
+    "last_completed_source_length": 3,
+    "final": true,
+    "rules_total": 106,
+    "rules_by_lhs_length": {
+      "2": 22,
+      "3": 82,
+      "4": 2
+    }
+  },
+  "symbolic_gate": {
+    "killed": [
+      [
+        [
+          "sinh",
+          "log",
+          "5"
+        ],
+        [
+          "2.4"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "cosh",
+          "(-4)"
+        ],
+        [
+          "1"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "cosh",
+          "4"
+        ],
+        [
+          "1"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "exp",
+          "3"
+        ],
+        [
+          "1"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "exp",
+          "np.e"
+        ],
+        [
+          "1"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "exp",
+          "np.pi"
+        ],
+        [
+          "1"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "log",
+          "2"
+        ],
+        [
+          "0.6"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "log",
+          "3"
+        ],
+        [
+          "0.8"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "log",
+          "7"
+        ],
+        [
+          "0.96"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "sinh",
+          "(-4)"
+        ],
+        [
+          "-1"
+        ]
+      ],
+      [
+        [
+          "tanh",
+          "sinh",
+          "4"
+        ],
+        [
+          "1"
+        ]
+      ]
+    ],
+    "kept": 126
+  },
+  "sort_promotion": {
+    "pointwise_promote": 0,
+    "pointwise_demote": 1,
+    "cb_promote": 0,
+    "overturned": 0,
+    "ground_passthrough": 94,
+    "after_refund": 32,
+    "final": 110
+  }
+}

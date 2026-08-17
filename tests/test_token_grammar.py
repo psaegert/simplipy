@@ -257,7 +257,6 @@ class TestThreatmodel3FromStrsCap:
     must refuse loudly at load, never abort the process."""
 
     def test_deep_rule_refuses_instead_of_crashing(self):
-        import json
         import subprocess
         import sys
         code = (

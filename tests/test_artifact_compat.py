@@ -168,7 +168,7 @@ class TestD12CleanCut:
     def test_shipped_configs_carry_no_inverse_key(self):
         import os
         import yaml
-        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'remine')
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets', 'engines')
         for cell in ('acj-2-1', 'acj-3-2', 'acj-4-3'):
             path = os.path.join(base, cell, 'config.yaml')
             if not os.path.exists(path):

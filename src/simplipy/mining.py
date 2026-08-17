@@ -16,22 +16,16 @@ Equality gate (D29): full-mine byte-identity on ``rules.json``, machine-pinned
 """
 
 import hashlib
-import importlib
 import os
 import warnings
 import signal
 import threading
-from itertools import product
-from types import CodeType, FunctionType
 from typing import Callable, TYPE_CHECKING
-from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from copy import deepcopy
-from enum import IntEnum
 
 import numpy as np
 import json
-import yaml
 
 from simplipy.utils import (
     is_numeric_string,
@@ -39,9 +33,6 @@ from simplipy.utils import (
     enumerate_expressions, count_expressions, sample_expression,
     remap_expression,
     violates_wildcard_multiplicity)
-from simplipy.trust import check_realization, check_root, package_for, resolve_trusted
-from simplipy.io import load_config
-from simplipy.asset_manager import get_path
 
 if TYPE_CHECKING:
     from .engine import SimpliPyEngine
@@ -91,7 +82,6 @@ def _tokens_in_vocabulary(tokens: Any, vocabulary: set) -> bool:
     proposal; audit Tier-1 #3)."""
     return all(t in vocabulary or t in _CONSTLIKE_LEAVES or is_numeric_string(t)
                for t in tokens)
-
 
 
 def _load_proposals(
@@ -145,7 +135,6 @@ def _load_proposals(
         record['sha256'] = hashlib.sha256(normalized.encode()).hexdigest()
     record['count'] = len(entries)
     return entries, record
-
 
 
 class RuleMiner:
@@ -545,7 +534,6 @@ class RuleMiner:
                 'kill_switches': {
                     var: os.environ.get(var) != '0'
                     for var in ('SIMPLIPY_IVL_GATE', 'SIMPLIPY_IVL_CLASS',
-    'SIMPLIPY_IVL_CLASS',         # interval value-class layer (bool too)
                                 'SIMPLIPY_IVL_REACH', 'SIMPLIPY_SPECIAL_BATTERY')},
                 'node_budget_env': os.environ.get('SIMPLIPY_IVL_NODE_BUDGET'),
                 # EVERY set entry of the artifact-affecting switch registry, raw (H-042):
@@ -648,7 +636,6 @@ class RuleMiner:
     #: fraction and a non-unit one (the fraction code and the inversion bit), a decimal
     #: whose denominator carries a five (the print/argmin split), a `<constant>` (mu_free),
     #: and a bare symbol (mu_sym).
-
 
     @staticmethod
     def _write_provenance(output_file: str, provenance: dict | None, rules: list,
@@ -792,6 +779,7 @@ class RuleMiner:
             x_spec = {'rows': int(X_data.shape[0]), 'cols': int(X_data.shape[1]),
                       'source': 'explicit_array (NOT reproducible from `seed`)',
                       'sha256': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest()}
+
         # R5 + C23c-prov (the G2 gate): the numeric stack that minted the artifact is
         # part of its identity. scipy's PRESENCE alone changes mined output (audit N3:
         # a promotion reads PROMOTE with scipy, NO-WITNESS without -- now a hard error,
@@ -938,9 +926,11 @@ class RuleMiner:
             _MINE_LOCK.release()
 
     def _certify_rules_locked(
-            self, sources, hint_list, max_target_pattern_length, dummy_variables,
-            extra_internal_terms, X, constants_fit_challenges, constants_fit_retries,
-            rtol, atol, min_informative, seed, verbose):
+            self, sources: list, hint_list: list, max_target_pattern_length: int,
+            dummy_variables: int | list[str] | None, extra_internal_terms: list[str] | None,
+            X: int | None, constants_fit_challenges: int, constants_fit_retries: int,
+            rtol: float, atol: float, min_informative: int | None, seed: int | None,
+            verbose: bool) -> list[tuple[tuple[str, ...], tuple[str, ...], str]]:
         dummy_variables = self._resolve_dummy_variables(
             dummy_variables,
             default=lambda: (sorted({t for s in sources for t in s
@@ -1596,4 +1586,3 @@ class RuleMiner:
             if handler_installed:
                 signal.signal(signal.SIGINT, old_handler)
             _MINE_LOCK.release()
-
