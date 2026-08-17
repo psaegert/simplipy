@@ -208,7 +208,34 @@ always considers every pattern in the loaded artifact (the former `max_pattern_l
 knob was removed in 0.10.0).
 
 The 0.13 line ships a re-designed, pre-registered fair benchmark: serial
-single-core for every arm, paired per-row scoring, right-censoring stated
-on the panel, three corpora (an SR training prior, its raw-masked
-transform, and an external neutral-prior set). Results ledgers and ECDF
-figures: coming soon.
+single-core for every arm, paired per-row scoring against SymPy 1.13.1
+(1 s cap, censoring stated on the panel), three corpora — an SR training
+prior (n = 65,536), its raw-masked transform (n = 65,536), and an
+external neutral problem set (n = 528). Scored in the deployment space
+under the MDL measure, with bootstrap 95% CIs; ratio = output/input, lower
+is better; "made bigger" = the fraction of rows an arm inflated.
+
+| corpus | arm | mean ratio | wins | made bigger |
+|---|---|---|---|---|
+| SR prior, unmasked | simplipy sound | **0.964** | 9.1% | **0.0%** |
+| | sympy simplify | 1.081 | 17.2% | 41.6% |
+| SR prior, masked raw | simplipy sound | **0.982** | **18.7%** | **0.0%** |
+| | sympy simplify | 1.072 | 17.1% | 40.4% |
+| external set | simplipy sound | 0.999 | 1.3% | **0.0%** |
+| | sympy simplify | 1.023 | 19.1% | 19.3% |
+
+The sound engine never inflated a single row of 131,600: refusal semantics
+mean an unprovable rewrite returns the input unchanged. SymPy's `simplify`
+inflates roughly four rows in ten on SR-shaped corpora and hits its 1 s
+timeout on ~14% of raw-masked rows. Paired wall-clock on the same rows:
+median speedup **~780×** (masked raw) / ~600–800× across corpora, medians
+at 92–130 µs per row against SymPy's ~69 ms. On the external set both
+systems are near the fixpoint; SymPy's 19.1% wins there are dominated by
+number-respelling (floats rewritten as exact rationals), not structural
+simplification.
+
+![ECDF, masked raw corpus](../assets/benchmarks/ecdf_masked_raw.png)
+
+Full panels: [unmasked](../assets/benchmarks/ecdf_unmasked.png) ·
+[masked raw](../assets/benchmarks/ecdf_masked_raw.png) ·
+[external](../assets/benchmarks/ecdf_external.png)

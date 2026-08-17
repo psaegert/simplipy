@@ -99,7 +99,7 @@ As of 0.6.0 the simplify hot path defers match-time certificates to completed ma
 rule-normal subtrees, and runs on interned token ids (~20× fewer allocations per call) —
 all at byte-identical outputs. On a 65,536-expression training-prior benchmark (measured
 at 0.11.0), large certificate-bearing rulesets simplify ~59× faster than 0.5.0 and
-certificate-free rulesets ~2.3× faster; see the [CHANGELOG](https://github.com/psaegert/simplipy/blob/v0.13.0/CHANGELOG.md)
+certificate-free rulesets ~2.3× faster; see the [CHANGELOG](https://github.com/psaegert/simplipy/blob/main/CHANGELOG.md)
 for details. Since 0.7.0 there is a single compiled engine line; the published ruleset
 artifacts (`acj-2-1`, `acj-3-2`, `acj-4-3`, …) are the distinguishing factor between engines. Rule
 application always considers every pattern in the loaded artifact (the former
@@ -108,7 +108,11 @@ v23.0-era behavior byte-for-byte, install `simplipy<=0.6.0`.)
 
 The 0.13 line ships a re-designed, pre-registered benchmark suite: three
 corpora, every arm timed serial single-core, paired per-row scoring with
-bootstrap confidence intervals. Results coming soon.
+bootstrap confidence intervals. Across 131,600 scored rows the sound
+engine never inflates an expression (0.00% made-bigger), wins 9–19% of
+rows against SymPy's `simplify` on SR-shaped corpora while SymPy inflates
+~40%, and runs a paired median ~600–800× faster. Full results and figures:
+[the simplify guide](https://simplipy.readthedocs.io/en/stable/guides/simplify/).
 
 # Development
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.1 — 2026-08-17
+
+### Added — the fair-benchmark results
+- The pre-registered three-corpus benchmark results are published: headline
+  table and full ECDF panels in the simplify guide, summary in the README.
+  Across 131,600 scored rows the sound engine never inflates an expression
+  (0.00% made-bigger); paired median speedup vs SymPy's `simplify` is
+  ~600–800× at 92–130 µs per row.
+
 ## 0.13.0 — 2026-08-17
 
 ### Added — the declared public API (`__all__`) and the compatibility policy
