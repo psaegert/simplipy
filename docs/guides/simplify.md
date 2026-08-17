@@ -115,7 +115,7 @@ engine.simplify(['exp', 'log', '<constant>'], mode=Mode.SOUND)  # -> ['exp', 'lo
 engine.simplify(['exp', 'log', '<constant>'], mode=Mode.LOSSY)  # -> ['<constant>']
 
 # (x^2)^0.5 equals |x|, not x: SOUND refuses the flattening, LOSSY takes it.
-engine.simplify(['pow', 'pow', 'x0', '2', '0.5'], mode=Mode.SOUND)  # -> unchanged
+engine.simplify(['pow', 'pow', 'x0', '2', '0.5'], mode=Mode.SOUND)  # -> ['rootn', 'pow', 'x0', '2', '2']
 engine.simplify(['pow', 'pow', 'x0', '2', '0.5'], mode=Mode.LOSSY)  # -> ['x0']
 
 # A finite-a.e. subtree (pole at a single measure-zero constant) folds in BOTH modes:
