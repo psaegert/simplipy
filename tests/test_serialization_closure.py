@@ -46,7 +46,7 @@ OPS_FULL = {
     # ARITY-3 operator -- both stay opaque nodes with call rendering, and the battery
     # proves the emit-parse closure survives them anywhere in a term.
     "hypot2": {"realization": "np.hypot", "alias": [], "inverse": None, "arity": 2, "precedence": 3, "commutative": False},
-    "fma3": {"realization": "math.fma", "alias": [], "inverse": None, "arity": 3, "precedence": 3, "commutative": False},
+    "clip3": {"realization": "np.clip", "alias": [], "inverse": None, "arity": 3, "precedence": 3, "commutative": False},
 }
 
 LEAVES = ["x0", "x1", "2", "-1", "<constant>"]
@@ -67,7 +67,7 @@ DEGENERATE = {
     "no_rootn": [k for k in OPS_FULL if k != "rootn"],
     "minimal_add_mul": ["+", "*", "exp", "sin"],
     "minimal_mul_inv": ["*", "inv", "log"],
-    "minimal_call_ops": ["fma3", "hypot2", "exp"],
+    "minimal_call_ops": ["clip3", "hypot2", "exp"],
 }
 
 
@@ -298,11 +298,13 @@ class TestOperatorSpecValidation:
         assert engine.code_to_lambda(codify(rendered, ["x0"]))(8.0) == pytest.approx(2.0)
 
     def test_arity3_operator_realization_evaluates(self) -> None:
+        # np.clip, not math.fma: fma landed in Python 3.13 and the floor is 3.12 --
+        # the arity-3 property must be provable on the floor (found at the 0.13.0 cut).
         from simplipy import codify
         engine = make_engine(list(OPS_FULL))
-        rendered = engine.prefix_to_infix(["fma3", "x0", "x1", "2"], realization=True)
-        assert rendered == "math.fma(x0, x1, 2)"
-        assert engine.code_to_lambda(codify(rendered, ["x0", "x1"]))(2.0, 3.0) == pytest.approx(8.0)
+        rendered = engine.prefix_to_infix(["clip3", "x0", "x1", "2"], realization=True)
+        assert rendered == "np.clip(x0, x1, 2)"
+        assert engine.code_to_lambda(codify(rendered, ["x0", "x1"]))(5.0, 1.0) == pytest.approx(2.0)
 
 
 class TestSignedNumericLeafSplit:

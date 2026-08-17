@@ -27,7 +27,7 @@ _FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         'fixtures', 'legacy_vocab_config.yaml')
 
 
-_ACJ_REPO_DIR = os.path.join(os.path.dirname(__file__), '..', 'remine', 'acj-4-3')
+_ACJ_REPO_DIR = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj-4-3')
 _ACJ_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'simplipy', 'engines', 'acj-4-3')
 
 

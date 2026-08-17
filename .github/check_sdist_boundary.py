@@ -24,7 +24,7 @@ import sys
 import tarfile
 
 ALLOWED_PRIVATE = {
-    f'remine/acj-{cell}/{name}'
+    f'assets/engines/acj-{cell}/{name}'
     for cell in ('2-1', '3-2', '4-3')
     for name in ('config.yaml', 'mine.yaml', 'rules.json', 'rules.json.provenance.json')
 }

@@ -10,8 +10,6 @@ import hashlib
 import importlib
 import os
 import warnings
-import signal
-import threading
 from itertools import product
 from types import CodeType, FunctionType
 from typing import Callable
@@ -26,10 +24,7 @@ import yaml
 
 from simplipy.utils import (
     is_numeric_string,
-    deduplicate_rules,
-    enumerate_expressions, count_expressions, sample_expression,
-    remap_expression,
-    violates_wildcard_multiplicity)
+    deduplicate_rules)
 from simplipy.trust import check_realization, check_root, package_for, resolve_trusted
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
@@ -219,6 +214,7 @@ from .mining import (  # noqa: E402,F401
 # D11 column R27 (owner-ratified 2026-08-16): ARTIFACT_ENV_SWITCHES is the
 # documented machine-readable registry of artifact-affecting env switches.
 __all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES']
+
 
 class Mode(IntEnum):
     """The simplification soundness mode: an ORDINAL axis where a higher rung permits
@@ -1092,7 +1088,7 @@ class SimpliPyEngine:
             return tuple(out)
         return out
 
-    def find_rules(self, *args: Any, **kwargs: Any):
+    def find_rules(self, *args: Any, **kwargs: Any) -> Any:
         """Mine rewrite rules into this engine's rule set.
 
         Thin delegator to :meth:`simplipy.mining.RuleMiner.find_rules` (C23a,
@@ -1103,7 +1099,7 @@ class SimpliPyEngine:
     # the delegators carry the miner's REAL signature for inspect/docs/tests
     find_rules.__wrapped__ = RuleMiner.find_rules  # type: ignore[attr-defined]
 
-    def certify_rules(self, *args: Any, **kwargs: Any):
+    def certify_rules(self, *args: Any, **kwargs: Any) -> Any:
         """Certify proposed rules against this engine.
 
         Thin delegator to :meth:`simplipy.mining.RuleMiner.certify_rules`

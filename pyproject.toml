@@ -106,27 +106,16 @@ features = ["pyo3/extension-module"]
 # private pre-release audit corpus). A deny-everything/allow-twelve list cannot regress
 # that way -- a new file under remine/ is out by default, forever.
 #
-# The allow half is spelled as gitignore-style `!` NEGATIONS inside exclude, not as an
-# `include` list: measured 2026-08-15, `include` does NOT override `exclude` in maturin
-# (all twelve files vanished from the build). The twelve are the acj artifact family the
-# test suites load -- three cells x {config, mine spec, rules, provenance sidecar}. The
-# sdist-guard job in publish.yml asserts BOTH halves on every build: no remine path
-# outside this list, and none of the twelve missing.
+# The twelve shippable artifact files (three acj cells x {config, mine spec, rules,
+# provenance sidecar}) live at their PUBLIC home `assets/engines/` since 0.13.0 -- the
+# curated public tree must build the same sdist as the private tree, so nothing the
+# sdist needs may live under a private-tier path (found at the 0.13.0 cut: the boundary
+# guard refused the public-built sdist for exactly this). The sdist-guard job in
+# publish.yml asserts BOTH halves on every build: no remine/design path ships, and none
+# of the twelve is missing.
 exclude = [
     "design/**",
     "remine/**",
-    "!remine/acj-2-1/config.yaml",
-    "!remine/acj-2-1/mine.yaml",
-    "!remine/acj-2-1/rules.json",
-    "!remine/acj-2-1/rules.json.provenance.json",
-    "!remine/acj-3-2/config.yaml",
-    "!remine/acj-3-2/mine.yaml",
-    "!remine/acj-3-2/rules.json",
-    "!remine/acj-3-2/rules.json.provenance.json",
-    "!remine/acj-4-3/config.yaml",
-    "!remine/acj-4-3/mine.yaml",
-    "!remine/acj-4-3/rules.json",
-    "!remine/acj-4-3/rules.json.provenance.json",
 ]
 
 
