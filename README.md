@@ -106,11 +106,9 @@ application always considers every pattern in the loaded artifact (the former
 `max_pattern_length` knob was removed in 0.10.0). (To reproduce the historical dev_7-3 /
 v23.0-era behavior byte-for-byte, install `simplipy<=0.6.0`.)
 
-The 0.11-era SymPy comparison figure is withdrawn from the public surfaces
-(release audit B13: its worker-pooling disclosure misread as a SymPy handicap,
-and measured, pooling *hurt* SymPy). The 0.13.0 release ships a re-designed,
-pre-registered fair benchmark (three corpora, paired per-row scoring, censoring
-stated); its results ledger and figures accompany the release.
+The 0.13 line ships a re-designed, pre-registered benchmark suite: three
+corpora, every arm timed serial single-core, paired per-row scoring with
+bootstrap confidence intervals. Results coming soon.
 
 # Development
 

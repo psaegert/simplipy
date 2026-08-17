@@ -207,13 +207,8 @@ Since 0.7.0 there is a single compiled engine line, and the published ruleset ar
 always considers every pattern in the loaded artifact (the former `max_pattern_length`
 knob was removed in 0.10.0).
 
-The 0.11-era SymPy comparison figure is withdrawn (release audit B13): its
-"SymPy's workers run 24-wide while SimpliPy is timed single-threaded"
-disclosure reads as SymPy being *given* compute, and the measured truth is
-the opposite — pooling hurt SymPy (p50 96 ms at 1 worker → 270 ms at 24,
-timeouts 12.8% → 30.0%). The 0.13.0 release ships a re-designed,
-pre-registered fair benchmark instead: serial single-core for every arm,
-paired per-row scoring, right-censoring stated on the panel, three corpora
-(the v24 training prior, its raw-masked transform, and an external
-neutral-prior set). Its results ledgers and ECDF figures accompany the
-release.
+The 0.13 line ships a re-designed, pre-registered fair benchmark: serial
+single-core for every arm, paired per-row scoring, right-censoring stated
+on the panel, three corpora (an SR training prior, its raw-masked
+transform, and an external neutral-prior set). Results ledgers and ECDF
+figures: coming soon.
