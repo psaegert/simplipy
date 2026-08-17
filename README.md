@@ -18,7 +18,7 @@
 </div>
 
 # Publications
-- Saegert & Köthe 2026, _Breaking the Simplification Bottleneck in Amortized Neural Symbolic Regression_ (preprint, under review) [https://arxiv.org/abs/2602.08885](https://arxiv.org/abs/2602.08885)
+- Saegert & Köthe 2026, _Breaking the Simplification Bottleneck in Amortized Neural Symbolic Regression_ (ICML 2026) [https://arxiv.org/abs/2602.08885](https://arxiv.org/abs/2602.08885)
 
 
 # Usage
@@ -131,9 +131,10 @@ pytest tests --cov src --cov-report html -m "not integration"
 
 # Citation
 ```bibtex
-@misc{saegert2026breakingsimplificationbottleneckamortized,
+@inproceedings{saegert2026breakingsimplificationbottleneckamortized,
   title   = {Breaking the Simplification Bottleneck in Amortized Neural Symbolic Regression},
   author  = {Paul Saegert and Ullrich Köthe},
+  booktitle = {Proceedings of the 43rd International Conference on Machine Learning (ICML)},
   year    = {2026},
   eprint  = {2602.08885},
   archivePrefix =  {arXiv},
@@ -147,7 +148,7 @@ pytest tests --cov src --cov-report html -m "not integration"
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2026,
     publisher = {GitHub},
-    version = {0.12.0},
+    version = {0.13.1},
     url = {https://github.com/psaegert/simplipy}
 }
 ```
