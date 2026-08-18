@@ -100,7 +100,7 @@ On a 65,536-expression symbolic-regression benchmark, paired per-row against Sym
 |---|---:|---:|
 | Rows won head-to-head | **18.7%** | 17.1% |
 | Mean size ratio (lower is better) | **0.98** | 1.07 |
-| Expressions made bigger | **0.00%** | 40.4% |
+| Expressions made bigger | **0.00%** | 40.5% |
 | Median per-row speedup | **≈780×** | 1× |
 
 Full results, figures, and methodology: [simplify guide](https://simplipy.readthedocs.io/en/stable/guides/simplify/) · [paper](https://arxiv.org/abs/2602.08885).
