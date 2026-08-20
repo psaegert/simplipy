@@ -8,7 +8,7 @@ reduction ordering. This suite is the B1 acceptance: it is measure-agnostic --
 no measure number appears anywhere below; every comparison goes through
 ``ac_ordered_below``, the one serve-time ordering (rust/ac/rules.rs).
 
-Row-156 (SOOSE, `the research harness`; the ledger's
+Row-156 (SOOSE, recorded in the research ledger; the ledger's
 named falsifier row): ``x2*(x2 + (x1+1)/x2)`` is a mu-hill. The valley
 ``1 + x1 + x2**2`` is strictly ordered below it, but every step toward it
 ASCENDS at its node (distribute first, recollect after), so greedy strict

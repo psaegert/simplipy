@@ -1361,7 +1361,7 @@ class SimpliPyEngine:
         """Convert an expression to the INFIX form -- NOTATION ONLY.
 
         One of the three PURE conversions (design
-        `the research harness`): a syntactic re-notation, never a
+        the research harness): a syntactic re-notation, never a
         simplification. No canonical state is built, no rule fires, nothing is
         collected, folded, reordered or re-spelled, and the answer does not depend on
         the engine ARTIFACT. Use :meth:`simplify` for content; compose them as
