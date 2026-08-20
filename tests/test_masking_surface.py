@@ -35,8 +35,6 @@ def engine() -> SimpliPyEngine:
     return SimpliPyEngine.from_config(acj_config_path())
 
 
-
-
 class TestDeclaredSurface:
     def test_all_declares_the_live_surface_only(self) -> None:
         """The deprecated spelling is not advertised; the typing helpers the

@@ -31,12 +31,11 @@ masked there, and only then rendered back into the caller's dialect.
 """
 import json
 import os
-import warnings
 
 import numpy as np
 import pytest
 
-from simplipy import SimpliPyEngine, normalization
+from simplipy import SimpliPyEngine
 from simplipy.normalization import to_expression, to_skeleton
 from conftest import acj_config_path
 
@@ -68,8 +67,6 @@ BATTERY = DIVERGENT_SHAPES + [
     '<constant>*x0',
     '-x0/3',
 ]
-
-
 
 
 class TestAllThreeInputForms:

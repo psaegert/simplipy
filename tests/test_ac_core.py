@@ -650,14 +650,11 @@ class TestMaxPassesRename:
     warning alias (same doctrine as `parse` -> `read_infix`), and the two are mutually
     exclusive: silently letting one win would be exactly the ambiguity the rename removes."""
 
-
     def test_new_name_does_not_warn(self, engine: SimpliPyEngine) -> None:
         import warnings as _w
         with _w.catch_warnings():
             _w.simplefilter('error', DeprecationWarning)
             engine.simplify(['+', 'x0', 'x0'], max_passes=2)
-
-
 
     def test_default_is_48_passes_and_convergence_is_far_below_it(
             self, engine: SimpliPyEngine) -> None:

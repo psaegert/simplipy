@@ -13,7 +13,6 @@ stops that happening on the path the user did not choose.
 These tests never touch the network: the resolver is stubbed, because what is under
 test is the ARGUMENT handling and the announcement, not the download.
 """
-import warnings
 
 import pytest
 
@@ -66,5 +65,3 @@ class TestTheDefaultIsPinnedAndAnnounced:
         # The default must not be a name this package refuses to load (compat gate).
         from simplipy.compat import check_asset_name
         check_asset_name(simplipy.DEFAULT_ENGINE)
-
-

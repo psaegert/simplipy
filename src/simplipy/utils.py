@@ -24,7 +24,7 @@ import numpy as np
 # but carries no stability promise (see the compatibility policy).
 __all__ = [
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
-    'remap_expression', 'substitute_constants', 
+    'remap_expression', 'substitute_constants',
     'construct_expressions', 'is_numeric_string',
     'enumerate_expressions', 'count_expressions', 'sample_expression',
     'compositions',

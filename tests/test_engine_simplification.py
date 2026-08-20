@@ -190,7 +190,6 @@ class TestMode:
         with pytest.raises(TypeError):
             Mode.f64 < Mode.corpus        # type: ignore[operator]
 
-
     def test_an_unknown_mode_attribute_is_still_an_attribute_error(self) -> None:
         """`__getattr__` serves the two retired names; it must not swallow typos."""
         from simplipy import Mode

@@ -569,7 +569,6 @@ class TestCleanlinessIsPerMode:
         with pytest.raises(ValueError, match='unknown mode'):
             verify_ruleset([self.CORE], mode='banana')
 
-
     def test_a_triple_is_verified_as_ONE_artifact(self) -> None:
         """Three per-file sweeps, and NOT the retired set identity. `corpus == f64 UNION
         real` was dropped once folding became mode-dependent: each file omits what its own

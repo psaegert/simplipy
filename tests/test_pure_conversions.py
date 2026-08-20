@@ -283,8 +283,6 @@ class TestSimplifyPreservesTheDialect:
             assert engine.simplify(engine.to_prefix(r)) == engine.simplify(engine.to_prefix(r))
 
 
-
-
 # ------------------------------------------------------------------- errors
 class TestErrors:
     @pytest.mark.parametrize("bad", [

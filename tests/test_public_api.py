@@ -104,7 +104,6 @@ class TestPowerUserCaveatsInline:
 class TestRunningDeprecations:
     """The policy's §2 promises, executable."""
 
-
     def test_correct_spelling_does_not_warn(self) -> None:
         import warnings
         from simplipy.utils import substitute_constants

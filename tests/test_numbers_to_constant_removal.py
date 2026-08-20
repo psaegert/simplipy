@@ -99,7 +99,6 @@ class TestWhatDeliberatelyStays:
             ['+', '*', '<constant>', 'x0', '<constant>']
 
 
-
 class TestTheReplacementIsNotADropIn:
     """The four measured behaviour differences, stated as tests. A migration that
     wants the OLD answer on these inputs does not exist -- the old answer was

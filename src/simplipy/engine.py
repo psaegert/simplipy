@@ -247,6 +247,8 @@ class _ModeMeta(EnumMeta):
     could never warn. ``__getattr__`` runs only when normal lookup fails, so live
     members never take this path.
     """
+
+
 _MODE_RENAME_WHY = (
     "`SOUND` claimed one notion of soundness where there are two incomparable ones: "
     "`f64` is sound as the deployed f64 evaluator computes, `real` is sound as "

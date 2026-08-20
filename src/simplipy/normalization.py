@@ -76,8 +76,7 @@ srbf all depend on.
 from __future__ import annotations
 
 import re
-import warnings
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 
@@ -94,7 +93,6 @@ _VAR_TOKEN_PATTERN = re.compile(r"^[vx](\d+)$", re.IGNORECASE)
 # kind as the variable renaming, so it belongs to the EXPRESSION form -- which is
 # what keeps `to_skeleton == to_expression + mask('all')` exactly true.
 _CONSTANT_PLACEHOLDER_SPELLINGS = frozenset({"<constant>", "<c>"})
-
 
 
 def normalize_variable_token(token: str) -> tuple[str, bool]:

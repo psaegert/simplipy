@@ -13,7 +13,6 @@ is why the earlier `parse` REMOVAL was overturned and a rename ordered instead.
 `parse` therefore survives as a deprecated alias that must keep working byte for
 byte, `mask_numbers=` included (its removal is separately blocked).
 """
-import warnings
 
 import pytest
 
@@ -69,5 +68,3 @@ class TestTheContractTheNameStates:
         assert 'canonical' in low, 'docstring does not state the non-canonicalisation'
         assert 'to_prefix' in doc, 'docstring does not contrast with to_prefix'
         assert 'simplify' in doc, 'docstring does not contrast with simplify'
-
-

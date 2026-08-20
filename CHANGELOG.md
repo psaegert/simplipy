@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 (unreleased)
 
 ### Changed — SOUNDNESS IS AN AXIS, NOT A LADDER (owner rulings, 2026-08-19/20)
 

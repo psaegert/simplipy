@@ -95,8 +95,7 @@ Example (the flash-ansr-style policy)::
     skeleton = masking.mask(engine.simplify(tokens), engine, keep_structure)
 """
 import enum
-import warnings
-from typing import TYPE_CHECKING, Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from simplipy.utils import is_numeric_string, reserved_numeric_spelling
 

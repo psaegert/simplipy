@@ -57,8 +57,6 @@ def test_get_used_modules():
     assert 'numpy' in utils.get_used_modules(expression_no_modules)
 
 
-
-
 def test_apply_variable_mapping():
     """Tests renaming variables in a prefix expression."""
     expr = ['+', 'var1', '*', 'var2', 'var1']
@@ -398,8 +396,6 @@ def test_explicit_constant_placeholders_numeral_conversion_is_deprecated():
     # while '-3' / '2.0' / '3.14' would not -- the incoherence that got it deprecated
     assert result_expr == ['*', 'C_0', 'pow', 'x1', 'C_1']
     assert result_constants == ['C_0', 'C_1']
-
-
 
 
 def test_is_constant_placeholder_predicate():

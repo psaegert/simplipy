@@ -2478,7 +2478,7 @@ class TestCanonicalSourceClassCertification:
         core = engine._core
         # Enumerate the same universe the mine walks, then group it by the loader's key.
         leaves = ["x0", "0", "1", "<constant>"]
-        exprs: list[list[str]] = [[l] for l in leaves]
+        exprs: list[list[str]] = [[leaf] for leaf in leaves]
         for _ in range(2):
             grown: list[list[str]] = []
             for op, spec in _OPERATORS.items():
