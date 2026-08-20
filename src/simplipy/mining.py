@@ -17,6 +17,7 @@ Equality gate (D29): full-mine byte-identity on ``rules.json``, machine-pinned
 
 import hashlib
 import os
+import re
 import warnings
 import signal
 import threading
@@ -30,6 +31,7 @@ import json
 from simplipy.utils import (
     is_numeric_string,
     deduplicate_rules,
+    _dedup_keyed_rules,
     enumerate_expressions, count_expressions, sample_expression,
     remap_expression,
     violates_wildcard_multiplicity)
@@ -72,6 +74,63 @@ _CONSTLIKE_LEAVES = {'<constant>', 'np.e', 'np.pi',
                      'float("inf")', 'float("-inf")', 'float("nan")'}
 
 _MINE_LOCK = threading.Lock()
+
+# A slot token is a SORT SIGIL plus an index (`?0` variable-leaf, `_0` subtree, `!0`
+# certified subtree, `$0` certified-nonzero subtree). The promotion respells the sigil
+# in place and never renumbers, so erasing it leaves an identity stable across sorts.
+_SLOT_SIGIL = re.compile(r'^[_!?$](\d+)$')
+
+
+def _rule_identity(lhs: Any, rhs: Any,
+                   dummy_variables: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """One key for every spelling a rule wears between certification and the artifact.
+
+    The proposal channel certifies CONCRETE variables (`x0`), :func:`deduplicate_rules`
+    canonicalises them to the `?` sort, and the promotion pass then respells the sigil
+    (`?0` -> `_0`/`!0`/`$0`). Tracking a certified pair through the post-mine stages
+    needs an identity invariant under all three, so the variable canonicalisation runs
+    first and the sort sigil is erased after it.
+    """
+    source, mapping = remap_expression(list(lhs), dummy_variables, variable_prefix='?')
+    target, _ = remap_expression(list(rhs), dummy_variables, mapping, variable_prefix='?')
+    return (tuple(_SLOT_SIGIL.sub(r'@\1', token) for token in source),
+            tuple(_SLOT_SIGIL.sub(r'@\1', token) for token in target))
+
+
+def _reconcile_proposal_census(
+        outcomes: dict, trail: list, watch: dict, drops: dict,
+        rules: Any, dummy_variables: list[str]) -> None:
+    """Rewrite the proposal census so it describes the ARTIFACT, not the moment of
+    certification (F94, 2026-08-18).
+
+    :meth:`RuleMiner._certify_proposals` records its verdicts BEFORE the symbolic gate,
+    the covered-prune and the sort promotion have run, and every one of those stages may
+    still drop a certified pair -- soundly. Left alone, the sidecar advertises rules the
+    artifact does not contain: measured on the published ``acj-4-3-llm`` asset, 19 of the
+    73 pairs it calls ``certified`` are absent from ``rules.json``.
+
+    A dropped pair keeps its certification history (``stage``/``certificate``: it WAS
+    certified) and gains the TERMINAL verdict ``certified_then_dropped`` naming the stage
+    that removed it and that stage's own reason, so the drop is auditable rather than
+    invisible. A certified pair that is neither present nor attributable is a hole in the
+    provenance chain and raises: the sidecar must never be silently wrong.
+    """
+    present = {_rule_identity(lhs, rhs, dummy_variables) for lhs, rhs in rules}
+    for identity, index in watch.items():
+        if identity in present:
+            continue
+        record = drops.get(identity)
+        if record is None:
+            entry = trail[index]
+            raise RuntimeError(
+                f"certified proposal {entry['source']} -> {entry['target']} is absent from "
+                f"the mined ruleset and no stage recorded dropping it -- the provenance "
+                f"sidecar cannot account for one of its own certified pairs (F94)")
+        stage, reason = record
+        trail[index].update(verdict='certified_then_dropped',
+                            dropped_at=stage, drop_reason=reason)
+        outcomes['certified'] -= 1
+        outcomes['certified_then_dropped'] += 1
 
 
 def _tokens_in_vocabulary(tokens: Any, vocabulary: set) -> bool:
@@ -135,6 +194,204 @@ def _load_proposals(
         record['sha256'] = hashlib.sha256(normalized.encode()).hexdigest()
     record['count'] = len(entries)
     return entries, record
+
+
+#: Which modes a judged tier licenses a rule to serve in. `corpus` is DERIVED (a rule
+#: serves there iff it serves in either), never listed: the ledger's invariant
+#: `rules_corpus == rules_f64 UNION rules_real` then holds by construction rather than by
+#: assertion, and a fourth entry here could silently break it.
+_TIER_MODES: dict[str, frozenset] = {
+    'core': frozenset({'f64', 'real'}),
+    'real': frozenset({'real'}),
+    'f64': frozenset({'f64'}),
+    'reject': frozenset(),
+}
+
+
+#: Slot sigils. A pattern carrying one matches many instances, and the constructor may
+#: reach the endpoint on the PATTERN while refusing it on some of them.
+_SLOT_SIGILS = ('_', '?', '!', '$', '<')
+
+
+def _is_ground(tokens: Any) -> bool:
+    """No slots and no `<constant>`: the pattern IS its only instance."""
+    return not any(str(t).startswith(_SLOT_SIGILS) for t in tokens)
+
+
+def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
+    """Does `mode`'s CONSTRUCTOR already reach this rule's endpoint without the rule?
+
+    Asked with the engine's own simplifier in that mode, against a RULE-LESS twin, so the
+    answer is "the constructor does this" and never "some other rule does this" -- the
+    second would make the prune order-dependent, dropping whichever of two mutually
+    covering rules happened to be tested first.
+
+    Compared on SIMPLIFIED sides, not on tokens. `1e-08` and `0.00000001` are the same
+    number, and an earlier version of this comparison read them as different and reported
+    17 preempted where the truth was 29.
+    """
+    # Cached ON THE ENGINE, not in a dict keyed by `id()`. CPython reuses an id once the
+    # object behind it is collected, so an id-keyed cache can hand a fresh engine a twin
+    # built from a DIFFERENT operator table -- which is exactly what happened, and the
+    # prune then silently answered "not preempted" for everything.
+    # GROUND RULES ONLY, and this is a correctness bound rather than caution. Asking the
+    # constructor about a PATTERN answers a question about the pattern, not about the
+    # instances the rule matches, and the two genuinely differ: in corpus the constructor
+    # takes `/ $0 $0` to `1` -- the slot carries a nonzero-a.e. certificate -- while
+    # taking the instance `inf / inf` to `nan`. Pruning on the pattern therefore deleted
+    # `/ $0 $0 -> 1` and with it the mask-sentinel doctrine, which is exactly the rule
+    # that makes `inf/inf * x0` collapse to `x0` in corpus.
+    #
+    # For a GROUND rule the pattern IS its only instance, so the question the constructor
+    # answers is the question asked. That still retires what the prune was for: the
+    # 18-rule `f(+-10^-k) -> +-10^-k` family is ground, and so is every literal
+    # evaluation folding now performs.
+    if not (_is_ground(lhs) and _is_ground(rhs)):
+        return False
+    bare = getattr(engine, '_ruleless_twin', None)
+    if bare is None:
+        from .engine import SimpliPyEngine
+        bare = SimpliPyEngine(operators=engine._operators_config, rules=[])
+        # `real` fails closed without a set of its own; an EMPTY one says "this mode
+        # serves no rules", which is exactly the constructor-only engine we want.
+        bare._core.set_mode_rules('real', [])
+        engine._ruleless_twin = bare
+    try:
+        return tuple(bare.simplify(list(lhs), mode=mode)) == tuple(bare.simplify(list(rhs), mode=mode))
+    except Exception:
+        return False
+
+
+def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]:
+    """Judge the FINAL served set and route every source rule into the triple.
+
+    -> ({'f64': [...], 'real': [...], 'corpus': [...]}, rejected, tiers)
+
+    Judged HERE and not reused from the symbolic gate, even though that is a second full
+    pass: the gate runs before the covered-prune and the sort promotion, both of which
+    change which rules exist AND how they are spelled, so its verdicts describe a rule set
+    that is not the one being written. What is routed must be what is served.
+
+    A source rule can mint several SERVED entries (orientation twins, minted at load from
+    the loading engine's canon). Its licence is the INTERSECTION over all of them, which is
+    the fail-closed combination and the same doctrine the symbolic gate already applies
+    when it condemns a twin by dropping the rule that mints it: a rule may serve in a mode
+    only if EVERY way it can fire is licensed there.
+    """
+    from .verify import CONST_CHANNEL_DETAIL, verify_ruleset
+
+    served = engine._core.ac_served_rules()
+    report = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs, _ in served])
+    detail = report['detail'] if isinstance(report, dict) else report
+
+    allowed: dict[int, frozenset] = {}
+    tiers: dict[int, set] = {}
+    for d in detail:
+        src = served[d['idx']][2]
+        # D36: the multi-`<constant>` family's soundness authority is the Const-channel
+        # chain, not the contract, so the judge's non-jurisdiction sentinel is not a
+        # verdict about the rule. Treated as `core`, which is exactly where those rules
+        # serve today -- the carve-out stays visible in the sidecar, never silent.
+        tier = 'core' if d.get('detail') == CONST_CHANNEL_DETAIL else (d.get('tier') or 'reject')
+        tiers.setdefault(src, set()).add(tier)
+        allowed[src] = allowed.get(src, _TIER_MODES['core']) & _TIER_MODES.get(tier, frozenset())
+
+    triple: dict[str, list] = {'f64': [], 'real': [], 'corpus': []}
+    rejected: list = []
+    preempted: dict[str, int] = {'f64': 0, 'real': 0, 'corpus': 0}
+    for i, (lhs, rhs) in enumerate(engine.simplification_rules):
+        # A rule with no served entry cannot fire at all, so it is licensed nowhere. This
+        # is the load-minted-twins lesson in the other direction: never infer a licence
+        # for something the matcher never saw.
+        modes = allowed.get(i, frozenset())
+        pair = [list(lhs), list(rhs)]
+        if not modes:
+            rejected.append(pair)
+            continue
+        for m in ('f64', 'real', 'corpus'):
+            if m != 'corpus' and m not in modes:
+                continue
+            # PER-MODE PRUNE. A mode's file carries only what that mode can actually
+            # serve. Folding is mode-dependent, so a rule can be load-bearing in `real`
+            # and pure dead weight in `f64`, where the constructor reaches the same
+            # endpoint without it -- `asin 1e-08 -> 1e-08` is the whole 18-rule
+            # `f(+-10^-k)` family. Shipping it anyway would put rules in a file that can
+            # never fire from it, which is exactly the computed-rather-than-stated shape
+            # the load-minted twins already punished once.
+            if _preempted_by(engine, lhs, rhs, m):
+                preempted[m] += 1
+                continue
+            triple[m].append(pair)
+
+    _assert_triple_invariants(triple, rejected, engine.simplification_rules, allowed,
+                              preempted)
+    if verbose:
+        print(f'Triple: f64={len(triple["f64"])} real={len(triple["real"])} '
+              f'corpus={len(triple["corpus"])} rejected={len(rejected)}')
+    return triple, rejected, {'tiers': {i: sorted(t) for i, t in tiers.items()},
+                              'preempted': preempted}
+
+
+def _assert_triple_invariants(triple: dict, rejected: list, mined: list,
+                              allowed: dict, preempted: dict | None = None) -> None:
+    """The ledger's four relationship invariants, checked before anything is written.
+
+    They are a statement about the RELATIONSHIP between the three files, which is a
+    stronger provenance guarantee than three independently pinned counts: a routing bug
+    that moved a rule between sets leaves every individual count plausible and breaks one
+    of these. Fail LOUDLY -- a partial triple is not shippable.
+
+    Each check is written so it CAN fail. An invariant that restates its own construction
+    proves nothing, and two of these did on the first pass.
+    """
+    def keys(rs: Any) -> set:
+        return {(tuple(lhs), tuple(rhs)) for lhs, rhs in rs}
+
+    f64, real, corpus = keys(triple['f64']), keys(triple['real']), keys(triple['corpus'])
+    rej = keys(rejected)
+    mined_keys = keys(mined)
+    # INVARIANT 1 and INVARIANT 2 are RETIRED, and this is why. They compared three rule
+    # sets as if they lived in ONE canonical world. Once folding is mode-dependent they do
+    # not: `acos 1 -> 0` is absent from the corpus set purely because corpus's own
+    # constructor performs it, and corpus performs all 15 such rules -- measured 15/15.
+    # Set overlap was therefore measuring SPELLING, not capability, and the property it
+    # stood proxy for ("corpus can do everything the other two can") is behavioural.
+    # It is checked as behaviour, by `assert_corpus_dominates`, on the corpus sweep the
+    # invariance gate already runs. Owner ruling 2026-08-20.
+    #
+    # What every set here must still satisfy: a rule may only appear where its tier
+    # licenses it, MINUS what that mode's constructor already performs.
+    # UNCONDITIONAL. This was gated on `preempted is not None`, which is only supplied by
+    # the production path, so every direct call skipped the one invariant that replaced
+    # the two retired ones. The check needs `allowed`, which is always passed.
+    if True:
+        for m, ks in (('f64', f64), ('real', real)):
+            licensed = {(tuple(lhs), tuple(rhs)) for i, (lhs, rhs) in enumerate(mined)
+                        if m in allowed.get(i, frozenset())}
+            if not ks <= licensed:
+                raise AssertionError(
+                    f'triple invariant broken: {len(ks - licensed)} rules in rules_{m} '
+                    f'are not licensed for that mode')
+    if corpus & rej:
+        raise AssertionError(
+            f'triple invariant 3 broken: {len(corpus & rej)} rules are BOTH served and '
+            f'rejected')
+    if (corpus | rej) - mined_keys:
+        raise AssertionError(
+            f'triple invariant 3 broken: {len((corpus | rej) - mined_keys)} rules are '
+            f'served or rejected but were never mined')
+    for i, (lhs, rhs) in enumerate(mined):
+        k = (tuple(lhs), tuple(rhs))
+        want = allowed.get(i, frozenset())
+        got = frozenset({m for m, ks in (('f64', f64), ('real', real)) if k in ks})
+        # SUBSET, not equality: the per-mode prune legitimately removes a rule from a
+        # file whose tier licenses it, when that mode's constructor already reaches the
+        # endpoint. What must never happen is the other direction -- a rule in a file its
+        # tier does NOT license.
+        if not got <= want:
+            raise AssertionError(
+                f'triple invariant 4 broken: {" ".join(lhs)} -> {" ".join(rhs)} is in '
+                f'{sorted(got)} but its tier licenses only {sorted(want) or "none"}')
 
 
 class RuleMiner:
@@ -225,8 +482,20 @@ class RuleMiner:
             # would make the confirm stage irreproducible across runs.
             key = f'{" ".join(source)}->{" ".join(target)}'.encode()
             rule_seed = seed + int.from_bytes(hashlib.blake2b(key, digest_size=7).digest(), 'little')
+            # THE BOUND MUST ADMIT THE PAIR IT IS ASKED ABOUT (2026-08-18). `find_rule`'s
+            # second argument is the MINE's candidate-length bound: the scan runs
+            # `1..min(simplified_length, max_target + 1)` (rust/worker.rs), so `len(source)`
+            # silently skips every candidate as long as the source -- and the candidate
+            # list here holds exactly ONE entry, the target being re-verified. That made
+            # "not confirmed" indistinguishable from "never looked at": a proposal hint
+            # the serve ordering accepts came back refused for a reason with no numerics
+            # in it. `max(...)` never LOWERS the old bound -- for a strictly shorter target
+            # `len(target) + 1 <= len(source)`, so every pair that confirms today keeps its
+            # verdict, mined pairs included (the mine's own bound, untouched, makes every
+            # mined target strictly shorter than its source).
+            scan_len = max(len(source), len(target) + 1)
             result = self.engine._core.find_rule(
-                list(source), len(source), None, [list(target)], list(dummy_variables),
+                list(source), scan_len, None, [list(target)], list(dummy_variables),
                 x_flat, n_rows, constants_fit_challenges, constants_fit_retries,
                 rule_seed, rtol, atol, min_informative)
             # The result must be THE TARGET WE ASKED ABOUT, not merely "something".
@@ -360,9 +629,18 @@ class RuleMiner:
         """
         assert self.engine._core is not None
 
+        # THE TARGET BOUND IS mu, NOT TOKENS (owner ruling, re-mine 2026-08-20).
+        # `max_target_pattern_length=None` now admits EVERY enumerated expression to the
+        # candidate library and lets the scan stop at the first mu tier that cannot descend
+        # below the source's mark -- the same predicate acceptance already applied, so the
+        # split between a token bound for search and mu for acceptance is gone.
+        #
+        # This is a WIDENING, and deliberately so: a longer target can be strictly cheaper
+        # (`1/5` -> `0.2`, `pow(inf,x)` -> `exp(inf*x)`), and `max_source_pattern_length - 1`
+        # refused exactly those without ever pricing them. An explicit integer still caps the
+        # library, for callers that want a small one; it is no longer the criterion.
         if max_target_pattern_length is None:
-            # Any strictly shorter candidate is a valid replacement.
-            max_candidate_length = max_source_pattern_length - 1
+            max_candidate_length = max_source_pattern_length
         else:
             max_candidate_length = max_target_pattern_length
 
@@ -394,6 +672,26 @@ class RuleMiner:
         # stages would be free to drift from this one.
         def _finalize(mined: list, out_path: str | None, prov: dict | None) -> list:
             self.engine._replace_rules(list(mined))
+            # --- F94 census reconciliation state -------------------------------------
+            # The proposal census is written at CERTIFICATION time, upstream of four
+            # stages that may each still drop a certified pair (symbolic gate, both
+            # covered-prunes, sort promotion). `_watch` follows every certified pair
+            # through them and `_drops` records WHICH stage took it and WHY, so the
+            # sidecar can carry a terminal outcome instead of a stale claim.
+            _outcomes: dict = {}
+            _trail: list = []
+            _watch: dict = {}
+            _drops: dict = {}
+
+            def _note_drops(stage: str, reason_of: Callable[[Any], str]) -> None:
+                """Attribute every watched pair that left the ruleset during `stage`."""
+                if not _watch:
+                    return
+                alive = {_rule_identity(lhs, rhs, dummy_variables)
+                         for lhs, rhs in self.engine.simplification_rules}
+                for identity in _watch:
+                    if identity not in _drops and identity not in alive:
+                        _drops[identity] = (stage, reason_of(identity))
             # Proposal channel: certify externally proposed rules against the just-mined
             # state, BEFORE the optional prune. Skipped on interrupt: a partial mine is not
             # the rule state the proposals were aimed at, and a clean abort must stay cheap.
@@ -411,6 +709,14 @@ class RuleMiner:
                     # The per-candidate verdict trail travels WITH the artifact: an aggregate
                     # tally cannot be audited (it never says which candidate died at which gate).
                     prov['proposals']['trail'] = trail
+                # Arm the F94 watch on the pairs the census currently calls certified.
+                # `deduplicate_rules` has already folded the batch in, so a pair missing
+                # from the ruleset ALREADY lost the merge -- attributed here, not left to
+                # the fail-closed hole check at the end.
+                _outcomes, _trail = outcomes, trail
+                _watch = {_rule_identity(e['source'], e['target'], dummy_variables): i
+                          for i, e in enumerate(_trail) if e['verdict'] == 'certified'}
+                _note_drops('merge', lambda _identity: 'folded-by-deduplicate')
             # SYMBOLIC GATE (the third authority; owner-approved 2026-08-02): every
             # confirmed rule is re-judged by the independent symbolic verifier
             # (`simplipy.verify`) at exact symbolic trigger points with the
@@ -425,8 +731,18 @@ class RuleMiner:
             # extension doctrine, matching the engine's own licences) passes.
             if symbolic_gate and not interrupted() and self.engine.simplification_rules:
                 from .verify import CONST_CHANNEL_DETAIL, FATAL_BUCKETS, verify_ruleset
-                _rep = verify_ruleset(
-                    [[list(lhs), list(rhs)] for lhs, rhs in self.engine.simplification_rules])
+                # JUDGE WHAT SERVES, NOT WHAT THE ARTIFACT SAYS. The gate used to judge
+                # `simplification_rules` -- the artifact -- but translation is not the
+                # identity on it: rules drop, and ORIENTATION TWINS are MINTED at load
+                # (`AcRules::translate`), from the LOADING engine's canon. Those twins fire
+                # and had never been judged by any authority, because they do not exist
+                # until after the artifact is read. `ac_served_rules` is the matcher's own
+                # rule set, so coverage is 100% of what can fire -- and it stays 100% if a
+                # later engine mints a different closure, which is exactly what an artifact
+                # cannot promise. Judging the served set also judges the DEPLOYED spelling
+                # (the canonical projection) rather than the mine's.
+                _served = self.engine._core.ac_served_rules()
+                _rep = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs, _ in _served])
                 _detail = _rep['detail'] if isinstance(_rep, dict) else _rep
                 # EVERY fatal bucket drops, not only KILL (audit B7): a rule the judge
                 # cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) or
@@ -439,15 +755,42 @@ class RuleMiner:
                 # soundness authority is the Const-channel chain (fitting + count gate
                 # + licence registry) -- exempted rules ship and are recorded under
                 # their own sidecar key, so the carve-out is visible, never silent.
-                # detail entries carry lhs/rhs as SPACE-JOINED strings.
+                # A verdict is attributed through the served entry's PROVENANCE, not
+                # through its spelling: the served side is canonical and the artifact side
+                # is the mine's, so `d['lhs'].split()` no longer names a droppable row
+                # (`/ cosh <constant> 0` serves as `* float("inf") cosh <constant>`). A
+                # twin has no row of its own at all and reports its SOURCE, so condemning
+                # one drops the rule that mints it -- fail-closed, and the only action that
+                # removes a twin from a later load.
                 _fatal: dict = {b: set() for b in FATAL_BUCKETS}
                 _const_channel: set = set()
+                _routed: dict = {}
                 for d in _detail:
                     if d.get('verdict') not in _fatal:
                         continue
-                    _pair = (tuple(d['lhs'].split()), tuple(d['rhs'].split()))
+                    _src_lhs, _src_rhs = self.engine.simplification_rules[
+                        _served[d['idx']][2]]
+                    _pair = (tuple(_src_lhs), tuple(_src_rhs))
+                    _tier_of = d.get('tier') or 'reject'
                     if d.get('detail') == CONST_CHANNEL_DETAIL:
                         _const_channel.add(_pair)
+                    elif _tier_of != 'reject':
+                        # THE TIER HAS SOMEWHERE TO PUT IT, so the gate must not delete
+                        # it. Every fatal bucket used to drop, which was right when
+                        # `rules.json` was the only destination: a rule the contract
+                        # convicts had no home. Under the triple two of those buckets
+                        # DO have one -- ENGINE-MISALIGN is `real` (true, the deployed
+                        # engine diverges) and an f64-realised KILL is `f64` (false,
+                        # bit-exact in the deployed algebra) -- and deleting them here
+                        # would leave `_route_triple` nothing to route, making
+                        # rules_real.json and rules.json identical and silently voiding
+                        # the whole split. This is the hazard the roadmap flagged as
+                        # "arming the deployed check without the tier makes the next
+                        # mine DELETE sound rules"; it is closed HERE, not downstream.
+                        # Fail-closed is UNCHANGED for everything else: NO-WITNESS,
+                        # UNSUPPORTED-SHAPE, JUDGE-TIMEOUT and UNRESOLVED-COVERAGE carry
+                        # no tier at all, so they read `reject` and still drop.
+                        _routed.setdefault(_tier_of, set()).add(_pair)
                     else:
                         _fatal[d['verdict']].add(_pair)
                 _drop = set().union(*_fatal.values())
@@ -455,9 +798,18 @@ class RuleMiner:
                     self.engine._replace_rules([
                         (lhs, rhs) for lhs, rhs in self.engine.simplification_rules
                         if (tuple(lhs), tuple(rhs)) not in _drop])
+                    # F94: the gate's own bucket IS the drop reason -- a certified
+                    # proposal killed here reads `certified_then_dropped(symbolic_gate,
+                    # KILL)` in the sidecar rather than staying `certified`.
+                    _gate_reason = {_rule_identity(bl, br, dummy_variables): bucket
+                                    for bucket, pairs in _fatal.items() for bl, br in pairs}
+                    _note_drops('symbolic_gate',
+                                lambda identity: _gate_reason.get(identity, 'fatal-verdict'))
                 if verbose:
                     print(f'Symbolic gate: {len(_fatal["KILL"])} killed, '
                           f'{len(_drop) - len(_fatal["KILL"])} unjudgeable, '
+                          f'{sum(len(v) for v in _routed.values())} routed to a mode tier '
+                          f'({", ".join(f"{k}={len(v)}" for k, v in sorted(_routed.items())) or "none"}), '
                           f'{len(self.engine.simplification_rules)} remain')
                 if prov is not None:
                     # The full census travels with the artifact (B7): every fatal
@@ -469,11 +821,21 @@ class RuleMiner:
                            for b in FATAL_BUCKETS},
                         'const_channel': sorted(
                             [list(cl), list(cr)] for cl, cr in _const_channel),
+                        # Convicted by the contract but KEPT, because a mode tier owns
+                        # them. Recorded so the carve-out is visible in the sidecar
+                        # rather than looking like the gate simply missed them.
+                        'routed_to_tier': {k: sorted([list(bl), list(br)] for bl, br in v)
+                                           for k, v in sorted(_routed.items())},
                         'census': ({b: len(ids) for b, ids in _rep['buckets'].items()}
                                    if isinstance(_rep, dict) else None),
                         'kept': len(self.engine.simplification_rules)}
             if prune == 'covered':
                 self.engine.prune_covered_rules(verbose=verbose)
+                # F94: the prune removes only rules the REMAINING set already reaches,
+                # so a certified proposal dropped here is still served compositionally
+                # -- a harmless drop, but one the census must still name.
+                _note_drops('prune_covered',
+                            lambda _identity: 'behaviourally-covered-by-remaining-rules')
             elif prune:
                 raise ValueError(
                     "prune=True (the redundant-rule prune) died with the legacy kernel; "
@@ -487,6 +849,16 @@ class RuleMiner:
                 from .promotion import promote
                 kept, promotion_report = promote(self.engine.simplification_rules, self.engine)
                 self.engine._replace_rules(kept)
+                # F94: the ladder's own per-rule verdict lists name the reason a pair
+                # left here (`killed_q` -- unsound at the `?` sort, `unsupported`, ...);
+                # a pair the refund pruned as derivable appears in none of them.
+                _promo_reason = {
+                    _rule_identity(item[0], item[1], dummy_variables): bucket
+                    for bucket, items in promotion_report.items()
+                    if isinstance(items, list)
+                    for item in items if len(item) >= 2}
+                _note_drops('sort_promotion',
+                            lambda identity: _promo_reason.get(identity, 'derivable-refund'))
                 if verbose:
                     print(f'Sort promotion: {promotion_report.get("stage_counts")}')
                 if prov is not None:
@@ -501,6 +873,8 @@ class RuleMiner:
                 # have no wildcard cover and survive.
                 if prune == 'covered':
                     self.engine.prune_covered_rules(verbose=verbose)
+                    _note_drops('prune_covered_post_promotion',
+                                lambda _identity: 'behaviourally-covered-by-remaining-rules')
             # SOUNDNESS PROVENANCE, second half (audit Tier-1 #4): the interval layer's
             # three fail-closed miss counters, read AFTER the mine as deltas over this
             # mine's baseline -- the exposure ("how often could the gate not decide?")
@@ -512,10 +886,49 @@ class RuleMiner:
                     'node_budget': self.engine._core.interval_node_budget_misses() - _ivl_baseline[1],
                     'unanalyzable': self.engine._core.interval_unanalyzable_misses() - _ivl_baseline[2],
                 }
+            # F94: the census must describe the ARTIFACT, not the moment of
+            # certification. Runs before ANY of it is written (artifact and sidecar
+            # alike) and fails closed on a certified pair that is neither present nor
+            # attributable -- a census that can advertise an absent rule is exactly the
+            # defect this reconciliation exists to make impossible.
+            if _watch:
+                _reconcile_proposal_census(
+                    _outcomes, _trail, _watch, _drops,
+                    self.engine.simplification_rules, dummy_variables)
             if out_path is not None:
-                with open(out_path, 'w') as file:
-                    json.dump(self.engine.simplification_rules, file, indent=4)
-                self._write_provenance(out_path, prov, self.engine.simplification_rules, final=True)
+                # THE ARTIFACT IS A TRIPLE (owner ruling 2026-08-19): a mine run is valid
+                # only if all three sets fall out of it, so they are routed and their
+                # invariants checked BEFORE a byte is written. `rules.json` keeps its name
+                # and carries the f64 set -- it is the default mode, and every config and
+                # loader that predates the ruling goes on reading it unchanged.
+                _triple, _rejected, _route_meta = _route_triple(self.engine, verbose=verbose)
+                _base, _ext = os.path.splitext(out_path)
+                for _mode, _path in (('f64', out_path),
+                                     ('real', f'{_base}_real{_ext}'),
+                                     ('corpus', f'{_base}_corpus{_ext}')):
+                    with open(_path, 'w') as file:
+                        json.dump(_triple[_mode], file, indent=4)
+                if prov is not None:
+                    # The REJECTS are recorded, never silently absent (owner ruling): a
+                    # rule the mine found and then licensed nowhere is evidence, and the
+                    # drop census is where it lives.
+                    prov['triple'] = {
+                        'counts': {m: len(rs) for m, rs in _triple.items()},
+                        'rejected': sorted(_rejected),
+                        # How many rules each file OMITS because that mode's own
+                        # constructor already performs them. Without this the sidecar
+                        # cannot explain why the files are smaller than the gate's kept
+                        # count, and "smaller than expected" is indistinguishable from
+                        # "something was lost".
+                        'preempted': _route_meta['preempted'],
+                        'files': {'f64': os.path.basename(out_path),
+                                  'real': os.path.basename(f'{_base}_real{_ext}'),
+                                  'corpus': os.path.basename(f'{_base}_corpus{_ext}')}}
+                # The sidecar covers the TRIPLE, not one third of it (owner ruling:
+                # "the provenance sidecar covers the triple, the manifest entry lists
+                # three files as ONE artifact"), so its totals describe everything the
+                # mine serves. The per-mode split lives in `prov['triple']['counts']`.
+                self._write_provenance(out_path, prov, _triple['corpus'], final=True)
             return [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
 
         snapshot_at = dict(snapshot_at or {})
@@ -542,7 +955,13 @@ class RuleMiner:
                     var: os.environ[var]
                     for var in ARTIFACT_ENV_SWITCHES if var in os.environ},
                 'interval_undecided': None,  # filled at finalize (deltas over this mine)
+                'ac_classes': None,  # filled per length as the climb proceeds
             }
+
+        # Per-length AC-class census, recorded in the sidecar: how many enumerated
+        # spellings collapsed to how many canonical classes. An artifact states what it
+        # actually mined, and under representative-only certification that is CLASSES.
+        ac_classes_per_length: dict[int, dict[str, int]] = {}
 
         # Sources: lengths up to max_source_pattern_length only (`construct_expressions`
         # over-produces a tail of longer expressions beyond the documented contract).
@@ -550,7 +969,43 @@ class RuleMiner:
             if interrupted():
                 break
             self.engine._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
-            sources = [list(expression) for expression in sorted(expressions_of_length[length])]
+            # CERTIFY THE CANONICAL REPRESENTATIVE ONLY (owner ruling, re-mine 2026-08-20).
+            #
+            # Certification runs in f64 on whichever spelling was enumerated, and AC says all
+            # regroupings of `a*b*c` are ONE expression while f64 says they are not --
+            # `(1e200*1e200)/1e200` is inf, `1e200*(1e200/1e200)` is 1e200. So a class could
+            # certify or not depending on association, which is what the 13 rules lost to
+            # evaluation order were. Mining one representative per class makes certification a
+            # function of the CLASS, so AC-dedup is sound by construction and every member
+            # gets an identical budget -- skipping a duplicate cannot lose a rule the skipped
+            # spelling would have reached.
+            #
+            # `ac_canonical_key` IS the loader's key: two sources share it iff the loader
+            # builds the same internal pattern from them, so a skipped spelling is served by
+            # the representative's rule rather than going unserved. An unparseable source has
+            # no class and is mined on its own.
+            _raw_sources = [list(expression) for expression in sorted(expressions_of_length[length])]
+            _keys = self.engine._core.ac_canonical_keys(_raw_sources)
+            _seen: set[tuple[str, ...]] = set()
+            sources = []
+            for _src, _key in zip(_raw_sources, _keys):
+                if _key is None:
+                    sources.append(_src)
+                    continue
+                _k = tuple(_key)
+                if _k in _seen:
+                    continue
+                _seen.add(_k)
+                sources.append(_src)
+            n_ac_classed = len(_raw_sources) - len(sources)
+            if verbose and n_ac_classed:
+                print(f'Length {length}: {len(_raw_sources):,} sources -> {len(sources):,} AC classes '
+                      f'({n_ac_classed:,} duplicate spellings skipped)')
+            ac_classes_per_length[length] = {'enumerated': len(_raw_sources),
+                                             'classes': len(sources)}
+            if provenance is not None:
+                provenance['ac_classes'] = {str(k): v for k, v in ac_classes_per_length.items()}
+            del _raw_sources, _keys, _seen
             n_sources = len(sources)
             # Release this length's source UNIVERSE as soon as it has been linearised: at the
             # top lengths that set of tuples is the largest object in the process (length 5
@@ -579,7 +1034,7 @@ class RuleMiner:
             if found:
                 rules = deduplicate_rules(
                     rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found],
-                    dummy_variables, verbose=verbose)
+                    dummy_variables, verbose=verbose, engine=self.engine)
             if verbose:
                 print(f'Length {length}: {n_sources:,} sources, {len(found):,} new rules, {len(rules):,} total')
             if output_file is not None:
@@ -702,7 +1157,9 @@ class RuleMiner:
                 raise AssertionError(
                     f'enumeration incomplete at length {length}: {len(expressions):,} != {counts[length]:,}')
 
-        max_candidate_length = (max_source_pattern_length - 1 if max_target_pattern_length is None
+        # Same bound as the library build above -- under the mu ruling an unset target cap
+        # admits every enumerated length, so SAMPLING any of them thins the candidate library.
+        max_candidate_length = (max_source_pattern_length if max_target_pattern_length is None
                                 else max_target_pattern_length)
         for length in sorted(source_sample_per_length):
             if not 1 < length <= max_source_pattern_length:
@@ -986,7 +1443,19 @@ class RuleMiner:
             certificate = 'minimal'
             if target is None and hint is not None:
                 hint = [str(t) for t in hint]
-                if (_tokens_in_vocabulary(hint, vocabulary) and len(hint) < len(source)
+                # NO TOKEN-LENGTH BAR on a proposal hint (owner ruling 2026-08-18:
+                # "Only 'remove' the length gate for the LLM proposed rules"). The
+                # retired conjunct was `len(hint) < len(source)` -- a RAW TOKEN COUNT,
+                # which is not the engine's ordering and disagrees with it:
+                # `1 - cos(2*x0) -> 2*sin(x0)^2` is 6 tokens against 6 while the target
+                # sits strictly BELOW the engine's endpoint (the `-` spelling costs two
+                # extra canonical nodes). Descent is decided below by the ordering, the
+                # same predicate G7 and the serve-time `oriented` check apply. The MINE's
+                # candidate-length bound is a separate thing and stays: a proposal skips
+                # the search entirely, so this costs no mining time, while an unbounded
+                # target length in the SEARCH is what would make e.g. a 5-5 mine
+                # unaffordable.
+                if (_tokens_in_vocabulary(hint, vocabulary)
                         and self.engine.is_valid(list(hint))
                         and not violates_wildcard_multiplicity(list(source), list(hint))
                         # the Const-count invariant (one invariant, every layer: the
@@ -1031,10 +1500,14 @@ class RuleMiner:
         # the same pair, arriving through `find_rules(proposals=...)`, was killed. The
         # parity sentence above ("exactly as sound as mined rules") is earned here, not
         # assumed: every accepted pair is re-judged by the independent symbolic
-        # verifier, and EVERY fatal bucket is refused -- a KILL, but equally a pair the
-        # judge cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) or
-        # cannot reconcile: an unjudged certificate is an unearned one. TOLERATED
-        # passes, exactly as at the mining gate (the null-set extension doctrine).
+        # verifier. What "refused" MEANS changed with the triple, and it has to change
+        # here in lockstep with `_finalize` or the parity claim is false: a pair whose
+        # tier owns it -- ENGINE-MISALIGN is `real`, an f64-realised KILL is `f64` --
+        # is KEPT for routing, exactly as a mined pair is, and only a `reject` is
+        # dropped. Fail-closed is untouched for the verdicts that carry no tier at all
+        # (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT / UNRESOLVED-COVERAGE): they
+        # read `reject` and still drop, because an unjudged certificate is an unearned
+        # one. TOLERATED passes, exactly as at the mining gate.
         if certified:
             from .verify import CONST_CHANNEL_DETAIL, FATAL_BUCKETS, verify_ruleset
             _rep = verify_ruleset([[list(s), list(t)] for s, t, _ in certified])
@@ -1043,7 +1516,8 @@ class RuleMiner:
             # sentinel is exempt exactly as at the mining gate (D36).
             _drop = {(tuple(d['lhs'].split()), tuple(d['rhs'].split())): d['verdict']
                      for d in _detail if d.get('verdict') in FATAL_BUCKETS
-                     and d.get('detail') != CONST_CHANNEL_DETAIL}
+                     and d.get('detail') != CONST_CHANNEL_DETAIL
+                     and (d.get('tier') or 'reject') == 'reject'}
             if _drop:
                 if verbose:
                     for s, t, _c in certified:
@@ -1098,7 +1572,12 @@ class RuleMiner:
 
         ``counts`` is the per-outcome tally for the provenance sidecar: ``certified`` /
         ``already_covered`` / ``rejected`` / ``duplicate`` (certified, but canonically
-        identical to an earlier certified proposal and not shorter).
+        identical to an earlier certified proposal and not shorter) /
+        ``certified_then_dropped``. The last one is filled in LATER, by
+        :func:`_reconcile_proposal_census`: certification runs upstream of the symbolic
+        gate, the covered-prunes and the sort promotion, so the tally this method returns
+        is provisional and the reconciliation moves every certified pair the artifact
+        does not contain out of ``certified`` (F94). The key is present even when zero.
 
         ``trail`` is the PER-PROPOSAL verdict record, one entry per input proposal in file
         order: ``{source, target, verdict, stage, certificate}``. A tally alone cannot be
@@ -1111,9 +1590,16 @@ class RuleMiner:
         (failed independent stage-2 re-verification), ``merge`` (certified but folded away as
         a duplicate), or ``accepted``. ``certificate`` is ``minimal`` (found by library scan)
         or ``verified`` (the proposal's own hint, confirmed).
+
+        A trail entry whose pair does not survive to the artifact is rewritten by
+        :func:`_reconcile_proposal_census` to the TERMINAL verdict
+        ``certified_then_dropped``, keeping ``stage``/``certificate`` (it WAS certified)
+        and gaining ``dropped_at`` (the stage that removed it) and ``drop_reason`` (that
+        stage's own verdict for it).
         """
         assert self.engine._core is not None
-        counts = {'certified': 0, 'already_covered': 0, 'rejected': 0, 'duplicate': 0}
+        counts = {'certified': 0, 'already_covered': 0, 'rejected': 0, 'duplicate': 0,
+                  'certified_then_dropped': 0}
         vocabulary = set(leaf_nodes) | set(self.engine.operator_arity)
         confirm_min = (max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
                        if X_confirm is not None else None)
@@ -1163,7 +1649,9 @@ class RuleMiner:
             certificate = 'minimal'
             if target is None and hint is not None:
                 hint_tokens = [str(token) for token in hint]
-                if (_tokens_in_vocabulary(hint_tokens, vocabulary) and len(hint_tokens) < len(source)
+                # NO TOKEN-LENGTH BAR (same ruling, same reasoning as certify_rules'
+                # hint arm above -- one certification chain, both entries).
+                if (_tokens_in_vocabulary(hint_tokens, vocabulary)
                         and self.engine.is_valid(list(hint_tokens))
                         and not violates_wildcard_multiplicity(list(source), list(hint_tokens))
                         # the Const-count invariant (same gate as certify_rules' hint
@@ -1207,17 +1695,13 @@ class RuleMiner:
         # first canonical source unless a strictly shorter target arrives): a certified
         # pair that would not change the merged set is a 'duplicate', not a 'certified'.
         before = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
-        seen: dict[tuple[str, ...], int] = {}
-        for lhs, rhs in before:
-            canon_source, mapping = remap_expression(list(lhs), dummy_variables, variable_prefix='?')
-            canon_target, _ = remap_expression(list(rhs), dummy_variables, mapping, variable_prefix='?')
-            key = tuple(canon_source)
+        seen: dict[tuple, int] = {}
+        for key, (_, canon_target) in _dedup_keyed_rules(before, dummy_variables, self.engine):
             if key not in seen or len(canon_target) < seen[key]:
                 seen[key] = len(canon_target)
-        for idx, (source, target) in zip(certified_trail_idx, certified_pairs):
-            canon_source, mapping = remap_expression(list(source), dummy_variables, variable_prefix='?')
-            canon_target, _ = remap_expression(list(target), dummy_variables, mapping, variable_prefix='?')
-            key = tuple(canon_source)
+        for idx, (key, (_, canon_target)) in zip(
+                certified_trail_idx,
+                _dedup_keyed_rules(certified_pairs, dummy_variables, self.engine)):
             if key in seen and len(canon_target) >= seen[key]:
                 counts['duplicate'] += 1
                 trail[idx].update(verdict='duplicate', stage='merge')
@@ -1227,7 +1711,8 @@ class RuleMiner:
         if certified_pairs:
             # The SAME merge path as mined rules: shortest target per canonical source.
             self.engine._replace_rules(deduplicate_rules(
-                before + certified_pairs, dummy_variables, verbose=verbose))
+                before + certified_pairs, dummy_variables, verbose=verbose,
+                engine=self.engine))
         if verbose:
             print(f"Proposals: {len(proposal_entries)} processed -> "
                   f"{counts['certified']} certified, {counts['already_covered']} already covered, "
@@ -1586,3 +2071,32 @@ class RuleMiner:
             if handler_installed:
                 signal.signal(signal.SIGINT, old_handler)
             _MINE_LOCK.release()
+
+
+def assert_corpus_dominates(engine: Any, expressions: Any) -> list:
+    """`corpus` must be at least as capable as `f64` and as `real`, on every expression.
+
+    THE REPLACEMENT for `rules_corpus == rules_f64 UNION rules_real`, which was retired
+    once folding made the three modes live in different canonical worlds (owner ruling
+    2026-08-20). That set identity was a proxy for this, and a bad one: it measured
+    spelling overlap, so it read `acos 1 -> 0` as "missing from corpus" when corpus
+    performs it -- and performs all 15 such rules -- through its own constructor.
+
+    Stated as behaviour it is checkable and it is what anyone actually wants: for every
+    expression, corpus's endpoint costs no more under the serve ordering than either
+    other mode's. Returns the counterexamples, empty when the property holds.
+    """
+    from .engine import Mode
+    bad = []
+    for expr in expressions:
+        try:
+            mu = {m: engine._core.ac_complexity(engine.simplify(list(expr), mode=m))
+                  for m in (Mode.f64, Mode.real, Mode.corpus)}
+        except Exception:
+            continue
+        if None in mu.values():
+            continue
+        if mu[Mode.corpus] > min(mu[Mode.f64], mu[Mode.real]):
+            bad.append({'expression': list(expr),
+                        'mu': {m.name: v for m, v in mu.items()}})
+    return bad

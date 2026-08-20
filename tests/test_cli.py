@@ -103,7 +103,8 @@ class TestCLI:
         assert sidecar["proposals"]["sha256"] == hashlib.sha256(proposals_file.read_bytes()).hexdigest()
         assert sidecar["proposals"]["count"] == 1
         assert sidecar["proposals"]["outcomes"] == {
-            "certified": 0, "already_covered": 0, "rejected": 1, "duplicate": 0}
+            "certified": 0, "already_covered": 0, "rejected": 1, "duplicate": 0,
+            "certified_then_dropped": 0}
 
     def test_find_rules_config_prune_and_relaxed_kruskal_honored(self, tmp_path) -> None:
         """The config is the single source of truth for the mine: `prune`,

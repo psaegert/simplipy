@@ -3,7 +3,7 @@
 //! the Rust port (it calls `is_valid` / `prefix_to_infix` / `infix_to_prefix` / `parse` on the engine
 //! OBJECT), not just route `.simplify`.
 
-use crate::operators::{pow1_power, pow_power, Operators};
+use crate::operators::{core_precedence, pow1_power, pow_power, Operators};
 use crate::utils::is_numeric_string;
 
 /// How `prefix_to_infix` renders power operators (the `power` parameter).
@@ -75,7 +75,24 @@ pub fn prefix_to_infix(
             || ops.operator_arity_compat.contains_key(canonical);
 
         if !is_op {
-            stack.push((token.clone(), INF, None)); // terminal
+            // A COMPOUND NUMERIC LEAF spells an operator inside itself: the exact-fraction
+            // token `7/3` and the signed `-1/3` are single tokens of the PREFIX language,
+            // but the infix language has no atom for them -- they render as the division
+            // (and the sign) they contain. Pushing INF here let `* 7/3 7/3` render
+            // `7/3 * 7/3`, which re-reads as `((7/3)*7)/3`: a different tree from the one
+            // that was serialized. Pushing the precedence of the operator the spelling
+            // EMBEDS makes the surrounding parenthesizer bracket it exactly as it brackets
+            // the structural spelling, so the rendering re-reads as the same tree.
+            let precedence = if token.contains('/') && is_numeric_string(token) {
+                if token.starts_with('-') {
+                    core_precedence("-").unwrap_or(1.0)
+                } else {
+                    core_precedence("/").unwrap_or(2.0)
+                }
+            } else {
+                INF
+            };
+            stack.push((token.clone(), precedence, None)); // terminal
             continue;
         }
 
@@ -145,6 +162,20 @@ pub fn prefix_to_infix(
             }
             // pow under power='func' -> func-form.
             if canonical == "pow" && power == Power::Func {
+                stack.push((
+                    format!("{write_operator}({left_str}, {right_str})"),
+                    INF,
+                    Some(canonical.to_string()),
+                ));
+                continue;
+            }
+            // ANY OTHER binary operator has no infix SYMBOL in this language. The reader
+            // (`infix_to_prefix`) knows `+ - * /` and `**`; everything else it reads as a
+            // function CALL, so the generic binary-infix rendering emitted strings this
+            // engine cannot read back (`neg(x0) hypot2 <constant>` for a config-declared
+            // `hypot2`) -- a serialization that does not re-parse, the same defect the
+            // `rootn` arm above was added for. Config-declared binaries render as calls.
+            if !matches!(canonical, "+" | "-" | "*" | "/" | "pow" | "**") {
                 stack.push((
                     format!("{write_operator}({left_str}, {right_str})"),
                     INF,

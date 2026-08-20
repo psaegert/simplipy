@@ -38,6 +38,7 @@ use crate::ac::convert::{from_prefix, to_infix_pretty, to_prefix, to_prefix_tagg
 use crate::ac::expr::{canon, complexity, rejoin_projection, Cx, Ex};
 use crate::ac::matcher::MCx;
 use crate::ac::rules::{rewrite_pass, AcRules, PassCtx};
+use crate::rules::CompiledRules;
 use crate::tokens::{TokenOverlay, TokenView};
 
 use super::memo::SimplifyCtx;
@@ -98,8 +99,73 @@ fn is_ground(e: &Ex, view: &TokenView) -> bool {
     }
 }
 
+/// One SERVED rule: `(lhs, rhs, artifact index)` -- see [`Engine::ac_served_rules`].
+pub type ServedRule = (Vec<String>, Vec<String>, usize);
+
 impl Engine {
-    /// The translated AC ruleset, built once on first use (never during construction).
+    /// The DEFAULT mode's translated rule set (`rules.json`), built once on first use and
+    /// never during construction. See [`Engine::ac_rules_for`] for the per-mode selection
+    /// and [`Engine::translate_rules`] for the load gates every set faces.
+    pub(crate) fn ac_rules(&self) -> &AcRules {
+        self.ac_rules_cell
+            .get_or_init(|| self.translate_rules(&self.rules.raw))
+    }
+
+    /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE (owner
+    /// ruling, 2026-08-19: "I'd like one distinct rule set for each mode"), never a base
+    /// plus a supplement. `rules.json` is the DEFAULT set, `rules_real.json` the `Real`
+    /// set, `rules_corpus.json` the `Corpus` set; each file is self-contained, so WHAT IS
+    /// LOADED IS WHAT IS SERVED, and nothing has to be unioned to answer "which rules
+    /// fire here".
+    ///
+    /// That property is the entire reason the triple is worth its bytes. The provenance
+    /// hole closed earlier existed PRECISELY because the served set was COMPUTED rather
+    /// than STATED -- `rules.json` said 5,545 while the engine served 5,553, and eight
+    /// load-minted twins went unjudged for exactly as long as that gap stood. An overlay
+    /// design (base ++ tier) recreates that shape by construction; three complete sets
+    /// cannot.
+    ///
+    /// ABSENCE, NOT EMPTINESS, is the fallback key. A mode with NO SET OF ITS OWN
+    /// (`None`) serves the DEFAULT set -- the very same `&AcRules`, pointer-equal, not a
+    /// second identical index -- which is what makes the no-op property ("a config naming
+    /// no `rules_real:`/`rules_corpus:` is byte-for-byte the engine that shipped") hold by
+    /// CONSTRUCTION rather than by re-derivation. A set that is PRESENT BUT EMPTY
+    /// (`Some([])`) is a DIFFERENT statement and is honoured as one: that mode serves
+    /// NOTHING. Keying the fallback on emptiness would collapse the two and make an
+    /// explicitly empty set unsayable -- the same "computed, not stated" mistake one
+    /// level down.
+    pub(crate) fn ac_rules_for(&self, mode: RuleMode) -> &AcRules {
+        match mode {
+            RuleMode::Default => self.ac_rules(),
+            RuleMode::Real => self.ac_mode_rules(&self.real_rules, &self.ac_real_rules_cell),
+            RuleMode::Corpus => self.ac_mode_rules(&self.corpus_rules, &self.ac_corpus_rules_cell),
+        }
+    }
+
+    /// One non-default mode's cell: translated on first use from THAT MODE'S COMPLETE
+    /// FILE, or -- when the mode has no file at all -- the default set itself. The cells
+    /// are independently lazy, so a consumer of one mode never pays to index another's.
+    fn ac_mode_rules<'a>(
+        &'a self,
+        set: &'a Option<CompiledRules>,
+        cell: &'a std::sync::OnceLock<AcRules>,
+    ) -> &'a AcRules {
+        match set {
+            None => self.ac_rules(),
+            Some(compiled) => cell.get_or_init(|| self.translate_rules(&compiled.raw)),
+        }
+    }
+
+    /// The SHARED translation, and the ONLY path into an `AcRules`: the licence
+    /// registry's pole-refusal filter, then `AcRules::translate`, then the provenance
+    /// lift. EVERY mode's set goes through this one function, so no mode can be admitted
+    /// under weaker LOAD-side gates than another -- a mode relaxes what a rule may CLAIM
+    /// about the deployed engine, never what the loader will accept.
+    ///
+    /// `raw` is the mode's OWN artifact list, and the `src` indices returned index THAT
+    /// list. Each set being self-contained is what makes provenance per-mode by
+    /// construction: `ac_served_rules_in_mode` points every served rule at a position in
+    /// the file the mode names, with no offset arithmetic between tiers.
     ///
     /// C1.20 LOAD CONSUMER (2026-08-08): before translate, every raw rule passes the
     /// licence registry's pole entry (`engine::refusals::pole_refusal`) on its
@@ -113,42 +179,45 @@ impl Engine {
     /// Const-introduction case is already load-refused by the Const-count invariant.
     /// Refusals are counted (`n_registry_dropped`), expected 0 for every artifact the
     /// mint-side registry produced.
-    pub(crate) fn ac_rules(&self) -> &AcRules {
-        self.ac_rules_cell.get_or_init(|| {
-            let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
-            let view = TokenView::new(&self.tokens, &overlay);
-            let is_wildcard = |s: &str| {
-                s.len() >= 2
-                    && (s.starts_with('_') || s.starts_with('!') || s.starts_with('?'))
-                    && s[1..].chars().all(|c| c.is_ascii_digit())
-            };
-            let mut n_registry_dropped = 0usize;
-            let kept: Vec<(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)> = self
-                .rules
-                .raw
-                .iter()
-                .filter(|(l, r)| {
-                    let lhs: Vec<String> = l.iter().map(|t| view.resolve_owned(*t)).collect();
-                    let rhs: Vec<String> = r.iter().map(|t| view.resolve_owned(*t)).collect();
-                    let mut vars: Vec<String> = Vec::new();
-                    for t in lhs.iter().chain(rhs.iter()) {
-                        if is_wildcard(t) && !vars.contains(t) {
-                            vars.push(t.clone());
-                        }
-                    }
-                    let refused =
-                        super::refusals::pole_refusal(&lhs, &rhs, &self.operators, &vars).is_some();
-                    if refused {
-                        n_registry_dropped += 1;
-                    }
-                    !refused
-                })
-                .cloned()
-                .collect();
-            let mut r = AcRules::translate(&kept, &view);
-            r.n_registry_dropped = n_registry_dropped;
-            r
-        })
+    fn translate_rules(
+        &self,
+        raw: &[(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)],
+    ) -> AcRules {
+        let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
+        let view = TokenView::new(&self.tokens, &overlay);
+        let is_wildcard = |s: &str| {
+            s.len() >= 2
+                && (s.starts_with('_') || s.starts_with('!') || s.starts_with('?'))
+                && s[1..].chars().all(|c| c.is_ascii_digit())
+        };
+        let mut n_registry_dropped = 0usize;
+        // `kept_idx` keeps the ARTIFACT position of every rule that reaches translate,
+        // so the provenance translate records (indices into `kept`) can be lifted back
+        // onto the mode's own artifact list -- refused rules would otherwise shift it.
+        let mut kept: Vec<(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)> = Vec::new();
+        let mut kept_idx: Vec<usize> = Vec::new();
+        for (i, (l, r)) in raw.iter().enumerate() {
+            let lhs: Vec<String> = l.iter().map(|t| view.resolve_owned(*t)).collect();
+            let rhs: Vec<String> = r.iter().map(|t| view.resolve_owned(*t)).collect();
+            let mut vars: Vec<String> = Vec::new();
+            for t in lhs.iter().chain(rhs.iter()) {
+                if is_wildcard(t) && !vars.contains(t) {
+                    vars.push(t.clone());
+                }
+            }
+            if super::refusals::pole_refusal(&lhs, &rhs, &self.operators, &vars).is_some() {
+                n_registry_dropped += 1;
+                continue;
+            }
+            kept.push((l.clone(), r.clone()));
+            kept_idx.push(i);
+        }
+        let mut r = AcRules::translate(&kept, &view);
+        r.n_registry_dropped = n_registry_dropped;
+        for s in r.src.iter_mut() {
+            *s = kept_idx[*s];
+        }
+        r
     }
 
     /// (kept, subsumed-by-arithmetic, dropped, orientation-twins) counts of the AC
@@ -158,6 +227,72 @@ impl Engine {
     pub fn ac_rules_info(&self) -> (usize, usize, usize, usize) {
         let r = self.ac_rules();
         (r.rules.len(), r.n_subsumed, r.n_dropped, r.n_twins)
+    }
+
+    /// The same four counts for ANY mode's served set. `ac_rules_info` stays the
+    /// DEFAULT mode's four-tuple untouched and unwidened: it is pinned by the corpus
+    /// gate and by tests, and answering it must never force another mode's index to be
+    /// built. On a mode with no set of its own this reads the default translation
+    /// itself, so the two agree exactly and nothing extra is indexed.
+    pub fn ac_rules_info_in_mode(&self, mode: RuleMode) -> (usize, usize, usize, usize) {
+        let r = self.ac_rules_for(mode);
+        (r.rules.len(), r.n_subsumed, r.n_dropped, r.n_twins)
+    }
+
+    /// How many rules this mode's OWN file was loaded with, BEFORE translation --
+    /// `None` when the mode HAS no file and therefore serves the default set.
+    ///
+    /// The distinction is the point of the whole design, so it is in the TYPE rather
+    /// than encoded as a sentinel count: `None` is "this mode names no set of its own",
+    /// `Some(0)` is "this mode names an EMPTY set and serves nothing". Reading it builds
+    /// no index at all -- it is a count of raw loaded pairs, so a caller can assert the
+    /// right file arrived without paying to translate it.
+    pub fn mode_rules_len(&self, mode: RuleMode) -> Option<usize> {
+        match mode {
+            RuleMode::Default => Some(self.rules.raw.len()),
+            RuleMode::Real => self.real_rules.as_ref().map(|c| c.raw.len()),
+            RuleMode::Corpus => self.corpus_rules.as_ref().map(|c| c.raw.len()),
+        }
+    }
+
+    /// THE SERVED RULE SET: every rule the matcher can fire, in the EXPLICIT projection,
+    /// as `(lhs, rhs, source)` triples. `source` indexes the artifact ruleset the engine was
+    /// built from (`SimpliPyEngine.simplification_rules`).
+    ///
+    /// This is what an auditor must judge, and it is NOT the artifact. Translation drops
+    /// rules and MINTS orientation twins (`AcRules::translate`), so the artifact is neither
+    /// a superset nor a subset of what serves: reading `rules.json` judges rules that never
+    /// fire and misses rules that do. The twins are the live case -- they are minted at LOAD
+    /// from the loading engine's canon, so they exist only here, and a twin reports its
+    /// source rule so a verdict against it can be acted on in the artifact.
+    ///
+    /// The EXPLICIT projection, not the tagged one: this is the serialization the contract
+    /// judge (`simplipy.verify`) parses.
+    pub fn ac_served_rules(&self) -> Vec<ServedRule> {
+        self.ac_served_rules_in_mode(RuleMode::Default)
+    }
+
+    /// [`Engine::ac_served_rules`] for ANY mode: the set that mode actually fires, with
+    /// `source` indexing THAT MODE'S OWN artifact file. This is the surface a judge needs
+    /// to rule on the triple -- each of the three files is judged against the rules its
+    /// own mode serves, and a verdict is actionable in the file it came from because no
+    /// tier offsets sit between the index and the line.
+    pub fn ac_served_rules_in_mode(&self, mode: RuleMode) -> Vec<ServedRule> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        let view = self.view(&ctx);
+        let bare = Cx::bare(&view);
+        let r = self.ac_rules_for(mode);
+        r.rules
+            .iter()
+            .zip(r.src.iter())
+            .map(|(rule, &src)| {
+                (
+                    self.resolve_seq(&to_prefix(&rule.lhs, &bare), &ctx),
+                    self.resolve_seq(&to_prefix(&rule.rhs, &bare), &ctx),
+                    src,
+                )
+            })
+            .collect()
     }
 
     /// Rules the licence registry's load consumer refused (see `ac_rules` above).
@@ -508,16 +643,19 @@ impl Engine {
     /// Simplify through the AC core, returning the STRICT TAGGED prefix form -- the AC
     /// engine's native serialization (`<add> ... </add>` / `<mul> ... </mul>` bags, plain
     /// `pow`/function prefix, one-token exact literals, no sugar operators). Input accepts
-    /// both the old grammar and the tagged form (one shared parser). `node_budget` bounds the
-    /// outer rewrite iterations; `wildcard_all` is the LOSSY switch (training-corpus
-    /// canonicalisation only). A malformed input is returned unchanged.
+    /// both the old grammar and the tagged form (one shared parser). `max_passes` bounds the
+    /// number of outer REWRITE PASSES -- not nodes, not rule firings: each pass is one full
+    /// `rewrite_pass` over the state, and the loop stops early at the fixpoint. Measured
+    /// convergence is 2-4 passes against the FFI default of 48, so the bound is
+    /// defense-in-depth (T6) rather than a tuning knob. `wildcard_all` is the LOSSY switch
+    /// (training-corpus canonicalisation only). A malformed input is returned unchanged.
     pub fn ac_simplify(
         &self,
         tokens: &[String],
-        node_budget: usize,
-        wildcard_all: bool,
+        max_passes: usize,
+        mode: RuleMode,
     ) -> Option<Vec<String>> {
-        self.ac_simplify_proj(tokens, node_budget, wildcard_all, AcForm::Tagged)
+        self.ac_simplify_proj(tokens, max_passes, mode, AcForm::Tagged)
     }
 
     /// [`Engine::ac_simplify`] with an explicit output projection. The SEARCH runs on the
@@ -526,15 +664,67 @@ impl Engine {
     pub fn ac_simplify_proj(
         &self,
         tokens: &[String],
-        node_budget: usize,
-        wildcard_all: bool,
+        max_passes: usize,
+        mode: RuleMode,
         form: AcForm,
     ) -> Option<Vec<String>> {
-        let (ctx, best) = self.ac_simplify_ex(tokens, node_budget, wildcard_all);
+        // THE DISPATCHER, not `ac_simplify_ex_fold`: corpus decides between two
+        // disciplines here, and routing this entry past it silently made corpus stop
+        // folding entirely. Only the mine's entry below bypasses the dispatcher, and it
+        // does so on purpose.
+        let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
+        self.project(ctx, best, form)
+    }
+
+    /// [`Engine::ac_simplify_proj`] with the fold discipline stated rather than derived.
+    /// The MINE is the only caller that overrides it: it canonicalises unfolded, so that
+    /// every rule stays discoverable, and folding is applied per mode at serve.
+    pub fn ac_simplify_proj_fold(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        mode: RuleMode,
+        form: AcForm,
+        fold_tr: bool,
+    ) -> Option<Vec<String>> {
+        let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, mode, 0, fold_tr);
+        self.project(ctx, best, form)
+    }
+
+    /// The shared tail of both projections: malformed input is `None` -- the AC parser is
+    /// the arbiter, and the FAILURE SIGNAL propagates to the caller (the FFI raises
+    /// ValueError). The old contract returned the input unchanged, which silently passed
+    /// garbage through the one entry point whose inputs skip `is_valid` (audit Tier-2,
+    /// 2026-08-03).
+    fn project(&self, ctx: SimplifyCtx, best: Option<Ex>, form: AcForm) -> Option<Vec<String>> {
         // Malformed input is `None` -- the AC parser is the arbiter, and the FAILURE
         // SIGNAL propagates to the caller (the FFI raises ValueError). The old contract
         // returned the input unchanged, which silently passed garbage through the one
         // entry point whose inputs skip `is_valid` (audit Tier-2, 2026-08-03).
+        let best = best?;
+        let view = self.view(&ctx);
+        let bare = Cx::bare(&view);
+        let toks = match form {
+            AcForm::Explicit => to_prefix(&best, &bare),
+            AcForm::Tagged => to_prefix_tagged(&best, &bare),
+        };
+        Some(self.resolve_seq(&toks, &ctx))
+    }
+
+    /// D39 B1 (ledger D39): [`Engine::ac_simplify_proj`] with the OPT-IN post-fixpoint
+    /// exploration phase. `explore_budget` counts candidate descents in `ac::search`;
+    /// 0 never enters the phase, making this entry byte-identical to `ac_simplify_proj`
+    /// (the ledger's effort=0 semantics). The public `effort=` API stays a later lane
+    /// (roadmap B7); this is the scaffolding's engine boundary.
+    pub fn ac_explore_proj(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        mode: RuleMode,
+        form: AcForm,
+        explore_budget: usize,
+    ) -> Option<Vec<String>> {
+        let (ctx, best) = self.ac_simplify_ex_explore(tokens, max_passes, mode, explore_budget);
         let best = best?;
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
@@ -551,10 +741,10 @@ impl Engine {
     pub fn ac_simplify_infix(
         &self,
         tokens: &[String],
-        node_budget: usize,
-        wildcard_all: bool,
+        max_passes: usize,
+        mode: RuleMode,
     ) -> Option<String> {
-        let (ctx, best) = self.ac_simplify_ex(tokens, node_budget, wildcard_all);
+        let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
         // `None` on malformed input, exactly as `ac_simplify_proj` (the FFI raises).
         let best = best?;
         let view = self.view(&ctx);
@@ -590,10 +780,21 @@ impl Engine {
     pub fn ac_judge(
         &self,
         tokens: &[String],
-        node_budget: usize,
+        max_passes: usize,
     ) -> Option<(u64, u64, Vec<String>)> {
         let src_c = self.ac_complexity(tokens)?;
-        let (ctx, best) = self.ac_simplify_ex(tokens, node_budget, false);
+        // THE MINE CANONICALISES UNFOLDED (owner ruling 2026-08-20). The default RULE
+        // SET, but with transcendental folding OFF -- `real`'s discipline, which is the
+        // finest-grained canonical form there is, so every rule is discoverable.
+        //
+        // Measured, on a small mine: with folding on during mining, `real` loses 15 rules
+        // and f64 loses 29. The `real` losses are EXACT identities -- `cos 0 -> 1`,
+        // `acos 1 -> 0`, `exp 0 -> 1`, `log 1 -> 0` -- which `real` genuinely needs,
+        // because `real` does not fold and so has nothing else to perform them. The mine
+        // folded the source `cos 0` to `1` before the target search ever ran, and the
+        // rule was never discovered, for ANY mode. Folding is a per-mode SERVE behaviour;
+        // the per-mode prune then drops from each file what that mode already performs.
+        let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, RuleMode::Default, 0, false);
         let best = best?;
         let view = self.view(&ctx);
         let best_c = complexity(&best, &view);
@@ -612,6 +813,76 @@ impl Engine {
         let bare = Cx::bare(&view);
         let e = from_prefix(&toks, &bare)?;
         Some(complexity(&canon(e, &bare), &view))
+    }
+
+    /// THE DEDUP KEY: the BARE-CONTEXT canonical serialization of one expression --
+    /// literally the form `AcRules::translate` builds for a rule side
+    /// (`canon(from_prefix(t, bare), bare)`), rendered in the engine's own native tagged
+    /// projection. Two expressions share a key IFF the loader builds the same internal
+    /// pattern from them, which is what makes "same key" mean "provably one rule".
+    ///
+    /// Why NOT the public conversion API (`to_prefix`/`to_tagged`, i.e.
+    /// `ac_simplify_proj(.., 0, ..)`): that runs the REWRITE PASS under the LOADED RULESET
+    /// and the full certificate-carrying context. Measured, 2026-08-18: on an engine
+    /// holding acj-4-3, `to_prefix(["*","(-1)","asin","_0"])` returns `asin neg _0` --
+    /// that rule's own RHS -- while on a RULES-LESS engine over the same vocabulary it
+    /// returns `neg asin _0`. The two engines differ only in their rules, so the collapse
+    /// is the rule firing, not a canon difference. A key computed that way would key a
+    /// rule on its own target *while deduplicating the very artifact that causes the
+    /// collapse* -- circular. This key is a pure function of the operator table: same
+    /// answer on both engines.
+    ///
+    /// Wildcards (`_0`/`?0`/`!0`/`$0`) are PATTERN VARIABLES: they intern as ordinary
+    /// distinct leaves and are neither folded nor renamed -- distinct sorts and distinct
+    /// indices stay distinct keys, while AC permutation of the same wildcards collapses.
+    ///
+    /// `None` on an unparseable side (the AC parser is the arbiter), so a caller can fall
+    /// back rather than fail a whole ruleset on one malformed entry -- `translate` drops
+    /// exactly such sides under `unparseable-side`.
+    pub fn ac_canonical_key(&self, tokens: &[String]) -> Option<Vec<String>> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        Some(
+            self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx)
+                .pop()??,
+        )
+    }
+
+    /// [`Engine::ac_canonical_key`] over a BATCH, sharing one context (and therefore one
+    /// token overlay) across the whole list -- a ruleset is keyed side-by-side, and a
+    /// per-expression context would re-pay the overlay setup 2x per rule.
+    pub fn ac_canonical_keys(&self, exprs: &[Vec<String>]) -> Vec<Option<Vec<String>>> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        self.ac_canonical_keys_in(exprs, &ctx)
+    }
+
+    fn ac_canonical_keys_in(
+        &self,
+        exprs: &[Vec<String>],
+        ctx: &SimplifyCtx,
+    ) -> Vec<Option<Vec<String>>> {
+        exprs
+            .iter()
+            .map(|tokens| {
+                let toks = self.intern_seq(tokens, ctx);
+                let view = self.view(ctx);
+                let bare = Cx::bare(&view);
+                let e = canon(from_prefix(&toks, &bare)?, &bare);
+                let key = to_prefix_tagged(&e, &bare);
+                // INJECTIVITY, asserted where it is cheapest to check. The key is a KEY
+                // only if the projection is FAITHFUL on canonical states: if two distinct
+                // states could share one serialization, dedup would silently merge two
+                // DIFFERENT rules. Re-parsing the key under the same bare context must
+                // land back on the same state. (The explicit projection is the one with a
+                // known display-redistribution class -- see `stable_in`'s H-014 note --
+                // which is why the key is the tagged form.)
+                debug_assert!(
+                    from_prefix(&key, &bare).map(|p| canon(p, &bare)).as_ref() == Some(&e),
+                    "bare canonical key is not faithful for {:?}",
+                    tokens
+                );
+                Some(self.resolve_seq(&key, ctx))
+            })
+            .collect()
     }
 
     /// CERTIFIED-canon complexity: the measure of the state the simplify CHAIN starts
@@ -637,7 +908,8 @@ impl Engine {
             cert_finnz: Some(&cfz),
             cert_nzae: Some(&czn),
             cert_nce: Some(&cnc),
-            lossy: false,
+            mode: RuleMode::Default,
+            fold_f64: Cx::folds_for(RuleMode::Default),
             sentinels_expired: false,
         };
         let bare = Cx::bare(&view);
@@ -660,7 +932,7 @@ impl Engine {
     pub fn ac_odd_neg_carriers(
         &self,
         tokens: &[String],
-        node_budget: usize,
+        max_passes: usize,
     ) -> Option<
         Vec<(
             Vec<String>,
@@ -670,7 +942,7 @@ impl Engine {
             Vec<(Vec<String>, bool, bool)>,
         )>,
     > {
-        let (ctx, best) = self.ac_simplify_ex(tokens, node_budget, false);
+        let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, RuleMode::Default);
         let best = best?;
         let view = self.view(&ctx);
         let cf = |e: &Ex| self.ac_cert(e, &ctx, false);
@@ -683,7 +955,8 @@ impl Engine {
             cert_finnz: Some(&cfz),
             cert_nzae: Some(&czn),
             cert_nce: Some(&cnc),
-            lossy: false,
+            mode: RuleMode::Default,
+            fold_f64: Cx::folds_for(RuleMode::Default),
             sentinels_expired: false,
         };
         let bare = Cx::bare(&view);
@@ -750,9 +1023,79 @@ impl Engine {
     fn ac_simplify_ex(
         &self,
         tokens: &[String],
-        node_budget: usize,
-        wildcard_all: bool,
+        max_passes: usize,
+        mode: RuleMode,
     ) -> (SimplifyCtx, Option<Ex>) {
+        // explore_budget 0 = the exploration phase does not exist (D39's effort=0
+        // semantics): every pre-D39 entry point routes through here, byte-stable.
+        self.ac_simplify_ex_explore(tokens, max_passes, mode, 0)
+    }
+
+    /// [`Engine::ac_simplify_ex`] plus the D39 OPT-IN post-fixpoint exploration
+    /// phase (`ac::search`, ledger D39): after the calling mode's own chain settles,
+    /// `explore_budget > 0` runs the budgeted expansion search under the SAME pass
+    /// context and accepts only endpoints strictly below in the reduction ordering.
+    /// Dispatcher. Every mode but `corpus` runs once, with the fold discipline its mode
+    /// derives. `corpus` runs TWICE and keeps the cheaper endpoint.
+    ///
+    /// "Real where possible, f64 as a fallback" cannot be a sequencing rule: folding is
+    /// bottom-up, so `tanh 30` becomes `1` before `atanh` ever sees it, and no ordering
+    /// inside a node recovers `atanh(tanh 30) -> 30`. It IS a selection rule between two
+    /// finished endpoints, and mu is the ordering of record, so the choice is priced:
+    ///
+    /// ```text
+    ///     atanh(tanh 30)    real  `30`                  mu 4000   <- wins
+    ///                       f64   `float("inf")`        mu 8000
+    ///     asin(1e-8)+same   real  `* 2 asin 1e-8`       mu 6170
+    ///                       f64   `2e-8`                mu 6170   <- tie, folded wins
+    /// ```
+    ///
+    /// A TIE GOES TO THE FOLDED FORM, and that is a policy choice rather than a
+    /// derivation: mu is indifferent, and corpus exists for the flash-ansr training path
+    /// where one literal token beats four. Recorded as policy so it can be revisited
+    /// without anyone mistaking it for arithmetic.
+    fn ac_simplify_ex_explore(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        mode: RuleMode,
+        explore_budget: usize,
+    ) -> (SimplifyCtx, Option<Ex>) {
+        if !matches!(mode, RuleMode::Corpus) {
+            return self.ac_simplify_ex_fold(
+                tokens,
+                max_passes,
+                mode,
+                explore_budget,
+                Cx::folds_for(mode),
+            );
+        }
+        let unfolded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, false);
+        let folded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, true);
+        let cost = |p: &(SimplifyCtx, Option<Ex>)| -> Option<u64> {
+            p.1.as_ref().map(|e| complexity(e, &self.view(&p.0)))
+        };
+        match (cost(&unfolded), cost(&folded)) {
+            (Some(cu), Some(cf)) if cu < cf => unfolded,
+            (Some(_), Some(_)) => folded,
+            (Some(_), None) => unfolded,
+            _ => folded,
+        }
+    }
+
+    fn ac_simplify_ex_fold(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        mode: RuleMode,
+        explore_budget: usize,
+        fold_tr: bool,
+    ) -> (SimplifyCtx, Option<Ex>) {
+        // The RECALL switch is DERIVED from the mode, once, here -- every layer below
+        // this line already speaks `wildcard_all` and is untouched. Deriving it (rather
+        // than taking it as a second parameter beside the mode) is what makes "which set
+        // serves" and "which search semantics run" impossible to set inconsistently.
+        let wildcard_all = mode.wildcard_all();
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
@@ -767,7 +1110,8 @@ impl Engine {
             cert_finnz: Some(&cfz),
             cert_nzae: Some(&czn),
             cert_nce: Some(&cnc),
-            lossy: wildcard_all,
+            mode,
+            fold_f64: fold_tr,
             sentinels_expired: false,
         };
         // Parse with the CALL's MODE: a bare (sound) parse let sound-only
@@ -778,7 +1122,8 @@ impl Engine {
         // immediately re-runs full cert-carrying construction, so certs at parse
         // are pure double work (measured +15us corpus-walk mean).
         let mut pbare = Cx::bare(&view);
-        pbare.lossy = wildcard_all;
+        pbare.mode = mode;
+        pbare.fold_f64 = fold_tr;
         let Some(e0) = from_prefix(&toks, &pbare) else {
             return (ctx, None);
         };
@@ -792,7 +1137,11 @@ impl Engine {
             RefCell::new(FxHashMap::default());
         let fold = |e: &Ex| self.ac_fold(e, &ctx, wildcard_all, &class_memo);
         let pass = PassCtx {
-            rules: self.ac_rules(),
+            // MODE SELECTION, half of it: the pass serves the mode's OWN complete set.
+            // The twin below (phase 2) is the other half and MUST agree -- leaving the
+            // default set in phase 2 would let a rule fire before sentinel expiry and not
+            // after, making the endpoint depend on which phase reached the subject.
+            rules: self.ac_rules_for(mode),
             cx: &cx,
             mcx: &mcx,
             fold: &fold,
@@ -865,7 +1214,7 @@ impl Engine {
         // complexity but higher literal-size/canonical rank -- a non-fixpoint, so
         // idempotence would break). A budget-truncated run returns the last state
         // reached, which is sound.
-        for _ in 0..node_budget.max(1) {
+        for _ in 0..max_passes.max(1) {
             let next = rewrite_pass(current.clone(), &pass);
             debug_assert!(
                 crate::ac::rules::no_nested_bags(&next),
@@ -879,6 +1228,19 @@ impl Engine {
                 break; // fixpoint, decided on the representation itself
             }
             current = next;
+        }
+        // D39 EXPLORATION, sound mode (ledger D39; `ac::search`): the chain above ran
+        // UNCHANGED to its fixpoint -- the theorems (T6, L3/L4) are already banked --
+        // and only an explicit budget enters the phase at all. Lossy mode explores
+        // its OWN final fixpoint after sentinel expiry instead (phase 2 below):
+        // exploration is post-FIXPOINT by definition, and phase-1 lossy states are a
+        // search licence, not an answer (H-015).
+        if explore_budget > 0 && !wildcard_all {
+            current = crate::ac::search::explore(current, &pass, max_passes, explore_budget);
+            debug_assert!(
+                stable(&current),
+                "explored endpoint is not serialization-stable: {current:?}"
+            );
         }
         // SENTINEL EXPIRY, phase 2 (H-015 class (a), 2026-08-04): the lossy parse keeps
         // `inv(inf)`-class reciprocals unfolded so the `$`-cancel can find its partner
@@ -901,14 +1263,20 @@ impl Engine {
                 cert_finnz: Some(&cfz),
                 cert_nzae: Some(&czn),
                 cert_nce: Some(&cnc),
-                lossy: true,
+                mode: RuleMode::Corpus,
+                fold_f64: fold_tr,
                 sentinels_expired: true,
             };
             let mut pbare2 = Cx::bare(&view);
-            pbare2.lossy = true;
+            pbare2.mode = RuleMode::Corpus;
+            pbare2.fold_f64 = fold_tr;
             pbare2.sentinels_expired = true;
             let pass2 = PassCtx {
-                rules: self.ac_rules(),
+                // MODE SELECTION, the phase-2 twin. Phase 2 is reached only under
+                // `wildcard_all`, i.e. only in `Corpus` today -- but it is stated as the
+                // mode, not hard-wired, so the `Mode` rename cannot leave the two phases
+                // serving different sets.
+                rules: self.ac_rules_for(mode),
                 cx: &cx2,
                 mcx: &mcx,
                 fold: &fold,
@@ -922,7 +1290,7 @@ impl Engine {
                 stable2(&current),
                 "expired canonical state is not serialization-stable: {current:?}"
             );
-            for _ in 0..node_budget.max(1) {
+            for _ in 0..max_passes.max(1) {
                 let next = rewrite_pass(current.clone(), &pass2);
                 debug_assert!(
                     crate::ac::rules::no_nested_bags(&next),
@@ -936,6 +1304,16 @@ impl Engine {
                     break;
                 }
                 current = next;
+            }
+            // D39 EXPLORATION, lossy mode: same phase, run on the sentinel-expired
+            // final fixpoint under the phase-2 pass (blanket licences -- the shipped
+            // wildcard_all semantics apply to the moves exactly as to the chain).
+            if explore_budget > 0 {
+                current = crate::ac::search::explore(current, &pass2, max_passes, explore_budget);
+                debug_assert!(
+                    stable2(&current),
+                    "explored phase-2 endpoint is not serialization-stable: {current:?}"
+                );
             }
         }
         // LOSSY OUTPUT PROJECTION (H-015, 2026-08-04): the returned endpoint gets the
@@ -955,6 +1333,64 @@ impl Engine {
     }
 }
 
+/// THE ENGINE'S RULE MODE -- three inhabitants, one distinct COMPLETE rule set each
+/// (`rules.json`, `rules_real.json`, `rules_corpus.json`). This is the internal
+/// selection key; the Python-facing `simplipy.Mode` is still `SOUND`/`LOSSY` and maps
+/// onto it at exactly ONE place per boundary (`rust/lib.rs`'s
+/// `RuleMode::from_wildcard_all`, and `SimpliPyEngine.simplify`), so the coming
+/// `Mode` -> `f64`/`real`/`corpus` change is a RENAME of that map, not a rebuild of the
+/// plumbing underneath it.
+///
+/// ```text
+///     Default  today's `Mode.SOUND`   -- rules.json, the shipped f64 set
+///     Real     not yet reachable from `simplipy.Mode` (deliberately: renaming `Mode` is
+///              a separate step) -- rules_real.json
+///     Corpus   today's `Mode.LOSSY`   -- rules_corpus.json, training-corpus canonicalisation
+/// ```
+///
+/// `wildcard_all` (the blanket-placeholder RECALL switch) is a FUNCTION of the mode, not
+/// a second parameter beside it: one value states both which set serves and which search
+/// semantics run, so the two can never be set inconsistently. `Real` takes the SOUND
+/// search semantics -- it differs from `Default` in WHICH RULES ARE CERTIFIED, which is
+/// the axis this ruleset ladder is about, not in how placeholders bind. The `Mode` rename
+/// must ratify that pairing explicitly; it is the one policy choice baked in here.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum RuleMode {
+    Default,
+    Real,
+    Corpus,
+}
+
+impl RuleMode {
+    /// The RECALL switch this mode runs under -- the `wildcard_all` every layer below
+    /// the mode selection already speaks. Derived here and nowhere else.
+    pub fn wildcard_all(self) -> bool {
+        matches!(self, RuleMode::Corpus)
+    }
+
+    /// TODAY'S MAP, and the only place the two-valued `simplipy.Mode` becomes a
+    /// three-valued rule mode: `SOUND` -> the default set, `LOSSY` -> the corpus set.
+    /// The `Mode` rename replaces this function with a total three-way map; nothing else
+    /// in the core has to move.
+    pub fn from_wildcard_all(wildcard_all: bool) -> Self {
+        if wildcard_all {
+            RuleMode::Corpus
+        } else {
+            RuleMode::Default
+        }
+    }
+
+    /// The wire spelling used by the FFI (`ac_simplify_in_mode`) and by the config keys.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "default" => Some(RuleMode::Default),
+            "real" => Some(RuleMode::Real),
+            "corpus" => Some(RuleMode::Corpus),
+            _ => None,
+        }
+    }
+}
+
 /// Output projections of the AC canonical state (see `ac::convert`): `Tagged` is the native
 /// strict prefix form; `Explicit` is the sugared old-token diagnostic form (the internal
 /// canonical form's sugared spelling, parseable by the binary engine -- the
@@ -967,7 +1403,86 @@ pub enum AcForm {
 
 #[cfg(test)]
 mod tests {
+    use crate::engine::RuleMode;
     use crate::Engine;
+
+    /// THE DEDUP KEY (owner ruling 2026-08-18: "compare internal form, not spelling").
+    /// `ac_canonical_key` must be the BARE-context canonical serialization -- literally
+    /// what `AcRules::translate` builds for a rule side -- and NOT what the public
+    /// `to_prefix`/`to_tagged` return: those run the rewrite pass under the LOADED
+    /// RULESET, and on this very asset `to_prefix(["*","(-1)","asin","_0"])` is already
+    /// `asin neg _0`, that rule's own RHS. The key must not depend on the ruleset it is
+    /// used to deduplicate.
+    #[test]
+    fn ac_canonical_key_is_the_bare_translate_form() {
+        let Some(e) = engine() else { return };
+        let k = |toks: &[&str]| e.ac_canonical_key(&t(toks)).expect("parses");
+        // The two AC spellings of one pattern share a key.
+        assert_eq!(
+            k(&["*", "(-1)", "asin", "_0"]),
+            k(&["*", "asin", "_0", "(-1)"])
+        );
+        // ... and it is NOT the RHS: no rule fires into the key, so the LHS survives as a
+        // pattern, exactly as it does at load.
+        assert_ne!(k(&["*", "(-1)", "asin", "_0"]), k(&["asin", "neg", "_0"]));
+        // The public conversion, on this asset, DOES land on the RHS -- the wrinkle this
+        // key exists to avoid (the rule fires; see the doc comment on `ac_canonical_key`).
+        assert_eq!(
+            e.ac_simplify_proj(
+                &t(&["*", "(-1)", "asin", "_0"]),
+                0,
+                RuleMode::Default,
+                super::AcForm::Explicit
+            )
+            .unwrap(),
+            t(&["asin", "neg", "_0"])
+        );
+    }
+
+    /// Wildcards are PATTERN VARIABLES, not values: the four sorts are distinct leaves and
+    /// distinct indices are distinct leaves. A key that confused them would merge rules of
+    /// different strength (`_` is pointwise-certified, `?` variable-leaf only).
+    #[test]
+    fn ac_canonical_key_separates_wildcard_sorts_and_indices() {
+        let Some(e) = engine() else { return };
+        let k = |toks: &[&str]| e.ac_canonical_key(&t(toks)).expect("parses");
+        let sorts = ["_0", "?0", "!0", "$0"];
+        for (i, a) in sorts.iter().enumerate() {
+            for b in &sorts[i + 1..] {
+                assert_ne!(k(&["sin", a]), k(&["sin", b]), "{a} vs {b}");
+            }
+        }
+        assert_ne!(k(&["+", "_0", "_0"]), k(&["+", "_0", "_1"]));
+        // ... while AC permutation of the SAME wildcards is one key.
+        assert_eq!(k(&["+", "_0", "_1"]), k(&["+", "_1", "_0"]));
+        assert_eq!(k(&["*", "_0", "sin", "_1"]), k(&["*", "sin", "_1", "_0"]));
+    }
+
+    /// The key is a KEY only if the tagged serialization is FAITHFUL on canonical states:
+    /// two distinct states sharing one key would merge two different rules. The
+    /// round-trip is asserted inside `ac_canonical_key` in debug builds; here is the
+    /// release-visible consequence -- the key is a fixpoint of itself.
+    #[test]
+    fn ac_canonical_key_is_idempotent() {
+        let Some(e) = engine() else { return };
+        for toks in [
+            vec!["*", "(-1)", "asin", "_0"],
+            vec!["+", "_0", "*", "_1", "_1"],
+            vec!["/", "sin", "_0", "cos", "_0"],
+            vec!["pow", "_0", "-2"],
+            vec!["-", "!0", "!0"],
+            vec!["*", "$0", "inv", "$0"],
+            vec!["log", "np.e"],
+            vec!["+", "<constant>", "*", "<constant>", "x0"],
+            vec!["/", "float(\"inf\")", "!0"],
+        ] {
+            let k1 = e.ac_canonical_key(&t(&toks)).expect("parses");
+            let k2 = e
+                .ac_canonical_key(&k1.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                .expect("key re-parses");
+            assert_eq!(k1, k2, "{toks:?}");
+        }
+    }
 
     fn engine() -> Option<Engine> {
         crate::test_engine()
@@ -975,6 +1490,264 @@ mod tests {
 
     fn t(s: &[&str]) -> Vec<String> {
         s.iter().map(|x| x.to_string()).collect()
+    }
+
+    // ---- ONE DISTINCT RULE SET PER MODE (owner ruling, 2026-08-19) --------------------
+    //
+    // Four PROBE RULES from the shipped artifact, each of which the canonical
+    // constructors CANNOT reach unaided -- verified by construction below
+    // (`constructor_cannot_reach_the_probes`). That property is what makes them
+    // witnesses: which FILE holds a rule is then observable in `ac_simplify` itself and
+    // not merely in a count. Rules the constructors already realize (`abs asinh exp _0`
+    // is one: `exp` is positive, so the `abs` folds) fire in every mode whatever the
+    // rule sets say, and would make every assertion here pass vacuously.
+    const P_ALL: (&[&str], &[&str]) = (&["*", "(-1)", "asin", "_0"], &["asin", "neg", "_0"]);
+    const P_DEFAULT: (&[&str], &[&str]) = (&["*", "(-1)", "asinh", "_0"], &["asinh", "neg", "_0"]);
+    const P_REAL: (&[&str], &[&str]) = (&["*", "(-1)", "atan", "_0"], &["atan", "neg", "_0"]);
+    const P_CORPUS: (&[&str], &[&str]) = (&["*", "(-1)", "tan", "_0"], &["tan", "neg", "_0"]);
+
+    /// The probe rule's LHS/RHS with `_0` instantiated at `x0`.
+    fn probe(r: (&[&str], &[&str])) -> (Vec<String>, Vec<String>) {
+        let sub = |xs: &[&str]| -> Vec<String> {
+            xs.iter()
+                .map(|x| if *x == "_0" { "x0" } else { *x }.to_string())
+                .collect()
+        };
+        (sub(r.0), sub(r.1))
+    }
+
+    fn rule(r: (&[&str], &[&str])) -> (Vec<String>, Vec<String>) {
+        (t(r.0), t(r.1))
+    }
+
+    fn simp_mode(e: &Engine, toks: &[String], mode: RuleMode) -> Vec<String> {
+        e.ac_simplify_proj(toks, 48, mode, super::AcForm::Explicit)
+            .expect("parses")
+    }
+
+    /// Does this mode FIRE the probe rule -- i.e. does its own set contain it?
+    fn fires(e: &Engine, r: (&[&str], &[&str]), mode: RuleMode) -> bool {
+        let (lhs, rhs) = probe(r);
+        simp_mode(e, &lhs, mode) == rhs
+    }
+
+    /// THE CONTROL for every assertion below: a rules-LESS engine reaches none of the
+    /// four probes, so a probe that fires did so because a RULE SET carried it. Without
+    /// this the per-mode tests would pass on an engine that ignores rule sets entirely.
+    #[test]
+    fn constructor_cannot_reach_the_probes() {
+        let Some(mut e) = engine() else { return };
+        e.set_rules(vec![]);
+        for r in [P_ALL, P_DEFAULT, P_REAL, P_CORPUS] {
+            let (lhs, _) = probe(r);
+            assert!(
+                !fires(&e, r, RuleMode::Default),
+                "constructor reaches {lhs:?}"
+            );
+            assert!(
+                !fires(&e, r, RuleMode::Corpus),
+                "constructor reaches {lhs:?}"
+            );
+        }
+    }
+
+    /// THE NO-OP PROPERTY, the most important one: an engine handed no per-mode set
+    /// serves the DEFAULT set in every mode, and `ac_rules_for` hands back the default
+    /// cell ITSELF rather than an identical second index. The counted equality is the
+    /// observable half; the pointer equality is the structural half that makes the
+    /// property hold by construction rather than by re-derivation.
+    #[test]
+    fn absent_mode_sets_are_the_default_set_itself() {
+        let Some(e) = engine() else { return };
+        assert_eq!(e.mode_rules_len(RuleMode::Real), None);
+        assert_eq!(e.mode_rules_len(RuleMode::Corpus), None);
+        assert_eq!(e.mode_rules_len(RuleMode::Default), Some(e.rules.raw.len()));
+        for mode in [RuleMode::Real, RuleMode::Corpus] {
+            assert_eq!(e.ac_rules_info_in_mode(mode), e.ac_rules_info());
+            assert!(std::ptr::eq(e.ac_rules_for(mode), e.ac_rules()));
+        }
+    }
+
+    /// EACH MODE SERVES EXACTLY THE SET IT NAMES, in every direction: a rule present in
+    /// one file only fires there and nowhere else, and a rule present in all three fires
+    /// in all three. This is the ruling's whole content, stated as behaviour.
+    #[test]
+    fn each_mode_serves_exactly_its_own_set() {
+        let Some(mut e) = engine() else { return };
+        e.set_rules(vec![rule(P_ALL), rule(P_DEFAULT)]);
+        e.set_mode_rules(RuleMode::Real, Some(vec![rule(P_ALL), rule(P_REAL)]));
+        e.set_mode_rules(
+            RuleMode::Corpus,
+            Some(vec![rule(P_ALL), rule(P_REAL), rule(P_CORPUS)]),
+        );
+        // WHAT IS LOADED IS WHAT IS SERVED: no rule is dropped or minted in between, so
+        // the served counts are the file lengths and the behaviour below is attributable.
+        assert_eq!(e.mode_rules_len(RuleMode::Default), Some(2));
+        assert_eq!(e.mode_rules_len(RuleMode::Real), Some(2));
+        assert_eq!(e.mode_rules_len(RuleMode::Corpus), Some(3));
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Default).0, 2);
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Real).0, 2);
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Corpus).0, 3);
+
+        let table = [
+            (P_ALL, [true, true, true]),
+            (P_DEFAULT, [true, false, false]),
+            (P_REAL, [false, true, true]),
+            (P_CORPUS, [false, false, true]),
+        ];
+        for (r, want) in table {
+            let got = [
+                fires(&e, r, RuleMode::Default),
+                fires(&e, r, RuleMode::Real),
+                fires(&e, r, RuleMode::Corpus),
+            ];
+            assert_eq!(got, want, "probe {:?} fired in the wrong modes", r.0);
+        }
+    }
+
+    /// AN EMPTY SET IS NOT AN ABSENT ONE. `Some(vec![])` says "this mode serves nothing"
+    /// and is honoured; `None` says "this mode names no set" and falls back to the
+    /// default one. Keying the fallback on emptiness would collapse the two -- and would
+    /// make an empty set unsayable, which is the same computed-instead-of-stated mistake
+    /// the triple exists to remove.
+    #[test]
+    fn an_empty_set_is_not_an_absent_one() {
+        let Some(mut e) = engine() else { return };
+        e.set_rules(vec![rule(P_DEFAULT)]);
+
+        e.set_mode_rules(RuleMode::Real, Some(vec![]));
+        assert_eq!(e.mode_rules_len(RuleMode::Real), Some(0));
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Real).0, 0);
+        assert!(!fires(&e, P_DEFAULT, RuleMode::Real));
+        assert!(!std::ptr::eq(e.ac_rules_for(RuleMode::Real), e.ac_rules()));
+
+        // ...and RETRACTION restores the fallback exactly, cell and all.
+        e.set_mode_rules(RuleMode::Real, None);
+        assert_eq!(e.mode_rules_len(RuleMode::Real), None);
+        assert!(fires(&e, P_DEFAULT, RuleMode::Real));
+        assert!(std::ptr::eq(e.ac_rules_for(RuleMode::Real), e.ac_rules()));
+    }
+
+    /// A mode's set faces the SAME LOAD GATES as the default one: a mode relaxes what a
+    /// rule may CLAIM about the deployed engine, never what the loader will admit.
+    /// `sin _0 -> log _0` changes a defined value at a constructed exceptional point and
+    /// the licence registry refuses it; `sin _0 -> tan _0` does not descend the reduction
+    /// ordering and translation drops it. Both are refused in a mode set exactly as in
+    /// the default one.
+    #[test]
+    fn mode_sets_face_the_same_load_gates() {
+        let Some(mut e) = engine() else { return };
+        e.set_rules(vec![]);
+        e.set_mode_rules(
+            RuleMode::Corpus,
+            Some(vec![
+                (t(&["sin", "_0"]), t(&["log", "_0"])),
+                (t(&["sin", "_0"]), t(&["tan", "_0"])),
+            ]),
+        );
+        assert_eq!(e.mode_rules_len(RuleMode::Corpus), Some(2));
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Corpus).0, 0);
+        assert_eq!(
+            simp_mode(&e, &t(&["sin", "x0"]), RuleMode::Corpus),
+            t(&["sin", "x0"])
+        );
+    }
+
+    /// THE CELLS ARE INDEPENDENTLY LAZY: a consumer of one mode never pays to index
+    /// another's. Read straight off the `OnceLock`s (private fields, visible to this
+    /// child module) -- a timing proxy could not distinguish "not built" from "built
+    /// quickly".
+    #[test]
+    fn no_mode_pays_for_another_modes_index() {
+        let Some(mut e) = engine() else { return };
+        e.set_mode_rules(RuleMode::Real, Some(vec![rule(P_REAL)]));
+        e.set_mode_rules(RuleMode::Corpus, Some(vec![rule(P_CORPUS)]));
+        assert!(e.ac_rules_cell.get().is_none());
+        assert!(e.ac_real_rules_cell.get().is_none());
+        assert!(e.ac_corpus_rules_cell.get().is_none());
+
+        // A DEFAULT call builds the default index and only that one.
+        let (lhs, _) = probe(P_REAL);
+        simp_mode(&e, &lhs, RuleMode::Default);
+        assert!(e.ac_rules_cell.get().is_some());
+        assert!(e.ac_real_rules_cell.get().is_none());
+        assert!(e.ac_corpus_rules_cell.get().is_none());
+
+        // The mirror image on a fresh engine: a REAL call builds `real`'s index alone.
+        let Some(mut f) = engine() else { return };
+        f.set_mode_rules(RuleMode::Real, Some(vec![rule(P_REAL)]));
+        f.set_mode_rules(RuleMode::Corpus, Some(vec![rule(P_CORPUS)]));
+        simp_mode(&f, &lhs, RuleMode::Real);
+        assert!(f.ac_real_rules_cell.get().is_some());
+        assert!(f.ac_rules_cell.get().is_none());
+        assert!(f.ac_corpus_rules_cell.get().is_none());
+    }
+
+    /// Replacing the DEFAULT set must move a mode that has NO SET OF ITS OWN: such a mode
+    /// serves the default set, so its answer changed even though its file did not. A
+    /// retained cell would leave it serving rules the engine no longer holds.
+    #[test]
+    fn a_default_push_moves_every_mode_that_has_no_set() {
+        let Some(mut e) = engine() else { return };
+        e.set_rules(vec![rule(P_DEFAULT)]);
+        assert!(fires(&e, P_DEFAULT, RuleMode::Real));
+        assert!(fires(&e, P_DEFAULT, RuleMode::Corpus));
+        e.set_rules(vec![rule(P_REAL)]);
+        assert!(!fires(&e, P_DEFAULT, RuleMode::Real));
+        assert!(!fires(&e, P_DEFAULT, RuleMode::Corpus));
+        assert!(fires(&e, P_REAL, RuleMode::Real));
+        assert!(fires(&e, P_REAL, RuleMode::Corpus));
+    }
+
+    /// Installing one mode's set can never move ANOTHER mode's answer -- the sets are
+    /// distinct files, not layers over a shared base.
+    #[test]
+    fn installing_one_modes_set_moves_no_other_mode() {
+        let Some(mut e) = engine() else { return };
+        e.set_rules(vec![rule(P_DEFAULT)]);
+        let (lhs, _) = probe(P_DEFAULT);
+        let before = simp_mode(&e, &lhs, RuleMode::Default);
+        e.set_mode_rules(RuleMode::Corpus, Some(vec![rule(P_CORPUS)]));
+        assert_eq!(simp_mode(&e, &lhs, RuleMode::Default), before);
+        assert!(fires(&e, P_DEFAULT, RuleMode::Real));
+    }
+
+    /// `wildcard_all` is a FUNCTION of the mode, and today's two-valued `simplipy.Mode`
+    /// maps onto exactly two of the three rungs. Pinned so the coming `Mode` rename has
+    /// to change this line deliberately rather than by accident.
+    #[test]
+    fn the_mode_map_is_what_ships_today() {
+        assert_eq!(RuleMode::from_wildcard_all(false), RuleMode::Default);
+        assert_eq!(RuleMode::from_wildcard_all(true), RuleMode::Corpus);
+        assert!(!RuleMode::Default.wildcard_all());
+        assert!(!RuleMode::Real.wildcard_all());
+        assert!(RuleMode::Corpus.wildcard_all());
+        assert_eq!(RuleMode::parse("default"), Some(RuleMode::Default));
+        assert_eq!(RuleMode::parse("real"), Some(RuleMode::Real));
+        assert_eq!(RuleMode::parse("corpus"), Some(RuleMode::Corpus));
+        assert_eq!(RuleMode::parse("lossy"), None);
+    }
+
+    /// PER-MODE PROVENANCE: `ac_served_rules_in_mode` reports `source` as a position in
+    /// THAT MODE'S OWN file, so a verdict against a served rule is actionable in the file
+    /// it came from. Under an overlay design this index would need offset arithmetic
+    /// between tiers -- the shape that let eight load-minted twins go unjudged.
+    #[test]
+    fn served_provenance_indexes_the_modes_own_file() {
+        let Some(mut e) = engine() else { return };
+        e.set_rules(vec![rule(P_DEFAULT)]);
+        e.set_mode_rules(
+            RuleMode::Corpus,
+            Some(vec![rule(P_ALL), rule(P_REAL), rule(P_CORPUS)]),
+        );
+        let served = e.ac_served_rules_in_mode(RuleMode::Corpus);
+        assert_eq!(served.len(), 3);
+        let srcs: Vec<usize> = served.iter().map(|(_, _, s)| *s).collect();
+        assert_eq!(srcs, vec![0, 1, 2]);
+        // ...and the DEFAULT mode's provenance still indexes ITS file, unshifted.
+        let d = e.ac_served_rules_in_mode(RuleMode::Default);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].2, 0);
     }
 
     /// C1.11: the per-Engine certificate cache's no-overlay-ids invariant lives in
@@ -1034,7 +1807,7 @@ mod tests {
     fn h051_num_exponents_classify_exactly() {
         let Some(e) = engine() else { return };
         let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, false, super::AcForm::Explicit)
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
                 .unwrap()
         };
         let odd = "10000000000000000001"; // 10^19 + 1: Num, not f64-representable
@@ -1073,7 +1846,7 @@ mod tests {
             odd,
             "-0.9999999999999999",
         ];
-        let kept = e.ac_simplify(&t(&chain), 48, false).unwrap();
+        let kept = e.ac_simplify(&t(&chain), 48, RuleMode::Default).unwrap();
         assert_eq!(
             kept,
             // H-059 (2026-08-07): the coefficient now takes the DIVISOR side, per the
@@ -1092,7 +1865,7 @@ mod tests {
                 "</mul>"
             ])
         );
-        assert_eq!(e.ac_simplify(&kept, 48, false).unwrap(), kept);
+        assert_eq!(e.ac_simplify(&kept, 48, RuleMode::Default).unwrap(), kept);
     }
 
     /// H-045-R (owner Option B, 2026-08-05): `pow` with a negative ground base and a
@@ -1107,7 +1880,7 @@ mod tests {
     fn h045_beyond_i128_integer_exponents_classify_exactly() {
         let Some(e) = engine() else { return };
         let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, false, super::AcForm::Explicit)
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
                 .unwrap()
         };
         let odd_huge = "10000000000000000000000000000000000000001"; // 10^40 + 1
@@ -1168,8 +1941,8 @@ mod tests {
         };
         let t1: Vec<String> = "<add> <sub> <mul> 0 <div> <add> x3 <sub> pow <add> x3 asinh x3 </add> 0.25 </add> </mul> <mul> x3 atanh x3 </mul> </add>"
             .split_whitespace().map(str::to_string).collect();
-        let t2 = e.ac_simplify(&t1, 48, false).unwrap();
-        let t3 = e.ac_simplify(&t2, 48, false).unwrap();
+        let t2 = e.ac_simplify(&t1, 48, RuleMode::Default).unwrap();
+        let t3 = e.ac_simplify(&t2, 48, RuleMode::Default).unwrap();
         assert_eq!(t2, t3, "kept-zero sign spelling must be unique");
         // The sign-free zero term displays in the POSITIVE section: `<add> <mul> 0 ...`.
         assert_eq!(&t2[..2], &["<add>".to_string(), "<mul>".to_string()]);
@@ -1195,15 +1968,15 @@ mod tests {
         // release-observable contract is idempotence plus the licensed collapse of the
         // finite part (0*x0 drops, the unlicensed 0*log(x1) survives).
         let t1 = t(&["+", "x2", "*", "0", "+", "x0", "log", "x1"]);
-        let s1 = e.ac_simplify(&t1, 48, false).unwrap();
-        let s2 = e.ac_simplify(&s1, 48, false).unwrap();
+        let s1 = e.ac_simplify(&t1, 48, RuleMode::Default).unwrap();
+        let s2 = e.ac_simplify(&s1, 48, RuleMode::Default).unwrap();
         assert_eq!(s1, s2, "kept-zero distribution must be idempotent");
         assert_eq!(
             s1,
             t(&["<add>", "x2", "<mul>", "0", "log", "x1", "</mul>", "</add>"])
         );
         // LOSSY mode: every factor is licence-blanketed, the zero collapses outright.
-        let l1 = e.ac_simplify(&t1, 48, true).unwrap();
+        let l1 = e.ac_simplify(&t1, 48, RuleMode::Corpus).unwrap();
         assert_eq!(l1, t(&["x2"]));
     }
 
@@ -1227,9 +2000,9 @@ mod tests {
                 .split_whitespace()
                 .map(str::to_string)
                 .collect();
-        let out = e.ac_simplify(&toks, 48, false).unwrap();
+        let out = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
         // Terminates, is idempotent, and keeps the cert-refused acosh-acosh pair.
-        assert_eq!(e.ac_simplify(&out, 48, false).unwrap(), out);
+        assert_eq!(e.ac_simplify(&out, 48, RuleMode::Default).unwrap(), out);
         assert_eq!(out.iter().filter(|t| *t == "acosh").count(), 2);
     }
 
@@ -1328,7 +2101,7 @@ mod tests {
         }
         let full: Vec<&str> = SPECS.iter().map(|(n, _)| *n).collect();
         let referee = build(&full);
-        let state = |toks: &[String]| referee.ac_simplify(toks, 48, false).unwrap();
+        let state = |toks: &[String]| referee.ac_simplify(toks, 48, RuleMode::Default).unwrap();
         let mut batteries: Vec<Vec<&str>> = ["neg", "inv", "-", "/", "+", "*"]
             .iter()
             .map(|drop| full.iter().copied().filter(|n| n != drop).collect())
@@ -1346,9 +2119,9 @@ mod tests {
             universe(&arities, 3, &mut uni);
             for src in &uni {
                 let want = state(src);
-                let tagged = e.ac_simplify(src, 48, false).unwrap();
+                let tagged = e.ac_simplify(src, 48, RuleMode::Default).unwrap();
                 let explicit = e
-                    .ac_simplify_proj(src, 48, false, super::AcForm::Explicit)
+                    .ac_simplify_proj(src, 48, RuleMode::Default, super::AcForm::Explicit)
                     .unwrap();
                 for out in [&tagged, &explicit] {
                     assert!(
@@ -1356,7 +2129,7 @@ mod tests {
                         "cfg {ops:?}: {src:?} -> {out:?} does not re-parse"
                     );
                     assert_eq!(
-                        &e.ac_simplify(out, 48, false).unwrap(),
+                        &e.ac_simplify(out, 48, RuleMode::Default).unwrap(),
                         &tagged,
                         "cfg {ops:?}: {src:?} -> {out:?} is not a fixpoint spelling"
                     );
@@ -1403,7 +2176,7 @@ mod tests {
         let e = Engine::from_strs(cfg, rules).expect("engine builds");
         let t = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_string).collect() };
         let ex = |toks: &[String]| {
-            e.ac_simplify_proj(toks, 48, false, super::AcForm::Explicit)
+            e.ac_simplify_proj(toks, 48, RuleMode::Default, super::AcForm::Explicit)
                 .unwrap()
         };
         // The rule's own orientation fires (sanity).
@@ -1432,7 +2205,7 @@ mod tests {
     /// and an artifact mined by an OLDER engine carries exactly the rules the constructors
     /// have since absorbed. (The dev-era claim -- "exact arithmetic subsumes the
     /// coefficient-rule family" -- retired with the dev_7-3 asset; the census numbers are
-    /// pinned in `remine/gate_acj.py` REFS, this in-crate twin pins the PROPERTY.)
+    /// pinned in the artifact gate REFS, this in-crate twin pins the PROPERTY.)
     ///
     /// The fixture is the PUBLISHED asset in `~/.cache/simplipy`, and since the 2026-08-08
     /// HF republish the pair is MATCHED again (asset mined 2026-08-08: 6661 rules), so both
@@ -1460,7 +2233,7 @@ mod tests {
              republish, do not re-pin"
         );
         // G2 REPUBLISH (2026-08-15): the full-lane re-mine ships (6,594 rules, x3
-        // byte-identical on solomon, D20's row-by-row accounting) and the pin returns
+        // byte-identical on the reference mint host, D20's row-by-row accounting) and the pin returns
         // to its PRISTINE form after the B5+B19 interim (6649/30/0, discharged). If
         // either count moves off 0 again, the published asset lags the engine:
         // REPUBLISH, do not re-pin.
@@ -1494,10 +2267,10 @@ mod tests {
         // ORDER: `* tan(A) cos(A) -> sin(A)` fired in the old engine while `* cos(A) tan(A)`
         // did not. Both spellings must now give the same (and simplified) answer.
         let a = e
-            .ac_simplify(&t(&["*", "tan", "x0", "cos", "x0"]), 48, false)
+            .ac_simplify(&t(&["*", "tan", "x0", "cos", "x0"]), 48, RuleMode::Default)
             .unwrap();
         let b = e
-            .ac_simplify(&t(&["*", "cos", "x0", "tan", "x0"]), 48, false)
+            .ac_simplify(&t(&["*", "cos", "x0", "tan", "x0"]), 48, RuleMode::Default)
             .unwrap();
         assert_eq!(a, b, "order invariance");
         assert_eq!(a, t(&["sin", "x0"]), "the rule fires through the bag");
@@ -1505,7 +2278,11 @@ mod tests {
         // x3 spellings were never adjacent. The bag collects them by construction. The native
         // output is the strict tagged form.
         let out = e
-            .ac_simplify(&t(&["+", "x3", "+", "x8", "/", "x3", "5"]), 48, false)
+            .ac_simplify(
+                &t(&["+", "x3", "+", "x8", "/", "x3", "5"]),
+                48,
+                RuleMode::Default,
+            )
             .unwrap();
         assert_eq!(
             out,
@@ -1528,7 +2305,7 @@ mod tests {
             ],
         ];
         for c in cases {
-            let out = e.ac_simplify(&t(c), 48, false).unwrap();
+            let out = e.ac_simplify(&t(c), 48, RuleMode::Default).unwrap();
             for tok in &out {
                 let hyper = tok.starts_with("mult")
                     || tok.starts_with("div")
@@ -1537,7 +2314,7 @@ mod tests {
             }
             // Tagged validity = the shared parser round-trips it (is_valid only knows the
             // old grammar).
-            let again = e.ac_simplify(&out, 48, false).unwrap();
+            let again = e.ac_simplify(&out, 48, RuleMode::Default).unwrap();
             assert_eq!(again, out, "tagged output fails round-trip for {c:?}");
         }
         // 7x arrives as an explicit literal coefficient in a tagged bag.
@@ -1547,7 +2324,7 @@ mod tests {
                     "+", "x0", "+", "x0", "+", "x0", "+", "x0", "+", "x0", "+", "x0", "x0",
                 ]),
                 48,
-                false,
+                RuleMode::Default,
             )
             .unwrap();
         assert_eq!(out, t(&["<mul>", "7", "x0", "</mul>"]));
@@ -1561,7 +2338,7 @@ mod tests {
         let e = crate::legacy_sugar_engine();
         let expr = t(&["+", "x3", "+", "x8", "div5", "x3"]);
         assert_eq!(
-            e.ac_simplify_proj(&expr, 48, false, super::AcForm::Tagged)
+            e.ac_simplify_proj(&expr, 48, RuleMode::Default, super::AcForm::Tagged)
                 .unwrap(),
             t(&["<add>", "<mul>", "6", "x3", "<div>", "5", "</mul>", "x8", "</add>"])
         );
@@ -1570,31 +2347,34 @@ mod tests {
         // denominator wins as a decimal -- §10.10(1), owner-ratified 2026-08-07. Two
         // dialects, one value; mu is spelling-independent.
         assert_eq!(
-            e.ac_simplify_proj(&expr, 48, false, super::AcForm::Explicit)
+            e.ac_simplify_proj(&expr, 48, RuleMode::Default, super::AcForm::Explicit)
                 .unwrap(),
             t(&["+", "*", "1.2", "x3", "x8"])
         );
         // ...and the user-facing infix agrees with the explicit dialect: `1.2` is the
         // argmin token for 6/5, so the reader gets `1.2*x3` rather than `6*x3/5`.
         assert_eq!(
-            e.ac_simplify_infix(&expr, 48, false).unwrap(),
+            e.ac_simplify_infix(&expr, 48, RuleMode::Default).unwrap(),
             "1.2*x3 + x8"
         );
         // The inverse SECTIONS: subtraction and division spell as `<sub>`/`<div>` sections
         // of their bags; fractions are single tokens.
         assert_eq!(
-            e.ac_simplify(&t(&["-", "x0", "x1"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["-", "x0", "x1"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["<add>", "x0", "<sub>", "x1", "</add>"])
         );
         assert_eq!(
-            e.ac_simplify(&t(&["/", "x0", "x1"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["/", "x0", "x1"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["<mul>", "x0", "<div>", "x1", "</mul>"])
         );
         // Divisor-side spelling (2026-08-01, design §8): x0/3 spells through the
         // `<div>` section, not as the `1/3` coefficient token (integer reciprocal is
         // the strictly shorter exact spelling; ties like 22/7 stay coefficient-side).
         assert_eq!(
-            e.ac_simplify(&t(&["div3", "x0"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["div3", "x0"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["<mul>", "x0", "<div>", "3", "</mul>"])
         );
         // (2*x1)/(x2*x3): one bag, numerator and denominator sections.
@@ -1602,7 +2382,7 @@ mod tests {
             e.ac_simplify(
                 &t(&["/", "*", "mult2", "x1", "1", "*", "x2", "x3"]),
                 48,
-                false
+                RuleMode::Default
             )
             .unwrap(),
             t(&["<mul>", "2", "x1", "<div>", "x2", "x3", "</mul>"])
@@ -1610,11 +2390,13 @@ mod tests {
         // Standalone unary spellings: `neg` in a function argument, `inv` for a lone
         // reciprocal; both parse back (liberal input).
         assert_eq!(
-            e.ac_simplify(&t(&["tan", "neg", "x0"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["tan", "neg", "x0"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["tan", "neg", "x0"])
         );
         assert_eq!(
-            e.ac_simplify(&t(&["inv", "x0"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["inv", "x0"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["inv", "x0"])
         );
         // In-bag `neg` on input maps to the section spelling on output.
@@ -1623,18 +2405,18 @@ mod tests {
             e.ac_simplify(
                 &t(&["<add>", "x2", "2.3", "neg", "x1", "</add>"]),
                 48,
-                false
+                RuleMode::Default
             )
             .unwrap(),
             t(&["<add>", "x2", "2.3", "<sub>", "x1", "</add>"])
         );
         assert_eq!(
-            e.ac_simplify_infix(&t(&["div3", "neg", "x0"]), 48, false)
+            e.ac_simplify_infix(&t(&["div3", "neg", "x0"]), 48, RuleMode::Default)
                 .unwrap(),
             "-x0/3"
         );
         assert_eq!(
-            e.ac_simplify_infix(&t(&["/", "x0", "x1"]), 48, false)
+            e.ac_simplify_infix(&t(&["/", "x0", "x1"]), 48, RuleMode::Default)
                 .unwrap(),
             "x0/x1"
         );
@@ -1643,8 +2425,14 @@ mod tests {
         // now divisor-side (2026-08-01, design §8) -- and that emission is the fixpoint.
         let old_spelling = t(&["<mul>", "1/3", "x0", "</mul>"]);
         let tagged = t(&["<mul>", "x0", "<div>", "3", "</mul>"]);
-        assert_eq!(e.ac_simplify(&old_spelling, 48, false).unwrap(), tagged);
-        assert_eq!(e.ac_simplify(&tagged, 48, false).unwrap(), tagged);
+        assert_eq!(
+            e.ac_simplify(&old_spelling, 48, RuleMode::Default).unwrap(),
+            tagged
+        );
+        assert_eq!(
+            e.ac_simplify(&tagged, 48, RuleMode::Default).unwrap(),
+            tagged
+        );
     }
 
     /// The general signed root: pow1_3/pow1_5 desugar into `rootn` (input compat only --
@@ -1657,12 +2445,19 @@ mod tests {
         // legacy fixture); every projection emits rootn natively.
         let sugar = crate::legacy_sugar_engine();
         assert_eq!(
-            sugar.ac_simplify(&t(&["pow1_3", "x0"]), 48, false).unwrap(),
+            sugar
+                .ac_simplify(&t(&["pow1_3", "x0"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["rootn", "x0", "3"])
         );
         assert_eq!(
             sugar
-                .ac_simplify_proj(&t(&["pow1_3", "x0"]), 48, false, super::AcForm::Explicit)
+                .ac_simplify_proj(
+                    &t(&["pow1_3", "x0"]),
+                    48,
+                    RuleMode::Default,
+                    super::AcForm::Explicit
+                )
                 .unwrap(),
             t(&["rootn", "x0", "3"])
         );
@@ -1670,7 +2465,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(&["rootn", "x0", "5"]),
                 48,
-                false,
+                RuleMode::Default,
                 super::AcForm::Explicit
             )
             .unwrap(),
@@ -1679,18 +2474,20 @@ mod tests {
         // Normalizations: even index == principal power; index 1 == identity; negative
         // index inverts (rendered as the division of the odd root).
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "2"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["rootn", "x0", "2"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["rootn", "x0", "2"])
         );
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "1"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["rootn", "x0", "1"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["x0"])
         );
         assert_eq!(
             e.ac_simplify_proj(
                 &t(&["rootn", "x0", "-3"]),
                 48,
-                false,
+                RuleMode::Default,
                 super::AcForm::Explicit
             )
             .unwrap(),
@@ -1702,7 +2499,7 @@ mod tests {
         // (`cos 0 -> 1`) must normalize in the SAME call -- this was the idempotence
         // break (simplify twice used to differ from simplify once).
         let once = e
-            .ac_simplify(&t(&["rootn", "x0", "cos", "0"]), 48, false)
+            .ac_simplify(&t(&["rootn", "x0", "cos", "0"]), 48, RuleMode::Default)
             .unwrap();
         assert_eq!(
             once,
@@ -1710,16 +2507,17 @@ mod tests {
             "index fold + unit normalization in ONE call"
         );
         let abs_case = e
-            .ac_simplify(&t(&["rootn", "x1", "abs", "(-2)"]), 48, false)
+            .ac_simplify(&t(&["rootn", "x1", "abs", "(-2)"]), 48, RuleMode::Default)
             .unwrap();
         assert_eq!(abs_case, t(&["rootn", "x1", "2"]));
         // Invalid indices are NaN everywhere (IEEE): zero and provably-non-integer.
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "0"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["rootn", "x0", "0"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["float(\"nan\")"])
         );
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "0.5"]), 48, false)
+            e.ac_simplify(&t(&["rootn", "x0", "0.5"]), 48, RuleMode::Default)
                 .unwrap(),
             t(&["float(\"nan\")"])
         );
@@ -1729,24 +2527,27 @@ mod tests {
         // the fold refuses and the pow spelling stands ("simplify is lossless";
         // pre-mu this pin read `2.8284271247461903`).
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "8", "2"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["rootn", "8", "2"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["rootn", "8", "2"])
         );
         // Arbitrary odd roots exist now (no legacy spelling; tagged carries them).
         assert_eq!(
-            e.ac_simplify(&t(&["rootn", "x0", "7"]), 48, false).unwrap(),
+            e.ac_simplify(&t(&["rootn", "x0", "7"]), 48, RuleMode::Default)
+                .unwrap(),
             t(&["rootn", "x0", "7"])
         );
         // Complexity parity with the principal power: rootn(x,3) and pow(x, 1/2) both
-        // price as Pow with a cheap rational exponent -- mu (stage 2): 8 + 8 +
-        // cost(1/3 or 1/2) = 2, so 18 each. Parity preserved, at the mu scale.
+        // price as Pow with a cheap rational exponent -- mu' (D38): 8 + 8 + the index
+        // literal (selector + 2-bit floor = 3), so 19 each. Parity preserved, at the
+        // mu' scale.
         // (The pow1_3 spelling needs the sugar-declaring fixture table to parse.)
-        assert_eq!(sugar.ac_complexity(&t(&["pow1_3", "x0"])), Some(18_000));
-        assert_eq!(e.ac_complexity(&t(&["rootn", "x0", "2"])), Some(18_000));
+        assert_eq!(sugar.ac_complexity(&t(&["pow1_3", "x0"])), Some(19_000));
+        assert_eq!(e.ac_complexity(&t(&["rootn", "x0", "2"])), Some(19_000));
         // The pretty infix is function-call style (x^(1/3) would claim the WRONG function).
         assert_eq!(
             sugar
-                .ac_simplify_infix(&t(&["pow1_3", "x0"]), 48, false)
+                .ac_simplify_infix(&t(&["pow1_3", "x0"]), 48, RuleMode::Default)
                 .unwrap(),
             "rootn(x0, 3)"
         );
@@ -1775,8 +2576,8 @@ mod tests {
         ];
         for s in specimens {
             let toks: Vec<String> = s.iter().map(|t| t.to_string()).collect();
-            let once = e.ac_simplify(&toks, 48, false).unwrap();
-            let twice = e.ac_simplify(&once, 48, false).unwrap();
+            let once = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Default).unwrap();
             assert_eq!(
                 twice, once,
                 "not idempotent through serialization: {toks:?}"
@@ -1958,21 +2759,21 @@ mod tests {
         for (input, fixpoint) in cases {
             let toks: Vec<String> = input.iter().map(|s| s.to_string()).collect();
             let want: Vec<String> = fixpoint.iter().map(|s| s.to_string()).collect();
-            let once = e.ac_simplify(&toks, 48, false).unwrap();
+            let once = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
             assert_eq!(
                 once, want,
                 "pass-1 must ship the mul()-conformant orientation: {toks:?}"
             );
-            let twice = e.ac_simplify(&once, 48, false).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Default).unwrap();
             assert_eq!(
                 twice, once,
                 "not idempotent through serialization: {toks:?}"
             );
             let exp = e
-                .ac_simplify_proj(&toks, 48, false, super::AcForm::Explicit)
+                .ac_simplify_proj(&toks, 48, RuleMode::Default, super::AcForm::Explicit)
                 .unwrap();
             let exp2 = e
-                .ac_simplify_proj(&exp, 48, false, super::AcForm::Explicit)
+                .ac_simplify_proj(&exp, 48, RuleMode::Default, super::AcForm::Explicit)
                 .unwrap();
             assert_eq!(exp2, exp, "P7-explicit round-trip unstable: {toks:?}");
         }
@@ -2000,8 +2801,8 @@ mod tests {
             "asinh",
             "x0",
         ]);
-        let sound = e.ac_simplify(&row1414, 48, false).unwrap();
-        let lossy = e.ac_simplify(&row1414, 48, true).unwrap();
+        let sound = e.ac_simplify(&row1414, 48, RuleMode::Default).unwrap();
+        let lossy = e.ac_simplify(&row1414, 48, RuleMode::Corpus).unwrap();
         assert_eq!(
             lossy, sound,
             "joined output must equal sound's refusal form"
@@ -2010,14 +2811,14 @@ mod tests {
 
         let partner = t(&["*", "acos", "x0", "inv", "*", "acos", "x0", "atan", "x1"]);
         assert_eq!(
-            e.ac_simplify(&partner, 48, true).unwrap(),
+            e.ac_simplify(&partner, 48, RuleMode::Corpus).unwrap(),
             t(&["inv", "atan", "x1"]),
             "partner cancellation must survive the projection"
         );
 
         let certified = t(&["inv", "*", "acos", "x0", "atan", "x1"]);
-        let cs = e.ac_simplify(&certified, 48, false).unwrap();
-        let cl = e.ac_simplify(&certified, 48, true).unwrap();
+        let cs = e.ac_simplify(&certified, 48, RuleMode::Default).unwrap();
+        let cl = e.ac_simplify(&certified, 48, RuleMode::Corpus).unwrap();
         assert_eq!(cl, cs, "certified pair: both modes stay distributed");
         assert!(cs.contains(&"<div>".to_string()));
 
@@ -2036,15 +2837,15 @@ mod tests {
             "atan",
             "x0",
         ]);
-        let il = e.ac_simplify(&infbag, 48, true).unwrap();
+        let il = e.ac_simplify(&infbag, 48, RuleMode::Corpus).unwrap();
         assert!(
             !il.starts_with(&["inv".to_string(), "<mul>".to_string()]),
             "literal-inf member must not be joined: {il:?}"
         );
 
         for toks in [&row1414, &partner, &certified, &infbag] {
-            let once = e.ac_simplify(toks, 48, true).unwrap();
-            let twice = e.ac_simplify(&once, 48, true).unwrap();
+            let once = e.ac_simplify(toks, 48, RuleMode::Corpus).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Corpus).unwrap();
             assert_eq!(
                 twice, once,
                 "lossy not idempotent through projection: {toks:?}"
@@ -2088,13 +2889,13 @@ mod tests {
         // positive-coefficient completion class stays live and stable
         let positive = t(&["*", "0.5", "inv", "*", "x4", "-", "x3", "np.pi"]);
         for toks in [&minimal, &row115616, &positive] {
-            let once = e.ac_simplify(toks, 48, true).unwrap();
-            let twice = e.ac_simplify(&once, 48, true).unwrap();
+            let once = e.ac_simplify(toks, 48, RuleMode::Corpus).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Corpus).unwrap();
             assert_eq!(twice, once, "lossy not idempotent: {toks:?}");
         }
         // Const-bearing class: the sign stays SPELLED (the H-020 fold inside the
         // completion would consume it -- absorbing it there was the defect).
-        let l = e.ac_simplify(&minimal, 48, true).unwrap();
+        let l = e.ac_simplify(&minimal, 48, RuleMode::Corpus).unwrap();
         assert!(
             l.contains(&"-1".to_string()) || l.contains(&"<sub>".to_string()),
             "the sign must survive the projection: {l:?}"
@@ -2103,13 +2904,13 @@ mod tests {
         // joined base, so the negative completion is re-derivable and fires --
         // lossy reaches sound's `inv(-1 * pi * rootn(3, x1))` refusal form exactly.
         let nonconst = t(&["inv", "*", "neg", "np.pi", "rootn", "3", "x1"]);
-        let ns = e.ac_simplify(&nonconst, 48, false).unwrap();
-        let nl = e.ac_simplify(&nonconst, 48, true).unwrap();
+        let ns = e.ac_simplify(&nonconst, 48, RuleMode::Default).unwrap();
+        let nl = e.ac_simplify(&nonconst, 48, RuleMode::Corpus).unwrap();
         assert_eq!(
             nl, ns,
             "re-derivable negative completion must join to sound's form"
         );
-        let nl2 = e.ac_simplify(&nl, 48, true).unwrap();
+        let nl2 = e.ac_simplify(&nl, 48, RuleMode::Corpus).unwrap();
         assert_eq!(nl2, nl, "and stay idempotent: {nonconst:?}");
     }
 
@@ -2141,19 +2942,22 @@ mod tests {
             "neg",
             "x2",
         ]);
-        let s = e.ac_simplify(&sentinel, 48, false).unwrap();
-        let l = e.ac_simplify(&sentinel, 48, true).unwrap();
+        let s = e.ac_simplify(&sentinel, 48, RuleMode::Default).unwrap();
+        let l = e.ac_simplify(&sentinel, 48, RuleMode::Corpus).unwrap();
         assert_eq!(l, s, "expired sentinel must reach the sound endpoint");
         assert_eq!(l, t(&["sin", "cos", "x2"]));
         // The mask doctrine survives: a PARTNERED sentinel cancels in phase 1.
         let mask = t(&["*", "/", "float(\"inf\")", "float(\"inf\")", "x0"]);
-        assert_eq!(e.ac_simplify(&mask, 48, true).unwrap(), t(&["x0"]));
+        assert_eq!(
+            e.ac_simplify(&mask, 48, RuleMode::Corpus).unwrap(),
+            t(&["x0"])
+        );
         // Coefficient completion: the rational coefficient rides inside the joined
         // base, reciprocated -- the outer Mul unwraps.
         let coeff = t(&[
             "*", "0.5", "inv", "*", "x4", "+", "x3", "+", "tan", "x0", "/", "1", "3",
         ]);
-        let lc = e.ac_simplify(&coeff, 48, true).unwrap();
+        let lc = e.ac_simplify(&coeff, 48, RuleMode::Corpus).unwrap();
         // RE-PINNED 2026-08-11 (E2, audit F81): the tan-bearing sum now passes the
         // zero-set licence (denominator clearing: N = (x3 + 1/3)*cos(x0) + sin(x0),
         // witnessed nonzero), so the kept carrier DISTRIBUTES and renders in the
@@ -2171,8 +2975,8 @@ mod tests {
             "coefficient must reciprocate into the joined (now distributed) base"
         );
         for toks in [&sentinel, &mask, &coeff] {
-            let once = e.ac_simplify(toks, 48, true).unwrap();
-            let twice = e.ac_simplify(&once, 48, true).unwrap();
+            let once = e.ac_simplify(toks, 48, RuleMode::Corpus).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Corpus).unwrap();
             assert_eq!(twice, once, "lossy not idempotent: {toks:?}");
         }
     }
@@ -2193,7 +2997,7 @@ mod tests {
             .ac_simplify_proj(
                 &t(&["rootn", "/", "x0", "-3", "-1"]),
                 48,
-                false,
+                RuleMode::Default,
                 crate::engine::AcForm::Explicit,
             )
             .unwrap();
@@ -2203,7 +3007,12 @@ mod tests {
             "must refuse the distribution"
         );
         let again = e
-            .ac_simplify_proj(&kept, 48, false, crate::engine::AcForm::Explicit)
+            .ac_simplify_proj(
+                &kept,
+                48,
+                RuleMode::Default,
+                crate::engine::AcForm::Explicit,
+            )
             .unwrap();
         assert_eq!(again, kept, "the kept carrier is a fixpoint");
         // Positive coefficient: the atom agrees (+inf both ways) -- still licensed.
@@ -2211,7 +3020,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(&["rootn", "/", "x0", "3", "-1"]),
                 48,
-                false,
+                RuleMode::Default,
                 crate::engine::AcForm::Explicit
             )
             .unwrap(),
@@ -2223,7 +3032,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(&["inv", "*", "-2", "-", "x1", "5"]),
                 48,
-                false,
+                RuleMode::Default,
                 crate::engine::AcForm::Explicit
             )
             .unwrap(),
@@ -2235,7 +3044,7 @@ mod tests {
             e.ac_simplify_proj(
                 &t(&["inv", "*", "-3", "exp", "x1"]),
                 48,
-                false,
+                RuleMode::Default,
                 crate::engine::AcForm::Explicit
             )
             .unwrap(),
@@ -2261,7 +3070,7 @@ mod tests {
             "-1",
         ]);
         let out = e
-            .ac_simplify_proj(&row, 48, false, crate::engine::AcForm::Explicit)
+            .ac_simplify_proj(&row, 48, RuleMode::Default, crate::engine::AcForm::Explicit)
             .unwrap();
         assert_eq!(
             out,
@@ -2336,7 +3145,7 @@ mod tests {
         ];
         for (src, want) in cases {
             let toks: Vec<String> = src.iter().map(|s| s.to_string()).collect();
-            let out = e.ac_simplify(&toks, 48, false).unwrap();
+            let out = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
             let want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
             assert_eq!(out, want, "healed fold regressed: {src:?}");
         }
@@ -2352,7 +3161,7 @@ mod tests {
             vec!["cosh", "tan", "acos", "0"],
         ] {
             let toks: Vec<String> = src.iter().map(|s| s.to_string()).collect();
-            let out = e.ac_simplify(&toks, 48, false).unwrap();
+            let out = e.ac_simplify(&toks, 48, RuleMode::Default).unwrap();
             assert!(
                 out.len() > 1,
                 "exactness-beyond-instruments ground must stay symbolic: {src:?} -> {out:?}"
@@ -2382,7 +3191,7 @@ mod tests {
         let Some(e) = engine() else { return };
         // H-028: the zero-absorption must refuse the mixed-class cofactor.
         let s1 = t(&["/", "0", "pow", "exp", "np.e", "/", "float(\"-inf\")", "x2"]);
-        let out = e.ac_simplify(&s1, 48, false).unwrap();
+        let out = e.ac_simplify(&s1, 48, RuleMode::Default).unwrap();
         assert_ne!(
             out,
             t(&["0"]),
@@ -2391,16 +3200,30 @@ mod tests {
         // H-029 integer bracket: the exact path finishes with the true value.
         let s2 = t(&["pow", "log", "0", "+", "atan", "0", "3"]);
         assert_eq!(
-            e.ac_simplify(&s2, 48, false).unwrap(),
+            e.ac_simplify(&s2, 48, RuleMode::Default).unwrap(),
             t(&["float(\"-inf\")"]),
             "(-inf)^3 must fold through the exact path, not ship the enclosure nan"
         );
-        // H-029 zero bracket: refusal, never the a.e. nan.
+        // H-029 zero bracket: refusal, never the a.e. nan -- in the mode where the
+        // exponent really is only an ENCLOSURE around 0. In `real` the constructor
+        // cannot evaluate `sin(sin(acos 1))`, so the interval layer's refusal stands and
+        // this is the case the test was written for.
         let s3 = t(&["pow", "float(\"nan\")", "sin", "sin", "acos", "1"]);
-        let out = e.ac_simplify(&s3, 48, false).unwrap();
+        let out = e.ac_simplify(&s3, 48, RuleMode::Real).unwrap();
         assert!(
             out.len() > 1,
             "nan-base pow over a ~0 enclosure must stay symbolic: {out:?}"
+        );
+        // In `f64` the exponent is not an enclosure at all: folding computes
+        // acos(1) = 0, sin(0) = 0 exactly -- in f64 AND in mathematics -- and `b^0 = 1`
+        // for every base including NaN (contract 2, and IEEE agrees: nan**0.0 is 1.0).
+        // So the honest answer there is 1, and folding has PROVEN what the interval
+        // layer could only bracket. The refusal was conservatism about a value that is
+        // now known, not a soundness requirement.
+        assert_eq!(
+            e.ac_simplify(&s3, 48, RuleMode::Default).unwrap(),
+            t(&["1"]),
+            "f64 folds the exponent to an exact 0, and nan^0 is 1"
         );
     }
 
@@ -2424,7 +3247,7 @@ mod tests {
             "1",
             "3",
         ]);
-        let out = e.ac_simplify(&powbase, 48, false).unwrap();
+        let out = e.ac_simplify(&powbase, 48, RuleMode::Default).unwrap();
         assert!(
             !out.contains(&"neg".to_string()),
             "sign must fold into the Const sum: {out:?}"
@@ -2432,7 +3255,7 @@ mod tests {
         // Mixed sum: the Const term refits, the non-Const term carries its sign as
         // ordinary structure -- no wrapper survives.
         let mixed = t(&["neg", "+", "*", "<constant>", "x4", "tanh", "x1"]);
-        let m = e.ac_simplify(&mixed, 48, false).unwrap();
+        let m = e.ac_simplify(&mixed, 48, RuleMode::Default).unwrap();
         assert!(
             !m.starts_with(&["neg".to_string()]),
             "wrapper must fold: {m:?}"
@@ -2451,8 +3274,8 @@ mod tests {
             "3.89",
         ]);
         for toks in [&powbase, &mixed, &bag] {
-            let once = e.ac_simplify(toks, 48, false).unwrap();
-            let twice = e.ac_simplify(&once, 48, false).unwrap();
+            let once = e.ac_simplify(toks, 48, RuleMode::Default).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Default).unwrap();
             assert_eq!(
                 twice, once,
                 "not idempotent through serialization: {toks:?}"
@@ -2481,17 +3304,17 @@ mod tests {
         let mut comp_lossy = 0u64;
         let mut n_lossy_wins = 0usize;
         for expr in corpus.iter() {
-            let sound = e.ac_simplify(expr, 48, false).unwrap();
-            let lossy = e.ac_simplify(expr, 48, true).unwrap();
+            let sound = e.ac_simplify(expr, 48, RuleMode::Default).unwrap();
+            let lossy = e.ac_simplify(expr, 48, RuleMode::Corpus).unwrap();
             // Idempotence and permutation invariance under LOSSY.
             assert_eq!(
-                e.ac_simplify(&lossy, 48, true).unwrap(),
+                e.ac_simplify(&lossy, 48, RuleMode::Corpus).unwrap(),
                 lossy,
                 "lossy not idempotent on {expr:?}"
             );
             let swapped = swap_commutative(expr, &e);
             assert_eq!(
-                e.ac_simplify(&swapped, 48, true).unwrap(),
+                e.ac_simplify(&swapped, 48, RuleMode::Corpus).unwrap(),
                 lossy,
                 "lossy permutation variance on {expr:?}"
             );
@@ -2514,7 +3337,7 @@ mod tests {
     /// Corpus gates, amortized over one engine build: output validity, idempotence,
     /// commutative-permutation invariance, complexity accounting, and no `<constant>`
     /// minting. (Numeric EQUIVALENCE gating is cross-installation territory by the clean-
-    /// release doctrine: the old kernel is gone from this crate, and the remine/ harness
+    /// release doctrine: the old kernel is gone from this crate, and the research harness
     /// adjudicates equivalence against a pinned previous release.)
     #[test]
     fn ac_corpus_gates() {
@@ -2537,12 +3360,12 @@ mod tests {
             // separately: it must round-trip through the shared parser (idempotence feeds
             // it back in).
             let out = e
-                .ac_simplify_proj(expr, 48, false, super::AcForm::Explicit)
+                .ac_simplify_proj(expr, 48, RuleMode::Default, super::AcForm::Explicit)
                 .unwrap();
             assert!(e.is_valid(&out), "invalid output {out:?} for {expr:?}");
-            let tagged = e.ac_simplify(expr, 48, false).unwrap();
+            let tagged = e.ac_simplify(expr, 48, RuleMode::Default).unwrap();
             // Idempotence in the native form: feeding the tagged answer back reproduces it.
-            let again = e.ac_simplify(&tagged, 48, false).unwrap();
+            let again = e.ac_simplify(&tagged, 48, RuleMode::Default).unwrap();
             assert_eq!(again, tagged, "not idempotent on {expr:?}");
             // The tagged form is strict: no binary sugar operators (bags + sections own
             // that structure); `neg`/`inv` are the sanctioned STANDALONE unary spellings.
@@ -2556,7 +3379,7 @@ mod tests {
             // must not change the answer (the ORDER axis, corpus-wide).
             let swapped = swap_commutative(expr, &e);
             let out_swapped = e
-                .ac_simplify_proj(&swapped, 48, false, super::AcForm::Explicit)
+                .ac_simplify_proj(&swapped, 48, RuleMode::Default, super::AcForm::Explicit)
                 .unwrap();
             assert_eq!(out_swapped, out, "permutation variance on {expr:?}");
 

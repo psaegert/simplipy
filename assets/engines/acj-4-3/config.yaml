@@ -138,7 +138,13 @@ operators:
     precedence: 2
     commutative: false
 
+# THE TRIPLE (owner ruling 2026-08-19). One distinct, complete rule set per mode; what
+# is loaded is what is served, with nothing unioned at serve time. `rules:` keeps its
+# name and carries the f64 set, so a loader written before the triple reads this config
+# unchanged and simply serves every mode the default set.
 rules: "./rules.json"
+rules_real: "./rules_real.json"
+rules_corpus: "./rules_corpus.json"
 
 # The artifact-generation pin (simplipy.compat, owner ruling 2026-08-03):
 # generation 2 = the AC engine's clean 23-operator vocabulary, simplipy >= 0.12.

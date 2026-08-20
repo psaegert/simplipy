@@ -36,6 +36,12 @@ exception (exact identity first). AMENDED 2026-08-08 (contract 10.11): the
 Const-absorption licence no longer beats the gradient at bag sites -- C*pi -> C
 absorbs like every ground; only non-bag positions (pi^C) still hold a special
 against mu.
+
+AMENDED AT D38/B2 (2026-08-17, mu'): the literal row is now the TWO-codeword price
+(selector + min(rational, decimal-scientific) + sign -- see tests/test_mu_prime.py,
+the falsifier suite that owns the codebook pins), and c_free re-derives to 67 bits
+under the new codebook. Everything BEHAVIORAL below (fold governance, policy rows,
+termination) is unchanged; the value pins in this file are re-earned under mu'.
 """
 import math
 from fractions import Fraction
@@ -47,15 +53,16 @@ from conftest import acj_config_path
 
 # The measure is carried in MILLI-BITS (owner ruling 2026-08-06): a literal's cost is the
 # real quantity log2(1 + |n|), not a bit COUNT, so the ordering can tell 100 from 1000.
-# The ratios are untouched -- one grammar symbol is still 8 bits, <constant> still 16
-# symbols -- only the unit is finer, and it stays an INTEGER so no float enters a
-# comparison.
+# The unit stays an INTEGER so no float enters a comparison.
 MILLI = 1000
 MU_SYM = 8 * MILLI
-# <constant> is DERIVED, not chosen (contract 10.10(5) / H-054): the supremum of mu over
-# f64 round-trip spellings (1131.931 bits, at 5.5605781537525765e-308) plus the sign bit,
-# rounded up. The old 128 = 16 symbols was beaten eightfold by mu(1e308) = 1024.154.
-MU_FREE = 1133 * MILLI
+# <constant> is DERIVED, not chosen (contract 10.10(5) / H-054), and re-derived under the
+# mu' codebook at D38/B2 (2026-08-17): the supremum of mu' over f64 round-trip spellings
+# (64.649 bits, at 8.9002954340287245e-308) plus the sign bit and the selector bit,
+# rounded up. Under the pre-D38 fraction-only code the same construction gave 1133 --
+# driven by the 10^324-scale denominators the decimal-scientific codeword now spells as
+# a ~8.3-bit exponent. TestB10CfreeDerivation below re-earns the number from a sweep.
+MU_FREE = 67 * MILLI
 
 
 def L(n) -> int:
@@ -75,20 +82,43 @@ def L(n) -> int:
 def mu_lit(value) -> int:
     """The spec's literal cost, computed independently of the Rust implementation.
 
-    ONE RULE: a literal is written as a few integers and each costs L(n) -- an integer
-    pays L(p) alone (its denominator is implicit) and a fraction pays L(p) + L(q), plus a
-    bit for a negative sign, floored at two bits.
+    mu' (D38/B2, 2026-08-17 -- this REVOKES contract 10.10(1)/H-055's fraction-only
+    rule): the codebook offers TWO codewords behind a one-bit selector,
 
-    There is NO decimal code (contract 10.10(1), H-055). mu is VALUE complexity, not
-    description length, so the `m * 10^-k` spelling earns no discount and the minimum over
-    codes is revoked: `mu(1000) = 9.967` and `mu(0.001) = 10.967`, so `mu(1/n) = mu(n) + 1`
-    exactly for every n >= 2 -- L(1) = log2(2) is exactly one bit, and that emergent
-    inversion bit is the multiplicative analogue of the additive sign bit.
+        mu'(value) = 1 + min( L(p) [+ L(q)],  max(2, L(m)) + L(|k|) ) + sign,
+
+    the rational spelling against the decimal-scientific spelling (m, k) of the
+    shortest exact decimal print -- available exactly when the denominator is
+    2^a * 5^b (integers included: 1000 is the codeword (1, 3)). Each codeword total
+    floors its mantissa at two bits and carries the sign bit; every priced literal
+    pays the selector exactly once, so the codebook is a genuine prefix code.
     """
     f = Fraction(value)
     p, q = abs(f.numerator), f.denominator
-    fraction = L(p) if q == 1 else L(p) + L(q)
-    return max(fraction + (MILLI if f.numerator < 0 else 0), 2 * MILLI)
+    sign = MILLI if f.numerator < 0 else 0
+    fraction = max((L(p) if q == 1 else L(p) + L(q)) + sign, 2 * MILLI)
+    # the decimal-scientific codeword, when the value terminates in base ten
+    a = b = 0
+    d = q
+    while d % 2 == 0:
+        d //= 2
+        a += 1
+    while d % 5 == 0:
+        d //= 5
+        b += 1
+    decimal = None
+    if d == 1:
+        if q == 1:
+            m, k = p, 0
+            while m and m % 10 == 0:
+                m //= 10
+                k += 1
+        else:
+            k = max(a, b)
+            m = p * 2 ** (k - a) * 5 ** (k - b)
+        if k > 0:
+            decimal = max(2 * MILLI, L(m)) + L(k) + sign
+    return MILLI + (fraction if decimal is None else min(fraction, decimal))
 
 
 @pytest.fixture(scope='module')
@@ -109,18 +139,21 @@ class TestMuValues:
         assert c(eng, ['np.e']) == MU_SYM
         assert c(eng, ['<constant>']) == MU_FREE
         # The two-bit FLOOR covers 0, 1, -1 and 2 alike: L is below it there, and the
-        # sign bit is invisible under it. Above the floor mu is the real quantity.
-        assert c(eng, ['0']) == mu_lit(0) == 2 * MILLI
-        assert c(eng, ['1']) == mu_lit(1) == 2 * MILLI
-        assert c(eng, ['(-1)']) == mu_lit(-1) == 2 * MILLI
-        assert c(eng, ['2']) == mu_lit(2) == 2 * MILLI
-        assert c(eng, ['0.5']) == mu_lit('1/2') == 2585   # L(1) + L(2) = 1 + 1.585
-        assert c(eng, ['2.5']) == mu_lit('5/2') == 4170   # L(5) + L(2) = 2.585 + 1.585
+        # sign bit is invisible under it. Every priced literal additionally pays the
+        # mu' selector bit (D38), so the floor class sits at 3 bits total.
+        assert c(eng, ['0']) == mu_lit(0) == 3 * MILLI
+        assert c(eng, ['1']) == mu_lit(1) == 3 * MILLI
+        assert c(eng, ['(-1)']) == mu_lit(-1) == 3 * MILLI
+        assert c(eng, ['2']) == mu_lit(2) == 3 * MILLI
+        assert c(eng, ['0.5']) == mu_lit('1/2') == 3585   # 1 + L(1) + L(2): rational wins
+        assert c(eng, ['2.5']) == mu_lit('5/2') == 5170   # 1 + L(5) + L(2): rational wins
 
     def test_long_literal_pays_its_bits(self, eng):
         tok = '2.718281828459045'
         expected = mu_lit('2718281828459045/1000000000000000')
-        assert expected > 90  # the ~105-unit class of the design doc
+        # the design doc's ~105-unit class prices ~56 bits under mu' (the
+        # decimal-scientific codeword: selector + L(2718281828459045) + L(15))
+        assert 50 * MILLI < expected < 60 * MILLI
         assert c(eng, [tok]) == expected
 
     def test_t1_coefficient_preservation(self, eng):
@@ -240,7 +273,8 @@ class TestMuGovernedFold:
         assert eng.simplify(['*', '2', '4']) == ['8']
         # The fold FIRES (the guard); the exact result 1/2 then takes its argmin
         # spelling, which for a 2^a denominator is the fraction, not `0.5`.
-        assert eng.simplify(['/', '1', '2']) == ['<mul>', '1', '<div>', '2', '</mul>']
+        assert eng.simplify(eng.to_tagged(['/', '1', '2'])) \
+            == ['<mul>', '1', '<div>', '2', '</mul>']
 
     def test_exact_transcendental_hits_keep_folding(self, eng):
         # cos 0 -> 1 and log 1 -> 0: tiny results are cheap, mu licenses the fold.
@@ -291,15 +325,16 @@ class TestMuGovernedFold:
 
 
 class TestB10CfreeDerivation:
-    """B10: c_free = 1133 is DERIVED, not asserted — and the docs now say so in four
-    places (formal.md §5, the .tex, the design doc, expr.rs). This pin recomputes the
+    """B10: c_free is DERIVED, not asserted — re-derived under the mu' codebook at
+    D38/B2 (was 1133 under the fraction-only code). This pin recomputes the
     derivation from first principles: the supremum over f64 round-trip spellings of
-    the decimal model L(significand) + |decimal scale|·log2(10), plus one sign bit,
-    ceiled. If the measure's literal model or the published number ever drifts, this
-    recomputation and `engine.complexity(['<constant>'])` stop agreeing."""
+    the mu' two-codeword model min(rational, max(2, L(m)) + L(|scale|)), plus one
+    sign bit and one selector bit, ceiled. If the measure's literal model or the
+    published number ever drifts, this recomputation and
+    `engine.complexity(['<constant>'])` stop agreeing."""
 
     @staticmethod
-    def _decimal_model_bits(x: float) -> float:
+    def _model_bits(x: float) -> float:
         s = repr(abs(x))
         if 'e' in s:
             mant, exp = s.split('e')
@@ -312,29 +347,45 @@ class TestB10CfreeDerivation:
         stripped = digits.rstrip('0')
         scale += len(digits) - len(stripped)
         d = int(stripped or '0')
-        return math.log2(1 + d) + abs(scale) * math.log2(10)
+        if d == 0:
+            return 2.0
+        if scale >= 0:
+            rational = math.log2(1 + d * 10 ** scale)
+        else:
+            f = Fraction(d, 10 ** -scale)
+            rational = math.log2(1 + f.numerator) + math.log2(1 + f.denominator)
+        rational = max(2.0, rational)
+        if scale == 0:
+            return rational
+        scientific = max(2.0, math.log2(1 + d)) + math.log2(1 + abs(scale))
+        return min(rational, scientific)
 
     def test_c_free_recomputes_from_the_f64_supremum(self, eng):
         sup, argmax = 0.0, None
-        mantissas = (1.0, 1.5, 1.0 + 2**-52, 2.0 - 2**-52, 1.2345678901234567)
+        mantissas = (1.0, 1.5, 1.0 + 2**-52, 2.0 - 2**-52, 1.2345678901234567,
+                     1.9999999999999998)
         for be in range(-1074, 1024):
             for m in mantissas:
                 x = math.ldexp(m, be)
                 if x == 0.0 or math.isinf(x):
                     continue
-                b = self._decimal_model_bits(x)
+                b = self._model_bits(x)
                 if b > sup:
                     sup, argmax = b, x
-        # The recorded attained value reproduces the recorded supremum exactly.
-        rec = self._decimal_model_bits(5.5605781537525765e-308)
-        assert abs(rec - 1131.931) < 1e-3, rec
+        # The recorded attained value reproduces the recorded supremum exactly: the
+        # largest 17-digit mantissa any shortest repr can carry (the ulp-per-decimal-
+        # grid feasibility bound at the 2^-1020 binade top) at the deepest scale a
+        # 17-digit spelling reaches (-324), found by ulp-walking every binade top in
+        # the boundary decades.
+        rec = self._model_bits(8.9002954340287245e-308)
+        assert abs(rec - 64.649) < 1e-3, rec
         # SAFETY direction -- the load-bearing assert: nothing in the sweep may price
-        # ABOVE the recorded supremum, or 1133 is no longer a supremum and the
-        # published constant is falsified. (The coarse 5-mantissa grid does not hit
-        # the exact 17-digit argmax spelling; it must get within a bit of the family,
-        # which is the anti-vacuity that the sweep reaches the extreme region at all.)
+        # ABOVE the recorded supremum, or 67 is no longer a supremum and the published
+        # constant is falsified. (The coarse mantissa grid does not hit the exact
+        # 17-digit argmax spelling; it must get within ~1.7 bits of the family, which
+        # is the anti-vacuity that the sweep reaches the extreme region at all.)
         assert sup <= rec + 1e-6, (sup, argmax)
-        assert sup > rec - 1.0, (sup, argmax)
-        derived_bits = math.ceil(rec + 1.0)  # + the sign bit, ceiled
-        assert derived_bits == 1133
+        assert sup > rec - 1.7, (sup, argmax)
+        derived_bits = math.ceil(rec + 1.0 + 1.0)  # + the sign bit + the selector, ceiled
+        assert derived_bits == 67
         assert c(eng, ['<constant>']) == derived_bits * MILLI

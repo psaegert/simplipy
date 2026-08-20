@@ -8,6 +8,12 @@ name: pytest
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    # A hung job runs to GitHub's 6h default. On 2026-08-19 three runs hung on
+    # "Run tests" for 2h+ each (3 jobs apiece) while the suite passed locally in
+    # 107s against the same commit -- an environment stall, not a code deadlock.
+    # 20 minutes is ~11x the observed runtime: generous for a slow runner, cheap
+    # for a hang.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

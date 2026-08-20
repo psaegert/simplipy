@@ -66,11 +66,28 @@ class TestLoadConsumer:
         # exceptional-point disagreements). Translations 6671 -> 6681 (+10 =
         # exactly the adopted rules), subsumed/dropped stay 0, twins stay 10.
         # G2 REPUBLISH (2026-08-15): the full-lane re-mine ships (6,594 rules, x3
-        # byte-identical, minted on solomon per D20) -- pristine again: 6602/0/0 + 8
+        # byte-identical, minted on the reference mint host per D20) -- pristine again: 6602/0/0 + 8
         # twins, the B5+B19 interim discharged.
+        # RE-PINNED for the 0.14.0 triple: (5558, 0, 0, 8) -> (5327, 0, 0, 8).
+        #
+        # WHY, and it is not the dedup. The shipped `rules.json` is now the f64 THIRD of a
+        # triple: 5,319 rows, against the 0.13 line's 6,594. Rules that are true over R
+        # and NOT f64-realised moved to rules_real.json, and the ground literal
+        # evaluations folding now performs were pruned. `kept` counts SERVED patterns, so
+        # it follows the file. Translation stays pristine 0/0 and twins stay 8: nothing
+        # about the surviving rules changed.
+        #
+        # The earlier comment here justified the pin with the 2026-08-18 dedup (6602 ->
+        # 5553, an artifact of 6,594 rows, complexity 294,730,680). Every one of those
+        # numbers is false for the artifact under test.
         kept, subsumed, dropped, twins = eng._core.ac_rules_info()
         assert eng._core.ac_registry_dropped() == 0
-        assert (kept, subsumed, dropped, twins) == (6602, 0, 0, 8)
+        # 5553 -> 5558 at the INVERSE-PAIR BAND (2026-08-19): five rules the
+        # constructor used to fold away now survive translation, because the band
+        # declines the fold on an unbounded argument. Nothing is subsumed or dropped;
+        # the artifact is untouched at 6,594 rows.
+        # RE-PINNED for the 0.14.0 triple (the 0.13 artifact served 5,558).
+        assert (kept, subsumed, dropped, twins) == (5327, 0, 0, 8)
 
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads
@@ -78,7 +95,7 @@ class TestLoadConsumer:
         # engine's -- the pole classes stay apart.
         hostile = [[['neg', 'inv', '-', '1', '_0'], ['inv', '-', '_0', '1']]]
         poisoned = _scratch(tmp_path, hostile)
-        out = poisoned.simplify(HOSTILE_SRC)
+        out = poisoned.simplify(poisoned.to_tagged(list(HOSTILE_SRC)))
         assert poisoned._core.ac_registry_dropped() == 1, \
             'the load consumer must refuse the pole-mirror rule'
         # the source state survives as itself: the mirror never fires

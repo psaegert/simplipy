@@ -42,9 +42,12 @@ class TestDefectAxesClosed:
     def test_order_invariance_of_the_canonical_witness(self, engine: SimpliPyEngine) -> None:
         # A rule rewrite (log(exp(t)) -> t, an acj-mined inverse composition) fires
         # identically under BOTH operand orders of the enclosing product.
-        a = engine.simplify(["*", "log", "exp", "x0", "x1"])
-        b = engine.simplify(["*", "x1", "log", "exp", "x0"])
-        assert a == b == ["<mul>", "x0", "x1", "</mul>"]
+        # `sin x0` rather than a bare `x0`: log-exp is BANDED now (f64 exp overflows at
+        # 709.782713), and ORDER INVARIANCE is what this pins -- so the argument is
+        # bounded to keep the rewrite firing and the subject intact.
+        a = engine.simplify(engine.to_tagged(["*", "log", "exp", "sin", "x0", "x1"]))
+        b = engine.simplify(engine.to_tagged(["*", "x1", "log", "exp", "sin", "x0"]))
+        assert a == b == ["<mul>", "x1", "sin", "x0", "</mul>"]
 
     def test_adjacency_collection_across_bracketing(self, engine: SimpliPyEngine) -> None:
         # `+ x3 (+ x8 (div5 x3))`: the two x3 spellings are never adjacent in the binary tree,
@@ -54,10 +57,10 @@ class TestDefectAxesClosed:
         # The 6/5 coefficient renders STRUCTURALLY in the tagged form (both components
         # inside the vocabulary bound); the COLLECTION this test guards is unchanged,
         # and the pretty infix below still shows the coefficient as `1.2`.
-        out = engine.simplify(["+", "x3", "+", "x8", "*", "0.2", "x3"])
+        out = engine.simplify(engine.to_tagged(["+", "x3", "+", "x8", "*", "0.2", "x3"]))
         assert out == ["<add>", "<mul>", "6", "x3", "<div>", "5", "</mul>", "x8", "</add>"]
         # ...and the pretty infix rendering of the same answer:
-        assert engine.simplify(["+", "x3", "+", "x8", "*", "0.2", "x3"], form="infix") \
+        assert engine.simplify(engine.to_infix(["+", "x3", "+", "x8", "*", "0.2", "x3"])) \
             == "1.2*x3 + x8"
 
     def test_permutation_invariance_property(self, engine: SimpliPyEngine) -> None:
@@ -92,12 +95,14 @@ class TestDefectAxesClosed:
 
 class TestExplicitConstants:
     def test_coefficient_arithmetic_is_computation(self, engine: SimpliPyEngine) -> None:
-        assert engine.simplify(["*", "2", "*", "3", "x0"]) == ["<mul>", "6", "x0", "</mul>"]
-        assert engine.simplify(["*", "4", "*", "0.5", "x0"]) == ["<mul>", "2", "x0", "</mul>"]
+        assert engine.simplify(engine.to_tagged(["*", "2", "*", "3", "x0"])) \
+            == ["<mul>", "6", "x0", "</mul>"]
+        assert engine.simplify(engine.to_tagged(["*", "4", "*", "0.5", "x0"])) \
+            == ["<mul>", "2", "x0", "</mul>"]
         seven_x = ["+", "*", "6", "x0", "x0"]
-        assert engine.simplify(seven_x) == ["<mul>", "7", "x0", "</mul>"]
+        assert engine.simplify(engine.to_tagged(seven_x)) == ["<mul>", "7", "x0", "</mul>"]
         # The binary-chain diagnostic projection is still available:
-        assert engine.simplify(seven_x, form="explicit") == ["*", "7", "x0"]
+        assert engine.simplify(seven_x) == ["*", "7", "x0"]
 
     def test_strict_tagged_form(self, engine: SimpliPyEngine) -> None:
         # The bags carry their group inverse as a SECTION: terms after <sub> subtract,
@@ -106,13 +111,14 @@ class TestExplicitConstants:
         # (2026-08-01, design §8) x0/3 renders through the `<div>` section rather than
         # as the `1/3` coefficient (`* 22/7 x0` still keeps its fraction token -- ties
         # stay on the coefficient side). See tests/test_divisor_side_spelling.py.
-        assert engine.simplify(["-", "x0", "x1"]) \
+        assert engine.simplify(engine.to_tagged(["-", "x0", "x1"])) \
             == ["<add>", "x0", "<sub>", "x1", "</add>"]
-        assert engine.simplify(["/", "x0", "x1"]) \
+        assert engine.simplify(engine.to_tagged(["/", "x0", "x1"])) \
             == ["<mul>", "x0", "<div>", "x1", "</mul>"]
-        assert engine.simplify(["/", "x0", "3"]) == ["<mul>", "x0", "<div>", "3", "</mul>"]
+        assert engine.simplify(engine.to_tagged(["/", "x0", "3"])) \
+            == ["<mul>", "x0", "<div>", "3", "</mul>"]
         # (2*x1)/(x2*x3): one bag, both sections.
-        assert engine.simplify(["/", "*", "2", "x1", "*", "x2", "x3"]) \
+        assert engine.simplify(engine.to_tagged(["/", "*", "2", "x1", "*", "x2", "x3"])) \
             == ["<mul>", "2", "x1", "<div>", "x2", "x3", "</mul>"]
         # `neg`/`inv` are the sanctioned STANDALONE unary spellings (function arguments,
         # lone reciprocals); inside bags the sections own all inverses.
@@ -127,9 +133,9 @@ class TestExplicitConstants:
             tagged = engine.simplify(expr)
             assert engine.simplify(tagged) == tagged
         # Pretty infix of the same answers:
-        assert engine.simplify(["-", "x0", "x1"], form="infix") == "x0 - x1"
-        assert engine.simplify(["/", "x0", "x1"], form="infix") == "x0/x1"
-        assert engine.simplify(["/", "neg", "x0", "3"], form="infix") == "-x0/3"
+        assert engine.simplify(engine.to_infix(["-", "x0", "x1"])) == "x0 - x1"
+        assert engine.simplify(engine.to_infix(["/", "x0", "x1"])) == "x0/x1"
+        assert engine.simplify(engine.to_infix(["/", "neg", "x0", "3"])) == "-x0/3"
 
     def test_no_hyper_operators_in_any_output(self, engine: SimpliPyEngine) -> None:
         cases = [
@@ -139,8 +145,9 @@ class TestExplicitConstants:
             ["pow", "x0", "0.5"],
         ]
         for case in cases:
-            for form in ("tagged", "explicit"):
-                out = engine.simplify(list(case), form=form)
+            for form, convert in (("tagged", engine.to_tagged),
+                                  ("explicit", engine.to_prefix)):
+                out = engine.simplify(convert(list(case)))
                 assert not any(_is_hyper(t) for t in out), (case, form, out)
 
     def test_real_odd_roots_are_rootn(self, engine: SimpliPyEngine) -> None:
@@ -150,13 +157,14 @@ class TestExplicitConstants:
         assert engine.simplify(["rootn", "x0", "3"]) == ["rootn", "x0", "3"]
         assert engine.simplify(["rootn", "x0", "7"]) == ["rootn", "x0", "7"]
         # Unit index normalizes away. An EVEN index agrees with the principal power
-        # everywhere, so either spelling is sound and mu TIES them (18000 both ways);
+        # everywhere, so either spelling is sound and mu TIES them (19000 both ways);
         # `rootn` is PRESERVED as the canonical representative (2026-08-06 rootn work).
         assert engine.simplify(["rootn", "x0", "2"]) == ["rootn", "x0", "2"]
         assert engine.simplify(["rootn", "x0", "1"]) == ["x0"]
-        assert engine.simplify(["rootn", "x0", "3"], form="infix") == "rootn(x0, 3)"
-        # MEASURE pin in MILLI-BITS since §10.10 (18 -> 18000); spelling-independent.
-        assert engine.complexity(["rootn", "x0", "3"]) == 18000
+        assert engine.simplify(engine.to_infix(["rootn", "x0", "3"])) == "rootn(x0, 3)"
+        # MEASURE pin in MILLI-BITS since §10.10 (18 -> 18000), +1000 at D38/B2: the
+        # index literal pays the mu' selector bit. Spelling-independent.
+        assert engine.complexity(["rootn", "x0", "3"]) == 19000
 
     def test_rootn_cross_evaluator_parity(self, engine: SimpliPyEngine) -> None:
         # ONE SEMANTICS, FIVE SURFACES: the Python realization and the
@@ -197,7 +205,9 @@ class TestVocabularyDeletion:
         # The hyper-operator family is DELETED from the vocabulary; the bounded
         # re-sugaring projection died with it.
         import pytest as _pytest
-        with _pytest.raises(ValueError, match="unknown form"):
+        # `form=` itself is gone in 0.14.0, so the projection is unreachable by a
+        # stronger route than an unknown-value error: the parameter does not exist.
+        with _pytest.raises(TypeError, match="form"):
             engine.simplify(["mult2", "x0"], form="bounded")
 
     def test_legacy_spellings_are_refused_outright(self, engine: SimpliPyEngine) -> None:
@@ -308,9 +318,9 @@ class TestContracts:
         # ...while log(x) - log(x) is REFUSED: log is undefined on x < 0, a
         # positive-measure set, so cancelling would fill undefined values with 0 -- exactly
         # what the certificate exists to forbid. The refusal keeps both terms.
-        assert engine.simplify(["-", "log", "x0", "log", "x0"]) \
+        assert engine.simplify(engine.to_tagged(["-", "log", "x0", "log", "x0"])) \
             == ["<add>", "log", "x0", "<sub>", "log", "x0", "</add>"]
-        assert engine.simplify(["-", "log", "x0", "log", "x0"], form="explicit") \
+        assert engine.simplify(["-", "log", "x0", "log", "x0"]) \
             == ["-", "log", "x0", "log", "x0"]
 
     def test_ground_pole_arithmetic_is_exact(self, engine: SimpliPyEngine) -> None:
@@ -330,7 +340,7 @@ class TestContracts:
         # LOSSY's structural-cancel contract is untouched for non-determined
         # structures (see the (x^2)^0.5 -> x and exp(log C) -> C pins).
         expr = ["-", "/", "1", "0", "/", "1", "0"]
-        assert engine.simplify(expr, mode=Mode.LOSSY) == ['float("nan")']
+        assert engine.simplify(expr, mode=Mode.corpus) == ['float("nan")']
         assert engine.simplify(expr) == ['float("nan")']
 
     def test_free_rhs_wildcards_are_dropped_at_translation(self, tmp_path) -> None:
@@ -437,9 +447,15 @@ class TestContracts:
         # form is a fixpoint -- the healing claim survives with an MDL-honest endpoint
         # (pre-mu this pinned the fully materialized coefficient at complexity 7).
         # MEASURE pin, not a dialect one: mu is spelling-independent, so this number
-        # stands under any print ruling. 212 -> 213786 is the milli-bit unit change
-        # plus the real-valued L of §10.10 (213.786 bits).
-        assert engine.complexity(out_a) == 213786
+        # stands under any print ruling. 212 -> 213786 was the milli-bit unit change
+        # plus the real-valued L of §10.10 (213.786 bits); 213786 -> 111969 is D38/B2
+        # mu': the 6.449...e-18 coefficient takes its decimal-scientific codeword
+        # (selector + L(64495375319922606) + L(35) + sign = 62.014 bits against the
+        # fraction code's ~112.9), and the endpoint STILL keeps it factored under its
+        # own pow -- the EXACT square is a 34-digit mantissa (~118 bits scientific),
+        # dearer than the factored spelling under mu' too, so the healing claim and
+        # the endpoint shape survive; only the priced total moves.
+        assert engine.complexity(out_a) == 111969
         assert "pow" in out_a and any("6449537531992260" in t for t in out_a), out_a
         assert engine.simplify(out_a) == out_a  # and the healed form is a fixpoint
 
@@ -482,6 +498,10 @@ class TestContracts:
         # mu refresh: the 1942-rule artifact is mint-time clean, 1943/0/0 + 1 twin.
         # G2 REPUBLISH (2026-08-15): the full-lane re-mine ships and the pin returns
         # to pristine -- the 6,594-rule artifact is mint-time clean, 6602/0/0 + 8 twins.
+        # (2026-08-18, dedup key on the internal form; RE-PINNED for the 0.14.0 triple:
+        # the shipped f64 file is 5,319 rows and reports kept = 5327 -- the
+        # 1,049 rows whose pattern an earlier row already owns never reach translate.
+        # `subsumed` is what this test pins, and it is unmoved at 0.)
         assert subsumed == 0, f"republished artifact must be mint-time clean; got {subsumed}"
 
 
@@ -519,7 +539,7 @@ class TestMatcherAssignmentCompleteness:
         ]
         for shared, a, b in cases:
             expr = ["+", "*", shared, a, "*", shared, b]
-            out = fresh_engine.simplify(expr, form="explicit")
+            out = fresh_engine.simplify(expr)
             assert out[0] == "*", (expr, out)
             assert shared in out, (expr, out)
 
@@ -528,7 +548,7 @@ class TestMatcherAssignmentCompleteness:
         # The shared factor is a composite (sin x0), which sorts after plain variables in
         # the subject Mul bags.
         expr = ["+", "*", "sin", "x0", "x1", "*", "sin", "x0", "x2"]
-        out = fresh_engine.simplify(expr, form="explicit")
+        out = fresh_engine.simplify(expr)
         assert out[0] == "*", (expr, out)
         assert "sin" in out, (expr, out)
 
@@ -536,7 +556,7 @@ class TestMatcherAssignmentCompleteness:
 class TestApiFootguns:
     """Audit Tier-2 (2026-08-03): the two API footguns, pinned closed.
 
-    A STRING mode must mean what it says: ``mode='lossy'`` used to compare unequal to
+    A STRING mode must mean what it says: ``mode='corpus'`` must compare equal to
     the enum and silently run SOUND. And malformed input through the tagged/``rootn``
     entry -- the one path that skips ``is_valid`` -- must raise like every other
     malformed input: it used to be returned unchanged, with no signal."""
@@ -547,16 +567,16 @@ class TestApiFootguns:
         # training-canonicalisation example. The string and the enum must take the
         # SAME branch.
         expr = ['exp', 'log', '<constant>']
-        enum_out = engine.simplify(list(expr), mode=Mode.LOSSY)
-        str_out = engine.simplify(list(expr), mode='lossy')
+        enum_out = engine.simplify(list(expr), mode=Mode.corpus)
+        str_out = engine.simplify(list(expr), mode='corpus')
         assert str_out == enum_out
         assert str_out != engine.simplify(list(expr)), \
             'the LOSSY observable collapsed: this expression no longer distinguishes modes'
 
     def test_mode_string_any_case(self, engine: SimpliPyEngine) -> None:
         expr = ['+', 'x0', 'x0']
-        assert engine.simplify(list(expr), mode='SOUND') == engine.simplify(list(expr))
-        assert engine.simplify(list(expr), mode='Sound') == engine.simplify(list(expr))
+        assert engine.simplify(list(expr), mode='f64') == engine.simplify(list(expr))
+        assert engine.simplify(list(expr), mode='F64') == engine.simplify(list(expr))
 
     def test_mode_unknown_string_raises(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError, match='unknown mode'):
@@ -581,11 +601,11 @@ class TestApiFootguns:
 
     def test_malformed_infix_projection_raises(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError):
-            engine.simplify(['<mul>', 'x0'], form='infix')
+            engine.simplify(engine.to_infix(['<mul>', 'x0']))
 
     def test_wellformed_tagged_and_rootn_still_simplify(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['rootn', 'x0', '1']) == ['x0']
-        assert engine.simplify(['<add>', 'x0', 'x1', '</add>'], form='explicit') == \
+        assert engine.simplify(engine.to_prefix(['<add>', 'x0', 'x1', '</add>'])) == \
             ['+', 'x0', 'x1']
 
 
@@ -597,13 +617,13 @@ class TestBoundaryWellFormedness:
     accidentally made it raise. H-004: empty or whitespace-bearing tokens are not
     tokens -- they corrupt every space-joined serialization (``['+', '', 'x0']``
     rendered the infix ``' + x0'``, which cannot round-trip) and used to pass as
-    silent opaque leaves. H-006: a negative node_budget surfaced as a raw pyo3
+    silent opaque leaves. H-006: a negative max_passes surfaced as a raw pyo3
     OverflowError instead of a ValueError."""
 
     def test_empty_input_returns_empty(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify([]) == []
-        assert engine.simplify((), form='explicit') == ()
-        assert engine.simplify([], form='infix') == ''
+        assert engine.simplify(()) == ()
+        assert engine.simplify(engine.to_infix([])) == ''
 
     def test_empty_token_raises(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError, match='token'):
@@ -617,11 +637,46 @@ class TestBoundaryWellFormedness:
     def test_unknown_nonempty_tokens_stay_opaque_leaves(self, engine: SimpliPyEngine) -> None:
         # DELIBERATE: unknown whitespace-free tokens are opaque leaves (free symbols);
         # the engine never folds them and carries them soundly.
-        assert engine.simplify(['+', 'alpha', 'x0'], form='explicit') == ['+', 'alpha', 'x0']
+        assert engine.simplify(['+', 'alpha', 'x0']) == ['+', 'alpha', 'x0']
 
-    def test_negative_node_budget_raises_valueerror(self, engine: SimpliPyEngine) -> None:
-        with pytest.raises(ValueError, match='node_budget'):
-            engine.simplify(['+', 'x0', 'x0'], node_budget=-1)
+    def test_negative_max_passes_raises_valueerror(self, engine: SimpliPyEngine) -> None:
+        with pytest.raises(ValueError, match='max_passes'):
+            engine.simplify(['+', 'x0', 'x0'], max_passes=-1)
+
+
+class TestMaxPassesRename:
+    """0.14 rename: `node_budget` never bounded nodes -- it is the trip count of the outer
+    `rewrite_pass` loop -- so the parameter is `max_passes` now. The old spelling stays as a
+    warning alias (same doctrine as `parse` -> `read_infix`), and the two are mutually
+    exclusive: silently letting one win would be exactly the ambiguity the rename removes."""
+
+
+    def test_new_name_does_not_warn(self, engine: SimpliPyEngine) -> None:
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter('error', DeprecationWarning)
+            engine.simplify(['+', 'x0', 'x0'], max_passes=2)
+
+
+
+    def test_default_is_48_passes_and_convergence_is_far_below_it(
+            self, engine: SimpliPyEngine) -> None:
+        import inspect
+        # The default lives in the body, not the signature (the signature default is the
+        # `None` sentinel that makes "both at once" detectable), so pin it behaviourally:
+        # every budget from the measured convergence depth up must agree with the default.
+        assert inspect.signature(engine.simplify).parameters['max_passes'].default is None
+        # THE NUMBER, pinned where it lives. The budgets-agree check below cannot see it:
+        # every budget in the probe exceeds the convergence depth, so it holds for any
+        # default at all and the test's own name went unasserted.
+        import re
+        src = inspect.getsource(type(engine).simplify)
+        assert re.search(r'max_passes\s*=\s*48', src), \
+            'the documented default of 48 is not in simplify\'s body'
+        expr = ['+', '*', '2', 'x0', '*', '3', 'x0']
+        default_out = engine.simplify(list(expr))
+        for budget in (4, 8, 48, 512):
+            assert engine.simplify(list(expr), max_passes=budget) == default_out
 
 
 class TestMaskingDiscoverability:
@@ -647,9 +702,12 @@ class TestLiteralGrammarComposition:
         # 1/3 renders STRUCTURALLY in the tagged form (both components inside the
         # vocabulary bound); the parenthesised-fraction PARSE is what this guards, and
         # the value is unchanged. mu ties the spellings at 3000.
-        assert engine.simplify(['neg', '(-1/3)']) == ['<mul>', '1', '<div>', '3', '</mul>']
-        assert engine.simplify(['+', '(-1/3)', 'x0'], form='explicit') == \
-            engine.simplify(['+', '-1/3', 'x0'], form='explicit')
+        # `neg (-1/3)` carries no bag delimiter in EITHER dialect, so it reads as
+        # explicit and the answer comes back in the explicit dialect's structural
+        # division; the tagged twin of the same state is `<mul> 1 <div> 3 </mul>`.
+        assert engine.simplify(['neg', '(-1/3)']) == ['/', '1', '3']
+        assert engine.simplify(['+', '(-1/3)', 'x0']) == \
+            engine.simplify(['+', '-1/3', 'x0'])
 
     def test_paren_fraction_evaluates(self, engine: SimpliPyEngine) -> None:
         out = engine._core.evaluate_batch(['+', '(-1/3)', 'x0'], ['x0'], [3.0], 1, [])
@@ -668,7 +726,7 @@ class TestInfixCallSyntaxRoundTrip:
                      ['pow', '+', 'x0', '1', '-', 'x1', '2'],
                      ['rootn', 'rootn', 'x0', 'x1', 'x2']):
             out = engine.simplify(list(expr))
-            infix = engine.simplify(list(expr), form='infix')
+            infix = engine.simplify(engine.to_infix(list(expr)))
             back = engine._core.parse(infix, True, False)
             assert engine.simplify(list(back)) == out, (expr, infix, back)
 
@@ -693,13 +751,13 @@ class TestOneZeroPoleContract:
     def test_odd_negative_exponent_pole_is_positive(self, engine: SimpliPyEngine) -> None:
         # Under signed zero the odd-integer exponent carried -inf (pow(-0.0, -3) = -inf);
         # under one zero the exponent's parity is irrelevant: pow(0, y<0) = +inf.
-        assert engine.simplify(engine.parse('pow(0/tanh(-2), -3)')) == ['float("inf")']
+        assert engine.simplify(engine.read_infix('pow(0/tanh(-2), -3)')) == ['float("inf")']
 
     def test_fuzz_row_188677_family(self, engine: SimpliPyEngine) -> None:
         # x2 / ((0*x1/tanh(-2)) / inf): the denominator collapses to a ground zero bag;
         # its -0.0 rendering flipped x2/0 to -inf*x2.
-        out = engine.simplify(['/', 'x2', '/', '/', '*', '0', '*', 'x1', '1',
-                               'tanh', '-2', 'float("inf")'])
+        out = engine.simplify(engine.to_tagged(
+            ['/', 'x2', '/', '/', '*', '0', '*', 'x1', '1', 'tanh', '-2', 'float("inf")']))
         assert out == ['<mul>', 'float("inf")', 'x2', '</mul>']
 
     def test_sibling_spellings_stay_positive(self, engine: SimpliPyEngine) -> None:
@@ -732,26 +790,46 @@ class TestTranscendentalAtomEnclosures:
     certified rules then fold the zero first and absorption wins."""
 
     def test_zero_times_cofactor_is_the_positive_pole(self, engine: SimpliPyEngine) -> None:
+        # These rest on `sin(np.pi) -> 0`, which is exactly true and NOT f64-realised
+        # (f64 gives 1.2246467991473532e-16), so from 0.14.0 it is a `real`-tier rule.
+        # The pole is therefore reached in `real`, and the default mode keeps the
+        # expression -- the two soundnesses disagreeing, on one row.
+        from simplipy import Mode
         for tokens in (['inv', '*', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'abs', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'tan', 'np.pi', 'x1']):
-            assert engine.simplify(list(tokens)) == ['float("inf")'], tokens
+            assert engine.simplify(list(tokens), mode=Mode.real) == ['float("inf")'], tokens
+            assert engine.simplify(list(tokens), mode=Mode.f64) != ['float("inf")'], tokens
 
     def test_fuzz_row_172346(self, engine: SimpliPyEngine) -> None:
         # inv( abs(sin(np.pi)) / inv(x4 - x1 + 2*x2) ): the reciprocal cofactor
         # canonicalizes with a rational -1, which turned the split pole visibly negative.
+        # `sin(np.pi) -> 0` is `real`-tier from 0.14.0 (exactly true, and f64 computes
+        # 1.2246467991473532e-16), so the pole is reached in the mode whose authority
+        # is mathematics.
+        from simplipy import Mode
         out = engine.simplify(['inv', '/', 'abs', 'sin', 'np.pi',
-                               'inv', '-', '-', 'x4', 'x1', '*', 'x2', '-2'])
+                               'inv', '-', '-', 'x4', 'x1', '*', 'x2', '-2'],
+                              mode=Mode.real)
         assert out == ['float("inf")'], out
 
     def test_true_nonzero_atom_grounds_still_certify(self, engine: SimpliPyEngine) -> None:
         # The enclosure must not blanket-refuse: pi itself and shifted atoms are
         # rigorously bounded away from 0, so the licensed split still fires.
-        assert engine.simplify(['inv', '*', 'np.pi', 'x1']) != \
-            ['inv', '*', 'np.pi', 'x1']  # some reduction happened
-        out = engine.simplify(['inv', '*', '+', 'sin', 'np.pi', '2', 'inv', 'x1'])
-        # sin(pi)+2 is certainly nonzero; the exact rule folds it to 2 regardless.
+        assert engine.simplify(engine.to_tagged(['inv', '*', 'np.pi', 'x1'])) != \
+            ['inv', '<mul>', 'np.pi', 'x1', '</mul>']  # some reduction happened
+        # sin(pi)+2 is certainly nonzero; in `real` the exact rule folds it to 2. In
+        # `f64` the fold is declined (see R1) and the enclosure must STILL not
+        # blanket-refuse -- which is the property this test exists for.
+        from simplipy import Mode
+        out = engine.simplify(['inv', '*', '+', 'sin', 'np.pi', '2', 'inv', 'x1'],
+                              mode=Mode.real)
         assert 'sin' not in out, out
+        # The CERTIFIED ENDPOINT, not merely "something changed" -- the split having
+        # fired is the property, and `!= input` is true of every subject whether the
+        # enclosure certifies or blanket-refuses.
+        f64_out = engine.simplify(['inv', '*', '+', 'sin', 'np.pi', '2', 'inv', 'x1'])
+        assert f64_out == ['/', 'x1', '+', 'sin', 'np.pi', '2'], f64_out
 
 
 class TestSignDistributionCanonicalUniqueness:
@@ -767,7 +845,7 @@ class TestSignDistributionCanonicalUniqueness:
     def test_fuzz_row_17001_idempotent(self, engine: SimpliPyEngine) -> None:
         x = ['acos', '-', 'tanh', 'acos', '-', '<constant>', '-3',
              'sinh', '-', 'x2', 'exp', 'float("inf")']
-        out = engine.simplify(list(x))
+        out = engine.simplify(engine.to_tagged(list(x)))
         assert engine.simplify(list(out)) == out, out
         # The one-call answer must already be the reduced fixpoint (both signs cancel).
         assert out == ['acos', '<add>', 'tanh', 'acos', '<constant>',
@@ -775,8 +853,8 @@ class TestSignDistributionCanonicalUniqueness:
 
     def test_fuzz_row_7333_explicit_fixpoint(self, engine: SimpliPyEngine) -> None:
         x = ['/', '-', 'float("-inf")', 'acosh', '*', '1.111', 'atanh', 'x2', 'inv', '-2']
-        exp_out = engine.simplify(list(x), form='explicit')
-        assert engine.simplify(list(exp_out), form='explicit') == exp_out, exp_out
+        exp_out = engine.simplify(list(x))
+        assert engine.simplify(list(exp_out)) == exp_out, exp_out
 
     def test_neg_of_sum_distributes(self, engine: SimpliPyEngine) -> None:
         # neg(<add> a b </add>) canonicalizes to the flipped sum, same as parsing the
@@ -797,29 +875,30 @@ class TestLossyReciprocalRejoinProjection:
     in the distributed working canon (200k battery: P6 rows 822 -> 780, 0 added)."""
 
     def test_row_1414_joins_to_sound_form(self, engine: SimpliPyEngine) -> None:
-        x = ['inv', '*', 'acos', '*', 'float("inf")', 'x4', 'atan', 'asinh', 'x0']
+        x = engine.to_tagged(['inv', '*', 'acos', '*', 'float("inf")', 'x4',
+                              'atan', 'asinh', 'x0'])
         sound = engine.simplify(list(x))
-        lossy = engine.simplify(list(x), mode=Mode.LOSSY)
+        lossy = engine.simplify(list(x), mode=Mode.corpus)
         assert lossy == sound, (lossy, sound)
         assert lossy[:2] == ['inv', '<mul>'], lossy
 
     def test_partner_cancellation_survives(self, engine: SimpliPyEngine) -> None:
         x = ['*', 'acos', 'x0', 'inv', '*', 'acos', 'x0', 'atan', 'x1']
-        assert engine.simplify(list(x), mode=Mode.LOSSY) == ['inv', 'atan', 'x1']
+        assert engine.simplify(list(x), mode=Mode.corpus) == ['inv', 'atan', 'x1']
 
     def test_certified_pair_stays_distributed(self, engine: SimpliPyEngine) -> None:
         # Where sound's zero-set licence certifies the split, both modes keep the
         # distributed form: the two canons agree and mined rules keep matching.
-        x = ['inv', '*', 'acos', 'x0', 'atan', 'x1']
+        x = engine.to_tagged(['inv', '*', 'acos', 'x0', 'atan', 'x1'])
         sound = engine.simplify(list(x))
-        lossy = engine.simplify(list(x), mode=Mode.LOSSY)
+        lossy = engine.simplify(list(x), mode=Mode.corpus)
         assert lossy == sound == ['<mul>', '<div>', 'acos', 'x0', 'atan', 'x1', '</mul>']
 
     def test_literal_infinity_never_joins(self, engine: SimpliPyEngine) -> None:
         # inv(inf) is a determined zero (the mask-sentinel cancellation partner);
         # joining it into an opaque base would hide that fold.
         x = ['inv', '*', 'float("inf")', '*', 'acos', '*', 'x4', 'x1', 'atan', 'x0']
-        out = engine.simplify(list(x), mode=Mode.LOSSY)
+        out = engine.simplify(list(x), mode=Mode.corpus)
         assert out[:2] != ['inv', '<mul>'], out
 
     def test_lossy_idempotent_through_projection(self, engine: SimpliPyEngine) -> None:
@@ -828,8 +907,8 @@ class TestLossyReciprocalRejoinProjection:
             ['*', 'acos', 'x0', 'inv', '*', 'acos', 'x0', 'atan', 'x1'],
             ['inv', '*', 'float("inf")', '*', 'acos', '*', 'x4', 'x1', 'atan', 'x0'],
         ):
-            once = engine.simplify(list(x), mode=Mode.LOSSY)
-            assert engine.simplify(list(once), mode=Mode.LOSSY) == once, x
+            once = engine.simplify(list(x), mode=Mode.corpus)
+            assert engine.simplify(list(once), mode=Mode.corpus) == once, x
 
 
 class TestF68ConstructionRouteConfluence:
@@ -869,22 +948,22 @@ class TestF68ConstructionRouteConfluence:
     @pytest.mark.parametrize('row,src', SOUND_ROWS, ids=[r for r, _ in SOUND_ROWS])
     def test_sound_explicit_roundtrip_is_a_fixpoint(
             self, engine: SimpliPyEngine, row: str, src: str) -> None:
-        out = engine.simplify(src.split(), form='explicit')
-        assert engine.simplify(list(out), form='explicit') == out, out
+        out = engine.simplify(src.split())
+        assert engine.simplify(list(out)) == out, out
 
     @pytest.mark.parametrize('row,src', LOSSY_ROWS, ids=[r for r, _ in LOSSY_ROWS])
     def test_lossy_is_a_fixpoint(self, engine: SimpliPyEngine, row: str, src: str) -> None:
-        once = engine.simplify(src.split(), mode=Mode.LOSSY)
-        assert engine.simplify(list(once), mode=Mode.LOSSY) == once, once
+        once = engine.simplify(src.split(), mode=Mode.corpus)
+        assert engine.simplify(list(once), mode=Mode.corpus) == once, once
 
     def test_kept_zero_files_one_state_for_both_mirrors(self, engine: SimpliPyEngine) -> None:
         # 0 * (1/2 - acos x4) and 0 * (acos x4 - 1/2) are value-equal (the zero eats
         # the sign); pre-F68 each arrival froze its own spelling.
-        a = engine.simplify('* 0 - / 1 2 acos x4'.split(), form='explicit')
-        b = engine.simplify('* 0 - acos x4 / 1 2'.split(), form='explicit')
+        a = engine.simplify('* 0 - / 1 2 acos x4'.split())
+        b = engine.simplify('* 0 - acos x4 / 1 2'.split())
         assert a == b, (a, b)
-        nested_a = engine.simplify('* 0 * pow x1 x0 - / 1 2 acos x4'.split(), form='explicit')
-        nested_b = engine.simplify('* 0 * pow x1 x0 - acos x4 / 1 2'.split(), form='explicit')
+        nested_a = engine.simplify('* 0 * pow x1 x0 - / 1 2 acos x4'.split())
+        nested_b = engine.simplify('* 0 * pow x1 x0 - acos x4 / 1 2'.split())
         assert nested_a == nested_b, (nested_a, nested_b)
 
     def test_both_mirror_classes_of_the_distributed_form_are_stable(
@@ -895,14 +974,14 @@ class TestF68ConstructionRouteConfluence:
             '<mul> x0 <div> <add> x1 <sub> log x4 </add> <add> x2 <sub> 1 </add> </mul>',
             '<mul> x0 <div> <add> log x4 <sub> x1 </add> <add> 1 <sub> x2 </add> </mul>',
         ):
-            once = engine.simplify(spelling.split(), mode=Mode.LOSSY)
-            assert engine.simplify(list(once), mode=Mode.LOSSY) == once, spelling
+            once = engine.simplify(spelling.split(), mode=Mode.corpus)
+            assert engine.simplify(list(once), mode=Mode.corpus) == once, spelling
 
 
 class TestF72ArrivalInvariantSignDecisions:
     """F72 (2026-08-09): two arrival-order leaks in the sign machinery, exposed by the
     extreme lane's first fresh census after F62..F71 (extreme-lane campaign,
-    remine/EXTREME_CENSUS_2026-08-09.md).
+    the research harness).
 
     * INTERNING-ORDER TIE-BREAK (P2 rows 829655/866090 -- the census's only NEW kind,
       a regression of the F62..F71 window itself): sign_place's residual equal-mu tie
@@ -947,8 +1026,8 @@ class TestF72ArrivalInvariantSignDecisions:
     def test_p2_rows_are_permutation_invariant(
             self, engine: SimpliPyEngine, row: str, src: str, swapped: str) -> None:
         assert engine.simplify(src.split()) == engine.simplify(swapped.split())
-        assert (engine.simplify(src.split(), mode=Mode.LOSSY)
-                == engine.simplify(swapped.split(), mode=Mode.LOSSY))
+        assert (engine.simplify(src.split(), mode=Mode.corpus)
+                == engine.simplify(swapped.split(), mode=Mode.corpus))
 
     def test_partition_sign_host_is_route_invariant(self, engine: SimpliPyEngine) -> None:
         a = engine.simplify(['*', '-0.9999999999999999', self.P])
@@ -1010,22 +1089,22 @@ class TestF73PartitionAtomRendering:
         src = ['*', self.A3, self.A3]
         t = engine.simplify(list(src))
         assert engine.simplify(list(t)) == t, t
-        x = engine.simplify(list(src), form='explicit')
-        assert engine.simplify(list(x), form='explicit') == x, x
-        infix = engine.simplify(list(src), form='infix')
+        x = engine.simplify(list(src))
+        assert engine.simplify(list(x)) == x, x
+        infix = engine.simplify(engine.to_infix(list(src)))
         back = engine._core.parse(infix, True, False)
         assert engine.simplify(list(back)) == t, infix
 
     def test_reparse_pool_state_is_its_own_fixpoint(self, engine: SimpliPyEngine) -> None:
         # `(a*a)/9` pools to the {a/9, a} cut; its rendering must reproduce that cut.
         a = '170141183460469231731687303715884105727'
-        x = engine.simplify(['/', '*', a, a, '9'], form='explicit')
-        assert engine.simplify(list(x), form='explicit') == x, x
+        x = engine.simplify(['/', '*', a, a, '9'])
+        assert engine.simplify(list(x)) == x, x
 
     def test_safe_fraction_rendering_is_unchanged(self, engine: SimpliPyEngine) -> None:
         # A single rational member is no partition: the pretty forms stay.
-        assert engine.simplify(['*', '1/3', 'x0'], form='explicit') == ['/', 'x0', '3']
-        assert engine.simplify(['*', '1/3', 'x0'], form='infix') == 'x0/3'
+        assert engine.simplify(['*', '1/3', 'x0']) == ['/', 'x0', '3']
+        assert engine.simplify(engine.to_infix(['*', '1/3', 'x0'])) == 'x0/3'
 
     HEALED_ROWS = [
         ('5215',
@@ -1042,8 +1121,8 @@ class TestF73PartitionAtomRendering:
             self, engine: SimpliPyEngine, row: str, src: str) -> None:
         once = engine.simplify(src.split())
         assert engine.simplify(list(once)) == once, once
-        exp = engine.simplify(src.split(), form='explicit')
-        assert engine.simplify(list(exp), form='explicit') == exp, exp
+        exp = engine.simplify(src.split())
+        assert engine.simplify(list(exp)) == exp, exp
 
 
 class TestConstSumSignAbsorption:
@@ -1060,12 +1139,13 @@ class TestConstSumSignAbsorption:
              'acos', '<constant>', '/', '1', '3']
         out = engine.simplify(list(x))
         assert 'neg' not in out, out
-        infix = engine.simplify(list(x), form='infix')
+        infix = engine.simplify(engine.to_infix(list(x)))
         back = engine._core.parse(infix, True, False)
         assert engine.simplify(list(back)) == out, (infix, back)
 
     def test_mixed_sum_sign_lands_on_nonconst_term(self, engine: SimpliPyEngine) -> None:
-        out = engine.simplify(['neg', '+', '*', '<constant>', 'x4', 'tanh', 'x1'])
+        out = engine.simplify(engine.to_tagged(
+            ['neg', '+', '*', '<constant>', 'x4', 'tanh', 'x1']))
         # The Const term refits sign-free; tanh carries the sign (pushed inside by the
         # odd-function sign-pull rule).
         assert out == ['<add>', 'tanh', 'neg', 'x1',
@@ -1077,7 +1157,7 @@ class TestConstSumSignAbsorption:
         x = ['/', 'neg', '+', '*', '<constant>', 'x0', 'atan', 'x1', '3.89']
         out = engine.simplify(list(x))
         assert engine.simplify(list(out)) == out
-        infix = engine.simplify(list(x), form='infix')
+        infix = engine.simplify(engine.to_infix(list(x)))
         back = engine._core.parse(infix, True, False)
         assert engine.simplify(list(back)) == out, (infix, back)
 
@@ -1102,17 +1182,18 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
 
     def test_unpartnered_sentinel_expires_and_chain_continues(self, engine: SimpliPyEngine) -> None:
         x = ['sin', 'cos', '+', '*', '<constant>', 'inv', 'float("inf")', 'neg', 'x2']
-        assert engine.simplify(list(x), mode=Mode.LOSSY) == \
+        assert engine.simplify(list(x), mode=Mode.corpus) == \
             engine.simplify(list(x)) == ['sin', 'cos', 'x2']
 
     def test_mask_doctrine_survives_expiry(self, engine: SimpliPyEngine) -> None:
         # A PARTNERED sentinel cancels in phase 1, before the licence expires.
         x = ['*', '/', 'float("inf")', 'float("inf")', 'x0']
-        assert engine.simplify(list(x), mode=Mode.LOSSY) == ['x0']
+        assert engine.simplify(list(x), mode=Mode.corpus) == ['x0']
 
     def test_coefficient_reciprocates_into_joined_base(self, engine: SimpliPyEngine) -> None:
-        x = ['*', '0.5', 'inv', '*', 'x4', '+', 'x3', '+', 'tan', 'x0', '/', '1', '3']
-        out = engine.simplify(list(x), mode=Mode.LOSSY)
+        x = engine.to_tagged(
+            ['*', '0.5', 'inv', '*', 'x4', '+', 'x3', '+', 'tan', 'x0', '/', '1', '3'])
+        out = engine.simplify(list(x), mode=Mode.corpus)
         # RE-PINNED 2026-08-11 (E2, audit F81): the tan-bearing sum now passes the
         # zero-set licence (denominator clearing), so the kept carrier DISTRIBUTES
         # and renders in the flat F80 spelling. The guarded behaviour is unchanged:
@@ -1123,14 +1204,14 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
         assert out == ['<mul>', '1', '<div>', '2', 'x4', '<add>', 'x3', 'tan', 'x0',
                        '<mul>', '1', '<div>', '3', '</mul>',
                        '</add>', '</mul>'], out
-        assert engine.simplify(list(out), mode=Mode.LOSSY) == out
+        assert engine.simplify(list(out), mode=Mode.corpus) == out
 
     def test_neg_one_coefficient_joins_inside(self, engine: SimpliPyEngine) -> None:
-        x = ['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'pow', 'x3', 'x4']
-        out = engine.simplify(list(x), mode=Mode.LOSSY)
+        x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'pow', 'x3', 'x4'])
+        out = engine.simplify(list(x), mode=Mode.corpus)
         assert out == ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3',
                        'x4', '</add>', '</mul>'], out
-        assert engine.simplify(list(out), mode=Mode.LOSSY) == out
+        assert engine.simplify(list(out), mode=Mode.corpus) == out
 
 
 class TestC36DropCensus:
@@ -1143,7 +1224,11 @@ class TestC36DropCensus:
             (("+", "?0", "0"), ("?0",)),                       # kept
             (("+", "?0", "0"), ("+", "?0", "0")),              # arithmetic-subsumed (lhs==rhs)
             (("sin", "?0"), ("+", "?0", "<constant>")),        # const-count-increase
-            (("?0",), ("sin", "?0")),                          # catch-all lhs
+            # Catch-all lhs. The SORT is load-bearing here since the dedup key became the
+            # internal form (2026-08-18): `?0` would key identically to the kept rule
+            # above (whose lhs `+ ?0 0` canonicalises to `?0`), so the specimen would be
+            # deduplicated away before translate ever classified it.
+            (("_0",), ("sin", "_0")),                          # catch-all lhs
             (("+", "?0", "1"), ("+", "?0", "?1")),             # unbound rhs wildcard
             (("sin", "sin", "?0"), ("+", "sin", "sin", "?0", "1")),  # not ordered below
         ]

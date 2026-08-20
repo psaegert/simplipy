@@ -17,6 +17,15 @@ modes, so the kinds live here rather than being re-invented by every consumer:
 * :func:`mask_fittable` -- every number a constant optimizer can actually fit, KEEPING the
   ones it cannot (``pow`` exponents, ``rootn`` indices). For training data.
 
+TWO KINDS, TWO NAMES -- and they are the SAME kind. ``mask_values_keep_structure`` was
+this module's original name for :func:`mask_fittable` and has been a bare alias since the
+rename; it is REMOVED in 0.14.0. There is no third semantics hiding
+behind the older name: "mask the values, keep the structure" partitions :class:`Role` into
+``{COEFFICIENT, ADDEND, VALUE}`` and ``{EXPONENT, ROOT_INDEX}``, which is exactly the
+partition :func:`mask_fittable` applies. The two names say one thing from two sides --
+WHAT is kept, and WHY it must be (an unfittable literal controls the expression's DOMAIN
+rather than its magnitude).
+
 A custom ``(value, role) -> str | None`` policy remains the primitive, so any other rule
 (mask only floats, keep a given vocabulary, ...) is a one-line function.
 
@@ -86,15 +95,19 @@ Example (the flash-ansr-style policy)::
     skeleton = masking.mask(engine.simplify(tokens), engine, keep_structure)
 """
 import enum
-from typing import TYPE_CHECKING, Callable, Optional, cast
+import warnings
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from simplipy.utils import is_numeric_string, reserved_numeric_spelling
 
 if TYPE_CHECKING:
     from simplipy.engine import SimpliPyEngine
 
-__all__ = ["Role", "literal_sites", "mask", "mask_all", "mask_fittable",
-           "mask_values_keep_structure"]
+# The DECLARED surface. `mask_values_keep_structure` is deliberately absent: it is a
+# deprecated spelling of `mask_fittable`, still reachable (with a warning) through the
+# module, but no longer advertised or bound by `import *`. The typing
+# helpers this module imports were never part of the surface either.
+__all__ = ["Role", "literal_sites", "mask", "mask_all", "mask_fittable"]
 
 
 class Role(enum.Enum):
@@ -190,10 +203,6 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
     return sites
 
 
-def _is_tagged(tokens: list[str]) -> bool:
-    return any(t in ("<mul>", "<add>", "</mul>", "</add>", "<div>", "<sub>") for t in tokens)
-
-
 def mask(tokens: list[str], engine: "SimpliPyEngine",
          policy: Callable[[str, Role], Optional[str]], *, collect: bool = True) -> list[str]:
     """Apply a masking ``policy``: ``policy(value, role)`` returns the replacement token,
@@ -220,9 +229,11 @@ def mask(tokens: list[str], engine: "SimpliPyEngine",
         if replacement is not None:
             out[idx] = replacement
     if collect and out != list(tokens):
-        # simplify mirrors the input container: a list in is a list out.
-        out = cast(list[str],
-                   engine.simplify(out, form="tagged" if _is_tagged(tokens) else "explicit"))
+        # simplify mirrors the input container AND the input DIALECT (owner ruling
+        # 2026-08-18), so the collect stage needs no projection argument: a tagged
+        # sequence comes back tagged, an explicit one explicit. The masked `out` carries
+        # the same delimiters as `tokens` -- a policy replaces literals, never tags.
+        out = cast(list[str], engine.simplify(out))
     return out
 
 
@@ -253,11 +264,10 @@ def mask_fittable(value: str, role: Role) -> Optional[str]:
 
     Everything else is smooth in its literal (``c*x``, ``x+c``, ``log(c*x)``) and is
     masked. This is the policy for training-data preparation.
+
+    Formerly ``mask_values_keep_structure`` -- the same policy under the name that says
+    what it keeps rather than why. That spelling is removed in 0.14.0.
     """
     if role in (Role.EXPONENT, Role.ROOT_INDEX):
         return None
     return "<constant>"
-
-
-#: Historical name for :func:`mask_fittable`, kept so existing callers keep working.
-mask_values_keep_structure = mask_fittable

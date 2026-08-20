@@ -1,34 +1,35 @@
-# The Mining Algorithm (Formal)
+# The mining algorithm (formal)
 
-This page is the formally typeset specification of `SimpliPyEngine.find_rules` **as of
-the 0.6.0–0.9.x kernel** — the companion to the prose walkthrough in
-[Creating Rulesets](rules.md): Algorithm 1 is the discovery loop, Algorithm 2 the
-per-pair equivalence certification (`Equivalent⁺`).
+This page is the typeset specification of `SimpliPyEngine.find_rules`, and the
+companion to the prose walkthrough in [Creating rulesets](rules.md). Algorithm 1
+is the discovery loop; Algorithm 2 is the per-pair equivalence certification
+(`Equivalent⁺`).
 
-**Scope note for 0.12.** The discovery loop's shape (complete source universes per
-length, constant fitting, pairwise certification, covered-pruning) survives, but 0.12's
-miner certifies against the AC engine under the μ ordering with substantially stronger
-gates than the ones typeset here — interval-corroborated ground folds, the
-special-constant policy, class preservation, and sort promotion, all specified in
-[The Simplification Engine (Formal)](formal.md) and summarized in the 0.12.0 CHANGELOG.
-Treat this page as the loop's skeleton and the historical certification; a full
-re-typeset against the 0.12 miner is pending.
+**Scope.** The typeset pages specify the kernel of the 0.6.0–0.9.x line. The
+discovery loop's shape is unchanged since — complete source universes per
+length, constant fitting, pairwise certification, covered-pruning — and
+Algorithm 2's numeric certification still describes what the miner does per
+pair. Four things the pages predate are now part of the pipeline:
+
+- Certification runs against the current engine under the unified simplicity
+  measure, with stronger gates than the ones typeset here: interval-corroborated ground
+  folds, the special-constant policy, class preservation, and sort promotion.
+  These are specified in
+  [The simplification engine (formal)](formal.md).
+- Acceptance rides the serve-time reduction ordering: a target must strictly
+  descend the simplicity measure below the engine's own mark for the source
+  ([formal.md](formal.md) §5).
+- Matched `<constant>` slots on constant-free sources are resolved to literal
+  tokens at the 1024-bit arbiter, behind a structural respell guard.
+- Every mined rule passes stage-2 confirmation on an independent matrix, and the
+  surviving set is covered-pruned and sort-promoted before it ships.
+
+Read this page as the loop's skeleton and its historical certification. The
+prose walkthrough in [Creating rulesets](rules.md) describes the current
+pipeline in full; a re-typeset against the current miner is not yet done.
 
 Downloads: [PDF](assets/algorithm/simplipy_mining_algorithm.pdf) ·
 [LaTeX source](assets/algorithm/simplipy_mining_algorithm.tex)
-
-**0.12 status.** The typeset pages remain accurate for the discovery loop's *shape*
-(enumerate → certify → dedup per length) and for Algorithm 2's numeric certification,
-but 0.12 layers four stages the pages predate: acceptance now **rides the serve-time
-reduction ordering** (a target must strictly descend the unified simplicity measure
-below the engine's own mark for the source — see [formal.md](formal.md) §5), matched
-`<constant>` slots on constant-free sources are **resolved to literal tokens** at the
-1024-bit arbiter (with a structural respell guard), every mined rule passes **stage-2
-confirmation** on an independent matrix, and the surviving set is **covered-pruned and
-sort-promoted** before it ships. The prose walkthrough in
-[Creating Rulesets](rules.md) describes the full current pipeline; the per-parameter
-sensitivity of the published mines is audited (seeds, sample size, tolerances,
-alphabet, dummy count — 2026-08).
 
 ![SimpliPy Rule Discovery — Algorithm 1](assets/algorithm/page1.svg)
 
@@ -40,7 +41,7 @@ alphabet, dummy count — 2026-08).
 |---|---|
 | challenges $K$, retries $R$ | `constants_fit_challenges`, `constants_fit_retries` |
 | tolerances rtol/atol | `rtol`, `atol` |
-| master seed $s$ | `seed` (reproduces the mine byte-for-byte) |
+| master seed $s$ | `seed` (reproduces the mine byte for byte) |
 | evaluation matrix $X$ (heavy-tailed mixture) | `X` (`n_samples` in a mining config) + seeded mixture spec |
 | evidence floor $m_{\min}$ | `min_informative` |
 | candidate fold filter | `candidate_fold_filter` |
@@ -51,9 +52,10 @@ alphabet, dummy count — 2026-08).
 
 ## Determinism contract
 
-A mine is a pure function of its configuration: one master seed derives the evaluation
-matrices and every per-length, per-source, and per-rule seed. Chunked and monolithic
-runs are bit-identical (per-source seed = length-seed + index), stage-2 verdicts are
-order-independent (content-derived per-rule seeds), and the enumeration is asserted
-against an exact counting recurrence on every run — a mine that cannot prove its
-universe complete (or its sample valid) aborts rather than under-covering silently.
+A mine is a pure function of its configuration. One master seed derives the
+evaluation matrices and every per-length, per-source and per-rule seed. Chunked
+and monolithic runs are bit-identical (a per-source seed is the length seed plus
+the index), stage-2 verdicts are order-independent (per-rule seeds are derived
+from content), and the enumeration is asserted against an exact counting
+recurrence on every run: a mine that cannot prove its universe complete, or its
+sample valid, aborts rather than under-covering silently.

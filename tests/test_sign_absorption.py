@@ -39,10 +39,10 @@ def _engine() -> SimpliPyEngine:
 class TestExplicitSignDoctrine:
     def test_negative_coefficient_spells_signed_literal(self) -> None:
         engine = _engine()
-        assert engine.simplify(["*", "(-2)", "x0"], form="explicit") == ["*", "-2", "x0"]
+        assert engine.simplify(["*", "(-2)", "x0"]) == ["*", "-2", "x0"]
         # -1/2 has no coefficient LITERAL under argmin spelling (`1/2` beats `0.5`), so
         # the sign has nothing to ride and the pure-sign case applies. Doctrine intact.
-        assert engine.simplify(["*", "(-0.5)", "x0"], form="explicit") == ["/", "neg", "x0", "2"]
+        assert engine.simplify(["*", "(-0.5)", "x0"]) == ["/", "neg", "x0", "2"]
 
     def test_computed_negative_fold_carries_its_sign(self) -> None:
         """The fold of a ground subtree lands as ONE signed token, never `neg` + magnitude
@@ -54,17 +54,17 @@ class TestExplicitSignDoctrine:
         # -3/2 spells as the fraction under argmin, so the fold lands as a signed
         # NUMERATOR literal (`-3`) rather than a signed decimal (`-1.5`): still ONE
         # signed token, never `neg` + magnitude, which is what this test guards.
-        assert engine.simplify(["*", "x0", "/", "(-3)", "2"], form="explicit") == \
+        assert engine.simplify(["*", "x0", "/", "(-3)", "2"]) == \
             ["/", "*", "-3", "x0", "2"]
         # The old fixture's state stays symbolic under mu (rounding refused).
-        out = engine.simplify(["*", "x0", "sin", "(-1)"], form="explicit")
+        out = engine.simplify(["*", "x0", "sin", "(-1)"])
         assert "sin" in out and not any("0.84" in t for t in out), out
 
     def test_rational_split_signs_the_numerator_literal(self) -> None:
         """A negative non-decimal rational routes through the division display with the
         sign on the numerator's coefficient literal."""
         engine = _engine()
-        assert engine.simplify(["*", "(-2)", "/", "x0", "3"], form="explicit") == \
+        assert engine.simplify(["*", "(-2)", "/", "x0", "3"]) == \
             ["/", "*", "-2", "x0", "3"]
 
     def test_pure_sign_keeps_neg(self) -> None:
@@ -77,12 +77,12 @@ class TestExplicitSignDoctrine:
         the den token stays positive. Pretty infix still leads with the sign
         (`-x0/3`)."""
         engine = _engine()
-        assert engine.simplify(["neg", "x0"], form="explicit") == ["neg", "x0"]
-        assert engine.simplify(["*", "neg", "np.pi", "x0"], form="explicit") == \
+        assert engine.simplify(["neg", "x0"]) == ["neg", "x0"]
+        assert engine.simplify(["*", "neg", "np.pi", "x0"]) == \
             ["neg", "*", "np.pi", "x0"]
-        assert engine.simplify(["*", "(-1)", "/", "x0", "3"], form="explicit") == \
+        assert engine.simplify(["*", "(-1)", "/", "x0", "3"]) == \
             ["/", "neg", "x0", "3"]
-        assert engine.simplify(["*", "(-1)", "/", "x0", "3"], form="infix") == "-x0/3"
+        assert engine.simplify(engine.to_infix(["*", "(-1)", "/", "x0", "3"])) == "-x0/3"
 
     def test_absorbed_spelling_is_fixpoint(self) -> None:
         """The parser reads the absorbed spelling back to the same state: emission is
@@ -91,7 +91,7 @@ class TestExplicitSignDoctrine:
         for spelled in (["*", "-2", "x0"],
                         ["/", "neg", "x0", "2"],   # -1/2: the argmin spelling is the fixpoint
                         ["/", "*", "-2", "x0", "3"]):
-            assert engine.simplify(spelled, form="explicit") == spelled
+            assert engine.simplify(spelled) == spelled
 
 
 class TestDialectCongruence:
@@ -101,7 +101,7 @@ class TestDialectCongruence:
 
     def test_tagged_spelling_unchanged(self) -> None:
         engine = _engine()
-        assert engine.simplify(["*", "(-2)", "x0"], form="tagged") == \
+        assert engine.simplify(engine.to_tagged(["*", "(-2)", "x0"])) == \
             ["<mul>", "-2", "x0", "</mul>"]
 
     def test_additive_signs_stay_structural_in_both_dialects(self) -> None:
@@ -110,8 +110,8 @@ class TestDialectCongruence:
         # The 1/2 coefficient takes its argmin spelling in BOTH dialects (explicit `/ x1 2`,
         # tagged `<div> 2`); what this test guards is that the ADDITIVE sign stays
         # structural -- binary `-` and `<sub>` -- which it does.
-        assert engine.simplify(source, form="explicit") == ["-", "x2", "/", "x1", "2"]
-        assert engine.simplify(source, form="tagged") == \
+        assert engine.simplify(source) == ["-", "x2", "/", "x1", "2"]
+        assert engine.simplify(engine.to_tagged(source)) == \
             ["<add>", "x2", "<sub>", "<mul>", "x1", "<div>", "2", "</mul>", "</add>"]
 
 
@@ -126,11 +126,11 @@ class TestMaskedSkeletonInheritsSigns:
         # STAGE 2: same fixture move as above -- an exact rational fold carries the
         # doctrine (the transcendental one stays symbolic under mu).
         engine = _engine()
-        folded = engine.simplify(["*", "x0", "/", "(-3)", "2"], form="explicit")
-        skeleton = masking.mask(folded, engine, masking.mask_values_keep_structure)
+        folded = engine.simplify(["*", "x0", "/", "(-3)", "2"])
+        skeleton = masking.mask(folded, engine, masking.mask_fittable)
         assert skeleton == ["*", "<constant>", "x0"]
-        tagged = engine.simplify(["*", "x0", "/", "(-3)", "2"], form="tagged")
-        assert masking.mask(tagged, engine, masking.mask_values_keep_structure) == \
+        tagged = engine.simplify(engine.to_tagged(["*", "x0", "/", "(-3)", "2"]))
+        assert masking.mask(tagged, engine, masking.mask_fittable) == \
             ["<mul>", "<constant>", "x0", "</mul>"]
 
     def test_masked_subtraction_stays_structural(self) -> None:
@@ -140,6 +140,6 @@ class TestMaskedSkeletonInheritsSigns:
         # stage normalizes `x0 - c` to `x0 + c` (owner ruling 2026-08-07: "I'd prefer
         # addition by a constant instead of subtraction"). A negative fitted value is a
         # RENDERING question at substitution time, not a skeleton one.
-        explicit = engine.simplify(["-", "x0", "0.5"], form="explicit")
-        assert masking.mask(explicit, engine, masking.mask_values_keep_structure) == \
+        explicit = engine.simplify(["-", "x0", "0.5"])
+        assert masking.mask(explicit, engine, masking.mask_fittable) == \
             ["+", "x0", "<constant>"]

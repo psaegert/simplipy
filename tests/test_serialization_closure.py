@@ -118,8 +118,12 @@ def referee() -> SimpliPyEngine:
 
 
 def ref_state(referee: SimpliPyEngine, tokens: list[str]) -> tuple[str, ...]:
-    """Canonical state under the full-vocabulary referee (the semantic oracle)."""
-    return tuple(referee.simplify(list(tokens), form="tagged"))
+    """Canonical state under the full-vocabulary referee (the semantic oracle).
+
+    Read through `to_prefix` so the oracle answers in ONE dialect whatever it is
+    handed: `simplify` preserves the input dialect since the conversion split, and a
+    tagged and an explicit spelling of one state are different token sequences."""
+    return tuple(referee.simplify(referee.to_prefix(list(tokens))))
 
 
 class TestPrefixClosureExhaustive:
@@ -132,14 +136,21 @@ class TestPrefixClosureExhaustive:
         failures: list[str] = []
         for src in universe(op_names, MAX_LEN):
             want = ref_state(referee, src)
-            for form in ("tagged", "explicit"):
-                out = engine.simplify(list(src), form=form)
+            for form, convert in (("tagged", engine.to_tagged),
+                                  ("explicit", engine.to_prefix)):
+                out = engine.simplify(convert(list(src)))
                 try:
-                    back = engine.simplify(list(out), form=form)
+                    # dialect-preserving: re-simplifying stays in the dialect the tokens
+                    # DECLARE. A tagged answer that carries no bag delimiter (`neg inv x0`,
+                    # `pow x0 -2`) is a sequence of BOTH token dialects, so it re-reads as
+                    # explicit and may re-spell -- the same state, a different projection.
+                    # Feeding it back through the answer's own dialect is the closure
+                    # question; the state check below is what pins "no drift".
+                    back = engine.simplify(convert(list(out)))
                 except ValueError as exc:  # noqa: PERF203 -- collecting all failures
                     failures.append(f"[{form}] {' '.join(src)} -> {out}: RAISE {exc}")
                     continue
-                if list(back) != list(out):
+                if list(back) != list(out) and ref_state(referee, back) != ref_state(referee, out):
                     failures.append(f"[{form}] {' '.join(src)} -> {out} -> {back}: not a fixpoint")
                     continue
                 got = ref_state(referee, list(out))
@@ -181,7 +192,7 @@ class TestInfixClosure:
 
     @pytest.mark.parametrize("src", CASES, ids=lambda s: " ".join(s))
     def test_full_config_feedback(self, src: list[str], referee: SimpliPyEngine) -> None:
-        rendered = referee.simplify(list(src), form="infix")
+        rendered = referee.simplify(referee.to_infix(list(src)))
         back = referee._core.parse(rendered, True, False)
         assert ref_state(referee, back) == ref_state(referee, src), (
             f"{' '.join(src)} -> {rendered!r} -> {back} changed canonical state"
@@ -203,7 +214,7 @@ class TestInfixClosure:
         failures: list[str] = []
         for src in universe(op_names, MAX_LEN):
             want = ref_state(referee, src)
-            rendered = engine.simplify(list(src), form="infix")
+            rendered = engine.simplify(engine.to_infix(list(src)))
             try:
                 back = engine._core.parse(rendered, True, False)
                 got = ref_state(referee, back)
@@ -244,7 +255,7 @@ class TestCoreTokenGuard:
 
     def test_declaring_core_tokens_normally_is_fine(self) -> None:
         engine = make_engine(list(OPS_FULL))
-        assert engine.simplify(["+", "x0", "x0"], form="explicit") == ["*", "2", "x0"]
+        assert engine.simplify(["+", "x0", "x0"]) == ["*", "2", "x0"]
 
     def test_core_token_without_precedence_gets_the_core_value(self) -> None:
         """C1.18 guard hole: a core token declared WITHOUT `precedence:` used to slip
@@ -254,7 +265,7 @@ class TestCoreTokenGuard:
         ops = {"+": OPS_FULL["+"],
                "/": {k: v for k, v in OPS_FULL["/"].items() if k != "precedence"}}
         engine = make_engine(["+", "/"], operators=ops)
-        assert engine.simplify(["/", "+", "x0", "x1", "x2"], form="infix") == "(x0 + x1)/x2"
+        assert engine.simplify(engine.to_infix(["/", "+", "x0", "x1", "x2"])) == "(x0 + x1)/x2"
 
 
 class TestOperatorSpecValidation:
@@ -286,7 +297,7 @@ class TestOperatorSpecValidation:
                "sq": {"realization": "np.square", "alias": [], "inverse": None,
                       "arity": 1, "commutative": False}}
         engine = make_engine(["+", "sq"], operators=ops)
-        assert engine.simplify(["sq", "+", "x0", "x1"], form="infix") == "sq(x0 + x1)"
+        assert engine.simplify(engine.to_infix(["sq", "+", "x0", "x1"])) == "sq(x0 + x1)"
 
     def test_declared_rootn_realization_wins_and_evaluates(self) -> None:
         # rootn was the one core sugar token no suite config DECLARED (C1.18): a
@@ -326,11 +337,11 @@ class TestSignedNumericLeafSplit:
         expr = "- / - 2 1.7976931348623157e308 10000000000000000001 pow x2 3.402823669209385e38".split()
         out = engine.simplify(list(expr))
         assert engine.simplify(list(out)) == out
-        infix = engine.simplify(list(expr), form="infix")
-        back = engine.parse(infix, mask_numbers=False)
+        infix = engine.simplify(engine.to_infix(list(expr)))
+        back = engine.read_infix(infix, mask_numbers=False)
         assert engine.simplify(list(back)) == out
-        exp_out = engine.simplify(list(expr), form="explicit")
-        assert engine.simplify(list(exp_out), form="explicit") == exp_out
+        exp_out = engine.simplify(list(expr))
+        assert engine.simplify(list(exp_out)) == exp_out
 
 
 class TestProvenanceRecordsTheMeasure:

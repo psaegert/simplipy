@@ -24,8 +24,8 @@ import numpy as np
 # but carries no stability promise (see the compatibility policy).
 __all__ = [
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
-    'remap_expression', 'substitute_constants', 'substitude_constants',
-    'construct_expressions', 'numbers_to_constant', 'is_numeric_string',
+    'remap_expression', 'substitute_constants', 
+    'construct_expressions', 'is_numeric_string',
     'enumerate_expressions', 'count_expressions', 'sample_expression',
     'compositions',
 ]
@@ -245,15 +245,15 @@ def substitute_constants(prefix_expression: list[str], values: list | np.ndarray
     Examples
     --------
     >>> expr = ['*', '<constant>', '+', 'x', '<constant>']
-    >>> substitude_constants(expr, [3.14, 2.71])
+    >>> substitute_constants(expr, [3.14, 2.71])
     ['*', '3.14', '+', 'x', '2.71']
 
     >>> expr = ['*', 'C_0', '+', 'x', 'C_1']
-    >>> substitude_constants(expr, [3.14, 2.71], constants=['C_0', 'C_1'])
+    >>> substitute_constants(expr, [3.14, 2.71], constants=['C_0', 'C_1'])
     ['*', '3.14', '+', 'x', '2.71']
 
     >>> expr = ['*', 'k1', '+', 'x', 'k2']
-    >>> substitude_constants(expr, [3.14, 2.71], constants=['k1', 'k2'])
+    >>> substitute_constants(expr, [3.14, 2.71], constants=['k1', 'k2'])
     ['*', '3.14', '+', 'x', '2.71']
     """
     if inplace:
@@ -273,20 +273,6 @@ def substitute_constants(prefix_expression: list[str], values: list | np.ndarray
             constant_index += 1
 
     return modified_prefix_expression
-
-
-# Historic alias: the function shipped under this misspelling for its whole life, and
-# released consumers (symbolic-data <= 0.14, flash-ansr v23) import it by this name.
-# Warns from 0.13.0 per the compatibility policy (D11 column R19); removal not before
-# 0.15.0, and never while a shipped downstream still imports it.
-def substitude_constants(*args: Any, **kwargs: Any) -> list[str]:
-    """Deprecated misspelling of :func:`substitute_constants` (removal not
-    before 0.15.0)."""
-    warnings.warn(
-        '`substitude_constants` is a deprecated misspelling; use '
-        '`substitute_constants` (removal not before 0.15.0)',
-        DeprecationWarning, stacklevel=2)
-    return substitute_constants(*args, **kwargs)
 
 
 def apply_variable_mapping(prefix_expression: list[str], variable_mapping: dict[str, str]) -> list[str]:
@@ -316,60 +302,6 @@ def apply_variable_mapping(prefix_expression: list[str], variable_mapping: dict[
     ['+', 'x', 'y']
     """
     return list(map(lambda token: variable_mapping.get(token, token), prefix_expression))
-
-
-def numbers_to_constant(prefix_expression: list[str], inplace: bool = False) -> list[str]:
-    """Replace all numeric literals in a prefix expression with '<constant>'.
-
-    .. deprecated::
-        This is a role-blind shadow of the masking module and is unsafe on two counts:
-        it decides WHICH literals become abstract (a masking-policy question -- it masks
-        ``pow`` exponents and ``rootn`` indices, whose integrality controls the domain),
-        and it classifies by a bare ``float()`` probe, which also accepts the RESERVED
-        spellings (``inf``/``nan`` any case/sign, underscore groupings) and so mints a
-        finite-by-doctrine ``<constant>`` for a non-finite literal. Use
-        ``simplipy.masking.mask(tokens, engine, policy)`` with the policy that states
-        your intent (``mask_fittable`` for "what a constant optimizer can fit",
-        ``mask_values_keep_structure`` for recovery skeletons, ``mask_all`` for the
-        legacy behavior); for structural HASHING use ``normalize_skeleton``.
-
-    Parameters
-    ----------
-    prefix_expression : list[str]
-        The prefix expression to process.
-    inplace : bool, optional
-        If True, modifies the list in-place; otherwise, returns a new list.
-        Defaults to False.
-
-    Returns
-    -------
-    list[str]
-        The modified prefix expression.
-
-    Examples
-    --------
-    >>> expr = ['+', 'x', '3.14', '*', 'y', '-2']
-    >>> numbers_to_constant(expr)
-    ['+', 'x', '<constant>', '*', 'y', '<constant>']
-    """
-    warnings.warn(
-        "numbers_to_constant is deprecated: it is a role-blind masking decision with a "
-        "float()-probe classifier (accepts reserved inf/nan spellings). Use "
-        "simplipy.masking.mask(tokens, engine, policy) with an explicit policy instead.",
-        DeprecationWarning, stacklevel=2)
-    if inplace:
-        modified_prefix_expression = prefix_expression
-    else:
-        modified_prefix_expression = prefix_expression.copy()
-
-    for i, token in enumerate(prefix_expression):
-        try:
-            float(token)
-            modified_prefix_expression[i] = '<constant>'
-        except ValueError:
-            modified_prefix_expression[i] = token
-
-    return modified_prefix_expression
 
 
 def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False, *, convert_numbers_to_constant: bool) -> tuple[list[str], list[str]]:
@@ -606,30 +538,28 @@ def remap_expression(source_expression: list[str], dummy_variables: list[str], v
     return source_expression, variable_mapping
 
 
-def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?') -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
-    """Deduplicate a list of simplification rules by canonicalizing variables.
+# The dedup key of a rule side: either the engine's INTERNAL FORM (the AC parser
+# accepted the side) or, for a side the parser refuses, its raw spelling. The bool
+# keeps the two APART -- a tagged canonical key can be spelled exactly like a raw
+# token list (`sin _0` is both), and a malformed rule must never collide with a
+# well-formed one.
+_DedupKey = tuple[bool, tuple[str, ...]]
 
-    This function processes a list of (source, target) simplification rules. It
-    standardizes the variables in each rule to a canonical form and then
 
-    removes duplicates. If multiple rules simplify to different targets from
-    the same canonical source, it keeps the one with the shortest target.
+def _dedup_keyed_rules(
+        rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
+        dummy_variables: list[str],
+        engine: Any,
+        variable_prefix: str = '?',
+        verbose: bool = False) -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
+    """The variable-remapped rules paired with their dedup keys, in input order.
 
-    Parameters
-    ----------
-    rules_list : list[tuple[tuple[str, ...], tuple[str, ...]]]
-        The list of simplification rules to deduplicate.
-    dummy_variables : list[str]
-        A list of tokens to be treated as variables for remapping.
-    verbose : bool, optional
-        If True, displays a progress bar. Defaults to False.
-
-    Returns
-    -------
-    list[tuple[tuple[str, ...], tuple[str, ...]]]
-        The deduplicated and optimized list of simplification rules.
+    ONE key, every consumer: :func:`deduplicate_rules` folds this list, and the mine's
+    per-proposal duplicate accounting folds it identically. A second copy of the keying
+    would be free to drift from this one, and the accounting would then report a
+    'certified' rule the merge silently discards.
     """
-    deduplicated_rules: dict[tuple[str, ...], tuple[str, ...]] = {}
+    remapped: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
     for rule in tqdm(rules_list, desc='Deduplicating rules', disable=not verbose):
         # Rename variables in the source expression.
         #
@@ -641,16 +571,75 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
         # never remapped.
         remapped_source, variable_mapping = remap_expression(list(rule[0]), dummy_variables=dummy_variables, variable_prefix=variable_prefix)
         remapped_target, _ = remap_expression(list(rule[1]), dummy_variables, variable_mapping, variable_prefix=variable_prefix)
+        remapped.append((tuple(remapped_source), tuple(remapped_target)))
 
-        remapped_source_key = tuple(remapped_source)
-        remapped_target_value = tuple(remapped_target)
+    # THE KEY IS THE INTERNAL FORM, not the spelling (owner ruling 2026-08-18). Batched
+    # through the core in ONE call: a ruleset is keyed side-by-side and a per-rule call
+    # would re-pay the token-overlay setup for every entry.
+    keys = engine._core.ac_canonical_keys([list(source) for source, _ in remapped])
+    out: list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]] = []
+    for key, pair in zip(keys, remapped):
+        # A side the AC parser refuses keeps its SPELLING as the key: the loader drops
+        # such rules anyway (`unparseable-side`), and one malformed entry must not fail
+        # a whole ruleset.
+        out.append(((True, tuple(key)) if key is not None else (False, pair[0]), pair))
+    return out
 
-        existing_replacement = deduplicated_rules.get(remapped_source_key)
-        if existing_replacement is None or len(remapped_target_value) < len(existing_replacement):
-            # Found a better (shorter) target expression for the same source
-            deduplicated_rules[remapped_source_key] = remapped_target_value
 
-    return list(deduplicated_rules.items())
+def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Deduplicate a list of simplification rules by canonicalizing variables.
+
+    This function processes a list of (source, target) simplification rules. It
+    standardizes the variables in each rule to a canonical form and then
+
+    removes duplicates. If multiple rules simplify to different targets from
+    the same canonical source, it keeps the one with the shortest target.
+
+    Two rules are the SAME rule when ``engine`` translates their sources into the same
+    internal pattern -- not when they are spelled alike (owner ruling 2026-08-18,
+    "instead of comparing spelling, compare internal form"). ``* (-1) asin _0`` and
+    ``* asin _0 (-1)`` are one rule; keying on the spelling shipped both, and the second
+    could never fire because the first already owns every subject it matches.
+
+    The key is the BARE-context canonical form -- the one
+    :func:`~simplipy._core.Engine.ac_canonical_keys` computes, which is literally what
+    the rule loader builds for a rule side. It is deliberately NOT
+    :meth:`~simplipy.engine.SimpliPyEngine.to_prefix`/``to_tagged``: those run the
+    rewrite pass under the LOADED ruleset and the full certificate context, so on an
+    engine holding acj-4-3 ``to_prefix(['*','(-1)','asin','_0'])`` returns
+    ``asin neg _0`` -- that rule's own target -- while a rules-less engine over the same
+    vocabulary returns ``neg asin _0``. A dedup key that depends on the ruleset being
+    deduplicated is circular; this one is a pure function of the operator table and
+    returns the same answer on both engines.
+
+    Parameters
+    ----------
+    rules_list : list[tuple[tuple[str, ...], tuple[str, ...]]]
+        The list of simplification rules to deduplicate.
+    dummy_variables : list[str]
+        A list of tokens to be treated as variables for remapping.
+    verbose : bool, optional
+        If True, displays a progress bar. Defaults to False.
+    engine : SimpliPyEngine
+        REQUIRED, keyword-only: the engine whose operator table defines the internal
+        form. Keyword-only on purpose -- a positional third argument would have
+        silently swallowed an existing caller's positional ``verbose``.
+
+    Returns
+    -------
+    list[tuple[tuple[str, ...], tuple[str, ...]]]
+        The deduplicated and optimized list of simplification rules.
+    """
+    deduplicated_rules: dict[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+    for key, pair in _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose):
+        existing = deduplicated_rules.get(key)
+        # The WHOLE PAIR wins or loses: a strictly shorter target brings its own source
+        # spelling with it, so every emitted rule is a (source, target) that was
+        # certified together -- never a cross of one rule's source with another's target.
+        if existing is None or len(pair[1]) < len(existing[1]):
+            deduplicated_rules[key] = pair
+
+    return list(deduplicated_rules.values())
 
 
 def is_numeric_string(s: str) -> bool:

@@ -788,33 +788,52 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
     # artifact carries the rule, so leaving it out is a REGRESSION, not a soundness gain: at the
     # `!` bar the slot is finite a.e., 0 * finite = 0, and the null set where the operand is
     # +-inf/nan is licensed by R3. Certified through judge_bang like every other seed.
-    lhs_seen = {tuple(l) for l, _ in kept}
-    for lhs, rhs in [(('-', '!0', '!0'), ('0',)),
-                     (('+', '!0', 'neg', '!0'), ('0',)),
-                     (('+', 'neg', '!0', '!0'), ('0',)),
-                     (('*', '0', '!0'), ('0',))]:
-        if tuple(lhs) in lhs_seen:
+    # THE RE-SEED GUARD IS KEYED ON THE INTERNAL FORM, not the spelling (owner ruling
+    # 2026-08-18; audit F49: "a gate keyed on a spelling breaks whenever the canon unifies
+    # two spellings"). Each family below seeds THREE spellings of ONE cancellation identity
+    # (`- !0 !0` / `+ !0 neg !0` / `+ neg !0 !0`; `/ $0 $0` / `* $0 inv $0` / `* inv $0 $0`),
+    # which are AC-equal but textually distinct: a spelling key cannot see them as one, so
+    # every seeded twin landed in the artifact as an AC-duplicate row of the one before it
+    # (measured on acj-4-3: 4 excess rows, 2 per family). Same idiom as
+    # `utils._dedup_keyed_rules`: batched through the core in ONE call, and a side the AC
+    # parser refuses keeps its SPELLING as the key (so a reduced engine that cannot parse a
+    # seed guards exactly as before).
+    def ac_key(sides):
+        return [(True, tuple(k)) if k is not None else (False, tuple(s))
+                for k, s in zip(engine._core.ac_canonical_keys([list(s) for s in sides]),
+                                sides)]
+
+    lhs_seen = set(ac_key([l for l, _ in kept]))
+    add_seeds = [(('-', '!0', '!0'), ('0',)),
+                 (('+', '!0', 'neg', '!0'), ('0',)),
+                 (('+', 'neg', '!0', '!0'), ('0',)),
+                 (('*', '0', '!0'), ('0',))]
+    for (lhs, rhs), key in zip(add_seeds, ac_key([l for l, _ in add_seeds])):
+        if key in lhs_seen:
             continue
         bv, _ = judge_bang(lhs, rhs, rng)
         if bv == 'PROMOTE':
             report['promoted_bang'].append((lhs, rhs, 'seed', ''))
             kept.append((lhs, rhs))
+            lhs_seen.add(key)
 
     # The multiplicative twins (SELFCANCEL Part 2): same seed discipline, certified through
     # `judge_bang_mult` -- the judge_bang bar on the finite-NONZERO atom lattice, where the
     # identities hold exactly. The match-time certificate (`interval::finite_nonzero_ae`)
     # carries the instance-level burden; `<constant>`-bearing bindings are refused there and
     # by the sort-independent rebind guard.
-    for lhs, rhs in [(('/', '$0', '$0'), ('1',)),
-                     (('*', '$0', 'inv', '$0'), ('1',)),
-                     (('*', 'inv', '$0', '$0'), ('1',)),
-                     (('/', '0', '$0'), ('0',))]:
-        if tuple(lhs) in lhs_seen:
+    mult_seeds = [(('/', '$0', '$0'), ('1',)),
+                  (('*', '$0', 'inv', '$0'), ('1',)),
+                  (('*', 'inv', '$0', '$0'), ('1',)),
+                  (('/', '0', '$0'), ('0',))]
+    for (lhs, rhs), key in zip(mult_seeds, ac_key([l for l, _ in mult_seeds])):
+        if key in lhs_seen:
             continue
         bv, _ = judge_bang_mult(lhs, rhs, rng)
         if bv == 'PROMOTE':
             report['promoted_bang'].append((lhs, rhs, 'seed-mult', ''))
             kept.append((lhs, rhs))
+            lhs_seen.add(key)
 
     # ground tier: skeleton semantics, mpmath
     for lhs, rhs in tiers['ground']:

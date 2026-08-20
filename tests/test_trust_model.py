@@ -15,7 +15,8 @@ Two defects, both reproduced on the pre-fix engine before this file existed:
 The fix: an allowlist of canonical spellings (``math``, ``np``, ``scipy``,
 ``simplipy``) checked BEFORE any import, opt-in from outside the config only, and a
 per-engine evaluation namespace. ``np`` -- not ``numpy`` -- is the spelling, because
-``np.pi``/``np.e`` are normative token grammar carried by 316 shipped rules.
+``np.pi``/``np.e`` are normative token grammar carried by 396 rules across the
+shipped triple.
 
 The load-bearing test in this file is
 :meth:`TestConfigIsNotExecutable.test_refusal_happens_before_the_import`: refusing is
@@ -212,7 +213,7 @@ class TestDeployedEvaluationPath:
             variables = sorted({t for t in row if t.startswith('x') and t[1:].isdigit()})
             if not variables:
                 continue
-            simplified = engine.simplify(list(row), form='explicit')
+            simplified = engine.simplify(list(row))
             with_placeholders, constants = explicit_constant_placeholders(
                 simplified, convert_numbers_to_constant=False)
             infix = engine.prefix_to_infix(with_placeholders, realization=True)

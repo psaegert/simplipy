@@ -174,13 +174,56 @@ class TestIsValid:
 
 
 class TestMode:
-    """The soundness `Mode` axis: SOUND (default) keeps a non-finite-a.e. subtree; LOSSY
-    relaxes the constant-fold's finiteness gate (and the rule matcher's `!`-certificate)."""
+    """The soundness `Mode` AXIS: `f64` (default) is sound as the deployed evaluator
+    computes, `real` is sound as mathematics defines, and `corpus` is the permissive
+    superset that relaxes the constant-fold's finiteness gate and the matcher's
+    `!`-certificate. The first test below asserts the members are exactly these three."""
 
-    def test_mode_is_exported_and_ordinal(self) -> None:
+    def test_mode_is_an_axis_not_an_ordering(self) -> None:
+        """The `IntEnum` said soundness is ordinal. It is not: `inv(acosh(cosh x)) ->
+        abs(inv x)` is mathematically true and NOT f64-realised, `asin(1e-8) -> 1e-8` is
+        f64-exact and mathematically false. Neither is "more sound", so `<` must not
+        type-check -- a comparison between modes is a category error, not a question
+        with a wrong answer."""
         from simplipy import Mode
-        assert Mode.SOUND < Mode.LOSSY
-        assert [m.name for m in Mode] == ["SOUND", "LOSSY"]
+        assert [m.name for m in Mode] == ["f64", "real", "corpus"]
+        with pytest.raises(TypeError):
+            Mode.f64 < Mode.corpus        # type: ignore[operator]
+
+
+    def test_an_unknown_mode_attribute_is_still_an_attribute_error(self) -> None:
+        """`__getattr__` serves the two retired names; it must not swallow typos."""
+        from simplipy import Mode
+        with pytest.raises(AttributeError):
+            Mode.EXACT        # type: ignore[attr-defined]
+
+    def test_real_fails_closed_when_the_artifact_has_no_real_ruleset(self) -> None:
+        """`corpus` may fall back to the default set -- its divergence is search
+        semantics, so the fallback IS today's LOSSY. `real` may not: its only divergence
+        is which rules are certified, so falling back would answer a request for
+        mathematical soundness with the f64 set, which contains rules that are
+        f64-exact and mathematically false."""
+        from simplipy import Mode
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        engine.simplify(["x0"], mode=Mode.f64)
+        engine.simplify(["x0"], mode=Mode.corpus)
+        with pytest.raises(ValueError, match="mode='real' needs a ruleset mined for it"):
+            engine.simplify(["x0"], mode=Mode.real)
+
+    def test_the_documented_lower_case_strings_bind(self) -> None:
+        """The old coercion upper-cased before lookup, which would now miss every
+        documented spelling, since the members are lower-case."""
+        from simplipy import Mode
+        engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
+        for spelling in ("f64", "F64", "CORPUS"):
+            engine.simplify(["x0"], mode=spelling)
+        # ` real ` still BINDS (it reaches the fail-closed check, not the unknown-mode
+        # branch), which is what this test is about
+        with pytest.raises(ValueError, match="needs a ruleset mined for it"):
+            engine.simplify(["x0"], mode=" real ")
+        with pytest.raises(ValueError, match="unknown mode"):
+            engine.simplify(["x0"], mode="sound-ish")
+        assert Mode["real"] is Mode.real
 
     def test_sound_keeps_constant_over_zero(self) -> None:
         """`<constant>/0` is +-inf/nan for every constant, so SOUND must NOT fold it."""
@@ -190,9 +233,10 @@ class TestMode:
         # is explicit: inf * <constant>. What SOUND must never do is collapse to a bare
         # <constant> -- the value class is not finite. (The LOSSY parity corner for this
         # spelling is a flagged flash-ansr-migration item.)
-        out = engine.simplify(["/", "<constant>", "0"], mode=Mode.SOUND)
+        src = engine.to_tagged(["/", "<constant>", "0"])
+        out = engine.simplify(src, mode=Mode.f64)
         assert out == ["<mul>", 'float("inf")', "<constant>", "</mul>"]
-        assert engine.simplify(["/", "<constant>", "0"]) == out  # the default is SOUND
+        assert engine.simplify(src) == out  # the default is SOUND
 
     def test_lossy_constant_over_zero_keeps_the_explicit_pole(self) -> None:
         """The AC core folds inv(0) to +inf exactly BEFORE any widening can see the
@@ -200,35 +244,35 @@ class TestMode:
         training-path parity corner, revisited at the flash-ansr migration)."""
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
-        assert engine.simplify(["/", "<constant>", "0"], mode=Mode.LOSSY) \
+        assert engine.simplify(engine.to_tagged(["/", "<constant>", "0"]), mode=Mode.corpus) \
             == ["<mul>", 'float("inf")', "<constant>", "</mul>"]
 
     def test_finite_ae_fold_is_mode_independent(self) -> None:
         """A finite-a.e. subtree (`1/C`) folds in BOTH modes -- the pole is measure-zero."""
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
-        assert engine.simplify(["inv", "<constant>"], mode=Mode.SOUND) == ["<constant>"]
-        assert engine.simplify(["inv", "<constant>"], mode=Mode.LOSSY) == ["<constant>"]
+        assert engine.simplify(["inv", "<constant>"], mode=Mode.f64) == ["<constant>"]
+        assert engine.simplify(["inv", "<constant>"], mode=Mode.corpus) == ["<constant>"]
 
     def test_lossy_relaxes_cancellation_group_axioms(self) -> None:
         """The THIRD edge: SOUND cancellation respects the group axioms (`inf/inf`, `inf-inf`
         stay the sound `nan`); LOSSY relaxes them (structural cancel) -- the same relaxation LOSSY
         applies to the rule matcher's `!`-cert and the constant-fold's finiteness gate, so all
-        three edges behave consistently under `Mode.LOSSY`."""
+        three edges behave consistently under `Mode.corpus`."""
         from simplipy import Mode
         engine = SimpliPyEngine.from_config(
             acj_config_path())
         # (inf/inf)*x0: SOUND keeps the sound nan; LOSSY relaxes the $-certificate and the
         # structural cancel fires.
         c = ["*", "/", 'float("inf")', 'float("inf")', "x0"]
-        assert list(engine.simplify(list(c), mode=Mode.SOUND)) == ['float("nan")']
-        assert list(engine.simplify(list(c), mode=Mode.LOSSY)) == ["x0"]
+        assert list(engine.simplify(list(c), mode=Mode.f64)) == ['float("nan")']
+        assert list(engine.simplify(list(c), mode=Mode.corpus)) == ["x0"]
         # (inf-inf)+x0: the AC CONSTRUCTORS compute inf + (-inf) = nan exactly (total
         # extended-real arithmetic, mode-independent) before any cancel could see it, so
         # BOTH modes return the true value -- there is no unsound step for LOSSY to relax.
         c = ["+", "-", 'float("inf")', 'float("inf")', "x0"]
-        assert list(engine.simplify(list(c), mode=Mode.SOUND)) == ['float("nan")']
-        assert list(engine.simplify(list(c), mode=Mode.LOSSY)) == ['float("nan")']
+        assert list(engine.simplify(list(c), mode=Mode.f64)) == ['float("nan")']
+        assert list(engine.simplify(list(c), mode=Mode.corpus)) == ['float("nan")']
 
 
 class TestOperatorConversions:
@@ -255,12 +299,20 @@ class TestOperatorConversions:
         result = engine.operators_to_realizations(["sin", "my_var"])
         assert "my_var" in result
 
-    from conftest import acj_config_path, construct_legacy_table
+
+def test_repeated_addition_avoids_unsupported_powers() -> None:
+    """The twin of the multiplication guard below.
+
+    This block had lost its `def` line and was sitting in the body of
+    `TestOperatorConversions`, so pytest never collected it: it ran once at import time,
+    could not be selected or reported, and a failure would have surfaced as a collection
+    error rather than as this test going red."""
+    from conftest import construct_legacy_table
     engine = construct_legacy_table()
     expr = " + ".join(["x"] * 14)
 
-    simplified = engine.simplify(expr, node_budget=2)
-    simplified_prefix = engine.parse(simplified)
+    simplified = engine.simplify(expr, max_passes=2)
+    simplified_prefix = engine.read_infix(simplified)
 
     assert "mult7" not in simplified_prefix
     assert "div7" not in simplified_prefix
@@ -271,8 +323,8 @@ def test_repeated_multiplication_avoids_unsupported_powers() -> None:
     engine = construct_legacy_table()
     expr = "x / (" + " * ".join(["x"] * 15) + ")"
 
-    simplified = engine.simplify(expr, node_budget=2)
-    simplified_prefix = engine.parse(simplified)
+    simplified = engine.simplify(expr, max_passes=2)
+    simplified_prefix = engine.read_infix(simplified)
 
     assert "pow7" not in simplified_prefix
     assert "mult7" not in simplified_prefix
@@ -282,9 +334,9 @@ def test_repeated_multiplication_avoids_unsupported_powers() -> None:
 def test_simplify_accepts_numpy_array_tokens() -> None:
     engine = SimpliPyEngine.from_config(
         acj_config_path())
-    expr = np.array(engine.parse("x1 + x2"), dtype=object)
+    expr = np.array(engine.to_tagged(engine.read_infix("x1 + x2")), dtype=object)
 
-    simplified = engine.simplify(expr, node_budget=2)
+    simplified = engine.simplify(expr, max_passes=2)
 
     assert isinstance(simplified, np.ndarray)
     assert simplified.dtype == expr.dtype
@@ -437,13 +489,22 @@ class TestFindRules:
         engine.find_rules(max_source_pattern_length=3, dummy_variables=2,
                           extra_internal_terms=["0", "1"], X=128,
                           constants_fit_challenges=2, constants_fit_retries=1)
+        # ONE ROW PER IDENTITY, not one per spelling. The ladder used to seed eight
+        # rows: `- !0 !0` / `+ !0 neg !0` / `+ neg !0 !0` are three spellings of the
+        # additive cancellation, and `/ $0 $0` / `* $0 inv $0` / `* inv $0 $0` three of
+        # the multiplicative one. Its `lhs_seen` guard keyed on the token SPELLING and
+        # was never updated inside the seeding loops, so neither family collapsed and
+        # four duplicate rows shipped. Keying on the internal AC form (the same
+        # `ac_canonical_keys` the rule dedup uses) reduces them to four.
+        #
+        # The four dropped rows were DEAD ON ARRIVAL, which is why this is a row-count
+        # change and nothing more: `ac_rules_info()` is (4, 0, 0, 0) for the eight-row
+        # set AND for this one -- the loader's `translate` already collapsed them to
+        # four served patterns. Measured across the 400-row corpus in SOUND and LOSSY:
+        # 0 rows move. Owner-ratified 2026-08-19.
         seeds = {(('-', '!0', '!0'), ('0',)),
-                 (('+', '!0', 'neg', '!0'), ('0',)),
-                 (('+', 'neg', '!0', '!0'), ('0',)),
                  (('*', '0', '!0'), ('0',)),
                  (('/', '$0', '$0'), ('1',)),
-                 (('*', '$0', 'inv', '$0'), ('1',)),
-                 (('*', 'inv', '$0', '$0'), ('1',)),
                  (('/', '0', '$0'), ('0',))}
         got = {(tuple(lhs), tuple(rhs)) for lhs, rhs in engine.simplification_rules}
         assert got == seeds, got
@@ -684,7 +745,7 @@ class TestConstantFolding:
         engine = self._engine()
         folded = engine.simplify("1.23 + 4.56")
         assert folded == "5.79"
-        masked = masking.mask(engine.parse(folded), engine, masking.mask_all)
+        masked = masking.mask(engine.read_infix(folded), engine, masking.mask_all)
         assert masked == ["<constant>"]
 
     def test_constant_folding_observable(self) -> None:
@@ -819,10 +880,11 @@ class TestBangSort:
         engine = self._engine(tmp_path)
         # log: nan on half the line -- rewriting to 0 would invent a function. The refusal
         # keeps both terms (native tagged spelling of the same refusal).
-        assert list(engine.simplify(["-", "log", "x0", "log", "x0"])) \
+        assert list(engine.simplify(engine.to_tagged(["-", "log", "x0", "log", "x0"]))) \
             == ["<add>", "log", "x0", "<sub>", "log", "x0", "</add>"]
         # pow(x, inf): a.e. in {0, inf} -- inf - inf = nan on positive measure
-        out = list(engine.simplify(["-", "pow", "x0", 'float("inf")', "pow", "x0", 'float("inf")']))
+        out = list(engine.simplify(engine.to_tagged(
+            ["-", "pow", "x0", 'float("inf")', "pow", "x0", 'float("inf")'])))
         assert out == ["<add>", "pow", "x0", 'float("inf")', "<sub>", "pow", "x0", 'float("inf")', "</add>"], out
 
     def test_pole_bearing_subtrees_bind_via_the_structural_path(self, tmp_path) -> None:
@@ -877,8 +939,8 @@ class TestB5B19OddSignFusion:
         return SimpliPyEngine.from_config(acj_config_path())
 
     def test_routes_agree_on_the_ratified_spelling(self, eng) -> None:
-        via_mul = list(eng.simplify(['*', '-5', 'sin', '2']))
-        via_add = list(eng.simplify(['+', '0', '*', '-5', 'sin', '2']))
+        via_mul = list(eng.simplify(eng.to_tagged(['*', '-5', 'sin', '2'])))
+        via_add = list(eng.simplify(eng.to_tagged(['+', '0', '*', '-5', 'sin', '2'])))
         assert via_mul == via_add == ['<mul>', '5', 'sin', '-2', '</mul>']
         # I4's other example: the -1 case dissolves the product node entirely.
         assert list(eng.simplify(['*', '-1', 'sin', '2'])) == ['sin', '-2']
@@ -947,7 +1009,7 @@ class TestMultSort:
         engine = self._engine(tmp_path)
         # region-nan operand: finite_nonzero_ae refuses (not finite a.e.); the refusal
         # keeps the quotient (native tagged spelling).
-        assert list(engine.simplify(["/", "asin", "x0", "asin", "x0"])) \
+        assert list(engine.simplify(engine.to_tagged(["/", "asin", "x0", "asin", "x0"]))) \
             == ["<mul>", "asin", "x0", "<div>", "asin", "x0", "</mul>"]
         # literal zero operand: 0/0 must never become 1 or 0 -- the all-valued exact fold
         # legitimately evaluates it to the nan literal (0/0 IS nan; that is not a $-binding)
@@ -968,7 +1030,7 @@ class TestMultSort:
     def test_lossy_skips_the_certificate(self, tmp_path) -> None:
         from simplipy.engine import Mode
         engine = self._engine(tmp_path)
-        assert list(engine.simplify(["/", "asin", "x0", "asin", "x0"], mode=Mode.LOSSY)) == ["1"]
+        assert list(engine.simplify(["/", "asin", "x0", "asin", "x0"], mode=Mode.corpus)) == ["1"]
 
     def test_judge_bang_mult_bar(self, tmp_path) -> None:
         # The promotion-side twin: the plain `!` bar demotes A/A -> 1 (0/0 = nan at the atom
@@ -1015,10 +1077,10 @@ class TestB9MuGuarantee:
         assert len(corpus) == 400
         token_longer = 0
         for expr in corpus:
-            out = list(eng.simplify(expr, form='explicit'))
+            out = list(eng.simplify(expr))
             assert eng.complexity(out) <= eng.complexity(list(expr)), \
                 f'mu INCREASED on {expr}'
-            assert list(eng.simplify(out, form='explicit')) == out, \
+            assert list(eng.simplify(out)) == out, \
                 f'not idempotent on {expr}'
             if len(out) > len(expr):
                 token_longer += 1
@@ -1029,10 +1091,10 @@ class TestB9MuGuarantee:
 
 class TestApi1ModeParameter:
     """api-1 + fmux-mode-1: the `mode` parameter accepted things it must refuse and
-    then silently selected DIFFERENT semantics. `simplify(expr, Mode.LOSSY)` bound
-    the Mode POSITIONALLY to node_budget and ran SOUND; `mode=3` and
+    then silently selected DIFFERENT semantics. `simplify(expr, Mode.corpus)` bound
+    the Mode POSITIONALLY to the pass budget and ran SOUND; `mode=3` and
     `mode=np.float64(3.0)` silently selected LOSSY -- a caller whose mode came out
-    of a JSON config got the mode that trades soundness for recall. node_budget /
+    of a JSON config got the mode that trades soundness for recall. max_passes /
     mode / form are keyword-only now, and mode accepts only Mode members and their
     documented string names."""
 
@@ -1043,7 +1105,7 @@ class TestApi1ModeParameter:
     def test_positional_arguments_are_refused(self, eng) -> None:
         from simplipy import Mode
         with pytest.raises(TypeError):
-            eng.simplify(['exp', 'log', '<constant>'], Mode.LOSSY)
+            eng.simplify(['exp', 'log', '<constant>'], Mode.corpus)
         with pytest.raises(TypeError):
             eng.simplify(['+', 'x0', 'x0'], 48)
 
@@ -1055,9 +1117,9 @@ class TestApi1ModeParameter:
 
     def test_mode_members_and_names_still_work(self, eng) -> None:
         from simplipy import Mode
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.LOSSY)) == ['<constant>']
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode='LOSSY')) == ['<constant>']
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.SOUND)) \
+        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.corpus)) == ['<constant>']
+        assert list(eng.simplify(['exp', 'log', '<constant>'], mode='corpus')) == ['<constant>']
+        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.f64)) \
             == ['exp', 'log', '<constant>']
 
 

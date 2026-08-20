@@ -33,6 +33,7 @@ Precision honesty:
 """
 import math
 import re
+from fractions import Fraction
 import numpy as np
 from mpmath import mp, mpf, isnan as misnan, isinf as misinf
 
@@ -67,6 +68,12 @@ SLOT_RE = re.compile(r'^([?!_$])(\d+)$')
 class Unresolved(Exception):
     """the point cannot be judged honestly at working precision -- skip, never convict"""
 
+
+#: The ordinary working precision, and the ceiling an operand-scaled escalation may
+#: reach. Past the ceiling a point is UNRESOLVED -- never convicted -- because the
+#: judge has run out of evidence, and "skip, never convict" is the house rule.
+BASE_DPS = 50
+MAX_DPS = 2000
 
 SNAP_EVENTS = [0]  # incremented when a symbolic-cancellation snap / pole-guard fires;
                    # at such points the f64 deployed algebra evaluates a DIFFERENT point
@@ -104,6 +111,24 @@ _SPECIALS = {'inf': math.inf, '+inf': math.inf, '-inf': -math.inf, 'nan': math.n
 _NAMED = {'np.pi': math.pi, 'np.e': math.e}
 
 
+def _exact(t):
+    """A decimal literal as the EXACT rational it spells -- `-0.1` is -1/10, not the
+    double 0.1000000000000000055511151231257827.
+
+    F97. Literals used to enter the tree through `float()`, so the engine's exact `Rat`
+    arrived at an arbitrary-precision judge already wrong in the 17th digit, and `c_eval`
+    then did `mpf(that_double)` and preserved the error at every rung. It convicted
+    `inv(-10/t) -> -0.1*t` -- an exact identity -- as a clause-(a) REAL-CHANGE at measure
+    1.0, because a 5.5e-17 relative gap is enormous against the judge's 1e-25 tolerance.
+    That is the same principle the module header already states for battery points: an f64
+    rendering is NOT the contract's point.
+
+    The DEPLOYED lane must keep seeing the double, because that is what deployment
+    computes -- `d_eval` converts back with `F()`, so its semantics are unchanged.
+    """
+    return Fraction(t.strip())
+
+
 def literal_value(t):
     """The accepted numeric grammar, evaluated without `eval`. Total: value or refusal."""
     if t in _NAMED:
@@ -114,20 +139,20 @@ def literal_value(t):
         if inner in _SPECIALS:
             return _SPECIALS[inner]
         if _NUM_RE.match(inner):
-            return float(inner)
+            return _exact(inner)
         raise UnsupportedToken(f'float() of a non-numeric literal: {t!r}')
     m = _PAREN_NEG_RE.match(t)
     if m:
-        return -float(m.group(1))
+        return -_exact(m.group(1))
     if _NUM_RE.match(t):
-        return float(t)
+        return _exact(t)
     if t.count('/') == 1:  # `p/q`: not in the shipped artifact, legal in a foreign one
         p, q = t.split('/')
         if _NUM_RE.match(p.strip()) and _NUM_RE.match(q.strip()):
-            den = float(q)
-            if den == 0.0:
+            den = _exact(q)
+            if den == 0:
                 raise UnsupportedToken(f'zero denominator: {t!r}')
-            return float(p) / den
+            return _exact(p) / den
     raise UnsupportedToken(f'not an accepted literal: {t!r}')
 
 
@@ -390,6 +415,10 @@ def c_eval(tree, env):
             return mp.pi
         if v == math.e:
             return mp.e
+        if isinstance(v, Fraction):
+            # rebuilt per rung, like the symbolic battery points: the exact rational is
+            # the contract's value, and its mpf reading follows whatever dps is current.
+            return mpf(v.numerator) / mpf(v.denominator)
         return mpf(v)
     # LITERAL PROVENANCE: a boundary literal WRITTEN in the rule is the exact boundary
     # point. The honesty band exists for COMPUTED values that merely round into the
@@ -407,10 +436,46 @@ def c_eval(tree, env):
     v = OPS[op](*args)
     if _NODE_SINK and misinf(v):
         _NODE_SINK[-1][0] = True
+    if _MAG_SINK:
+        # The size of the largest INTERMEDIATE, which is what decides how much precision
+        # a cancellation will eat. Only finite values count: an inf tells us nothing
+        # about digits, and `misinf` above already records it.
+        try:
+            if not misinf(v):
+                a = abs(v)
+                if a > _MAG_SINK[-1][0]:
+                    _MAG_SINK[-1][0] = a
+        except Exception:
+            pass
     return v
 
 
 _NODE_SINK: list = []
+
+#: Filled by `c_eval` when a `_measured_dps` scope is open; see `_required_dps`.
+_MAG_SINK: list = []
+
+
+def _required_dps(mag):
+    """Precision that a cancellation between operands of size `mag` can demand.
+
+    Adding two numbers of magnitude 10^k whose true sum is 10^-k destroys about 2k
+    significant digits, so the working precision has to carry them before any correct
+    digit survives. Measured against the case that motivated this: at t = -20,
+    `cosh(25t) + sinh(25t)` has intermediates near e^500 ~ 10^217, and the sum only
+    becomes representable somewhere past dps 400 -- which is what `2 * 217 + 50` gives.
+
+    Derived, not tuned: the 2 is the two-sided digit loss, `k` is measured from the
+    actual intermediates rather than guessed from the expression, and `BASE_DPS` is the
+    ordinary working precision that must survive on top.
+    """
+    if mag is None or mag <= 1:
+        return BASE_DPS
+    try:
+        k = int(mp.floor(mp.log10(mag))) + 1
+    except Exception:
+        return BASE_DPS
+    return min(MAX_DPS, BASE_DPS + 2 * max(0, k))
 
 
 def lhs_singular(tree, env):
@@ -493,7 +558,9 @@ def d_eval(tree, env):
     if op == 'slot':
         return env[tree[1]]
     if op == 'lit':
-        return F(tree[1])
+        # deployment parses the token as a double; the exact rational is the CONTRACT's
+        # reading, never this lane's.
+        return F(float(tree[1]))
     args = [d_eval(c, env) for c in tree[1:]]
     # C35: the ignore-everything float semantics this judge needs are SCOPED to the
     # operator application, never set process-wide at import.
@@ -534,9 +601,125 @@ def compare(cl, cr, rel=mpf('1e-25')):
     a, b = cl[1], cr[1]
     if a == b:
         return 'eq'
-    tol = rel * max(mpf(1), abs(mpf(a)), abs(mpf(b))) if not isinstance(a, float) \
-        else 1e-9 * max(1.0, abs(a), abs(b))
+    # F99: the CONTRACT tolerance is purely RELATIVE. `max(mpf(1), ...)` made it
+    # ABSOLUTE at `rel` for small values, so any disagreement below 1e-25 read as
+    # equality however wrong it was relatively -- `e**sinh(-5) -> 0` is a 100%
+    # relative error and `asin(1e-8) -> 1e-8` is 1.7e-17, and both passed. That is
+    # precisely the "accidental short hit" the 2026-08-02 fold unification deleted
+    # from the serve path, re-entering through the mint.
+    #
+    # Symbolic cancellation is NOT what the floor was protecting: the snap already
+    # handles it (a trig output below 10^(-dps+10) snaps to exact 0, so `sin(pi)`
+    # takes the `a == b` branch above and never reaches this line). Measured on
+    # acj-4-3: 149 rules newly convict, 145 of them verified genuinely false with a
+    # gap stable to dps 400, and ZERO true identities are over-convicted.
+    #
+    # A SNAP-TIED floor was tried and rejected: it is merely a different arbitrary
+    # threshold. At dps 50 it convicts `e**sinh(-5)` (5.94e-33, above 1e-40) and spares
+    # `e**sinh(-8)` (~1e-647, below it) -- the same family, split by where the value
+    # happens to land -- and it misses 114 of the 149 rules a relative tolerance
+    # convicts, 145 of which are verified false to dps 400.
+    #
+    # The invariant it preserved ("the snap cannot fabricate an equality the tolerance
+    # would refuse") buys ESCALATION EFFICIENCY, not soundness: a fabricated rung-1
+    # equality disagrees with rung 2, and `_point_verdict` then decides at rung 3.
+    # That machinery exists for exactly this.
+    #
+    # The DEPLOYED lane no longer comes through here -- it asks a different question and
+    # has its own two comparisons below. This function has ONE meaning now.
+    tol = rel * max(abs(mpf(a)), abs(mpf(b)))
     return 'eq' if abs(a - b) <= tol else 'REAL-CHANGE'
+
+
+#: The deployed-realisation bound, in ULP. DERIVED, not chosen -- see
+#: `compare_deployed_realised`. Reproduce with the libm ULP measurement.
+REALISED_ULP = 8
+
+
+def _ulp_gap(a, b):
+    """ULP distance between two finite doubles of the same sign; inf across a sign
+    change, which is never a rounding difference."""
+    if a == b:
+        return 0
+    if (a < 0) != (b < 0):
+        return float('inf')
+    return int(abs(np.float64(a).view(np.int64) - np.float64(b).view(np.int64)))
+
+
+def _deployed_classes(cl, cr):
+    """The nan/inf half of a deployed comparison, shared by both bars below."""
+    if cl[0] == 'nan' and cr[0] == 'nan':
+        return 'eq'
+    if cl[0] == 'nan':
+        return 'EXT'
+    if cr[0] == 'nan':
+        return 'SHRINK'
+    if cl[0] == 'inf' or cr[0] == 'inf':
+        return 'eq' if cl == cr else 'INF-CHANGE'
+    return None
+
+
+def compare_deployed_realised(cl, cr):
+    """The REALISATION comparison: does the deployed f64 engine compute this rewrite?
+
+    Answers `realised`, which decides the `f64` tier and so what ships in `rules.json`.
+    Bounded at `REALISED_ULP` ULP, with NO absolute floor.
+
+    WHY A BOUND, AND WHY THIS ONE. Three rejected answers first, because each names a
+    constraint on the fourth:
+
+    * `1e-9 * max(1.0, |a|, |b|)`, what this used to be: roughly 10^7 ULP, and for any
+      value below 1 a pure ABSOLUTE floor. It read `pow np.e sinh (-5) -> 0` as an f64
+      equality when the sides are 5.942307292381135e-33 and 0.0. Not a model of f64. It
+      was harmless only while every fatal verdict was DELETED; once the symbolic gate
+      began ROUTING on the tier it became an admission path into the default rule set,
+      and 8 acj-4-3 rules took it.
+    * Bit-exact: right in principle, wrong in practice. It convicts 390 acj-4-3 rules,
+      310 of them over a SINGLE ULP, and it makes those 310 depend on the build host's
+      libm -- so a pinned triple would not classify identically on another machine, which
+      D29 byte-identity cannot survive.
+    * 4 ULP, the first proposal: rejected precisely because the number had to be
+      defensible. The observed rounding cluster runs 1..7 ULP, so a bar at 4 splits one
+      phenomenon down the middle.
+
+    THE DERIVATION. IEEE-754 mandates correct rounding only for + - * / and sqrt; every
+    transcendental is implementation-defined, and libm documents an error rather than
+    promising exactness. Measured on this host (glibc 2.43) against mpmath at dps 60 over
+    the judge's OWN grid (the libm ULP measurement): every function is correctly rounded
+    except `cos`, `cosh`, `sinh` and `tanh`, which reach 1 ULP. A rewrite has TWO sides,
+    each a composition of up to about four such calls, with independent errors that can
+    oppose: 2 x 4 x 1 = 8 ULP.
+
+    WHY 8 IS NOT TUNED. Over the 390 rules bit-exactness moves, the gap distribution is
+    4 at 0 ULP (class changes), 310 at 1 ULP, then 5/2/4/0/2/2 at 2..7 -- and then
+    NOTHING until 57. Every bound in [8, 56] gives the IDENTICAL partition, so the
+    classification does not depend on where in that range the bar sits. That
+    insensitivity is what makes this a derivation rather than a preference.
+
+    NOT used for ENGINE-MISALIGN -- see `compare_deployed_structural`. Answering both
+    questions with one comparison gave 396 ENGINE-MISALIGNs against a true 10.
+    """
+    c = _deployed_classes(cl, cr)
+    if c is not None:
+        return c
+    return 'eq' if _ulp_gap(cl[1], cr[1]) <= REALISED_ULP else 'REAL-CHANGE'
+
+
+def compare_deployed_structural(cl, cr, tol_rel=1e-9):
+    """The STRUCTURAL deployed comparison, for ENGINE-MISALIGN only.
+
+    ENGINE-MISALIGN means "the contract certifies but the deployed algebra structurally
+    DIVERGES" -- an infinity where a finite value belongs, a nan where a number belongs,
+    or a gap far outside rounding. A few ULP is none of those, and convicting it would
+    rename ~400 sound rules as misaligned (measured: 396 against a true 10). So this
+    keeps the band `compare` used to carry for f64, and realisation gets the ULP bar
+    above. Two questions, two comparisons.
+    """
+    c = _deployed_classes(cl, cr)
+    if c is not None:
+        return c
+    a, b = cl[1], cr[1]
+    return 'eq' if abs(a - b) <= tol_rel * max(1.0, abs(a), abs(b)) else 'REAL-CHANGE'
 
 
 # ---------------------------------------------------------------- batteries
@@ -591,6 +774,12 @@ GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
 # dense center (0.05 spacing: sub-unit undefined intervals like (0.2, 0.8) are visible),
 # unit-spaced mid-range, and a magnitude tail (half-line violations opening at |x|>20,
 # e.g. exp-shift constructions)
+# DEDUPED (F96): `linspace(-3,3,121)` and `linspace(-20,20,41)` overlap, so seven core
+# values (-2.9862579, -1.9862579, -0.9862579, 0.0137421, 1.0137421, 2.0137421, 3.0137421)
+# were double-weighted -- 174 entries for 167 distinct points, silently giving those seven
+# twice the say in `meas`. Order preserved; the point SET is unchanged.
+GRID = list(dict.fromkeys(GRID))
+
 MEASURE_KILL = 0.05  # fraction of the generic grid; a genuine positive-measure set
                      # shows as many points; single-point flukes never reach this
 
@@ -766,17 +955,50 @@ def mp_polish(tl, tr, nvars, clb, c0):
 
 # ---------------------------------------------------------------- the judge
 def _point_verdict(tl, tr, env_mp):
-    """two-rung confirmed contract verdict at one point -> (verdict|None, snapped)"""
-    def once():
+    """two-rung confirmed contract verdict at one point -> (verdict|None, snapped)
+
+    Rung agreement is necessary and NOT sufficient. Confirming the CLASS of the verdict
+    ('REAL-CHANGE' at both rungs) says nothing about whether the disagreement is real,
+    because catastrophic cancellation swamps both rungs alike: mpmath at dps 50 and at
+    dps 120 can agree perfectly that two equal numbers differ. Measured, the identity
+    `log(cosh(25t) + sinh(25t)) = 25t` -- exactly true on all of R -- was KILLed at
+    bc-positive-measure with 56 of 167 grid points "disagreeing" at dps 50, collapsing
+    to 22, 17, 8, 4, 3 as the precision doubled. That monotone collapse IS the answer,
+    and the class comparison threw it away.
+
+    NOT YET FIXED, and the mechanism is now known exactly. At the convicting points the
+    cancellation drives `cosh(25t) + sinh(25t)` to a computed EXACT ZERO, so the left side
+    is `log(0) = -inf`: the disagreement is a CLASS change (INF-CHANGE), not a finite gap,
+    so no magnitude test can see it, and it is stable at rungs 1 and 2 alike -- only
+    around dps 400 does the sum become representable and the class flip to finite. At
+    t = -20 the cancellation is ~217 decimal digits deep, which is why the real fix is
+    precision scaled to the OPERANDS (~2*log10(max|operand|)), the item already deferred
+    for the clause split. A magnitude discriminator was written for this and reverted: it
+    cannot fire on a class change.
+
+    URGENCY, measured: three EXACT identities on the shipped artifact --
+    `cos asin tanh _0 -> inv cosh _0` and two siblings -- already sit at 6 of 167 grid
+    points against a kill bar of 9. They are three points from being wrongly convicted at
+    the next mine.
+    """
+    def once(track=False):
+        """One reading at the current precision; with `track`, also report the largest
+        finite intermediate either side produced, which is what sizes a cancellation."""
+        if track:
+            _MAG_SINK.append([mpf(0)])
         try:
             return compare(cls_mp(c_eval(tl, env_mp())), cls_mp(c_eval(tr, env_mp())))
         except Unresolved:
             return None
+        finally:
+            if track:
+                once.mag = _MAG_SINK.pop()[0]
     old = mp.dps
     snap0 = SNAP_EVENTS[0]
     try:
-        mp.dps = 50
-        v1 = once()
+        mp.dps = BASE_DPS
+        once.mag = None
+        v1 = once(track=True)
         snapped1 = SNAP_EVENTS[0] > snap0
         if v1 is None:
             return None, snapped1
@@ -785,17 +1007,58 @@ def _point_verdict(tl, tr, env_mp):
         # non-eq, OR an 'eq' that involved a snap (the snap can FABRICATE equality:
         # sin(exp(-100)) = 3.7e-44 snaps to 0 at dps 50): confirm at rung 2; a
         # snapped-eq that changes class at dps 120 takes rung 3.
-        mp.dps = 120
+        #
+        # RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates
+        # are 10^217: both rungs are swamped alike, agree on a manufactured verdict, and
+        # the class comparison reads that agreement as evidence. `log(cosh(25t) +
+        # sinh(25t)) = 25t` -- exactly true on all of R -- was KILLed exactly this way,
+        # with the cancellation driving the sum to a computed ZERO so the left side read
+        # `log(0) = -inf` at both rungs. The precision now comes from the operands that
+        # were actually seen, so rung 2 is high enough to be a second opinion rather than
+        # a second copy of the first.
+        mp.dps = max(120, _required_dps(getattr(once, 'mag', None)))
         v2 = once()
         if v1 == v2:
             return v1, snapped1
         if v1 == 'eq':
-            mp.dps = 250
+            mp.dps = max(250, 2 * mp.dps)
             v3 = once()
             return (v2 if v2 == v3 else None), snapped1
         return None, snapped1
     finally:
         mp.dps = old
+
+
+#: The four cells of the soundness LATTICE. The two notions are INCOMPARABLE -- a rule
+#: can be true and unrealised (`atanh(tanh t) -> t`, exact on R, `inf` in f64) or
+#: realised and untrue (`asin(1e-8) -> 1e-8`, bit-identical in f64, wrong by 1.7e-17) --
+#: so this is an axis, not a rung on the Mode ladder.
+#:
+#:   core    true AND realised     served by every mode
+#:   real    true, NOT realised    exact arithmetic is the authority
+#:   f64     realised, NOT true    the deployed evaluator is the authority
+#:   reject  neither               dropped everywhere
+def _tier(verdict, realised):
+    if verdict in ('CERTIFIED', 'TOLERATED'):
+        # `real`, NOT `f64`. The contract accepting a rule means it is TRUE; `realised is
+        # False` means the deployed evaluator disagrees. "True, not realised" is the `real`
+        # row of the table above, and filing it as `f64` was wrong in both directions at
+        # once -- it put the rule in the one mode whose authority CONTRADICTS it and
+        # removed it from the mode that honours it. Reachable, and measured: 6 rules of
+        # acj-4-3 land here, all TOLERATED, e.g. `/ $0 $0 -> 1` (true off the null set
+        # {0}, and f64 answers nan at 0 and at both infinities).
+        # `core` now requires realised to be TRUE, not merely "not False" (owner ruling,
+        # 2026-08-20). `None` means the deployed lane never got an observation at all --
+        # ABSENT EVIDENCE -- and that cannot support a claim of f64 soundness. 102
+        # acj-4-3 rules take this path, dominated by the symbolic-cancellation snap
+        # family: `sin(np.pi) -> 0` is exactly true in mathematics while f64 computes
+        # 1.2246467991473532e-16, so serving it in f64 mode CHANGES the answer.
+        return 'core' if realised is True else 'real'
+    if verdict == 'ENGINE-MISALIGN':
+        return 'real'
+    if verdict == 'KILL':
+        return 'f64' if realised is True else 'reject'
+    return 'reject'
 
 
 def judge_rule(lhs, rhs, deployed_check=True):
@@ -878,6 +1141,12 @@ def judge_rule(lhs, rhs, deployed_check=True):
         cl_battery = kept_cl if has_cl else [(None, None)]
 
     a_kills, tolerated, dep_div = [], [], []
+    # F100, the REALISATION axis. `dep_div` answers "the contract certifies but
+    # deployment diverges" and is therefore gated on the contract agreeing -- which
+    # means a KILLed rule's realisation was never recorded, and the SOUND/LOSSY tier
+    # split needs exactly that. `dep_bad`/`dep_seen` record the same comparison with no
+    # gate, so a verdict and a realisation can be reported independently.
+    dep_bad, dep_seen = [], [False]
     resolved_pts = 0
     attempted_pts = 0
     # battery sweep (cap the slot-product deterministically)
@@ -947,7 +1216,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
             elif v in ('EXT', 'SHRINK', 'INF-CHANGE'):
                 tolerated.append((v, point, tags))
             all_real = all(t == 'real' for t in tags.values())
-            if deployed_check and v in (None, 'eq') and not snapped and all_real:
+            if deployed_check and not snapped:
                 try:
                     ed = {n: F(float(b())) for n, (b, t) in combo.items()}
                     if clkey is not None:
@@ -955,8 +1224,18 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     if crd is not None:
                         ed['<C_R>'] = F(crd)   # the f64-fitted witness: each algebra
                                                # is judged with its OWN constant
-                    dv = compare(cls_np(d_eval(tl, ed)), cls_np(d_eval(tr, ed)))
+                    _dcl = cls_np(d_eval(tl, ed))
+                    _dcr = cls_np(d_eval(tr, ed))
+                    dv = compare_deployed_realised(_dcl, _dcr)
+                    dep_seen[0] = True
                     if dv != 'eq':
+                        dep_bad.append((dv, point))
+                    # ENGINE-MISALIGN keeps its ORIGINAL gate AND its own STRUCTURAL
+                    # comparison: a divergence where the contract also disagrees is not
+                    # misalignment, one at an inf binding is convention-mediated, and a
+                    # few-ULP rounding is not a divergence at all.
+                    if compare_deployed_structural(_dcl, _dcr) != 'eq' \
+                            and v in (None, 'eq') and all_real:
                         dep_div.append((dv, point))
                 except Exception:
                     pass
@@ -979,13 +1258,70 @@ def judge_rule(lhs, rhs, deployed_check=True):
                         if wv is None:
                             continue
                         e['<C_R>'] = +wv
+                    # PRECISION-COUPLED (F96). This lane took a SINGLE dps-50 reading,
+                    # while `_point_verdict` -- the battery's own comparison -- has always
+                    # confirmed each non-eq verdict at a second rung and returned
+                    # Unresolved on rung disagreement. The gap was measurable:
+                    # `log(cosh t + sinh t) -> t` scores 5/174 at dps 50, 3/174 at 120,
+                    # 2/174 at 400 and 0/174 at 9000, because mpmath loses ~0.87|t| digits
+                    # to catastrophic cancellation there. Every one of those points is a
+                    # TRUE identity, and the only positive measure this judge has ever
+                    # recorded on a shipped artifact was that noise -- four more negative
+                    # tail points and it would have convicted a true rule. Escalate, and
+                    # never convict on a reading a second rung will not repeat.
+                    snap0 = SNAP_EVENTS[0]
+                    cv, _snapped = _point_verdict(tl, tr, lambda e=e: e)
+                    if cv is None:
+                        continue
+                    res.append(cv)
+                    # DEPLOYED LANE (F95). ENGINE-MISALIGN asks "does the shipped f64
+                    # engine realise what the contract certified?", and until now the only
+                    # place that question was ever put ran over the BATTERY, whose largest
+                    # magnitude is 3.0 -- below every point where f64 departs from the
+                    # extended reals (tanh saturates at 18.99, exp overflows at 709.78 and
+                    # underflows at -745.13, cosh/sinh overflow at 710.48). The verdict was
+                    # therefore unreachable in principle, not merely unfired. This grid
+                    # already reaches 1e4, so the same comparison the battery lane performs
+                    # is put at every grid point too.
+                    #
+                    # Guards mirror the battery lane exactly: only where the CONTRACT is
+                    # 'eq' (misalignment is contract-certifies-but-deployment-diverges, so
+                    # a contract disagreement is a different verdict), and never across a
+                    # symbolic snap, where f64 evaluates a genuinely different point and a
+                    # divergence would be a measurement artifact. `<C_R>` binds the RAW f64
+                    # fit, never the mp-polished witness: deployment fits its OWN constant.
+                    if not (deployed_check and SNAP_EVENTS[0] == snap0):
+                        continue
+                    ed = {m: F(cfg) for m in names}
+                    ed[n] = F(float(g))
+                    if has_cl:
+                        ed['<C_L>'] = F(CONSTS[0])
+                    if has_cr:
+                        wf = witness_f64.get(float(CONSTS[0]) if has_cl else None)
+                        if wf is None:
+                            continue
+                        ed['<C_R>'] = F(wf)
                     try:
-                        res.append(compare(cls_mp(c_eval(tl, e)), cls_mp(c_eval(tr, e))))
-                    except Unresolved:
-                        pass
+                        with np.errstate(all='ignore'):
+                            _gcl = cls_np(d_eval(tl, ed))
+                            _gcr = cls_np(d_eval(tr, ed))
+                            dv = compare_deployed_realised(_gcl, _gcr)
+                    except Exception:
+                        continue
+                    dep_seen[0] = True
+                    if dv != 'eq':
+                        dep_bad.append((dv, {'slot': n, 'grid': float(g)}))
+                    if cv == 'eq' and compare_deployed_structural(_gcl, _gcr) != 'eq':
+                        dep_div.append((dv, {'slot': n, 'grid': float(g)}))
                 if res:
-                    bad = sum(1 for c in res if c != 'eq') / len(res)
-                    meas = max(meas, bad)
+                    # DENOMINATOR IS THE GRID, not the resolved subset (F96). Dropping
+                    # Unresolved points from the divisor made the bar a moving target:
+                    # two shipped rules already run at 154, and at a denominator of 19 a
+                    # SINGLE disagreeing point scores 0.0526 and kills -- precisely the
+                    # "single-point fluke" the MEASURE_KILL comment promises can never
+                    # reach the bar. An unresolved point is absence of evidence and
+                    # counts toward neither side.
+                    meas = max(meas, sum(1 for c in res if c != 'eq') / len(GRID))
         # D15 (X11's opposite-polarity hole): the DIAGONAL lane -- every wildcard
         # slot bound to ONE varying value. Independent-slot sampling makes
         # {_i = _j} a null event, but for a REWRITE RULE the diagonal is an
@@ -1005,21 +1341,29 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     if wv is None:
                         continue
                     e['<C_R>'] = +wv
-                try:
-                    res.append(compare(cls_mp(c_eval(tl, e)), cls_mp(c_eval(tr, e))))
-                except Unresolved:
-                    pass
+                # PRECISION-COUPLED like every other lane (F96 completed 2026-08-20).
+                # This took a single bare reading at rung 1 and fed the SAME `meas` that
+                # KILLs, so one dps-50 rounding on the diagonal could convict a rule that
+                # the per-slot lane -- two-rung since F96 -- would have cleared. The
+                # asymmetry was invisible because both lanes write into one accumulator.
+                v, _ = _point_verdict(tl, tr, lambda e=e: e)
+                if v is not None:
+                    res.append(v)
             if res:
-                meas = max(meas, sum(1 for c in res if c != 'eq') / len(res))
+                meas = max(meas, sum(1 for c in res if c != 'eq') / len(GRID))
     finally:
         mp.dps = old
 
+    _realised = (not dep_bad) if dep_seen[0] else None
+
     if a_kills:
         return {'verdict': 'KILL', 'clause': 'a-real-change', 'points': a_kills[:3],
-                'measure': meas, 'skipped_cl': skipped_cl}
+                'measure': meas, 'skipped_cl': skipped_cl,
+                'realised': _realised, 'tier': _tier('KILL', _realised)}
     if meas > MEASURE_KILL:
         return {'verdict': 'KILL', 'clause': 'bc-positive-measure', 'measure': meas,
-                'tolerated_events': len(tolerated), 'skipped_cl': skipped_cl}
+                'tolerated_events': len(tolerated), 'skipped_cl': skipped_cl,
+                'realised': _realised, 'tier': _tier('KILL', _realised)}
     if resolved_pts == 0 or resolved_pts / max(1, attempted_pts) < 0.25:
         # "skip, never convict" must not become "skip everything, acquit": a rule whose
         # battery is almost entirely Unresolved has no evidence either way (e.g. a
@@ -1035,13 +1379,16 @@ def judge_rule(lhs, rhs, deployed_check=True):
         # zero-sign) never reaches here because cls_np uses quotient zeros; what
         # remains is a genuine realization split.
         return {'verdict': 'ENGINE-MISALIGN', 'points': [p for _, p in dep_div[:3]],
-                'kinds': sorted({k for k, _ in dep_div}), 'measure': meas}
+                'kinds': sorted({k for k, _ in dep_div}), 'measure': meas,
+                'realised': _realised, 'tier': _tier('ENGINE-MISALIGN', _realised)}
     if tolerated:
         kinds = sorted({v for v, _, _ in tolerated})
         return {'verdict': 'TOLERATED', 'classes': kinds,
+            'realised': _realised, 'tier': _tier('TOLERATED', _realised),
                 'events': [(v, p) for v, p, _ in tolerated[:3]], 'measure': meas,
                 'skipped_cl': skipped_cl, 'resolved_points': resolved_pts}
     return {'verdict': 'CERTIFIED', 'measure': meas, 'skipped_cl': skipped_cl,
+            'realised': _realised, 'tier': _tier('CERTIFIED', _realised),
             'resolved_points': resolved_pts}
 
 
@@ -1081,15 +1428,28 @@ TOUCHSTONES = [
     ('mult3 log pow1_3 _0', 'log _0', 'CERTIFIED',
      '3*log(cbrt t) = log t for t>0; both undefined for t<0; -inf vs -inf equal at 0; '
      '3*inf = inf at +inf: no disagreement event anywhere -- exactly certified'),
-    ('atanh tanh !0', '!0', 'CERTIFIED',
-     'exactly true on ALL of R; dps-50 rounding of tanh(100) to 1 must go Unresolved at '
-     'the boundary, never fabricate +inf (boundary-honesty band)'),
+    ('atanh tanh !0', '!0', 'ENGINE-MISALIGN',
+     'BOTH halves, and they are independent. CONTRACT half unchanged: exactly true on ALL '
+     'of R, and the dps-50 rounding of tanh(100) to 1 must still go Unresolved at the '
+     'boundary rather than fabricate +inf (boundary-honesty band) -- a CERTIFIED contract '
+     'lane is what lets the second half be reached at all. DEPLOYED half, new with F95: '
+     'f64 tanh attains exactly 1.0 from 18.990341103219276, so the shipped engine returns '
+     'inf where the rule says the argument. The rule is TRUE and NOT REALISED, which is '
+     'precisely what ENGINE-MISALIGN names. A regression to CERTIFIED here means the '
+     'deployed lane stopped reaching the grid; a KILL means the contract lane started '
+     'fabricating.'),
     # -- regression guards --
-    ('+ ?0 sin exp -100', '?0', 'CERTIFIED',
-     'sin(e^-100) = 3.7e-44 differs from 0 BELOW the judge resolution floor (rel 1e-25):'
-     ' any snap-absorbable value (<1e-40) is also below the floor, so the snap cannot'
-     ' fabricate an equality the tolerance would not grant; f64-mined rules cannot'
-     ' express sub-1e-16 discrepancies (rung-2 confirmation kept as belt-and-braces)'),
+    ('+ ?0 sin exp -100', '?0', 'KILL',
+     'F99. The invariant this pins is unchanged and now holds at EVERY rung rather '
+     'than only at dps 50: the tolerance floor is tied to the snap threshold '
+     '(10**(-dps+10)), so a snap-absorbable value is always within tolerance and the '
+     'snap can never fabricate an equality the tolerance would refuse. What changed is '
+     'the VERDICT, because the rule is genuinely false and the old fixed 1e-25 floor '
+     'was hiding it: sin(e^-100) = 3.720076e-44, so at the battery point ?0 = 0 the LHS '
+     'is 3.7e-44 against an RHS of 0 -- a 100% relative disagreement in exact arithmetic '
+     'AND in f64, where 0.0 + sin(exp(-100)) == 0.0 is False. The snap absorbs it at '
+     'dps 50 (threshold 1e-40) and not at dps 120 (1e-110), so rungs 2 and 3 decide, '
+     'which is the escalation working as designed.'),
     ('pow1_2 * - ?0 0.2 - ?0 0.8', 'pow1_2 abs * - ?0 0.2 - ?0 0.8', 'KILL',
      'undefined on (0.2, 0.8), measure 0.6: invisible to a coarse unit-spaced grid'),
     ('+ ?0 * pow exp neg pow2 - <constant> 2 float("inf") ?0', '?0', 'KILL',

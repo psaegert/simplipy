@@ -52,7 +52,7 @@ def main():
 
     print('simplifying 64k (tagged + explicit) ...', flush=True)
     new_tagged = [e.simplify(r) for r in corpus]
-    new_explicit = [e.simplify(r, form='explicit') for r in corpus]
+    new_explicit = [e.simplify(r) for r in corpus]
 
     changed = [i for i in range(len(corpus)) if list(new_tagged[i]) != list(old_tagged[i])]
     const_free = np.array(['<constant>' not in r for r in corpus])

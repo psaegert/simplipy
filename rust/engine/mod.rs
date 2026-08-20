@@ -25,6 +25,7 @@ use crate::tokens::{Tok, TokenTable, TokenView};
 use memo::{BangCache, SimplifyCtx};
 
 pub use ac::AcForm;
+pub use ac::RuleMode;
 
 /// Test-only plumbing for the serialization-stability probes (a per-call ctx + view + intern).
 #[cfg(test)]
@@ -86,12 +87,48 @@ pub struct Engine {
     bang_cache: std::sync::Mutex<BangCache>,
     /// The `$`-sort twin (`interval::finite_nonzero_ae`), same discipline.
     mult_cache: std::sync::Mutex<BangCache>,
-    /// The AC core's translated ruleset, built lazily on first `ac_simplify` (see `engine/ac.rs`)
-    /// so consumers that never opt in pay nothing at construction.
+    /// The DEFAULT mode's translated ruleset, built lazily on first `ac_simplify` (see
+    /// `engine/ac.rs`) so consumers that never opt in pay nothing at construction.
     ac_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
+    /// THE `real` MODE'S OWN COMPLETE RULE SET (`rules_real.json`), interned exactly like
+    /// `rules` -- NOT a supplement to it. Owner ruling, 2026-08-19: "one distinct rule set
+    /// for each mode", and "for provenance, the triple should be pinned; we will only ever
+    /// mine and distribute triples". So this file carries the core rules AND the real-only
+    /// rules, complete, and the engine never computes a union to decide what `real` serves.
+    ///
+    /// `None` -- the state of every engine not handed one -- means the mode names NO SET
+    /// OF ITS OWN and serves the default set. `Some(vec![])` is the different, sayable
+    /// statement "this mode serves nothing"; see `Engine::ac_rules_for`.
+    real_rules: Option<CompiledRules>,
+    /// THE `corpus` MODE'S OWN COMPLETE RULE SET (`rules_corpus.json`), same discipline:
+    /// core plus BOTH the real-only and corpus-only rules, in one self-contained file.
+    corpus_rules: Option<CompiledRules>,
+    /// `real`'s translated set, lazily built by the same `translate_rules` as the default
+    /// cell. Untouched by a consumer that never asks for `real`.
+    ac_real_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
+    /// `corpus`'s translated set, same discipline as `ac_real_rules_cell`.
+    ac_corpus_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
 }
 
 impl Engine {
+    /// Syntactic PREFIX -> TAGGED regrouping (`crate::forms`): NOTATION only -- no AC
+    /// state, no canonical constructor, no rule, no reordering, no literal re-spelling.
+    pub fn to_tagged_syntactic(&self, tokens: &[String]) -> Result<Vec<String>, String> {
+        crate::forms::prefix_to_tagged(tokens, &self.operators)
+    }
+
+    /// Syntactic TAGGED -> explicit binary PREFIX expansion, the twin of
+    /// [`Engine::to_tagged_syntactic`]. The identity on tag-free input by construction.
+    pub fn to_prefix_syntactic(&self, tokens: &[String]) -> Result<Vec<String>, String> {
+        crate::forms::tagged_to_prefix(tokens, &self.operators)
+    }
+
+    /// Well-formedness in either dialect, without producing anything: the conversion
+    /// parse IS the validation, so both share one arbiter.
+    pub fn check_form(&self, tokens: &[String]) -> Result<(), String> {
+        crate::forms::check(tokens, &self.operators)
+    }
+
     /// Build from resolved local paths (the Python shim resolves HF-hub/local via simplipy's own
     /// asset_manager and hands us files; the Rust core is network-free). REUSES the unchanged
     /// config.yaml + rules.json (single source of truth shared with Python).
@@ -180,6 +217,14 @@ impl Engine {
             bang_cache: std::sync::Mutex::new(BangCache::new()),
             mult_cache: std::sync::Mutex::new(BangCache::new()),
             ac_rules_cell: std::sync::OnceLock::new(),
+            // NO per-mode sets at construction: `from_strs` builds exactly today's engine
+            // from exactly today's `rules.json`, and the other two files -- when a config
+            // names them -- arrive afterwards through `set_mode_rules`. That is what makes
+            // "absent files are a no-op" true by construction rather than by argument.
+            real_rules: None,
+            corpus_rules: None,
+            ac_real_rules_cell: std::sync::OnceLock::new(),
+            ac_corpus_rules_cell: std::sync::OnceLock::new(),
         })
     }
 

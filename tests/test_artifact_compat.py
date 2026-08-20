@@ -52,7 +52,8 @@ class TestConfigGate:
     def test_acj_config_loads(self):
         _require_or_skip(ACJ_CONFIG, 'acj-4-3 config not staged')
         engine = SimpliPyEngine.from_config(ACJ_CONFIG)
-        assert engine.simplify(['+', 'x0', 'x0']) == ['<mul>', '2', 'x0', '</mul>']
+        assert engine.simplify(engine.to_tagged(['+', 'x0', 'x0'])) \
+            == ['<mul>', '2', 'x0', '</mul>']
 
     def test_vocabulary_sniff_refuses_retired_tokens(self, tmp_path):
         # The sniff classifies UN-declared configs (the published legacy artifacts):
@@ -97,7 +98,8 @@ class TestConfigGate:
         p = tmp_path / 'config.yaml'
         p.write_text(yaml.safe_dump(config, sort_keys=False))
         engine = SimpliPyEngine.from_config(str(p))
-        assert engine.simplify(['+', 'x0', 'x0']) == ['<mul>', '2', 'x0', '</mul>']
+        assert engine.simplify(engine.to_tagged(['+', 'x0', 'x0'])) \
+            == ['<mul>', '2', 'x0', '</mul>']
 
     def test_malformed_declaration_refuses(self, tmp_path):
         _require_or_skip(ACJ_CONFIG, 'acj-4-3 config not staged')
@@ -117,7 +119,8 @@ class TestConfigGate:
         p = tmp_path / 'config.yaml'
         p.write_text(yaml.safe_dump(config, sort_keys=False))
         engine = SimpliPyEngine.from_config(str(p))
-        assert engine.simplify(['+', 'x0', 'x0']) == ['<mul>', '2', 'x0', '</mul>']
+        assert engine.simplify(engine.to_tagged(['+', 'x0', 'x0'])) \
+            == ['<mul>', '2', 'x0', '</mul>']
 
 
 class TestDeliberateBoundaries:

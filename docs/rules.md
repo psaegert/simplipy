@@ -110,7 +110,7 @@ than during every candidate attempt, and memoized (per call, plus a generational
 per-engine cache), which makes `!`-bearing rulesets fast at scale with identical
 verdicts.
 
-These sort gates define the default **`SOUND`** apply-time contract. `Mode.LOSSY`
+These sort gates define the default **`f64`** apply-time contract. `Mode.corpus`
 (see [Soundness modes](guides/simplify.md#soundness-modes)) relaxes them together — every `!`/`$`
 placeholder then binds any subtree with the certificate skipped — which recovers extra
 reductions for training-data canonicalization at the cost of equivalence. Mined rules are
@@ -289,7 +289,8 @@ certified = engine.certify_rules(proposals, hints,
 
 dummies = ["x0", "x1"]
 engine.simplification_rules = deduplicate_rules(
-    engine.simplification_rules + [(s, t) for s, t, _ in certified], dummies)
+    engine.simplification_rules + [(s, t) for s, t, _ in certified], dummies,
+    engine=engine)   # dedup keys on the engine's internal form, not the spelling
 engine.compile_rules()
 ```
 

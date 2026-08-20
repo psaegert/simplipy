@@ -170,7 +170,7 @@ class TestMuEraResolutionRespell:
         import numpy as np
         core = mined_acj._core
         src = ['*', '*', '0.3333333333333333', '0.3333333333333333', 'x0']
-        mark = mined_acj.simplify(list(src), form='explicit')
+        mark = mined_acj.simplify(list(src))
         assert mark[1].startswith('0.111111111111111088'), mark  # exact square stands
         x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
         lib = core.build_candidate_library(
@@ -189,12 +189,12 @@ class TestMuEraResolutionRespell:
         import numpy as np
         # The RESOLUTION is the guard; the resolved exact 1/2 then takes its argmin
         # spelling (`/ 1 2`, not `0.5`) -- §10.10(1), owner-ratified 2026-08-07.
-        assert mined_acj.simplify(['/', 'acos', '0', 'np.pi'], form='explicit') \
+        assert mined_acj.simplify(['/', 'acos', '0', 'np.pi']) \
             == ['/', '1', '2']
         bare = SimpliPyEngine(operators=mined_acj._operators_config, rules=[])
         core = bare._core
         src = ['/', 'acos', '0', 'np.pi']
-        mark = bare.simplify(list(src), form='explicit')
+        mark = bare.simplify(list(src))
         assert 'acos' in mark, mark
         x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
         lib = core.build_candidate_library([['<constant>'], ['x0']], ['x0'], x, 256)

@@ -19,8 +19,8 @@ from simplipy import masking
 engine = sp.SimpliPyEngine.load("acj-4-3", install=True)
 
 masking.mask(engine.simplify(['+', 'x1', '3.14']), engine,
-             masking.mask_values_keep_structure)
-# -> ['<add>', 'x1', '<constant>', '</add>']
+             masking.mask_fittable)
+# -> ['+', 'x1', '<constant>']
 ```
 
 ## The shipped policies
@@ -28,8 +28,6 @@ masking.mask(engine.simplify(['+', 'x1', '3.14']), engine,
 Choosing what to abstract is a real decision with real failure modes, so the
 kinds ship in the module rather than being re-invented by every consumer:
 
-- **`mask_values_keep_structure`** — numeric literal *values* become
-  `<constant>` while structural literals stay.
 - **`mask_all`** — every number, including either half of a fraction and the
   special constants. For structural comparison.
 - **`mask_fittable`** — every number a constant optimizer can actually fit,

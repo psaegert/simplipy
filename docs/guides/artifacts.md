@@ -1,12 +1,41 @@
 # Artifacts and assets
 
-Every published engine asset is four files: `config.yaml` (the operator table and
-engine configuration), `rules.json` (the mined ruleset), `mine.yaml` (the exact mine
+Every published engine asset is six files: `config.yaml` (the operator table and
+engine configuration), a **rule-set TRIPLE** — `rules.json`, `rules_real.json` and
+`rules_corpus.json` — `mine.yaml` (the exact mine
 configuration — each artifact is byte-deterministically reproducible from it with one
 `simplipy find-rules` command **at the recorded environment**; what "recorded
 environment" means, and why it must be said, is the
 [environment qualification](../method/environment-qualification.md) page), and
-`rules.json.provenance.json`. The provenance
+`rules.json.provenance.json`.
+## The triple
+
+One distinct, complete rule set per mode, not a base plus overlays:
+
+| file | mode | contains |
+|---|---|---|
+| `rules.json` | `Mode.f64` (the default) | every rule the deployed f64 evaluator reproduces |
+| `rules_real.json` | `Mode.real` | every rule that is true over ℝ |
+| `rules_corpus.json` | `Mode.corpus` | the permissive superset |
+
+`rules.json` keeps its name, so a config written before the triple goes on loading
+unchanged: the other two keys are optional, and a mode naming no set of its own serves
+the default one. `Mode.real` is the exception — it **fails closed** rather than fall
+back, because its only divergence from `f64` is which rules are certified, so serving
+it the f64 set would answer a request for mathematical soundness with rules that are
+f64-exact and mathematically false.
+
+**The triple is the unit of mining, pinning and distribution.** A mine run is valid only
+if all three fall out of it; a partial triple is not shippable. The provenance sidecar
+covers the triple as a whole, and so does D29 byte-identity. Rules the mine finds and
+can license in no mode are **recorded** in the sidecar's drop census rather than
+silently absent.
+
+Verify a shipped triple with `simplipy.verify.verify_triple`, which sweeps each file
+against **its own** mode's contract. Cleanliness is per mode: `atanh(tanh t) → t` is
+exactly what belongs in `rules_real.json` and would be a defect in `rules.json`.
+
+The provenance
 sidecar records how the ruleset came to be: the mine parameters, the core build stamp
 (package version plus git revision of the compiled core), the environment (python,
 platform, libc, numpy/scipy/mpmath versions, and a `libm_fingerprint` — a digest of a
