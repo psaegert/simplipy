@@ -185,6 +185,17 @@ drop census rather than silently absent.
 - Two shipped rules of the form `exp(exp(sinh c)) = 1` were certified as true over ℝ. They
   are not: at `c = -6` the left side differs from 1 by `2.5e-88`. They are exact in f64 and
   stay in the same rule set; what changes is that the gate now says which of the two it is.
+- The miner asked one question where the judge asks two. Its row gate skips the contract
+  entirely wherever the deployed f64 sides "agree", and the bar for that was the band that
+  answers a different question — whether the deployed algebra has *diverged*, which is
+  deliberately loose because a few ULP of rounding is not a divergence. As a pre-screen it
+  is roughly 10⁷ ULP, and below 1 a pure absolute floor: it reads `e^sinh(-5) = 0` as an
+  equality when the sides are `5.9e-33` and `0.0`, so a rule that is false could be mined
+  without its truth ever being asked. The two questions now have the two comparisons the
+  judge already used — realisation in ULP for the pre-screen, the structural band for
+  divergence. Measured: 8 of 102 `real`-tier rules in a reference mine have a point that
+  now reaches the contract, up to 4.9 million ULP apart, and every mined artifact is
+  byte-for-byte what it was.
 - The D15 diagonal lane never received the precision coupling its commit claimed, and fed
   the same measure that convicts.
 
