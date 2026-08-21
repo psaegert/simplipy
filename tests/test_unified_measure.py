@@ -6,8 +6,8 @@ termination probe -- as behavior, before the measure lands.
 
 The measure, as ratified (Sec. 2 of the design doc; costs in 1/8 units, exact u64):
 
-  structural node (bag / Pow / Fun head)   8
-  variable leaf, special (pi, e), inf/nan  8
+  structural node (bag / Pow / Fun head)   8   (SUPERSEDED 2026-08-21, see below)
+  variable leaf, special (pi, e), inf/nan  8   (SUPERSEDED 2026-08-21, see below)
   numeric literal p/q (the exact VALUE)    max(2, bitlen(|p|) + bitlen(q) - 1)
   bag coefficient slot                     the literal cost above (magnitude 1 free:
                                            a bare sign is not information -- "x - y is
@@ -37,6 +37,15 @@ Const-absorption licence no longer beats the gradient at bag sites -- C*pi -> C
 absorbs like every ground; only non-bag positions (pi^C) still hold a special
 against mu.
 
+AMENDED 2026-08-21 (the SYMBOL TABLE): the two "8" rows above are gone. A description
+length is not flat, and the flatness was minting degenerate rules -- `pi - 2` and
+`asin(sin 2)` both priced 19 bits, so the mine preferred the composition. Each grammar
+symbol now carries its own price, informed by the node census and rounded to whole bits
+(rust/ac/expr.rs, the `MU_BITS_*` block); the module constants below mirror it.
+Everything BEHAVIORAL in this file is unchanged -- the T-battery inequalities all still
+hold, and T4's now holds with room it did not have at the design doc's first-draft
+leaf price.
+
 AMENDED AT D38/B2 (2026-08-17, mu'): the literal row is now the TWO-codeword price
 (selector + min(rational, decimal-scientific) + sign -- see tests/test_mu_prime.py,
 the falsifier suite that owns the codebook pins), and c_free re-derives to 67 bits
@@ -55,7 +64,18 @@ from conftest import acj_config_path
 # real quantity log2(1 + |n|), not a bit COUNT, so the ordering can tell 100 from 1000.
 # The unit stays an INTEGER so no float enters a comparison.
 MILLI = 1000
-MU_SYM = 8 * MILLI
+# The SYMBOL TABLE (2026-08-21), mirroring rust/ac/expr.rs's `MU_BITS_*`. There is no
+# single "one grammar symbol" price any more; 8 survives only as the UNIT the table is
+# read against (`SIMPLIPY_MU_SYM`) and as the price of a head the table does not name.
+MU_LEAF = 6 * MILLI
+MU_ADD = 3 * MILLI
+MU_MUL = 3 * MILLI
+MU_POW = 3 * MILLI
+MU_PI = 4 * MILLI
+MU_E = 4 * MILLI
+MU_FUN_ELEMENTARY = 6 * MILLI      # exp log abs sin cos tan rootn
+MU_FUN_TRANSCENDENTAL = 8 * MILLI  # asin acos atan sinh cosh tanh asinh acosh atanh
+MU_INF = 8 * MILLI                 # float("inf"), float("-inf"), float("nan")
 # <constant> is DERIVED, not chosen (contract 10.10(5) / H-054), and re-derived under the
 # mu' codebook at D38/B2 (2026-08-17): the supremum of mu' over f64 round-trip spellings
 # (64.649 bits, at 8.9002954340287245e-308) plus the sign bit and the selector bit,
@@ -134,10 +154,16 @@ class TestMuValues:
     """The weight table, pinned against independently computed expectations."""
 
     def test_atoms(self, eng):
-        assert c(eng, ['x0']) == MU_SYM
-        assert c(eng, ['np.pi']) == MU_SYM
-        assert c(eng, ['np.e']) == MU_SYM
+        assert c(eng, ['x0']) == MU_LEAF
+        assert c(eng, ['np.pi']) == MU_PI
+        assert c(eng, ['np.e']) == MU_E
+        assert c(eng, ['float("inf")']) == MU_INF
         assert c(eng, ['<constant>']) == MU_FREE
+        # THE LAW THAT FIXES pi AND e, which the census cannot: a named constant must
+        # cost less than the cheapest expression denoting it, or writing the name is
+        # never a descent. `acos(-1)` and `exp(1)` are those expressions.
+        assert MU_PI < c(eng, ['acos', '(-1)']) == MU_FUN_TRANSCENDENTAL + mu_lit(-1)
+        assert MU_E < MU_FUN_ELEMENTARY + mu_lit(1)
         # The two-bit FLOOR covers 0, 1, -1 and 2 alike: L is below it there, and the
         # sign bit is invisible under it. Every priced literal additionally pays the
         # mu' selector bit (D38), so the floor class sits at 3 bits total.
@@ -161,35 +187,46 @@ class TestMuValues:
         # coefficient is a steep ascent -- the 6-rule fork is dead by arithmetic.
         sym = c(eng, ['*', 'np.e', 'x0'])
         mat = c(eng, ['*', '2.718281828459045', 'x0'])
-        assert sym == 3 * MU_SYM
-        assert mat == 2 * MU_SYM + mu_lit('2718281828459045/1000000000000000')
+        assert sym == MU_MUL + MU_E + MU_LEAF
+        assert mat == MU_MUL + mu_lit('2718281828459045/1000000000000000') + MU_LEAF
         assert sym < mat
 
     def test_t2_exp_pi_x_over_pow(self, eng):
         # The owner's original preference is the measure's theorem: 32 < ~121.
-        assert c(eng, ['exp', '*', 'np.pi', 'x0']) == 4 * MU_SYM
+        assert c(eng, ['exp', '*', 'np.pi', 'x0']) == (
+            MU_FUN_ELEMENTARY + MU_MUL + MU_PI + MU_LEAF)
         assert c(eng, ['exp', '*', 'np.pi', 'x0']) < c(
             eng, ['pow', '23.140692632779267', 'x0'])
 
     def test_t3_exact_collapse_is_a_descent(self, eng):
-        assert c(eng, ['sin', 'np.pi']) == 2 * MU_SYM
+        assert c(eng, ['sin', 'np.pi']) == MU_FUN_ELEMENTARY + MU_PI
         assert c(eng, ['sin', 'np.pi']) > c(eng, ['0'])
 
     def test_t4_collection_still_descends(self, eng):
-        # x + x -> 2x: 24 > 18. Small integers are genuinely cheap (< variable cost).
-        assert c(eng, ['*', '2', 'x0']) == 2 * MU_SYM + mu_lit(2)
-        assert c(eng, ['pow', 'x0', '2']) == 2 * MU_SYM + mu_lit(2)
+        # x + x -> 2x and x*x -> x^2. Small integers are genuinely cheap (< a variable).
+        assert c(eng, ['*', '2', 'x0']) == MU_MUL + mu_lit(2) + MU_LEAF
+        assert c(eng, ['pow', 'x0', '2']) == MU_POW + MU_LEAF + mu_lit(2)
         for n in range(2, 9):
-            assert mu_lit(n) < MU_SYM
+            assert mu_lit(n) < MU_LEAF
+        # THE INEQUALITY ITSELF, which this test used to assert only the operands of.
+        # The collected spellings are the ones `add`/`mul` build, so `ac_complexity`
+        # cannot be handed the uncollected tree -- it canonicalizes on the way in --
+        # but the uncollected price is a sum of table entries and is exactly what T4
+        # compares against. The FIRST DRAFT of the symbol table failed here: a 2-bit
+        # leaf priced `Add[x, x]` BELOW `2x`, because the census prices a node CLASS
+        # while a leaf must also say WHICH variable.
+        assert MU_MUL + mu_lit(2) + MU_LEAF < MU_ADD + 2 * MU_LEAF
+        assert MU_POW + MU_LEAF + mu_lit(2) < MU_MUL + 2 * MU_LEAF
 
     def test_t5_rational_special_boundary(self, eng):
         # 2.5*pi (20 units) sits far below its materialization (~105): stays symbolic.
-        assert c(eng, ['*', '2.5', 'np.pi']) == 2 * MU_SYM + mu_lit('5/2')
+        assert c(eng, ['*', '2.5', 'np.pi']) == MU_MUL + mu_lit('5/2') + MU_PI
         assert c(eng, ['*', '2.5', 'np.pi']) < c(eng, ['7.853981633974483'])
 
     def test_t6_const_is_the_priciest_atom(self, eng):
         assert c(eng, ['<constant>']) == MU_FREE
-        assert MU_FREE > MU_SYM
+        assert MU_FREE > max(MU_LEAF, MU_ADD, MU_MUL, MU_POW, MU_PI, MU_E,
+                             MU_FUN_ELEMENTARY, MU_FUN_TRANSCENDENTAL, MU_INF)
         assert MU_FREE > mu_lit('2718281828459045/1000000000000000')
 
     def test_sign_costs_one_bit_in_atoms_and_slots(self, eng):
@@ -201,7 +238,7 @@ class TestMuValues:
         # keeps its old relation to `x + y`. The negation WRAPPER is separate: mu is
         # measured on the canonical TREE ("never on a serialization"), and `x - y` is
         # canonically Add[x, Mul[-1, y]] -- the wrapper Mul is a real structural node
-        # at 8, so subtraction prices one grammar symbol above addition. (Delta from
+        # at `MU_MUL`, so subtraction prices one Mul head above addition. (Delta from
         # the pre-mu table's blanket sign-free row; operationally inert -- the
         # ordering only compares EQUIVALENT states, and sign wrappers on the same
         # value canonicalize identically -- but pinned here so it is a decision, not
@@ -213,7 +250,7 @@ class TestMuValues:
         assert mu_lit(-2) - mu_lit(2) == 585
         # mu(1) and mu(-1) both sit on the two-bit FLOOR, so the sign is invisible there.
         assert c(eng, ['(-1)']) == c(eng, ['1'])
-        assert c(eng, ['-', 'x0', 'x1']) == c(eng, ['+', 'x0', 'x1']) + MU_SYM
+        assert c(eng, ['-', 'x0', 'x1']) == c(eng, ['+', 'x0', 'x1']) + MU_MUL
 
 
 class TestB22AstronomicSaturation:
@@ -259,7 +296,7 @@ class TestT7Termination:
             frac = Fraction(3, 2 ** k)
             tok = f'{frac.numerator}/{frac.denominator}'
             m = c(eng, ['*', tok, 'x0'])
-            assert m == 2 * MU_SYM + mu_lit(frac)
+            assert m == MU_MUL + mu_lit(frac) + MU_LEAF
             if prev is not None:
                 assert m > prev, (k, m, prev)
             prev = m
@@ -389,3 +426,77 @@ class TestB10CfreeDerivation:
         derived_bits = math.ceil(rec + 1.0 + 1.0)  # + the sign bit + the selector, ceiled
         assert derived_bits == 67
         assert c(eng, ['<constant>']) == derived_bits * MILLI
+
+
+class TestTheSymbolTable:
+    """The 2026-08-21 re-pricing: what the table was FOR, and what it must stay.
+
+    mu' charged one flat 8 bits for every grammar symbol, and that flatness minted a
+    degenerate family. `pi - 2 -> asin(sin 2)` is CORRECT (`asin(sin x) = pi - x` on
+    [pi/2, pi]) and CERTIFIED, and mu' genuinely preferred the right-hand side --
+    19.000 against 19.585 -- because two transcendental heads plus a literal cost
+    exactly what a bag plus `pi` plus a literal cost. The whole parametrised family
+    followed (`- k np.pi -> atan tan k`, `acos neg cos (-k)`).
+
+    The table is HEURISTIC, informed by `ac_node_census` over the 400-row corpus, and
+    two of its entries are fixed by laws the census cannot see. Both laws are pinned
+    here, because both are load-bearing and neither is derivable from a frequency count.
+    """
+
+    @pytest.mark.parametrize('cheap,degenerate', [
+        (['-', 'np.pi', '2'], ['asin', 'sin', '2']),
+        (['-', 'np.pi', '1'], ['atan', 'tan', '1']),
+        (['-', 'np.pi', '2'], ['acos', 'neg', 'cos', '(-2)']),
+    ])
+    def test_the_degenerate_family_is_dearer_than_what_it_replaces(
+            self, eng, cheap, degenerate):
+        assert c(eng, cheap) < c(eng, degenerate), (
+            f'{" ".join(cheap)} = {c(eng, cheap)} is not below '
+            f'{" ".join(degenerate)} = {c(eng, degenerate)}')
+
+    def test_a_named_constant_costs_less_than_its_cheapest_denotation(self, eng):
+        """A name that costs more than an expression for the same value is never worth
+        writing, and the census cannot say so: `pi` and `e` occur ZERO times in a
+        symbolic-regression skeleton corpus, so a frequency table prices them at its
+        smoothing floor and makes the degenerate family STRONGER."""
+        assert c(eng, ['np.pi']) < c(eng, ['acos', '(-1)'])
+        # `exp 1` folds to `np.e` on the way in, so the denotation is priced from the
+        # table rather than through the engine -- which is the point: the fold filter's
+        # correctness rests on `exp 1 -> np.e` being a strict improvement, and under the
+        # flat unit it was a TIE decided by the canonical tie-break instead.
+        assert c(eng, ['np.e']) < MU_FUN_ELEMENTARY + mu_lit(1)
+
+    def test_the_table_is_a_valid_code_over_a_real_vocabulary(self, eng):
+        """Kraft, over the alphabet a tree position can hold: `sum 2^-cost <= 1`.
+
+        Read PER SYMBOL, not per class -- a leaf must also say WHICH variable, and that
+        is exactly the term the census omits (it counts the class `Leaf`, 3519 of 10,996
+        nodes at 1.65 bits, while a specific variable among 18 is 5.82). The first draft
+        of the table took the class number, and at a 2-bit leaf this inequality admits
+        exactly ONE variable -- and T4's collection inequality inverts, which is the same
+        defect showing up where it can be measured.
+
+        The literal codebook is deliberately not in this sum: the table does not touch
+        it, and `L(n) = log2(1+n)` was never summable over the integers anyway (a
+        property mu inherited from `bits`, predating all of this).
+        """
+        # THE ALPHABET IS NODE KINDS, NOT CONFIG TOKENS. `-` is an inverted member of an
+        # Add bag, `/` and `inv` are `Pow(., -1)`, `neg` is `Mul[-1, .]`; none of them is
+        # a node, and counting them collides several spellings onto one code point and
+        # blows the sum past 1 for no informational reason. Same trap the node census
+        # documents (`ac_node_census`: serialized tokens are the wrong unit).
+        STRUCTURE = {'+', '-', '*', '/', 'neg', 'pow', 'inv'}
+        ELEMENTARY = {'exp', 'log', 'abs', 'sin', 'cos', 'tan', 'rootn'}
+        alphabet = [MU_ADD, MU_MUL, MU_POW, MU_PI, MU_E,
+                    MU_INF, MU_INF, MU_INF, MU_FREE]
+        for op in eng.operator_arity:
+            if op in STRUCTURE:
+                continue
+            alphabet.append(MU_FUN_ELEMENTARY if op in ELEMENTARY
+                            else MU_FUN_TRANSCENDENTAL)
+        n_vars = 18   # x0..x17, the census corpus's own vocabulary
+        mass = sum(2.0 ** (-b / MILLI) for b in alphabet)
+        assert mass < 1.0, f'the fixed alphabet alone exhausts the code: {mass}'
+        assert mass + n_vars * 2.0 ** (-MU_LEAF / MILLI) <= 1.0, (
+            f'Kraft violated at {n_vars} variables: '
+            f'{mass + n_vars * 2.0 ** (-MU_LEAF / MILLI)}')

@@ -40,16 +40,24 @@ from conftest import acj_config_path
 
 MILLI = 1000
 SEL = 1 * MILLI          # the selector bit: one bit, once per priced numeric leaf
-MU_SYM = 8 * MILLI
+MU_SYM = 8 * MILLI       # the symbol UNIT; since 2026-08-21 a LEAF is priced separately
+MU_LEAF = 6 * MILLI      # the symbol table's leaf entry (rust/ac/expr.rs MU_BITS_LEAF)
 MU_FREE_PRIME = 67 * MILLI   # the re-derived c_free' (TestCfreePrimeDerivation earns it)
 
 # The digest acj-4-3 was MINED under (its provenance sidecar; mu, pre-D38). The mu'
 # engine must compute a DIFFERENT digest -- and still load the artifact (D25: warn,
 # never refuse; the fingerprint is write-only at load).
-#: The digest the PRE-0.14 artifact was mined under. The shipped triple is mined under
-#: the current measure ('66ba8c4654ac9388'), so this is kept only as the historical
-#: value a mismatch test can differ FROM -- not as a description of the asset.
+#: The digest the PRE-0.14 artifact was mined under, kept as a historical value a
+#: mismatch test can differ FROM.
 ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
+
+#: The digest the SHIPPED triple was mined under, read from its provenance sidecar. The
+#: symbol table (2026-08-21) changed the measure, so the engine no longer computes this
+#: and D25/R6 warns at load -- correctly, and until the re-mine under the new measure
+#: replaces the artifact. `test_acj_load_warns_until_the_remine` below pins that the
+#: warning is EXACTLY this one and nothing else, which is the only shape of allowance
+#: that cannot swallow a genuine mismatch (the last blanket one nearly did).
+ACJ_SHIPPED_DIGEST = '66ba8c4654ac9388'
 
 
 def L(n) -> int:
@@ -485,21 +493,35 @@ class TestFingerprintAndArtifactLoad:
             '355/113': 16309,         # no decimal codeword: selector + old price
             '0.2': 4 * MILLI,         # (2, 1): selector + 2 + L(1)
             '<constant>': MU_FREE_PRIME,
-            'x0': MU_SYM,
+            'x0': MU_LEAF,
         }
         assert fp['digest'] != ACJ_MINED_DIGEST
 
-    def test_acj_loads_without_a_mismatch_warning_and_serves(self):
-        """The warning existed because the shipped artifact was mined under an older
-        measure. The 0.14.0 triple is mined under the current one, so a clean load is
-        the CORRECT outcome -- and this test now guards that the warning does not fire
-        spuriously, which is the more useful direction. D25 warn-not-refuse is pinned on
-        a deliberately mismatched fixture elsewhere in this file."""
+    def test_acj_load_warns_until_the_remine(self):
+        """D25 warn-not-refuse, on the real asset, for exactly as long as the asset
+        predates the measure.
+
+        The shipped triple was mined under `ACJ_SHIPPED_DIGEST`; the symbol table
+        (2026-08-21) changed the measure, so the engine computes a different one and
+        says so. The rules stay SOUND -- the warning is about their minimality and
+        ordering claims, which were certified against the old prices -- and the artifact
+        still loads and serves, which is the whole point of warn-not-refuse.
+
+        WHEN THE RE-MINE UNDER THE NEW MEASURE LANDS, this test must go back to
+        asserting NO fingerprint warning. It is written to force that: it pins the
+        mined digest verbatim, so a re-mined artifact fails it rather than sliding
+        through. A blanket "ignore fingerprint warnings" allowance is what this shape
+        deliberately avoids -- one existed before, and its own deletion note recorded
+        that while it stayed it would have silently swallowed a genuine mismatch."""
         import warnings as _w
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter('always')
             engine = SimpliPyEngine.from_config(acj_config_path())
-        assert not [x for x in caught if 'measure fingerprint mismatch' in str(x.message)]
+        mismatch = [str(x.message) for x in caught
+                    if 'measure fingerprint mismatch' in str(x.message)]
+        assert len(mismatch) == 1, caught
+        assert ACJ_SHIPPED_DIGEST in mismatch[0], mismatch[0]
+        assert engine._measure_fingerprint()['digest'] in mismatch[0], mismatch[0]
         out = engine.simplify(engine.to_prefix(['+', 'x0', 'x0']))
         assert list(out) == ['*', '2', 'x0']
 

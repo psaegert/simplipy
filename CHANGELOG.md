@@ -72,6 +72,32 @@ releases require simplipy >= 0.14.0. There is no compatibility shim, as with the
 artifact-format break: the rule sets, the artifact layout and the returned dialect all
 move together, and a shim would have to lie about at least one of them. Pin the pair.
 
+### Changed — every grammar symbol carries its own price
+
+The simplicity measure `mu` charged a flat 8 bits for every grammar symbol: a bag, a
+`Pow`, a function head, a variable leaf and a named constant alike. A description length
+is not flat, and the flatness had a visible cost — `pi - 2` and `asin(sin 2)` priced
+identically, so the miner preferred the composition and shipped a whole parametrised
+family of them. Those rules are true and certified; they are simply not simplifications.
+
+`mu` now reads each symbol off a table: a variable leaf 6 bits, `Add`/`Mul`/`Pow` 3,
+`pi` and `e` 4, an elementary head (`exp log abs sin cos tan rootn`) 6, an
+inverse/hyperbolic head 8, an infinity or an unnamed head 8. Literal pricing is
+untouched. The entries are read against the same 1/8 unit and scale with it, so
+`SIMPLIPY_MU_SYM` keeps its meaning.
+
+Two entries are fixed by rules a frequency count cannot supply: **a named constant must
+cost less than the cheapest expression denoting it** (`acos(-1)` is 11 bits, `exp(1)`
+is 9), and **a leaf must also name which variable it is** — the reason it is 6 and not
+the 1.65 bits the census reads for the class.
+
+Measured across the change: no rule of the shipped 5,451 changes direction, no corpus
+output changes in any mode, and no literal spelling moves. What does change is the
+number `SimpliPyEngine.complexity` returns — it is a different measure, so any pinned
+`mu` value downstream must be re-earned. Published rule sets mined under the previous
+measure still load and serve; they warn (D25/R6) that their minimality and ordering
+claims were certified against the old prices, until the next mine replaces them.
+
 ### Changed — the artifact is a TRIPLE
 
 A published asset is now six files, not four: `rules.json` (the f64 set, keeping its

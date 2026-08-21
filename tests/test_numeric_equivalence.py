@@ -282,11 +282,18 @@ class TestCorpusGate:
         # Both are true and NOT f64-realised, so both serve `real` and no longer the
         # default mode, and f64's own constructor reaches a form that costs 8,000 more
         # in each case. This is the measured price of the mode split, not a regression.
-        assert walk['complexity_out'] == 84714486, walk['complexity_out']
+        # THE SYMBOL TABLE (2026-08-21): 84,714,486 -> 56,665,486. The MEASURE changed
+        # -- structure is no longer a flat 8 bits a node -- so the old pin is not
+        # comparable and this is a re-pin, not a movement. What is comparable, and
+        # measured beside it: sound (`f64`) and `real` outputs are BYTE-IDENTICAL on all
+        # 400 rows across the change, and 14 corpus-mode rows re-spell through the
+        # mu-driven reciprocal-rejoin projection, which is the one output decision the
+        # prices own.
+        assert walk['complexity_out'] == 56665486, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4-3":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 84714486, \
+            assert m and int(m.group(1)) == 56665486, \
                 'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):

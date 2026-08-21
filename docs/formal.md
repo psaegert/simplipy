@@ -275,9 +275,25 @@ length under an exactness-respecting cost model). The integer carrier is the
 **milli-bit** ($\tfrac{1}{1000}$ bit; §10.10, 2026-08-06): a literal's cost is the real
 quantity $L(n) = \log_2(1+|n|)$ rather than a bit count — bit lengths quantise exactly
 where the ordering must discriminate — while the ordering stays integer, no float ever
-entering a comparison. In bits: a structural node (bag, `Pow`, function head), a
-variable leaf, and a special constant ($\pi$, $e$, the infinities, NaN) each cost $8$;
-a numeric literal is priced **on its exact value**, spelling-free, by a
+entering a comparison. In bits, each grammar symbol carries its own price -- the
+**symbol table** (2026-08-21; the former flat $8$ per symbol is revoked):
+
+| symbol | bits | | symbol | bits |
+|---|---|---|---|---|
+| variable leaf | 6 | | $\pi$, $e$ | 4 |
+| `Add`, `Mul`, `Pow` bag or head | 3 | | $\pm\infty$, NaN | 8 |
+| elementary head (`exp log abs sin cos tan rootn`) | 6 | | any other head | 8 |
+| inverse/hyperbolic head (`asin acos atan sinh cosh tanh asinh acosh atanh`) | 8 | | | |
+
+The entries are read against the ratified $1/8$ unit and scale with it, so the P-R3
+sensitivity axis (the symbol-vs-literal *ratio*) is unchanged. Two of them are fixed by
+laws a frequency count cannot see: a **named constant costs less than the cheapest
+expression denoting it** ($\mathrm{acos}(-1) = 11$ bits, $\exp(1) = 9$, so $4$ has
+room), and a **leaf must also name which variable it is** -- the class `Leaf` carries
+$1.65$ bits of the corpus census, a specific variable among eighteen carries $5.82$, and
+it is the second number the code has to charge for Kraft's inequality to hold and for
+collection ($x + x \to 2x$) to stay a descent. A numeric literal is priced **on its
+exact value**, spelling-free, by a
 **two-codeword codebook behind a one-bit selector** (D38/B2, 2026-08-17 — the former
 fraction-only code is revoked):
 

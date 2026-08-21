@@ -151,25 +151,146 @@ impl Ex {
 /// Worked examples: `x + y` = 24, `x*y` = 24, `2x` = 18, `x^2` = 18, `1/x` = 16,
 /// `sin(x)` = 16, `sin(pi)` = 16, `E*x` = 24 < `2.718281828459045*x` = ~117,
 /// `<constant>*x` = 144, `exp(pi*x)` = 32 < `pow(23.14..., x)` = ~121.
-/// One grammar symbol, in bit-units. 8 by default (the ratified 1/8 unit: one
-/// symbol counts as 8 bits of description); `SIMPLIPY_MU_SYM` overrides it, read
+/// The symbol UNIT, in BITS: what one grammar symbol costs at the ratified 1/8 pin, and
+/// the scale every entry of the symbol table below is expressed against. Since 2026-08-21
+/// no node is priced at the bare unit except an unclassified function head -- the table
+/// holds the per-kind entries, and this is what they are read AGAINST.
+/// 8 by default; `SIMPLIPY_MU_SYM` overrides it, read
 /// ONCE per process -- the pre-registered P-R3 sensitivity axis is this
-/// symbol-vs-bits RATIO (literal costs are absolute bits and do not scale).
+/// symbol-vs-bits RATIO (literal costs are absolute bits and do not scale), and the axis
+/// survives the table unchanged because the whole table scales with the unit.
 /// Production never sets the variable; it exists for the sensitivity mine only.
 // ARTIFACT-AFFECTING switch (and mu_free below): listed in
 // engine.py::ARTIFACT_ENV_SWITCHES (H-042).
-/// Returned in MILLI-BITS, but the environment variable is still read in BITS -- its
-/// ratified meaning ("one grammar symbol counts as 8 bits of description") is unchanged,
-/// only the unit the measure is carried in.
-pub fn mu_sym() -> u64 {
+fn mu_sym_unit() -> u64 {
     static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
         std::env::var("SIMPLIPY_MU_SYM")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(8)
-            * MU_MILLI
     })
+}
+
+/// A symbol-table entry, in MILLI-BITS: `bits` read at the ratified 8-bit unit, scaled
+/// by whatever unit this process runs at.
+///
+/// EXACT in integer arithmetic at every unit -- `MU_MILLI / 8 = 125` divides evenly, so
+/// no entry ever rounds. That is not cosmetic: the reduction ordering's well-foundedness
+/// comes from mu taking values in a discrete set, and a table that rounded would owe a
+/// fresh termination argument.
+#[inline]
+fn sym_bits(bits: u64) -> u64 {
+    bits * (MU_MILLI / 8) * mu_sym_unit()
+}
+
+/// The mu SYMBOL TABLE (round-1, 2026-08-21), in BITS at the 8-bit unit.
+///
+/// mu' priced EVERY grammar symbol the same: one flat 8 bits for a bag, a `Pow`, a
+/// function head, a variable leaf and a named constant alike. That flatness is what
+/// minted the degenerate family `pi - 2 -> asin(sin 2)` (and its parametrised kin
+/// `- k np.pi -> atan tan k`, `acos neg cos (-k)`). Those rules are CORRECT and
+/// CERTIFIED -- `asin(sin x) = pi - x` on [pi/2, pi] -- and mu' genuinely preferred the
+/// right-hand side, 19.000 against 19.585, because two transcendental heads plus a
+/// literal cost exactly what a bag plus `pi` plus a literal cost.
+///
+/// A description length is not flat. `ac_node_census` over a 400-row corpus (10,996
+/// charged nodes) reads the empirical class frequencies as
+///
+/// ```text
+///   Leaf 3519 (1.65 bits)   Mul 1989 (2.47)    Num 1948 (2.50)   Pow 1250 (3.14)
+///   Add  1088 (3.34)        Const 204 (5.75)   Fun:rootn 181 (5.92)
+///   transcendental heads 40-68 each (7.3-8.1)
+/// ```
+///
+/// -- structure CHEAP, a transcendental head EXPENSIVE, the exact opposite of what one
+/// flat unit says. The table below is HEURISTIC, informed by that census and rounded to
+/// whole bits: there is no standard corpus to derive it from, and the corpus that does
+/// exist is a symbolic-regression skeleton set in which `pi` and `e` occur ZERO times, so
+/// a straight frequency table would price them at the smoothing floor (~13.4 bits) and
+/// make the defect family STRONGER rather than weaker.
+///
+/// Pi and E are fixed instead by a LAW the census cannot see: A NAMED CONSTANT MUST COST
+/// LESS THAN THE CHEAPEST EXPRESSION DENOTING IT, or writing the name is never a descent.
+/// The cheapest spellings here are `acos(-1)` = 11 bits and `exp(1)` = 9, so 4 has room --
+/// and `np.e` now beats `exp 1` on COST rather than on the canonical tie-break, which is
+/// what the fold filter's correctness had been resting on.
+///
+/// Entries are bits AT THE 8-BIT UNIT and scale with it, so the pre-registered P-R3
+/// sensitivity axis is exactly what it was: `SIMPLIPY_MU_SYM=16` doubles every entry
+/// while literal costs stay absolute bits.
+const MU_BITS_LEAF: u64 = 6;
+const MU_BITS_ADD: u64 = 3;
+const MU_BITS_MUL: u64 = 3;
+const MU_BITS_POW: u64 = 3;
+const MU_BITS_PI: u64 = 4;
+const MU_BITS_E: u64 = 4;
+const MU_BITS_ELEMENTARY: u64 = 6;
+const MU_BITS_TRANSCENDENTAL: u64 = 8;
+const MU_BITS_INFINITY: u64 = 8;
+
+/// A variable (or slot, or any other vocabulary) leaf.
+#[inline]
+pub fn mu_leaf() -> u64 {
+    sym_bits(MU_BITS_LEAF)
+}
+
+/// The `Add` bag head. ONE node however many `+` the spelling shows.
+#[inline]
+pub fn mu_add() -> u64 {
+    sym_bits(MU_BITS_ADD)
+}
+
+/// The `Mul` bag head -- also the negation WRAPPER `Mul[-1, .]` that spells `x - y`.
+#[inline]
+pub fn mu_mul() -> u64 {
+    sym_bits(MU_BITS_MUL)
+}
+
+/// The `Pow` head -- also the division wrapper `Pow[y, -1]` that spells `x / y`.
+#[inline]
+pub fn mu_pow() -> u64 {
+    sym_bits(MU_BITS_POW)
+}
+
+/// `np.pi`. Below `acos(-1)` = 11 bits, its cheapest denoting expression.
+#[inline]
+pub fn mu_pi() -> u64 {
+    sym_bits(MU_BITS_PI)
+}
+
+/// `np.e`. Below `exp(1)` = 9 bits, its cheapest denoting expression -- the inequality
+/// the fold filter needs `exp 1 -> np.e` to be a strict improvement.
+#[inline]
+pub fn mu_e() -> u64 {
+    sym_bits(MU_BITS_E)
+}
+
+/// `float("inf")`, `float("-inf")`, `float("nan")`. Left at the flat unit: the census
+/// cannot see them either, and unlike `pi` and `e` no law pushes them down -- an infinity
+/// is not a value a shorter expression denotes.
+#[inline]
+pub fn mu_infinity() -> u64 {
+    sym_bits(MU_BITS_INFINITY)
+}
+
+/// A function HEAD, priced by name, in BITS at the 8-bit unit.
+///
+/// Two tiers, read off the census: the ELEMENTARY heads a skeleton reaches for constantly
+/// (`rootn` alone is 181 of 10,996 charged nodes at 5.92 bits) and the TRANSCENDENTAL
+/// heads it barely reaches at all (40-68 occurrences each, 7.3-8.1 bits). The gap between
+/// the tiers is the whole point: it is what makes `pi - 2` cheaper than `asin(sin 2)`.
+///
+/// A head this table does not name is a USER-DEFINED operator, which no census can price;
+/// it keeps the flat unit, so an unknown symbol is never made cheaper than mu' had it.
+fn mu_fun_bits(name: &str) -> u64 {
+    match name {
+        "exp" | "log" | "abs" | "sin" | "cos" | "tan" | "rootn" => MU_BITS_ELEMENTARY,
+        "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
+            MU_BITS_TRANSCENDENTAL
+        }
+        _ => 8,
+    }
 }
 
 /// The free constant's price, DERIVED rather than chosen (contract §10.10(5), H-054) --
@@ -402,27 +523,22 @@ pub fn mu_rat(r: &Rat) -> u64 {
 /// (exactly `c([str(mant)])` of the rescorer), the exponent on top. These are ALSO the
 /// exact quantities the serializer argmin compares (`decimal_spelling_wins`), so the
 /// spelling emitted is by construction the codeword the measure priced.
-/// The literal codeword FLOOR, in milli-bits (default 2 bits, the shipped value).
+/// The literal codeword FLOOR, in milli-bits: no codeword prices below two bits.
 ///
-/// Under investigation 2026-08-21: the floor is why `1`, `2` and `3` all price at 3000,
-/// which makes mu(x^2) == mu(x^3). Overridable so the effect can be swept in one build.
-fn mu_rat_floor() -> u64 {
-    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SIMPLIPY_MU_RAT_FLOOR")
-            .ok()
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|b| (b * MU_MILLI as f64).round() as u64)
-            .unwrap_or(2 * MU_MILLI)
-    })
-}
+/// The floor is why `1`, `2` and `3` all price at 3000 -- `L` is under it there -- and so
+/// why `mu(x^2) == mu(x^3)`. That is a KNOWN standing property of the codebook, not of
+/// the symbol table, and it is unchanged by it: at floor 1 the clamp stops binding and
+/// the exponent rows separate by `log2(3) - log2(2) = 415` milli-bits. Swept 2026-08-21
+/// over twenty worked examples -- only the exponent rows and `100` move, every printed
+/// spelling byte-identical -- and left at the shipped 2 pending a ruling.
+const MU_RAT_FLOOR: u64 = 2 * MU_MILLI;
 
 fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
     let sign = if r.num() < 0 { MU_MILLI } else { 0 };
     let pb = l_millibits(r.num().unsigned_abs());
     let qb = l_millibits(r.den() as u128);
     let fraction_raw = if r.den() == 1 { pb } else { pb + qb };
-    let floor = mu_rat_floor();
+    let floor = MU_RAT_FLOOR;
     let fraction = (fraction_raw + sign).max(floor);
     let decimal = decimal_code(r).map(|(m, k)| m.max(floor) + k + sign);
     (fraction, decimal)
@@ -745,10 +861,11 @@ pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap
 }
 
 pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
-    let sym = mu_sym();
     match e {
         Ex::Num(r) => mu_rat(r),
-        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN => sym,
+        Ex::Pi => mu_pi(),
+        Ex::E => mu_e(),
+        Ex::PosInf | Ex::NegInf | Ex::NaN => mu_infinity(),
         // A vocabulary leaf is one symbol; a NUMERIC-STRING leaf is a beyond-`Rat`
         // literal and pays the description length of the value its print denotes
         // (see `mu_numeric_str` -- the boundary must not be an ordering cliff).
@@ -763,15 +880,16 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
             {
                 mu_numeric_str(s)
             } else {
-                sym
+                mu_leaf()
             }
         }),
         Ex::Const => mu_free(),
         Ex::Add(v) => v
             .iter()
-            .fold(sym, |t, x| t.saturating_add(complexity(x, view))),
+            .fold(mu_add(), |t, x| t.saturating_add(complexity(x, view))),
         Ex::Mul(v) => {
-            let mut total = sym;
+            let head = mu_mul();
+            let mut total = head;
             let mut members = 0u64;
             for f in v {
                 match f {
@@ -792,11 +910,12 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
             }
             if members == 0 {
                 // Degenerate all-coefficient bag: the literal (or bare Const) itself.
-                return (total - sym).max(2);
+                return (total - head).max(2);
             }
             total
         }
         Ex::Pow(b, ex) => {
+            let head = mu_pow();
             if let Ex::Num(r) = &**ex {
                 // Rational exponent as a coefficient slot: `x^-1` is division (pure
                 // structure, the sign is free), `x^2` pays cost(2), `x^-2` the same.
@@ -805,14 +924,18 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
                 } else {
                     mu_rat(r)
                 };
-                return sym.saturating_add(complexity(b, view)).saturating_add(mag);
+                return head.saturating_add(complexity(b, view)).saturating_add(mag);
             }
-            sym.saturating_add(complexity(b, view))
+            head.saturating_add(complexity(b, view))
                 .saturating_add(complexity(ex, view))
         }
-        Ex::Fun(_, args) => args
-            .iter()
-            .fold(sym, |t, x| t.saturating_add(complexity(x, view))),
+        // The head is priced by NAME (`mu_fun_bits`): the elementary/transcendental gap
+        // is the table's load-bearing entry. Read without allocating, like the leaf above.
+        Ex::Fun(t, args) => {
+            let head = view.with_str(*t, |s| sym_bits(mu_fun_bits(s)));
+            args.iter()
+                .fold(head, |acc, x| acc.saturating_add(complexity(x, view)))
+        }
     }
 }
 
@@ -1925,10 +2048,16 @@ fn as_rational_power<'a>(e: &'a Ex, cx: &Cx) -> Option<(&'a Ex, Rat)> {
 /// THE FOLD CONDITION IS BOTH GATES AT ONCE, which is why the arm needs no licence:
 ///
 ///   * mu. With a symbolic `a` the product needs a `Mul` node and the composition stops
-///     paying: `pow(exp x0, x1)` and `exp(x0*x1)` both price 32,000, and through the root
-///     spelling the composition is an outright ASCENT -- `rootn(exp x0, 3)` is 26,000
-///     against 27,000 for `exp(x0/3)`. A constructor arm that does not descend has no
-///     business firing, so that case stays with the RULES: `pow exp (-1) _0 -> exp neg _0`
+///     paying: `pow(exp x0, x1)` and `exp(x0*x1)` both price 24,000. UNDER THE SYMBOL
+///     TABLE (2026-08-21) the LITERAL-exponent readings moved and no longer all agree:
+///     `pow(exp x0, 3)` ties its composition at 18,000, but `rootn(exp x0, 3)` is 21,000
+///     against 19,000 for `exp(x0/3)` -- a 2,000 DESCENT the arm declines, because a
+///     `rootn` head (6, elementary in the table) is dearer than the `Mul` plus unit
+///     fraction the composed spelling pays, where the flat unit priced them the other way
+///     round (26,000 against 27,000). The arm's gate was never mu -- it is the FOLD
+///     CONDITION, and that has not moved -- so this is a MISSED descent, not an unsound
+///     one, and it stays where it already lives: with the RULES. `pow exp (-1) _0 ->
+///     exp neg _0`
 ///     (a non-unit literal `a` against a symbolic `b`) is shipped and still needed. The
 ///     `E`-base rule `pow np.e _0 -> exp _0` is NOT -- `a = 1` needs no fold, so the arm
 ///     covers every exponent and the mine can no longer mint it.
@@ -2391,7 +2520,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // (b), owner ruling 2026-08-08: the filed orientation is the mu-CHEAPER one ("the
     // mirrors score equal; the bigger expression scores bigger"); the historical
     // first-in-sort-positive lex rule survives only as the exact-tie breaker. For a
-    // content-1 sum the flip's wrapper cost is one mu_sym (the `-1 x Add` wrapper exists
+    // content-1 sum the flip's wrapper cost is one Mul head (the `-1 x Add` wrapper exists
     // only in the flipped spelling); for a non-unit content the wrapper exists in BOTH
     // spellings and the flip pays only the coefficient's sign bit -- and the per-term
     // deltas must then be priced on the DIVIDED terms (the candidates actually stored),
@@ -2399,7 +2528,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     let sign_neg = if terms.iter().any(term_absorbs_negation) {
         false
     } else if g.is_one() {
-        flipped_orientation_wins(&terms, mu_sym() as i128, Tie::Keep, cx)
+        flipped_orientation_wins(&terms, mu_mul() as i128, Tie::Keep, cx)
     } else {
         let Some(ng) = g.checked_neg() else {
             return Ex::Add(terms);
@@ -2526,8 +2655,9 @@ enum Tie {
 fn flipped_orientation_wins(terms: &[Ex], wrapper_sign_delta: i128, tie: Tie, cx: &Cx) -> bool {
     // (b), owner ruling 2026-08-08: the mu-CHEAPER orientation wins. `wrapper_sign_delta`
     // is what the flip costs at the wrapper itself, signed from the caller's side:
-    // +mu_sym in `primitive_sum` for a content-1 sum (the wrapper exists only in the
-    // flipped spelling), NEGATIVE mu_sym in `mul()`'s distribution arm (the wrapper
+    // +mu_mul (the wrapper IS a `Mul[-1, .]` node, priced by the symbol table) in
+    // `primitive_sum` for a content-1 sum (the wrapper exists only in the
+    // flipped spelling), NEGATIVE mu_mul in `mul()`'s distribution arm (the wrapper
     // exists only in the CURRENT spelling), the coefficient sign-bit delta for a
     // non-unit content (wrapper in both spellings). The two callers' deltas are exact
     // mirrors, so their decisions cannot ping-pong.
@@ -3351,7 +3481,7 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
         // the odd-literal fusion parks signs inside function arguments where no
         // coefficient shows them (measured: 5 corpus rows + 4 rust pins regressed
         // under mixed-sign counting).
-        if flipped_orientation_wins(&out, mu_sym() as i128, Tie::Keep, cx) {
+        if flipped_orientation_wins(&out, mu_mul() as i128, Tie::Keep, cx) {
             return None;
         }
         out.sort_by(|a, b| add_term_cmp(a, b, cx.view));
@@ -3507,7 +3637,7 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
             }
         })
         .collect();
-    let inner = mul(inner_members, cx);
+    let inner = mul(inner_members.clone(), cx);
     {
         let Ex::Mul(v) = &inner else {
             // The positive-power bag collapsed below two factors: no joined SHAPE exists.
@@ -4170,7 +4300,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             {
                 // FILES-BARE gate (same rule as sign_trade_flip): only adopt an
                 // orientation primitive_sum itself would file bare.
-                if !flipped_orientation_wins(&flipped, mu_sym() as i128, Tie::Keep, cx) {
+                if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
                     flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                     return pow(Ex::Add(flipped), exp, cx);
                 }
@@ -4352,7 +4482,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     .collect::<Option<Vec<Ex>>>()
                 {
                     // FILES-BARE gate (same rule as sign_trade_flip).
-                    if !flipped_orientation_wins(&flipped, mu_sym() as i128, Tie::Keep, cx) {
+                    if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         return fun(op, vec![Ex::Add(flipped)], cx);
                     }
@@ -5169,8 +5299,10 @@ mod tests {
 
     #[test]
     fn complexity_weight_table() {
-        // The mu' weight table (D38/B2), in MILLI-BITS: structural nodes and vocabulary
-        // symbols 8 bits; a priced literal pays ONE selector bit + its cheaper codeword
+        // The mu weight table in MILLI-BITS, at the SYMBOL TABLE (2026-08-21): a leaf 6
+        // bits, Add/Mul/Pow 3, Pi/E 4, an elementary head 6, a transcendental head 8,
+        // an infinity 8 -- where mu' (D38/B2) charged a flat 8 for every one of them.
+        // Unchanged by the table: a priced literal pays ONE selector bit + its cheaper codeword
         // (rational L(p)[+L(q)] vs decimal-scientific max(2,L(m))+L(|k|)) + a bit for a
         // negative sign, mantissa floored at two bits; magnitude-1 coefficient and
         // exponent slots stay free (a bare sign writes no number, so no selector
@@ -5179,43 +5311,46 @@ mod tests {
         with_view(|view| {
             let cx = Cx::bare(view);
             let c = |e: &Ex| super::complexity(e, view);
-            // x - y = 32: Add(8) + x(8) + the sign-wrapper Mul (8, a real structural
-            // node of the canonical tree; the -1 slot itself is free) + y(8).
-            // x*y = 24; x/y = 32 (the Pow(y, -1) wrapper, exponent -1 free).
+            // x - y = 18: Add(3) + x(6) + the sign-wrapper Mul (3, a real structural
+            // node of the canonical tree; the -1 slot itself is free) + y(6).
+            // x*y = 15; x/y = 18 (the Pow(y, -1) wrapper at 3, exponent -1 free).
             let x_ = x(view);
             let y_ = y(view);
             let x_minus_y = add(
                 vec![x_.clone(), mul(vec![Ex::int(-1), y_.clone()], &cx)],
                 &cx,
             );
-            assert_eq!(c(&x_minus_y), 32_000);
-            assert_eq!(c(&mul(vec![x_.clone(), y_.clone()], &cx)), 24_000);
+            assert_eq!(c(&x_minus_y), 18_000);
+            assert_eq!(c(&mul(vec![x_.clone(), y_.clone()], &cx)), 15_000);
             let x_over_y = mul(vec![x_.clone(), pow(y_.clone(), Ex::int(-1), &cx)], &cx);
-            assert_eq!(c(&x_over_y), 32_000);
-            // 2x = 19 (the coefficient PAYS selector + its bits: 8 + 3 + 8), x^2 = 19,
-            // 1/x = 16, sin(x) = 16.
-            assert_eq!(c(&mul(vec![Ex::int(2), x_.clone()], &cx)), 19_000);
-            assert_eq!(c(&pow(x_.clone(), Ex::int(2), &cx)), 19_000);
-            assert_eq!(c(&pow(x_.clone(), Ex::int(-1), &cx)), 16_000);
-            assert_eq!(c(&fun(view.intern("sin"), vec![x_.clone()], &cx)), 16_000);
+            assert_eq!(c(&x_over_y), 18_000);
+            // 2x = 12 (the coefficient PAYS selector + its bits: 3 + 3 + 6), x^2 = 12,
+            // 1/x = 9, sin(x) = 12.
+            assert_eq!(c(&mul(vec![Ex::int(2), x_.clone()], &cx)), 12_000);
+            assert_eq!(c(&pow(x_.clone(), Ex::int(2), &cx)), 12_000);
+            assert_eq!(c(&pow(x_.clone(), Ex::int(-1), &cx)), 9_000);
+            assert_eq!(c(&fun(view.intern("sin"), vec![x_.clone()], &cx)), 12_000);
             // x^-2 costs as x^2 plus the sign bit (the -2 exponent is a priced
             // literal: selector + L(2) + sign = 1 + 1.585 + 1 over the 2-bit floor).
-            assert_eq!(c(&pow(x_.clone(), Ex::int(-2), &cx)), 19_585);
-            // Mul(8) + <constant>(67_000) + x(8) = 83_000.
+            assert_eq!(c(&pow(x_.clone(), Ex::int(-2), &cx)), 12_585);
+            // Mul(3) + <constant>(67_000) + x(6) = 76_000. The free constant is a LITERAL
+            // price, so the table does not touch it: it now outweighs its own structure by
+            // more than it did, which is the direction the ordering wants.
             assert_eq!(
                 c(&mul(vec![Ex::Const, x_.clone()], &cx)),
-                2 * mu_sym() + MU_FREE_WORST_CASE_F64
+                mu_mul() + MU_FREE_WORST_CASE_F64 + mu_leaf()
             );
             assert_eq!(mu_free(), 67 * MU_MILLI);
             assert_eq!(c(&Ex::int(-5)), 4_585); // selector + L(5) + 1 for the sign
-                                                // x8 + 1.2*x3 = 8 + 8 + (8 + cost(6/5) + 8).
+                                                // x8 + 1.2*x3 = 3 + 6 + (3 + cost(6/5) + 6).
                                                 // cost(6/5) = selector + min(L(6)+L(5) = 5.392, max(2,L(12))+L(1) = 4.700)
                                                 // = 5.700: the decimal-scientific codeword takes it (D38 revoked the
                                                 // Sec 10.10(1) fraction-only rule).
             let t = mul(vec![Ex::Num(Rat::new(6, 5).unwrap()), y_.clone()], &cx);
-            assert_eq!(c(&add(vec![x_.clone(), t], &cx)), 37_700);
+            assert_eq!(c(&add(vec![x_.clone(), t], &cx)), 23_700);
             // The stage-2 point, in one line: an E factor undercuts its f64 image --
-            // still ~32 bits clear under mu' (the image prices 56.272 as m*10^-15).
+            // and by MORE than before, since the table cheapened the structure the
+            // symbolic spelling is made of and left the image's 56.272 bits alone.
             let sym = c(&mul(vec![Ex::E, x_.clone()], &cx));
             let mat = c(&mul(
                 vec![
@@ -5224,7 +5359,7 @@ mod tests {
                 ],
                 &cx,
             ));
-            assert!(sym == 24_000 && sym < mat, "{sym} vs {mat}");
+            assert!(sym == 13_000 && sym < mat, "{sym} vs {mat}");
         });
     }
 
@@ -5443,7 +5578,7 @@ mod tests {
                 );
                 assert_eq!(
                     cs,
-                    mu_sym() + ca * n as u64,
+                    mu_add() + ca * n as u64,
                     "an astronomic Add bag mispriced at {n} members"
                 );
                 prev = cs;

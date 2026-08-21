@@ -462,18 +462,32 @@ class TestPowerOfExpIsExp:
         # `exp(-1)` base: 21,000 -> 12,585, the sibling the census found
         assert eng.complexity(eng.simplify(['pow', 'exp', '(-1)', '0.5'])) < 13000
         # and the composition never lands on the dearer spelling of e: 10,000 -> 8,000
-        assert eng.complexity(eng.simplify(['inv', 'inv', 'np.e'])) == 8000
+        # -> 4,000, `np.e`'s own entry in the symbol table (2026-08-21)
+        assert eng.complexity(eng.simplify(['inv', 'inv', 'np.e'])) == 4000
 
-    def test_a_symbolic_inner_exponent_is_REFUSED_because_it_would_ascend(self, eng) -> None:
-        # The composition is available but not worth taking: through `pow` it is a tie
-        # (26,000 = 26,000) and through `rootn` an ascent (26,000 against 27,000 for
-        # `exp(x0/3)`).  A constructor arm that does not descend must not fire; the
-        # identity stays with the RULES, which is where the shipped wildcard rules live.
+    def test_a_symbolic_inner_exponent_is_REFUSED_by_the_fold_condition(self, eng) -> None:
+        """The arm fires on the FOLD CONDITION -- `a*b` collapsing to a single node --
+        and never on a mu comparison, which is why the refusal is stable while the
+        prices under it are not.
+
+        Under the flat unit the refusal also happened to be mu-justified: through `pow`
+        the composition tied (26,000 = 26,000) and through `rootn` it ascended (26,000
+        against 27,000 for `exp(x0/3)`). THE SYMBOL TABLE (2026-08-21) SPLIT THOSE TWO.
+        `pow` still ties, but `rootn(exp x0, 3)` is now 21,000 against 19,000 -- a
+        `rootn` head (6, elementary) is dearer than the `Mul` plus unit-fraction literal
+        the composed spelling pays, where the flat unit priced them the other way round.
+        So the arm now declines a 2,000 descent on the root spelling. That is a MISSED
+        descent, not an unsound one, and the identity stays where it already lives: with
+        the RULES, which is where the shipped wildcard rules are.
+        """
         for tokens in (['pow', 'exp', 'x0', '3'], ['rootn', 'exp', 'x0', '3']):
             kept = eng.simplify(list(tokens))
             assert kept == tokens, tokens
-            composed = eng.simplify(['exp', '*' if tokens[0] == 'pow' else '/', 'x0', '3'])
-            assert eng.complexity(kept) <= eng.complexity(composed), tokens
+        composed_pow = eng.simplify(['exp', '*', 'x0', '3'])
+        assert eng.complexity(['pow', 'exp', 'x0', '3']) == eng.complexity(composed_pow)
+        composed_root = eng.simplify(['exp', '/', 'x0', '3'])
+        assert eng.complexity(['rootn', 'exp', 'x0', '3']) == 21000
+        assert eng.complexity(composed_root) == 19000
 
     def test_an_INFINITE_inner_exponent_is_REFUSED_the_zero_times_inf_trap(self, eng) -> None:
         # `a = -inf, b = 0` is the one configuration where `(e^a)^b` and `e^(a*b)`

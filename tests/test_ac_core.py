@@ -157,14 +157,16 @@ class TestExplicitConstants:
         assert engine.simplify(["rootn", "x0", "3"]) == ["rootn", "x0", "3"]
         assert engine.simplify(["rootn", "x0", "7"]) == ["rootn", "x0", "7"]
         # Unit index normalizes away. An EVEN index agrees with the principal power
-        # everywhere, so either spelling is sound and mu TIES them (19000 both ways);
+        # everywhere, so either spelling is sound and mu TIES them (15000 both ways);
         # `rootn` is PRESERVED as the canonical representative (2026-08-06 rootn work).
         assert engine.simplify(["rootn", "x0", "2"]) == ["rootn", "x0", "2"]
         assert engine.simplify(["rootn", "x0", "1"]) == ["x0"]
         assert engine.simplify(engine.to_infix(["rootn", "x0", "3"])) == "rootn(x0, 3)"
-        # MEASURE pin in MILLI-BITS since §10.10 (18 -> 18000), +1000 at D38/B2: the
-        # index literal pays the mu' selector bit. Spelling-independent.
-        assert engine.complexity(["rootn", "x0", "3"]) == 19000
+        # MEASURE pin in MILLI-BITS since §10.10 (18 -> 18000), +1000 at D38/B2 (the
+        # index literal pays the mu' selector bit), 19000 -> 15000 at the SYMBOL TABLE
+        # (2026-08-21): `rootn` is an ELEMENTARY head at 6 bits, not a flat 8, and a
+        # leaf is 6. Spelling-independent.
+        assert engine.complexity(["rootn", "x0", "3"]) == 15000
 
     def test_rootn_cross_evaluator_parity(self, engine: SimpliPyEngine) -> None:
         # ONE SEMANTICS, FIVE SURFACES: the Python realization and the
@@ -454,8 +456,11 @@ class TestContracts:
         # fraction code's ~112.9), and the endpoint STILL keeps it factored under its
         # own pow -- the EXACT square is a 34-digit mantissa (~118 bits scientific),
         # dearer than the factored spelling under mu' too, so the healing claim and
-        # the endpoint shape survive; only the priced total moves.
-        assert engine.complexity(out_a) == 111969
+        # the endpoint shape survive; only the priced total moves. 111969 -> 94969 at
+        # the SYMBOL TABLE (2026-08-21): the endpoint's five structural nodes and its
+        # leaves re-price, the 62-bit coefficient does not (the table never touches a
+        # literal), and the shape is again unmoved.
+        assert engine.complexity(out_a) == 94969
         assert "pow" in out_a and any("6449537531992260" in t for t in out_a), out_a
         assert engine.simplify(out_a) == out_a  # and the healed form is a fixpoint
 

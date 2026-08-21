@@ -2553,13 +2553,14 @@ mod tests {
                 .unwrap(),
             t(&["rootn", "x0", "7"])
         );
-        // Complexity parity with the principal power: rootn(x,3) and pow(x, 1/2) both
-        // price as Pow with a cheap rational exponent -- mu' (D38): 8 + 8 + the index
-        // literal (selector + 2-bit floor = 3), so 19 each. Parity preserved, at the
-        // mu' scale.
+        // Complexity parity with the principal power: rootn(x,3) and rootn(x,2) price
+        // alike -- the `rootn` head (6 bits, ELEMENTARY in the symbol table: 181 of the
+        // corpus census's 10,996 charged nodes, far and away the commonest Fun) + the
+        // leaf (6) + the index literal (selector + 2-bit floor = 3), so 15 each. Parity
+        // preserved, now at the symbol-table scale (it was 19 each under the flat unit).
         // (The pow1_3 spelling needs the sugar-declaring fixture table to parse.)
-        assert_eq!(sugar.ac_complexity(&t(&["pow1_3", "x0"])), Some(19_000));
-        assert_eq!(e.ac_complexity(&t(&["rootn", "x0", "2"])), Some(19_000));
+        assert_eq!(sugar.ac_complexity(&t(&["pow1_3", "x0"])), Some(15_000));
+        assert_eq!(e.ac_complexity(&t(&["rootn", "x0", "2"])), Some(15_000));
         // The pretty infix is function-call style (x^(1/3) would claim the WRONG function).
         assert_eq!(
             sugar
@@ -2798,7 +2799,8 @@ mod tests {
     /// H-015 class (b) (2026-08-04): the lossy OUTPUT projection rejoins reciprocal
     /// products where the joined spelling prices strictly smaller AND sound's
     /// distribution licence would refuse to re-split it (`ac::expr::rejoin_projection`).
-    /// Pins the three regimes: the registered row-1414 shape joins (mu 80 -> 72, now
+    /// Pins the three regimes: the registered row-1414 shape joins (mu 56 -> 53 under
+    /// the symbol table, 80 -> 72 under the flat unit it replaced -- and now
     /// IDENTICAL to sound's licence-refusal output); a cancellation partner still
     /// cancels through the distributed working canon; a certified pair stays
     /// distributed in BOTH modes (sound alignment). Idempotence through the projected
@@ -2823,7 +2825,9 @@ mod tests {
             lossy, sound,
             "joined output must equal sound's refusal form"
         );
-        assert_eq!(e.ac_complexity(&lossy), Some(72_000));
+        // Pow(3) + Mul(3) + [acos(8) + Mul(3) + inf(8) + leaf(6)] + [atan(8) + asinh(8)
+        // + leaf(6)] = 53; the -1 exponent slot is a bare sign and free.
+        assert_eq!(e.ac_complexity(&lossy), Some(53_000));
 
         let partner = t(&["*", "acos", "x0", "inv", "*", "acos", "x0", "atan", "x1"]);
         assert_eq!(

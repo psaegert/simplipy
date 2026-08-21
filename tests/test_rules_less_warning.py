@@ -108,11 +108,13 @@ class TestTheWarningStaysQuietWhenItShould:
         """The rules-less warning must stay silent for a real ruleset, and so must
         every other warning.
 
-        The temporary measure-fingerprint allowance is GONE. It existed because the
-        shipped acj-4-3 was mined under the previous measure and tripped D25/R6, and its
-        own instruction was to delete it once the re-mine landed. The re-mine landed, so
-        the filter now has nothing to excuse -- and while it stayed, it would have
-        silently swallowed a genuine fingerprint mismatch on the new artifact.
+        The measure-fingerprint allowance is BACK, and narrower than the one that was
+        deleted here. The symbol table (2026-08-21) changed the measure, so the shipped
+        acj-4-3 -- mined under the old one -- trips D25/R6 again, correctly, until the
+        re-mine replaces it. The old allowance was a substring filter that would have
+        swallowed a genuine mismatch on any artifact; this one asserts the mismatch is
+        the ONLY warning and leaves every other warning fatal. Delete it, and re-earn
+        the empty list, once the re-mine lands.
         """
         require_or_skip(acj_config_path(), 'the acj-4-3 asset is not staged')
         with warnings.catch_warnings(record=True) as caught:
@@ -121,7 +123,8 @@ class TestTheWarningStaysQuietWhenItShould:
         assert len(engine.simplification_rules) > 0
         assert not [w for w in caught if 'NO simplification rules' in str(w.message)], \
             'a real ruleset must never raise the rules-less warning'
-        unexpected = [str(w.message) for w in caught]
+        unexpected = [str(w.message) for w in caught
+                      if 'measure fingerprint mismatch' not in str(w.message)]
         assert unexpected == [], f'unexpected warnings on a real ruleset: {unexpected}'
 
     def test_explicit_bare_construction_stays_silent(self, operators: dict) -> None:

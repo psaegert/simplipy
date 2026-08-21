@@ -83,12 +83,52 @@ stays exact and the order is discrete — no float comparisons anywhere in the o
 
 | atom / node | cost (units of 1/8) | rationale |
 |---|---|---|
-| structural node (bag, Pow, Fun head) | 8 | one grammar symbol |
-| variable leaf | 8 | one vocabulary symbol |
-| special constant (π, e) | 8 | one vocabulary symbol, zero dof |
+| structural node (bag, Pow, Fun head) | 8 | one grammar symbol — **superseded, see the 2026-08-21 amendment below** |
+| variable leaf | 8 | one vocabulary symbol — **superseded** |
+| special constant (π, e) | 8 | one vocabulary symbol, zero dof — **superseded** |
 | numeric literal q = p/q′ (exact value, spelling-independent) | max(2, bits(p) + bits(q′)) | its description length; small ints ≈ 2–4, a 52-bit dyadic ≈ 105 |
 | bag COEFFICIENT slot (the Rat riding a Mul/Add) | the literal cost above, NOT free | removes the current coefficient-rides-free asymmetry |
 | `<constant>` | c_free = 128 → **1133 (amended 2026-08-06: DERIVED, not floored** — sup over f64 round-trip spellings = 1131.931 bits at 5.5605781537525765e-308, + 1 sign bit, ceiled; the 128 floor was beaten 8× by μ(1e308) = 1024.154)** | a free real dof; the priciest atom by construction |
+
+> **2026-08-21 amendment — THE SYMBOL TABLE.** The three "8" rows above are revoked.
+> One flat price per grammar symbol was minting a degenerate family: `pi - 2` and
+> `asin(sin 2)` both priced 19 bits, and the mine — correctly, under that measure —
+> preferred the composition (the rule is CERTIFIED and true on [π/2, π]; it is
+> degenerate as a *simplification*, not unsound). Each symbol now carries its own price,
+> in bits at the same 1/8 unit, so P-R3's symbol-vs-literal ratio is untouched:
+>
+> | variable leaf | 6 | `Add` / `Mul` / `Pow` | 3 | π, e | 4 |
+> |---|---|---|---|---|---|
+> | elementary head (`exp log abs sin cos tan rootn`) | 6 | inverse/hyperbolic head | 8 | ±inf, NaN, any unnamed head | 8 |
+>
+> The table is HEURISTIC, informed by `ac_node_census` over the 400-row corpus (10,996
+> charged nodes: Leaf 1.65 bits, Mul 2.47, Num 2.50, Pow 3.14, Add 3.34, Const 5.75,
+> `rootn` 5.92, transcendentals 7.3–8.1) and rounded to whole bits. Two entries are fixed
+> by laws the census cannot see, because it prices node CLASSES:
+>
+> * **A named constant costs less than the cheapest expression denoting it**, or the name
+>   is never worth writing. π and e occur ZERO times in a symbolic-regression skeleton
+>   corpus, so a straight frequency table prices them at its smoothing floor (~13.4 bits)
+>   and makes the defect family *stronger*. `acos(-1)` is 11 bits and `exp(1)` is 9, so 4
+>   has room — and `np.e` now beats `exp 1` on cost rather than on the canonical
+>   tie-break, which the fold filter's correctness had been resting on.
+> * **A leaf must also name WHICH variable.** The class `Leaf` is 1.65 bits; a specific
+>   variable among the corpus's eighteen is 5.82. Charging only the class breaks Kraft
+>   (the code admits exactly one variable) and inverts T4 below — `Add[x, x]` prices
+>   under `2x`. 6 is the census read per symbol, and it restores both.
+>
+> Measured before adoption: **0** of the 5,451 shipped rules change direction (no descent
+> becomes an ascent, no tie moves); **0** of 400 corpus rows change output in any mode,
+> byte-for-byte; **0** of 105 literal spellings move (the table never touches the literal
+> codebook); Kraft holds to 22 variables against the corpus's 18; every entry is an exact
+> integer count of milli-bits at any unit, so termination's discreteness argument is
+> unchanged. The corpus's total priced complexity re-pins 84,714,486 → 56,665,486 — a
+> re-scaling, not a movement, since no output moved.
+>
+> Two entries of the design's own first draft did not survive that measurement and were
+> corrected TOWARD the census: the leaf (2 → 6, above) and `Pow` (4 → 3; 3.14 rounds to
+> 3, and rounding it up had inverted the census's own `Pow < Add` and turned the
+> ratified `pow(exp x, k)` tie into a 1-bit ascent).
 
 Two structural decisions worth pinning:
 
