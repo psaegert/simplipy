@@ -378,7 +378,29 @@ OPS = {
     'cosh': lambda a: NAN if misnan(a) else
             (PINF if misinf(a) else (_z(mp.cosh(a)) if abs(a) < mpf('1e5')
              else (_ for _ in ()).throw(Unresolved()))),
-    'tanh': lambda a: NAN if misnan(a) else (_z(mp.sign(a)) if misinf(a) else _z(mp.tanh(a))),
+    # F104: BOUNDARY HONESTY AT THE ASYMPTOTE, the same doctrine `atanh` states below.
+    # `tanh` is where the information is lost, so this is where the refusal belongs. Once
+    # |tanh(x)| is inside the working-precision band of 1 the value is indistinguishable
+    # from 1, and everything downstream inherits that: `asin(1) = pi/2` is returned as
+    # though definite, `cos(pi/2)` is a ~1e-50 residue, and against a true `sech(1000)` of
+    # 1e-434 that is a RELATIVE gap of 1.0 -- at EVERY rung, because tanh saturates at
+    # every affordable precision. F103's decay test reads that stability as analytic, which
+    # is how the EXACT `cos asin tanh _0 -> inv cosh _0` reached 6 of 167 grid points.
+    # Saturation makes a false rule look true AND a true rule look false; this is the
+    # second half.
+    #
+    # Refusing at `asin`/`acos` instead was tried and reverted: their +-1 is an ordinary
+    # point with a finite value, so a band there also refuses the legitimate exact
+    # `asin(-1) = -pi/2` -- 67 rules to UNRESOLVED-COVERAGE and three broken tests.
+    #
+    # This does NOT spare the shallow rows: at dps 50 the band is 1e-40 and
+    # 1 - tanh(30) = 1.75e-26 sits far outside it, so `tanh * (-10) (-3) -> 1` is still
+    # judged and still convicted. Rows that fall inside the band at rung 1 are settled by
+    # the CLIMB in `_point_verdict` -- the band narrows as the precision rises.
+    'tanh': lambda a: NAN if misnan(a) else (_z(mp.sign(a)) if misinf(a) else
+            ((_ for _ in ()).throw(Unresolved())
+             if abs(abs(_z(mp.tanh(a))) - 1) < mpf(10) ** (-mp.dps + 10)
+             else _z(mp.tanh(a)))),
     'asinh': lambda a: NAN if misnan(a) else (a if misinf(a) else _z(mp.asinh(a))),
     'acosh': lambda a: NAN if misnan(a) else
              ((_ for _ in ()).throw(Unresolved())
@@ -1060,9 +1082,6 @@ def _point_verdict(tl, tr, env_mp):
         once.mag = None
         r1 = once(BASE_DPS, track=True)
         snapped1 = SNAP_EVENTS[0] > snap0
-        if r1 is None:
-            return None, snapped1
-        cls1, gap1 = r1
         # RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates
         # are 10^217: both rungs are swamped alike, agree on a manufactured verdict, and
         # the class comparison reads that agreement as evidence. The precision now comes
@@ -1071,17 +1090,35 @@ def _point_verdict(tl, tr, env_mp):
         dps2 = max(GAP_RUNGS[1], _required_dps(getattr(once, 'mag', None)))
         dps3 = max(GAP_RUNGS[2], 2 * dps2)
 
+        # CLIMB PAST AN UNRESOLVED RUNG. A rung refuses when an intermediate lands inside
+        # its boundary-honesty band, and that band NARROWS as the precision rises:
+        # tanh(60) is inside it at dps 50 (band 1e-40) and well outside at dps 120
+        # (1e-110). Bailing out at rung 1 therefore abstained on rows a higher rung can
+        # settle -- measured, when F104 put the band on tanh, that short-circuit sent 275
+        # rules of rules_real.json to UNRESOLVED-COVERAGE and dropped the kills from 65 to
+        # 27. An Unresolved is a statement about the RUNG, not about the rule.
+        rungs = (BASE_DPS, dps2, dps3)
+        r_lo = lo_dps = hi_dps = None
+        for i in range(len(rungs) - 1):
+            r = r1 if i == 0 else once(rungs[i])
+            if r is not None:
+                r_lo, lo_dps, hi_dps = r, rungs[i], rungs[i + 1]
+                break
+        if r_lo is None:
+            return None, snapped1          # refused at every rung we can afford
+        cls1, gap1 = r_lo
+
         if cls1 is not None:
             # nan/inf: a CLASS is confirmed by agreement at a second rung -- there is no
             # gap to watch decay, so this half keeps the two/three-rung rule unchanged.
-            r2 = once(dps2)
+            r2 = once(hi_dps)
             if r2 is None:
                 return None, snapped1
             if r2[0] == cls1 and not snapped1:
                 return cls1, snapped1
             # a snapped agreement can be fabricated, and a disagreement is unsettled:
-            # both take rung 3.
-            r3 = once(dps3)
+            # both take one rung higher.
+            r3 = once(max(GAP_RUNGS[2], 2 * hi_dps))
             cls3 = r3[0] if r3 is not None else None
             return (r2[0] if r2[0] == cls3 else None), snapped1
 
@@ -1094,9 +1131,9 @@ def _point_verdict(tl, tr, env_mp):
         # appearing from nowhere. Zero means "closer than this rung can see", so it enters
         # the ratio as the rung's OWN resolution. One test then covers every case, which
         # is why nothing below branches on exact agreement.
-        floor_lo = mpf(10) ** (-BASE_DPS)
-        floor_hi = mpf(10) ** (-dps2)
-        hi = once(dps2)
+        floor_lo = mpf(10) ** (-lo_dps)
+        floor_hi = mpf(10) ** (-hi_dps)
+        hi = once(hi_dps)
         if hi is None or hi[0] is not None or hi[1] is None:
             return None, snapped1            # class flipped / Unresolved: never convict
         g_lo = gap1 if gap1 > floor_lo else floor_lo
@@ -1105,7 +1142,7 @@ def _point_verdict(tl, tr, env_mp):
         # gap that only BECOMES visible higher up (deep saturation) drops by less than
         # nothing. Half the added precision separates them with >=30 decades to spare.
         drop = mp.log10(g_lo / g_hi)
-        return ('eq' if drop > (dps2 - BASE_DPS) / 2
+        return ('eq' if drop > (hi_dps - lo_dps) / 2
                 else 'REAL-CHANGE'), snapped1
     finally:
         mp.dps = old
