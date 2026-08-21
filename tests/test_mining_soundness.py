@@ -2496,3 +2496,34 @@ class TestCanonicalSourceClassCertification:
         for members in multi.values():
             endpoints = {tuple(engine.simplify(list(m))) for m in members}
             assert len(endpoints) == 1, (members, endpoints)
+
+
+class TestVarFreeCandidatesMustFoldToALeaf:
+    """The fold filter's replacement lemma, pinned (2026-08-21).
+
+    The mu-dominance criterion that briefly replaced the length rule was UNSOUND: it
+    admitted every var-free composite, because `<constant>` prices at 67000 while
+    `asin sin 2` is 19000. A live mine under it produced 57 rules of the form
+    `pi - 2 -> asin(sin(2))` in its first 212 -- true by value, an obfuscation as a
+    rewrite. The criterion is now what the CONSTRUCTOR makes of the candidate.
+    """
+
+    def test_a_candidate_is_admitted_iff_it_folds_to_a_leaf(self, engine, mining_x) -> None:
+        x_flat, n = mining_x
+        # `exp 1` folds to `np.e`; `pow2 <c>` and `exp <c>` stay composite.
+        cands = [["x0"], ["<constant>"], ["exp", "1"], ["exp", "<constant>"],
+                 ["pow2", "<constant>"], ["*", "<constant>", "x0"]]
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        assert lib.n_filtered == 2, "exp(<c>) and pow2(<c>) stay composite -> dropped"
+        assert lib.n_candidates == 4, "exp(1) folds to np.e and must survive"
+
+    def test_the_mine_never_mints_a_composite_var_free_target(self, engine) -> None:
+        """THE FALSIFIER. A mined RHS may be a leaf (`0`, `1`, `np.e`) but never a
+        var-free COMPOSITE -- that is the class the broken filter let through."""
+        engine.find_rules(max_source_pattern_length=3, max_target_pattern_length=None,
+                          dummy_variables=1, extra_internal_terms=["0", "1", "<constant>"],
+                          X=256, seed=7, verbose=False, promote_sorts=False)
+        offenders = [(lhs, rhs) for lhs, rhs in engine.simplification_rules
+                     if len(rhs) >= 2
+                     and not any(t.startswith(("x", "_", "$", "?", "!")) for t in rhs)]
+        assert not offenders, offenders

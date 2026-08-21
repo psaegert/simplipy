@@ -1880,7 +1880,13 @@ class SimpliPyEngine:
                 continue
             if is_numeric_string(t) or t in _SPECIAL_LEAVES:
                 continue
-            if t.startswith(('<', '_', '$', '?')):
+            # The PARENTHESIZED negative literal (`(-3)`) is the engine's own spelling and
+            # is not caught by `is_numeric_string`; `!` is a slot sigil like the rest.
+            # Missing both made 3,389 of the shipped artifact's 10,638 rule sides report a
+            # literal as a free variable, and `as_callable` then compiled a bad signature.
+            if t.startswith('(') and t.endswith(')') and is_numeric_string(t[1:-1]):
+                continue
+            if t.startswith(('<', '_', '$', '?', '!')):
                 continue
             out.append(t)
         return out

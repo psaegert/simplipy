@@ -1550,6 +1550,7 @@ impl CandidateLibrary {
         ops: &Operators,
         candidates: &[Vec<String>],
         mus: &[Option<u64>],
+        folds_to_leaf: &[bool],
         var_names: &[String],
         x_flat: &[f64],
         n_rows: usize,
@@ -1569,22 +1570,34 @@ impl CandidateLibrary {
             && candidates
                 .iter()
                 .any(|c| c.len() == 1 && c[0] == "<constant>");
-        // WHAT `<constant>` ACTUALLY DOMINATES (revised with the mu search bound,
-        // 2026-08-20). The filter's lemma was "the length-1 `<constant>` preempts every
-        // var-free candidate", which held while the scan was ordered by TOKEN LENGTH --
-        // nothing is shorter than one token. Under mu it is false: `<constant>` is the
-        // priciest atom, so a var-free candidate can be strictly CHEAPER and win the tier.
-        // Dropping those does not preserve the decision, it degrades it -- the source falls
-        // through to `<constant>` and resolves to a ROUNDED LITERAL where an exact symbolic
-        // spelling existed (`exp 1` -> `2.7182818260590453`), which is precisely the respell
-        // the mint doctrine forbids. So the filter now drops only candidates mu-dominated by
-        // `<constant>`; strictly cheaper ones stay and keep the exact spelling reachable.
-        let const_mu = candidates
-            .iter()
-            .zip(mus.iter())
-            .find(|(c, _)| c.len() == 1 && c[0] == "<constant>")
-            .and_then(|(_, m)| *m)
-            .unwrap_or(u64::MAX);
+        // WHAT A VAR-FREE CANDIDATE MUST BE TO EARN ITS PLACE (revised 2026-08-21, after
+        // the mu-dominance criterion below it was measured UNSOUND).
+        //
+        // The original lemma -- "the length-1 `<constant>` preempts every var-free
+        // candidate" -- held only because the scan was ordered by TOKEN LENGTH, and the
+        // mu bound broke it. The repair attempt, "drop those with mu >= mu(`<constant>`)",
+        // is worse than the disease: `<constant>` prices at 67000 while `asin sin 2` is
+        // 19000 and `* 0 <constant>` is 3000, so the whole class of var-free composites
+        // sailed through. A live mine under that criterion produced 57 rules of the form
+        // `pi - 2 -> asin(sin(2))` in its first 212: true by value, and an obfuscation
+        // rather than a simplification.
+        //
+        // THE CRITERION IS WHAT THE CONSTRUCTOR MAKES OF IT, not what the measure charges.
+        // A var-free candidate is admitted iff the constructor folds it to a SINGLE LEAF:
+        //
+        //     exp 1            -> np.e     KEPT   (a leaf the engine can name exactly)
+        //     * 0 <constant>   -> 0        KEPT
+        //     asin sin 2       -> unchanged  DROPPED (a composite spelling of pi - 2)
+        //     log <constant>   -> unchanged  DROPPED (the universal absorber the filter
+        //                                    was written for: it ranges over every real
+        //                                    AND nan, so it "matches" any constant-family
+        //                                    source and mints vacuous rules)
+        //
+        // This keeps the fix the mu criterion was reaching for -- dropping `exp 1` forced
+        // the source through `<constant>` to the ROUNDED literal 2.7182818260590453, the
+        // respell the mint doctrine forbids -- while excluding everything that made the
+        // mu version unsound. The falsifier is TestFoldFilter::test_dominance_holds_at_
+        // the_band_edge plus the no-composite-var-free-RHS invariant asserted on the mine.
         let mut n_candidates = 0usize;
         let mut n_filtered = 0usize;
         for (ci, c) in candidates.iter().enumerate() {
@@ -1597,11 +1610,7 @@ impl CandidateLibrary {
             // candidate whose only variables have index >= 32 would be misclassified as
             // var-free and wrongly dropped. The filter checks ALL var_names.
             let has_var = c.iter().any(|t| var_names.iter().any(|v| v == t));
-            if filter_active
-                && len >= 2
-                && !has_var
-                && mus[ci].is_none_or(|m| m >= const_mu)
-            {
+            if filter_active && len >= 2 && !has_var && !folds_to_leaf[ci] {
                 // NOTE: this filter carries more weight than "candidate
                 // minimization". A var-free candidate of length >= 2 can be a UNIVERSAL ABSORBER:
                 // `log <constant>` ranges over every real AND nan, so under the rule semantics
@@ -2218,8 +2227,10 @@ pub fn find_rule(
     // Per-call path: no engine here to score mu, so the library is unscored and the legacy
     // token bound stands (`max_mu = None`). The MINE goes through the resident-library path.
     let mus = vec![None; candidates.len()];
-    let lib =
-        CandidateLibrary::build(ops, candidates, &mus, var_names, x_flat, n_rows, fold_filter)?;
+    let folds = vec![false; candidates.len()];
+    let lib = CandidateLibrary::build(
+        ops, candidates, &mus, &folds, var_names, x_flat, n_rows, fold_filter,
+    )?;
     find_rule_with_lib(
         ops,
         source,
@@ -2537,15 +2548,15 @@ mod tests {
             s(&["neg", "x0"]),
             s(&["*", "<constant>", "x0"]),
         ];
-        let filtered = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n, true).unwrap();
-        let raw = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n, false).unwrap();
+        let filtered = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vec![false; cands.len()], &vars, &xf, n, true).unwrap();
+        let raw = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vec![false; cands.len()], &vars, &xf, n, false).unwrap();
         assert_eq!(filtered.n_filtered(), 3); // sin(<c>), pow(<c>, 2), exp(1)
         assert_eq!(filtered.n_candidates(), 4);
         assert_eq!(raw.n_filtered(), 0);
         assert_eq!(raw.n_candidates(), 7);
         // WITHOUT the bare <constant> the filter must be INERT (conservative guard)
         let no_bare: Vec<Vec<String>> = cands[2..].to_vec();
-        let inert = CandidateLibrary::build(ops, &no_bare, &vec![None; no_bare.len()], &vars, &xf, n, true).unwrap();
+        let inert = CandidateLibrary::build(ops, &no_bare, &vec![None; no_bare.len()], &vec![false; no_bare.len()], &vars, &xf, n, true).unwrap();
         assert_eq!(inert.n_filtered(), 0);
         // decision parity on both a constant-valued and a non-constant source: the dominance
         // lemma says the length-1 <constant> preempts every var-free candidate, so filtered and
@@ -2611,7 +2622,7 @@ mod tests {
             s(&["sin", "x0"]),
             s(&["exp", "<constant>"]), // genuinely var-free -> filtered
         ];
-        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n, true).unwrap();
+        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vec![false; cands.len()], &vars, &xf, n, true).unwrap();
         assert_eq!(lib.n_filtered(), 1, "only exp(<constant>) may be dropped");
         assert_eq!(lib.n_candidates(), 3);
     }
@@ -2683,7 +2694,7 @@ mod tests {
         // Both candidates are numerically equivalent to the source x0+x0+x0 = 3*x0:
         // `* 3 x0` at length 3, `neg * -3 x0` at length 4.
         let cands = vec![s(&["*", "3", "x0"]), s(&["neg", "*", "-3", "x0"])];
-        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n, true).unwrap();
+        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vec![false; cands.len()], &vars, &xf, n, true).unwrap();
         let src = s(&["+", "+", "x0", "x0", "x0"]);
         // Without acceptance the length-3 spelling wins.
         let free = find_rule_with_lib(
