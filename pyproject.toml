@@ -106,13 +106,16 @@ features = ["pyo3/extension-module"]
 # private pre-release audit corpus). A deny-everything/allow-twelve list cannot regress
 # that way -- a new file under remine/ is out by default, forever.
 #
-# The twelve shippable artifact files (three acj cells x {config, mine spec, rules,
-# provenance sidecar}) live at their PUBLIC home `assets/engines/` since 0.13.0 -- the
+# The shippable artifact files (one acj cell x {config, mine spec, rules, provenance
+# sidecar}; it was three cells and twelve files until the superseded `acj-2-1` and
+# `acj-3-2` were retired from the tree on 2026-08-22 -- they remain on the Hugging Face
+# assets repository, so nothing published is withdrawn) live at their PUBLIC home
+# `assets/engines/` since 0.13.0 -- the
 # curated public tree must build the same sdist as the private tree, so nothing the
 # sdist needs may live under a private-tier path (found at the 0.13.0 cut: the boundary
-# guard refused the public-built sdist for exactly this). The sdist-guard job in
-# publish.yml asserts BOTH halves on every build: no remine/design path ships, and none
-# of the twelve is missing.
+# guard refused the public-built sdist for exactly this). The sdist guard asserts BOTH
+# halves on every build: no remine/design path ships, and no shippable artifact file is
+# missing.
 exclude = [
     "design/**",
     "remine/**",

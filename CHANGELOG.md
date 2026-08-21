@@ -72,6 +72,12 @@ releases require simplipy >= 0.14.0. There is no compatibility shim, as with the
 artifact-format break: the rule sets, the artifact layout and the returned dialect all
 move together, and a shim would have to lie about at least one of them. Pin the pair.
 
+### Removed — the superseded `acj-2-1` and `acj-3-2` engines
+
+Installs no longer bundle them; `acj-4-3` is the shipped engine. Both remain on the
+Hugging Face assets repository and still load by name, so nothing published is
+withdrawn — `simplipy install acj-3-2` fetches it as before.
+
 ### Changed — the literal floor is one bit, not two
 
 Every numeric codeword was clamped at two bits, which swallowed `0`, `1`, `2` and `3`

@@ -172,10 +172,14 @@ class TestD12CleanCut:
         import os
         import yaml
         base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets', 'engines')
-        for cell in ('acj-2-1', 'acj-3-2', 'acj-4-3'):
+        # ITERATE WHAT SHIPS, not a written list: the list went stale the moment two
+        # cells were retired, and a `continue` on a missing path would have made this
+        # test quietly vacuous for them rather than fail.
+        cells = sorted(d for d in os.listdir(base)
+                       if os.path.exists(os.path.join(base, d, 'config.yaml')))
+        assert cells, 'no shipped engine carries a config.yaml'
+        for cell in cells:
             path = os.path.join(base, cell, 'config.yaml')
-            if not os.path.exists(path):
-                continue
             cfg = yaml.safe_load(open(path))
             for name, spec in cfg['operators'].items():
                 assert 'inverse' not in spec, f'{cell}:{name} still carries inverse:'
