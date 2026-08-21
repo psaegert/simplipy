@@ -1187,3 +1187,53 @@ class TestTheWidenedQuantifierDoesNotConvictWhatItCannotResolve:
                       - {0.0})
         assert min(mags) <= 1e-3 and max(mags) >= 1e4, mags
         assert {-1e4, -1e3, -0.001, 1e-3, 1e3, 1e4} <= {float(c) for c in C.WIDE_CONSTS}
+
+
+class TestAtanGetsTheBoundaryBandTanhAlreadyHad:
+    """F104 refuses at `tanh`/`atanh`/`acosh` where a value is inside the working
+    precision's band of a boundary. `atan` never got the same treatment, and its pi/2 is
+    the same kind of boundary: an ASYMPTOTE, not an ordinary point. (That distinction is
+    why `asin`/`acos` deliberately do NOT get a band -- their +-1 has a finite value and
+    banding it cost 67 rules.)
+    """
+
+    GUDERMANNIAN = (['cos', 'atan', 'sinh', '_0'], ['inv', 'cosh', '_0'])
+
+    def test_the_band_refuses_where_the_information_is_gone(self) -> None:
+        """At |x| = 1e4, `atan(sinh x)` rounds to pi/2 at any affordable precision -- the
+        true gap is 2.2e-4343 -- and `cos` of that returns -5.05e-52: the residue of
+        pi/2's own rounding, with the WRONG SIGN against a true `sech(1e4)` that is
+        positive. Refuse where the information is lost, rather than propagate it."""
+        from mpmath import mp, mpf
+        import simplipy.verify._contract as C
+        old = mp.dps
+        try:
+            mp.dps = 50
+            with pytest.raises(C.Unresolved):
+                C.c_eval(('atan', ('lit', mpf(10) ** 4400)), {})
+        finally:
+            mp.dps = old
+
+    def test_the_identity_is_still_certified_and_nothing_is_convicted(self) -> None:
+        """The Gudermannian `cos(atan(sinh x)) = sech(x)` is exact. The band must make
+        the two extreme points ABSTAIN, never convict, and must not cost the rule its
+        coverage."""
+        import simplipy.verify._contract as C
+        r = C.judge_rule(list(self.GUDERMANNIAN[0]), list(self.GUDERMANNIAN[1]))
+        assert r['verdict'] == 'CERTIFIED', r
+        assert r['measure'] == 0.0, r
+
+    def test_the_band_narrows_with_precision_and_spares_the_shallow(self) -> None:
+        """At dps 50 the band refuses only |a| > 1e40, so ordinary magnitudes are still
+        judged. A band that swallowed those would trade one false conviction class for a
+        coverage collapse."""
+        from mpmath import mp, mpf
+        import simplipy.verify._contract as C
+        old = mp.dps
+        try:
+            mp.dps = 50
+            for a in ('1', '30', '1e12', '1e30'):
+                v = C.c_eval(('atan', ('lit', mpf(a))), {})
+                assert abs(abs(v) - mp.pi / 2) >= mpf(10) ** (-mp.dps + 10), a
+        finally:
+            mp.dps = old

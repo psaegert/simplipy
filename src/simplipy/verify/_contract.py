@@ -384,8 +384,24 @@ OPS = {
             ((_ for _ in ()).throw(Unresolved())
              if (not misinf(a) and abs(a) > 1 and abs(abs(a) - 1) < mpf(10) ** (-mp.dps + 10))
              else (NAN if abs(a) > 1 else _z(mp.acos(a)))),
+    # F104's band, extended to `atan` (2026-08-21). pi/2 is an ASYMPTOTE `atan` never
+    # attains at a finite argument -- the same class as `tanh`'s +-1, and NOT the class
+    # `asin`/`acos` refuse to band, where +-1 is an ordinary point with a finite value.
+    # Once |atan(a)| is inside the working-precision band of pi/2 the value is
+    # indistinguishable from pi/2, and everything downstream inherits a fabrication:
+    # `cos(atan(sinh(1e4)))` returns -5.05e-52, which is the residue of pi/2's OWN
+    # rounding and even has the wrong SIGN, against a true `sech(1e4)` of 2.2e-4343.
+    # `cos atan sinh _0 -> inv cosh _0` -- an exact identity, the Gudermannian, and the
+    # sibling of the `cos asin tanh` row the tanh band above was written for -- abstained
+    # at the two |x| = 1e4 grid points at every rung to dps 1000, because resolving that
+    # comparison honestly needs 4,343 digits. Refusing where the information is LOST is
+    # cheaper and truthful; the band narrows as the precision rises, so nothing shallow
+    # is spared (at dps 50 it refuses only |a| > 1e40).
     'atan': lambda a: NAN if misnan(a) else
-            (_z(mp.sign(a) * mp.pi / 2) if misinf(a) else _z(mp.atan(a))),
+            (_z(mp.sign(a) * mp.pi / 2) if misinf(a) else
+             ((_ for _ in ()).throw(Unresolved())
+              if abs(abs(_z(mp.atan(a))) - mp.pi / 2) < mpf(10) ** (-mp.dps + 10)
+              else _z(mp.atan(a)))),
     'sinh': lambda a: NAN if misnan(a) else
             (a if misinf(a) else (_z(mp.sinh(a)) if abs(a) < mpf('1e5')
              else (_ for _ in ()).throw(Unresolved()))),
