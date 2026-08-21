@@ -2251,7 +2251,14 @@ pub fn find_rule(
     let mus = vec![None; candidates.len()];
     let folds = vec![false; candidates.len()];
     let lib = CandidateLibrary::build(
-        ops, candidates, &mus, &folds, var_names, x_flat, n_rows, fold_filter,
+        ops,
+        candidates,
+        &mus,
+        &folds,
+        var_names,
+        x_flat,
+        n_rows,
+        fold_filter,
     )?;
     find_rule_with_lib(
         ops,
@@ -2570,15 +2577,45 @@ mod tests {
             s(&["neg", "x0"]),
             s(&["*", "<constant>", "x0"]),
         ];
-        let filtered = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vec![false; cands.len()], &vars, &xf, n, true).unwrap();
-        let raw = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vec![false; cands.len()], &vars, &xf, n, false).unwrap();
+        let filtered = CandidateLibrary::build(
+            ops,
+            &cands,
+            &vec![None; cands.len()],
+            &vec![false; cands.len()],
+            &vars,
+            &xf,
+            n,
+            true,
+        )
+        .unwrap();
+        let raw = CandidateLibrary::build(
+            ops,
+            &cands,
+            &vec![None; cands.len()],
+            &vec![false; cands.len()],
+            &vars,
+            &xf,
+            n,
+            false,
+        )
+        .unwrap();
         assert_eq!(filtered.n_filtered(), 3); // sin(<c>), pow(<c>, 2), exp(1)
         assert_eq!(filtered.n_candidates(), 4);
         assert_eq!(raw.n_filtered(), 0);
         assert_eq!(raw.n_candidates(), 7);
         // WITHOUT the bare <constant> the filter must be INERT (conservative guard)
         let no_bare: Vec<Vec<String>> = cands[2..].to_vec();
-        let inert = CandidateLibrary::build(ops, &no_bare, &vec![None; no_bare.len()], &vec![false; no_bare.len()], &vars, &xf, n, true).unwrap();
+        let inert = CandidateLibrary::build(
+            ops,
+            &no_bare,
+            &vec![None; no_bare.len()],
+            &vec![false; no_bare.len()],
+            &vars,
+            &xf,
+            n,
+            true,
+        )
+        .unwrap();
         assert_eq!(inert.n_filtered(), 0);
         // decision parity on both a constant-valued and a non-constant source: the dominance
         // lemma says the length-1 <constant> preempts every var-free candidate, so filtered and
@@ -2644,7 +2681,17 @@ mod tests {
             s(&["sin", "x0"]),
             s(&["exp", "<constant>"]), // genuinely var-free -> filtered
         ];
-        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vec![false; cands.len()], &vars, &xf, n, true).unwrap();
+        let lib = CandidateLibrary::build(
+            ops,
+            &cands,
+            &vec![None; cands.len()],
+            &vec![false; cands.len()],
+            &vars,
+            &xf,
+            n,
+            true,
+        )
+        .unwrap();
         assert_eq!(lib.n_filtered(), 1, "only exp(<constant>) may be dropped");
         assert_eq!(lib.n_candidates(), 3);
     }
@@ -2716,7 +2763,17 @@ mod tests {
         // Both candidates are numerically equivalent to the source x0+x0+x0 = 3*x0:
         // `* 3 x0` at length 3, `neg * -3 x0` at length 4.
         let cands = vec![s(&["*", "3", "x0"]), s(&["neg", "*", "-3", "x0"])];
-        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vec![false; cands.len()], &vars, &xf, n, true).unwrap();
+        let lib = CandidateLibrary::build(
+            ops,
+            &cands,
+            &vec![None; cands.len()],
+            &vec![false; cands.len()],
+            &vars,
+            &xf,
+            n,
+            true,
+        )
+        .unwrap();
         let src = s(&["+", "+", "x0", "x0", "x0"]);
         // Without acceptance the length-3 spelling wins.
         let free = find_rule_with_lib(
