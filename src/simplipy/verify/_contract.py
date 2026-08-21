@@ -202,12 +202,24 @@ def _z(v):
     return mpf(0) if v == 0 else v
 
 
-def _snap(v):
+def _snap(v, arg=None):
     """symbolic-cancellation floor: trig output below the dps noise floor is exact 0;
-    above the pole floor it is a pole (undefined); the band between is ambiguous."""
+    above the pole floor it is a pole (undefined); the band between is ambiguous.
+
+    THE FLOOR IS RELATIVE TO WHAT THE ARGUMENT PREDICTS. Cancellation means the output
+    came out far smaller than its own input can account for -- `sin(pi)` is tiny only
+    because mp.pi is a rounded pi. For |x| < 1 there is nothing to cancel: sin x ~ x and
+    tan x ~ x, so `sin(exp(-300)) = 5.1e-131` is exactly the size it should be. Read
+    against an ABSOLUTE band it was 0 at dps 50, 0 at dps 120 and 5.1e-131 at dps 250 --
+    a value that MOVES with the working precision, this time inside the evaluator rather
+    than in the comparison, and the decay test cannot date a gap whose own operand keeps
+    changing. Scaled by the argument, the band still fires for every cancellation it was
+    written for, because there |x| >= 1 and the scale is 1.
+    """
     if misnan(v) or misinf(v):
         return v
-    floor = mpf(10) ** (-mp.dps + 10)
+    predicted = mpf(1) if arg is None else min(mpf(1), abs(arg))
+    floor = predicted * mpf(10) ** (-mp.dps + 10)
     ceil = mpf(10) ** (mp.dps - 10)
     a = abs(v)
     if a == 0:
@@ -303,8 +315,8 @@ def _trig(fn):
                                       # omitting this flag manufactures false
                                       # ENGINE-MISALIGNs
                 return NAN
-            return _snap(mp.sin(a) / c)
-        return _snap(fn(a))
+            return _snap(mp.sin(a) / c, a)
+        return _snap(fn(a), a)
     return g
 
 
@@ -462,13 +474,23 @@ def c_eval(tree, env):
         _NODE_SINK[-1][0] = True
     if _MAG_SINK:
         # The size of the largest INTERMEDIATE, which is what decides how much precision
-        # a cancellation will eat. Only finite values count: an inf tells us nothing
-        # about digits, and `misinf` above already records it.
+        # a cancellation will eat -- AND of the smallest nonzero one, which decides the
+        # same thing from the other end (see `_required_dps`). Only finite values count:
+        # an inf tells us nothing about digits, and `misinf` above already records it.
         try:
             if not misinf(v):
                 a = abs(v)
                 if a > _MAG_SINK[-1][0]:
                     _MAG_SINK[-1][0] = a
+                # ...but a SUM's output is not evidence of a small operand -- it may BE
+                # the cancellation residue, whose size is a fact about the precision and
+                # not about the expression. Sizing the next rung from it is circular: at
+                # (pi/2, -pi/2) the seam `(x^3 + x^2 y)/(x + y)` would set its own rung
+                # from its own ~1e-50 residue, and the precision roulette that rung exists
+                # to expose would confirm itself instead.
+                if (a != 0 and op not in ('+', '-')
+                        and (_MAG_SINK[-1][1] == 0 or a < _MAG_SINK[-1][1])):
+                    _MAG_SINK[-1][1] = a
         except Exception:
             pass
     return v
@@ -480,8 +502,9 @@ _NODE_SINK: list = []
 _MAG_SINK: list = []
 
 
-def _required_dps(mag):
-    """Precision that a cancellation between operands of size `mag` can demand.
+def _required_dps(mag, small=None):
+    """Precision that a cancellation between intermediates of size `mag` (the largest)
+    and `small` (the smallest nonzero) can demand.
 
     Adding two numbers of magnitude 10^k whose true sum is 10^-k destroys about 2k
     significant digits, so the working precision has to carry them before any correct
@@ -489,17 +512,38 @@ def _required_dps(mag):
     `cosh(25t) + sinh(25t)` has intermediates near e^500 ~ 10^217, and the sum only
     becomes representable somewhere past dps 400 -- which is what `2 * 217 + 50` gives.
 
+    A SMALL INTERMEDIATE COSTS THE SAME AS A LARGE ONE, and for the same reason: it is
+    the RATIO the precision has to carry, not the size. `cos x = 1 - x^2/2 + ...` at
+    x = exp(-300) = 5.1e-131 puts the whole content of the answer 261 digits below the 1
+    it sits next to, so the output is exactly 1.0 at dps 50, at dps 120 and at dps 250,
+    and `acos` of that is 0 at all three. Three rungs reading a manufactured 0 is not
+    three opinions; it convicted `acos(cos(exp(c))) -> c_t`, true for every c by
+    construction. Sized from the small end, rung 2 lands at 312 and the identity
+    resolves.
+
     Derived, not tuned: the 2 is the two-sided digit loss, `k` is measured from the
     actual intermediates rather than guessed from the expression, and `BASE_DPS` is the
     ordinary working precision that must survive on top.
     """
-    if mag is None or mag <= 1:
-        return BASE_DPS
+    return min(MAX_DPS, _demanded_dps(mag, small))
+
+
+def _demanded_dps(mag, small=None):
+    """`_required_dps` BEFORE the ceiling: what the point asks for, not what it gets.
+
+    The two differ exactly where the ceiling binds, and there the difference is the
+    whole finding -- a rung clamped to `MAX_DPS` is not the rung that was asked for, and
+    reading it as though it were is how the judge convicted past its own evidence.
+    """
+    k = 0
     try:
-        k = int(mp.floor(mp.log10(mag))) + 1
+        if mag is not None and mag > 1:
+            k = max(k, int(mp.floor(mp.log10(mag))) + 1)
+        if small is not None and 0 < small < 1:
+            k = max(k, -int(mp.floor(mp.log10(small))))
     except Exception:
         return BASE_DPS
-    return min(MAX_DPS, BASE_DPS + 2 * max(0, k))
+    return BASE_DPS + 2 * max(0, k)
 
 
 def lhs_singular(tree, env):
@@ -932,7 +976,11 @@ def _gen_env(names, k):
 #: `skipped_cl` swallowed the report. Density is not delicate: measured over the whole
 #: 296-rule constant population, every tail from 1 point per 12 decades to 1 per decade
 #: recovers the SAME 27 fits and moves NO witness that already fitted.
-_XS_TAIL = np.logspace(12, 300, 49)[1:]
+#: ...AND IT RUNS TO THE f64 CEILING, not to a round 1e300. A search that stops eight
+#: decades short has no bracket for `cosh(-3)^300 = 7.6e300`, and a rule whose witness
+#: cannot be bracketed is reported NO-WITNESS -- a conviction, for a row true by
+#: construction.
+_XS_TAIL = np.logspace(12, 308, 49)[1:]
 
 #: The dense body is the shipped grid, unchanged -- the tail only adds reach.
 _XS = np.concatenate([-_XS_TAIL[::-1], -np.logspace(12, -3, 120),
@@ -1063,15 +1111,23 @@ def mp_polish(tl, tr, nvars, clb, c0):
         # clause-(a) KILL of a rule that is true by construction. Costs nothing for an
         # ordinary rule: small intermediates give back exactly the old 300.
         mp.dps = GAP_RUNGS[-1] + 50
-        _MAG_SINK.append([mpf(0)])
+        _MAG_SINK.append([mpf(0), mpf(0)])
         try:
             c_eval(tl, build_env())
         except Unresolved:
-            return mpf(c0)
+            # NOT a fallback -- this probe exists to MEASURE, and a refusal is one of
+            # its readings. `acosh(exp(exp(-1000)))` is 1.0e-217, but at dps 300 the
+            # inner `exp` rounds to exactly 1.0 and `acosh` refuses at its boundary
+            # band; returning the f64 seed here froze the witness at 0.0 and clause (a)
+            # convicted the identity. The intermediates it DID see (exp(-1000) =
+            # 5.1e-435) are enough to size the depth, and the target evaluation below
+            # already falls back for real if the deeper rung refuses too.
+            pass
         finally:
-            _mag = _MAG_SINK.pop()[0]
+            _mag, _small = _MAG_SINK.pop()
         mp.dps = max(mp.dps,
-                     max(GAP_RUNGS[2], 2 * max(GAP_RUNGS[1], _required_dps(_mag))) + 50)
+                     max(GAP_RUNGS[2],
+                         2 * max(GAP_RUNGS[1], _required_dps(_mag, _small))) + 50)
         # `_WIT_RESID` was 10^-270 = "deeper than the deepest rung" when the deepest rung
         # was a fixed 250. It has to follow the ladder for the same reason the depth does.
         _wit_resid = mpf(10) ** (-(mp.dps - 30))
@@ -1082,6 +1138,37 @@ def mp_polish(tl, tr, nvars, clb, c0):
             return mpf(c0)
         if misnan(target) or misinf(target):
             return mpf(c0)
+
+        _residue: list = []
+
+        def target_is_residue():
+            """Is `target` the RESIDUE of a cancellation, or a value in its own right?
+
+            The F103 question, asked of the target itself: a residue SHRINKS when the
+            working precision rises (`sin(pi)` reads ~1e-300 at dps 300 and ~1e-600 at
+            dps 600), a value STANDS STILL. Only for a residue is an absolute noise
+            floor the right instrument -- `pow(acos(0), -3000)` is 4.37e-589 at every
+            precision, out of one power and no subtraction at all, and the floor
+            accepted 0 as its witness. The contract then judges by pure relative decay,
+            sees a 100% frozen gap, and KILLs a rule true by construction. Measured
+            over the widened constant quantifier: 75 of 97 such kills.
+
+            Asked ONCE, lazily, and only where the answer can change the verdict, so an
+            ordinary witness never pays for the extra depth.
+            """
+            if not _residue:
+                lo = mp.dps
+                try:
+                    mp.dps = 2 * lo
+                    t2 = c_eval(tl, build_env())
+                except (Unresolved, ValueError):
+                    t2 = None          # cannot tell: keep the floor (the old answer)
+                finally:
+                    mp.dps = lo
+                _residue.append(
+                    t2 is None or target == 0 or t2 == 0
+                    or abs(t2) < abs(target) * mpf(10) ** (-(lo // 2)))
+            return _residue[0]
 
         def accepts(residual):
             """Is this residual inside the noise of THIS computation?
@@ -1100,9 +1187,15 @@ def mp_polish(tl, tr, nvars, clb, c0):
             about -- carries the other half: below it a value is not distinguishable
             from zero, which is what keeps a CANCELLATION zero (`sin(pi)` reads ~1e-300
             at dps 300, not 0) from being chased as though it were a real witness.
+
+            AND THE NOISE FLOOR IS ASKED ONLY WHERE IT MEANS SOMETHING. It is an
+            ABSOLUTE band, so applied unconditionally it swallows every honestly tiny
+            target as well; `target_is_residue` is what tells the two apart.
             """
+            if abs(residual) <= _wit_resid * abs(target):
+                return True
             noise = max(_mag, mpf(1)) * mpf(10) ** (-(mp.dps - 25))
-            return abs(residual) <= max(_wit_resid * abs(target), noise)
+            return abs(residual) <= noise and target_is_residue()
 
         def h(c):
             e = dict(env)
@@ -1209,7 +1302,7 @@ def _point_verdict(tl, tr, env_mp):
         sizes a cancellation."""
         mp.dps = dps
         if track:
-            _MAG_SINK.append([mpf(0)])
+            _MAG_SINK.append([mpf(0), mpf(0)])
         try:
             cl = cls_mp(c_eval(tl, env_mp()))
             cr = cls_mp(c_eval(tr, env_mp()))
@@ -1217,14 +1310,14 @@ def _point_verdict(tl, tr, env_mp):
             return None
         finally:
             if track:
-                once.mag = _MAG_SINK.pop()[0]
+                once.mag, once.small = _MAG_SINK.pop()
         v = compare_classes(cl, cr)
         return (v, None) if v is not None else (None, gap_reading(cl, cr))
 
     old = mp.dps
     snap0 = SNAP_EVENTS[0]
     try:
-        once.mag = None
+        once.mag = once.small = None
         r1 = once(BASE_DPS, track=True)
         snapped1 = SNAP_EVENTS[0] > snap0
         # RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates
@@ -1232,7 +1325,8 @@ def _point_verdict(tl, tr, env_mp):
         # the class comparison reads that agreement as evidence. The precision now comes
         # from the operands that were actually seen, so rung 2 is a second opinion rather
         # than a second copy of the first.
-        dps2 = max(GAP_RUNGS[1], _required_dps(getattr(once, 'mag', None)))
+        dps2 = max(GAP_RUNGS[1], _required_dps(getattr(once, 'mag', None),
+                                              getattr(once, 'small', None)))
         dps3 = max(GAP_RUNGS[2], 2 * dps2)
 
         # CLIMB PAST AN UNRESOLVED RUNG. A rung refuses when an intermediate lands inside
@@ -1276,6 +1370,41 @@ def _point_verdict(tl, tr, env_mp):
             return None, snapped1            # class flipped / Unresolved: never convict
         d_lo, s_lo = gap1
         d_hi, s_hi = hi[1]
+        # A RUNG THAT LOST A SIDE ENTIRELY CANNOT DATE A DECAY. `d == scale` (with a
+        # nonzero scale) says exactly one side read 0 while the other did not: the rung
+        # saw no agreement at all, and a rate measured from a reading pinned at the
+        # instrument's rail is not a rate. `acos(cos(exp(-100)))` is 3.7e-44, but at dps
+        # 50 `cos` of it rounds to exactly 1.0 and `acos` gives 0 -- so rung 1 read a
+        # 100% gap, rung 2 read 1.1e-78, and the drop came to 34.5 against a bar of 35.
+        # A true identity convicted by three tenths of a decade.
+        #
+        # Climb, and measure the rate between the two rungs that BOTH saw something.
+        # This can only ever DELAY a conviction to a stricter pair, never prevent one:
+        # where the vanished side is genuinely zero -- a written 0, as in
+        # `exp(sinh(-10)) -> 0` -- it is still zero at the higher rung, the rail reading
+        # repeats, and the KILL stands.
+        if d_lo == s_lo != 0 and d_hi != s_hi:
+            lo_dps, gap1 = hi_dps, hi[1]
+            hi_dps = max(GAP_RUNGS[2], 2 * hi_dps)
+            hi = once(hi_dps)
+            if hi is None or hi[0] is not None or hi[1] is None:
+                return None, snapped1
+            d_lo, s_lo = gap1
+            d_hi, s_hi = hi[1]
+        # THE FINER RUNG FOUND NO SEPARATION AT ALL. That is the deepest evidence of
+        # agreement the ladder can produce, and it is not something the floor below
+        # should be allowed to argue with: at dps 918 the two sides of
+        # `asin(inv(cosh(1000))) -> c_t` are bit-identical, yet flooring that exact zero
+        # by the computation's own magnitude (cosh(1000) ~ 1e434) put a 9.9e-485 gap
+        # where the rung had measured none, larger than the 2.2e-485 the COARSER rung
+        # reported -- a negative drop, and a clause-(a) KILL of an identity.
+        #
+        # A false rule does not reach here: a fixed gap stays visible at the finer rung,
+        # which is why `pow np.e sinh -10 -> 0` still reads 1.03e-4783 at every rung and
+        # is still convicted below. This also subsumes the exactly-zero-on-both-sides
+        # case, which is why the scale below can no longer be zero.
+        if d_hi == 0:
+            return 'eq', snapped1
         # ONE SCALE FOR BOTH RUNGS (F105). The separations are absolute; the scale is
         # fixed here, so it divides out of the ratio and touches nothing but the floor.
         # It is the largest of what either rung SAW and what the computation was made
@@ -1283,8 +1412,6 @@ def _point_verdict(tl, tr, env_mp):
         # `_MAG_SINK`'s intermediate is then the only honest one available.
         mag = getattr(once, 'mag', None) or mpf(0)
         scale = max(s_lo, s_hi, abs(mag))
-        if scale == 0:
-            return 'eq', snapped1            # exactly zero on both sides at both rungs
         # A separation of exactly zero is still not a special VERDICT -- it enters as
         # the rung's own resolution, "closer than this rung can see", which is what
         # keeps `log np.e -> 1` and 31 other exact identities resolvable when their
@@ -1297,13 +1424,35 @@ def _point_verdict(tl, tr, env_mp):
         # that swamps it manufactures a decay it does not have. Left unfloored it
         # stands still beside its own scale and clause (a) convicts it.
         g_lo = d_lo if d_lo != 0 else scale * mpf(10) ** (-lo_dps)
-        g_hi = d_hi if d_hi != 0 else scale * mpf(10) ** (-hi_dps)
+        g_hi = d_hi
         # Residue falls with the added precision; an analytic gap does not move, and a
         # gap that only BECOMES visible higher up (deep saturation) drops by less than
         # nothing. Half the added precision separates them with >=30 decades to spare.
         drop = mp.log10(g_lo / g_hi)
-        return ('eq' if drop > (hi_dps - lo_dps) / 2
-                else 'REAL-CHANGE'), snapped1
+        if drop > (hi_dps - lo_dps) / 2:
+            return 'eq', snapped1
+        # PAST THE CEILING, UNRESOLVED -- NEVER CONVICTED. That is what `MAX_DPS`
+        # documents, and the ladder did not do it: it read a rung clamped to 2000 as
+        # though it were the rung the point asked for. At c = -3000, `exp(c) = 1e-1303`
+        # needs dps 2656 before `cos` of it is anything but exactly 1.0, so every
+        # affordable rung reads `acos(1) = 0`, the gap never moves, and clause (a)
+        # convicts `acos(cos(exp(c))) -> c_t` -- true for every c by construction.
+        #
+        # Only the CONVICTION is withheld. A decay the clamped rungs could still see is
+        # evidence of agreement and keeps its 'eq'; running out of precision is a
+        # statement about the judge, and the house rule for that is skip, never convict.
+        #
+        # AND NOT WHERE A SIDE IS WRITTEN. The same LITERAL PROVENANCE that governs the
+        # boundary bands governs this: a side the rule SPELLS is exact at every rung, so
+        # a gap against it is not one more precision could ever close. `10^sinh(-10)` is
+        # 5.8e-11014 -- far below any affordable rung, and no closer to the 0 the rule
+        # writes than it was at dps 50. Withholding there would abstain on 26 shipped
+        # rows the judge convicts correctly, which is the F105 family exactly.
+        if (_demanded_dps(getattr(once, 'mag', None),
+                          getattr(once, 'small', None)) > MAX_DPS
+                and tl[0] != 'lit' and tr[0] != 'lit'):
+            return saturation_verdict(tl, tr, env_mp), snapped1
+        return 'REAL-CHANGE', snapped1
     finally:
         mp.dps = old
 

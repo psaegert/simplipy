@@ -948,3 +948,176 @@ class TestABoundedFunctionNeverAttainsItsLimit:
             got = judge_rule(lhs, rhs)
             assert got.get('verdict') != 'KILL', (lhs, got)
             assert got.get('tier') == 'real', (lhs, got)
+
+
+class TestTheQuantifierWidensWithoutConvictingTheTrue:
+    """F107. The judging battery for a source constant reaches |c| <= 5 (plus pi, e) for
+    generic values, while the miner draws log-uniform over [1e-3, 1e3]; the gate cannot
+    check what the miner explores. Widening it to +-1e4 convicted 97 of 343 shipped
+    constant rows, and every one diagnosed was an artifact of the instrument at magnitudes
+    it could not resolve. Six of them, each measurable on its own."""
+
+    #: `(lhs, rhs, c)` -- the rule, and the source constant that convicted it.
+    WAS_CONVICTED = [
+        # the noise floor swallowed an honestly tiny target and took 0 as the witness
+        (['pow', 'acos', '0', '<constant>'], ['<constant>'], -3000.0),
+        (['pow', 'acosh', '2', '<constant>'], ['<constant>'], -3000.0),
+        (['asin', 'tanh', 'exp', '<constant>'], ['<constant>'], -1000.0),
+        # the floor was scaled by a magnitude that had already cancelled away
+        (['asin', 'inv', 'cosh', '<constant>'], ['<constant>'], 1000.0),
+        (['log', 'atan', 'cosh', '<constant>'], ['<constant>'], 100.0),
+        # rung 1 lost a side entirely and the drop was measured from the rail
+        (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -100.0),
+        (['log', 'cosh', 'exp', '<constant>'], ['<constant>'], -100.0),
+        # an absolute snap band inside the evaluator
+        (['asin', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0),
+        (['atanh', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0),
+        # past MAX_DPS, where the judge documents abstention and used to convict
+        (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -3000.0),
+        # the witness search stopped eight decades short of the f64 ceiling
+        (['pow', 'cosh', '(-3)', '<constant>'], ['<constant>'], 300.0),
+        (['pow', 'sinh', '3', '<constant>'], ['<constant>'], 300.0),
+    ]
+
+    @staticmethod
+    def _judge_at(lhs, rhs, c):
+        """judge `lhs -> rhs` with the source-constant battery replaced by `c` alone."""
+        from mpmath import mpf
+        from simplipy.verify import _contract as C
+        base = C.judge_cl_battery
+        try:
+            C.judge_cl_battery = lambda saturation=True: [lambda: mpf(c)]
+            return C.judge_rule(list(lhs), list(rhs))
+        finally:
+            C.judge_cl_battery = base
+
+    def test_no_true_rule_is_convicted_at_a_widened_constant(self) -> None:
+        """Each row is true for EVERY source constant by construction -- the RHS constant
+        is the fitted witness, so there is nothing for the quantifier to falsify. An
+        abstention is not a conviction and is allowed: past `MAX_DPS` it is the answer the
+        contract documents."""
+        bad = []
+        for lhs, rhs, c in self.WAS_CONVICTED:
+            got = self._judge_at(lhs, rhs, c)
+            if got.get('verdict') in ('KILL', 'NO-WITNESS') or got.get('tier') == 'reject':
+                bad.append((' '.join(lhs), c, got.get('verdict'), got.get('clause')))
+        assert not bad, f'true rules convicted at a widened constant: {bad}'
+
+    def test_the_noise_floor_still_refuses_a_cancellation_zero(self) -> None:
+        """The other direction. The floor exists to stop `sin(pi)` -- which reads ~1e-300
+        at dps 300 and ~1e-600 at dps 600 -- from being chased as a witness, and asking
+        whether the target DECAYS is what tells that apart from an honestly tiny value."""
+        from mpmath import mpf
+        from simplipy.verify._contract import mp_polish, parse
+        tl = parse(['sin', 'np.pi'], '<C_L>')
+        tr = parse(['<constant>'], '<C_R>')
+        assert mp_polish(tl, tr, {}, lambda: mpf(2), 0.0) == 0
+
+    def test_an_honestly_tiny_target_gets_a_real_witness(self) -> None:
+        """`pow(acos(0), -3000)` is 4.37e-589 out of one power and no subtraction at all.
+        It is far below the noise floor and is not noise, and 0 is 100% wrong for it."""
+        from mpmath import mp, mpf
+        from simplipy.verify._contract import mp_polish, parse
+        tl = parse(['pow', 'acos', '0', '<constant>'], '<C_L>')
+        tr = parse(['<constant>'], '<C_R>')
+        got = mp_polish(tl, tr, {}, lambda: mpf(-3000), 0.0)
+        assert got != 0, 'the noise floor took 0 as the witness for 4.4e-589'
+        old = mp.dps
+        try:
+            mp.dps = 800
+            assert abs(got / (mp.pi / 2) ** mpf(-3000) - 1) < mpf('1e-100')
+        finally:
+            mp.dps = old
+
+    def test_the_snap_band_is_relative_to_the_argument(self) -> None:
+        """`sin(exp(-300)) = 5.1e-131` is exactly the size its own argument predicts --
+        nothing cancelled. Under an absolute band it read 0 at dps 50, 0 at dps 120 and
+        5.1e-131 at dps 250: a value that MOVES with the working precision."""
+        from mpmath import mp, mpf
+        from simplipy.verify._contract import c_eval, parse
+        tree = parse(['sin', 'exp', '(-300)'], '<C_L>')
+        old = mp.dps
+        try:
+            seen = []
+            for dps in (50, 120, 250):
+                mp.dps = dps
+                seen.append(c_eval(tree, {}))
+            assert all(v != 0 for v in seen), f'a well-resolved value snapped to 0: {seen}'
+            mp.dps = 250
+            # rung 1 read it at dps 50, so it is exp(-300) to about that many digits
+            assert abs(seen[0] / mp.e ** mpf(-300) - 1) < mpf('1e-45')
+        finally:
+            mp.dps = old
+
+    def test_a_cancellation_still_snaps(self) -> None:
+        """The band still fires for every cancellation it was written for: there the
+        argument is at or above 1, the predicted scale is 1, and the floor is unchanged."""
+        from mpmath import mp
+        from simplipy.verify._contract import c_eval, parse
+        old = mp.dps
+        try:
+            mp.dps = 50
+            assert c_eval(parse(['sin', 'np.pi'], '<C_L>'), {}) == 0
+        finally:
+            mp.dps = old
+
+    def test_a_small_intermediate_sizes_the_rung_like_a_large_one(self) -> None:
+        """`cos x = 1 - x^2/2 + ...` at x = exp(-300) puts the answer 261 digits below the
+        1 it sits next to, so dps 50, 120 and 250 all read exactly 1.0. A magnitude of
+        10^-k costs the same 2k digits as one of 10^k."""
+        from mpmath import mpf
+        from simplipy.verify._contract import _required_dps
+        assert _required_dps(mpf(1), mpf('5.1482e-131')) == 312
+        assert _required_dps(mpf('1.344e43'), None) == 138
+        assert _required_dps(mpf(1), mpf(1)) == 50
+
+    def test_a_sum_does_not_size_its_own_rung(self) -> None:
+        """A `+`/`-` output may BE the cancellation residue, whose size is a fact about
+        the precision and not about the expression. Sizing the next rung from it is
+        circular -- the seam that rung exists to expose would confirm itself."""
+        from mpmath import mp, mpf
+        from simplipy.verify import _contract as C
+        tree = C.parse(['-', 'cosh', '_0', 'sinh', '_0'], '<C_L>')
+        old = mp.dps
+        try:
+            mp.dps = 50
+            C._MAG_SINK.append([mpf(0), mpf(0)])
+            try:
+                C.c_eval(tree, {'_0': mpf(30)})
+            finally:
+                _mag, _small = C._MAG_SINK.pop()
+            assert _small >= 1, f'a difference was taken for a small operand: {_small}'
+        finally:
+            mp.dps = old
+
+    def test_past_the_ceiling_the_point_is_unresolved_not_convicted(self) -> None:
+        """`MAX_DPS` documents "past the ceiling a point is UNRESOLVED -- never convicted".
+        At c = -3000 `exp(c) = 1e-1303` needs dps 2656 before `cos` of it is anything but
+        exactly 1.0, and the ladder read its clamped rung as the rung it asked for."""
+        from mpmath import mpf
+        from simplipy.verify._contract import _demanded_dps, _required_dps, MAX_DPS
+        assert _demanded_dps(mpf(1), mpf('1e-1303')) > MAX_DPS
+        assert _required_dps(mpf(1), mpf('1e-1303')) == MAX_DPS
+        got = self._judge_at(['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -3000.0)
+        assert got.get('verdict') != 'KILL', got
+
+    def test_a_written_side_is_still_convicted_past_the_ceiling(self) -> None:
+        """The exemption, and the reason it is needed. A side the rule SPELLS is exact at
+        every rung, so a gap against it is not one more precision could close:
+        `10^sinh(-10)` is 5.8e-11014 and no closer to the written 0 than at dps 50.
+        Withholding there would abstain on 26 shipped rows the judge convicts correctly."""
+        from simplipy.verify._contract import judge_rule
+        for lhs in (['pow', '10', 'sinh', '(-10)'], ['pow', '2', 'sinh', '(-9)'],
+                    ['pow', '7', 'sinh', '(-8)']):
+            got = judge_rule(lhs, ['0'])
+            assert got.get('verdict') == 'KILL', (lhs, got)
+            assert got.get('tier') == 'f64', (lhs, got)
+
+    def test_the_witness_search_reaches_the_f64_ceiling(self) -> None:
+        """A search that stops at a round 1e300 has no bracket for `cosh(-3)^300 =
+        7.6e300`, and a rule whose witness cannot be bracketed is reported NO-WITNESS --
+        a conviction, for a row true by construction."""
+        import numpy as np
+        from simplipy.verify._contract import _XS
+        assert _XS.max() > 1e307 and _XS.min() < -1e307
+        assert np.isfinite(_XS).all()

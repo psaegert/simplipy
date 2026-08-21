@@ -153,6 +153,38 @@ drop census rather than silently absent.
   argument, and the comparison now settles those rules from that fact rather than from a
   measurement — confirming every one of them into the tier it already ships in. The gate
   now returns a verdict for every rule in the artifact.
+- The judge could not check the constants the miner explores. Its source-constant battery
+  reached `|c| ≤ 5` plus π and e while the miner draws from `[10⁻³, 10³]`, and widened to
+  ±10⁴ it convicted 97 of the 343 constant-carrying rules in the shipped set — every one
+  of them true by construction, and every one an artifact of the instrument at a magnitude
+  it could not resolve. Six distinct causes, each fixed:
+  - The exists-witness search accepted `0` as the witness for a target of `4.4e-589`. Its
+    noise floor is an absolute band, there to stop a cancellation zero from being chased
+    as a witness; a value that is simply small — one power and no subtraction — fell
+    under it too. The floor is now consulted only where the target actually shrinks as
+    the working precision rises, which is what separates a residue from a value.
+  - That search also stopped eight decades short of the f64 ceiling, so a witness of
+    `7.6e300` had no bracket and the rule was reported as having none.
+  - A precision rung that read one side as exactly zero, while the other was not, was
+    still used to date the gap's decay. It cannot: the reading is pinned at the
+    instrument's rail. The comparison now measures the rate between two rungs that both
+    saw something, which can only ever move a conviction to a stricter pair of rungs.
+  - The rungs were sized only from the LARGEST intermediate. A small one costs the same:
+    `cos x = 1 - x²/2 + …` at `x = e⁻³⁰⁰` puts the whole content of the answer 261 digits
+    below the 1 it sits beside, so three rungs in a row read exactly `1.0` and `acos` of
+    that is `0`. Precision is now sized from both ends.
+  - The evaluator's own symbolic-cancellation floor was absolute, so `sin(e⁻³⁰⁰)` — which
+    is exactly the size its argument predicts, with nothing cancelled — read as `0` at two
+    precisions and as `5.1e-131` at a third. The floor is now relative to what the
+    argument predicts, and still fires for every cancellation it was written for.
+  - Past its own precision ceiling the judge convicted rather than abstaining, which is
+    the opposite of what that ceiling documents. Running out of evidence is a statement
+    about the judge, so the conviction is withheld — except against a value the rule
+    itself spells, which is exact at every precision and cannot be a casualty of running
+    short of it.
+- Two shipped rules of the form `exp(exp(sinh c)) = 1` were certified as true over ℝ. They
+  are not: at `c = -6` the left side differs from 1 by `2.5e-88`. They are exact in f64 and
+  stay in the same rule set; what changes is that the gate now says which of the two it is.
 - The D15 diagonal lane never received the precision coupling its commit claimed, and fed
   the same measure that convicts.
 

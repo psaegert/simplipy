@@ -534,8 +534,9 @@ fn floor_nonneg(x: &BigFloat, p: usize) -> Option<u64> {
     Some(lo)
 }
 
-/// Precision that a cancellation between operands of size `mag` can demand -- the mirror
-/// of `_contract._required_dps`.
+/// Precision that a cancellation between the largest intermediate `mag` and the smallest
+/// nonzero one `small` can demand -- the mirror of `_contract._required_dps` and
+/// `_contract._demanded_dps`.
 ///
 /// Adding two numbers of magnitude 10^k whose true sum is 10^-k destroys about 2k
 /// significant digits, so the working precision has to carry them before any correct digit
@@ -543,18 +544,53 @@ fn floor_nonneg(x: &BigFloat, p: usize) -> Option<u64> {
 /// `cosh(25t) + sinh(25t)` are near e^500 ~ 10^217, and the sum only becomes representable
 /// somewhere past dps 400 -- which is what `2 * 217 + 50` gives.
 ///
+/// A SMALL INTERMEDIATE COSTS THE SAME AS A LARGE ONE, and for the same reason: it is the
+/// RATIO the precision has to carry, not the size. `cos x = 1 - x^2/2 + ...` at
+/// x = exp(-300) = 5.1e-131 puts the whole content of the answer 261 digits below the 1 it
+/// sits next to, so the output is exactly 1.0 at dps 50, at 120 and at 250, and `acos` of
+/// that is 0 at all three -- three rungs reading one manufactured zero.
+///
 /// Derived, not tuned: the 2 is the two-sided digit loss, `k` is MEASURED from the
 /// intermediates actually seen rather than guessed from the expression, and `BASE_DPS` is
 /// the ordinary working precision that has to survive on top.
-fn required_dps(mag: &BigFloat, p: usize, cc: &mut Consts) -> i32 {
-    if mag.is_nan() || mag.is_inf() || !cmp_gt(mag, &one(p)) {
-        return BASE_DPS;
+/// The caller takes it twice: clamped to `MAX_DPS` for the rung it can afford, and RAW for
+/// what the point asked for. The two differ exactly where the ceiling binds, and there the
+/// difference is the whole finding -- a rung clamped to `MAX_DPS` is not the rung that was
+/// asked for, and reading it as though it were is how the judge convicted past its own
+/// evidence.
+fn demanded_dps(mag: &BigFloat, small: &BigFloat, p: usize, cc: &mut Consts) -> i32 {
+    let mut k: i32 = 0;
+    if !mag.is_nan() && !mag.is_inf() && cmp_gt(mag, &one(p)) {
+        match floor_nonneg(&mag.log10(p, RM, cc), p) {
+            Some(f) => k = k.max(i32::try_from(f + 1).unwrap_or(MAX_DPS)),
+            None => return BASE_DPS,
+        }
     }
-    let Some(f) = floor_nonneg(&mag.log10(p, RM, cc), p) else {
-        return BASE_DPS;
-    };
-    let k = i32::try_from(f + 1).unwrap_or(MAX_DPS);
-    MAX_DPS.min(BASE_DPS + 2 * k.max(0))
+    if !small.is_nan() && !small.is_inf() && !small.is_zero() && cmp_lt(small, &one(p)) {
+        // `-floor(log10(small))` = `ceil(log10(1/small))`, taken on the reciprocal because
+        // `floor_nonneg` only reads non-negative arguments.
+        let r = one(p).div(small, p, RM);
+        match floor_nonneg(&r.log10(p, RM, cc), p) {
+            Some(f) => {
+                let f = i32::try_from(f).unwrap_or(MAX_DPS);
+                let ks = if cmp_lt(&pow10(f, p), &r) { f + 1 } else { f };
+                k = k.max(ks);
+            }
+            None => return BASE_DPS,
+        }
+    }
+    BASE_DPS + 2 * k.max(0)
+}
+
+/// Is this side a WRITTEN literal -- one token the rule SPELLS, exact at every rung? The
+/// mirror of the `tree[0] == 'lit'` test: `<constant>` is a fitted slot and a variable is a
+/// binding, and neither is something the rule writes down.
+fn is_written_literal(tokens: &[String], var_names: &[String]) -> bool {
+    tokens.len() == 1 && tokens[0] != "<constant>" && !var_names.iter().any(|v| *v == tokens[0])
+}
+
+fn cmp_eq(a: &BigFloat, b: &BigFloat) -> bool {
+    !cmp_gt(a, b) && !cmp_lt(a, b)
 }
 
 fn render_atom(a: &ProbeAtom, p: usize, cc: &mut Consts) -> BigFloat {
@@ -631,6 +667,9 @@ struct CtCtx {
     snapped: bool,
     /// Largest finite INTERMEDIATE this evaluation produced -- what sizes the next rung.
     max_mag: BigFloat,
+    /// ...and the smallest nonzero finite one, which sizes it from the OTHER end: a
+    /// magnitude of 10^-k costs the same 2k digits as one of 10^k (see `required_dps`).
+    min_mag: BigFloat,
     cc: Consts,
 }
 
@@ -671,30 +710,56 @@ impl CtCtx {
             ceil: pow10(dps - 10, p),
             snapped: false,
             max_mag: small_int(0, p),
+            min_mag: small_int(0, p),
             cc: Consts::new().ok()?,
         })
     }
 
     /// Record one node's value for `required_dps`. Only finite values count: an infinity
     /// says nothing about how many digits a cancellation will eat.
-    fn note_mag(&mut self, v: &BigFloat) {
+    ///
+    /// `additive` marks a `+`/`-` node, whose output is NOT evidence of a small operand --
+    /// it may BE the cancellation residue, whose size is a fact about the precision and not
+    /// about the expression. Sizing the next rung from it is circular: at (pi/2, -pi/2) the
+    /// seam `(x^3 + x^2 y)/(x + y)` would set its own rung from its own ~1e-50 residue, and
+    /// the precision roulette that rung exists to expose would confirm itself instead.
+    fn note_mag(&mut self, v: &BigFloat, additive: bool) {
         if v.is_nan() || v.is_inf() {
             return;
         }
         let a = v.abs();
         if cmp_gt(&a, &self.max_mag) {
-            self.max_mag = a;
+            self.max_mag = a.clone();
+        }
+        if !additive && !a.is_zero() && (self.min_mag.is_zero() || cmp_lt(&a, &self.min_mag)) {
+            self.min_mag = a;
         }
     }
 
     /// Symbolic-cancellation snap: a trig output below the noise floor is exact 0; above the pole
     /// ceiling it is a pole (nan); both flag a symbolic-cancellation event.
-    fn snap_trig(&mut self, v: BigFloat) -> BigFloat {
+    ///
+    /// THE FLOOR IS RELATIVE TO WHAT THE ARGUMENT PREDICTS. Cancellation means the output came
+    /// out far smaller than its own input can account for -- `sin(pi)` is tiny only because pi
+    /// is rounded. For |x| < 1 there is nothing to cancel: sin x ~ x, so `sin(exp(-300)) =
+    /// 5.1e-131` is exactly the size it should be, and an ABSOLUTE band read it as 0 at dps 50,
+    /// 0 at dps 120 and 5.1e-131 at dps 250 -- a value that MOVES with the working precision,
+    /// inside the evaluator. Scaled by the argument the band still fires for every cancellation
+    /// it was written for, because there |x| >= 1 and the scale is 1.
+    fn snap_trig(&mut self, v: BigFloat, arg: &BigFloat) -> BigFloat {
         if v.is_nan() || v.is_inf() || v.is_zero() {
             return v;
         }
         let a = v.abs();
-        if cmp_lt(&a, &self.floor) {
+        let mut predicted = one(self.p);
+        if !arg.is_nan() && !arg.is_inf() {
+            let aa = arg.abs();
+            if cmp_lt(&aa, &predicted) {
+                predicted = aa;
+            }
+        }
+        let floor = predicted.mul(&self.floor, self.p, RM);
+        if cmp_lt(&a, &floor) {
             self.snapped = true;
             return small_int(0, self.p);
         }
@@ -915,14 +980,15 @@ fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat
                     Some(NAN)
                 } else {
                     let s = x.sin(p, RM, &mut ctx.cc);
-                    Some(ctx.snap_trig(s.div(&c, p, RM)))
+                    let q = s.div(&c, p, RM);
+                    Some(ctx.snap_trig(q, x))
                 }
             } else if name == "sin" {
                 let v = x.sin(p, RM, &mut ctx.cc);
-                Some(ctx.snap_trig(v))
+                Some(ctx.snap_trig(v, x))
             } else {
                 let v = x.cos(p, RM, &mut ctx.cc);
-                Some(ctx.snap_trig(v))
+                Some(ctx.snap_trig(v, x))
             }
         }
         "asin" | "acos" => {
@@ -1173,7 +1239,7 @@ fn ct_node(
         if arity == 1 {
             let v = ct_unary(&tok, &a, ctx)?;
             if let Some(u) = &v {
-                ctx.note_mag(u);
+                ctx.note_mag(u, false);
             }
             return Some(v);
         }
@@ -1182,7 +1248,7 @@ fn ct_node(
         };
         let v = ct_binary(&tok, &a, &b, ctx)?;
         if let Some(u) = &v {
-            ctx.note_mag(u);
+            ctx.note_mag(u, tok == "+" || tok == "-");
         }
         return Some(v);
     }
@@ -1421,7 +1487,7 @@ pub fn contract_point_verdict(
     // for the precision this rung's own intermediates turned out to demand -- only rung 1
     // is asked, because only rung 1 sizes the rungs above it, and the logarithm behind the
     // answer is not worth paying for at 834 bits to then discard.
-    let once = |dps: i32, want_req: bool| -> Option<(Option<Read>, bool, i32, BigFloat)> {
+    let once = |dps: i32, want_req: bool| -> Option<(Option<Read>, bool, i32, BigFloat, i32)> {
         let p = dps_to_prec(dps);
         let mut ctx = CtCtx::new(p, dps)?;
         let vals: Vec<BigFloat> = atoms
@@ -1442,16 +1508,19 @@ pub fn contract_point_verdict(
         };
         // rung 1 also carries out its `max_mag`: an exactly-cancelling source offers no
         // scale from its own value, and the intermediate is then the only honest one.
-        let (req, mag) = if want_req {
+        let (req, mag, dem) = if want_req {
             let mag = ctx.max_mag.clone();
-            (required_dps(&mag, p, &mut ctx.cc), mag)
+            let small = ctx.min_mag.clone();
+            // one logarithm, read twice: the rung the point ASKED for, and the rung it gets
+            let dem = demanded_dps(&mag, &small, p, &mut ctx.cc);
+            (MAX_DPS.min(dem), mag, dem)
         } else {
-            (BASE_DPS, small_int(0, p))
+            (BASE_DPS, small_int(0, p), BASE_DPS)
         };
-        Some((read, ctx.snapped, req, mag))
+        Some((read, ctx.snapped, req, mag, dem))
     };
 
-    let Some((read1, snap1, req1, mag1)) = once(GAP_RUNGS[0], true) else {
+    let Some((read1, snap1, req1, mag1, dem1)) = once(GAP_RUNGS[0], true) else {
         return (Some(PointCmp::Eq), false); // unevaluable: fail open
     };
     // RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates are
@@ -1473,7 +1542,7 @@ pub fn contract_point_verdict(
         let read = match first.take() {
             Some(rd) => rd,
             None => match once(rungs[i], false) {
-                Some((rd, _, _, _)) => rd,
+                Some((rd, _, _, _, _)) => rd,
                 None => return (Some(PointCmp::Eq), false), // unevaluable: fail open
             },
         };
@@ -1497,7 +1566,7 @@ pub fn contract_point_verdict(
             // nan/inf: a CLASS is confirmed by agreement at a second rung -- there is no
             // gap to watch decay, so this half is the two/three-rung rule unchanged.
             let f1 = Some((c1, cl1, cr1));
-            let Some((r2, _, _, _)) = once(hi_dps, false) else {
+            let Some((r2, _, _, _, _)) = once(hi_dps, false) else {
                 return (Some(PointCmp::Eq), false);
             };
             let Some(r2) = r2 else {
@@ -1527,20 +1596,64 @@ pub fn contract_point_verdict(
             }
             // a snapped agreement can be fabricated: it takes one rung higher.
             let f3 = match once(GAP_RUNGS[2].max(2 * hi_dps), false) {
-                Some((Some(Read::Class(a, b, c)), _, _, _)) => Some((a, b, c)),
+                Some((Some(Read::Class(a, b, c)), _, _, _, _)) => Some((a, b, c)),
                 _ => None,
             };
             (if f3 == f1 { Some(c1) } else { None }, snap1)
         }
         Read::Gap(d1, s1) => {
             // BOTH FINITE -- decided by DECAY, never by size.
-            let p = dps_to_prec(hi_dps);
-            let Some((rhi, _, _, _)) = once(hi_dps, false) else {
+            let mut p = dps_to_prec(hi_dps);
+            let Some((rhi, _, _, _, _)) = once(hi_dps, false) else {
                 return (Some(PointCmp::Eq), false);
             };
             let Some(Read::Gap(d2, s2)) = rhi else {
                 return (None, snap1); // class flipped / Unresolved: never convict
             };
+            let (mut lo_dps, mut hi_dps) = (lo_dps, hi_dps);
+            let (mut d1, mut s1, mut d2, mut s2) = (d1, s1, d2, s2);
+            // A RUNG THAT LOST A SIDE ENTIRELY CANNOT DATE A DECAY. `d == scale` (with a
+            // nonzero scale) says exactly one side read 0 while the other did not: the
+            // rung saw no agreement at all, and a rate measured from a reading pinned at
+            // the instrument's rail is not a rate. `acos(cos(exp(-100)))` is 3.7e-44, but
+            // at dps 50 `cos` of it rounds to exactly 1.0 and `acos` gives 0 -- rung 1
+            // read a 100% gap, rung 2 read 1.1e-78, and the drop came to 34.5 against a
+            // bar of 35. A true identity convicted by three tenths of a decade.
+            //
+            // Climb, and measure the rate between the two rungs that BOTH saw something.
+            // This can only DELAY a conviction to a stricter pair, never prevent one:
+            // where the vanished side is genuinely zero -- a written 0, as in
+            // `exp(sinh(-10)) -> 0` -- it is still zero at the higher rung, the rail
+            // reading repeats, and the kill stands.
+            if !s1.is_zero() && cmp_eq(&d1, &s1) && !cmp_eq(&d2, &s2) {
+                let next = GAP_RUNGS[2].max(2 * hi_dps);
+                let Some((rn, _, _, _, _)) = once(next, false) else {
+                    return (Some(PointCmp::Eq), false);
+                };
+                let Some(Read::Gap(d3, s3)) = rn else {
+                    return (None, snap1);
+                };
+                lo_dps = hi_dps;
+                hi_dps = next;
+                p = dps_to_prec(hi_dps);
+                d1 = d2;
+                s1 = s2;
+                d2 = d3;
+                s2 = s3;
+            }
+            // THE FINER RUNG FOUND NO SEPARATION AT ALL -- the deepest evidence of
+            // agreement the ladder can produce, and not something the floor below should
+            // be allowed to argue with. Flooring that exact zero by the computation's own
+            // magnitude put a 9.9e-485 gap where the rung had measured none, larger than
+            // the 2.2e-485 the COARSER rung reported: a negative drop, and a kill of
+            // `asin(inv(cosh(1000))) -> c_t`. A false rule does not reach here -- a fixed
+            // gap stays visible at the finer rung, which is why `pow np.e sinh -10 -> 0`
+            // still reads 1.03e-4783 at every rung and is still convicted below. This also
+            // subsumes the exactly-zero-on-both-sides case, which is why the scale below
+            // can no longer be zero.
+            if d2.is_zero() {
+                return (Some(PointCmp::Eq), snap1);
+            }
             // ONE SCALE FOR BOTH RUNGS (F105). The separations are absolute; the scale is
             // fixed here, so it divides out of the ratio and touches nothing but the
             // floor. It is the largest of what either rung SAW and what the computation
@@ -1552,9 +1665,6 @@ pub fn contract_point_verdict(
             let m = mag1.abs();
             if cmp_gt(&m, &scale) {
                 scale = m;
-            }
-            if scale.is_zero() {
-                return (Some(PointCmp::Eq), snap1); // exactly zero on both sides, both rungs
             }
             // A separation of exactly zero is still not a special VERDICT -- it enters as
             // the rung's own resolution, "closer than this rung can see", which is what
@@ -1571,11 +1681,7 @@ pub fn contract_point_verdict(
             } else {
                 d1
             };
-            let g_hi = if d2.is_zero() {
-                scale.mul(&pow10(-hi_dps, p), p, RM)
-            } else {
-                d2
-            };
+            let g_hi = d2;
             // Residue falls with the added precision; an analytic gap does not move, and a
             // gap that only BECOMES visible higher up (deep saturation) drops by less than
             // nothing. The test is `log10(g_lo / g_hi) > (hi - lo) / 2`, squared to keep it
@@ -1584,12 +1690,30 @@ pub fn contract_point_verdict(
             let rhs = g_hi
                 .mul(&g_hi, p, RM)
                 .mul(&pow10(hi_dps - lo_dps, p), p, RM);
-            let v = if cmp_gt(&lhs, &rhs) {
-                PointCmp::Eq
-            } else {
-                PointCmp::RealChange
-            };
-            (Some(v), snap1)
+            if cmp_gt(&lhs, &rhs) {
+                return (Some(PointCmp::Eq), snap1);
+            }
+            // PAST THE CEILING, UNRESOLVED -- NEVER CONVICTED. That is what `MAX_DPS`
+            // documents, and the ladder did not do it: it read a rung clamped to 2000 as
+            // though it were the rung the point asked for. At c = -3000, `exp(c) = 1e-1303`
+            // needs dps 2656 before `cos` of it is anything but exactly 1.0, so every
+            // affordable rung reads `acos(1) = 0` and the frozen gap convicts an identity.
+            //
+            // Only the CONVICTION is withheld -- a decay the clamped rungs could still see
+            // keeps its Eq. AND NOT WHERE A SIDE IS WRITTEN: a side the rule SPELLS is
+            // exact at every rung, so a gap against it is not one more precision could
+            // close. `10^sinh(-10)` is 5.8e-11014 and no closer to the 0 the rule writes
+            // than it was at dps 50.
+            if dem1 > MAX_DPS
+                && !is_written_literal(source, var_names)
+                && !is_written_literal(target, var_names)
+            {
+                let v = ct_saturation_verdict(
+                    source, src_params, target, tgt_params, ops, var_names, atoms,
+                );
+                return (v, snap1);
+            }
+            (Some(PointCmp::RealChange), snap1)
         }
     }
 }
@@ -2287,7 +2411,11 @@ mod magnitude_probe {
             &vars,
             &[ProbeAtom::Val(f64::INFINITY)],
         );
-        assert_eq!(v, Some(PointCmp::Eq), "tanh(inf) -> 1 is TRUE, not a change");
+        assert_eq!(
+            v,
+            Some(PointCmp::Eq),
+            "tanh(inf) -> 1 is TRUE, not a change"
+        );
 
         // DEEP SATURATION WITHOUT A WRITTEN BOUND IS STILL REFUSED, NOT CONVICTED: the
         // ladder cannot see the gap and this test has no opinion on a computed side.
@@ -2300,7 +2428,95 @@ mod magnitude_probe {
             &vars,
             &[ProbeAtom::Val(10.0)],
         );
-        assert_eq!(v, None, "a computed side must not be read as a written bound");
+        assert_eq!(
+            v, None,
+            "a computed side must not be read as a written bound"
+        );
+
+        // F107, and the reason the constant quantifier could not widen: at magnitudes the
+        // miner explores and the gate never checked, the instrument convicted rules true by
+        // construction. Every assertion below read `RealChange` on the ladder it replaces.
+        //
+        // Two of the F107 fixes -- the finer rung's exact zero, and the scale that stopped
+        // being inflated by an intermediate that had already cancelled -- are mirrored here
+        // for parity but are not reachable from this entry point, which has no witness to
+        // fit; `tests/test_verify.py::TestTheQuantifierWidensWithoutConvictingTheTrue`
+        // exercises them where the witness lives.
+
+        // A SMALL INTERMEDIATE SIZES THE RUNG LIKE A LARGE ONE, and a rung that lost a side
+        // entirely cannot date a decay. At c = -300 the answer sits 261 digits below the 1
+        // that `cos` adds it to, so dps 50, 120 and 250 all read exactly 1.0 and `acos` of
+        // that is 0 -- three rungs reading one manufactured zero, not three opinions.
+        let exp_x = s(&["exp", "x0"]);
+        let (v, _) = contract_point_verdict(
+            &s(&["acos", "cos", "exp", "x0"]),
+            &[],
+            &exp_x,
+            &[],
+            ops,
+            &vars,
+            &[ProbeAtom::Val(-300.0)],
+        );
+        assert_eq!(v, Some(PointCmp::Eq), "acos(cos(exp(-300))) IS exp(-300)");
+
+        // THE SNAP BAND IS RELATIVE TO THE ARGUMENT. `sin(exp(-300)) = 5.1e-131` is exactly
+        // the size its own argument predicts -- nothing cancelled. An absolute band read it
+        // as 0 at dps 50 and 120 and as 5.1e-131 at 250: a value that MOVES with the
+        // working precision, inside the evaluator.
+        for head in ["asin", "atanh"] {
+            let (v, _) = contract_point_verdict(
+                &s(&[head, "sin", "exp", "x0"]),
+                &[],
+                &exp_x,
+                &[],
+                ops,
+                &vars,
+                &[ProbeAtom::Val(-300.0)],
+            );
+            assert_eq!(
+                v,
+                Some(PointCmp::Eq),
+                "a well-resolved value must not snap to 0"
+            );
+        }
+
+        // PAST THE CEILING, UNRESOLVED -- NEVER CONVICTED, which is what `MAX_DPS`
+        // documents. At c = -3000, `exp(c) = 1e-1303` needs dps 2656 before `cos` of it is
+        // anything but exactly 1.0, and the ladder was reading its clamped rung as though it
+        // were the rung the point asked for.
+        let (v, _) = contract_point_verdict(
+            &s(&["acos", "cos", "exp", "x0"]),
+            &[],
+            &exp_x,
+            &[],
+            ops,
+            &vars,
+            &[ProbeAtom::Val(-3000.0)],
+        );
+        assert_ne!(
+            v,
+            Some(PointCmp::RealChange),
+            "past MAX_DPS the point is unresolved, never convicted"
+        );
+
+        // ...AND NOT WHERE A SIDE IS WRITTEN, which is what keeps that abstention from
+        // swallowing the F105 family. `10^sinh(-10)` is 5.8e-11014 and no closer to the 0
+        // the rule spells than it was at dps 50: no precision could close that gap, so
+        // running out of precision is not the reason it is open.
+        let (v, _) = contract_point_verdict(
+            &s(&["pow", "10", "sinh", "x0"]),
+            &[],
+            &s(&["0"]),
+            &[],
+            ops,
+            &vars,
+            &[ProbeAtom::Val(-10.0)],
+        );
+        assert_eq!(
+            v,
+            Some(PointCmp::RealChange),
+            "a written 0 is exact at every rung: 10^sinh(-10) is not it"
+        );
     }
 
     /// Cost anchor for the contract ladder (run explicitly:
