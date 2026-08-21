@@ -402,13 +402,29 @@ pub fn mu_rat(r: &Rat) -> u64 {
 /// (exactly `c([str(mant)])` of the rescorer), the exponent on top. These are ALSO the
 /// exact quantities the serializer argmin compares (`decimal_spelling_wins`), so the
 /// spelling emitted is by construction the codeword the measure priced.
+/// The literal codeword FLOOR, in milli-bits (default 2 bits, the shipped value).
+///
+/// Under investigation 2026-08-21: the floor is why `1`, `2` and `3` all price at 3000,
+/// which makes mu(x^2) == mu(x^3). Overridable so the effect can be swept in one build.
+fn mu_rat_floor() -> u64 {
+    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("SIMPLIPY_MU_RAT_FLOOR")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|b| (b * MU_MILLI as f64).round() as u64)
+            .unwrap_or(2 * MU_MILLI)
+    })
+}
+
 fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
     let sign = if r.num() < 0 { MU_MILLI } else { 0 };
     let pb = l_millibits(r.num().unsigned_abs());
     let qb = l_millibits(r.den() as u128);
     let fraction_raw = if r.den() == 1 { pb } else { pb + qb };
-    let fraction = (fraction_raw + sign).max(2 * MU_MILLI);
-    let decimal = decimal_code(r).map(|(m, k)| m.max(2 * MU_MILLI) + k + sign);
+    let floor = mu_rat_floor();
+    let fraction = (fraction_raw + sign).max(floor);
+    let decimal = decimal_code(r).map(|(m, k)| m.max(floor) + k + sign);
     (fraction, decimal)
 }
 

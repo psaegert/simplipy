@@ -2517,6 +2517,27 @@ class TestVarFreeCandidatesMustFoldToALeaf:
         assert lib.n_filtered == 2, "exp(<c>) and pow2(<c>) stay composite -> dropped"
         assert lib.n_candidates == 4, "exp(1) folds to np.e and must survive"
 
+    def test_the_guard_reaches_the_class_that_escaped(self, engine, mining_x) -> None:
+        """REGRESSION. The first version of this falsifier ran on a vocabulary where the
+        defect could not occur, so it passed while the real mine minted
+        `rootn 1 <constant> -> pow 1 <constant>`. The candidate was admitted because the
+        CONSTRUCTOR folds `pow 1 <constant>` to `1`; the scan then emitted its own token
+        form. This pins the emitted spelling, which is what ships."""
+        x_flat, n = mining_x
+        # `pow 1 <c>` folds to the leaf `1`, so the library admits it -- the guard has to
+        # refuse the composite SPELLING at emission, not the candidate at admission.
+        cands = [["x0"], ["<constant>"], ["1"], ["pow", "1", "<constant>"]]
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        assert lib.n_candidates == 4, "the foldable composite must still be ADMITTED"
+        src = ["rootn", "1", "<constant>"]
+        _, _, mark = engine._core.ac_judge(list(src), 48)
+        got = engine._core.find_rule_lib(list(src), len(src), None, lib, challenges=16,
+                                         retries=16, seed=1, rtol=1e-9, atol=1e-12,
+                                         min_informative=32, mark=mark)
+        assert got is None or len(got) < 2 or any(
+            t.startswith(("x", "_", "$", "?", "!")) for t in got), \
+            f"emitted a var-free composite target: {got}"
+
     def test_the_mine_never_mints_a_composite_var_free_target(self, engine) -> None:
         """THE FALSIFIER. A mined RHS may be a leaf (`0`, `1`, `np.e`) but never a
         var-free COMPOSITE -- that is the class the broken filter let through."""

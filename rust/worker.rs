@@ -2127,6 +2127,28 @@ pub fn find_rule_with_lib(
                 if dirac_refutes_literal(source, &target, ops) {
                     continue;
                 }
+                // THE EMITTED TARGET IS WHAT SHIPS (2026-08-21). The library's fold filter
+                // asks what the CONSTRUCTOR folds a candidate to, but the scan emits the
+                // candidate's OWN token form -- so a candidate admitted because it folds to
+                // a leaf (`pow 1 <constant>` -> `1`) was still written out composite:
+                // `rootn 1 <constant> -> pow 1 <constant>`. Filtering the LIBRARY cannot
+                // close the class; only a guard on the emitted spelling can, and it belongs
+                // HERE, in the shared scan, because `find_rule_lib` and the resident mine
+                // carry separate acceptance closures and a guard in either alone is a hole.
+                //
+                // A var-free LEAF target (`0`, `np.pi`) stays legal -- admitting foldable
+                // candidates is the point. A var-free COMPOSITE never does.
+                if target.len() >= 2
+                    && !target.iter().any(|t| {
+                        lib.var_names.iter().any(|v| v == t)
+                            || t.starts_with('_')
+                            || t.starts_with('$')
+                            || t.starts_with('?')
+                            || t.starts_with('!')
+                    })
+                {
+                    continue;
+                }
                 // COLLAPSE-TO-`<constant>` guard, the ratified zoo-collapse predicate applied at
                 // the MINT rather than only at the online fold: a source may collapse to a free
                 // finite constant only if its finite part has POSITIVE MEASURE. `inv <constant>`
