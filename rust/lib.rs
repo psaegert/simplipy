@@ -530,6 +530,16 @@ impl PyEngine {
     /// NOT interchangeable with `to_prefix`/`to_tagged`: those run the rewrite pass under
     /// the LOADED RULESET, which on acj-4-3 turns `* (-1) asin _0` into `asin neg _0` --
     /// that rule's own RHS. See `Engine::ac_canonical_key`.
+    /// Census of the nodes `mu` CHARGES, over the bare canonical forms of a batch.
+    /// The unit any symbol-cost table must be derived over -- serialized tokens are not it.
+    fn ac_node_census(
+        &self,
+        py: Python<'_>,
+        exprs: Vec<Vec<String>>,
+    ) -> PyResult<std::collections::HashMap<String, u64>> {
+        Ok(py.detach(|| self.inner.ac_node_census(&exprs)))
+    }
+
     fn ac_canonical_keys(
         &self,
         py: Python<'_>,

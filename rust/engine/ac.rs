@@ -839,6 +839,22 @@ impl Engine {
     /// `None` on an unparseable side (the AC parser is the arbiter), so a caller can fall
     /// back rather than fail a whole ruleset on one malformed entry -- `translate` drops
     /// exactly such sides under `unparseable-side`.
+    /// Census of the CHARGED nodes across a batch, in the bare canonical form -- the unit
+    /// a symbol-cost table must be derived over. See `ac::expr::node_census`.
+    pub fn ac_node_census(&self, exprs: &[Vec<String>]) -> std::collections::HashMap<String, u64> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        let view = self.view(&ctx);
+        let bare = Cx::bare(&view);
+        let mut out = std::collections::HashMap::new();
+        for e in exprs {
+            let toks = self.intern_seq(e, &ctx);
+            if let Some(parsed) = from_prefix(&toks, &bare) {
+                crate::ac::expr::node_census(&canon(parsed, &bare), &view, &mut out);
+            }
+        }
+        out
+    }
+
     pub fn ac_canonical_key(&self, tokens: &[String]) -> Option<Vec<String>> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         Some(

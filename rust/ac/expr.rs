@@ -677,6 +677,57 @@ pub fn eq_mod_nums(a: &Ex, b: &Ex, view: &TokenView) -> bool {
 // parts, exactly the direction that licenses false mu-descents (and it panics the debug
 // build outright). Saturating at the TOP is sound: a rewrite fires only on a STRICT
 // decrease, so two totals pinned at the ceiling can only ever REFUSE.
+/// CENSUS of the nodes `complexity` actually CHARGES, keyed by kind.
+///
+/// Mirrors the pricing arms exactly, including their silences: a +-1 rational coefficient
+/// inside a `Mul` bag is free, so it is not counted; a degenerate all-coefficient bag is
+/// the literal itself. Counting serialized TOKENS instead gets this wrong in both
+/// directions -- `-` and `/` are not nodes (they are an inverted member of an Add/Mul
+/// bag), and an n-ary bag is ONE node however many `+` the spelling shows.
+pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap<String, u64>) {
+    let mut bump = |k: &str| *out.entry(k.to_string()).or_insert(0) += 1;
+    match e {
+        Ex::Num(_) => bump("Num"),
+        Ex::Pi => bump("Pi"),
+        Ex::E => bump("E"),
+        Ex::PosInf => bump("PosInf"),
+        Ex::NegInf => bump("NegInf"),
+        Ex::NaN => bump("NaN"),
+        Ex::Const => bump("Const"),
+        Ex::Leaf(_) => bump("Leaf"),
+        Ex::Add(v) => {
+            bump("Add");
+            for x in v {
+                node_census(x, view, out);
+            }
+        }
+        Ex::Mul(v) => {
+            bump("Mul");
+            for f in v {
+                // The free +-1 coefficient slot is NOT charged, so it is not counted.
+                if let Ex::Num(r) = f {
+                    if r.is_one() || *r == Rat::NEG_ONE {
+                        continue;
+                    }
+                }
+                node_census(f, view, out);
+            }
+        }
+        Ex::Pow(b, ex) => {
+            bump("Pow");
+            node_census(b, view, out);
+            node_census(ex, view, out);
+        }
+        Ex::Fun(t, args) => {
+            let name = view.with_str(*t, |s| s.to_string());
+            *out.entry(format!("Fun:{name}")).or_insert(0) += 1;
+            for a in args {
+                node_census(a, view, out);
+            }
+        }
+    }
+}
+
 pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
     let sym = mu_sym();
     match e {
