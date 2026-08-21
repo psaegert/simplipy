@@ -72,6 +72,20 @@ releases require simplipy >= 0.14.0. There is no compatibility shim, as with the
 artifact-format break: the rule sets, the artifact layout and the returned dialect all
 move together, and a shim would have to lie about at least one of them. Pin the pair.
 
+### Changed — the literal floor is one bit, not two
+
+Every numeric codeword was clamped at two bits, which swallowed `0`, `1`, `2` and `3`
+alike — so `mu` could not tell `x**2` from `x**3` from `x**4`. The clamp is now one bit,
+where it binds only at `0` and `±1`, values whose codeword could not be shorter anyway.
+The exponents order again, and the sign on `±1` becomes visible, which is what the rest
+of the measure already promised: a description length must tell a number from its
+negation.
+
+No rule of the 5,451 published changes direction and no printed literal spelling moves —
+the serializer compares the same two codeword totals the measure does, and the floor
+shifts both. `SimpliPyEngine.complexity` returns different numbers; pinned values
+downstream must be re-earned.
+
 ### Changed — every grammar symbol carries its own price
 
 The simplicity measure `mu` charged a flat 8 bits for every grammar symbol: a bag, a

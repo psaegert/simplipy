@@ -289,11 +289,16 @@ class TestCorpusGate:
         # 400 rows across the change, and 14 corpus-mode rows re-spell through the
         # mu-driven reciprocal-rejoin projection, which is the one output decision the
         # prices own.
-        assert walk['complexity_out'] == 56665486, walk['complexity_out']
+        # 56,665,486 -> 56,521,606 at the ONE-BIT LITERAL FLOOR (owner 2026-08-22). Also
+        # a measure change and also a re-pin, and this one DOES move outputs: four f64
+        # rows and six corpus rows re-spell, and the corpus rests cheaper by 3,000
+        # milli-bits. 0 of 5,451 shipped rules change direction; 0 of 105 printed literal
+        # spellings move. Evidence: research `audit-2026-08-21/floor/`.
+        assert walk['complexity_out'] == 56521606, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4-3":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 56665486, \
+            assert m and int(m.group(1)) == 56521606, \
                 'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):

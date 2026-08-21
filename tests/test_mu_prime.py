@@ -26,7 +26,7 @@ differ by a constant 1000 mB per priced numeric leaf -- EXPECTED, not a bug. A s
 smaller divergence class is documented at TestIntegerScientificCodeword.
 
 Oracle: dec_price() of the rescorer, ported exactly below (mantissa priced at the OLD
-integer price max(2 bits, L(m)), + round(1000*log2(1+e)), + sign).
+integer price max(1 bit, L(m)), + round(1000*log2(1+e)), + sign).
 """
 import json
 import math
@@ -74,15 +74,15 @@ def old_int_price(m: int) -> int:
     """What the pre-D38 engine charged for a bare non-negative integer token --
     the `c([str(mant)])` the rescorer's dec_price() calls."""
     assert m >= 0
-    return max(2 * MILLI, L(m))
+    return max(MILLI, L(m))
 
 
 def old_rat_price(f: Fraction) -> int:
     """The pre-D38 mu literal price (the rescorer's `old`): fraction code + sign,
-    floored at two bits."""
+    floored at ONE bit (owner ruling 2026-08-22; it was two)."""
     p, q = abs(f.numerator), f.denominator
     raw = L(p) + (L(q) if q > 1 else 0)
-    return max(2 * MILLI, raw + (MILLI if f.numerator < 0 else 0))
+    return max(MILLI, raw + (MILLI if f.numerator < 0 else 0))
 
 
 def oracle_dec_price(f: Fraction):
@@ -207,7 +207,7 @@ class TestDecimalCodewordOracle:
     def test_the_d38_headline_specimen_moves(self, eng):
         # 2.177697277405848 priced 94,781 under mu (the rational codeword); under mu'
         # the decimal-scientific codeword (m = 2177697277405848, k = 15) takes over:
-        # max(2, L(m)) + L(15) + selector = 50.952 + 4.000 + 1 bits.
+        # max(1, L(m)) + L(15) + selector = 50.952 + 4.000 + 1 bits.
         v = Fraction(2177697277405848, 10 ** 15)
         assert oracle_dec_price(v) < old_rat_price(v)
         assert c(eng, ['2.177697277405848']) == SEL + oracle_dec_price(v)
@@ -217,9 +217,9 @@ class TestDecimalCodewordOracle:
         # H-055's named wart -- mu(1000) = 9.967 against mu(0.001) = 10.967 under the
         # fraction-only code (and 9.967 vs 3.000 under the pre-H-055 min) -- lands at
         # the symmetric point: both are (m=1, k=3) codewords, 2 + 2 + selector bits.
-        assert c(eng, ['1000']) == c(eng, ['0.001']) == 5 * MILLI
+        assert c(eng, ['1000']) == c(eng, ['0.001']) == 4 * MILLI
         # and the reciprocal pair 10 / 0.1 likewise
-        assert c(eng, ['10']) == c(eng, ['0.1']) == 4 * MILLI
+        assert c(eng, ['10']) == c(eng, ['0.1']) == 3 * MILLI
 
 
 class TestNonDecimalFractions:
@@ -264,11 +264,13 @@ class TestIntegerScientificCodeword:
     """
 
     def test_ten_divisible_integers_take_the_scientific_codeword(self, eng):
-        # 1000 = (m=1, k=3): selector + max(2, L(1)) + L(3) = 1 + 2 + 2 bits.
-        assert c(eng, ['1000']) == 5 * MILLI
-        assert c(eng, ['1e3']) == 5 * MILLI          # same value, same price
-        assert c(eng, ['100']) == SEL + 2 * MILLI + L(2)      # (1, 2)
-        assert c(eng, ['20']) == SEL + 2 * MILLI + L(1)       # (2, 1)
+        # 1000 = (m=1, k=3): selector + max(1, L(1)) + L(3) = 1 + 1 + 2 bits. The
+        # ratified D38/B2 note says 5; the FLOOR moved under it (2026-08-22) and the
+        # finding it recorded -- the SYMMETRY mu(1000) == mu(0.001) -- holds at 4.
+        assert c(eng, ['1000']) == 4 * MILLI
+        assert c(eng, ['1e3']) == 4 * MILLI          # same value, same price
+        assert c(eng, ['100']) == SEL + MILLI + L(2)          # (1, 2), one-bit floor
+        assert c(eng, ['20']) == SEL + L(2) + L(1)                # (2, 1), one-bit floor
         assert c(eng, ['(-30)']) == SEL + 2 * MILLI + L(1) + MILLI  # sign bit rides
 
     def test_non_ten_divisible_integers_are_unmoved_beyond_the_selector(self, eng):
@@ -323,10 +325,10 @@ class TestCfreePrimeDerivation:
         else:
             f = Fraction(m0, 10 ** -s)
             frac = math.log2(1 + f.numerator) + math.log2(1 + f.denominator)
-        frac = max(2.0, frac)
+        frac = max(1.0, frac)
         if s == 0:
             return frac
-        sci = max(2.0, math.log2(1 + m0)) + math.log2(1 + abs(s))
+        sci = max(1.0, math.log2(1 + m0)) + math.log2(1 + abs(s))
         return min(frac, sci)
 
     def test_c_free_prime_value(self, eng):
@@ -489,10 +491,10 @@ class TestFingerprintAndArtifactLoad:
         fp = eng._measure_fingerprint()
         assert fp['probes'] == {
             # the literal codebook
-            '1000': 5 * MILLI,        # (1, 3): selector + 2 + L(3)
+            '1000': 4 * MILLI,        # (1, 3): selector + 1 + L(3)
             '1/2': 3585,              # rational wins: selector + L(1) + L(2)
             '355/113': 16309,         # no decimal codeword: selector + old price
-            '0.2': 4 * MILLI,         # (2, 1): selector + 2 + L(1)
+            '0.2': 3585,              # (2, 1): selector + L(2) + L(1)
             '<constant>': MU_FREE_PRIME,
             # the symbol table, one probe per entry (2026-08-21). Add and Mul price the
             # same here and still need separate probes: a change to ONE of them has to
@@ -500,7 +502,7 @@ class TestFingerprintAndArtifactLoad:
             'x0': MU_LEAF,                    # 6
             '+': 3 * MILLI + 2 * MU_LEAF,     # Add 3
             '*': 3 * MILLI + 2 * MU_LEAF,     # Mul 3
-            'pow': 3 * MILLI + MU_LEAF + 3 * MILLI,   # Pow 3 + leaf + cost(2)
+            'pow': 3 * MILLI + MU_LEAF + 2585,        # Pow 3 + leaf + cost(2)
             'np.pi': 4 * MILLI, 'np.e': 4 * MILLI,
             'sin': 6 * MILLI + MU_LEAF,       # elementary head
             'asin': 8 * MILLI + MU_LEAF,      # transcendental head

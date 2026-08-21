@@ -523,15 +523,23 @@ pub fn mu_rat(r: &Rat) -> u64 {
 /// (exactly `c([str(mant)])` of the rescorer), the exponent on top. These are ALSO the
 /// exact quantities the serializer argmin compares (`decimal_spelling_wins`), so the
 /// spelling emitted is by construction the codeword the measure priced.
-/// The literal codeword FLOOR, in milli-bits: no codeword prices below two bits.
+/// The literal codeword FLOOR, in milli-bits: ONE bit, beyond the selector (owner ruling
+/// 2026-08-22; it was two, and two was blind).
 ///
-/// The floor is why `1`, `2` and `3` all price at 3000 -- `L` is under it there -- and so
-/// why `mu(x^2) == mu(x^3)`. That is a KNOWN standing property of the codebook, not of
-/// the symbol table, and it is unchanged by it: at floor 1 the clamp stops binding and
-/// the exponent rows separate by `log2(3) - log2(2) = 415` milli-bits. Swept 2026-08-21
-/// over twenty worked examples -- only the exponent rows and `100` move, every printed
-/// spelling byte-identical -- and left at the shipped 2 pending a ruling.
-const MU_RAT_FLOOR: u64 = 2 * MU_MILLI;
+/// At two, `0`, `1`, `2` and `3` all priced 3000 -- `L` is under the clamp there -- so the
+/// measure could not tell `x^2` from `x^3` from `x^4`. At one the clamp stops binding
+/// except at `0` and `+-1`, where a codeword cannot cost less than a bit anyway, and the
+/// exponent rows separate by `log2(3) - log2(2) = 415` milli-bits.
+///
+/// MEASURED before adoption, against the shipped floor of two: **0 of 5,451 shipped rules
+/// change direction** and **0 of 105 printed literal spellings move** -- the serializer
+/// argmin compares the same two codeword totals, and the floor shifts both. Four f64 rows
+/// and six corpus rows of the 400-row benchmark re-spell, and the corpus rests cheaper by
+/// 3,000 (f64) and 3,359 (corpus) milli-bits: a small genuine descent. The D38/B2
+/// numbers move with it -- `mu(1000)` is 4 bits where the ratified note says 5 -- but
+/// H-055's finding was the SYMMETRY, `mu(1000) == mu(0.001)`, and that holds at 4.
+/// Evidence: `audit-2026-08-21/floor/`.
+const MU_RAT_FLOOR: u64 = 1 * MU_MILLI;
 
 fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
     let sign = if r.num() < 0 { MU_MILLI } else { 0 };
@@ -5324,14 +5332,23 @@ mod tests {
             assert_eq!(c(&mul(vec![x_.clone(), y_.clone()], &cx)), 15_000);
             let x_over_y = mul(vec![x_.clone(), pow(y_.clone(), Ex::int(-1), &cx)], &cx);
             assert_eq!(c(&x_over_y), 18_000);
-            // 2x = 12 (the coefficient PAYS selector + its bits: 3 + 3 + 6), x^2 = 12,
-            // 1/x = 9, sin(x) = 12.
-            assert_eq!(c(&mul(vec![Ex::int(2), x_.clone()], &cx)), 12_000);
-            assert_eq!(c(&pow(x_.clone(), Ex::int(2), &cx)), 12_000);
+            // 2x = 11.585 (the coefficient PAYS selector + its bits: 3 + 2.585 + 6),
+            // x^2 = 11.585, 1/x = 9, sin(x) = 12. The literal floor is ONE bit since
+            // 2026-08-22, so cost(2) = 2.585 clears it and no longer ties cost(3).
+            assert_eq!(c(&mul(vec![Ex::int(2), x_.clone()], &cx)), 11_585);
+            assert_eq!(c(&pow(x_.clone(), Ex::int(2), &cx)), 11_585);
+            // THE EXPONENTS ARE ORDERED AGAIN. Under the two-bit floor `x^2`, `x^3` and
+            // `x^4` all priced alike, because the clamp swallowed cost(2), cost(3) and
+            // cost(4) together -- the measure could not tell a square from a cube.
+            assert!(
+                c(&pow(x_.clone(), Ex::int(2), &cx)) < c(&pow(x_.clone(), Ex::int(3), &cx))
+                    && c(&pow(x_.clone(), Ex::int(3), &cx)) < c(&pow(x_.clone(), Ex::int(4), &cx))
+            );
             assert_eq!(c(&pow(x_.clone(), Ex::int(-1), &cx)), 9_000);
             assert_eq!(c(&fun(view.intern("sin"), vec![x_.clone()], &cx)), 12_000);
-            // x^-2 costs as x^2 plus the sign bit (the -2 exponent is a priced
-            // literal: selector + L(2) + sign = 1 + 1.585 + 1 over the 2-bit floor).
+            // x^-2 costs as x^2 plus the FULL sign bit (the -2 exponent is a priced
+            // literal: selector + L(2) + sign = 1 + 1.585 + 1, all of it clear of the
+            // one-bit floor; under the two-bit floor the clamp absorbed all but 0.585).
             assert_eq!(c(&pow(x_.clone(), Ex::int(-2), &cx)), 12_585);
             // Mul(3) + <constant>(67_000) + x(6) = 76_000. The free constant is a LITERAL
             // price, so the table does not touch it: it now outweighs its own structure by

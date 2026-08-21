@@ -297,8 +297,8 @@ exact value**, spelling-free, by a
 **two-codeword codebook behind a one-bit selector** (D38/B2, 2026-08-17 — the former
 fraction-only code is revoked):
 
-$$ \mu(v) = 1 + \min\Big( \underbrace{\max\big(2,\; L(|p|) + [q \neq 1]\,L(q) + [v < 0]\big)}_{\text{rational}},\;
-   \underbrace{\max\big(2,\; L(m)\big) + L(|k|) + [v < 0]}_{\text{decimal-scientific}} \Big) $$
+$$ \mu(v) = 1 + \min\Big( \underbrace{\max\big(1,\; L(|p|) + [q \neq 1]\,L(q) + [v < 0]\big)}_{\text{rational}},\;
+   \underbrace{\max\big(1,\; L(m)\big) + L(|k|) + [v < 0]}_{\text{decimal-scientific}} \Big) $$
 
 where $p/q$ is the reduced rational — an integer's denominator is implicit and free, a
 genuine fraction pays both components — and $m \cdot 10^{k}$ is the shortest exact
@@ -306,7 +306,10 @@ decimal spelling, which exists iff $q = 2^a 5^b$ and $k \neq 0$ (for an integer,
 is its count of trailing zeros: $1000$ is the codeword $(1, 3)$; $k = 0$ degenerates
 to the rational codeword and is refused as redundant). Each codeword total carries its
 own **sign bit** (the former blanket "sign is free" doctrine is revoked for literals:
-$\mu$ must tell a number from its negation) and the two-bit mantissa floor; a value
+$\mu$ must tell a number from its negation) and the one-bit mantissa floor (2026-08-22;
+it was two, and at two the clamp swallowed $0$, $1$, $2$ and $3$ alike, so $\mu$ could
+not tell $x^2$ from $x^3$ — at one it binds only where a codeword could not be shorter
+anyway); a value
 with no terminating decimal pays the rational codeword alone — still plus the
 selector, so every priced numeric leaf pays exactly one selector bit and the codebook
 is a genuine prefix code. A magnitude-$1$

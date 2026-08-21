@@ -459,8 +459,10 @@ class TestContracts:
         # the endpoint shape survive; only the priced total moves. 111969 -> 94969 at
         # the SYMBOL TABLE (2026-08-21): the endpoint's five structural nodes and its
         # leaves re-price, the 62-bit coefficient does not (the table never touches a
-        # literal), and the shape is again unmoved.
-        assert engine.complexity(out_a) == 94969
+        # literal), and the shape is again unmoved. 94969 -> 93724 at the ONE-BIT LITERAL
+        # FLOOR (owner 2026-08-22): the small exponents stop being clamped together. The
+        # endpoint shape is unmoved a third time.
+        assert engine.complexity(out_a) == 93724
         assert "pow" in out_a and any("6449537531992260" in t for t in out_a), out_a
         assert engine.simplify(out_a) == out_a  # and the healed form is a fixpoint
 

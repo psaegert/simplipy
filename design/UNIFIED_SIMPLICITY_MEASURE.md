@@ -86,7 +86,7 @@ stays exact and the order is discrete — no float comparisons anywhere in the o
 | structural node (bag, Pow, Fun head) | 8 | one grammar symbol — **superseded, see the 2026-08-21 amendment below** |
 | variable leaf | 8 | one vocabulary symbol — **superseded** |
 | special constant (π, e) | 8 | one vocabulary symbol, zero dof — **superseded** |
-| numeric literal q = p/q′ (exact value, spelling-independent) | max(2, bits(p) + bits(q′)) | its description length; small ints ≈ 2–4, a 52-bit dyadic ≈ 105 |
+| numeric literal q = p/q′ (exact value, spelling-independent) | max(2, bits(p) + bits(q′)) — **floor amended to 1, 2026-08-22** | its description length; small ints ≈ 2–4, a 52-bit dyadic ≈ 105 |
 | bag COEFFICIENT slot (the Rat riding a Mul/Add) | the literal cost above, NOT free | removes the current coefficient-rides-free asymmetry |
 | `<constant>` | c_free = 128 → **1133 (amended 2026-08-06: DERIVED, not floored** — sup over f64 round-trip spellings = 1131.931 bits at 5.5605781537525765e-308, + 1 sign bit, ceiled; the 128 floor was beaten 8× by μ(1e308) = 1024.154)** | a free real dof; the priciest atom by construction |
 

@@ -9,6 +9,7 @@ The measure, as ratified (Sec. 2 of the design doc; costs in 1/8 units, exact u6
   structural node (bag / Pow / Fun head)   8   (SUPERSEDED 2026-08-21, see below)
   variable leaf, special (pi, e), inf/nan  8   (SUPERSEDED 2026-08-21, see below)
   numeric literal p/q (the exact VALUE)    max(2, bitlen(|p|) + bitlen(q) - 1)
+                                           (floor amended to 1, owner 2026-08-22)
   bag coefficient slot                     the literal cost above (magnitude 1 free:
                                            a bare sign is not information -- "x - y is
                                            not more complex than x + y" stands)
@@ -105,18 +106,18 @@ def mu_lit(value) -> int:
     mu' (D38/B2, 2026-08-17 -- this REVOKES contract 10.10(1)/H-055's fraction-only
     rule): the codebook offers TWO codewords behind a one-bit selector,
 
-        mu'(value) = 1 + min( L(p) [+ L(q)],  max(2, L(m)) + L(|k|) ) + sign,
+        mu'(value) = 1 + min( L(p) [+ L(q)],  max(1, L(m)) + L(|k|) ) + sign,
 
     the rational spelling against the decimal-scientific spelling (m, k) of the
     shortest exact decimal print -- available exactly when the denominator is
     2^a * 5^b (integers included: 1000 is the codeword (1, 3)). Each codeword total
-    floors its mantissa at two bits and carries the sign bit; every priced literal
+    floors its mantissa at one bit and carries the sign bit; every priced literal
     pays the selector exactly once, so the codebook is a genuine prefix code.
     """
     f = Fraction(value)
     p, q = abs(f.numerator), f.denominator
     sign = MILLI if f.numerator < 0 else 0
-    fraction = max((L(p) if q == 1 else L(p) + L(q)) + sign, 2 * MILLI)
+    fraction = max((L(p) if q == 1 else L(p) + L(q)) + sign, MILLI)
     # the decimal-scientific codeword, when the value terminates in base ten
     a = b = 0
     d = q
@@ -137,7 +138,7 @@ def mu_lit(value) -> int:
             k = max(a, b)
             m = p * 2 ** (k - a) * 5 ** (k - b)
         if k > 0:
-            decimal = max(2 * MILLI, L(m)) + L(k) + sign
+            decimal = max(MILLI, L(m)) + L(k) + sign
     return MILLI + (fraction if decimal is None else min(fraction, decimal))
 
 
@@ -164,13 +165,25 @@ class TestMuValues:
         # never a descent. `acos(-1)` and `exp(1)` are those expressions.
         assert MU_PI < c(eng, ['acos', '(-1)']) == MU_FUN_TRANSCENDENTAL + mu_lit(-1)
         assert MU_E < MU_FUN_ELEMENTARY + mu_lit(1)
-        # The two-bit FLOOR covers 0, 1, -1 and 2 alike: L is below it there, and the
-        # sign bit is invisible under it. Every priced literal additionally pays the
-        # mu' selector bit (D38), so the floor class sits at 3 bits total.
-        assert c(eng, ['0']) == mu_lit(0) == 3 * MILLI
-        assert c(eng, ['1']) == mu_lit(1) == 3 * MILLI
+        # `acos(-1)` and `exp(1)` both cheapen at the one-bit floor; the LAW is the
+        # inequality, not the numbers on either side of it.
+        # The ONE-bit FLOOR (owner 2026-08-22) covers 0, 1 and -1: L is below it only
+        # there, and the sign bit is invisible under it. Every priced literal
+        # additionally pays the mu' selector bit (D38), so the floor class sits at 2 bits
+        # total. At the old two-bit floor `2` and `3` were swallowed with them, which is
+        # why mu could not tell x^2 from x^3.
+        assert c(eng, ['0']) == mu_lit(0) == 2 * MILLI
+        assert c(eng, ['1']) == mu_lit(1) == 2 * MILLI
+        # THE SIGN ON +-1 BECOMES VISIBLE at the one-bit floor, and that is the
+        # ratified doctrine finally applying everywhere: "without it mu(2) == mu(-2), and
+        # the measure could not tell a number from its negation, which a description
+        # length may not do." The two-bit clamp was swallowing exactly that bit at +-1.
+        # Operationally inert -- a magnitude-1 COEFFICIENT is a bare sign and free, so
+        # `Mul[-1, x]` never pays this; it is the standalone literal that does.
         assert c(eng, ['(-1)']) == mu_lit(-1) == 3 * MILLI
-        assert c(eng, ['2']) == mu_lit(2) == 3 * MILLI
+        assert c(eng, ['2']) == mu_lit(2) == 2585
+        assert c(eng, ['3']) == mu_lit(3) == 3 * MILLI
+        assert c(eng, ['pow', 'x0', '2']) < c(eng, ['pow', 'x0', '3']) < c(eng, ['pow', 'x0', '4'])
         assert c(eng, ['0.5']) == mu_lit('1/2') == 3585   # 1 + L(1) + L(2): rational wins
         assert c(eng, ['2.5']) == mu_lit('5/2') == 5170   # 1 + L(5) + L(2): rational wins
 
@@ -206,6 +219,7 @@ class TestMuValues:
         # x + x -> 2x and x*x -> x^2. Small integers are genuinely cheap (< a variable).
         assert c(eng, ['*', '2', 'x0']) == MU_MUL + mu_lit(2) + MU_LEAF
         assert c(eng, ['pow', 'x0', '2']) == MU_POW + MU_LEAF + mu_lit(2)
+        assert mu_lit(2) == 2585 and mu_lit(3) == 3 * MILLI   # the floor no longer ties them
         for n in range(2, 9):
             assert mu_lit(n) < MU_LEAF
         # THE INEQUALITY ITSELF, which this test used to assert only the operands of.
@@ -244,12 +258,13 @@ class TestMuValues:
         # value canonicalize identically -- but pinned here so it is a decision, not
         # an accident.)
         assert c(eng, ['*', '-2.5', 'x0']) == c(eng, ['*', '2.5', 'x0']) + MILLI
-        # mu(2) sits ON the floor while mu(-2) clears it, so the OBSERVED gap here is
-        # L(2) + 1 - 2 = 0.585 bits, not the full bit -- the floor absorbs the rest.
+        # At the one-bit floor mu(2) clears the clamp, so the sign now costs its FULL
+        # bit here -- under the two-bit floor the clamp absorbed all but 0.585 of it.
         assert c(eng, ['pow', 'x0', '(-2)']) == c(eng, ['pow', 'x0', '2']) + mu_lit(-2) - mu_lit(2)
-        assert mu_lit(-2) - mu_lit(2) == 585
-        # mu(1) and mu(-1) both sit on the two-bit FLOOR, so the sign is invisible there.
-        assert c(eng, ['(-1)']) == c(eng, ['1'])
+        assert mu_lit(-2) - mu_lit(2) == MILLI
+        # mu(1) sits on the floor; mu(-1) now clears it by its sign bit (see
+        # `test_atoms`), so the measure tells them apart.
+        assert c(eng, ['(-1)']) == c(eng, ['1']) + MILLI
         assert c(eng, ['-', 'x0', 'x1']) == c(eng, ['+', 'x0', 'x1']) + MU_MUL
 
 
@@ -391,10 +406,10 @@ class TestB10CfreeDerivation:
         else:
             f = Fraction(d, 10 ** -scale)
             rational = math.log2(1 + f.numerator) + math.log2(1 + f.denominator)
-        rational = max(2.0, rational)
+        rational = max(1.0, rational)
         if scale == 0:
             return rational
-        scientific = max(2.0, math.log2(1 + d)) + math.log2(1 + abs(scale))
+        scientific = max(1.0, math.log2(1 + d)) + math.log2(1 + abs(scale))
         return min(rational, scientific)
 
     def test_c_free_recomputes_from_the_f64_supremum(self, eng):

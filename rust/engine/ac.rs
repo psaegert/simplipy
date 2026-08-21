@@ -2553,14 +2553,18 @@ mod tests {
                 .unwrap(),
             t(&["rootn", "x0", "7"])
         );
-        // Complexity parity with the principal power: rootn(x,3) and rootn(x,2) price
-        // alike -- the `rootn` head (6 bits, ELEMENTARY in the symbol table: 181 of the
-        // corpus census's 10,996 charged nodes, far and away the commonest Fun) + the
-        // leaf (6) + the index literal (selector + 2-bit floor = 3), so 15 each. Parity
-        // preserved, now at the symbol-table scale (it was 19 each under the flat unit).
-        // (The pow1_3 spelling needs the sugar-declaring fixture table to parse.)
+        // The `rootn` head is 6 bits (ELEMENTARY in the symbol table: 181 of the corpus
+        // census's 10,996 charged nodes, far and away the commonest Fun), the leaf is 6,
+        // and the INDEX is an ordinary priced literal. Under the two-bit floor index 2
+        // and index 3 tied at 15 each; at the one-bit floor (2026-08-22) cost(2) = 2.585
+        // clears the clamp and cost(3) = 3 does not, so a square root prices BELOW a cube
+        // root -- which is the measure telling two different operators apart, not a
+        // parity being lost. (The pow1_3 spelling needs the sugar-declaring fixture.)
         assert_eq!(sugar.ac_complexity(&t(&["pow1_3", "x0"])), Some(15_000));
-        assert_eq!(e.ac_complexity(&t(&["rootn", "x0", "2"])), Some(15_000));
+        assert_eq!(e.ac_complexity(&t(&["rootn", "x0", "2"])), Some(14_585));
+        assert!(
+            e.ac_complexity(&t(&["rootn", "x0", "2"])) < e.ac_complexity(&t(&["rootn", "x0", "3"]))
+        );
         // The pretty infix is function-call style (x^(1/3) would claim the WRONG function).
         assert_eq!(
             sugar
