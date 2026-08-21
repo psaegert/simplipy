@@ -119,7 +119,9 @@ def _exact(t):
     arrived at an arbitrary-precision judge already wrong in the 17th digit, and `c_eval`
     then did `mpf(that_double)` and preserved the error at every rung. It convicted
     `inv(-10/t) -> -0.1*t` -- an exact identity -- as a clause-(a) REAL-CHANGE at measure
-    1.0, because a 5.5e-17 relative gap is enormous against the judge's 1e-25 tolerance.
+    1.0. A mis-rendered literal is wrong by the same 5.5e-17 at EVERY rung, so the gap does
+    not decay and the judge reads it as analytic -- which, given that literal, is exactly
+    what it is. No tolerance ever hid this; only the right point does.
     That is the same principle the module header already states for battery points: an f64
     rendering is NOT the contract's point.
 
@@ -1043,17 +1045,19 @@ def _point_verdict(tl, tr, env_mp):
     addresses that -- at t = -20 the cancellation is ~217 digits deep, and the rung sized
     from the operands actually seen reaches past it where a fixed 120 never could.
 
-    NOT YET FIXED FOR THOSE IDENTITIES, and F103 made it WORSE, measured. The three
-    EXACT identities that were three grid points from conviction --
-    `cos asin tanh _0 -> inv cosh _0` and two siblings -- moved TOWARD the bar, not away:
-    the bc measure rose from under 0.0167 to 0.03593 against a kill bar of 0.05, which is
-    what `test_the_shipped_identities_are_no_longer_near_the_bar` now fails on.
-    The decay test is not the cause at the point level -- at the convicting grid point
+    A SECOND hole, and F103 opened it wider before F104 closed it. The three EXACT
+    identities that were three grid points from conviction -- `cos asin tanh _0 ->
+    inv cosh _0` and two siblings -- moved TOWARD the bar rather than away from it: the bc
+    measure rose from under 0.0167 to 0.03593 against a kill bar of 0.05. The decay test
+    was never the cause at the point level; at the convicting grid point
     (_0 = -19.9862579) both the contract evaluator and bare mpmath put the gap at 10^-34.5
     (dps 50) and 10^-106.2 (dps 120), a drop of 71.6 that reads as residue and returns
-    'eq'. The REAL-CHANGE is entering through the MEASURE lane, which reaches the same
-    grid point by a different path. That path is the open item; until it is understood,
-    F103 has shrunk a true identity's safety margin and must not be called finished.
+    'eq'. The cause was SATURATION at `tanh`'s asymptote, where a rounded +-1 makes a
+    relative gap of 1.0 that is identical at every affordable rung -- stability the decay
+    test reads as analytic. It is refused at the asymptote now (the band in `OPS`) and the
+    rows that refuse at rung 1 are settled by the CLIMB below. Measured after both: those
+    identities sit at 0 of 167 grid points, better than the 2 of 167 they scored before
+    F103 existed.
     """
     def once(dps, track=False):
         """One reading at `dps` -> (class_verdict|None, gap|None), or None if Unresolved.

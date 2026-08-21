@@ -356,9 +356,10 @@ class TestRuleFilesAreDataNotCode:
 
         # F97: a decimal literal denotes the EXACT rational it spells, not the nearest
         # double. Asserted where the two differ, because that difference is the defect:
-        # a 5.5e-17 relative error is enormous against the judge's 1e-25 tolerance, and
-        # it convicted the exact identity `inv(-10/t) -> -0.1*t` as a clause-(a)
-        # REAL-CHANGE at measure 1.0. The deployed lane still reads the double -- that is
+        # a mis-rendered literal is wrong by the same 5.5e-17 at every precision rung, so
+        # the gap does not decay and the judge reads it as an analytic difference. It
+        # convicted the exact identity `inv(-10/t) -> -0.1*t` as a clause-(a) REAL-CHANGE
+        # at measure 1.0. The deployed lane still reads the double -- that is
         # what deployment computes -- so only the CONTRACT lane changed.
         assert literal_value('-1e-09') == Fraction(-1, 10 ** 9) != Fraction(-1e-09)
         assert literal_value('-0.1') == Fraction(-1, 10) != Fraction(float('-0.1'))
