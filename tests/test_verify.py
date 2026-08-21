@@ -253,7 +253,14 @@ class TestShippingArtifact:
         # kept as the statement of intent, with the real check being the membership
         # assertions below -- WHICH rules are excused, not how many.)
         assert tolerated == set(), sorted(tolerated)
-        real_rules = json.load(open(ACJ_RULES.replace('rules.json', 'rules_real.json')))
+
+    def test_the_excused_rules_live_in_the_real_file(self):
+        """The other half of the split, kept as its own test so that shipping the f64
+        set WITHOUT a triple reports honestly: the census above still runs and passes,
+        and this one skips for want of a subject rather than dragging the pair down."""
+        real_path = ACJ_RULES.replace('rules.json', 'rules_real.json')
+        _staged_or_skip(real_path)
+        real_rules = json.load(open(real_path))
         real_keys = {(tuple(a), tuple(b)) for a, b in real_rules}
         assert (('/', '$0', '$0'), ('1',)) in real_keys      # x/x -> 1
         assert (('/', '0', '$0'), ('0',)) in real_keys       # 0/x -> 0
@@ -595,8 +602,10 @@ class TestCleanlinessIsPerMode:
         reported the 0.14.0 artifact as dirty while every per-file sweep was clean."""
         from conftest import acj_config_path, require_or_skip
         from simplipy.verify import verify_triple
-        require_or_skip(acj_config_path(), 'needs the shipped acj-4-3 triple')
         base = acj_config_path().replace('config.yaml', '')
+        # the TRIPLE is the subject, so guard on the triple and not merely on the config:
+        # the f64 set ships on its own while the real/corpus sets are re-mined
+        require_or_skip(base + 'rules_real.json', 'needs the shipped acj-4-3 triple')
         report = verify_triple(base + 'rules.json', base + 'rules_real.json',
                                base + 'rules_corpus.json',
                                engine_config=acj_config_path())

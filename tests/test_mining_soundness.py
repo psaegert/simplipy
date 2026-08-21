@@ -2362,6 +2362,8 @@ class TestCorpusDominanceReplacesTheSetInvariant:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import assert_corpus_dominates
         require_or_skip(acj_config_path(), 'needs the acj-4-3 asset')
+        from conftest import require_triple_or_skip
+        require_triple_or_skip('needs the shipped corpus set')
         # NOT wiped: the shipped artifact's own 5,471-rule real set is the thing corpus
         # has to dominate. Emptying it first made the check trivial.
         engine = SimpliPyEngine.from_config(acj_config_path())

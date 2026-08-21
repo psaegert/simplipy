@@ -129,10 +129,22 @@ class TestAbsentFilesAreANoOp:
         exercised by the fixtures below instead -- and the shipped config must name all
         three, or `mode='real'` fails closed for every user."""
         require_or_skip(acj_config_path(), 'acj-4-3 config not staged')
+        base = acj_config_path().replace('config.yaml', '')
         config = yaml.safe_load(open(acj_config_path()))
         assert config['rules'] == './rules.json'
-        assert config['rules_real'] == './rules_real.json'
-        assert config['rules_corpus'] == './rules_corpus.json'
+        # THE CONFIG AND THE DIRECTORY MUST AGREE, in both directions. Naming a set it
+        # does not ship makes `Mode.real` fail closed and `Mode.corpus` fall back
+        # SILENTLY, and shipping a set it does not name makes that set dead weight no
+        # loader will ever read. Asserting the pair holds while the asset carries the f64
+        # third alone AND once the re-mine stages all three, which asserting three
+        # literal filenames did not.
+        for key, fname in (('rules_real', 'rules_real.json'),
+                           ('rules_corpus', 'rules_corpus.json')):
+            staged = os.path.exists(base + fname)
+            named = config.get(key) == f'./{fname}'
+            assert named == staged, (
+                f'{key}: named={named} staged={staged} -- the config and the shipped '
+                f'directory disagree')
 
     def test_every_mode_serves_the_default_set(self):
         """No set of its own means the DEFAULT set -- for every mode, counted and

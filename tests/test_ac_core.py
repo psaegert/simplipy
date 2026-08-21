@@ -791,6 +791,8 @@ class TestTranscendentalAtomEnclosures:
         # (f64 gives 1.2246467991473532e-16), so from 0.14.0 it is a `real`-tier rule.
         # The pole is therefore reached in `real`, and the default mode keeps the
         # expression -- the two soundnesses disagreeing, on one row.
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         from simplipy import Mode
         for tokens in (['inv', '*', 'sin', 'np.pi', 'x1'],
                        ['inv', '*', 'abs', 'sin', 'np.pi', 'x1'],
@@ -804,6 +806,8 @@ class TestTranscendentalAtomEnclosures:
         # `sin(np.pi) -> 0` is `real`-tier from 0.14.0 (exactly true, and f64 computes
         # 1.2246467991473532e-16), so the pole is reached in the mode whose authority
         # is mathematics.
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         from simplipy import Mode
         out = engine.simplify(['inv', '/', 'abs', 'sin', 'np.pi',
                                'inv', '-', '-', 'x4', 'x1', '*', 'x2', '-2'],
@@ -813,6 +817,8 @@ class TestTranscendentalAtomEnclosures:
     def test_true_nonzero_atom_grounds_still_certify(self, engine: SimpliPyEngine) -> None:
         # The enclosure must not blanket-refuse: pi itself and shifted atoms are
         # rigorously bounded away from 0, so the licensed split still fires.
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         assert engine.simplify(engine.to_tagged(['inv', '*', 'np.pi', 'x1'])) != \
             ['inv', '<mul>', 'np.pi', 'x1', '</mul>']  # some reduction happened
         # sin(pi)+2 is certainly nonzero; in `real` the exact rule folds it to 2. In
@@ -1184,6 +1190,8 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
 
     def test_mask_doctrine_survives_expiry(self, engine: SimpliPyEngine) -> None:
         # A PARTNERED sentinel cancels in phase 1, before the licence expires.
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         x = ['*', '/', 'float("inf")', 'float("inf")', 'x0']
         assert engine.simplify(list(x), mode=Mode.corpus) == ['x0']
 

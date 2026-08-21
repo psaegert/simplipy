@@ -196,6 +196,8 @@ class TestEvaluateConstants:
         `real` never folds a transcendental at all -- `tan(1)` is irrational and no
         literal spells it. `tan 1` survives everywhere because its float costs 58,877
         against the expression's 11,000; `asin 1e-08` folds where folding is allowed."""
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         assert eng._core.mode_rules_len('real') is not None, 'the artifact must ship one'
         for mode in (Mode.f64, Mode.real, Mode.corpus):
             assert eng.simplify(['tan', '1'], mode=mode) == ['tan', '1'], mode

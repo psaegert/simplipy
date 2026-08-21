@@ -258,6 +258,8 @@ class TestMode:
         stay the sound `nan`); LOSSY relaxes them (structural cancel) -- the same relaxation LOSSY
         applies to the rule matcher's `!`-cert and the constant-fold's finiteness gate, so all
         three edges behave consistently under `Mode.corpus`."""
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         from simplipy import Mode
         engine = SimpliPyEngine.from_config(
             acj_config_path())

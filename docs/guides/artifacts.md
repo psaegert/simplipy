@@ -1,8 +1,8 @@
 # Artifacts and assets
 
-Every published engine asset is six files: `config.yaml` (the operator table and
-engine configuration), a **rule-set TRIPLE** — `rules.json`, `rules_real.json` and
-`rules_corpus.json` — `mine.yaml` (the exact mine
+Every published engine asset carries `config.yaml` (the operator table and engine
+configuration), the rule sets that config names — a 0.14.0 mine produces the full
+**TRIPLE**, `rules.json`, `rules_real.json` and `rules_corpus.json` — `mine.yaml` (the exact mine
 configuration — each artifact is byte-deterministically reproducible from it with one
 `simplipy find-rules` command **at the recorded environment**; what "recorded
 environment" means, and why it must be said, is the

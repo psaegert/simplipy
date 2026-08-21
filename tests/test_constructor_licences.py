@@ -890,6 +890,8 @@ class TestTheBandAndTheRulesetAgree:
         `inv(acosh(cosh x0))` became `abs(1/x0)` through a rule while the constructor
         refused it. The triple resolves it by tiering them `real`; this is the tripwire
         that says so, and would fire if a future judge change tiered one `core`."""
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         import json
         from conftest import acj_config_path, require_or_skip
         from simplipy.verify._contract import judge_rule

@@ -48,6 +48,22 @@ def acj_rules_path() -> str:
     return os.path.join(acj_asset_dir(), 'rules.json')
 
 
+def acj_real_rules_path() -> str:
+    return os.path.join(acj_asset_dir(), 'rules_real.json')
+
+
+def require_triple_or_skip(why: str = 'the shipped asset carries the f64 set only') -> None:
+    """Skip when the staged asset ships no `real`/`corpus` set of its own.
+
+    The published asset carries the f64 third alone while the other two are re-mined,
+    so a test whose subject is a `real` or `corpus` RULE SET has no subject and says so.
+    It skips rather than passing vacuously: under `SIMPLIPY_TEST_REQUIRE_ASSETS` -- what
+    the release job sets -- the same call FAILS, so a triple that is supposed to be
+    staged and is not can never be mistaken for a clean run.
+    """
+    require_or_skip(acj_real_rules_path(), why)
+
+
 def require_or_skip(path: str, why: str) -> None:
     if not os.path.exists(path):
         if os.environ.get('SIMPLIPY_TEST_REQUIRE_ASSETS'):

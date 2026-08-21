@@ -80,6 +80,8 @@ class TestGroundFoldLicence:
         # `f(special)` collapses ONLY to exact values, and those ship as MINED certified
         # rules -- the f64 fold may not approximate. This retires the documented
         # `sin(np.pi) -> 1.2246e-16` wart as a POLICY consequence (P-B3).
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         check(eng, ['cos', 'np.e'], ['cos', 'np.e'])
         check(eng, ['exp', 'np.pi'], ['exp', 'np.pi'])
         # `sin(np.pi) -> 0` is exactly true and NOT f64-realised: f64 computes
