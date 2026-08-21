@@ -586,10 +586,21 @@ def cls_np(v):
     return ('fin', float(v))  # quotient zeros: -0 == 0
 
 
-def compare(cl, cr, rel=mpf('1e-25')):
-    """-> 'eq' | 'REAL-CHANGE' (both fin, differ: clause a) |
-          'EXT' | 'SHRINK' (nan vs defined: clause b) |
-          'INF-CHANGE' (an infinity involved: clause c)"""
+#: The gap ladder for the FINITE case. Rung 1 is `BASE_DPS`; the rest climb far enough
+#: that a residue's decay is unmistakable beside an analytic gap's stability.
+GAP_RUNGS = (BASE_DPS, 120, 250)
+
+#: Residual target for the exists-witness fit. Deeper than the deepest rung, so a fitted
+#: `<C_R>` is never the thing the decay test is measuring.
+_WIT_RESID = mpf(10) ** (-(250 + 20))
+
+
+def compare_classes(cl, cr):
+    """The class half of a contract comparison -- everything nan/inf settles by itself.
+
+    -> 'eq' | 'EXT' | 'SHRINK' (nan vs defined: clause b) | 'INF-CHANGE' (clause c),
+    or None when BOTH sides are finite, where the gap ladder decides instead.
+    """
     if cl[0] == 'nan' and cr[0] == 'nan':
         return 'eq'
     if cl[0] == 'nan':
@@ -598,37 +609,51 @@ def compare(cl, cr, rel=mpf('1e-25')):
         return 'SHRINK'
     if cl[0] == 'inf' or cr[0] == 'inf':
         return 'eq' if cl == cr else 'INF-CHANGE'
+    return None
+
+
+def rel_gap(cl, cr):
+    """Relative separation of two FINITE sides; exactly 0 when they agree."""
     a, b = cl[1], cr[1]
     if a == b:
-        return 'eq'
-    # F99: the CONTRACT tolerance is purely RELATIVE. `max(mpf(1), ...)` made it
-    # ABSOLUTE at `rel` for small values, so any disagreement below 1e-25 read as
-    # equality however wrong it was relatively -- `e**sinh(-5) -> 0` is a 100%
-    # relative error and `asin(1e-8) -> 1e-8` is 1.7e-17, and both passed. That is
-    # precisely the "accidental short hit" the 2026-08-02 fold unification deleted
-    # from the serve path, re-entering through the mint.
-    #
-    # Symbolic cancellation is NOT what the floor was protecting: the snap already
-    # handles it (a trig output below 10^(-dps+10) snaps to exact 0, so `sin(pi)`
-    # takes the `a == b` branch above and never reaches this line). Measured on
-    # acj-4-3: 149 rules newly convict, 145 of them verified genuinely false with a
-    # gap stable to dps 400, and ZERO true identities are over-convicted.
-    #
-    # A SNAP-TIED floor was tried and rejected: it is merely a different arbitrary
-    # threshold. At dps 50 it convicts `e**sinh(-5)` (5.94e-33, above 1e-40) and spares
-    # `e**sinh(-8)` (~1e-647, below it) -- the same family, split by where the value
-    # happens to land -- and it misses 114 of the 149 rules a relative tolerance
-    # convicts, 145 of which are verified false to dps 400.
-    #
-    # The invariant it preserved ("the snap cannot fabricate an equality the tolerance
-    # would refuse") buys ESCALATION EFFICIENCY, not soundness: a fabricated rung-1
-    # equality disagrees with rung 2, and `_point_verdict` then decides at rung 3.
-    # That machinery exists for exactly this.
-    #
-    # The DEPLOYED lane no longer comes through here -- it asks a different question and
-    # has its own two comparisons below. This function has ONE meaning now.
-    tol = rel * max(abs(mpf(a)), abs(mpf(b)))
-    return 'eq' if abs(a - b) <= tol else 'REAL-CHANGE'
+        return mpf(0)
+    scale = max(abs(mpf(a)), abs(mpf(b)))
+    if scale == 0:
+        return mpf(0)
+    return abs(mpf(a) - mpf(b)) / scale
+
+
+# F103 (2026-08-21): THE FINITE CASE HAS NO MAGNITUDE BAR AT ALL. It asks how the gap
+# RESPONDS TO PRECISION, which is the only question that separates the two populations.
+#
+# Every fixed tolerance was the wrong instrument, and the artifact proves it by ordering.
+# On acj-4-3 the EXACT identity `cos asin tanh _0 -> inv cosh _0` shows a dps-50 gap of
+# 1.8e-26, while the FALSE `tanh pow np.pi 3 -> 1` shows 2.3e-27 -- the true rule's gap is
+# the LARGER one. Any bar between them convicts the identity and spares the falsehood.
+# Nor is the false family clustered: `tanh(x) -> 1` is false at every finite x by exactly
+# 2/(e^2x+1), a smooth continuum measured from 1.8e-26 (x=30) through 2.5e-47 (x=54) and
+# below. There is no valley to put a threshold in, because there is no threshold there.
+#
+# What separates them is decay. Residue is a fact about the ARITHMETIC and falls with the
+# working precision; an analytic gap is a fact about the FUNCTIONS and does not move.
+# Measured over dps 50 -> 400: the tanh rows above are bit-identical at all four rungs,
+# while every true identity's gap falls ~10^350. The bar is half the ADDED precision, and
+# the two populations clear it by >=30 decades on either side -- a separator, not a knob.
+#
+# Crucially, the cancellation depth cancels out of a RATIO. `log(cosh y + sinh y) -> y` at
+# y = -50 -- exactly true, and the identity F99 recorded as wrongly KILLed -- carries a
+# dps-50 residue of 8.5e-21 that ANY magnitude bar convicts; its gap still falls 10^69 by
+# dps 120, so the ratio spares it. That is the failure the old comment called NOT YET
+# FIXED, and it is what a size test structurally cannot see.
+#
+# This supersedes both earlier attempts. F99 deleted an ABSOLUTE 1e-25 floor because it
+# read `e**sinh(-5) -> 0` and `asin(1e-8) -> 1e-8` as equal; the RELATIVE 1e-25 that
+# replaced it still spared the whole tanh saturation family. Both are gone. `asin(1e-8) ->
+# 1e-8` and `sin(1e-3) -> 1e-3` now convict on decay, not on size.
+#
+# Known limit, stated rather than hidden: a gap below the deepest rung's resolution is
+# invisible, so `tanh(400) -> 1` (gap 1e-348) still reads eq. That is the "saturated at P
+# is extendable, not wrong" case `hiprec.rs` already documents; it ships today too.
 
 
 #: The deployed-realisation bound, in ULP. DERIVED, not chosen -- see
@@ -891,7 +916,14 @@ def mp_polish(tl, tr, nvars, clb, c0):
     then surfaces in the sweep for investigation, never silently)."""
     old = mp.dps
     try:
-        mp.dps = 60
+        # THE WITNESS MUST OUT-RESOLVE THE LADDER. `<C_L>` is rebuilt exactly at each
+        # rung while `<C_R>` is this fitted value merely re-rounded, so a witness good to
+        # only 45 digits puts a FROZEN ~1e-45 gap between the two sides -- one that does
+        # not decay, and that the F103 decay test therefore reads as analytic. That
+        # convicted the identity `pow abs ?0 <constant> -> pow abs ?0 <constant>`, whose
+        # two sides are the same tokens. Fitting deeper than the deepest rung keeps the
+        # comparison a statement about the FUNCTIONS rather than about this fit.
+        mp.dps = GAP_RUNGS[-1] + 50
         env = {}
         for i, n in enumerate(sorted(nvars)):
             env[n] = mpf(GEN[i % len(GEN)])
@@ -925,27 +957,39 @@ def mp_polish(tl, tr, nvars, clb, c0):
             # +-1e-12 bracket recovers a tiny witness; h is linear for a
             # bare-<constant> RHS).
             try:
-                if abs(h(mpf(0))) <= mpf('1e-45') * max(1, abs(target)):
+                if abs(h(mpf(0))) <= _WIT_RESID * max(1, abs(target)):
                     return mpf(0)
             except Unresolved:
                 return mpf(0)
         try:
             a, b = mpf(c0) * (1 - mpf('1e-8')) - mpf('1e-12'), mpf(c0) * (1 + mpf('1e-8')) + mpf('1e-12')
             fa, fb = h(a), h(b)
-            for _ in range(120):
+            # Track the best iterate. Tightening the target must never turn a GOOD
+            # witness into the f64 seed: falling back to `c0` would put a ~1e-17 frozen
+            # gap between the sides, which is the same defect two orders worse.
+            best, best_r = None, None
+            for _ in range(200):
                 if fb == fa:
                     break
                 c = b - fb * (b - a) / (fb - fa)
                 fc = h(c)
                 a, fa, b, fb = b, fb, c, fc
-                if abs(fc) <= mpf('1e-45') * max(1, abs(target)):
-                    if abs(c) < mpf('1e-50'):
+                if best_r is None or abs(fc) < best_r:
+                    best, best_r = c, abs(fc)
+                if abs(fc) <= _WIT_RESID * max(1, abs(target)):
+                    if abs(c) < mpf(10) ** (-(GAP_RUNGS[-1] + 25)):
                         try:
-                            if abs(h(mpf(0))) <= mpf('1e-45') * max(1, abs(target)):
+                            if abs(h(mpf(0))) <= _WIT_RESID * max(1, abs(target)):
                                 return mpf(0)   # snap near-zero polish results to exact 0
                         except Unresolved:
                             pass
                     return c
+            if best is not None and best_r is not None:
+                try:
+                    if best_r < abs(h(mpf(c0))):
+                        return best        # short of target, but better than the seed
+                except Unresolved:
+                    return best
         except (Unresolved, ZeroDivisionError):
             pass
         return mpf(c0)
@@ -955,76 +999,114 @@ def mp_polish(tl, tr, nvars, clb, c0):
 
 # ---------------------------------------------------------------- the judge
 def _point_verdict(tl, tr, env_mp):
-    """two-rung confirmed contract verdict at one point -> (verdict|None, snapped)
+    """confirmed contract verdict at one point -> (verdict|None, snapped)
 
-    Rung agreement is necessary and NOT sufficient. Confirming the CLASS of the verdict
-    ('REAL-CHANGE' at both rungs) says nothing about whether the disagreement is real,
-    because catastrophic cancellation swamps both rungs alike: mpmath at dps 50 and at
-    dps 120 can agree perfectly that two equal numbers differ. Measured, the identity
-    `log(cosh(25t) + sinh(25t)) = 25t` -- exactly true on all of R -- was KILLed at
-    bc-positive-measure with 56 of 167 grid points "disagreeing" at dps 50, collapsing
-    to 22, 17, 8, 4, 3 as the precision doubled. That monotone collapse IS the answer,
-    and the class comparison threw it away.
+    Rung agreement alone is necessary and NOT sufficient, and this is where that used to
+    bite. Confirming the CLASS of a verdict ('REAL-CHANGE' at both rungs) says nothing
+    about whether the disagreement is real, because catastrophic cancellation swamps both
+    rungs alike: mpmath at dps 50 and at dps 120 can agree perfectly that two equal
+    numbers differ. Measured, the identity `log(cosh(25t) + sinh(25t)) = 25t` -- exactly
+    true on all of R -- was KILLed at bc-positive-measure with 56 of 167 grid points
+    "disagreeing" at dps 50, collapsing to 22, 17, 8, 4, 3 as the precision doubled.
 
-    NOT YET FIXED, and the mechanism is now known exactly. At the convicting points the
-    cancellation drives `cosh(25t) + sinh(25t)` to a computed EXACT ZERO, so the left side
-    is `log(0) = -inf`: the disagreement is a CLASS change (INF-CHANGE), not a finite gap,
-    so no magnitude test can see it, and it is stable at rungs 1 and 2 alike -- only
-    around dps 400 does the sum become representable and the class flip to finite. At
-    t = -20 the cancellation is ~217 decimal digits deep, which is why the real fix is
-    precision scaled to the OPERANDS (~2*log10(max|operand|)), the item already deferred
-    for the clause split. A magnitude discriminator was written for this and reverted: it
-    cannot fire on a class change.
+    That monotone collapse IS the answer, and it is now what the finite half asks: a
+    residue decays with the working precision and an analytic gap does not (F103, above
+    `compare_classes`). The identity above is spared on decay -- its dps-50 residue of
+    8.5e-21 would fail any magnitude bar, and still falls 10^69 by dps 120.
 
-    URGENCY, measured: three EXACT identities on the shipped artifact --
-    `cos asin tanh _0 -> inv cosh _0` and two siblings -- already sit at 6 of 167 grid
-    points against a kill bar of 9. They are three points from being wrongly convicted at
-    the next mine.
+    The class half is unchanged and keeps the two/three-rung rule, because a class has no
+    gap to watch. It is also the remaining hole: where cancellation drives a sum to a
+    computed EXACT ZERO the left side reads `log(0) = -inf`, so the disagreement is a
+    CLASS change and no decay test can fire on it. Rung 2's OPERAND SCALING is what
+    addresses that -- at t = -20 the cancellation is ~217 digits deep, and the rung sized
+    from the operands actually seen reaches past it where a fixed 120 never could.
+
+    NOT YET FIXED FOR THOSE IDENTITIES, and F103 made it WORSE, measured. The three
+    EXACT identities that were three grid points from conviction --
+    `cos asin tanh _0 -> inv cosh _0` and two siblings -- moved TOWARD the bar, not away:
+    the bc measure rose from under 0.0167 to 0.03593 against a kill bar of 0.05, which is
+    what `test_the_shipped_identities_are_no_longer_near_the_bar` now fails on.
+    The decay test is not the cause at the point level -- at the convicting grid point
+    (_0 = -19.9862579) both the contract evaluator and bare mpmath put the gap at 10^-34.5
+    (dps 50) and 10^-106.2 (dps 120), a drop of 71.6 that reads as residue and returns
+    'eq'. The REAL-CHANGE is entering through the MEASURE lane, which reaches the same
+    grid point by a different path. That path is the open item; until it is understood,
+    F103 has shrunk a true identity's safety margin and must not be called finished.
     """
-    def once(track=False):
-        """One reading at the current precision; with `track`, also report the largest
-        finite intermediate either side produced, which is what sizes a cancellation."""
+    def once(dps, track=False):
+        """One reading at `dps` -> (class_verdict|None, gap|None), or None if Unresolved.
+
+        `class_verdict` is set whenever nan/inf is involved -- there the classes are the
+        whole finding. Otherwise both sides are finite and `gap` carries it. With `track`,
+        also report the largest finite intermediate either side produced, which is what
+        sizes a cancellation."""
+        mp.dps = dps
         if track:
             _MAG_SINK.append([mpf(0)])
         try:
-            return compare(cls_mp(c_eval(tl, env_mp())), cls_mp(c_eval(tr, env_mp())))
+            cl = cls_mp(c_eval(tl, env_mp()))
+            cr = cls_mp(c_eval(tr, env_mp()))
         except Unresolved:
             return None
         finally:
             if track:
                 once.mag = _MAG_SINK.pop()[0]
+        v = compare_classes(cl, cr)
+        return (v, None) if v is not None else (None, rel_gap(cl, cr))
+
     old = mp.dps
     snap0 = SNAP_EVENTS[0]
     try:
-        mp.dps = BASE_DPS
         once.mag = None
-        v1 = once(track=True)
+        r1 = once(BASE_DPS, track=True)
         snapped1 = SNAP_EVENTS[0] > snap0
-        if v1 is None:
+        if r1 is None:
             return None, snapped1
-        if v1 == 'eq' and not snapped1:
-            return 'eq', False
-        # non-eq, OR an 'eq' that involved a snap (the snap can FABRICATE equality:
-        # sin(exp(-100)) = 3.7e-44 snaps to 0 at dps 50): confirm at rung 2; a
-        # snapped-eq that changes class at dps 120 takes rung 3.
-        #
+        cls1, gap1 = r1
         # RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates
         # are 10^217: both rungs are swamped alike, agree on a manufactured verdict, and
-        # the class comparison reads that agreement as evidence. `log(cosh(25t) +
-        # sinh(25t)) = 25t` -- exactly true on all of R -- was KILLed exactly this way,
-        # with the cancellation driving the sum to a computed ZERO so the left side read
-        # `log(0) = -inf` at both rungs. The precision now comes from the operands that
-        # were actually seen, so rung 2 is high enough to be a second opinion rather than
-        # a second copy of the first.
-        mp.dps = max(120, _required_dps(getattr(once, 'mag', None)))
-        v2 = once()
-        if v1 == v2:
-            return v1, snapped1
-        if v1 == 'eq':
-            mp.dps = max(250, 2 * mp.dps)
-            v3 = once()
-            return (v2 if v2 == v3 else None), snapped1
-        return None, snapped1
+        # the class comparison reads that agreement as evidence. The precision now comes
+        # from the operands that were actually seen, so rung 2 is a second opinion rather
+        # than a second copy of the first.
+        dps2 = max(GAP_RUNGS[1], _required_dps(getattr(once, 'mag', None)))
+        dps3 = max(GAP_RUNGS[2], 2 * dps2)
+
+        if cls1 is not None:
+            # nan/inf: a CLASS is confirmed by agreement at a second rung -- there is no
+            # gap to watch decay, so this half keeps the two/three-rung rule unchanged.
+            r2 = once(dps2)
+            if r2 is None:
+                return None, snapped1
+            if r2[0] == cls1 and not snapped1:
+                return cls1, snapped1
+            # a snapped agreement can be fabricated, and a disagreement is unsettled:
+            # both take rung 3.
+            r3 = once(dps3)
+            cls3 = r3[0] if r3 is not None else None
+            return (r2[0] if r2[0] == cls3 else None), snapped1
+
+        # BOTH FINITE -- decided by DECAY, never by size (see F103 above).
+        #
+        # A gap of exactly zero is NOT a special state, and treating it as one is what
+        # made `log np.e -> 1`, `sin / np.pi 6 -> 0.5`, `tan / np.pi 4 -> 1` and 29 other
+        # EXACT identities unresolvable: their sides agree to the full working precision
+        # at one rung and differ by a single rounding at the next, which looked like a gap
+        # appearing from nowhere. Zero means "closer than this rung can see", so it enters
+        # the ratio as the rung's OWN resolution. One test then covers every case, which
+        # is why nothing below branches on exact agreement.
+        floor_lo = mpf(10) ** (-BASE_DPS)
+        floor_hi = mpf(10) ** (-dps2)
+        hi = once(dps2)
+        if hi is None or hi[0] is not None or hi[1] is None:
+            return None, snapped1            # class flipped / Unresolved: never convict
+        g_lo = gap1 if gap1 > floor_lo else floor_lo
+        g_hi = hi[1] if hi[1] > floor_hi else floor_hi
+        # Residue falls with the added precision; an analytic gap does not move, and a
+        # gap that only BECOMES visible higher up (deep saturation) drops by less than
+        # nothing. Half the added precision separates them with >=30 decades to spare.
+        drop = mp.log10(g_lo / g_hi)
+        return ('eq' if drop > (dps2 - BASE_DPS) / 2
+                else 'REAL-CHANGE'), snapped1
     finally:
         mp.dps = old
 
