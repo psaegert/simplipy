@@ -995,6 +995,9 @@ def mp_polish(tl, tr, nvars, clb, c0):
             _mag = _MAG_SINK.pop()[0]
         mp.dps = max(mp.dps,
                      max(GAP_RUNGS[2], 2 * max(GAP_RUNGS[1], _required_dps(_mag))) + 50)
+        # `_WIT_RESID` was 10^-270 = "deeper than the deepest rung" when the deepest rung
+        # was a fixed 250. It has to follow the ladder for the same reason the depth does.
+        _wit_resid = mpf(10) ** (-(mp.dps - 30))
         env = build_env()
         try:
             target = c_eval(tl, env)
@@ -1002,6 +1005,27 @@ def mp_polish(tl, tr, nvars, clb, c0):
             return mpf(c0)
         if misnan(target) or misinf(target):
             return mpf(c0)
+
+        def accepts(residual):
+            """Is this residual inside the noise of THIS computation?
+
+            The test used to be `|r| <= _WIT_RESID * max(1, |target|)`, which for every
+            target below 1 is a pure ABSOLUTE floor -- the shape F99 deleted from the
+            contract's own comparison, left behind in the test that accepts a witness.
+            It accepted 0 as the witness for `asin(inv(cosh(710))) = 8.9e-309`, since
+            8.9e-309 is under 1e-270 absolutely though it is 100% wrong relatively; the
+            contract then judged by pure relative decay, saw a frozen 8.9e-309 gap and
+            KILLed a rule true by construction.
+
+            Two scales, taken as a MAXIMUM rather than multiplied. The target's own size
+            carries the relative claim. The noise floor -- the largest intermediate
+            scaled by the working precision, the same quantity `_required_dps` reasons
+            about -- carries the other half: below it a value is not distinguishable
+            from zero, which is what keeps a CANCELLATION zero (`sin(pi)` reads ~1e-300
+            at dps 300, not 0) from being chased as though it were a real witness.
+            """
+            noise = max(_mag, mpf(1)) * mpf(10) ** (-(mp.dps - 25))
+            return abs(residual) <= max(_wit_resid * abs(target), noise)
 
         def h(c):
             e = dict(env)
@@ -1021,7 +1045,7 @@ def mp_polish(tl, tr, nvars, clb, c0):
             # +-1e-12 bracket recovers a tiny witness; h is linear for a
             # bare-<constant> RHS).
             try:
-                if abs(h(mpf(0))) <= _WIT_RESID * max(1, abs(target)):
+                if accepts(h(mpf(0))):
                     return mpf(0)
             except Unresolved:
                 return mpf(0)
@@ -1040,10 +1064,10 @@ def mp_polish(tl, tr, nvars, clb, c0):
                 a, fa, b, fb = b, fb, c, fc
                 if best_r is None or abs(fc) < best_r:
                     best, best_r = c, abs(fc)
-                if abs(fc) <= _WIT_RESID * max(1, abs(target)):
+                if accepts(fc):
                     if abs(c) < mpf(10) ** (-(mp.dps - 25)):
                         try:
-                            if abs(h(mpf(0))) <= _WIT_RESID * max(1, abs(target)):
+                            if accepts(h(mpf(0))):
                                 return mpf(0)   # snap near-zero polish results to exact 0
                         except Unresolved:
                             pass

@@ -153,10 +153,16 @@ The string spellings `'sound'` and `'lossy'` are removed with them.
 
 ### What `f64` mode does and does not promise
 
-It promises that **every rewrite it applies** is one the deployed evaluator agrees with, to
-within a derived bound of 8 ULP (`simplipy.verify._contract.REALISED_ULP`), which comes
-from the measured worst-case error of the platform's own math library rather than from a
-chosen tolerance.
+It promises that **every rule it applies** has been checked against the deployed evaluator
+itself. Both sides of the rewrite are evaluated in floating point across the verifier's
+battery and grid, and a rule enters the `f64` set only where they agree to within 8 ULP
+(`simplipy.verify._contract.REALISED_ULP`). That bound is derived rather than chosen: a
+rewrite has two sides, each a composition of up to four implementation-defined library
+calls whose errors are independent and can oppose.
+
+It does **not** promise that a *sequence* of rewrites carries the same bound. Each rule
+carries it individually; simplification composes rules, and floating-point error composes
+with them.
 
 It does **not** promise to preserve your evaluation order. The canonical form flattens sums
 and products into bags and re-emits them, and IEEE-754 addition commutes but does not

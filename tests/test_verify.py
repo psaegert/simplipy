@@ -778,3 +778,36 @@ class TestTheWitnessOutResolvesTheLadder:
         finally:
             C.judge_cl_battery = base
         assert got['verdict'] != 'KILL', got
+
+    def test_a_witness_under_the_old_absolute_floor_is_not_flattened_to_zero(self) -> None:
+        """The witness ACCEPTANCE test kept the shape F99 deleted from the contract:
+        `|residual| <= _WIT_RESID * max(1, |target|)` is a pure absolute floor for every
+        target below 1. `asin(inv(cosh(710))) = 8.95e-309` is under 1e-270 absolutely, so
+        0 was accepted as its witness though it is 100% wrong; the contract then judged by
+        relative decay, saw a frozen gap and KILLed a rule true by construction."""
+        from mpmath import asin, cosh, mp, mpf
+
+        from simplipy.verify._contract import mp_polish, parse
+        tl = parse(['asin', 'inv', 'cosh', '<constant>'], '<C_L>')
+        tr = parse(['<constant>'], '<C_R>')
+        got = mp_polish(tl, tr, {}, lambda: mpf(710), 0.0)   # 0.0 is what f64 fits
+        assert got != 0, 'the subnormal witness was flattened to an exact zero'
+        old = mp.dps
+        try:
+            mp.dps = 1500
+            assert abs(got - asin(1 / cosh(mpf(710)))) < mpf(10) ** -1000
+        finally:
+            mp.dps = old
+
+    def test_a_cancellation_zero_is_still_accepted_as_zero(self) -> None:
+        """The other side of the same bar. A relative-only test would reject 0 for a
+        target that is zero mathematically but reads as precision residue, and send the
+        secant chasing that noise. The floor is the largest intermediate scaled by the
+        working precision -- below it, a value is not distinguishable from zero."""
+        from mpmath import mpf
+
+        from simplipy.verify._contract import mp_polish, parse
+        tl = parse(['sin', '*', '<constant>', 'np.pi'], '<C_L>')
+        tr = parse(['<constant>'], '<C_R>')
+        got = mp_polish(tl, tr, {}, lambda: mpf(2), 0.0)
+        assert got == 0, f'a cancellation zero was chased to {got}'
