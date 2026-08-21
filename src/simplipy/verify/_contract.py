@@ -809,7 +809,17 @@ BATTERY_CAP = max(len(battery_for(s)) for s in '?_!$') ** 2
 CONSTS = [2.5, -1.5, 3.0, 0.5, -0.7]      # witness-fitting battery (generic values)
 
 
-def judge_cl_battery():
+#: The f64 SATURATION magnitudes: where the deployed evaluator ATTAINS a bound that
+#: mathematics only approaches. `tanh(19)` is exactly 1.0 in f64; `cosh(exp(-20))` and
+#: `cosh(inv(1e17))` round to exactly 1.0; `exp(-750)` underflows to 0.0 and `cosh(750)`
+#: overflows to inf. A rule that RELIES on non-attainment -- `acosh(neg(tanh(c)))` is nan
+#: only because |tanh| < 1 -- is true mathematics and false in f64 at exactly these
+#: magnitudes, and the ordinary battery (|c| <= 5, pi, e) cannot see it. Both signs: the
+#: quantifier ranges over R and a one-sided probe is not a probe of R.
+SATURATION_CONSTS = [c * s for c in (19., 20., 50., 750., 1e17) for s in (1., -1.)]
+
+
+def judge_cl_battery(saturation=True):
     """judging battery for a SOURCE-side constant (forall c_s over R). Includes the
     special rationals (pow(1,nan)=1 class) AND the SYMBOLIC transcendental atoms,
     built at the CURRENT dps: a fitted constant reaches pi/2, and pow(sin(c),inf)
@@ -817,12 +827,15 @@ def judge_cl_battery():
     coincidence by 5e-33 (a false rescue can otherwise slip through; the symbolic
     constant atoms kill it correctly). A cl whose witness is unfittable (degenerate
     LHS there) is skipped with a tally; only core-CONSTS failures mean NO-WITNESS."""
-    return ([(lambda c=c: mpf(c)) for c in CONSTS] +
+    base = ([(lambda c=c: mpf(c)) for c in CONSTS] +
             [(lambda: mpf(1)), (lambda: mpf(-1)), (lambda: mpf(0)),
              (lambda: mpf(2)), (lambda: mpf(-2)), (lambda: mpf(4)),
              (lambda: mpf(-4)), (lambda: mpf(5)), (lambda: mpf(-5)),
              (lambda: mp.pi / 2), (lambda: -mp.pi / 2), (lambda: mp.pi),
              (lambda: mp.e)])
+    if not saturation:
+        return base
+    return base + [(lambda c=c: mpf(c)) for c in SATURATION_CONSTS]
 GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
                        np.array([-1e4, -1e3, -300., -100., -50., -30.,
                                  30., 50., 100., 300., 1e3, 1e4])]) + 0.0137421
@@ -1290,8 +1303,19 @@ def judge_rule(lhs, rhs, deployed_check=True):
     # cliffs (asin(tanh(exp(3))): f64 sees exactly pi/2, the contract pi/2 - 2.3e-9).
     witness = {}
     witness_f64 = {}
+    # THE SATURATION PROBES ARE WITHHELD WHERE A WITNESS MUST BE RE-FITTED AT THEM.
+    # Measured over the shipped rules.json: on the 71 rows whose constant appears only on
+    # the SOURCE side, the probes move exactly 16 rows and every one moves cleanly from
+    # `core` to `real` -- they are the rules the deep audit found unrealised in f64. On
+    # the 272 rows that also fit a TARGET constant they produce 88 clause-(a) KILLs, and
+    # every one diagnosed is an artifact of the exists-witness machinery at magnitudes it
+    # cannot resolve, not a false rule. So the probe is put where its answer can be read
+    # and withheld where it cannot; `saturation_probed` says which happened, because a
+    # withheld question that nobody records is the `skipped_cl` defect again.
+    saturation_probed = not has_cr
     if has_cl:
-        cl_battery = [(b, float(b())) for b in judge_cl_battery()]
+        cl_battery = [(b, float(b()))
+                      for b in judge_cl_battery(saturation=saturation_probed)]
     else:
         cl_battery = [(None, None)]
     core = {float(c) for c in CONSTS}
@@ -1595,10 +1619,12 @@ def judge_rule(lhs, rhs, deployed_check=True):
     if tolerated:
         kinds = sorted({v for v, _, _ in tolerated})
         return {'verdict': 'TOLERATED', 'classes': kinds,
+                'saturation_probed': saturation_probed,
             'realised': _realised, 'tier': _tier('TOLERATED', _realised),
                 'events': [(v, p) for v, p, _ in tolerated[:3]], 'measure': meas,
                 'skipped_cl': skipped_cl, 'resolved_points': resolved_pts}
     return {'verdict': 'CERTIFIED', 'measure': meas, 'skipped_cl': skipped_cl,
+            'saturation_probed': saturation_probed,
             'realised': _realised, 'tier': _tier('CERTIFIED', _realised),
             'resolved_points': resolved_pts}
 

@@ -772,7 +772,7 @@ class TestTheWitnessOutResolvesTheLadder:
 
         import simplipy.verify._contract as C
         base = C.judge_cl_battery
-        C.judge_cl_battery = lambda: base() + [lambda: mpf(710)]
+        C.judge_cl_battery = lambda **kw: base(**kw) + [lambda: mpf(710)]
         try:
             got = C.judge_rule(['log', 'cosh', '<constant>'], ['<constant>'])
         finally:
