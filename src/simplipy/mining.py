@@ -1079,18 +1079,17 @@ class RuleMiner:
         prov['ladder_snapshot'] = {
             'emitted_at_source_length': length,
             'climb_max_source_pattern_length': climb_max,
-            'equivalence': 'Lengths are mined shortest-first, the per-source seed is '
-                           'mine_seed + (length << 40), and the candidate library is bounded by '
-                           'max_target_pattern_length -- so this prefix does not depend on how far '
-                           'the climb continues, and the rule set equals a one-shot mine of this cell.',
+            'equivalence': 'Lengths are mined shortest-first and the per-source seed is '
+                           'mine_seed + (length << 40). Every bound the search applies is a '
+                           'function of the SOURCE and the candidate alone: the candidate library '
+                           'is bounded by max_target_pattern_length, mu is scored once from the '
+                           'bare context at library-build time, acceptance requires mu(target) < '
+                           'mu(source), and certification is per canonical source class. None of '
+                           'them reads how far the climb continues, so this prefix equals a '
+                           'one-shot mine of this cell.',
         }
         return prov
 
-    #: Probe expressions whose complexities identify the MEASURE. Chosen to separate the
-    #: changes the measure has actually undergone: an integer (the L-formula), a unit
-    #: fraction and a non-unit one (the fraction code and the inversion bit), a decimal
-    #: whose denominator carries a five (the print/argmin split), a `<constant>` (mu_free),
-    #: and a bare symbol (mu_sym).
 
     @staticmethod
     def _write_provenance(output_file: str, provenance: dict | None, rules: list,

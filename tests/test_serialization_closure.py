@@ -429,3 +429,44 @@ class TestCoreTableHasOneSource:
         # semantics already match the engine's.
         for tok in ('+', '-', '*'):
             assert table[tok]['realization'] is None, tok
+
+
+class TestTheMeasureFingerprintReadsTheWholeMeasure:
+    """D25/R6 exists so an artifact mined under one measure cannot be mistaken for one
+    mined under another. That only works if every dial the measure turns moves at least
+    one probe -- and for a while six of the symbol table's nine entries turned nothing.
+    Changing `Pow` from 4 bits to 3 left the digest at `355f6ba90801f603`.
+    """
+
+    def test_every_node_kind_the_measure_prices_is_probed(self, referee) -> None:
+        """The probe set must exercise each kind, or a change to that kind is invisible.
+        Checked structurally rather than by value: two kinds can price the same (an `Add`
+        and a `Mul` of two leaves both cost 15,000 today) and still need separate probes,
+        because a change to ONE of them must move the digest."""
+        probes = {t[0]: list(t) for t in type(referee)._MEASURE_PROBES}
+        kinds = {
+            'leaf': ['x0'], 'Add': ['+', 'x0', 'x1'], 'Mul': ['*', 'x0', 'x1'],
+            'Pow': ['pow', 'x0', '2'], 'Pi': ['np.pi'], 'E': ['np.e'],
+            'elementary head': ['sin', 'x0'], 'transcendental head': ['asin', 'x0'],
+            'infinity': ['float("inf")'], 'free constant': ['<constant>'],
+        }
+        missing = [k for k, toks in kinds.items() if toks not in probes.values()]
+        assert not missing, f'no fingerprint probe exercises: {missing}'
+
+    def test_the_probes_have_distinct_heads(self, referee) -> None:
+        """The digest keys on the FIRST token, so two probes sharing a head would
+        silently collapse into one entry."""
+        heads = [t[0] for t in type(referee)._MEASURE_PROBES]
+        assert len(heads) == len(set(heads)), heads
+
+    def test_the_digest_moves_when_a_probe_moves(self, referee) -> None:
+        """The digest is a hash of the probe readings, so a changed reading must change
+        it. Pinned because a fingerprint that cannot move is worse than none: it reports
+        agreement it never checked."""
+        import hashlib
+        fp = referee._measure_fingerprint()
+        assert fp['digest'] == hashlib.sha256(
+            repr(sorted(fp['probes'].items())).encode()).hexdigest()[:16]
+        tampered = dict(fp['probes'], **{'pow': (fp['probes']['pow'] or 0) + 1000})
+        assert hashlib.sha256(
+            repr(sorted(tampered.items())).encode()).hexdigest()[:16] != fp['digest']

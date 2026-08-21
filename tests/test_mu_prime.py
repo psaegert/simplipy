@@ -488,12 +488,23 @@ class TestFingerprintAndArtifactLoad:
     def test_fingerprint_probes_pin_mu_prime(self, eng):
         fp = eng._measure_fingerprint()
         assert fp['probes'] == {
+            # the literal codebook
             '1000': 5 * MILLI,        # (1, 3): selector + 2 + L(3)
             '1/2': 3585,              # rational wins: selector + L(1) + L(2)
             '355/113': 16309,         # no decimal codeword: selector + old price
             '0.2': 4 * MILLI,         # (2, 1): selector + 2 + L(1)
             '<constant>': MU_FREE_PRIME,
-            'x0': MU_LEAF,
+            # the symbol table, one probe per entry (2026-08-21). Add and Mul price the
+            # same here and still need separate probes: a change to ONE of them has to
+            # move the digest.
+            'x0': MU_LEAF,                    # 6
+            '+': 3 * MILLI + 2 * MU_LEAF,     # Add 3
+            '*': 3 * MILLI + 2 * MU_LEAF,     # Mul 3
+            'pow': 3 * MILLI + MU_LEAF + 3 * MILLI,   # Pow 3 + leaf + cost(2)
+            'np.pi': 4 * MILLI, 'np.e': 4 * MILLI,
+            'sin': 6 * MILLI + MU_LEAF,       # elementary head
+            'asin': 8 * MILLI + MU_LEAF,      # transcendental head
+            'float("inf")': 8 * MILLI,
         }
         assert fp['digest'] != ACJ_MINED_DIGEST
 

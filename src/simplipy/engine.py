@@ -1751,7 +1751,26 @@ class SimpliPyEngine:
 
     certify_rules.__wrapped__ = RuleMiner.certify_rules  # type: ignore[attr-defined]
 
-    _MEASURE_PROBES = (('1000',), ('1/2',), ('355/113',), ('0.2',), ('<constant>',), ('x0',))
+    _MEASURE_PROBES = (
+        # the LITERAL codebook: an integer (the L-formula), a unit fraction and a
+        # non-unit one (the fraction code and the inversion bit), a decimal whose
+        # denominator carries a five (the print/argmin split), and `<constant>`.
+        ('1000',), ('1/2',), ('355/113',), ('0.2',), ('<constant>',),
+        # the SYMBOL TABLE, one probe per entry (2026-08-21). Before these, six of the
+        # nine entries were invisible to the fingerprint: changing `Pow` from 4 bits to
+        # 3 left the digest at `355f6ba90801f603`, so an artifact mined under one table
+        # was indistinguishable from one mined under another -- which is the exact
+        # failure this fingerprint exists to prevent. Keyed on the first token, so each
+        # probe needs a distinct head.
+        ('x0',),                    # leaf
+        ('+', 'x0', 'x1'),          # Add
+        ('*', 'x0', 'x1'),          # Mul
+        ('pow', 'x0', '2'),         # Pow
+        ('np.pi',), ('np.e',),      # the named constants
+        ('sin', 'x0'),              # an elementary head
+        ('asin', 'x0'),             # a transcendental head
+        ('float("inf")',),          # the infinities
+    )
 
     def _measure_fingerprint(self) -> dict:
         """A fingerprint of the REDUCTION MEASURE, for the provenance sidecar.
@@ -1765,8 +1784,9 @@ class SimpliPyEngine:
 
         The fingerprint is BEHAVIOURAL, not a version string: it records what the measure
         actually charges on probes chosen to separate the changes it has undergone. Any
-        change to `L`, to the fraction/decimal codes, to `mu_free` or to `mu_sym` moves at
-        least one entry.
+        change to `L`, to the fraction/decimal codes, to `mu_free`, or to ANY ENTRY OF THE
+        SYMBOL TABLE moves at least one entry -- the last clause is why there is one probe
+        per table entry rather than the single bare symbol this used to carry.
         """
         probes: dict[str, int | None] = {}
         for tokens in self._MEASURE_PROBES:
@@ -1776,7 +1796,10 @@ class SimpliPyEngine:
                 probes[tokens[0]] = None
         return {
             'unit': 'milli-bits',
+            # `mu_sym` is the historical key and stays, for sidecars already published;
+            # what it holds is the LEAF entry, which is what a bare symbol costs.
             'mu_sym': probes.get('x0'),
+            'mu_leaf': probes.get('x0'),
             'mu_free': probes.get('<constant>'),
             'probes': probes,
             'digest': hashlib.sha256(
