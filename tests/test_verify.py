@@ -644,3 +644,137 @@ class TestOperandScaledPrecision:
         assert _required_dps(mpf('1e217')) == BASE_DPS + 2 * 218
         # and it is CAPPED: past the ceiling the point is Unresolved, never convicted
         assert _required_dps(mpf('1e100000')) == MAX_DPS
+
+
+class TestTheBatterySweepIsExhaustiveWhereItClaimsToBe:
+    """The slot-product cap was the literal 500, under a comment asserting that "500
+    covers every <=2-slot rule exhaustively (23^2 = 529 ~ capped edge)". 529 > 500, so
+    the comment described the one thing the number could not do."""
+
+    def test_the_cap_is_the_full_two_slot_product(self) -> None:
+        from simplipy.verify._contract import BATTERY_CAP, battery_for
+        widest = max(len(battery_for(s)) for s in '?_!$')
+        assert BATTERY_CAP == widest ** 2, (BATTERY_CAP, widest)
+
+    def test_a_two_slot_rule_is_never_sampled(self) -> None:
+        """The real assertion is behavioural: the sampling branch must not fire. Under
+        the old cap it fired for EVERY 2-slot rule and dropped 29 of the 529 pairs --
+        and since the cap applies once per slot as the product is built, no combo
+        extending one of those 29 could reach a 3-slot sample either."""
+        import simplipy.verify._contract as C
+        drawn = []
+        real_rng = C.np.random.default_rng
+
+        def spy(*a, **k):
+            drawn.append(a)
+            return real_rng(*a, **k)
+
+        C.np.random.default_rng = spy
+        try:
+            got = C.judge_rule(['+', '_0', '_1'], ['+', '_1', '_0'])
+            assert got['verdict'] == 'CERTIFIED', got
+            assert drawn == [], 'the two-slot sweep was sampled, not exhaustive'
+            # and the guard is load-bearing: at the old cap the same rule IS sampled
+            C.BATTERY_CAP = 500
+            C.judge_rule(['+', '_0', '_1'], ['+', '_1', '_0'])
+            assert drawn, 'the spy never observed the branch it is guarding'
+        finally:
+            C.np.random.default_rng = real_rng
+            C.BATTERY_CAP = max(len(C.battery_for(s)) for s in '?_!$') ** 2
+
+
+class TestTheExistsWitnessIsActuallySearchedFor:
+    """`forall c_s exists c_t` was decided by a search that stopped at 1e12, and the
+    failures it produced were filed in `skipped_cl` -- a key every verdict returns and
+    nothing reads."""
+
+    def test_the_search_reaches_the_f64_ceiling(self) -> None:
+        """`pow(exp(9), 5) = 3.5e19` is an unremarkable constant-fold whose witness is
+        the value itself. The old grid could not BRACKET it, so 15 rules of the shipped
+        `rules_real.json` were reported witness-less on a search artifact."""
+        import math
+
+        from simplipy.verify._contract import _XS, fit_witness, parse
+        assert max(_XS) >= 1e300 and min(_XS) <= -1e300
+        tl = parse(['pow', 'exp', '9', '<constant>'], '<C_L>')
+        tr = parse(['<constant>'], '<C_R>')
+        want = math.exp(9) ** 5
+        got = fit_witness(tl, tr, set(), 5.0)
+        assert got is not None, 'no witness for a plain constant-fold'
+        assert abs(got - want) <= 1e-6 * abs(want), (got, want)
+
+    def test_a_defined_lhs_with_no_witness_is_convicted_not_swallowed(self) -> None:
+        """The rule holds at every constant that fits, so the verdict used to be
+        CERTIFIED. A cl where the LHS HAS a value and no c_t reproduces it falsifies the
+        exists-claim outright, whether or not that cl is one of the core CONSTS."""
+        import math
+
+        import simplipy.verify._contract as C
+        lhs, rhs = ['pow', 'exp', '9', '<constant>'], ['<constant>']
+        assert C.judge_rule(list(lhs), list(rhs))['verdict'] == 'CERTIFIED'
+
+        real_fit = C.fit_witness
+
+        def blind_at_pi(tl, tr, shared, cl_val=None):
+            # pi is NOT in CONSTS, so the old code appended it to `skipped_cl`
+            if cl_val is not None and abs(cl_val - math.pi) < 1e-12:
+                return None
+            return real_fit(tl, tr, shared, cl_val)
+
+        C.fit_witness = blind_at_pi
+        try:
+            got = C.judge_rule(list(lhs), list(rhs))
+        finally:
+            C.fit_witness = real_fit
+        assert got['verdict'] == 'NO-WITNESS', got
+        assert 'cl=' in got['detail'] and got['skipped_cl'] == [], got
+
+    def test_an_undefined_lhs_is_still_a_legitimate_skip(self) -> None:
+        """The other half of the split must not move: where the LHS has NO value the
+        rule is vacuous at that constant, and skipping is correct. `log(cosh(tan(c)))`
+        at c = +-pi/2 is infinite in f64, and stays a skip rather than a conviction."""
+        import simplipy.verify._contract as C
+        got = C.judge_rule(['log', 'cosh', 'tan', '<constant>'], ['<constant>'])
+        assert got['verdict'] != 'NO-WITNESS', got
+        assert got.get('skipped_cl'), 'the degenerate skip stopped being recorded'
+
+
+class TestTheWitnessOutResolvesTheLadder:
+    """`mp_polish` says it in its own docstring -- "THE WITNESS MUST OUT-RESOLVE THE
+    LADDER" -- and then polished to a FIXED `GAP_RUNGS[-1] + 50`. F96 made the ladder's
+    depth operand-scaled, so that constant stopped naming its deepest rung."""
+
+    def test_the_polish_depth_follows_the_operands(self) -> None:
+        """`cosh(710) ~ 1.1e308` puts rung 2 at dps 668 and rung 3 at dps 1336. A witness
+        frozen at 300 leaves the SAME ~1e-300 residue at both rungs: it does not decay,
+        so the F103 test reads it as an analytic gap."""
+        from mpmath import cosh, log, mp, mpf
+
+        from simplipy.verify._contract import mp_polish, parse
+        tl = parse(['log', 'cosh', '<constant>'], '<C_L>')
+        tr = parse(['<constant>'], '<C_R>')
+        got = mp_polish(tl, tr, {}, lambda: mpf(710), 709.3068528194401)
+        old = mp.dps
+        try:
+            mp.dps = 1500
+            want = log(cosh(mpf(710)))
+            digits = -mp.log10(abs(got - want) / abs(want))
+        finally:
+            mp.dps = old
+        # rung 3 sits at dps 1336; the witness must be deeper than that, not at 300
+        assert digits > 1336, f'witness good to only {digits} digits'
+
+    def test_a_rule_true_by_construction_is_not_killed_at_the_overflow_edge(self) -> None:
+        """`log(cosh(C)) -> c_t` holds for every C with c_t = log(cosh(C)). At C = 710 --
+        the last constant where f64 `cosh` is still finite -- the shallow witness made it
+        a clause-(a) KILL."""
+        from mpmath import mpf
+
+        import simplipy.verify._contract as C
+        base = C.judge_cl_battery
+        C.judge_cl_battery = lambda: base() + [lambda: mpf(710)]
+        try:
+            got = C.judge_rule(['log', 'cosh', '<constant>'], ['<constant>'])
+        finally:
+            C.judge_cl_battery = base
+        assert got['verdict'] != 'KILL', got

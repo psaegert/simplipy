@@ -800,6 +800,12 @@ def battery_for(sort):
     raise ValueError(sort)
 
 
+#: The battery slot-product cap: the size of the FULL two-slot product, derived from
+#: the batteries themselves rather than written down, so that adding a battery point
+#: cannot silently turn an exhaustive two-slot sweep back into a sample.
+BATTERY_CAP = max(len(battery_for(s)) for s in '?_!$') ** 2
+
+
 CONSTS = [2.5, -1.5, 3.0, 0.5, -0.7]      # witness-fitting battery (generic values)
 
 
@@ -841,8 +847,19 @@ def _gen_env(names, k):
     return {n: F(GEN[(k + i) % len(GEN)]) for i, n in enumerate(sorted(names))}
 
 
-_XS = np.concatenate([-np.logspace(12, -3, 120), np.linspace(-3, 3, 81),
-                      np.logspace(-3, 12, 120)])
+#: The COARSE TAIL of the exists-witness search grid, out to the f64 ceiling. A witness
+#: only has to be BRACKETED on this grid -- 300 bisection steps do the rest -- and the
+#: dense body below stops at 1e12, which cannot bracket the perfectly ordinary
+#: constant-folds `pow(exp(9), 5) = 3.5e19` or `pow(cosh(7), 5) = 5.0e13`. 15 rules of
+#: the shipped `rules_real.json` were reported witness-less for that reason alone, and
+#: `skipped_cl` swallowed the report. Density is not delicate: measured over the whole
+#: 296-rule constant population, every tail from 1 point per 12 decades to 1 per decade
+#: recovers the SAME 27 fits and moves NO witness that already fitted.
+_XS_TAIL = np.logspace(12, 300, 49)[1:]
+
+#: The dense body is the shipped grid, unchanged -- the tail only adds reach.
+_XS = np.concatenate([-_XS_TAIL[::-1], -np.logspace(12, -3, 120),
+                      np.linspace(-3, 3, 81), np.logspace(-3, 12, 120), _XS_TAIL])
 
 
 def fit_witness(tl, tr, shared, cl_val=None):
@@ -947,15 +964,38 @@ def mp_polish(tl, tr, nvars, clb, c0):
         # convicted the identity `pow abs ?0 <constant> -> pow abs ?0 <constant>`, whose
         # two sides are the same tokens. Fitting deeper than the deepest rung keeps the
         # comparison a statement about the FUNCTIONS rather than about this fit.
+        def build_env():
+            e = {}
+            for i, n in enumerate(sorted(nvars)):
+                e[n] = mpf(GEN[i % len(GEN)])
+            if clb is not None:
+                # the EXACT battery value (symbolic builder), NOT its f64 rendering: a
+                # witness polished against f64-pi differs from the judge's exact mp.pi by
+                # ~4e-17, producing false clause-(a) kills of the witness family. Rebuilt
+                # after the depth is settled, since a symbolic atom is only as good as
+                # the dps it was rendered at.
+                e['<C_L>'] = clb()
+            return e
+
+        # ...AND THE LADDER'S DEPTH IS OPERAND-SCALED (F96), so `GAP_RUNGS[-1]` stopped
+        # naming its deepest rung. Size the rule's own intermediates first and match the
+        # depth the ladder will actually climb to. Measured on `log(cosh(C)) -> c_t` at
+        # C = 710: cosh(710) ~ 1.1e308 puts rung 2 at dps 668 and rung 3 at dps 1336,
+        # against a witness frozen at 300 -- so the SAME ~1e-300 residue sat at both
+        # rungs, did not decay, and the F103 decay test read it as an analytic gap. A
+        # clause-(a) KILL of a rule that is true by construction. Costs nothing for an
+        # ordinary rule: small intermediates give back exactly the old 300.
         mp.dps = GAP_RUNGS[-1] + 50
-        env = {}
-        for i, n in enumerate(sorted(nvars)):
-            env[n] = mpf(GEN[i % len(GEN)])
-        if clb is not None:
-            # the EXACT battery value (symbolic builder), NOT its f64 rendering: a
-            # witness polished against f64-pi differs from the judge's exact mp.pi by
-            # ~4e-17, producing false clause-(a) kills of the witness family
-            env['<C_L>'] = clb()
+        _MAG_SINK.append([mpf(0)])
+        try:
+            c_eval(tl, build_env())
+        except Unresolved:
+            return mpf(c0)
+        finally:
+            _mag = _MAG_SINK.pop()[0]
+        mp.dps = max(mp.dps,
+                     max(GAP_RUNGS[2], 2 * max(GAP_RUNGS[1], _required_dps(_mag))) + 50)
+        env = build_env()
         try:
             target = c_eval(tl, env)
         except Unresolved:
@@ -1001,7 +1041,7 @@ def mp_polish(tl, tr, nvars, clb, c0):
                 if best_r is None or abs(fc) < best_r:
                     best, best_r = c, abs(fc)
                 if abs(fc) <= _WIT_RESID * max(1, abs(target)):
-                    if abs(c) < mpf(10) ** (-(GAP_RUNGS[-1] + 25)):
+                    if abs(c) < mpf(10) ** (-(mp.dps - 25)):
                         try:
                             if abs(h(mpf(0))) <= _WIT_RESID * max(1, abs(target)):
                                 return mpf(0)   # snap near-zero polish results to exact 0
@@ -1232,6 +1272,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
         cl_battery = [(None, None)]
     core = {float(c) for c in CONSTS}
     skipped_cl = []
+    unwitnessed_cl = []
     if has_cr:
         kept_cl = []
         any_fit = False
@@ -1251,8 +1292,20 @@ def judge_rule(lhs, rhs, deployed_check=True):
                             break
                     except Exception:
                         pass
-                if lhs_defined and (key is None or key in core):
-                    return {'verdict': 'NO-WITNESS', 'detail': f'cl={key} (LHS defined)'}
+                if lhs_defined:
+                    # the LHS HAS a value here and no c_t reproduces it: an
+                    # exists-FAILURE, which is a different fact from the degenerate skip
+                    # below. A core cl convicts immediately, as before. A NON-core cl
+                    # used to be appended to `skipped_cl` and forgotten -- and
+                    # `skipped_cl` is returned by every verdict yet read by nobody, so
+                    # the rule went on to be CERTIFIED on the strength of the constants
+                    # that happened to fit. Recorded apart, and made verdict-bearing.
+                    if key is None or key in core:
+                        return {'verdict': 'NO-WITNESS',
+                                'detail': f'cl={key} (LHS defined)'}
+                    unwitnessed_cl.append(key)
+                    continue
+                # LHS UNDEFINED here: the rule is vacuous at this cl, a real skip
                 skipped_cl.append(key)
                 continue
             any_fit = True
@@ -1261,6 +1314,12 @@ def judge_rule(lhs, rhs, deployed_check=True):
             kept_cl.append((b, key))
         if has_cr and not any_fit:
             return {'verdict': 'NO-WITNESS', 'detail': 'no cl with a finite LHS/witness'}
+        if unwitnessed_cl:
+            # forall-c_s exists-c_t is falsified at a constant where the LHS is defined.
+            # Reported for ALL such constants rather than the first, because the set is
+            # the evidence: one is a corner, a spread is a false rule.
+            return {'verdict': 'NO-WITNESS', 'skipped_cl': skipped_cl,
+                    'detail': f'cl={sorted(unwitnessed_cl)} (LHS defined)'}
         cl_battery = kept_cl if has_cl else [(None, None)]
 
     a_kills, tolerated, dep_div = [], [], []
@@ -1283,12 +1342,17 @@ def judge_rule(lhs, rhs, deployed_check=True):
                 e[n] = (builder, tag)
                 nxt.append(e)
         combos = nxt
-        if len(combos) > 500:
-            # 500 covers every <=2-slot rule exhaustively (23^2 = 529 ~ capped edge);
-            # sampling below that drops single-point clause-(a) violations of 2-var
-            # rules; >=3-slot rules keep the seeded sample
+        if len(combos) > BATTERY_CAP:
+            # the cap is the FULL two-slot product, so every <=2-slot rule is judged
+            # exhaustively and a >=3-slot sample is drawn from the COMPLETE two-slot
+            # base. The literal 500 this replaces was 29 short of 23^2 = 529 while its
+            # comment claimed the opposite. Two consequences, not one: it dropped 29
+            # two-slot pairs outright, and -- because the cap applies once per slot as
+            # the product is built -- combos extending those 29 could never enter a
+            # 3-slot sample either. A systematic blind spot, not a smaller sample.
             rng = np.random.default_rng(11)
-            combos = [combos[i] for i in rng.choice(len(combos), 500, replace=False)]
+            combos = [combos[i]
+                      for i in rng.choice(len(combos), BATTERY_CAP, replace=False)]
     for clb, clkey in cl_battery:
         cr = witness.get(clkey) if has_cr else None
         crd = witness_f64.get(clkey) if has_cr else None
