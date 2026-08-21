@@ -736,7 +736,20 @@ class TestTheExistsWitnessIsActuallySearchedFor:
         finally:
             C.fit_witness = real_fit
         assert got['verdict'] == 'NO-WITNESS', got
-        assert 'cl=' in got['detail'] and got['skipped_cl'] == [], got
+        assert 'cl=' in got['detail'], got
+        # pi is the cl the fit was BLINDED at, so pi is what convicts.
+        assert str(math.pi) in got['detail'], got
+        # `skipped_cl` is no longer empty, and that is correct rather than a regression:
+        # the widened battery reaches |c| = 1e4, and `exp(9)^c` overflows there, so those
+        # constants are genuinely degenerate. Assert the PROPERTY instead of the old
+        # empty list -- every skipped cl must be one where no witness can be DETERMINED
+        # (`_fit_target_env` is the judge's own test for that), and the blinded pi must
+        # not be among them, or the conviction would be coming from the wrong place.
+        assert math.pi not in got['skipped_cl'], got
+        tl, tr = C.parse(lhs, '<C_L>'), C.parse(rhs, '<C_R>')
+        assert got['skipped_cl'], 'the widened battery must reach the degenerate range'
+        for cl in got['skipped_cl']:
+            assert C._fit_target_env(tl, tr, set(), cl) is None, (cl, got)
 
     def test_an_undefined_lhs_is_still_a_legitimate_skip(self) -> None:
         """The other half of the split must not move: where the LHS has NO value the
@@ -1121,3 +1134,56 @@ class TestTheQuantifierWidensWithoutConvictingTheTrue:
         from simplipy.verify._contract import _XS
         assert _XS.max() > 1e307 and _XS.min() < -1e307
         assert np.isfinite(_XS).all()
+
+
+class TestTheWidenedQuantifierDoesNotConvictWhatItCannotResolve:
+    """The constant battery reaches |c| = 1e4 because the miner draws from that span.
+    Getting there needed two fixes in the exists-witness machinery, and both are the
+    same shape as every other false conviction in this lane: the judge answered a
+    question at a point where it could not read the answer.
+    """
+
+    LHS = ['pow', 'abs', '?0', '<constant>']
+
+    def test_an_identity_survives_the_widened_battery(self) -> None:
+        """The reproducer. At cl = 10000 the deployed LHS is inf at ?0 = 1.7 and at
+        -1.3, and underflows to exactly 0.0 at -0.8 -- the one finite env, and the one
+        the fit used to commit to. `0.8^c - 0.0` is then zero for EVERY c past ~3339, so
+        the fit returned 3339.25 against a true 10000 and the judge convicted an
+        IDENTITY on the difference."""
+        import simplipy.verify._contract as C
+        r = C.judge_rule(list(self.LHS), list(self.LHS))
+        assert r['verdict'] == 'CERTIFIED', r
+
+    def test_a_saturated_env_determines_nothing_and_is_skipped(self) -> None:
+        """An equation that holds on an INTERVAL names no constant. The env is refused,
+        every other env is tried, and a cl with no determinate env is a SKIP -- not a
+        conviction. `skipped_cl` is exactly the tally that fact belongs in."""
+        import simplipy.verify._contract as C
+        tl = C.parse(self.LHS, '<C_L>')
+        tr = C.parse(self.LHS, '<C_R>')
+        assert C._fit_target_env(tl, tr, {'?0'}, 10000.0) is None
+        # ...and the neighbouring magnitude, where one env is NOT saturated, still fits.
+        assert C._fit_target_env(tl, tr, {'?0'}, -3000.0) is not None
+
+    def test_the_search_reaches_the_constant_it_is_asked_about(self) -> None:
+        """`_XS` is a fixed grid and its density collapses where the deployed algebra
+        saturates: at ?0 = -0.8 the RHS overflows below c ~ -3178, so every finite grid
+        point near the true witness -3000 sits on ONE side of it and the bracketing
+        finds no sign change at all. The source constant is tried as a seed, which is
+        the answer for every identity and costs one residual evaluation."""
+        import simplipy.verify._contract as C
+        tl = C.parse(self.LHS, '<C_L>')
+        tr = C.parse(self.LHS, '<C_R>')
+        w = C.fit_witness(tl, tr, {'?0'}, -3000.0)
+        assert w == -3000.0, w
+
+    def test_the_battery_spans_what_the_miner_draws(self) -> None:
+        """The point of the widening: `POLE_GRID` runs to 500 and fitted constants are
+        drawn log-uniform over [1e-3, 1e3]. A battery that stops at |c| <= 5 checks a
+        quantifier the search does not obey."""
+        import simplipy.verify._contract as C
+        mags = sorted({abs(float(b())) for b in C.judge_cl_battery(saturation=False)}
+                      - {0.0})
+        assert min(mags) <= 1e-3 and max(mags) >= 1e4, mags
+        assert {-1e4, -1e3, -0.001, 1e-3, 1e3, 1e4} <= {float(c) for c in C.WIDE_CONSTS}

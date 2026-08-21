@@ -969,10 +969,10 @@ def judge_cl_battery(saturation=True):
              (lambda: mpf(-4)), (lambda: mpf(5)), (lambda: mpf(-5)),
              (lambda: mp.pi / 2), (lambda: -mp.pi / 2), (lambda: mp.pi),
              (lambda: mp.e)])
+    base = base + [(lambda c=c: mpf(c)) for c in WIDE_CONSTS]
     if not saturation:
         return base
-    return base + [(lambda c=c: mpf(c))
-                   for c in SATURATION_CONSTS + WIDE_CONSTS]
+    return base + [(lambda c=c: mpf(c)) for c in SATURATION_CONSTS]
 GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
                        np.array([-1e4, -1e3, -300., -100., -50., -30.,
                                  30., 50., 100., 300., 1e3, 1e4])]) + 0.0137421
@@ -1016,6 +1016,63 @@ _XS = np.concatenate([-_XS_TAIL[::-1], -np.logspace(12, -3, 120),
                       np.linspace(-3, 3, 81), np.logspace(-3, 12, 120), _XS_TAIL])
 
 
+def _fit_target_env(tl, tr, shared, cl_val=None):
+    """The generic env at which a witness can be DETERMINED, with its residual scanned.
+
+    Returns `(env0, L0, g, vals, ok)`, or None if no env determines anything.
+
+    TWO CONDITIONS, where there used to be one. The deployed LHS must be FINITE there --
+    as before -- AND the residual `rhs(c) - L0` must vanish at no more than one grid
+    point. The second is what makes the widened constant battery safe: where the deployed
+    LHS has SATURATED, the equation holds on an INTERVAL, and an interval names no
+    constant. `pow(abs ?0, 10000)` is inf at `?0 = 1.7` and at `-1.3`, and underflows to
+    exactly 0.0 at `-0.8` -- the only finite env -- so `0.8^c - 0.0` is zero for every c
+    past ~3339. The old code took the first finite env, fitted the edge of that interval
+    at 3339.25 against a true 10000, and the judge convicted an IDENTITY.
+
+    EVERY candidate env is tried, not just the first finite one: indeterminacy is a
+    property of the env, and another env may still pin the witness. When none does, the
+    cl is degenerate for fitting -- which is exactly what `skipped_cl` records, and why
+    `judge_rule` asks THIS function rather than re-deriving "is the LHS defined" from
+    finiteness alone (a saturated LHS is finite and determines nothing).
+    """
+    def lhs_at(env):
+        e = dict(env)
+        if cl_val is not None:
+            e['<C_L>'] = F(cl_val)
+        return d_eval(tl, e)
+
+    def rhs_at(env, c):
+        e = dict(env)
+        e['<C_R>'] = F(c)
+        if cl_val is not None:
+            e['<C_L>'] = F(cl_val)
+        return d_eval(tr, e)
+
+    for k in (0, 1, 4):
+        try:
+            env0 = _gen_env(shared, k)
+            L0 = lhs_at(env0)
+        except Exception:
+            continue
+        if not np.isfinite(L0):
+            continue
+
+        def g(c, _env0=env0, _L0=L0):
+            try:
+                v = rhs_at(_env0, c)
+                return v - _L0 if np.isfinite(v) else np.nan
+            except Exception:
+                return np.nan
+
+        vals = np.array([g(x) for x in _XS])
+        ok = np.isfinite(vals)
+        if int(np.count_nonzero(ok & (vals == 0))) > 1:
+            continue          # the residual vanishes on an interval: nothing to pin
+        return env0, L0, g, vals, ok
+    return None
+
+
 def fit_witness(tl, tr, shared, cl_val=None):
     """fit the exists-witness for a RHS <constant> on generic reals (deployed algebra);
     validated on two further generic envs; None if no witness exists/found"""
@@ -1032,28 +1089,10 @@ def fit_witness(tl, tr, shared, cl_val=None):
             e['<C_L>'] = F(cl_val)
         return d_eval(tr, e)
 
-    env0, L0 = None, None
-    for k in (0, 1, 4):
-        try:
-            e0 = _gen_env(shared, k)
-            v = lhs_at(e0)
-            if np.isfinite(v):
-                env0, L0 = e0, v
-                break
-        except Exception:
-            pass
-    if env0 is None:
+    found = _fit_target_env(tl, tr, shared, cl_val)
+    if found is None:
         return None
-
-    def g(c):
-        try:
-            v = rhs_at(env0, c)
-            return v - L0 if np.isfinite(v) else np.nan
-        except Exception:
-            return np.nan
-
-    vals = np.array([g(x) for x in _XS])
-    ok = np.isfinite(vals)
+    env0, L0, g, vals, ok = found
     best = None
     for i in range(len(_XS) - 1):
         if ok[i] and vals[i] == 0:
@@ -1073,7 +1112,19 @@ def fit_witness(tl, tr, shared, cl_val=None):
             best = 0.5 * (lo + hi)
             break
     if best is None:
-        for c in [1., -1., 2., -2., 0.5, -0.5, math.e, -math.e, math.pi, -math.pi]:
+        # THE SEARCH MUST INCLUDE THE CONSTANT THE QUANTIFIER IS ASKING ABOUT. `_XS` is a
+        # fixed global grid, and its density collapses exactly where the deployed algebra
+        # saturates: `pow(abs ?0, c)` at `?0 = -0.8` overflows below c ~ -3178, so every
+        # finite grid point near the true witness -3000 lies on ONE side of it and the
+        # bracketing finds no sign change at all. For a rule whose source carries a
+        # constant, `c_R = c_L` is the first candidate worth trying -- it is the answer
+        # for every identity -- and it costs one residual evaluation. It weakens nothing:
+        # the candidate still has to satisfy the same residual bound and the same
+        # two-env validation as any other. (Same shape as F16d: a lane that cannot
+        # evaluate where the question is asked answers a different question.)
+        seeds = ([float(cl_val)] if cl_val is not None else [])
+        for c in seeds + [1., -1., 2., -2., 0.5, -0.5, math.e, -math.e,
+                          math.pi, -math.pi]:
             v = g(c)
             if np.isfinite(v) and abs(v) <= 1e-9 * max(1.0, abs(L0)):
                 best = c
@@ -1602,16 +1653,11 @@ def judge_rule(lhs, rhs, deployed_check=True):
                 # distinguish: LHS UNDEFINED at this cl for the generic envs -> the rows
                 # are tolerated degenerate extensions (the acos(pow(c,-inf)) class),
                 # skip WITH tally; LHS defined but unfittable -> a genuine exists-failure
-                lhs_defined = False
-                for k in (0, 1, 4):
-                    try:
-                        v = d_eval(tl, dict(_gen_env(set(nvars), k),
-                                            **({'<C_L>': F(key)} if key is not None else {})))
-                        if np.isfinite(v):
-                            lhs_defined = True
-                            break
-                    except Exception:
-                        pass
+                # DEFINED here means DETERMINATE, not merely finite. A saturated LHS is
+                # finite and pins nothing (see `_fit_target_env`), and convicting a rule
+                # for failing to be witnessed at a point that cannot witness anything is
+                # the false-conviction shape this whole lane keeps producing.
+                lhs_defined = _fit_target_env(tl, tr, set(nvars), key) is not None
                 if lhs_defined:
                     # the LHS HAS a value here and no c_t reproduces it: an
                     # exists-FAILURE, which is a different fact from the degenerate skip

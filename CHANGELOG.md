@@ -151,6 +151,17 @@ drop census rather than silently absent.
 
 ### Fixed
 
+- The judge quantified a source-side `<constant>` over |c| ≤ 5 while the miner draws its
+  constants from [1e-3, 1e3] and sweeps magnitudes to 500 — so `forall c over the reals`
+  was checked on one decade. The battery now spans ±1e-3 to ±1e4. Reaching there needed
+  two fixes to the exists-witness search, both cases of answering at a point where the
+  answer cannot be read: a witness fitted where the deployed left-hand side has
+  **saturated** solves an *interval*, not a point, and its edge is not a witness (an
+  identity was convicted on the difference); and the fixed search grid thins out exactly
+  where the deployed algebra overflows, so the constant under test is now tried directly.
+  Rules true over the reals but unrealised at large constants move from `f64` to `real`,
+  where they belong — 107 of the 5,451 currently published, with no rule newly rejected.
+
 - The judge's realisation axis was measured with a `1e-9` tolerance carrying an absolute
   floor — roughly 10⁷ ULP — so a rule the contract convicts could be stamped "realised"
   and admitted to the default rule set. It now uses a bound derived from this platform's
