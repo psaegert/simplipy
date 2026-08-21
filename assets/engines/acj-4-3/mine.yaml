@@ -25,7 +25,7 @@ max_source_pattern_length: 4
 # scan), but the value here has to describe the rules actually shipped in this directory,
 # not the policy the next mine will use. It becomes `null` when the re-mined artifact
 # lands, in the same commit as the rules it describes.
-max_target_pattern_length: null
+max_target_pattern_length: 3
 source_sample_per_length: null        # complete universes at every length
 n_samples: 1024
 constants_fit_challenges: 16
