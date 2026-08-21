@@ -443,7 +443,7 @@ class TestSerializerArgmin:
 class TestSooseStructuralSpecimens:
     """Falsifier 8: the SOOSE row-235/row-59 shapes (cos*tan). No behavior assertion
     beyond: the engine loads acj-4-3, simplifies, and mu'-never-worse holds -- the
-    cos*tan -> sin rule itself is the acj-5-4 mine's (B3), not this artifact's."""
+    cos*tan -> sin rule itself is the acj-5 mine's (B3), not this artifact's."""
 
     SPECIMENS = [
         ['*', 'x1', '*', 'cos', 'x2', 'tan', 'x2'],           # row 235 shape
