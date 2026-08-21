@@ -136,6 +136,15 @@ drop census rather than silently absent.
   when intermediates are 10²¹⁷: both rungs are swamped alike and agree on a manufactured
   verdict. It is now sized from the largest intermediate actually seen. This was killing
   `log(cosh(25t) + sinh(25t)) = 25t`, which is exactly true.
+- The contract's finite comparison measured a RELATIVE separation, normalised by the
+  larger of the two sides. Against a side that is exactly zero that normaliser is the
+  other side, so the reading was `1.0` at every precision — it could not respond to
+  precision at all, which is the only question the comparison asks, and an identity whose
+  two sides agree exactly was convicted for its own arithmetic residue. The separation is
+  now measured absolutely, against a single scale held fixed across the precision rungs.
+  This was killing true identities of the form `log(eᵃ · e⁻ᵃ) = 0`, and the two judges
+  could disagree about them, because the verdict turned on whether the arbitrary-precision
+  library happened to return an exact zero at the upper rung.
 - The D15 diagonal lane never received the precision coupling its commit claimed, and fed
   the same measure that convicts.
 

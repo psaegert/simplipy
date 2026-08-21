@@ -820,3 +820,63 @@ class TestTheWitnessOutResolvesTheLadder:
         tr = parse(['<constant>'], '<C_R>')
         got = mp_polish(tl, tr, {}, lambda: mpf(2), 0.0)
         assert got == 0, f'a cancellation zero was chased to {got}'
+
+
+class TestAnExactZeroIsNotAnUndecayableGap:
+    """F105. The decay test compares ONE reading at TWO rungs, so any normaliser that is
+    the same at both cancels out of the ratio and cannot change a verdict. The old
+    `max(|l|, |r|)` was not the same at both: against an exact zero the scale IS the
+    residue, so the quotient was 1.0 at EVERY precision. A gap that cannot move by
+    construction is read as an analytic one, and clause (a) convicted it."""
+
+    #: True on the reals, with one side EXACTLY zero -- so the judge is comparing pure
+    #: precision residue against an exact zero, the shape that could never decay.
+    TRUE_ZERO_SIDE = [
+        (['log', '*', 'exp', '_0', 'exp', 'neg', '_0'], ['0']),
+        (['-', 'atanh', 'tanh', '_0', '_0'], ['0']),
+        (['-', 'asinh', 'sinh', '_0', '_0'], ['0']),
+        (['-', 'log', '+', 'cosh', '_0', 'sinh', '_0', '_0'], ['0']),
+        (['-', '*', 'tanh', '_0', 'cosh', '_0', 'sinh', '_0'], ['0']),
+        (['-', 'log', 'exp', '_0', '_0'], ['0']),
+    ]
+
+    def test_a_true_identity_against_an_exact_zero_is_not_killed(self) -> None:
+        """Every row here is zero by construction on the reals. All six were clause-(a)
+        KILLs at `tier=reject` -- convicted for a gap that was arithmetic residue and
+        nothing else."""
+        from simplipy.verify._contract import judge_rule
+        bad = []
+        for lhs, rhs in self.TRUE_ZERO_SIDE:
+            got = judge_rule(lhs, rhs)
+            if got.get('verdict') == 'KILL' or got.get('tier') == 'reject':
+                bad.append((' '.join(lhs), got.get('verdict'), got.get('clause')))
+        assert not bad, f'true zero-side identities convicted: {bad}'
+
+    def test_the_saturation_family_is_still_convicted(self) -> None:
+        """The other direction, and the reason the floor cannot simply be widened to
+        cover the rows above. `exp(sinh(-10))` is exactly 1.03e-4783 at EVERY working
+        precision -- tiny, but FIXED, and false. Flooring a nonzero separation at an
+        absolute `10^-dps` swamps it and manufactures a decay it does not have, so
+        nothing nonzero is floored. These must stay `f64`-tier kills, never `real`."""
+        from simplipy.verify._contract import judge_rule
+        for lhs, rhs in ((['exp', 'sinh', '(-10)'], ['0']),
+                         (['exp', 'sinh', '(-8)'], ['0']),
+                         (['tanh', '(-19)'], ['(-1)']),
+                         (['tanh', '20'], ['1'])):
+            got = judge_rule(lhs, rhs)
+            assert got.get('verdict') == 'KILL', (lhs, got)
+            assert got.get('clause') == 'a-real-change', (lhs, got)
+            assert got.get('tier') == 'f64', (lhs, got)
+
+    def test_the_reading_is_absolute_so_no_scale_can_normalise_it_away(self) -> None:
+        """The unit underneath. A separation reported as a QUOTIENT of its own scale is
+        1.0 whatever the residue is, which is what made the decay test blind."""
+        from mpmath import mpf
+
+        from simplipy.verify._contract import gap_reading
+        for residue in ('1e-51', '1e-121', '1e-4783'):
+            d, scale = gap_reading(('fin', mpf(0)), ('fin', mpf(residue)))
+            assert d == mpf(residue), f'{residue}: separation normalised away -> {d}'
+            assert scale == mpf(residue), f'{residue}: scale {scale}'
+        # and it still reports exact agreement as an exact zero
+        assert gap_reading(('fin', mpf(3)), ('fin', mpf(3)))[0] == 0

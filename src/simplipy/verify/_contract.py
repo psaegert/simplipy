@@ -636,15 +636,23 @@ def compare_classes(cl, cr):
     return None
 
 
-def rel_gap(cl, cr):
-    """Relative separation of two FINITE sides; exactly 0 when they agree."""
-    a, b = cl[1], cr[1]
-    if a == b:
-        return mpf(0)
-    scale = max(abs(mpf(a)), abs(mpf(b)))
-    if scale == 0:
-        return mpf(0)
-    return abs(mpf(a) - mpf(b)) / scale
+def gap_reading(cl, cr):
+    """One rung's FINITE reading -> `(|l - r|, scale)`, both ABSOLUTE.
+
+    F105 (2026-08-21): THIS USED TO RETURN THE QUOTIENT, AND AGAINST AN EXACT ZERO THE
+    QUOTIENT IS 1.0 AT EVERY PRECISION. The decay test compares this reading at two
+    rungs, so any normaliser that is the SAME at both cancels out of the ratio and
+    cannot change a verdict. `max(|l|, |r|)` is not the same at both: when one side is
+    exactly 0 and the other is pure precision residue, the scale IS the residue, the
+    quotient is 1.0 by construction, and a gap that cannot move reads as an analytic
+    one. Measured over 85 true zero-side identities, that convicted 25.
+
+    So the separation is reported RAW and the scale beside it, leaving the ladder to
+    fix ONE scale across both rungs -- where, being rung-invariant, it can only set the
+    zero-floor and never manufacture a ratio of its own.
+    """
+    a, b = mpf(cl[1]), mpf(cr[1])
+    return abs(a - b), max(abs(a), abs(b))
 
 
 # F103 (2026-08-21): THE FINITE CASE HAS NO MAGNITUDE BAR AT ALL. It asks how the gap
@@ -1155,7 +1163,7 @@ def _point_verdict(tl, tr, env_mp):
             if track:
                 once.mag = _MAG_SINK.pop()[0]
         v = compare_classes(cl, cr)
-        return (v, None) if v is not None else (None, rel_gap(cl, cr))
+        return (v, None) if v is not None else (None, gap_reading(cl, cr))
 
     old = mp.dps
     snap0 = SNAP_EVENTS[0]
@@ -1204,21 +1212,33 @@ def _point_verdict(tl, tr, env_mp):
             return (r2[0] if r2[0] == cls3 else None), snapped1
 
         # BOTH FINITE -- decided by DECAY, never by size (see F103 above).
-        #
-        # A gap of exactly zero is NOT a special state, and treating it as one is what
-        # made `log np.e -> 1`, `sin / np.pi 6 -> 0.5`, `tan / np.pi 4 -> 1` and 29 other
-        # EXACT identities unresolvable: their sides agree to the full working precision
-        # at one rung and differ by a single rounding at the next, which looked like a gap
-        # appearing from nowhere. Zero means "closer than this rung can see", so it enters
-        # the ratio as the rung's OWN resolution. One test then covers every case, which
-        # is why nothing below branches on exact agreement.
-        floor_lo = mpf(10) ** (-lo_dps)
-        floor_hi = mpf(10) ** (-hi_dps)
         hi = once(hi_dps)
         if hi is None or hi[0] is not None or hi[1] is None:
             return None, snapped1            # class flipped / Unresolved: never convict
-        g_lo = gap1 if gap1 > floor_lo else floor_lo
-        g_hi = hi[1] if hi[1] > floor_hi else floor_hi
+        d_lo, s_lo = gap1
+        d_hi, s_hi = hi[1]
+        # ONE SCALE FOR BOTH RUNGS (F105). The separations are absolute; the scale is
+        # fixed here, so it divides out of the ratio and touches nothing but the floor.
+        # It is the largest of what either rung SAW and what the computation was made
+        # of -- an exactly-cancelling source offers no scale from its own value, and
+        # `_MAG_SINK`'s intermediate is then the only honest one available.
+        mag = getattr(once, 'mag', None) or mpf(0)
+        scale = max(s_lo, s_hi, abs(mag))
+        if scale == 0:
+            return 'eq', snapped1            # exactly zero on both sides at both rungs
+        # A separation of exactly zero is still not a special VERDICT -- it enters as
+        # the rung's own resolution, "closer than this rung can see", which is what
+        # keeps `log np.e -> 1` and 31 other exact identities resolvable when their
+        # sides agree to full precision at one rung and differ by a rounding at the
+        # next. What changed is that the resolution is now taken AT THIS SCALE.
+        #
+        # AND NOTHING NONZERO IS FLOORED, which is the half that does the work. An
+        # absolute 10^-dps floor acquits `pow np.e sinh -10 -> 0`: the true value is
+        # 1.03e-4783 at every precision -- tiny, but FIXED, and false -- so a floor
+        # that swamps it manufactures a decay it does not have. Left unfloored it
+        # stands still beside its own scale and clause (a) convicts it.
+        g_lo = d_lo if d_lo != 0 else scale * mpf(10) ** (-lo_dps)
+        g_hi = d_hi if d_hi != 0 else scale * mpf(10) ** (-hi_dps)
         # Residue falls with the added precision; an analytic gap does not move, and a
         # gap that only BECOMES visible higher up (deep saturation) drops by less than
         # nothing. Half the added precision separates them with >=30 decades to spare.

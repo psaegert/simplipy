@@ -1260,24 +1260,35 @@ fn ct_classes(l: &BigFloat, r: &BigFloat) -> Option<PointCmp> {
     None
 }
 
-/// Relative separation of two FINITE sides; exactly 0 when they agree.
+/// One rung's FINITE reading -> `(|l - r|, scale)`, both ABSOLUTE.
 ///
 /// No tolerance and no absolute floor. The floor of 1 that used to sit here read
 /// `e**sinh(-5) -> 0` and `asin(1e-8) -> 1e-8` as equal, and the relative 1e-25 that
-/// replaced it spared the entire `tanh(x) -> +-1` saturation family. What the gap is FOR
-/// is `contract_point_verdict`'s decay test; its size decides nothing on its own.
-fn ct_rel_gap(l: &BigFloat, r: &BigFloat, p: usize) -> BigFloat {
-    if !cmp_gt(l, r) && !cmp_lt(l, r) {
-        return small_int(0, p); // equal, including the quotient zeros -0 == 0
-    }
+/// replaced it spared the entire `tanh(x) -> +-1` saturation family. What the reading is
+/// FOR is `contract_point_verdict`'s decay test; its size decides nothing on its own.
+///
+/// F105 (2026-08-21): THIS USED TO RETURN THE QUOTIENT, AND AGAINST AN EXACT ZERO THE
+/// QUOTIENT IS 1.0 AT EVERY PRECISION. The decay test compares this reading at two rungs,
+/// so any normaliser that is the SAME at both cancels out of the ratio and cannot change a
+/// verdict; `max(|l|, |r|)` is not the same at both. When one side is exactly 0 and the
+/// other is pure precision residue, the scale IS the residue, the quotient is 1.0 by
+/// construction, and a gap that cannot move reads as an analytic one. Measured over 85
+/// true zero-side identities, that convicted 25 -- and it convicted them HERE and not in
+/// mpmath, which escaped only by returning an exact 0 at the upper rung where astro-float
+/// leaves a residue. Same contract, different libm, opposite verdicts.
+///
+/// So the separation is reported RAW and the scale beside it, leaving the ladder to fix
+/// ONE scale across both rungs -- where, being rung-invariant, it can only set the
+/// zero-floor and never manufacture a ratio of its own.
+fn ct_gap_reading(l: &BigFloat, r: &BigFloat, p: usize) -> (BigFloat, BigFloat) {
     let mut scale = l.abs();
     if cmp_gt(&r.abs(), &scale) {
         scale = r.abs();
     }
-    if scale.is_zero() {
-        return small_int(0, p);
+    if !cmp_gt(l, r) && !cmp_lt(l, r) {
+        return (small_int(0, p), scale); // equal, including the quotient zeros -0 == 0
     }
-    l.sub(r, p, RM).abs().div(&scale, p, RM)
+    (l.sub(r, p, RM).abs(), scale)
 }
 
 /// The confirmed point verdict -- the Rust mirror of `_contract._point_verdict`, and the
@@ -1320,16 +1331,16 @@ pub fn contract_point_verdict(
     atoms: &[ProbeAtom],
 ) -> (Option<PointCmp>, bool) {
     /// One rung's reading: a CLASS finding (nan/inf involved -- there the classes are the
-    /// whole answer), or the finite relative GAP the decay test consumes.
+    /// whole answer), or the finite `(separation, scale)` the decay test consumes.
     enum Read {
         Class(PointCmp, i8, i8),
-        Gap(BigFloat),
+        Gap(BigFloat, BigFloat),
     }
     // outer None = unevaluable; inner None = Unresolved at this rung. `want_req` asks
     // for the precision this rung's own intermediates turned out to demand -- only rung 1
     // is asked, because only rung 1 sizes the rungs above it, and the logarithm behind the
     // answer is not worth paying for at 834 bits to then discard.
-    let once = |dps: i32, want_req: bool| -> Option<(Option<Read>, bool, i32)> {
+    let once = |dps: i32, want_req: bool| -> Option<(Option<Read>, bool, i32, BigFloat)> {
         let p = dps_to_prec(dps);
         let mut ctx = CtCtx::new(p, dps)?;
         let vals: Vec<BigFloat> = atoms
@@ -1341,20 +1352,25 @@ pub fn contract_point_verdict(
         let read = match (l, r) {
             (Some(l), Some(r)) => Some(match ct_classes(&l, &r) {
                 Some(c) => Read::Class(c, side_class(&l), side_class(&r)),
-                None => Read::Gap(ct_rel_gap(&l, &r, p)),
+                None => {
+                    let (d, sc) = ct_gap_reading(&l, &r, p);
+                    Read::Gap(d, sc)
+                }
             }),
             _ => None, // Unresolved at this rung
         };
-        let req = if want_req {
+        // rung 1 also carries out its `max_mag`: an exactly-cancelling source offers no
+        // scale from its own value, and the intermediate is then the only honest one.
+        let (req, mag) = if want_req {
             let mag = ctx.max_mag.clone();
-            required_dps(&mag, p, &mut ctx.cc)
+            (required_dps(&mag, p, &mut ctx.cc), mag)
         } else {
-            BASE_DPS
+            (BASE_DPS, small_int(0, p))
         };
-        Some((read, ctx.snapped, req))
+        Some((read, ctx.snapped, req, mag))
     };
 
-    let Some((read1, snap1, req1)) = once(GAP_RUNGS[0], true) else {
+    let Some((read1, snap1, req1, mag1)) = once(GAP_RUNGS[0], true) else {
         return (Some(PointCmp::Eq), false); // unevaluable: fail open
     };
     // RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates are
@@ -1376,7 +1392,7 @@ pub fn contract_point_verdict(
         let read = match first.take() {
             Some(rd) => rd,
             None => match once(rungs[i], false) {
-                Some((rd, _, _)) => rd,
+                Some((rd, _, _, _)) => rd,
                 None => return (Some(PointCmp::Eq), false), // unevaluable: fail open
             },
         };
@@ -1394,7 +1410,7 @@ pub fn contract_point_verdict(
             // nan/inf: a CLASS is confirmed by agreement at a second rung -- there is no
             // gap to watch decay, so this half is the two/three-rung rule unchanged.
             let f1 = Some((c1, cl1, cr1));
-            let Some((r2, _, _)) = once(hi_dps, false) else {
+            let Some((r2, _, _, _)) = once(hi_dps, false) else {
                 return (Some(PointCmp::Eq), false);
             };
             let Some(r2) = r2 else {
@@ -1402,7 +1418,7 @@ pub fn contract_point_verdict(
             };
             let f2 = match r2 {
                 Read::Class(a, b, c) => Some((a, b, c)),
-                Read::Gap(_) => None, // the class dissolved into a finite pair
+                Read::Gap(..) => None, // the class dissolved into a finite pair
             };
             // A rung-1 DISAGREEMENT is unsettled, full stop -- and here the Rust ladder
             // stays STRICTER than the Python one, deliberately. The judge rescues a
@@ -1424,32 +1440,55 @@ pub fn contract_point_verdict(
             }
             // a snapped agreement can be fabricated: it takes one rung higher.
             let f3 = match once(GAP_RUNGS[2].max(2 * hi_dps), false) {
-                Some((Some(Read::Class(a, b, c)), _, _)) => Some((a, b, c)),
+                Some((Some(Read::Class(a, b, c)), _, _, _)) => Some((a, b, c)),
                 _ => None,
             };
             (if f3 == f1 { Some(c1) } else { None }, snap1)
         }
-        Read::Gap(g1) => {
+        Read::Gap(d1, s1) => {
             // BOTH FINITE -- decided by DECAY, never by size.
-            //
-            // A gap of exactly zero is NOT a special state, and treating it as one is what
-            // made 32 exact identities unresolvable in the Python judge: their sides agree
-            // to the full working precision at one rung and differ by a single rounding at
-            // the next, which looks like a gap appearing from nowhere. Zero means "closer
-            // than this rung can see", so it enters the ratio as the rung's OWN
-            // resolution. One test then covers every case, and nothing below branches on
-            // exact agreement.
             let p = dps_to_prec(hi_dps);
-            let Some((rhi, _, _)) = once(hi_dps, false) else {
+            let Some((rhi, _, _, _)) = once(hi_dps, false) else {
                 return (Some(PointCmp::Eq), false);
             };
-            let Some(Read::Gap(g2)) = rhi else {
+            let Some(Read::Gap(d2, s2)) = rhi else {
                 return (None, snap1); // class flipped / Unresolved: never convict
             };
-            let f_lo = pow10(-lo_dps, p);
-            let f_hi = pow10(-hi_dps, p);
-            let g_lo = if cmp_gt(&g1, &f_lo) { g1 } else { f_lo };
-            let g_hi = if cmp_gt(&g2, &f_hi) { g2 } else { f_hi };
+            // ONE SCALE FOR BOTH RUNGS (F105). The separations are absolute; the scale is
+            // fixed here, so it divides out of the ratio and touches nothing but the
+            // floor. It is the largest of what either rung SAW and what the computation
+            // was made of.
+            let mut scale = s1;
+            if cmp_gt(&s2, &scale) {
+                scale = s2;
+            }
+            let m = mag1.abs();
+            if cmp_gt(&m, &scale) {
+                scale = m;
+            }
+            if scale.is_zero() {
+                return (Some(PointCmp::Eq), snap1); // exactly zero on both sides, both rungs
+            }
+            // A separation of exactly zero is still not a special VERDICT -- it enters as
+            // the rung's own resolution, "closer than this rung can see", which is what
+            // keeps 32 exact identities resolvable when their sides agree to full
+            // precision at one rung and differ by a rounding at the next. What changed is
+            // that the resolution is now taken AT THIS SCALE.
+            //
+            // AND NOTHING NONZERO IS FLOORED, which is the half that does the work. An
+            // absolute 10^-dps floor acquits `pow np.e sinh -10 -> 0`: the true value is
+            // 1.03e-4783 at every precision -- tiny, but FIXED, and false -- so a floor
+            // that swamps it manufactures a decay it does not have.
+            let g_lo = if d1.is_zero() {
+                scale.mul(&pow10(-lo_dps, p), p, RM)
+            } else {
+                d1
+            };
+            let g_hi = if d2.is_zero() {
+                scale.mul(&pow10(-hi_dps, p), p, RM)
+            } else {
+                d2
+            };
             // Residue falls with the added precision; an analytic gap does not move, and a
             // gap that only BECOMES visible higher up (deep saturation) drops by less than
             // nothing. The test is `log10(g_lo / g_hi) > (hi - lo) / 2`, squared to keep it
@@ -2085,6 +2124,42 @@ mod magnitude_probe {
             v,
             Some(PointCmp::Eq),
             "log(cosh + sinh) -> y must be spared"
+        );
+
+        // F105: AN EXACT ZERO ON ONE SIDE IS NOT AN UNDECAYABLE GAP. `log(e^a e^-a) = 0`
+        // exactly, so the target is a literal zero and the source is pure residue. While
+        // the reading was a QUOTIENT of `max(|l|, |r|)` the scale WAS that residue, so the
+        // gap read 1.0 at every rung, could not decay by construction, and clause (a)
+        // convicted. astro-float hits this where mpmath escaped it by returning an exact
+        // zero at the upper rung -- the same contract, opposite verdicts, on the libm.
+        let (v, _) = contract_point_verdict(
+            &s(&["log", "*", "exp", "x0", "exp", "neg", "x0"]),
+            &[],
+            &s(&["0"]),
+            &[],
+            ops,
+            &vars,
+            &[ProbeAtom::Val(2.0)],
+        );
+        assert_eq!(v, Some(PointCmp::Eq), "log(e^a e^-a) -> 0 must be spared");
+
+        // AND THE OTHER DIRECTION, which is why the floor cannot simply be widened to
+        // reach the row above: `e^sinh(-10)` is 1.03e-4783 at EVERY precision -- tiny, but
+        // FIXED, and false. Flooring a nonzero separation at an absolute 10^-dps swamps it
+        // and manufactures a decay it does not have, so nothing nonzero is floored.
+        let (v, _) = contract_point_verdict(
+            &s(&["exp", "sinh", "(-10)"]),
+            &[],
+            &s(&["0"]),
+            &[],
+            ops,
+            &vars,
+            &[ProbeAtom::Val(1.0)],
+        );
+        assert_eq!(
+            v,
+            Some(PointCmp::RealChange),
+            "e^sinh(-10) -> 0 must still convict"
         );
     }
 
