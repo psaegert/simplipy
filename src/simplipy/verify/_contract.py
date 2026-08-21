@@ -927,6 +927,24 @@ CONSTS = [2.5, -1.5, 3.0, 0.5, -0.7]      # witness-fitting battery (generic val
 SATURATION_CONSTS = [c * s for c in (19., 20., 50., 750., 1e17) for s in (1., -1.)]
 
 
+#: The GENERIC magnitude span, decade-spaced, both signs (F107, owner-ratified
+#: 2026-08-21). `CONSTS` above reaches |c| <= 5, and the MINER does not: the Rust side
+#: sweeps `POLE_GRID` to 500 and draws its fitted constants log-uniform over [1e-3, 1e3],
+#: so the quantifier explored a span the gate never checked. A `forall c over R` that
+#: only ever looks inside one decade is not a check of R; it is a check of [-5, 5].
+#:
+#: Deliberately NOT the saturation set (that is `SATURATION_CONSTS`, which probes where
+#: f64 ATTAINS a bound) and not a denser re-run of |c| <= 5 -- more points inside a span
+#: already covered buy nothing. This is SPAN, not resolution.
+#:
+#: IT WAS NOT SAFE TO LAND BEFORE F107. Measured against the shipped acj-4-3 file with
+#: the old ladder it convicted 97 rows and failed to witness 2 more, and every one was an
+#: instrument artifact -- six distinct defects, of which the roadmap had named two. After
+#: those fixes: 0 convictions, 0 unresolved. Evidence: `audit-2026-08-21/widen/`.
+WIDE_CONSTS = [c * s for c in (10., 30., 100., 300., 1e3, 3e3, 1e4, 0.1, 0.01, 0.001)
+               for s in (1., -1.)]
+
+
 def judge_cl_battery(saturation=True):
     """judging battery for a SOURCE-side constant (forall c_s over R). Includes the
     special rationals (pow(1,nan)=1 class) AND the SYMBOLIC transcendental atoms,
@@ -934,7 +952,17 @@ def judge_cl_battery(saturation=True):
     at c = pi/2 is the powsin class in constant space -- an f64 pi/2 misses the
     coincidence by 5e-33 (a false rescue can otherwise slip through; the symbolic
     constant atoms kill it correctly). A cl whose witness is unfittable (degenerate
-    LHS there) is skipped with a tally; only core-CONSTS failures mean NO-WITNESS."""
+    LHS there) is skipped with a tally; only core-CONSTS failures mean NO-WITNESS.
+
+    The `saturation` arm carries BOTH the f64-attainment magnitudes and the generic
+    span out to |c| = 1e4 (`WIDE_CONSTS`), because they share a failure mode and
+    therefore share the caller's withholding rule: where a TARGET constant has to be
+    re-fitted at the probe, the exists-witness machinery cannot resolve it, and the fit
+    returns the edge of an interval instead of a point. At `pow(abs ?0, 10000)` with
+    `?0 = -0.8` the deployed LHS underflows to exactly 0.0, so `0.8^c - 0.0` vanishes for
+    every c past ~3339 and the fit answered 3339.25 against a true 10000 -- an IDENTITY
+    convicted. `judge_rule` withholds this arm exactly where that can happen and records
+    that it did (`saturation_probed`)."""
     base = ([(lambda c=c: mpf(c)) for c in CONSTS] +
             [(lambda: mpf(1)), (lambda: mpf(-1)), (lambda: mpf(0)),
              (lambda: mpf(2)), (lambda: mpf(-2)), (lambda: mpf(4)),
@@ -943,7 +971,8 @@ def judge_cl_battery(saturation=True):
              (lambda: mp.e)])
     if not saturation:
         return base
-    return base + [(lambda c=c: mpf(c)) for c in SATURATION_CONSTS]
+    return base + [(lambda c=c: mpf(c))
+                   for c in SATURATION_CONSTS + WIDE_CONSTS]
 GRID = np.concatenate([np.linspace(-3, 3, 121), np.linspace(-20, 20, 41),
                        np.array([-1e4, -1e3, -300., -100., -50., -30.,
                                  30., 50., 100., 300., 1e3, 1e4])]) + 0.0137421
@@ -1049,10 +1078,25 @@ def fit_witness(tl, tr, shared, cl_val=None):
             if np.isfinite(v) and abs(v) <= 1e-9 * max(1.0, abs(L0)):
                 best = c
                 break
-    if best is None:
+    # A NON-FINITE FIT IS NOT A WITNESS. `<constant>` stands for a value a FIT will
+    # supply, i.e. an f64 -- that scoping is the whole basis of `c_free`'s derivation --
+    # and no fit produces an infinity. The bisection can land on one when both ends
+    # overflow, and `round(inf)` then raises OverflowError out of the middle of the
+    # judge. Found 2026-08-21 by widening the constant battery to |c| = 1e4: at
+    # `pow(exp(9), c)` the deployed LHS is inf there, so the fit had nothing finite to
+    # aim at. Returning None routes it to the ordinary no-witness tally, which is what a
+    # cl with no fittable witness has always meant.
+    if best is None or not np.isfinite(best):
         return None
+    # ...and the SNAP CANDIDATES have to survive the same scoping. `round(best)` is fine
+    # for a finite `best`, but `best * 2` overflows at the top of the f64 range and
+    # `round(inf)` raises out of the judge -- so the half-integer candidate is only
+    # offered when the doubling stays finite.
+    snaps = [round(best)] if abs(best) < 2.0 ** 1023 else []
+    if np.isfinite(best * 2):
+        snaps.append(round(best * 2) / 2)
     for c in [1., -1., 2., -2., 3., -3., 0.5, -0.5, math.e, -math.e, math.pi, -math.pi,
-              round(best), round(best * 2) / 2]:
+              *snaps]:
         # RELATIVE snap only (1e-15 floor = f64 fit noise around an exact zero): the old
         # absolute 1e-6 tolerance flattened every tiny TRUE witness to round(best) = 0
         # (pow(exp(-5), pi) = 1.5e-7 snapped to 0), fabricating clause-(a) kills of
