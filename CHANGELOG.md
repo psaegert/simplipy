@@ -94,6 +94,23 @@ drop census rather than silently absent.
 - `simplify(..., max_passes=)` replaces `node_budget=`, which never counted nodes. **The
   old name is removed**; the bound is the number of outer rewrite passes, which is what
   the new name says.
+- **`SimpliPyEngine.to_realization(expr)` — the fourth notation.** The same expression
+  with each operator spelled as the callable it runs (`sin` → `simplipy.operators.sin`),
+  and reversible like the other three: `to_prefix`, `to_infix` and `to_tagged` all accept
+  realization-spelled input. Operators realized as themselves (`+`, `-`, `*`) are
+  identical in both spellings, so only dotted realizations ever need detecting.
+  - Reading realization notation back requires the engine's realization map to be
+    injective. Two operators may legally share one realization, and then the spelling
+    names both; that refuses loudly rather than picking one. Writing never refuses.
+- **`SimpliPyEngine.as_code(expr)` and `as_callable(expr)` — the compile pipeline in one
+  step.** `as_callable` replaces the `prefix_to_infix(realization=True)` → `codify` →
+  `code_to_lambda` dance for the common case, binding the result to this engine's own
+  namespace. `expression_variables(expr)` exposes the signature it binds, in order of
+  first appearance.
+  - Named `as_`, not `to_`, and deliberately: every `to_*` in this API is a notation that
+    converts back, and a code object has no syntax to recover. `to_lambda` would advertise
+    a round-trip that cannot exist. Compiling also runs through `compile()`, so the trust
+    rules apply where the notation family's do not.
 - `simplipy.DEFAULT_ENGINE` and `simplipy.DEFAULT_ENGINE_REVISION` — the artifact this
   version was built and tested against. `SimpliPyEngine.load()` with no argument resolves
   it and says which it took. The pin lives in the package rather than the hosted manifest,

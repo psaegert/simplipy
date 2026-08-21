@@ -249,6 +249,10 @@ class _ModeMeta(EnumMeta):
     """
 
 
+#: Leaves that denote a VALUE rather than a free variable.
+_SPECIAL_LEAVES = {'np.pi', 'np.e', 'float("inf")', 'float("-inf")', 'float("nan")'}
+
+
 _MODE_RENAME_WHY = (
     "`SOUND` claimed one notion of soundness where there are two incomparable ones: "
     "`f64` is sound as the deployed f64 evaluator computes, `real` is sound as "
@@ -1275,6 +1279,15 @@ class SimpliPyEngine:
             raise TypeError(
                 f'conversion expects an infix str or a token sequence '
                 f'(list, tuple or 1-D ndarray), not {type(expression).__name__}')
+        # REALIZATION is a fourth NOTATION, not a fourth semantics: the same expression
+        # with each operator spelled as the callable it runs (`neg` ->
+        # `simplipy.operators.neg`). Detected, never guessed -- only realizations that
+        # DIFFER from their operator token can identify the form, and those are dotted
+        # names no operator vocabulary contains. Operators realized as themselves (`+`,
+        # `-`, `*`) make the two spellings identical, so there is nothing to detect and
+        # nothing to get wrong.
+        if self._realization_only_tokens().intersection(tokens):
+            tokens = self.realizations_to_operators(tokens)
         return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'prefix'), tokens
 
     def evaluate_constants(
@@ -1815,6 +1828,109 @@ class SimpliPyEngine:
                 out = None
             lines.append(f"{' '.join(probe)}={out}")
         return hashlib.sha256('\n'.join(lines).encode()).hexdigest()
+
+    def _realization_only_tokens(self) -> set[str]:
+        """Realization spellings that are NOT also operator tokens -- the detectable half.
+
+        Cached on the instance: the operator table is fixed at construction.
+        """
+        cached = getattr(self, '_realization_only_cache', None)
+        if cached is None:
+            ops = set(self._operators_config)
+            cached = {spec['realization'] for spec in self._operators_config.values()
+                      if spec['realization'] not in ops}
+            self._realization_only_cache = cached
+        return cached
+
+    def _assert_realizations_are_invertible(self) -> None:
+        """Reading realization notation back REQUIRES an injective realization map.
+
+        Two operators may legally share a realization -- nothing in the config format
+        forbids `abs` and `absolute` both running `np.abs` -- and then the spelling
+        `np.abs` names both, so no reader can recover which was meant. Injectivity is a
+        property of a CONFIG, not a guarantee of the format, so it is checked when it
+        matters and refused loudly rather than resolved by picking one.
+        """
+        seen: dict[str, str] = {}
+        for op, spec in self._operators_config.items():
+            r = spec['realization']
+            if r in seen:
+                raise ValueError(
+                    f"this engine's realization map is not invertible: operators "
+                    f"{seen[r]!r} and {op!r} both realize as {r!r}, so realization "
+                    f"notation cannot be read back. Convert from operator notation "
+                    f"instead, or give the two operators distinct realizations.")
+            seen[r] = op
+
+    def expression_variables(
+            self, expression: 'str | list[str] | tuple[str, ...] | np.ndarray') -> list[str]:
+        """The free variables of an expression, IN ORDER OF FIRST APPEARANCE.
+
+        Order is the contract, not an accident: it is the signature
+        :meth:`as_callable` binds, so `f(*values)` has to mean what the expression
+        reads. A token is a variable when it is none of the things that are not one --
+        an operator, a numeric literal, a special constant, or a slot. Slots are
+        excluded because a `<constant>` is a fitted degree of freedom, not an argument.
+        """
+        from .utils import is_numeric_string
+        tokens = self.to_prefix(expression)
+        out: list[str] = []
+        for t in tokens:
+            if t in self._operators_config or t in out:
+                continue
+            if is_numeric_string(t) or t in _SPECIAL_LEAVES:
+                continue
+            if t.startswith(('<', '_', '$', '?')):
+                continue
+            out.append(t)
+        return out
+
+    def to_realization(
+            self, expression: 'str | list[str] | tuple[str, ...] | np.ndarray') -> list[str]:
+        """The expression in REALIZATION notation: prefix tokens, operators spelled as
+        the callables they run (``sin`` -> ``np.sin``).
+
+        The fourth notation of the conversion family, and reversible like the other
+        three: :meth:`to_prefix`, :meth:`to_infix` and :meth:`to_tagged` all accept
+        realization-spelled input and read it back. It is what the compile pipeline
+        consumes, and it is occasionally what you want directly -- to see which callable
+        an operator actually resolves to, without running anything.
+
+        Reading realization notation back needs an injective realization map; writing it
+        does not, so this direction never refuses.
+        """
+        return self.operators_to_realizations(self.to_prefix(expression))
+
+    def as_code(
+            self, expression: 'str | list[str] | tuple[str, ...] | np.ndarray',
+            variables: list[str] | None = None) -> CodeType:
+        """Compile the expression to a Python code object.
+
+        ``as_``, not ``to_``: this is TERMINAL. Every ``to_*`` in this API is a notation
+        that converts back, and a code object has no syntax to recover -- naming it
+        ``to_compiled`` would advertise a round-trip that cannot exist.
+
+        .. warning::
+           Compiling runs the expression's realizations through :func:`compile`, so the
+           usual trust rules apply -- the evaluation namespace is scoping, not a sandbox
+           (:mod:`simplipy.trust`).
+        """
+        from .utils import codify
+        prefix = self.to_prefix(expression)
+        if variables is None:
+            variables = self.expression_variables(prefix)
+        return codify(self.prefix_to_infix(prefix, realization=True), variables)
+
+    def as_callable(
+            self, expression: 'str | list[str] | tuple[str, ...] | np.ndarray',
+            variables: list[str] | None = None) -> Callable[..., float]:
+        """Compile the expression to a callable bound to THIS engine's namespace.
+
+        The one-step form of :meth:`as_code` followed by :meth:`code_to_lambda`, which
+        is the pipeline nearly every caller wanted. Terminal, for the reason given on
+        :meth:`as_code`.
+        """
+        return self.code_to_lambda(self.as_code(expression, variables))
 
     def operators_to_realizations(self, prefix_expression: list[str] | tuple[str, ...]) -> list[str]:
         """Convert canonical operator names to their runtime realizations (e.g. ``'sin'`` -> ``'np.sin'``)."""
