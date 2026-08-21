@@ -880,3 +880,71 @@ class TestAnExactZeroIsNotAnUndecayableGap:
             assert scale == mpf(residue), f'{residue}: scale {scale}'
         # and it still reports exact agreement as an exact zero
         assert gap_reading(('fin', mpf(3)), ('fin', mpf(3)))[0] == 0
+
+
+class TestABoundedFunctionNeverAttainsItsLimit:
+    """F106. The gap ladder cannot reach the saturation family and no affordable depth
+    can: `tanh(cosh(10))` differs from 1 by 2e-9566 and `tanh(exp(10))` by 1e-19132, both
+    inside F104's boundary band at every rung, so the honest numeric verdict is Unresolved
+    forever. The question does not need a precision -- a bounded function never attains its
+    limit at a finite argument -- and 174 rows of the shipped artifact were judged by
+    nobody for want of asking it."""
+
+    def test_deep_saturation_is_convicted_and_routed_to_f64(self) -> None:
+        """These are real rows of the shipped sets. They are f64-REALISED (the deployed
+        `tanh(cosh(-10))` is exactly 1.0), so conviction routes them to the f64 tier --
+        exactly the file they ship in. The gate confirms them instead of abstaining."""
+        from simplipy.verify._contract import judge_rule
+        for lhs, rhs in ((['tanh', 'cosh', '(-10)'], ['1']),
+                         (['tanh', 'cosh', 'cosh', '(-3)'], ['1']),
+                         (['tanh', 'exp', '10'], ['1']),
+                         (['tanh', '400'], ['1']),
+                         (['exp', 'sinh', '(-50)'], ['0']),
+                         (['inv', 'cosh', 'exp', '10'], ['0'])):
+            got = judge_rule(lhs, rhs)
+            assert got.get('verdict') == 'KILL', (lhs, got)
+            assert got.get('tier') == 'f64', (lhs, got)
+
+    def test_an_infinite_argument_does_attain_the_limit(self) -> None:
+        """The condition that keeps this sound. `tanh(inf)` IS exactly 1 and `exp(-inf)`
+        IS exactly 0, so the same shape is TRUE there and must stay certified."""
+        from simplipy.verify._contract import judge_rule
+        for lhs, rhs in ((['tanh', 'float("inf")'], ['1']),
+                         (['tanh', 'float("-inf")'], ['(-1)']),
+                         (['exp', 'float("-inf")'], ['0'])):
+            got = judge_rule(lhs, rhs)
+            assert got.get('verdict') == 'CERTIFIED', (lhs, got)
+            assert got.get('tier') == 'core', (lhs, got)
+
+    def test_a_computed_bound_is_not_a_written_one(self) -> None:
+        """The other condition, and the subtle one. `1 - 2*exp(-2*cosh(10))` IS
+        `tanh(cosh(10))` exactly, and it rounds to exactly 1.0 at every affordable
+        precision -- so a test that accepted a COMPUTED side would convict an identity.
+        Only a bound the rule WRITES counts, which is the literal-provenance doctrine
+        `c_eval` already states for atanh/acosh."""
+        from mpmath import mp, mpf
+
+        from simplipy.verify._contract import parse, saturation_verdict
+        tl = parse(['tanh', 'cosh', '10'])
+        tr = parse(['-', '1', '*', '2', 'exp', '*', '(-2)', 'cosh', '10'])
+        old = mp.dps
+        try:
+            mp.dps = 50
+            assert mp.mpf(1) - mpf(2) * mp.exp(-2 * mp.cosh(mpf(10))) == 1, \
+                'the premise of this test died: the computed side no longer rounds to 1'
+            assert saturation_verdict(tl, tr, dict) is None, \
+                'a computed bound was taken for a written one'
+        finally:
+            mp.dps = old
+
+    def test_the_ladder_still_owns_every_verdict_it_can_reach(self) -> None:
+        """This is consulted ONLY where the ladder refused, so it can add a verdict and
+        never change one. Shallow saturation stays the ladder's call, and the true
+        identities that live at the same asymptote stay untouched."""
+        from simplipy.verify._contract import judge_rule
+        assert judge_rule(['tanh', '30'], ['1'])['clause'] == 'a-real-change'
+        for lhs, rhs in ((['cos', 'asin', 'tanh', '_0'], ['inv', 'cosh', '_0']),
+                         (['log', '*', 'exp', '_0', 'exp', 'neg', '_0'], ['0'])):
+            got = judge_rule(lhs, rhs)
+            assert got.get('verdict') != 'KILL', (lhs, got)
+            assert got.get('tier') == 'real', (lhs, got)

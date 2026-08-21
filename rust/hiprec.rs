@@ -1291,6 +1291,87 @@ fn ct_gap_reading(l: &BigFloat, r: &BigFloat, p: usize) -> (BigFloat, BigFloat) 
     (l.sub(r, p, RM).abs(), scale)
 }
 
+/// Bounded functions, and the values they NEVER attain at a FINITE argument. Every bound
+/// is exactly representable, which is the point: the test below must not need a precision
+/// to reach its answer.
+fn saturating_bounds(op: &str) -> Option<&'static [f64]> {
+    match op {
+        "tanh" => Some(&[-1.0, 1.0]), // |tanh a| < 1 strictly, for every finite a
+        "exp" => Some(&[0.0]),        // exp a > 0 strictly, for every finite a
+        "inv" => Some(&[0.0]),        // 1/a reaches 0 only in the limit
+        _ => None,
+    }
+}
+
+/// F106: A BOUNDED FUNCTION NEVER ATTAINS ITS LIMIT AT A FINITE ARGUMENT, so a rewrite
+/// claiming it does is false -- by a fact about the FUNCTION, at no precision at all.
+///
+/// This is the family the gap ladder cannot reach, and depth is not the answer.
+/// `tanh(cosh(10))` differs from 1 by 2e-9566, inside the boundary band at every rung
+/// anyone can afford, so the honest numeric verdict is Unresolved forever;
+/// `tanh(exp(10))` differs by 1e-19132. Measured, one more rung bought ten rows for ~3x
+/// the cost of EVERY comparison. A symbolic fact costs nothing and settles all of them.
+///
+/// Consulted only where the ladder has already refused, so it can add a verdict but never
+/// change one.
+///
+/// TWO CONDITIONS, both required, both exact. The argument must be FINITE -- at an
+/// infinite one the limit IS attained (`tanh(inf) = 1`, `exp(-inf) = 0`) and the claim is
+/// true. And the bound must be WRITTEN, a single token, never computed: `1 - 2*exp(-2*
+/// cosh(10))` IS `tanh(cosh(10))` and rounds to exactly 1.0 at any affordable precision,
+/// so accepting a computed side would convict an identity. Slicing past the unary head to
+/// reach the argument keeps `<constant>` params aligned -- only `<constant>` consumes one,
+/// and it keeps its prefix order.
+fn ct_saturation_verdict(
+    source: &[String],
+    src_params: &[f64],
+    target: &[String],
+    tgt_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    atoms: &[ProbeAtom],
+) -> Option<PointCmp> {
+    let dps = GAP_RUNGS[0];
+    let p = dps_to_prec(dps);
+    for (src, sp, tgt, tp) in [
+        (source, src_params, target, tgt_params),
+        (target, tgt_params, source, src_params),
+    ] {
+        let Some(bounds) = src.first().and_then(|o| saturating_bounds(o)) else {
+            continue;
+        };
+        if src.len() < 2 || tgt.len() != 1 {
+            continue; // computed side: provenance is not a written bound
+        }
+        let Some(mut ctx) = CtCtx::new(p, dps) else {
+            continue;
+        };
+        let vals: Vec<BigFloat> = atoms
+            .iter()
+            .map(|a| render_atom(a, p, &mut ctx.cc))
+            .collect();
+        let (Some(Some(arg)), Some(Some(lim))) = (
+            ct_eval(&src[1..], ops, var_names, &vals, sp, &mut ctx),
+            ct_eval(tgt, ops, var_names, &vals, tp, &mut ctx),
+        ) else {
+            continue;
+        };
+        if ctx.snapped {
+            continue; // a snapped value is a DIFFERENT point
+        }
+        if side_class(&arg) != 0 || side_class(&lim) != 0 {
+            continue; // the limit IS attained at an infinite argument
+        }
+        for b in bounds {
+            let bb = bf(*b, p);
+            if !cmp_gt(&lim, &bb) && !cmp_lt(&lim, &bb) {
+                return Some(PointCmp::RealChange);
+            }
+        }
+    }
+    None
+}
+
 /// The confirmed point verdict -- the Rust mirror of `_contract._point_verdict`, and the
 /// same contract the artifact gate applies. `(None, snapped)` = the point cannot be judged
 /// honestly (refused at every affordable rung, or rung disagreement); otherwise the
@@ -1402,7 +1483,13 @@ pub fn contract_point_verdict(
         }
     }
     let Some((r_lo, lo_dps, hi_dps)) = climbed else {
-        return (None, snap1); // refused at every rung we can afford
+        // Refused at every rung we can afford -- so ask the one question that needs no
+        // rung at all (F106). Reached only here, so it cannot move a verdict the ladder
+        // was able to reach.
+        let v = ct_saturation_verdict(
+            source, src_params, target, tgt_params, ops, var_names, atoms,
+        );
+        return (v, snap1);
     };
 
     match r_lo {
@@ -2076,9 +2163,13 @@ mod magnitude_probe {
         );
         assert_eq!(v, Some(PointCmp::RealChange), "tanh(30) -> 1 must convict");
 
-        // DEEP SATURATION IS REFUSED, NOT SPARED. At x = 1000 the gap is 1e-869, inside the
-        // boundary band at every rung this ladder can afford, so the honest answer is that
-        // the point cannot be judged. Never `Eq`, which would certify a false row.
+        // DEEP SATURATION IS CONVICTED. At x = 1000 the gap is 1e-869, inside the boundary
+        // band at every rung this ladder can afford, so no amount of precision reaches it.
+        // This asserted `None` until F106: abstention was the honest answer while the only
+        // instrument was numeric, and the requirement was never `Eq` -- which would certify
+        // a false row. A bounded function does not attain its limit at a finite argument,
+        // so the row is now REFUTED outright, which is strictly the better answer and the
+        // one the Python judge gives (KILL, clause a, tier f64).
         let (v, _) = contract_point_verdict(
             &tanh_x,
             &[],
@@ -2088,7 +2179,11 @@ mod magnitude_probe {
             &vars,
             &[ProbeAtom::Val(1000.0)],
         );
-        assert_eq!(v, None, "tanh(1000) -> 1 must be unresolved, not eq");
+        assert_eq!(
+            v,
+            Some(PointCmp::RealChange),
+            "tanh(1000) -> 1 must convict, and never read eq"
+        );
 
         // A TRUE IDENTITY ON THE MAGNITUDE TAIL SURVIVES. `cos(asin(tanh x)) = sech(x)`
         // exactly, and this is the grid point that convicted it before the asymptote band:
@@ -2161,6 +2256,51 @@ mod magnitude_probe {
             Some(PointCmp::RealChange),
             "e^sinh(-10) -> 0 must still convict"
         );
+
+        // F106: DEEP SATURATION IS NOW CONVICTED, NOT MERELY REFUSED. tanh(cosh(10))
+        // differs from 1 by 2e-9566 -- inside the boundary band at every rung anyone can
+        // afford, so the ladder abstains forever. A bounded function never attains its
+        // limit at a finite argument, and that fact needs no precision.
+        let (v, _) = contract_point_verdict(
+            &s(&["tanh", "cosh", "x0"]),
+            &[],
+            &s(&["1"]),
+            &[],
+            ops,
+            &vars,
+            &[ProbeAtom::Val(10.0)],
+        );
+        assert_eq!(
+            v,
+            Some(PointCmp::RealChange),
+            "tanh(cosh(10)) -> 1 must convict"
+        );
+
+        // AND THE CONDITION THAT KEEPS IT SOUND: at an INFINITE argument the limit IS
+        // attained, so the same shape is TRUE there.
+        let (v, _) = contract_point_verdict(
+            &s(&["tanh", "x0"]),
+            &[],
+            &s(&["1"]),
+            &[],
+            ops,
+            &vars,
+            &[ProbeAtom::Val(f64::INFINITY)],
+        );
+        assert_eq!(v, Some(PointCmp::Eq), "tanh(inf) -> 1 is TRUE, not a change");
+
+        // DEEP SATURATION WITHOUT A WRITTEN BOUND IS STILL REFUSED, NOT CONVICTED: the
+        // ladder cannot see the gap and this test has no opinion on a computed side.
+        let (v, _) = contract_point_verdict(
+            &s(&["tanh", "cosh", "x0"]),
+            &[],
+            &s(&["tanh", "cosh", "x0"]),
+            &[],
+            ops,
+            &vars,
+            &[ProbeAtom::Val(10.0)],
+        );
+        assert_eq!(v, None, "a computed side must not be read as a written bound");
     }
 
     /// Cost anchor for the contract ladder (run explicitly:

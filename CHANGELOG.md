@@ -145,6 +145,14 @@ drop census rather than silently absent.
   This was killing true identities of the form `log(eᵃ · e⁻ᵃ) = 0`, and the two judges
   could disagree about them, because the verdict turned on whether the arbitrary-precision
   library happened to return an exact zero at the upper rung.
+- The gate had no verdict at all for the saturation family — a bounded function claimed to
+  reach its limit. `tanh(cosh(10))` differs from 1 by 2e-9566, far inside the precision
+  band at any working precision anyone can afford, so a numeric comparison can only
+  abstain however deep it is taken, and 174 shipped rules were carried without the gate
+  ever forming an opinion on them. A bounded function does not attain its limit at a finite
+  argument, and the comparison now settles those rules from that fact rather than from a
+  measurement — confirming every one of them into the tier it already ships in. The gate
+  now returns a verdict for every rule in the artifact.
 - The D15 diagonal lane never received the precision coupling its commit claimed, and fed
   the same measure that convicts.
 

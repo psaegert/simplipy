@@ -688,6 +688,62 @@ def gap_reading(cl, cr):
 # is extendable, not wrong" case `hiprec.rs` already documents; it ships today too.
 
 
+#: Bounded functions, and the values they NEVER attain at a FINITE argument. Every
+#: bound here is exactly representable, which is the whole point: the test below must
+#: not need a precision to reach its answer.
+SATURATING = {
+    'tanh': (-1.0, 1.0),   # |tanh a| < 1 strictly, for every finite a
+    'exp': (0.0,),         # exp a > 0 strictly, for every finite a
+    'inv': (0.0,),         # 1/a reaches 0 only in the limit
+}
+
+
+def saturation_verdict(tl, tr, env_mp):
+    """F106: A BOUNDED FUNCTION NEVER ATTAINS ITS LIMIT AT A FINITE ARGUMENT, so a
+    rewrite claiming it does is false -- by a fact about the FUNCTION, at no precision
+    at all. -> 'REAL-CHANGE' when the claim is refuted, else None (no opinion).
+
+    This is the family the gap ladder cannot reach, and depth is not the answer.
+    `tanh(cosh(10))` differs from 1 by 2e-9566, inside F104's boundary band at every
+    rung anyone can afford, so the honest numeric verdict is Unresolved forever;
+    `tanh(exp(10))` differs by 1e-19132. Measured, one more rung bought ten rows for
+    ~3x the cost of EVERY comparison. A symbolic fact costs nothing and settles all of
+    them.
+
+    Consulted only where the ladder has already refused, so it can add a verdict but
+    never change one.
+
+    TWO CONDITIONS, both required, both exact. The argument must be FINITE -- at an
+    infinite one the limit IS attained (`tanh(inf) = 1`, `exp(-inf) = 0`) and the claim
+    is true. And the bound must be WRITTEN, as a literal or a slot's bound value, never
+    computed: `1 - 2*exp(-2*cosh(10))` IS `tanh(cosh(10))`, and it rounds to exactly 1.0
+    at any affordable precision, so a computed side would convict an identity. That is
+    the same literal-provenance doctrine `c_eval` states for `atanh`/`acosh`.
+    """
+    for src, tgt in ((tl, tr), (tr, tl)):
+        bounds = SATURATING.get(src[0]) if len(src) == 2 else None
+        if not bounds:
+            continue
+        snap0 = SNAP_EVENTS[0]
+        try:
+            arg = c_eval(src[1], env_mp())
+            if tgt[0] == 'lit':
+                lim = c_eval(tgt, env_mp())
+            elif tgt[0] == 'slot':
+                lim = env_mp()[tgt[1]]
+            else:
+                continue                     # computed: provenance is not a written bound
+        except (Unresolved, KeyError):
+            continue
+        if SNAP_EVENTS[0] != snap0:
+            continue                         # a snapped value is a DIFFERENT point
+        if misnan(arg) or misinf(arg) or misnan(lim) or misinf(lim):
+            continue                         # the limit is attained at an infinite arg
+        if any(lim == mpf(b) for b in bounds):
+            return 'REAL-CHANGE'
+    return None
+
+
 #: The deployed-realisation bound, in ULP. DERIVED, not chosen -- see
 #: `compare_deployed_realised`. Reproduce with the libm ULP measurement.
 REALISED_ULP = 8
@@ -1194,7 +1250,10 @@ def _point_verdict(tl, tr, env_mp):
                 r_lo, lo_dps, hi_dps = r, rungs[i], rungs[i + 1]
                 break
         if r_lo is None:
-            return None, snapped1          # refused at every rung we can afford
+            # Refused at every rung we can afford -- so ask the one question that needs
+            # no rung at all (F106). Reached only here, so it cannot move a verdict the
+            # ladder was able to reach.
+            return saturation_verdict(tl, tr, env_mp), snapped1
         cls1, gap1 = r_lo
 
         if cls1 is not None:
