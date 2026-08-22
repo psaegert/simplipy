@@ -30,6 +30,11 @@ written `numpy.sin` is refused with a hint. A realization naming any root
 outside the list refuses at engine construction, and the message names both the
 operator that asked and how to allow it.
 
+A realization spelled as a bare name imports nothing, but it still resolves
+against Python's own builtins, so those are enumerated as well: `abs`, `round`,
+`min`, `max`, `sum`, `pow`, `divmod`, `float`, `int`, `bool`, `len`, and the bare
+operator symbols.
+
 The list applies to the **whole dotted path**, not just its first component. A
 realization is resolved by attribute traversal, and a module's attributes
 include every module it imported, so a trusted root would otherwise be a way

@@ -92,9 +92,15 @@ _DOTTED = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*)(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+$')
 # machine (shipped acj-*, base, fixtures) finds 36 distinct dotted realizations and the
 # three bare operator symbols, nothing else.
 _OPERATOR_SYMBOL = frozenset({'+', '-', '*', '/', '**', '//', '%'})
-#: A bare builtin (``abs``). Dunders are refused: no realization is legitimately spelled
-#: ``__import__``, and that name is the whole attack.
-_BARE_NAME = re.compile(r'^(?!_)[a-zA-Z][a-zA-Z0-9_]*$')
+#: The bare builtins a realization may name. An ALLOWLIST, not a shape rule: a bare name
+#: is interpolated into generated source and resolved against Python's own builtins, where
+#: `eval`, `exec`, `compile`, `open` and `__import__` live next door to `abs`. Every name
+#: here computes a number from numbers, which is what a realization is for; nothing here
+#: takes source, a path or a name and turns it into behaviour. Closing the dotted path
+#: (:func:`check_chain`) while leaving this open would be false closure -- both doors lead
+#: to arbitrary code given a string argument, and neither leads anywhere given a float.
+_BARE_BUILTIN = frozenset({
+    'abs', 'round', 'min', 'max', 'sum', 'pow', 'divmod', 'float', 'int', 'bool', 'len'})
 _EXAMPLE_DOTTED = 'np.sin, simplipy.operators.sin'
 
 
@@ -130,19 +136,25 @@ def check_realization(realization: str, operator: str) -> str | None:
     (register C1.12 / audit B14).
 
     So the shape is decided here for EVERY realization: a dotted name (root returned,
-    trust checked later at import), a bare operator symbol or bare builtin (references
-    nothing, no import, allowed), or a refusal. There is no fourth case.
+    trust checked later at import), a bare operator symbol or an ALLOWLISTED bare builtin
+    (references nothing, no import, allowed), or a refusal. There is no fourth case.
+
+    The bare half is an allowlist for the same reason the dotted half is: a bare name is
+    resolved against Python's own builtins, where `eval` and `__import__` sit beside `abs`.
+    See :data:`_BARE_BUILTIN`.
     """
     text = str(realization).strip()
     if _DOTTED.match(text):
         return _DOTTED.match(text).group(1)  # type: ignore[union-attr]
-    if text in _OPERATOR_SYMBOL or _BARE_NAME.match(text):
+    if text in _OPERATOR_SYMBOL or text in _BARE_BUILTIN:
         return None
     raise UntrustedModuleError(
         f"operator {operator!r} declares the realization {text!r}, which is neither a dotted module "
         f"reference ({_EXAMPLE_DOTTED}), a bare operator symbol ({', '.join(sorted(_OPERATOR_SYMBOL))}), "
-        f"nor a bare builtin name (abs). A realization is COMPILED INTO GENERATED SOURCE, so anything "
-        f"else is arbitrary Python arriving from a config file -- refused at load, before it can run.")
+        f"nor one of the bare builtins a realization may name ({', '.join(sorted(_BARE_BUILTIN))}). A "
+        f"realization is COMPILED INTO GENERATED SOURCE and a bare name resolves against Python's own "
+        f"builtins, so anything else is arbitrary Python arriving from a config file -- refused at "
+        f"load, before it can run.")
 
 
 def resolve_trusted(trusted_modules: Iterable[str] | None = None) -> frozenset[str]:
@@ -227,7 +239,7 @@ def check_chain(realization: str, operator: str, root_module: ModuleType,
     Dunder components are refused outright. ``__loader__``, ``__globals__`` and their
     siblings are Python's introspection surface, no realization is legitimately spelled
     through one, and they are the shortest way back out of any namespace -- the same reason
-    :data:`_BARE_NAME` refuses a leading underscore.
+    :data:`_BARE_BUILTIN` is an allowlist rather than a shape.
 
     ``root_module`` is the ALREADY-IMPORTED root, so the walk imports nothing this engine's
     trust decision has not already licensed: a lazy package that materialises a submodule on

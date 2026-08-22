@@ -185,6 +185,13 @@ that names a module rather than a callable is refused. `math`, `np`, `scipy` and
 `simplipy` remain trusted by default; `trusted_modules=` and `SIMPLIPY_TRUSTED_MODULES`
 remain the only ways to widen that, and they widen the whole path.
 
+A realization spelled as a **bare name** is now an allowlist too. It imports nothing,
+which is why it used to pass on shape alone, but it is still interpolated into generated
+source and resolved against Python's own builtins — where `eval`, `exec`, `compile`,
+`open` and `__import__` sit beside `abs`. The accepted names are `abs`, `round`, `min`,
+`max`, `sum`, `pow`, `divmod`, `float`, `int`, `bool` and `len`, alongside the bare
+operator symbols; anything else refuses at load.
+
 This affects any deployment that builds an engine from a config it did not write — a
 Hugging Face asset loaded by name, a colleague's file, a cloned repository. Shipped
 configs, the legacy vocabulary and every realization the deployed evaluation path uses

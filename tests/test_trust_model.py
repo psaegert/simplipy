@@ -394,3 +394,40 @@ class TestTheWholeDottedPathIsChecked:
             survivors.append(realization)
         assert not survivors, f'{len(survivors)} escaping realizations loaded: {survivors[:10]}'
 
+
+class TestBareNamesAreAnAllowlist:
+    """The bare half of the shape check, held to the same standard as the dotted half.
+
+    A bare realization imports nothing, which is why it was allowed on shape alone -- but
+    it is still interpolated into generated source, and a bare name resolves against
+    Python's own builtins, where `eval`, `exec`, `compile`, `open` and `__import__` sit
+    beside `abs`. Closing the dotted path while leaving this open would be false closure:
+    both doors reach arbitrary code given a string argument, and neither reaches anything
+    given a float. So the accepted names are enumerated (audit S2 sibling)."""
+
+    @pytest.mark.parametrize('realization', [
+        'eval', 'exec', 'compile', 'open', 'input', 'breakpoint',
+        'getattr', 'setattr', 'globals', 'vars', 'memoryview', 'print',
+    ])
+    def test_the_execution_builtins_are_refused(self, tmp_path, realization):
+        with pytest.raises(UntrustedModuleError) as excinfo:
+            SimpliPyEngine.from_config(_config(tmp_path, realization))
+        assert 'probe' in str(excinfo.value)
+
+    def test_eval_never_reaches_the_evaluation_path(self, tmp_path):
+        marker = tmp_path / 'PWNED_BY_BUILTIN'
+        with pytest.raises(UntrustedModuleError):
+            engine = SimpliPyEngine.from_config(_config(tmp_path, 'eval'))
+            engine.code_to_lambda(codify(engine.prefix_to_infix(['probe', 'x0'], realization=True),
+                                         ['x0']))(f'__import__("pathlib").Path(r"{marker}").touch()')
+        assert not marker.exists(), 'the realization executed'
+
+    def test_every_allowlisted_builtin_loads_and_computes(self, tmp_path):
+        """Controls: the names that compute a number from numbers stay allowed, and the
+        list is not so narrow that a plausible realization is caught in it."""
+        from simplipy.trust import _BARE_BUILTIN
+        assert 'abs' in _BARE_BUILTIN, 'the docstring promises abs'
+        for realization in sorted(_BARE_BUILTIN):
+            engine = SimpliPyEngine.from_config(_config(tmp_path, realization))
+            assert engine.operator_realizations['probe'] == realization
+        assert engine.code_to_lambda(codify('abs(-2.0)', []))() == 2.0
