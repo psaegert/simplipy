@@ -1654,17 +1654,32 @@ pub fn contract_point_verdict(
             if d2.is_zero() {
                 return (Some(PointCmp::Eq), snap1);
             }
-            // ONE SCALE FOR BOTH RUNGS (F105). The separations are absolute; the scale is
-            // fixed here, so it divides out of the ratio and touches nothing but the
-            // floor. It is the largest of what either rung SAW and what the computation
-            // was made of.
+            // ONE SCALE FOR BOTH RUNGS (F105), AND IT IS THE VALUE'S, NEVER THE
+            // COMPUTATION'S (S11, 2026-08-22, mirroring `_contract._point_verdict`).
+            // Taking the largest INTERMEDIATE into the max scaled the floor by
+            // everything the computation passed through: `acos(inv(exp(exp 5)))
+            // -> div2 np.pi` has a FIXED gap of -3.5e-65, the intermediate 2.85e64
+            // put the rung-1 floor at 2.85e14, and the drop read 78.9 decades
+            // against a bar of 65 -- a false rule certified, in both authorities.
+            // The exactly-cancelling source keeps its intermediate scale, and ONLY
+            // it: when the coarse rung's whole reading vanished (`s1 == 0`, total
+            // cancellation), the sides offer no value to scale by and the residue
+            // at the finer rung is residue OF the intermediate -- flooring by the
+            // value scale convicts `log(exp x * exp -x) -> 0`. The distinguisher is
+            // s1 itself: the S11 family arrives with the coarse rung having SEEN
+            // the value (s1 ~ pi/2), so the value sets the floor and the fixed
+            // gap stands. Intermediates keep their say in how many digits a
+            // reading NEEDS (`demanded_dps`) either way.
+            let s1_vanished = s1.is_zero();
             let mut scale = s1;
             if cmp_gt(&s2, &scale) {
                 scale = s2;
             }
-            let m = mag1.abs();
-            if cmp_gt(&m, &scale) {
-                scale = m;
+            if s1_vanished {
+                let m = mag1.abs();
+                if cmp_gt(&m, &scale) {
+                    scale = m;
+                }
             }
             // A separation of exactly zero is still not a special VERDICT -- it enters as
             // the rung's own resolution, "closer than this rung can see", which is what

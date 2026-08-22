@@ -1526,13 +1526,30 @@ def _point_verdict(tl, tr, env_mp):
         # case, which is why the scale below can no longer be zero.
         if d_hi == 0:
             return 'eq', snapped1
-        # ONE SCALE FOR BOTH RUNGS (F105). The separations are absolute; the scale is
+        # ONE SCALE FOR BOTH RUNGS (F105), AND IT IS THE VALUE'S, NEVER THE
+        # COMPUTATION'S (S11, 2026-08-22). The separations are absolute; the scale is
         # fixed here, so it divides out of the ratio and touches nothing but the floor.
-        # It is the largest of what either rung SAW and what the computation was made
-        # of -- an exactly-cancelling source offers no scale from its own value, and
-        # `_MAG_SINK`'s intermediate is then the only honest one available.
+        # This used to take the largest INTERMEDIATE into the max (`_MAG_SINK`'s
+        # `once.mag`), on the argument that an exactly-cancelling source offers no
+        # scale from its own value -- and that scaled the floor by everything the
+        # computation passed through: `acos(inv(exp(exp 5))) -> div2 np.pi` has a
+        # FIXED gap of -3.5e-65, the intermediate `exp(exp 5)` = 2.85e64 put the
+        # rung-1 floor at 2.85e14, and the drop read 78.9 decades against a bar of 65
+        # -- a false rule CERTIFIED core, in both authorities, for the whole
+        # `acos inv cosh c` family. The value scale (pi/2 here) puts the floor at
+        # 1.57e-50 and the fixed gap stands still beside it, as a fixed gap must.
+        # The exactly-cancelling source keeps its intermediate scale, and ONLY it:
+        # when the coarse rung's whole reading vanished (`s_lo == 0` -- total
+        # cancellation, `log(exp x * exp -x)` at x = 1e4 rounds through 1.0 to an
+        # exact 0), the sides offer no value to scale by, the residue that appears
+        # at the finer rung is residue OF the intermediate, and flooring by the
+        # value scale (the residue itself) convicts the true identity at 19.8% of
+        # the grid. The distinguisher is s_lo itself: the S11 family arrives with
+        # `s_lo ~ pi/2` -- the coarse rung SAW the value, so the value sets the
+        # floor and the fixed 3.5e-65 gap stands. `_MAG_SINK` keeps its other
+        # consumer, the precision-demand estimator, either way.
         mag = getattr(once, 'mag', None) or mpf(0)
-        scale = max(s_lo, s_hi, abs(mag))
+        scale = max(s_lo, s_hi) if s_lo != 0 else max(s_hi, abs(mag))
         # A separation of exactly zero is still not a special VERDICT -- it enters as
         # the rung's own resolution, "closer than this rung can see", which is what
         # keeps `log np.e -> 1` and 31 other exact identities resolvable when their
