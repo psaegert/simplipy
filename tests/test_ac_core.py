@@ -40,13 +40,13 @@ def _is_hyper(token: str) -> bool:
 
 class TestDefectAxesClosed:
     def test_order_invariance_of_the_canonical_witness(self, engine: SimpliPyEngine) -> None:
-        # A rule rewrite (log(exp(t)) -> t, an acj-mined inverse composition) fires
-        # identically under BOTH operand orders of the enclosing product.
-        # `sin x0` rather than a bare `x0`: log-exp is BANDED now (f64 exp overflows at
-        # 709.782713), and ORDER INVARIANCE is what this pins -- so the argument is
-        # bounded to keep the rewrite firing and the subject intact.
-        a = engine.simplify(engine.to_tagged(["*", "log", "exp", "sin", "x0", "x1"]))
-        b = engine.simplify(engine.to_tagged(["*", "x1", "log", "exp", "sin", "x0"]))
+        # An inverse-composition rewrite fires identically under BOTH operand orders
+        # of the enclosing product. The vehicle is asinh(sinh(sin x0)) -- the clean
+        # pair, which collapses under its plain ceiling: log-exp gained a magnitude
+        # floor (task 46) that refuses a sin argument, and ORDER INVARIANCE is what
+        # this pins, so the vehicle must keep firing.
+        a = engine.simplify(engine.to_tagged(["*", "asinh", "sinh", "sin", "x0", "x1"]))
+        b = engine.simplify(engine.to_tagged(["*", "x1", "asinh", "sinh", "sin", "x0"]))
         assert a == b == ["<mul>", "x1", "sin", "x0", "</mul>"]
 
     def test_adjacency_collection_across_bracketing(self, engine: SimpliPyEngine) -> None:
@@ -806,6 +806,36 @@ class TestAtanhTanhBandIsPrecisionDerived:
 
     def test_unbounded_argument_never_collapses(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['atanh', 'tanh', 'x0']) == ['atanh', 'tanh', 'x0']
+
+
+class TestFlatPointCollapseFloors:
+    """Task 46, found re-deriving S3 with the contract's own criterion: the collapse
+    bands guarded only the OVERFLOW end, but compression near a flat point of the
+    inner function eats the LOW end -- exp rounds a small argument into the
+    neighbourhood of 1, and cosh is quadratically flat at 0. Measured against
+    `_ulp_gap <= REALISED_ULP = 8`: log(exp(t)) breaches for ALL |t| < ~0.0625
+    (worst 6.7e7 ULP at 1e-8) and acosh(cosh(t)) for all |t| < ~0.25 (worst ~4.5e18),
+    while inside |t| >= 1 the measured worst is 0 and 1 ULP. Both arms now carry a
+    proven magnitude floor of 1 next to their ceiling; asinh(sinh(t)) measured clean
+    over its whole band (worst 2 ULP) and carries none."""
+
+    def test_collapses_with_a_proven_floor(self, engine: SimpliPyEngine) -> None:
+        assert engine.simplify(['log', 'exp', '2']) == ['2']
+        assert engine.simplify(['acosh', 'cosh', '3']) == ['3']
+
+    def test_refused_at_the_flat_point(self, engine: SimpliPyEngine) -> None:
+        """sin(x0) has ceiling 1 -- inside the old band -- but no floor: it sweeps
+        through the flat point, where these collapsed to rewrites wrong by 1e7-1e18
+        ULP. All three collapsed under the ceiling-only licence."""
+        assert engine.simplify(['log', 'exp', 'sin', 'x0']) == \
+            ['log', 'exp', 'sin', 'x0']
+        assert engine.simplify(['log', 'exp', '0.5']) == ['log', 'exp', '/', '1', '2']
+        assert engine.simplify(['acosh', 'cosh', 'sin', 'x0']) == \
+            ['acosh', 'cosh', 'sin', 'x0']
+
+    def test_the_clean_pair_keeps_its_ceiling_only_licence(
+            self, engine: SimpliPyEngine) -> None:
+        assert engine.simplify(['asinh', 'sinh', 'sin', 'x0']) == ['sin', 'x0']
 
 
 class TestTranscendentalAtomEnclosures:

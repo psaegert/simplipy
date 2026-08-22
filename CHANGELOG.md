@@ -217,6 +217,16 @@ are unchanged; upgrade to 0.14.0 to get the check.
   overflow-derived bands (`log∘exp` 709, `sinh`/`cosh` pairs 710) are a different
   failure mode and keep their attainment thresholds.
 
+- The same re-derivation exposed the sibling holes at the other end: the collapse
+  bands guarded only against **overflow**, but compression near a flat point of the
+  inner function eats the low end -- `log(exp(t))` breaches the realised bar for all
+  |t| below ~0.0625 and `acosh(cosh(t))` below ~0.25 (`exp` rounds a small argument
+  into the neighbourhood of 1; `cosh` is quadratically flat at 0). Both collapses now
+  require a *proven* magnitude floor of 1 beside their ceiling, where the measured
+  worst is 0 and 1 ULP; `asinh(sinh(t))` measured clean over its whole band and is
+  unchanged. The two shipped f64 rules of this shape (`log exp <constant>`,
+  `acosh cosh <constant>`) re-tier to `real` with the 0.14.0 artifact.
+
 - The literal codeword floor (one bit, ruled 2026-08-22) reached `mu_rat` but not the
   beyond-i128 leaf pricer, whose clamp stayed at two bits -- so `1e-39` priced *above*
   `3e-38`: the simpler mantissa at the adjacent magnitude, upcharged for crossing the

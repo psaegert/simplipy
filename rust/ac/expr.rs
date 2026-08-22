@@ -1499,6 +1499,37 @@ impl<'a> Cx<'a> {
         self.magnitude_ceiling(e).is_some_and(|m| m <= bound)
     }
 
+    /// A PROVEN lower bound on |e| -- the mirror of `magnitude_ceiling`, for the
+    /// licences that need the argument bounded AWAY from a flat point (task 46: the
+    /// low-end collapse holes). Sound arms only: a literal's own floor, the named
+    /// constants, `cosh >= 1`, magnitude-preserving heads, and a product of floors.
+    /// A SUM abstains -- floors do not add across cancellation -- and everything
+    /// unknown abstains, so refusal stays the safe direction.
+    fn magnitude_floor(&self, e: &Ex) -> Option<i128> {
+        match e {
+            Ex::Num(r) => Some((r.num().unsigned_abs() / (r.den() as u128)) as i128),
+            Ex::Pi => Some(3),
+            Ex::E => Some(2),
+            Ex::Fun(f, a) => {
+                let s = self.view.resolve_owned(*f);
+                match s.as_str() {
+                    "cosh" => Some(1),
+                    "abs" | "neg" => a.first().and_then(|t| self.magnitude_floor(t)),
+                    _ => None,
+                }
+            }
+            Ex::Mul(v) => v.iter().try_fold(1i128, |acc, t| {
+                self.magnitude_floor(t).and_then(|m| acc.checked_mul(m))
+            }),
+            _ => None,
+        }
+    }
+
+    /// Is `|e| >= bound` PROVEN? `false` whenever unknown.
+    fn certainly_at_least(&self, e: &Ex, bound: i128) -> bool {
+        self.magnitude_floor(e).is_some_and(|m| m >= bound)
+    }
+
     fn certainly_in_unit(&self, e: &Ex) -> bool {
         match e {
             Ex::Fun(f, _) => {
@@ -1598,9 +1629,17 @@ impl<'a> Cx<'a> {
             // atanh(tanh x) = x for every real x -- and each band is derived from the
             // REALISED criterion (`_ulp_gap <= REALISED_ULP = 8`, verify._contract), not
             // from where the inner function attains its limit. The two are different
-            // diseases: `log o exp` and the sinh/cosh pairs fail by OVERFLOW, so their
-            // bands sit at the last safe argument (709/710, bisected to the ulp against
-            // the deployed evaluator); `atanh o tanh` fails by COMPRESSION -- tanh loses
+            // diseases: OVERFLOW caps the HIGH end of `log o exp` and the sinh/cosh
+            // pairs (709/710, bisected to the ulp against the deployed evaluator), and
+            // COMPRESSION near a flat point of the inner function eats the LOW end --
+            // exp rounds a small argument into the neighbourhood of 1 and cosh is
+            // quadratically flat at 0, so `log o exp` breaches the 8-ULP bar for all
+            // |t| < ~0.0625 (worst 6.7e7 ULP at 1e-8) and `acosh o cosh` for all
+            // |t| < ~0.25 (worst ~4.5e18), while inside |t| >= 1 the measured worst is
+            // 0 and 1 ULP -- hence their `certainly_at_least(t, 1)` floor (task 46).
+            // The sinh pairs are clean over their whole bands, worst 2 ULP measured
+            // for asinh o sinh and 4 for sinh o asinh, and carry no floor. `atanh o tanh` fails by the same COMPRESSION but at the
+            // HIGH end -- tanh loses
             // ~2|t|/ln2 bits of the argument approaching +-1, so the roundtrip drifts
             // past 8 ULP at |t| ~ 2.7 (first breach measured 2.677 audit host / 2.808
             // this host, libm-dependent; by |t|=18 the drift is ~0.03-0.06 ABSOLUTE),
@@ -1618,7 +1657,10 @@ impl<'a> Cx<'a> {
             ("atanh", "tanh") if !self.f64_semantics() || self.certainly_in_band(t, 2) => {
                 Some(t.clone())
             }
-            ("log", "exp") if !self.f64_semantics() || self.certainly_in_band(t, 709) => {
+            ("log", "exp")
+                if !self.f64_semantics()
+                    || (self.certainly_in_band(t, 709) && self.certainly_at_least(t, 1)) =>
+            {
                 Some(t.clone())
             }
             ("asinh", "sinh") | ("sinh", "asinh")
@@ -1626,7 +1668,10 @@ impl<'a> Cx<'a> {
             {
                 Some(t.clone())
             }
-            ("acosh", "cosh") if !self.f64_semantics() || self.certainly_in_band(t, 710) => {
+            ("acosh", "cosh")
+                if !self.f64_semantics()
+                    || (self.certainly_in_band(t, 710) && self.certainly_at_least(t, 1)) =>
+            {
                 Some(fun(self.view.intern("abs"), vec![t.clone()], self))
             }
             ("exp", "log") if self.certainly_nonneg(t) => Some(t.clone()),

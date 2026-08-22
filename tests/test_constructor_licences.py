@@ -221,15 +221,15 @@ class TestAbsElimination:
 
 class TestJudgePoleBand:
     def test_symbolic_cancellation_residue_is_not_a_conviction(self, eng):
-        # log(exp(x)) - x folds to an exact zero denominator; the judge's finite
-        # precision leaves a sign-noise residue and must skip, never convict
-        # `sin x0` rather than a bare `x0`: the log-exp collapse is BANDED now, and
-        # this test is about the judge's residue handling, not about the band. sin's
-        # range is inside every band, so the vehicle still folds and the subject is
-        # unchanged.
-        o1 = eng.simplify('tanh / 1 - log exp sin x0 sin x0'.split())
+        # asinh(sinh(x)) - x folds to an exact zero denominator; the judge's finite
+        # precision leaves a sign-noise residue and must skip, never convict.
+        # The vehicle is the CLEAN pair (worst 4 ULP over its whole band): log-exp
+        # gained a magnitude floor (task 46) that refuses a sin argument, and this
+        # test is about the judge's residue handling, not about collapse licences --
+        # asinh o sinh collapses on sin x0 under the plain ceiling, subject unchanged.
+        o1 = eng.simplify('tanh / 1 - asinh sinh sin x0 sin x0'.split())
         assert o1 == ['1']
-        v, _ = judge_pair('tanh / 1 - log exp sin x0 sin x0'.split(), list(o1), rng())
+        v, _ = judge_pair('tanh / 1 - asinh sinh sin x0 sin x0'.split(), list(o1), rng())
         # the MEASURED verdict under the seeded rng (audit Tier-2, 2026-08-03): the judge
         # SCORES this pair and passes it. The old `in ('OK', 'UNSCORED')` tolerated a
         # judge that silently stopped scoring the row; a regression to UNSCORED means the
@@ -601,10 +601,14 @@ class TestInversePairsCollapse:
 
     def test_total_pairs_collapse_only_within_the_f64_BAND(self, bare) -> None:
         """Genuine bijections of the EXTENDED LINE -- and not of f64, which is why they
-        now carry a magnitude band. `tanh` attains exactly 1.0 from 18.990341103219276
-        and `exp` overflows at 709.782713, past which `atanh(tanh t)` is `inf` rather
-        than `t`. Unbounded argument: refused. Provably bounded argument: collapses,
-        because the band is a proof obligation, not a blanket ban."""
+        carry magnitude licences, each derived from the realised 8-ULP criterion (S3,
+        task 46). Unbounded argument: refused. Provably licensed argument: collapses,
+        because the licence is a proof obligation, not a blanket ban. The sin vehicle
+        (range [-1, 1]) satisfies every CEILING but sweeps through 0 -- so it still
+        collapses only for the pairs without a flat point there: the sinh pairs (clean,
+        worst 4 ULP measured over the whole band) and atanh o tanh (compression is at
+        the HIGH end). For log o exp and acosh o cosh, 0 is the flat point itself and
+        the sin vehicle is REFUSED; their collapse needs a proven floor."""
         from simplipy import Mode
         for pair in (['log', 'exp'], ['asinh', 'sinh'], ['sinh', 'asinh'],
                      ['atanh', 'tanh']):
@@ -612,9 +616,13 @@ class TestInversePairsCollapse:
             assert bare.simplify(list(unbounded)) == unbounded, unbounded
             # LOSSY answers to no external evaluator, so it still collapses
             assert bare.simplify(list(unbounded), mode=Mode.corpus) == ['x0'], unbounded
-            # sin's range is [-1, 1], inside every band
+        for pair in (['asinh', 'sinh'], ['sinh', 'asinh'], ['atanh', 'tanh']):
             bounded = pair + ['sin', 'x0']
             assert bare.simplify(list(bounded)) == ['sin', 'x0'], bounded
+        # log o exp: the sin vehicle breaches (all |t| < ~0.0625, worst 6.7e7 ULP);
+        # a literal with a proven floor collapses.
+        assert bare.simplify(['log', 'exp', 'sin', 'x0']) == ['log', 'exp', 'sin', 'x0']
+        assert bare.simplify(['log', 'exp', '2']) == ['2']
 
     def test_the_two_axes_are_INDEPENDENT_which_no_bool_could_express(self, bare) -> None:
         """`Cx` used to carry `lossy: bool`, which can only ask "may I skip
@@ -682,10 +690,13 @@ class TestInversePairsCollapse:
     def test_acosh_of_cosh_is_ABS_not_the_identity(self, bare) -> None:
         # cosh is EVEN, so the collapse is |t|. The judge certifies this shape and KILLs
         # the identity one; getting it wrong would be a real change on t < 0.
-        # BANDED: cosh overflows at 710.475860, so an unbounded argument is refused --
-        # the shape assertion moves to arguments the band can prove.
+        # TWO-SIDED licence (task 46): cosh overflows at 710.475860 (the ceiling) and is
+        # quadratically FLAT at 0, where the roundtrip is wrong by up to ~4.5e18 ULP --
+        # so sin(x0), inside every ceiling but sweeping the flat point, is refused, and
+        # the ABS assertion rides a negative literal with a proven floor.
         assert bare.simplify(['acosh', 'cosh', 'x0']) == ['acosh', 'cosh', 'x0']
-        assert bare.simplify(['acosh', 'cosh', 'sin', 'x0']) == ['abs', 'sin', 'x0']
+        assert bare.simplify(['acosh', 'cosh', 'sin', 'x0']) == \
+            ['acosh', 'cosh', 'sin', 'x0']
         assert bare.simplify(['acosh', 'cosh', '-3']) == ['3']
 
     def test_licensed_pairs_need_their_licence(self, bare) -> None:
