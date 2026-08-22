@@ -464,33 +464,29 @@ class TestExtensionMeasureGate:
 
 
 class TestFoldFilter:
-    """Variable-free candidate minimization. Var-free candidates
-    of length >= 2 are dominated by the length-1 <constant> candidate (a var-free candidate
-    is a constant function of X per constant-assignment; the scan is shortest-first), so
-    dropping them must not change ANY mined rule -- while removing the bulk of the
-    constant-bearing (LM-fit) candidate arm that dominates const-free source cost."""
+    """The library filter MIRRORS THE EMIT GUARD (2026-08-22): every var-free candidate
+    of length >= 2 is dropped unconditionally, because the shared scan refuses every
+    var-free composite TARGET at the mint and such a candidate can therefore never
+    emit. Two 400-source byte-identity controls certified the drop changes no mined
+    rule while removing ~97% of the scan's cost on var-free sources. The old
+    `fold_filter` switch and its `folds_to_leaf` exemption are retired: the invariant
+    is not optional, and the exemption admitted exactly the class the emit guard
+    refuses."""
 
-    def test_counts_and_inert_guard(self, engine, mining_x) -> None:
+    def test_counts_and_unconditional_drop(self, engine, mining_x) -> None:
         x_flat, n = mining_x
         cands = [["x0"], ["<constant>"], ["exp", "<constant>"], ["pow2", "<constant>"],
                  ["exp", "1"], ["neg", "x0"], ["*", "<constant>", "x0"]]
         lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
-        # THE FILTER DROPS WHAT `<constant>` DOMINATES IN mu, not what it outranks in
-        # token length (revised with the mu search bound, 2026-08-20). Measured on the
-        # shipped vocabulary: `<constant>` 67000, `exp <constant>` 75000 -- dominated,
-        # dropped -- but `exp 1` folds to `np.e` and costs 8000, EIGHT TIMES CHEAPER.
-        # Dropping that one never preserved the decision: it forced the source through
-        # `<constant>` to the rounded literal 2.7182818260590453 when the exact symbolic
-        # spelling was sitting in the library (TestFoldFilter::test_dominance_holds_at_
-        # the_band_edge is the falsifier, and it caught exactly this).
-        assert lib.n_filtered == 2, "exp(<c>) and pow2(<c>) are mu-dominated; exp(1) is not"
-        assert lib.n_candidates == 5
-        raw = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, fold_filter=False)
-        assert raw.n_filtered == 0 and raw.n_candidates == 7
-        # without the bare <constant> candidate the filter must be INERT (conservative guard:
-        # dominance needs the length-1 <constant> to actually be scanned first)
+        # every var-free composite drops -- including `exp 1`, which the retired
+        # `folds_to_leaf` exemption used to admit: the leaf `np.e` is the candidate
+        # that emits; the composite spelling never can (emit guard).
+        assert lib.n_filtered == 3, "exp(<c>), pow2(<c>) and exp(1) are all var-free composites"
+        assert lib.n_candidates == 4
+        # and the drop needs no bare `<constant>` guard token: it is unconditional
         lib2 = engine._core.build_candidate_library(cands[2:], ["x0"], x_flat, n)
-        assert lib2.n_filtered == 0
+        assert lib2.n_filtered == 3
+        assert lib2.n_candidates == 2
 
     def test_dominance_holds_at_the_band_edge(self, engine, tmp_path) -> None:
         """Adversarial regression at the acceptance-band edge. The dominance lemma
@@ -521,13 +517,10 @@ class TestFoldFilter:
         x_flat = [-1.0] * (n - 1) + [1.0]
         src = ["+", "exp", "1", "*", "2.4e-9", "x0"]
         cands = [["<constant>"], ["x0"], ["exp", "1"]]
-        results = []
-        for ff in (True, False):
-            lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, fold_filter=ff)
-            results.append(engine._core.find_rule_lib(
-                src, len(src), 2, lib, challenges=16, retries=16, seed=7,
-                rtol=1e-9, atol=1e-12))
-        assert results[0] == results[1], f"filtered {results[0]} != unfiltered {results[1]}"
+        # `exp 1` is dropped from the library (var-free composite); the exact
+        # interval-intersection `<constant>` decision must carry the match alone.
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        assert lib.n_filtered == 1
         # The band-edge match itself is asserted with the special-point battery OFF (own
         # subprocess: the switch is a process-lifetime OnceLock). The battery's fixed
         # probe points (|x| up to pi) amplify the crafted 2.4e-9-per-x skew past the
@@ -541,13 +534,10 @@ class TestFoldFilter:
             "eng = SimpliPyEngine.from_config(sys.argv[1]);"
             f"x_flat = {x_flat!r}; n = {n};"
             f"cands = {cands!r};"
-            "outs = [];\n"
-            "for ff in (True, False):\n"
-            "    lib = eng._core.build_candidate_library(cands, ['x0'], x_flat, n, fold_filter=ff)\n"
-            f"    outs.append(eng._core.find_rule_lib({src!r}, {len(src)}, 2, lib,"
-            " challenges=16, retries=16, seed=7, rtol=1e-9, atol=1e-12))\n"
-            "assert outs[0] == outs[1], outs\n"
-            "assert outs[0] is not None, 'the feasible near-constant source must match'\n"
+            "lib = eng._core.build_candidate_library(cands, ['x0'], x_flat, n)\n"
+            f"out = eng._core.find_rule_lib({src!r}, {len(src)}, 2, lib,"
+            " challenges=16, retries=16, seed=7, rtol=1e-9, atol=1e-12)\n"
+            "assert out is not None, 'the feasible near-constant source must match'\n"
         )
         (tmp_path / "rules.json").write_text(json.dumps([]))
         cfg = tmp_path / "config.yaml"
@@ -558,48 +548,28 @@ class TestFoldFilter:
             capture_output=True, text=True)
         assert res.returncode == 0, res.stderr
 
-    def test_mine_parity_filtered_vs_unfiltered(self, tmp_path) -> None:
-        """THE PARITY GATE, as an INCLUSION (amended 2026-07-26).
+    def test_the_mine_never_ships_a_var_free_composite_rhs(self, tmp_path) -> None:
+        """The end-to-end form of the invariant. The old parity gate A/B-ran the mine
+        with the filter on and off; the switch is retired, so the assertable property is
+        the emit guard's own: no mined rule may carry a var-free composite RHS (the
+        universal-absorber class -- `cosh asin <constant> -> log <constant>` -- and every
+        obfuscated respelling of a value). The shipped acj-4-3 artifact has 0 of 5,319."""
+        (tmp_path / "rules.json").write_text(json.dumps([]))
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
+        eng = SimpliPyEngine.from_config(str(cfg))
+        eng.find_rules(max_source_pattern_length=3, dummy_variables=1,
+                       extra_internal_terms=["0", "1", "<constant>"], X=256, seed=7,
+                       verbose=False, promote_sorts=False)
+        rules = sorted((tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules)
+        assert len(rules) > 0
 
-        Fit seeds are a pure function of (source seed, candidate tokens, instance) -- order
-        independent -- so the two runs draw identical randomness for every shared candidate and
-        can differ ONLY via the dropped var-free candidates. This used to assert EQUALITY on the
-        grounds that dominance makes those candidates unselectable: any var-free expression could
-        collapse to the length-1 `<constant>`, so nothing longer was ever needed.
+        def var_free(t: str) -> bool:  # the emit guard's own predicate (worker.rs)
+            return t != "x0" and not t.startswith(("_", "$", "?", "!"))
 
-        The owner-ratified collapse licence removed that dominance. `<constant>` is now refused for
-        a source whose value class is not `Finite`, so a longer var-free candidate CAN become
-        selectable -- and the unfiltered run then admits UNIVERSAL ABSORBERS: `log <constant>`
-        ranges over every real and nan, so under "for every source constant there exists a target
-        constant" it matches any constant-family source at all (measured:
-        `cosh asin <constant> -> log <constant>`, formally sound and entirely vacuous). Dropping
-        those candidates is exactly what keeps such matches out, which makes the fold filter
-        soundness-relevant rather than merely a minimisation lever.
-
-        So the invariant is INCLUSION, not equality: the filter can only remove rules, and every
-        removed rule must be one whose target is a var-free candidate of length >= 2."""
-        rulesets = []
-        for fold_filter in (True, False):
-            tag = str(fold_filter)
-            (tmp_path / f"rules_{tag}.json").write_text(json.dumps([]))
-            cfg = tmp_path / f"config_{tag}.yaml"
-            cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": f"rules_{tag}.json"}))
-            eng = SimpliPyEngine.from_config(str(cfg))
-            eng.find_rules(max_source_pattern_length=3, dummy_variables=1,
-                           extra_internal_terms=["0", "1", "<constant>"], X=256, seed=7,
-                           verbose=False, candidate_fold_filter=fold_filter,
-                           promote_sorts=False)
-            rulesets.append(sorted((tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules))
-        filtered, unfiltered = set(rulesets[0]), set(rulesets[1])
-        assert filtered <= unfiltered, (
-            "the fold-filter must only REMOVE rules, never add or alter one: "
-            f"{sorted(filtered - unfiltered)}")
-        assert len(rulesets[0]) > 0
-        # Every removed rule must be attributable to a dropped candidate: a var-free target of
-        # length >= 2. Anything else means the filter perturbed the search rather than pruning it.
-        for lhs, rhs in unfiltered - filtered:
-            assert len(rhs) >= 2 and not any(t == "x0" for t in rhs), (
-                f"rule dropped for a reason other than the filtered candidates: {lhs} -> {rhs}")
+        for lhs, rhs in rules:
+            assert not (len(rhs) >= 2 and all(var_free(t) for t in rhs)), (
+                f"var-free composite RHS shipped: {lhs} -> {rhs}")
 
 
 class TestProvenance:
@@ -620,7 +590,6 @@ class TestProvenance:
         side = json.load(open(out + ".provenance.json"))
         assert side["params"]["seed"] == 7
         assert side["params"]["mine_seed"] and side["params"]["confirm_seed"]
-        assert side["params"]["candidate_fold_filter"] is True
         assert side["params"]["source_sample_per_length"] == {"3": 500}
         assert side["X"]["source"].startswith("seeded_mixture")
         assert side["universe"]["3"]["sampled"] is True
@@ -1781,7 +1750,7 @@ class TestProposalHintLengthAllowance:
         X_data = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(0))
         library = core.build_candidate_library(
             [["x0"], ["1"], ["2"], ["sin", "x0"], ["cos", "x0"], list(self.SIN_TGT)],
-            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0], fold_filter=True)
+            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0])
         _, _, endpoint = core.ac_judge(list(self.SIN_SRC), 48)
         scan = dict(challenges=16, retries=16, seed=1, rtol=1e-9, atol=1e-12,
                     min_informative=32, mark=endpoint)
@@ -1797,7 +1766,7 @@ class TestProposalHintLengthAllowance:
         # so it is not ordered strictly below the mark and no length admits it.
         tie_lib = core.build_candidate_library(
             [["x0"], ["1"], ["2"], ["sin", "x0"], list(self.TIE_TGT)],
-            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0], fold_filter=True)
+            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0])
         _, _, tie_end = core.ac_judge(list(self.TIE_SRC), 48)
         tie_scan = dict(scan, mark=tie_end)
         assert core.find_rule_lib(list(self.TIE_SRC), len(self.TIE_SRC), None,

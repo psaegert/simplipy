@@ -1022,6 +1022,11 @@ struct CandEntry {
     /// Precomputed log-linear plan (form + the const-free `g` tape) for nonlinear
     /// `pow(C,g)` / `pow(g,C)` candidates -> closed-form fit instead of the LM.
     loglin: Option<(crate::fit::LogLinForm, Tape)>,
+    /// `interval::value_set` over the reals, computed ONCE at library build: it is a pure
+    /// function of (tokens, ops), and the scan used to recompute it per (source,
+    /// candidate) -- measured at 14.4% of the scan (2026-08-22 audit). Cached, not
+    /// removed: the reachability refusal it feeds is a net saving on hot sources.
+    reals_vs: Option<crate::interval::Vs>,
     /// mu of this candidate in the BARE context -- the SEARCH ORDER and the SEARCH BOUND.
     /// `u64::MAX` for a candidate the measure cannot score (unparseable): it sorts last and
     /// no finite bound admits it, which matches acceptance, since that also requires a
@@ -1525,36 +1530,32 @@ impl CandidateLibrary {
         self.n_filtered
     }
 
-    /// Build the resident library. With `fold_filter`, VARIABLE-FREE candidates of length >= 2
-    /// are dropped, PROVIDED the bare
-    /// `["<constant>"]` candidate is present (otherwise the filter is inert -- conservative).
+    /// Build the resident library. VARIABLE-FREE candidates of length >= 2 are dropped,
+    /// unconditionally: the library filter MIRRORS THE EMIT GUARD. The shared scan
+    /// refuses every var-free composite TARGET at the mint (`find_rule_with_lib`, "THE
+    /// EMITTED TARGET IS WHAT SHIPS"), and every target a var-free candidate can produce
+    /// is var-free -- its own tokens, or `resolve_const_slots`' literal respelling of
+    /// them -- so a var-free composite in the library is judged, fitted and battery-swept
+    /// only to be refused at the end, on every path. Building it is pure waste: measured
+    /// 2026-08-22 over two independent 400-source length-4 slices, dropping the class cut
+    /// the scan from 101.5 s to 3.2 s (and 59.7 s to 2.2 s) with BYTE-IDENTICAL mined
+    /// rules, and the shipped acj-4-3 artifact has 0 of 5,319 rules with a var-free
+    /// composite RHS. Var-free LEAVES (`0`, `np.pi`) stay: admitting foldable sources to
+    /// a nameable leaf is the point, and the emit guard admits them too.
     ///
-    /// SOUNDNESS (the narrow, provable form of "candidate minimization"): a variable-free
-    /// candidate evaluates to ONE scalar per constant-assignment (a constant function of X), so
-    /// - const-bearing var-free (`sin(<constant>)`, `pow(<constant>,<constant>)`, ...): any
-    ///   source instance it matches is (near-)constant-valued, which the length-1 `<constant>`
-    ///   candidate also matches -- with a fit family (all of R) that SUPERSET-dominates the
-    ///   wrapper's reachable set;
-    /// - const-free var-free (`exp(1)`, `neg(np.pi)`, ...): a fixed value; any match implies the
-    ///   per-instance `<constant>` fit matches too (and its all-nonfinite members never match:
-    ///   the finite-evidence gate rejects them).
-    ///
-    /// Since `find_rule_with_lib` scans lengths SHORTEST-FIRST and returns at the first matching
-    /// length, the length-1 `<constant>` match preempts every length>=2 var-free candidate, which
-    /// is therefore never selectable and can be dropped without changing any mined rule. The one
-    /// theoretical edge is tolerance-band width: `<constant>`'s solved fit sits within <= 2x the
-    /// per-row tolerance of the wrapper's (mean vs member), relevant only for sources within
-    /// ~rtol of the band edge -- real mine values agree to ~1e-16 vs rtol 1e-9, and the
-    /// filtered-vs-unfiltered mine parity test certifies the dominance empirically.
+    /// (History: a `folds_to_leaf` exemption used to admit var-free composites the
+    /// constructor folds to a single leaf, guarding against `<constant>`-respelling of
+    /// exact leaves -- `exp 1` -> the rounded literal 2.718... That concern died when the
+    /// emit guard landed: the leaf itself is always a candidate, so the composite
+    /// spelling adds nothing it can ever emit. The exemption admitted exactly the class
+    /// the emit guard refuses; the two were never reconciled until the 2026-08-22 audit.)
     pub fn build(
         ops: &Operators,
         candidates: &[Vec<String>],
         mus: &[Option<u64>],
-        folds_to_leaf: &[bool],
         var_names: &[String],
         x_flat: &[f64],
         n_rows: usize,
-        fold_filter: bool,
     ) -> Result<Self, String> {
         if mus.len() != candidates.len() {
             return Err("mus/candidates length mismatch".to_string());
@@ -1566,38 +1567,6 @@ impl CandidateLibrary {
         let cols = columns_from_row_major(x_flat, n_rows, n_vars);
         let max_len = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
         let mut by_len: Vec<Vec<CandEntry>> = (0..=max_len).map(|_| Vec::new()).collect();
-        let filter_active = fold_filter
-            && candidates
-                .iter()
-                .any(|c| c.len() == 1 && c[0] == "<constant>");
-        // WHAT A VAR-FREE CANDIDATE MUST BE TO EARN ITS PLACE (revised 2026-08-21, after
-        // the mu-dominance criterion below it was measured UNSOUND).
-        //
-        // The original lemma -- "the length-1 `<constant>` preempts every var-free
-        // candidate" -- held only because the scan was ordered by TOKEN LENGTH, and the
-        // mu bound broke it. The repair attempt, "drop those with mu >= mu(`<constant>`)",
-        // is worse than the disease: `<constant>` prices at 67000 while `asin sin 2` is
-        // 19000 and `* 0 <constant>` is 3000, so the whole class of var-free composites
-        // sailed through. A live mine under that criterion produced 57 rules of the form
-        // `pi - 2 -> asin(sin(2))` in its first 212: true by value, and an obfuscation
-        // rather than a simplification.
-        //
-        // THE CRITERION IS WHAT THE CONSTRUCTOR MAKES OF IT, not what the measure charges.
-        // A var-free candidate is admitted iff the constructor folds it to a SINGLE LEAF:
-        //
-        //     exp 1            -> np.e     KEPT   (a leaf the engine can name exactly)
-        //     * 0 <constant>   -> 0        KEPT
-        //     asin sin 2       -> unchanged  DROPPED (a composite spelling of pi - 2)
-        //     log <constant>   -> unchanged  DROPPED (the universal absorber the filter
-        //                                    was written for: it ranges over every real
-        //                                    AND nan, so it "matches" any constant-family
-        //                                    source and mints vacuous rules)
-        //
-        // This keeps the fix the mu criterion was reaching for -- dropping `exp 1` forced
-        // the source through `<constant>` to the ROUNDED literal 2.7182818260590453, the
-        // respell the mint doctrine forbids -- while excluding everything that made the
-        // mu version unsound. The falsifier is TestFoldFilter::test_dominance_holds_at_
-        // the_band_edge plus the no-composite-var-free-RHS invariant asserted on the mine.
         let mut n_candidates = 0usize;
         let mut n_filtered = 0usize;
         for (ci, c) in candidates.iter().enumerate() {
@@ -1610,17 +1579,14 @@ impl CandidateLibrary {
             // candidate whose only variables have index >= 32 would be misclassified as
             // var-free and wrongly dropped. The filter checks ALL var_names.
             let has_var = c.iter().any(|t| var_names.iter().any(|v| v == t));
-            if filter_active && len >= 2 && !has_var && !folds_to_leaf[ci] {
-                // NOTE: this filter carries more weight than "candidate
-                // minimization". A var-free candidate of length >= 2 can be a UNIVERSAL ABSORBER:
-                // `log <constant>` ranges over every real AND nan, so under the rule semantics
-                // (for every source constant there EXISTS a target constant) it "matches" any
-                // constant-family source at all -- `cosh asin <constant> -> log <constant>` is
-                // formally sound and completely vacuous. Dropping these candidates is what keeps
-                // such matches out; an experiment that kept the non-`Finite`-class ones to
-                // preserve filtered/unfiltered parity promptly shipped exactly that rule and was
-                // reverted. Parity is now asserted as an INCLUSION, not an equality
-                // (tests/test_mining_soundness.py::TestFoldFilter).
+            if len >= 2 && !has_var {
+                // The emit-guard mirror (see `build`'s doc). Beyond the waste, a var-free
+                // composite can be a UNIVERSAL ABSORBER: `log <constant>` ranges over
+                // every real AND nan, so under the rule semantics (for every source
+                // constant there EXISTS a target constant) it "matches" any
+                // constant-family source -- `cosh asin <constant> -> log <constant>` is
+                // formally sound and completely vacuous. An experiment that kept the
+                // non-`Finite`-class ones promptly shipped exactly that rule.
                 n_filtered += 1;
                 continue;
             }
@@ -1654,6 +1620,7 @@ impl CandidateLibrary {
                 finite_y,
                 loglin,
                 hash: token_hash(c),
+                reals_vs: crate::interval::value_set(c, ops, &crate::interval::Vs::reals()),
                 mu: mus[ci].unwrap_or(u64::MAX),
             });
             n_candidates += 1;
@@ -2049,10 +2016,8 @@ pub fn find_rule_with_lib(
                 continue;
             }
             if let Some(sv) = &src_reach {
-                if let Some(cv) =
-                    crate::interval::value_set(&cand.tokens, ops, &crate::interval::Vs::reals())
-                {
-                    if !crate::interval::reaches_all_of(&cv, sv) {
+                if let Some(cv) = &cand.reals_vs {
+                    if !crate::interval::reaches_all_of(cv, sv) {
                         continue; // cannot reach a component the source takes: FALSE, no sampling
                     }
                 }
@@ -2174,9 +2139,14 @@ pub fn find_rule_with_lib(
                 // <constant>` is FINITE (its +inf lives only at C=0) and keeps collapsing, per
                 // §9.8.3(c) and the §9.8.4 degenerate-literal carve-out.
                 if let Some(sv) = &src_reach {
-                    let same_class =
+                    // `target` is the candidate's own tokens unless literal resolution
+                    // respelled it -- reuse the build-time value set where it is.
+                    let tv = if is_resolution {
                         crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
-                            .is_some_and(|cv| cv.cls() == sv.cls());
+                    } else {
+                        cand.reals_vs.clone()
+                    };
+                    let same_class = tv.is_some_and(|cv| cv.cls() == sv.cls());
                     if !same_class {
                         continue;
                     }
@@ -2244,22 +2214,11 @@ pub fn find_rule(
     rtol: f64,
     atol: f64,
     min_informative: usize,
-    fold_filter: bool,
 ) -> Result<Option<Vec<String>>, String> {
     // Per-call path: no engine here to score mu, so the library is unscored and the legacy
     // token bound stands (`max_mu = None`). The MINE goes through the resident-library path.
     let mus = vec![None; candidates.len()];
-    let folds = vec![false; candidates.len()];
-    let lib = CandidateLibrary::build(
-        ops,
-        candidates,
-        &mus,
-        &folds,
-        var_names,
-        x_flat,
-        n_rows,
-        fold_filter,
-    )?;
+    let lib = CandidateLibrary::build(ops, candidates, &mus, var_names, x_flat, n_rows)?;
     find_rule_with_lib(
         ops,
         source,
@@ -2558,7 +2517,12 @@ mod tests {
     }
 
     #[test]
-    fn fold_filter_drops_var_free_and_preserves_decisions() {
+    fn library_filter_mirrors_the_emit_guard() {
+        // The library must drop EVERY var-free candidate of length >= 2, unconditionally:
+        // the shared scan refuses every var-free composite TARGET at the mint, so such a
+        // candidate can never emit and building it is pure waste (2026-08-22 audit; two
+        // 400-source byte-identity controls). Leaves -- variables, `<constant>`, literals
+        // -- always stay.
         let Some(e) = crate::test_engine() else {
             return;
         };
@@ -2566,72 +2530,45 @@ mod tests {
         let vars = s(&["x0"]);
         let n = 128usize;
         let xf: Vec<f64> = (0..n).map(|r| (r as f64) * 0.11 - 7.0).collect();
-        // library incl. the bare <constant> (guard token), var-free const-bearing (sin(<c>),
-        // pow(<c>, 2)), var-free const-free (exp(1)), and var-bearing candidates
         let cands = vec![
             s(&["x0"]),
             s(&["<constant>"]),
-            s(&["sin", "<constant>"]),
-            s(&["pow", "<constant>", "2"]),
-            s(&["exp", "1"]),
+            s(&["sin", "<constant>"]),      // var-free composite: dropped
+            s(&["pow", "<constant>", "2"]), // var-free composite: dropped
+            s(&["exp", "1"]),               // var-free composite: dropped, even though
+            // the constructor folds it to the leaf `np.e` -- the leaf itself is the
+            // candidate that emits; the composite spelling never can (emit guard).
             s(&["neg", "x0"]),
             s(&["*", "<constant>", "x0"]),
         ];
-        let filtered = CandidateLibrary::build(
-            ops,
-            &cands,
-            &vec![None; cands.len()],
-            &vec![false; cands.len()],
-            &vars,
-            &xf,
-            n,
-            true,
-        )
-        .unwrap();
-        let raw = CandidateLibrary::build(
-            ops,
-            &cands,
-            &vec![None; cands.len()],
-            &vec![false; cands.len()],
-            &vars,
-            &xf,
-            n,
-            false,
-        )
-        .unwrap();
-        assert_eq!(filtered.n_filtered(), 3); // sin(<c>), pow(<c>, 2), exp(1)
-        assert_eq!(filtered.n_candidates(), 4);
-        assert_eq!(raw.n_filtered(), 0);
-        assert_eq!(raw.n_candidates(), 7);
-        // WITHOUT the bare <constant> the filter must be INERT (conservative guard)
-        let no_bare: Vec<Vec<String>> = cands[2..].to_vec();
-        let inert = CandidateLibrary::build(
-            ops,
-            &no_bare,
-            &vec![None; no_bare.len()],
-            &vec![false; no_bare.len()],
-            &vars,
-            &xf,
-            n,
-            true,
-        )
-        .unwrap();
-        assert_eq!(inert.n_filtered(), 0);
-        // decision parity on both a constant-valued and a non-constant source: the dominance
-        // lemma says the length-1 <constant> preempts every var-free candidate, so filtered and
-        // raw libraries must decide identically (incl. the ORDER-INDEPENDENT fit seeds).
-        for src in [
-            s(&["-", "x0", "x0"]),    // constant-valued (0) -> matches <constant> at len 1
-            s(&["+", "x0", "np.pi"]), // genuinely var-dependent
-            s(&["neg", "neg", "x0"]), // reduces to x0
+        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n)
+            .unwrap();
+        assert_eq!(lib.n_filtered(), 3); // sin(<c>), pow(<c>, 2), exp(1)
+        assert_eq!(lib.n_candidates(), 4);
+        // and the drop is unconditional: no bare `<constant>` guard token, same result
+        let no_bare: Vec<Vec<String>> = cands
+            .iter()
+            .filter(|c| !(c.len() == 1 && c[0] == "<constant>"))
+            .cloned()
+            .collect();
+        let lib2 =
+            CandidateLibrary::build(ops, &no_bare, &vec![None; no_bare.len()], &vars, &xf, n)
+                .unwrap();
+        assert_eq!(lib2.n_filtered(), 3);
+        assert_eq!(lib2.n_candidates(), 3);
+        // the decisions the old fold_filter parity test pinned still hold on the
+        // filtered library (the only library there is now)
+        for (src, want) in [
+            (s(&["+", "x0", "np.pi"]), None),
+            (s(&["neg", "neg", "x0"]), Some(s(&["x0"]))),
         ] {
-            let a = find_rule_with_lib(
+            let got = find_rule_with_lib(
                 ops,
                 &src,
                 src.len(),
                 Some(2),
                 None,
-                &filtered,
+                &lib,
                 16,
                 16,
                 7,
@@ -2642,29 +2579,12 @@ mod tests {
                 None,
             )
             .unwrap();
-            let b = find_rule_with_lib(
-                ops,
-                &src,
-                src.len(),
-                Some(2),
-                None,
-                &raw,
-                16,
-                16,
-                7,
-                1e-9,
-                1e-12,
-                16,
-                None,
-                None,
-            )
-            .unwrap();
-            assert_eq!(a, b, "filtered vs raw decision diverged on {src:?}");
+            assert_eq!(got, want, "decision moved on {src:?}");
         }
     }
 
     #[test]
-    fn fold_filter_keeps_var_dependent_candidates_beyond_32_vars() {
+    fn library_filter_keeps_var_dependent_candidates_beyond_32_vars() {
         // Regression: the scan var_mask truncates at 32
         // variables, so a candidate whose only variable has index >= 32 has var_mask == 0; the
         // filter must NOT treat it as var-free (it checks all var_names directly).
@@ -2681,17 +2601,8 @@ mod tests {
             s(&["sin", "x0"]),
             s(&["exp", "<constant>"]), // genuinely var-free -> filtered
         ];
-        let lib = CandidateLibrary::build(
-            ops,
-            &cands,
-            &vec![None; cands.len()],
-            &vec![false; cands.len()],
-            &vars,
-            &xf,
-            n,
-            true,
-        )
-        .unwrap();
+        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n)
+            .unwrap();
         assert_eq!(lib.n_filtered(), 1, "only exp(<constant>) may be dropped");
         assert_eq!(lib.n_candidates(), 3);
     }

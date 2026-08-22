@@ -101,7 +101,6 @@ class Engine:
         rtol: float,
         atol: float,
         min_informative: int | None,
-        fold_filter: bool,
     ) -> list[str] | None: ...
     def registry_mint_refusal(
         self, source: list[str], mark: list[str], target: list[str], var_names: list[str]
@@ -170,7 +169,6 @@ class Engine:
         var_names: list[str],
         x_flat: list[float],
         n_rows: int,
-        fold_filter: bool = ...,
     ) -> CandidateLibrary: ...
     def find_rule_lib(
         self,

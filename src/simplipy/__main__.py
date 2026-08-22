@@ -87,7 +87,7 @@ def main(argv: str = None) -> None:
                 'dummy_variables', 'extra_internal_terms', 'n_samples',
                 'constants_fit_challenges', 'constants_fit_retries', 'rtol', 'atol',
                 'min_informative', 'seed', 'confirm', 'source_sample_per_length',
-                'candidate_fold_filter', 'relaxed_kruskal', 'prune', 'proposals',
+                'relaxed_kruskal', 'prune', 'proposals',
                 'promote_sorts', 'symbolic_gate', 'snapshot_at'}
             unknown_keys = sorted(set(rule_finding_config) - known_keys)
             if unknown_keys:
@@ -121,7 +121,6 @@ def main(argv: str = None) -> None:
                 source_sample_per_length={
                     int(k): int(v) for k, v in
                     (rule_finding_config.get('source_sample_per_length') or {}).items()},
-                candidate_fold_filter=rule_finding_config.get('candidate_fold_filter', True),
                 relaxed_kruskal=rule_finding_config.get('relaxed_kruskal', True),
                 proposals=proposals,
                 promote_sorts=rule_finding_config.get('promote_sorts', True),

@@ -1104,7 +1104,7 @@ impl PyEngine {
     /// short-circuit + candidate scan (no-constant test / constant fit) + selection. Returns
     /// the chosen target token list, or None. `candidates` = the candidate library (expressions
     /// up to max_target); for the resident path see `build_candidate_library`/`find_rule_lib`.
-    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, fold_filter=true))]
+    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule(
         &self,
@@ -1122,7 +1122,6 @@ impl PyEngine {
         rtol: f64,
         atol: f64,
         min_informative: Option<usize>,
-        fold_filter: bool,
     ) -> PyResult<Option<Vec<String>>> {
         ensure_tokens_are_tokens(&source)?;
         for c in &candidates {
@@ -1147,7 +1146,6 @@ impl PyEngine {
                 rtol,
                 atol,
                 mi,
-                fold_filter,
             )
         })
         .map_err(PyValueError::new_err)
@@ -1155,9 +1153,9 @@ impl PyEngine {
 
     /// OFFLINE miner: build a RESIDENT candidate library once per mine (precompiles every
     /// candidate's tape + precomputes const-free `y`). Pass the returned handle to
-    /// `find_rule_lib`. `fold_filter` (default on) drops var-free candidates of length >= 2 --
-    /// the sound "candidate minimization" lever; see `worker::CandidateLibrary::build`.
-    #[pyo3(signature = (candidates, var_names, x_flat, n_rows, fold_filter=true))]
+    /// `find_rule_lib`. Var-free candidates of length >= 2 are dropped unconditionally --
+    /// the library mirrors the emit guard; see `worker::CandidateLibrary::build`.
+    #[pyo3(signature = (candidates, var_names, x_flat, n_rows))]
     fn build_candidate_library(
         &self,
         py: Python<'_>,
@@ -1165,20 +1163,14 @@ impl PyEngine {
         var_names: Vec<String>,
         x_flat: Vec<f64>,
         n_rows: usize,
-        fold_filter: bool,
     ) -> PyResult<PyCandidateLibrary> {
         for c in &candidates {
             ensure_tokens_are_tokens(c)?;
         }
         let inner = py
             .detach(|| {
-                self.inner.build_candidate_library(
-                    &candidates,
-                    &var_names,
-                    &x_flat,
-                    n_rows,
-                    fold_filter,
-                )
+                self.inner
+                    .build_candidate_library(&candidates, &var_names, &x_flat, n_rows)
             })
             .map_err(PyValueError::new_err)?;
         Ok(PyCandidateLibrary { inner })

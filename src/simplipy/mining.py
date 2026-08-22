@@ -599,7 +599,6 @@ class RuleMiner:
             mine_seed: int = 42,
             confirm_seed: int = 43,
             X_confirm: np.ndarray | None = None,
-            candidate_fold_filter: bool = True,
             relaxed_kruskal: bool = True,
             provenance: dict | None = None,
             proposal_entries: list[tuple[tuple[str, ...], tuple[str, ...] | None]] | None = None,
@@ -654,8 +653,7 @@ class RuleMiner:
             for expression in sorted(expressions_of_length[length])
         ]
         library = self.engine._core.build_candidate_library(
-            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0],
-            fold_filter=candidate_fold_filter)
+            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0])
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates'
                   f' ({library.n_filtered:,} var-free filtered)')
@@ -1209,7 +1207,6 @@ class RuleMiner:
             mine_seed: int,
             confirm_seed: int,
             confirm: bool,
-            candidate_fold_filter: bool,
             relaxed_kruskal: bool,
             prune: bool | str,
             reset_rules: bool) -> dict:
@@ -1276,7 +1273,7 @@ class RuleMiner:
                 'constants_fit_retries': constants_fit_retries,
                 'rtol': rtol, 'atol': atol, 'min_informative': min_informative,
                 'seed': seed, 'mine_seed': mine_seed, 'confirm_seed': confirm_seed,
-                'confirm': confirm, 'candidate_fold_filter': candidate_fold_filter,
+                'confirm': confirm,
                 'relaxed_kruskal': relaxed_kruskal,
                 'prune': prune, 'reset_rules': reset_rules,
                 'source_sample_per_length': {str(k): int(v) for k, v in source_sample_per_length.items()},
@@ -1416,7 +1413,7 @@ class RuleMiner:
                       for expression in sorted(expressions[length])]
         library = self.engine._core.build_candidate_library(
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(),
-            X_data.shape[0], fold_filter=True)
+            X_data.shape[0])
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates '
                   f'({library.n_filtered:,} var-free filtered)')
@@ -1738,7 +1735,6 @@ class RuleMiner:
             seed: int | None = 42,
             confirm: bool = True,
             source_sample_per_length: dict[int, int] | None = None,
-            candidate_fold_filter: bool = True,
             relaxed_kruskal: bool = True,
             proposals: str | list | dict | None = None,
             promote_sorts: bool = True,
@@ -1829,16 +1825,6 @@ class RuleMiner:
             replacement range additionally warns, because the candidate library then
             no longer certifies "no shorter equivalent exists". The dev operator set
             crosses enumeration feasibility between lengths 5 (6.8e6) and 6 (2.4e8).
-        candidate_fold_filter : bool, optional
-            Drop VARIABLE-FREE candidates of length >= 2 from the candidate library
-            (default True). Sound: a var-free candidate evaluates to one scalar per
-            constant-assignment, so any source it matches is constant-valued and the
-            length-1 ``<constant>`` candidate (whose presence gates the filter)
-            already matches at a strictly shorter length, preempting it in the
-            shortest-first scan. This removes the bulk of the constant-bearing
-            (LM-fit) candidate arm -- the dominant per-source cost for const-free
-            sources -- without changing any mined rule. Set False only for a
-            reference mine (e.g. the filtered-vs-unfiltered parity gate).
         relaxed_kruskal : bool, optional
             If True (the default), EVERY source is searched with the engine's own
             result as the mark to beat: only targets strictly below that mark in
@@ -2007,7 +1993,7 @@ class RuleMiner:
             constants_fit_retries=constants_fit_retries,
             rtol=rtol, atol=atol, min_informative=min_informative,
             seed=seed, mine_seed=mine_seed, confirm_seed=confirm_seed,
-            confirm=confirm, candidate_fold_filter=candidate_fold_filter,
+            confirm=confirm,
             relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules)
         if proposal_record is not None:
             # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
@@ -2057,7 +2043,6 @@ class RuleMiner:
                 mine_seed=mine_seed,
                 confirm_seed=confirm_seed,
                 X_confirm=X_confirm,
-                candidate_fold_filter=candidate_fold_filter,
                 relaxed_kruskal=relaxed_kruskal,
                 provenance=provenance,
                 proposal_entries=proposal_entries,

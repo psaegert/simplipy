@@ -72,7 +72,6 @@ impl Engine {
         rtol: f64,
         atol: f64,
         min_informative: usize,
-        fold_filter: bool,
     ) -> Result<Option<Vec<String>>, String> {
         crate::worker::find_rule(
             &self.operators,
@@ -89,43 +88,30 @@ impl Engine {
             rtol,
             atol,
             min_informative,
-            fold_filter,
         )
     }
 
-    /// OFFLINE miner: build a RESIDENT candidate library (once per mine). See
-    /// `crate::worker::CandidateLibrary` for the `fold_filter` (var-free candidate minimization)
-    /// semantics and its soundness argument.
+    /// OFFLINE miner: build a RESIDENT candidate library (once per mine). Var-free
+    /// composites are dropped unconditionally -- the library mirrors the emit guard; see
+    /// `crate::worker::CandidateLibrary::build`.
     pub fn build_candidate_library(
         &self,
         candidates: &[Vec<String>],
         var_names: &[String],
         x_flat: &[f64],
         n_rows: usize,
-        fold_filter: bool,
     ) -> Result<crate::worker::CandidateLibrary, String> {
         // mu is scored HERE because it is an engine-level measure (`ac_complexity` reads the
         // bare context), and the library builder only has the operator table. Bare-context mu
         // depends on no mined rule, so scoring once at build time is stable for the whole mine.
         let mus: Vec<Option<u64>> = candidates.iter().map(|c| self.ac_complexity(c)).collect();
-        // WHICH VAR-FREE CANDIDATES EARN THEIR PLACE. A var-free candidate of length >= 2
-        // is admitted only when the CONSTRUCTOR folds it to a single leaf -- `exp 1` is
-        // `np.e`, `* 0 <constant>` is `0`. Anything that stays composite (`asin sin 2`,
-        // `log <constant>`) is either an obfuscated spelling of a value or a universal
-        // absorber, and `<constant>` or the leaf itself already covers it.
-        let folds_to_leaf: Vec<bool> = candidates
-            .iter()
-            .map(|c| self.ac_canonical_key(c).is_some_and(|k| k.len() == 1))
-            .collect();
         crate::worker::CandidateLibrary::build(
             &self.operators,
             candidates,
             &mus,
-            &folds_to_leaf,
             var_names,
             x_flat,
             n_rows,
-            fold_filter,
         )
     }
 
