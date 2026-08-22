@@ -53,14 +53,6 @@ pub const JUDGE_REL: f64 = 1e-9;
 pub const REALISED_ULP: f64 = 8.0;
 
 /// The spacing between `x` and the next double away from zero -- one ULP AT `x`.
-fn ulp_at(x: f64) -> f64 {
-    let a = x.abs();
-    if !a.is_finite() {
-        return f64::INFINITY;
-    }
-    f64::from_bits(a.to_bits() + 1) - a
-}
-
 /// The per-variable battery of contract points.
 pub const BATTERY: [ProbeAtom; 21] = [
     ProbeAtom::Val(0.0),
@@ -89,7 +81,16 @@ pub const BATTERY: [ProbeAtom; 21] = [
 /// The source-constant battery: the core generic
 /// witnesses plus the special rationals and the symbolic transcendental atoms. A fitted or
 /// pattern-bound source constant reaches every one of these in deployment.
-pub const SPECIAL_CONSTS: [f64; 18] = [
+///
+/// SPAN MIRRORS THE JUDGE (audit U8, 2026-08-22). This battery reached |c| <= 5 while
+/// the gate's constant quantifier reaches |c| = 1e4 generically (`WIDE_CONSTS`, F107)
+/// and probes the f64 attainment magnitudes out to 1e17 (`SATURATION_CONSTS`) -- so
+/// the miner minted rows the gate then convicted, and every such row was judged,
+/// confirmed and routed before dying. The span below is the judge's own: the 18 core
+/// witnesses, the 20 generic decades (both signs), and the 10 saturation magnitudes.
+/// Skip semantics make the widening safe: an instance where no witness fits is
+/// SKIPPED with no verdict, so new points can only refuse rows the gate would refuse.
+pub const SPECIAL_CONSTS: [f64; 48] = [
     2.5,
     -1.5,
     3.0,
@@ -108,6 +109,38 @@ pub const SPECIAL_CONSTS: [f64; 18] = [
     -std::f64::consts::FRAC_PI_2,
     std::f64::consts::PI,
     std::f64::consts::E,
+    // WIDE_CONSTS: the generic magnitude span, decade-spaced, both signs (F107)
+    10.0,
+    -10.0,
+    30.0,
+    -30.0,
+    100.0,
+    -100.0,
+    300.0,
+    -300.0,
+    1e3,
+    -1e3,
+    3e3,
+    -3e3,
+    1e4,
+    -1e4,
+    0.1,
+    -0.1,
+    0.01,
+    -0.01,
+    0.001,
+    -0.001,
+    // SATURATION_CONSTS: where f64 ATTAINS a bound mathematics only approaches
+    19.0,
+    -19.0,
+    20.0,
+    -20.0,
+    50.0,
+    -50.0,
+    750.0,
+    -750.0,
+    1e17,
+    -1e17,
 ];
 
 /// Cap on battery combinations per source: the slot-product is capped at 500 with a
@@ -216,12 +249,40 @@ fn dep_realised(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp
     if let Some(cl) = dep_classes(s, c) {
         return cl;
     }
+    // The pre-screen's bar is the fit band PLUS ULP headroom, additively -- and that
+    // shape is deliberate, not sloppy (audit U8, resolved 2026-08-22 by measurement).
+    // A strict bit-distance OR-form was tried and refused true rules at the band
+    // EDGE: `adopt_snapped_witness` legitimately places a witness up to the band
+    // boundary, and the boundary case then measured the SNAP displacement (124,875
+    // bit-ulps on `rootn exp 7 <constant>` at source constant -5), not realisation
+    // -- while the judge, whose witness machinery re-polishes, CERTIFIES the rule
+    // core. The additive ulp term is the band's closure under its own arithmetic.
+    // Its binade-boundary factor-2 looseness (<= 16 effective bit-ulps) sits inside
+    // the REALISED_ULP derivation's own insensitivity envelope ("every bound in
+    // [8, 56] gives the identical partition"). The one genuine defect was
+    // `ulp_at(f64::MAX) = +inf` -- a literally vacuous bar at the top of the range
+    // -- which `ulp_at` now closes by pricing the top magnitude at its lower
+    // neighbour's spacing.
     let tol = witness_band(s, rtol, atol) + REALISED_ULP * ulp_at(s.abs().max(c.abs()));
     if (s - c).abs() <= tol {
         P::Eq
     } else {
         P::RealChange
     }
+}
+
+/// The ulp SPACING at |x|, finite for every finite input: at `f64::MAX` the next
+/// representable is inf, so the spacing is taken to the lower neighbour instead --
+/// an infinite tolerance is not a bar (audit U8).
+fn ulp_at(x: f64) -> f64 {
+    let a = x.abs();
+    if !a.is_finite() {
+        return f64::INFINITY;
+    }
+    if a == f64::MAX {
+        return a - f64::from_bits(a.to_bits() - 1);
+    }
+    f64::from_bits(a.to_bits() + 1) - a
 }
 
 /// "Has the deployed algebra DIVERGED?" -- the STRUCTURAL question, the mirror of
