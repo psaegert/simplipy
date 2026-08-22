@@ -2469,37 +2469,43 @@ class TestCanonicalSourceClassCertification:
             assert len(endpoints) == 1, (members, endpoints)
 
 
-class TestVarFreeCandidatesMustFoldToALeaf:
-    """The fold filter's replacement lemma, pinned (2026-08-21).
+class TestVarFreeCandidatesNeverEnterTheLibrary:
+    """The library filter mirrors the emit guard (2026-08-22, replacing the 2026-08-21
+    folds-to-leaf lemma).
 
-    The mu-dominance criterion that briefly replaced the length rule was UNSOUND: it
-    admitted every var-free composite, because `<constant>` prices at 67000 while
-    `asin sin 2` is 19000. A live mine under it produced 57 rules of the form
-    `pi - 2 -> asin(sin(2))` in its first 212 -- true by value, an obfuscation as a
-    rewrite. The criterion is now what the CONSTRUCTOR makes of the candidate.
+    History, kept because both halves earned their scars: the mu-dominance criterion
+    admitted every var-free composite (`<constant>` prices at 67000, `asin sin 2` at
+    19000) and a live mine minted 57 rules of the form `pi - 2 -> asin(sin(2))`. Its
+    replacement admitted the composites the CONSTRUCTOR folds to a leaf -- and the
+    real mine then minted `rootn 1 <constant> -> pow 1 <constant>`, because the scan
+    emits the candidate's own token form, not its fold. The emit guard fixed that at
+    the mint; the library exemption it obsoleted survived for a day and was spending
+    30x of the scan on candidates that could never emit (audit U2, two byte-identity
+    controls). Now the library refuses the whole class at admission AND the emit
+    guard still refuses the spelling at the mint -- one invariant, both layers.
     """
 
-    def test_a_candidate_is_admitted_iff_it_folds_to_a_leaf(self, engine, mining_x) -> None:
+    def test_no_var_free_composite_enters_the_library(self, engine, mining_x) -> None:
         x_flat, n = mining_x
-        # `exp 1` folds to `np.e`; `pow2 <c>` and `exp <c>` stay composite.
+        # `exp 1` folds to `np.e` -- and is dropped anyway: the leaf `np.e` is the
+        # candidate that emits; the composite spelling never can.
         cands = [["x0"], ["<constant>"], ["exp", "1"], ["exp", "<constant>"],
                  ["pow2", "<constant>"], ["*", "<constant>", "x0"]]
         lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
-        assert lib.n_filtered == 2, "exp(<c>) and pow2(<c>) stay composite -> dropped"
-        assert lib.n_candidates == 4, "exp(1) folds to np.e and must survive"
+        assert lib.n_filtered == 3, "exp(1), exp(<c>) and pow2(<c>) are all var-free composites"
+        assert lib.n_candidates == 3
 
-    def test_the_guard_reaches_the_class_that_escaped(self, engine, mining_x) -> None:
-        """REGRESSION. The first version of this falsifier ran on a vocabulary where the
-        defect could not occur, so it passed while the real mine minted
-        `rootn 1 <constant> -> pow 1 <constant>`. The candidate was admitted because the
-        CONSTRUCTOR folds `pow 1 <constant>` to `1`; the scan then emitted its own token
-        form. This pins the emitted spelling, which is what ships."""
+    def test_the_escaped_class_cannot_be_minted(self, engine, mining_x) -> None:
+        """REGRESSION, kept end-to-end. The mine that minted
+        `rootn 1 <constant> -> pow 1 <constant>` did so through a candidate the
+        folds-to-leaf exemption admitted. The library now refuses it at admission, and
+        the emitted spelling stays pinned: whatever the scan returns for this source,
+        it is never a var-free composite."""
         x_flat, n = mining_x
-        # `pow 1 <c>` folds to the leaf `1`, so the library admits it -- the guard has to
-        # refuse the composite SPELLING at emission, not the candidate at admission.
         cands = [["x0"], ["<constant>"], ["1"], ["pow", "1", "<constant>"]]
         lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
-        assert lib.n_candidates == 4, "the foldable composite must still be ADMITTED"
+        assert lib.n_candidates == 3, "the foldable composite must be REFUSED at admission"
+        assert lib.n_filtered == 1
         src = ["rootn", "1", "<constant>"]
         _, _, mark = engine._core.ac_judge(list(src), 48)
         got = engine._core.find_rule_lib(list(src), len(src), None, lib, challenges=16,
