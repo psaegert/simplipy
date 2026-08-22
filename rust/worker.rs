@@ -2537,8 +2537,8 @@ mod tests {
             s(&["neg", "x0"]),
             s(&["*", "<constant>", "x0"]),
         ];
-        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n)
-            .unwrap();
+        let lib =
+            CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n).unwrap();
         assert_eq!(lib.n_filtered(), 3); // sin(<c>), pow(<c>, 2), exp(1)
         assert_eq!(lib.n_candidates(), 4);
         // and the drop is unconditional: no bare `<constant>` guard token, same result
@@ -2597,8 +2597,8 @@ mod tests {
             s(&["sin", "x0"]),
             s(&["exp", "<constant>"]), // genuinely var-free -> filtered
         ];
-        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n)
-            .unwrap();
+        let lib =
+            CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n).unwrap();
         assert_eq!(lib.n_filtered(), 1, "only exp(<constant>) may be dropped");
         assert_eq!(lib.n_candidates(), 3);
     }
@@ -2670,8 +2670,8 @@ mod tests {
         // Both candidates are numerically equivalent to the source x0+x0+x0 = 3*x0:
         // `* 3 x0` at length 3, `neg * -3 x0` at length 4.
         let cands = vec![s(&["*", "3", "x0"]), s(&["neg", "*", "-3", "x0"])];
-        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n)
-            .unwrap();
+        let lib =
+            CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n).unwrap();
         let src = s(&["+", "+", "x0", "x0", "x0"]);
         // Without acceptance the length-3 spelling wins.
         let free = find_rule_with_lib(

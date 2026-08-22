@@ -1088,7 +1088,6 @@ class RuleMiner:
         }
         return prov
 
-
     @staticmethod
     def _write_provenance(output_file: str, provenance: dict | None, rules: list,
                           completed_length: int | None = None, final: bool = False) -> None:
