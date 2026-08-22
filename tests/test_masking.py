@@ -63,15 +63,15 @@ class TestPolicies:
     def test_keep_structure_never_touches_indices_or_exponents(
             self, engine: SimpliPyEngine) -> None:
         # The D2c regression: coefficient masked, rootn index AND exponent kept.
-        out = engine.simplify(["*", "2", "rootn", "pow", "x0", "5", "3"])
-        masked = masking.mask(out, engine, masking.mask_values_keep_structure)
+        out = engine.simplify(engine.to_tagged(["*", "2", "rootn", "pow", "x0", "5", "3"]))
+        masked = masking.mask(out, engine, masking.mask_fittable)
         assert masked == ["<mul>", "<constant>", "rootn", "pow", "x0", "5", "3", "</mul>"]
         # The masked skeleton stays parseable (positional replacement preserves
         # canonical order; complexity() exercises the shared parser).
         assert engine.complexity(masked) > 0
 
     def test_mask_all_is_the_legacy_equivalent(self, engine: SimpliPyEngine) -> None:
-        out = engine.simplify(["+", "x3", "+", "x8", "*", "0.2", "x3"])
+        out = engine.simplify(engine.to_tagged(["+", "x3", "+", "x8", "*", "0.2", "x3"]))
         masked = masking.mask(out, engine, masking.mask_all)
         # The 6/5 coefficient is ONE degree of freedom, so it costs ONE <constant>
         # however the serializer spelled it. Note the TERM ORDER moves: `<constant>`
@@ -130,27 +130,27 @@ class TestSpecialConstantsAreSites:
     manufacture an unfittable skeleton."""
 
     def test_mask_all_masks_specials(self, engine: SimpliPyEngine) -> None:
-        out = engine.simplify(["*", "np.pi", "x0"])
+        out = engine.simplify(engine.to_tagged(["*", "np.pi", "x0"]))
         assert masking.mask(out, engine, masking.mask_all) == \
             ["<mul>", "<constant>", "x0", "</mul>"]
         # 2*pi*x: both the integer and the special are SITES, so both are masked -- but
         # `2 * pi` is ONE value and therefore ONE degree of freedom, so the collect stage
         # leaves ONE <constant>. Two sites, one constant.
-        out = engine.simplify(["*", "2", "*", "np.pi", "x0"])
+        out = engine.simplify(engine.to_tagged(["*", "2", "*", "np.pi", "x0"]))
         assert masking.mask(out, engine, masking.mask_all) == \
             ["<mul>", "<constant>", "x0", "</mul>"]
-        out = engine.simplify(["+", "x0", "np.e"])
+        out = engine.simplify(engine.to_tagged(["+", "x0", "np.e"]))
         assert masking.mask(out, engine, masking.mask_all) == \
             ["<add>", "x0", "<constant>", "</add>"]
 
     def test_keep_structure_keeps_special_exponents(self, engine: SimpliPyEngine) -> None:
         # In a STRUCTURAL position the keep-structure policy keeps the special exactly
         # like it keeps a structural integer; in a value position it masks it.
-        out = engine.simplify(["pow", "x0", "np.e"])
-        assert masking.mask(out, engine, masking.mask_values_keep_structure) == \
+        out = engine.simplify(engine.to_tagged(["pow", "x0", "np.e"]))
+        assert masking.mask(out, engine, masking.mask_fittable) == \
             ["pow", "x0", "np.e"]
-        out = engine.simplify(["*", "np.pi", "x0"])
-        assert masking.mask(out, engine, masking.mask_values_keep_structure) == \
+        out = engine.simplify(engine.to_tagged(["*", "np.pi", "x0"]))
+        assert masking.mask(out, engine, masking.mask_fittable) == \
             ["<mul>", "<constant>", "x0", "</mul>"]
 
     def test_sites_report_specials_with_roles(self, engine: SimpliPyEngine) -> None:
@@ -169,11 +169,11 @@ class TestSpecialConstantsAreSites:
         (an integer or a fraction) -- and those are masked here anyway, so it buys
         nothing. Both shipped kinds agree."""
         for policy in (masking.mask_fittable, masking.mask_all):
-            out = engine.simplify(["*", "2", "*", "np.pi", "x0"])
+            out = engine.simplify(engine.to_tagged(["*", "2", "*", "np.pi", "x0"]))
             assert masking.mask(out, engine, policy) == \
                 ["<mul>", "<constant>", "x0", "</mul>"]
             # ...and a SEPARATE additive term keeps its own degree of freedom.
-            out = engine.simplify(["+", "2", "*", "np.pi", "x0"])
+            out = engine.simplify(engine.to_tagged(["+", "2", "*", "np.pi", "x0"]))
             assert masking.mask(out, engine, policy) == \
                 ["<add>", "<mul>", "<constant>", "x0", "</mul>", "<constant>", "</add>"]
 
@@ -198,15 +198,77 @@ class TestSpecialConstantsAreSites:
         def mask_all_keep_specials(value: str, role: masking.Role):
             return None if value in ("np.pi", "np.e") else "<constant>"
 
-        out = engine.simplify(["*", "2", "*", "np.pi", "x0"])
+        out = engine.simplify(engine.to_tagged(["*", "2", "*", "np.pi", "x0"]))
         # The kept `np.pi` sits beside the mask the policy minted for `2`, and the
         # canon's absorption folds them: pi * <constant> IS <constant>.
         assert masking.mask(out, engine, mask_all_keep_specials) == \
             ["<mul>", "<constant>", "x0", "</mul>"]
         # Where the policy mints no adjacent mask, the kept special DOES survive
         # (no other literal in the bag), while the shipped policies mask it:
-        out = engine.simplify(["sin", "*", "np.pi", "x0"])
+        out = engine.simplify(engine.to_tagged(["sin", "*", "np.pi", "x0"]))
         assert masking.mask(list(out), engine, mask_all_keep_specials) == \
             ["sin", "<mul>", "np.pi", "x0", "</mul>"]
         assert masking.mask(list(out), engine, masking.mask_all) == \
             ["sin", "<mul>", "<constant>", "x0", "</mul>"]
+
+
+class TestEngineMaskFrontDoor:
+    """``engine.mask(expr, policy='all')`` -- the owner-approved front door over
+    this module (design D8): pure delegation, str->str / list->list symmetry,
+    the three shipped policies by name or any callable policy."""
+
+    def test_list_in_list_out_delegates_byte_identically(self, engine: SimpliPyEngine) -> None:
+        toks = engine.read_infix('2*sin(x0) + 1.5')
+        out = engine.mask(toks)
+        assert isinstance(out, list)
+        assert out == masking.mask(toks, engine, masking.mask_all)
+        assert out == ['+', '*', '<constant>', 'sin', 'x0', '<constant>']
+
+    def test_str_in_str_out(self, engine: SimpliPyEngine) -> None:
+        out = engine.mask('2*sin(x0) + 1.5')
+        assert isinstance(out, str)
+        # the infix rendering is the structure-preserving renderer's (pure conversion)
+        assert out == '<constant> * sin(x0) + <constant>'
+
+    def test_default_policy_is_all(self, engine: SimpliPyEngine) -> None:
+        toks = engine.read_infix('x0**2 * 0.5')
+        assert engine.mask(toks) == engine.mask(toks, policy='all')
+
+    def test_named_policy_all_masks_exponents(self, engine: SimpliPyEngine) -> None:
+        tagged = engine.simplify(engine.to_tagged(['*', '2', 'pow', 'x0', '3']))
+        assert engine.mask(tagged, policy='all') \
+            == ['<mul>', '<constant>', 'pow', 'x0', '<constant>', '</mul>']
+
+    def test_named_policy_fittable_keeps_exponents(self, engine: SimpliPyEngine) -> None:
+        tagged = engine.simplify(engine.to_tagged(['*', '2', 'pow', 'x0', '3']))
+        out = engine.mask(tagged, policy='fittable')
+        assert out == ['<mul>', '<constant>', 'pow', 'x0', '3', '</mul>']
+        # the emitted dialect is preserved (delegation, not conversion)
+        assert out[0] == '<mul>'
+
+    def test_named_policy_values_is_the_fittable_alias(self, engine: SimpliPyEngine) -> None:
+        toks = engine.read_infix('x0**2 * 0.5')
+        assert engine.mask(toks, policy='values') == ['*', '<constant>', 'pow', 'x0', '2']
+        assert engine.mask(toks, policy='values') == engine.mask(toks, policy='fittable')
+
+    def test_custom_callable_policy(self, engine: SimpliPyEngine) -> None:
+        def keep_ints(value: str, role: masking.Role) -> str | None:
+            return None if value.lstrip('-').isdigit() else '<constant>'
+
+        toks = engine.read_infix('2.5*sin(x0) + 3')
+        out = engine.mask(toks, policy=keep_ints)
+        assert out == ['+', '*', '<constant>', 'sin', 'x0', '3']
+        assert out == masking.mask(toks, engine, keep_ints)
+
+    def test_unknown_policy_name_raises(self, engine: SimpliPyEngine) -> None:
+        with pytest.raises(ValueError, match="'all', 'fittable', 'values'"):
+            engine.mask(['*', '2', 'x0'], policy='everything')
+
+    def test_wrong_policy_type_raises(self, engine: SimpliPyEngine) -> None:
+        with pytest.raises(TypeError):
+            engine.mask(['*', '2', 'x0'], policy=42)
+
+    def test_wrong_expression_type_raises(self, engine: SimpliPyEngine) -> None:
+        # The front door reads an infix str or a token LIST -- nothing else (D8).
+        with pytest.raises(TypeError):
+            engine.mask(('*', '2', 'x0'))

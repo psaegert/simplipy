@@ -4,6 +4,7 @@
 
 use rayon::prelude::*;
 
+use crate::engine::RuleMode;
 use crate::rules::CompiledRules;
 
 use super::Engine;
@@ -71,7 +72,6 @@ impl Engine {
         rtol: f64,
         atol: f64,
         min_informative: usize,
-        fold_filter: bool,
     ) -> Result<Option<Vec<String>>, String> {
         crate::worker::find_rule(
             &self.operators,
@@ -88,28 +88,85 @@ impl Engine {
             rtol,
             atol,
             min_informative,
-            fold_filter,
         )
     }
 
-    /// OFFLINE miner: build a RESIDENT candidate library (once per mine). See
-    /// `crate::worker::CandidateLibrary` for the `fold_filter` (var-free candidate minimization)
-    /// semantics and its soundness argument.
+    /// OFFLINE miner: build a RESIDENT candidate library (once per mine). Var-free
+    /// composites are dropped unconditionally -- the library mirrors the emit guard; see
+    /// `crate::worker::CandidateLibrary::build`.
     pub fn build_candidate_library(
         &self,
         candidates: &[Vec<String>],
         var_names: &[String],
         x_flat: &[f64],
         n_rows: usize,
-        fold_filter: bool,
     ) -> Result<crate::worker::CandidateLibrary, String> {
+        // mu is scored HERE because it is an engine-level measure (`ac_complexity` reads the
+        // bare context), and the library builder only has the operator table. Bare-context mu
+        // depends on no mined rule, so scoring once at build time is stable for the whole mine.
+        let mus: Vec<Option<u64>> = candidates.iter().map(|c| self.ac_complexity(c)).collect();
+        // THE AC-CLASS QUOTIENT (2026-08-22 audit §7.1). The enumeration spells one
+        // canonical class many ways -- commutative orderings, odd-sign twins, inv/abs
+        // pairs -- and the scan judged every spelling: 31.6% of the variable-carrying
+        // acj-4 library was duplicate classes. Two spellings of one class compute the
+        // same function, so they match identically; the one the scan would PICK --
+        // cheapest mu tier, then earliest in library order -- makes every later
+        // spelling with the SAME variable multiset and `<constant>` count unreachable:
+        // it sits in a same-or-later tier, sorts identically in select_best (stable by
+        // `<constant>` count), and passes the wildcard-multiplicity and mu-acceptance
+        // checks whenever the dropped one would. Spellings whose variable multiset or
+        // `<constant>` count differ (`* x0 x0` vs `pow2 x0`) are NEVER dropped: their
+        // guard behaviour is not interchangeable, and the byte-identity gate only
+        // certifies the dominated class.
+        let mut keeper: std::collections::HashMap<(Vec<String>, Vec<String>, usize), (u64, usize)> =
+            std::collections::HashMap::new();
+        let sig = |c: &[String]| -> (Vec<String>, usize) {
+            let mut vars: Vec<String> = c
+                .iter()
+                .filter(|t| var_names.iter().any(|v| v == *t))
+                .cloned()
+                .collect();
+            vars.sort();
+            let n_const = c.iter().filter(|t| t.as_str() == "<constant>").count();
+            (vars, n_const)
+        };
+        for (i, c) in candidates.iter().enumerate() {
+            let Some(k) = self.ac_canonical_key(c) else {
+                continue; // unkeyed spellings are never quotiented
+            };
+            let (vars, n_const) = sig(c);
+            let mu_i = mus[i].unwrap_or(u64::MAX);
+            keeper
+                .entry((k, vars, n_const))
+                .and_modify(|best| {
+                    if (mu_i, i) < *best {
+                        *best = (mu_i, i);
+                    }
+                })
+                .or_insert((mu_i, i));
+        }
+        let mut cands_q: Vec<Vec<String>> = Vec::with_capacity(candidates.len());
+        let mut mus_q: Vec<Option<u64>> = Vec::with_capacity(candidates.len());
+        for (i, c) in candidates.iter().enumerate() {
+            let keep = match self.ac_canonical_key(c) {
+                None => true,
+                Some(k) => {
+                    let (vars, n_const) = sig(c);
+                    keeper.get(&(k, vars, n_const)).is_none_or(|&(_, j)| j == i)
+                }
+            };
+            if keep {
+                cands_q.push(c.clone());
+                mus_q.push(mus[i]);
+            }
+        }
         crate::worker::CandidateLibrary::build(
             &self.operators,
-            candidates,
+            &cands_q,
+            &mus_q,
             var_names,
             x_flat,
             n_rows,
-            fold_filter,
         )
     }
 
@@ -123,6 +180,7 @@ impl Engine {
         source: &[String],
         simplified_length: usize,
         max_target: Option<usize>,
+        max_mu: Option<u64>,
         lib: &crate::worker::CandidateLibrary,
         challenges: usize,
         retries: usize,
@@ -138,6 +196,7 @@ impl Engine {
             source,
             simplified_length,
             max_target,
+            max_mu,
             lib,
             challenges,
             retries,
@@ -172,6 +231,44 @@ impl Engine {
         // The AC translation is cached lazily (ac_rules_cell); the AC-judged Kruskal prune
         // must see the rules just installed, so the cache dies with the old rule set.
         self.ac_rules_cell = std::sync::OnceLock::new();
+        // ...and so do the other two modes' cells. Not because their SETS changed -- they
+        // did not -- but because a mode with NO set of its own SERVES this one, so its
+        // answer moved even though its file did not. Retaining them would leave such a
+        // mode serving a rule set the engine no longer holds.
+        self.ac_real_rules_cell = std::sync::OnceLock::new();
+        self.ac_corpus_rules_cell = std::sync::OnceLock::new();
+    }
+
+    /// Install ONE MODE'S OWN COMPLETE RULE SET (`rules_real.json` / `rules_corpus.json`),
+    /// or -- with `None` -- retract it so that mode falls back to the default set again.
+    ///
+    /// `Some(vec![])` is NOT the same call as `None`: it installs an EMPTY set, and that
+    /// mode then serves nothing. The distinction is the design (see `Engine::ac_rules_for`)
+    /// and it survives every layer up to the config loader.
+    ///
+    /// `RuleMode::Default` routes to `set_rules`, so there is exactly one way to say
+    /// "replace the default set" and it keeps that path's invalidation discipline.
+    /// Shaped like `set_rules` otherwise: the same `&mut self` token-table extension (the
+    /// table is append-only, so existing ids -- including `bang_cache` keys -- stay valid)
+    /// and the same lazy-cell invalidation. Only the named mode's cell dies; installing
+    /// `real` can never move a `default` or `corpus` answer.
+    pub fn set_mode_rules(&mut self, mode: RuleMode, raw: Option<Vec<(Vec<String>, Vec<String>)>>) {
+        if mode == RuleMode::Default {
+            self.set_rules(raw.unwrap_or_default());
+            return;
+        }
+        let compiled = raw.map(|r| CompiledRules::compile(r, &mut self.tokens, &self.operators));
+        match mode {
+            RuleMode::Real => {
+                self.real_rules = compiled;
+                self.ac_real_rules_cell = std::sync::OnceLock::new();
+            }
+            RuleMode::Corpus => {
+                self.corpus_rules = compiled;
+                self.ac_corpus_rules_cell = std::sync::OnceLock::new();
+            }
+            RuleMode::Default => unreachable!("handled above"),
+        }
     }
 
     /// OFFLINE (mine driver): mine ONE source-length IN PARALLEL (rayon, all cores). For each
@@ -229,7 +326,15 @@ impl Engine {
                     // here, and treating it as "already reduced" (source unchanged) keeps
                     // this site total without a panic path in the worker threads.
                     let ac_out = self
-                        .ac_simplify_proj(src, 48, false, crate::engine::AcForm::Explicit)
+                        // UNFOLDED: the mine's canonical form is the finest-grained one,
+                        // so no rule is lost at discovery. See `Engine::ac_judge`.
+                        .ac_simplify_proj_fold(
+                            src,
+                            48,
+                            RuleMode::Default,
+                            crate::engine::AcForm::Explicit,
+                            false,
+                        )
                         .unwrap_or_else(|| src.to_vec());
                     // "Already reduced" is judged in the serve-time reduction ordering
                     // (one coverage ordering, everywhere): the walk strictly descended,
@@ -401,10 +506,18 @@ impl Engine {
                             matches!((self.ac_complexity(t), mark_c), (Some(tc), Some(mc)) if tc < mc)
                                 && !self.ac_same_literal_skeleton(t, &ac_out).unwrap_or(true)
                         };
+                        // THE SEARCH BOUND IS THE ACCEPTANCE MARK (owner ruling, re-mine
+                        // 2026-08-20). `mark_c` is mu of the engine's own endpoint for this
+                        // source -- exactly what `accept_resolved` above requires a target to
+                        // beat -- so passing it as the scan bound removes the last split
+                        // between a token bound for SEARCH and mu for ACCEPTANCE. The scan
+                        // now stops at the first mu tier that cannot descend, and reaches
+                        // longer-but-cheaper targets the token ceiling used to refuse.
                         match self.find_rule_with_lib(
                             src,
                             src.len(),
                             max_target,
+                            mark_c,
                             lib,
                             challenges,
                             retries,

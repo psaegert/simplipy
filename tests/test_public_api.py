@@ -1,6 +1,6 @@
 """The declared public surface (D11): the ratified __all__ column, landed.
 
-The column is `remine/D11_API_COLUMN.md` (owner-ratified 2026-08-16); these
+The column is the research harness (owner-ratified 2026-08-16); these
 tests pin its landing plan. Red on the pre-landing tree by construction: the
 root had no ``__all__``, so ``from simplipy import *`` injected eight
 submodules into the caller's namespace — one of which shadowed stdlib ``io``
@@ -13,18 +13,25 @@ import pytest
 
 # R1-R13 + __version__ — the root column, verbatim.
 ROOT_ALL = {
+    'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION',
     'Mode', 'SimpliPyEngine', '__version__',
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
     'get_path', 'install', 'list_assets', 'uninstall',
-    'normalize_expression', 'normalize_skeleton', 'normalize_variable_token',
+    'normalize_variable_token', 'to_expression', 'to_skeleton',
 }
+# R11/R12 renamed 2026-08-18 (`normalize_skeleton` -> `to_skeleton`,
+# `normalize_expression` -> `to_expression`): the name states the OUTPUT form, like
+# the engine's `to_infix`/`to_prefix`/`to_tagged`. The old spellings stay reachable
+# through the root's PEP 562 `__getattr__` with a DeprecationWarning (pinned in
+# test_normalization_forms.py) but are deliberately OUT of the declared column, the
+# same treatment `mask_values_keep_structure` got in `simplipy.masking`.
 
 # R18, R21, R22, R27, R30 — the module columns, verbatim.
 MODULE_ALLS = {
     'simplipy.utils': {
         'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
-        'remap_expression', 'substitute_constants', 'substitude_constants',
-        'construct_expressions', 'numbers_to_constant', 'is_numeric_string',
+        'remap_expression', 'substitute_constants',
+        'construct_expressions', 'is_numeric_string',
         'enumerate_expressions', 'count_expressions', 'sample_expression',
         'compositions',
     },
@@ -60,8 +67,11 @@ class TestRootSurface:
 
     def test_every_declared_root_name_resolves(self) -> None:
         import simplipy
+        missing = object()  # a sentinel, not None: an exported constant may BE None
+        # (DEFAULT_ENGINE_REVISION=None means "track the manifest") and that must not
+        # read as a typo in __all__, which is what this test is for.
         for name in simplipy.__all__:
-            assert getattr(simplipy, name, None) is not None, name
+            assert getattr(simplipy, name, missing) is not missing, name
 
 
 class TestModuleSurfaces:
@@ -93,15 +103,6 @@ class TestPowerUserCaveatsInline:
 
 class TestRunningDeprecations:
     """The policy's §2 promises, executable."""
-
-    def test_substitude_misspelling_warns_and_works(self) -> None:
-        """R19: the misspelling a shipped downstream imports stays for 0.13.x,
-        warns from 0.13.0, and remains substitute_constants by identity of
-        behaviour."""
-        from simplipy.utils import substitude_constants
-        with pytest.warns(DeprecationWarning, match='substitute_constants'):
-            out = substitude_constants(['+', '<constant>', 'x0'], [3.14])
-        assert out == ['+', '3.14', 'x0']
 
     def test_correct_spelling_does_not_warn(self) -> None:
         import warnings

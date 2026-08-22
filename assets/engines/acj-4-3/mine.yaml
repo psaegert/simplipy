@@ -19,6 +19,12 @@ extra_internal_terms: ['<constant>', '(-10)', '(-9)', '(-8)', '(-7)', '(-6)', '(
                        'float("inf")', 'float("-inf")', 'float("nan")']
 dummy_variables: 2  # >= ceil(max_source_pattern_length/2) suffices for an all-binary vocabulary (measured 2026-08-01: dummies beyond that only enumerate renamed duplicates; dummy2 arm byte-identical, universe -21%)
 max_source_pattern_length: 4
+# THIS FILE REPRODUCES THE ARTIFACT BESIDE IT, which was mined with an explicit target
+# cap of 3 -- its provenance sidecar records exactly that. The cap is retired as a
+# CRITERION (an unset value now admits every enumerated expression and lets mu bound the
+# scan), but the value here has to describe the rules actually shipped in this directory,
+# not the policy the next mine will use. It becomes `null` when the re-mined artifact
+# lands, in the same commit as the rules it describes.
 max_target_pattern_length: 3
 source_sample_per_length: null        # complete universes at every length
 n_samples: 1024

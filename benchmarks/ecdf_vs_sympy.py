@@ -228,8 +228,8 @@ def run_simplipy(corpus):
     out = {}
     for label, cfg, kwargs in (
             [(f'acj-{c}', CELLS[c], {}) for c in CELLS]
-            + [('acj-4-3-lossy', CELLS['4-3'], {'mode': Mode.LOSSY})]
-            + [(f'acj-4-3-b{b}', CELLS['4-3'], {'node_budget': b})
+            + [('acj-4-3-lossy', CELLS['4-3'], {'mode': Mode.corpus})]
+            + [(f'acj-4-3-b{b}', CELLS['4-3'], {'max_passes': b})
                for b in BUDGETS if b != 48]):
         e = SimpliPyEngine.from_config(cfg)
         for row in corpus[:20]:

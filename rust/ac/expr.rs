@@ -21,6 +21,7 @@
 //! contract. Each gate cites its counterexample. Refusing to transform is always sound; the
 //! constructors prefer refusal over any uncertified step.
 
+use crate::engine::RuleMode;
 use std::cmp::Ordering;
 
 use crate::tokens::{Tok, TokenView};
@@ -141,59 +142,199 @@ impl Ex {
 /// consistent with the ratified doc's worked examples: cost(2)=2 (T4: mu(2x)=18),
 /// cost(5/2)=4 (T5: mu(2.5*pi)=20), a 52-bit dyadic ~105 (T1/T2), mu(0)=mu(1)=2 (T3).
 ///
+/// (Historical preamble; later rulings amended it in place: milli-bit carrier and the
+/// literal sign bit 2026-08-06, c_free DERIVED not floored 2026-08-06, and mu-PRIME at
+/// D38/B2 2026-08-17 -- the numeric codebook gains the decimal-scientific codeword
+/// behind a one-bit selector, and c_free' re-derives to 67 bits. Current authority:
+/// `mu_rat`, `decimal_code`, `mu_numeric_str`, `mu_free` below.)
+///
 /// Worked examples: `x + y` = 24, `x*y` = 24, `2x` = 18, `x^2` = 18, `1/x` = 16,
 /// `sin(x)` = 16, `sin(pi)` = 16, `E*x` = 24 < `2.718281828459045*x` = ~117,
 /// `<constant>*x` = 144, `exp(pi*x)` = 32 < `pow(23.14..., x)` = ~121.
-/// One grammar symbol, in bit-units. 8 by default (the ratified 1/8 unit: one
-/// symbol counts as 8 bits of description); `SIMPLIPY_MU_SYM` overrides it, read
+/// The symbol UNIT, in BITS: what one grammar symbol costs at the ratified 1/8 pin, and
+/// the scale every entry of the symbol table below is expressed against. Since 2026-08-21
+/// no node is priced at the bare unit except an unclassified function head -- the table
+/// holds the per-kind entries, and this is what they are read AGAINST.
+/// 8 by default; `SIMPLIPY_MU_SYM` overrides it, read
 /// ONCE per process -- the pre-registered P-R3 sensitivity axis is this
-/// symbol-vs-bits RATIO (literal costs are absolute bits and do not scale).
+/// symbol-vs-bits RATIO (literal costs are absolute bits and do not scale), and the axis
+/// survives the table unchanged because the whole table scales with the unit.
 /// Production never sets the variable; it exists for the sensitivity mine only.
 // ARTIFACT-AFFECTING switch (and mu_free below): listed in
 // engine.py::ARTIFACT_ENV_SWITCHES (H-042).
-/// Returned in MILLI-BITS, but the environment variable is still read in BITS -- its
-/// ratified meaning ("one grammar symbol counts as 8 bits of description") is unchanged,
-/// only the unit the measure is carried in.
-pub fn mu_sym() -> u64 {
+fn mu_sym_unit() -> u64 {
     static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
         std::env::var("SIMPLIPY_MU_SYM")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(8)
-            * MU_MILLI
     })
 }
 
-/// The free constant's price, DERIVED rather than chosen (contract §10.10(5), H-054).
+/// A symbol-table entry, in MILLI-BITS: `bits` read at the ratified 8-bit unit, scaled
+/// by whatever unit this process runs at.
 ///
-/// `<constant>` denotes an unknown value that a FIT will supply, i.e. an f64, and the ordering
-/// requires it to dominate every literal it could be instantiated to. The former default of
-/// `16 * mu_sym()` = 128 bits -- sixteen grammar symbols, a count with no derivation behind it --
-/// did NOT: `mu(1e308) = 1024.154` even before §10.10(1), so the priciest atom was beaten
-/// eightfold by an ordinary f64 extreme, and after §10.10(1) an everyday fitted constant beats it
-/// too (`1.2345678901234567e-17` prices 163.078). So the price is the SUPREMUM instead:
+/// EXACT in integer arithmetic at every unit -- `MU_MILLI / 8 = 125` divides evenly, so
+/// no entry ever rounds. That is not cosmetic: the reduction ordering's well-foundedness
+/// comes from mu taking values in a discrete set, and a table that rounded would owe a
+/// fresh termination argument.
+#[inline]
+fn sym_bits(bits: u64) -> u64 {
+    bits * (MU_MILLI / 8) * mu_sym_unit()
+}
+
+/// The mu SYMBOL TABLE (round-1, 2026-08-21), in BITS at the 8-bit unit.
+///
+/// mu' priced EVERY grammar symbol the same: one flat 8 bits for a bag, a `Pow`, a
+/// function head, a variable leaf and a named constant alike. That flatness is what
+/// minted the degenerate family `pi - 2 -> asin(sin 2)` (and its parametrised kin
+/// `- k np.pi -> atan tan k`, `acos neg cos (-k)`). Those rules are CORRECT and
+/// CERTIFIED -- `asin(sin x) = pi - x` on [pi/2, pi] -- and mu' genuinely preferred the
+/// right-hand side, 19.000 against 19.585, because two transcendental heads plus a
+/// literal cost exactly what a bag plus `pi` plus a literal cost.
+///
+/// A description length is not flat. `ac_node_census` over a 400-row corpus (10,996
+/// charged nodes) reads the empirical class frequencies as
 ///
 /// ```text
-///   max over f64 round-trip spellings of  L(significand) + |decimal scale| * log2(10)
-///     = 1131.931 bits, attained at 5.5605781537525765e-308
-///       (17 significant digits, decimal scale -324)
-///   + 1 sign bit                    = 1132.931 bits
-///   rounded up                      = 1133 bits
+///   Leaf 3519 (1.65 bits)   Mul 1989 (2.47)    Num 1948 (2.50)   Pow 1250 (3.14)
+///   Add  1088 (3.34)        Const 204 (5.75)   Fun:rootn 181 (5.92)
+///   transcendental heads 40-68 each (7.3-8.1)
 /// ```
 ///
-/// Swept over 210,389 candidates: every binary exponent -1074..=1024 at five mantissas each,
-/// the range boundaries, and 200,000 uniformly random bit patterns.
+/// -- structure CHEAP, a transcendental head EXPENSIVE, the exact opposite of what one
+/// flat unit says. The table below is HEURISTIC, informed by that census and rounded to
+/// whole bits: there is no standard corpus to derive it from, and the corpus that does
+/// exist is a symbolic-regression skeleton set in which `pi` and `e` occur ZERO times, so
+/// a straight frequency table would price them at the smoothing floor (~13.4 bits) and
+/// make the defect family STRONGER rather than weaker.
 ///
-/// SCOPED TO THE f64 RANGE ON PURPOSE. `mu_numeric_str` prices a WRITTEN token beyond that range
-/// higher still (`1e-400` costs 1330.8 bits under §10.10(1)), and no finite bound dominates every
-/// writable spelling, because the exponent is unbounded. A beyond-f64 literal is not a value a fit
-/// can produce, so it is not a value `<constant>` stands for; the deliberate consequence is that
-/// such a literal outprices the free constant.
+/// Pi and E are fixed instead by a LAW the census cannot see: A NAMED CONSTANT MUST COST
+/// LESS THAN THE CHEAPEST EXPRESSION DENOTING IT, or writing the name is never a descent.
+/// The cheapest spellings here are `acos(-1)` = 11 bits and `exp(1)` = 9, so 4 has room --
+/// and `np.e` now beats `exp 1` on COST rather than on the canonical tie-break, which is
+/// what the fold filter's correctness had been resting on.
 ///
-/// Pinned at the POST-§10.10(1) bound, not today's 1024.154, so that landing the print-only
-/// decimal code does not have to move it a second time.
-pub const MU_FREE_WORST_CASE_F64: u64 = 1_133 * MU_MILLI;
+/// Entries are bits AT THE 8-BIT UNIT and scale with it, so the pre-registered P-R3
+/// sensitivity axis is exactly what it was: `SIMPLIPY_MU_SYM=16` doubles every entry
+/// while literal costs stay absolute bits.
+const MU_BITS_LEAF: u64 = 6;
+const MU_BITS_ADD: u64 = 3;
+const MU_BITS_MUL: u64 = 3;
+const MU_BITS_POW: u64 = 3;
+const MU_BITS_PI: u64 = 4;
+const MU_BITS_E: u64 = 4;
+const MU_BITS_ELEMENTARY: u64 = 6;
+const MU_BITS_TRANSCENDENTAL: u64 = 8;
+const MU_BITS_INFINITY: u64 = 8;
+
+/// A variable (or slot, or any other vocabulary) leaf.
+#[inline]
+pub fn mu_leaf() -> u64 {
+    sym_bits(MU_BITS_LEAF)
+}
+
+/// The `Add` bag head. ONE node however many `+` the spelling shows.
+#[inline]
+pub fn mu_add() -> u64 {
+    sym_bits(MU_BITS_ADD)
+}
+
+/// The `Mul` bag head -- also the negation WRAPPER `Mul[-1, .]` that spells `x - y`.
+#[inline]
+pub fn mu_mul() -> u64 {
+    sym_bits(MU_BITS_MUL)
+}
+
+/// The `Pow` head -- also the division wrapper `Pow[y, -1]` that spells `x / y`.
+#[inline]
+pub fn mu_pow() -> u64 {
+    sym_bits(MU_BITS_POW)
+}
+
+/// `np.pi`. Below `acos(-1)` = 11 bits, its cheapest denoting expression.
+#[inline]
+pub fn mu_pi() -> u64 {
+    sym_bits(MU_BITS_PI)
+}
+
+/// `np.e`. Below `exp(1)` = 9 bits, its cheapest denoting expression -- the inequality
+/// the fold filter needs `exp 1 -> np.e` to be a strict improvement.
+#[inline]
+pub fn mu_e() -> u64 {
+    sym_bits(MU_BITS_E)
+}
+
+/// `float("inf")`, `float("-inf")`, `float("nan")`. Left at the flat unit: the census
+/// cannot see them either, and unlike `pi` and `e` no law pushes them down -- an infinity
+/// is not a value a shorter expression denotes.
+#[inline]
+pub fn mu_infinity() -> u64 {
+    sym_bits(MU_BITS_INFINITY)
+}
+
+/// A function HEAD, priced by name, in BITS at the 8-bit unit.
+///
+/// Two tiers, read off the census: the ELEMENTARY heads a skeleton reaches for constantly
+/// (`rootn` alone is 181 of 10,996 charged nodes at 5.92 bits) and the TRANSCENDENTAL
+/// heads it barely reaches at all (40-68 occurrences each, 7.3-8.1 bits). The gap between
+/// the tiers is the whole point: it is what makes `pi - 2` cheaper than `asin(sin 2)`.
+///
+/// A head this table does not name is a USER-DEFINED operator, which no census can price;
+/// it keeps the flat unit, so an unknown symbol is never made cheaper than mu' had it.
+fn mu_fun_bits(name: &str) -> u64 {
+    match name {
+        "exp" | "log" | "abs" | "sin" | "cos" | "tan" | "rootn" => MU_BITS_ELEMENTARY,
+        "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
+            MU_BITS_TRANSCENDENTAL
+        }
+        _ => 8,
+    }
+}
+
+/// The free constant's price, DERIVED rather than chosen (contract §10.10(5), H-054) --
+/// re-derived under the mu' codebook at D38/B2 (2026-08-17): the sup-construction
+/// RECIPE is untouched, the codebook under the sup changed.
+///
+/// `<constant>` denotes an unknown value that a FIT will supply, i.e. an f64, and the ordering
+/// requires it to dominate every literal it could be instantiated to: the price is the
+/// SUPREMUM of mu' over f64 round-trip spellings (the exact rationals the shortest reprs
+/// of finite f64s denote), plus the sign bit, ceiled.
+///
+/// ```text
+///   max over f64 round-trip spellings m * 10^s of
+///       min( rational codeword,  max(2, L(m)) + L(|s|) )
+///     = 64.649 bits, attained at 8.9002954340287245e-308
+///       (m = 89002954340287245, s = -324: the largest 17-digit mantissa any
+///        shortest repr can carry -- the ulp-per-decimal-grid feasibility bound
+///        m < 10 * 2^53 -- meeting the deepest scale a 17-digit spelling reaches)
+///   + 1 sign bit + 1 selector bit  = 66.649 bits
+///   rounded up                     = 67 bits
+/// ```
+///
+/// The scientific codeword caps the sup analytically: `L(m) < L(10^17) = 56.475` (a
+/// shortest repr has at most 17 significant digits) and `|s| <= 343` (the deepest
+/// reachable spelling scale), so sup < 64.92 and the ceiling is robust to the exact
+/// argmax. Swept: every binade top in the boundary decades walked by ulp (600k ulps
+/// each), the full subnormal boundary, every binary exponent at six mantissas, and
+/// 400,000 random bit patterns.
+/// Under the fraction-only code the same construction gave 1133 bits, driven by the
+/// 10^324-scale DENOMINATOR of the extreme spellings -- the D38 overcharge itself; the
+/// re-derivation lands a free parameter at ~8 grammar symbols instead of ~142.
+/// Executable derivations: `c_free_prime_derivation` below (this file) and
+/// `tests/test_mu_prime.py::TestCfreePrimeDerivation` (independent model + the
+/// engine-priced dominance sweep).
+///
+/// SCOPED TO THE f64 RANGE ON PURPOSE, as before: a beyond-f64 literal is not a value a
+/// fit can produce, so it is not a value `<constant>` stands for. NOTE the direction of
+/// the old "beyond-f64 literals outprice the free constant" consequence PARTLY inverts
+/// under mu': a deep-but-thin beyond-f64 literal (`1e-400`, now 10.651 bits via its
+/// scientific codeword) undercuts c_free'. Nothing load-bearing rests on the old
+/// direction -- G3 refuses Const-introducing rules regardless of price, and the
+/// dominance the ordering needs (over every FITTABLE value) is exactly what the sup
+/// construction guarantees.
+pub const MU_FREE_WORST_CASE_F64: u64 = 67 * MU_MILLI;
 
 /// `<constant>`, the priciest atom. `SIMPLIPY_MU_FREE` (read in BITS) overrides explicitly, for
 /// deployments whose fitted constants live in a narrower range than the whole f64 line.
@@ -262,17 +403,40 @@ pub fn l_millibits(n: u128) -> u64 {
     int_part * MU_MILLI + frac_milli as u64
 }
 
-/// The DECIMAL code's cost components for a value that terminates in base ten
-/// (`q = 2^a * 5^b`): the cost of the scaled mantissa `m = |p| * 10^k / q` and of the
-/// scale `k = max(a, b)`, each priced by `l_millibits` -- the scale is just another
-/// integer the spelling has to write down. `None` when the value does not terminate, when
-/// it is an integer (the fraction code already prices those exactly, and offering a
-/// decimal code there is the base-ten roundness question, deliberately left shut), or when
-/// the scaled mantissa leaves `i128`, in which case the decimal spelling is not available
-/// in range and the fraction code stands alone.
+/// The DECIMAL-SCIENTIFIC codeword's cost components for a value with a finite decimal
+/// expansion (`q = 2^a * 5^b`, which includes every integer): the cost of the integer
+/// mantissa `m` of the SHORTEST exact decimal spelling `m * 10^k` and of the decimal
+/// exponent `k`, each priced by `l_millibits` -- the exponent is just another integer
+/// the spelling has to write down, `L(k) = log2(1 + |k|)`.
+///
+/// For a non-integer, `k = -max(a, b)` and `m = |p| * 10^|k| / q` (for a REDUCED
+/// fraction `m` is never divisible by 10, so this IS the shortest spelling); for an
+/// integer, `k >= 0` is its count of trailing base-ten zeros and `m` the remaining
+/// digits (D38: the spec's "shortest exact decimal spelling" reading -- `1000` is the
+/// codeword `(1, 3)`; an integer with no trailing zeros has `k = 0`, where the
+/// codeword degenerates to the rational one and is refused as redundant).
+///
+/// `None` when the value does not terminate in base ten, when the codeword would be
+/// degenerate (`k = 0`), or when the scaled mantissa leaves `i128`, in which case the
+/// decimal spelling is not available in range and the fraction code stands alone (the
+/// ratified i128-boundedness boundary; the beyond-`Rat` STRING pricer carries the same
+/// refusal, so the boundary cannot become an ordering cliff).
 fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
     if r.den() == 1 {
-        return None;
+        // Integer arm (D38): k = trailing base-ten zeros, m = the remaining digits.
+        let mut m = r.num().checked_abs()?;
+        if m == 0 {
+            return None;
+        }
+        let mut k = 0u32;
+        while m % 10 == 0 {
+            m /= 10;
+            k += 1;
+        }
+        if k == 0 {
+            return None;
+        }
+        return Some((l_millibits(m.unsigned_abs()), l_millibits(u128::from(k))));
     }
     let (mut a, mut b) = (0u32, 0u32);
     let mut rest = r.den();
@@ -299,85 +463,116 @@ fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
 }
 
 /// Description length of the exact VALUE p/q (lowest terms), in MILLI-BITS and
-/// spelling-free. The implicit denominator 1 is free (an integer writes no denominator);
-/// the floor of 2 bits makes every literal a real object.
+/// spelling-free -- **mu' since D38 (B2, 2026-08-17): the numeric codebook carries TWO
+/// codewords, chosen by a one-bit selector.**
 ///
-/// ONE RULE FOR EVERY LITERAL (owner ruling 2026-08-06). A literal is written as a small
-/// number of integers, and each integer costs `L(n) = log2(1 + |n|)`:
+/// ```text
+/// mu'(value) = 1 selector bit + min( L(p) + L(q),  L(m) + L(k) ) + sign bit
+/// ```
 ///
-/// | spelling            | cost                                   |
-/// |---------------------|----------------------------------------|
-/// | integer `n`         | `L(n)`                                 |
-/// | fraction `p/q`      | `L(p) + L(q)`                          |
-/// | decimal `m * 10^-k` | `L(m) + L(k)` -- the scale is an integer too |
-/// | negative            | `+ 1 bit`, once                        |
+/// where `(p, q)` is the reduced rational spelling (an integer's denominator is
+/// implicit and free) and `(m, k)` the decimal-scientific spelling of the SHORTEST
+/// exact decimal print (`decimal_code`), with `L(k) = log2(1 + |k|)` -- the exponent is
+/// an integer the spelling writes down, not a run of zeros. A value whose denominator
+/// has a prime factor other than 2 and 5 has no decimal codeword and pays the rational
+/// codeword alone -- still plus the selector, so every priced numeric leaf pays exactly
+/// one selector bit and the codebook is a genuine prefix code.
 ///
-/// mu is the MINIMUM over the codes the grammar offers. The crossover then falls out
-/// instead of being legislated: powers of two keep the fraction (`1/2`, `5/8`), anything
-/// carrying a factor of five prints decimal (`2/5` -> `0.4`, `6/5` -> `1.2`), and a power
-/// of ten can never survive in a denominator.
+/// Each codeword total carries the sign bit and the two-bit mantissa floor exactly as
+/// the D38 rescorer priced them (`d38_muprime_rescore.dec_price`: the mantissa at the
+/// integer price `max(2, L(m))`, the exponent at `L(k)`, the sign once); the NATIVE
+/// measure adds the selector uniformly on top, which the study rescorer -- computing
+/// `min(old, dec)` only -- deliberately omitted. Native mu' and study-rescored prices
+/// therefore differ by a constant 1000 mB per priced numeric leaf, by design.
+///
+/// WHY A SECOND CODEWORD (D38). MDL codebooks should match the source distribution:
+/// SR constants are decimal-printed f64s, and the fraction-only code forced them
+/// through "two arbitrary integers", overcharging ~3.32 bits per decimal shift
+/// (`2.177697277405848` priced 94.781 bits as p/q against 55.952 as mantissa+exponent
+/// +selector). This REVOKES §10.10(1)/H-055 ("mu is value complexity, no min over
+/// codes") -- the ratified resolution of the H-055 asymmetry is now symmetry at the
+/// codeword level: `mu'(1000) == mu'(0.001)` (both are the codeword `(1, 3)`), where
+/// H-055 had `9.967` against `10.967`.
 ///
 /// WHY `L` AND NOT A BIT COUNT. `bits()` quantises exactly where it hurts: it cannot
 /// separate 100 from 1000 once a scale is involved (both scales cost 2 bits), it priced
 /// two spellings of one value up to a bit apart for no reason but rounding, and it made
 /// mu non-monotone in magnitude at the `i128` boundary. `L` is the continuous lower
-/// envelope of `bits` -- equal at 1, 3, 7, 127, never more than a bit below -- so this
-/// DE-QUANTISES the ratified measure rather than repricing it.
+/// envelope of `bits` -- equal at 1, 3, 7, 127, never more than a bit below.
 ///
 /// WHY THE SIGN COSTS A BIT. Without it `mu(2) == mu(-2)`: the measure could not tell a
 /// number from its negation, which a description length may not do. `Rat` normalises to
-/// `q > 0` with the sign on the numerator, so the bit is unambiguous and charged once.
-/// (This REVOKES the former "sign is free" doctrine for literals; `x - y` vs `x + y` is
-/// unaffected, since a subtraction is structural and carries no signed literal.)
-/// **The decimal code is NOT consulted here (contract §10.10(1), H-055).** mu is VALUE
-/// complexity, not description length, so a rational costs its two written integers and the
-/// `m * 10^-k` spelling earns it no discount. Taking the minimum over the two codes made mu
-/// asymmetric about 1 by an order of operation -- `log2(value)` above, `log2(log(1/value))`
-/// below, so `mu(1000) = 9.967` against `mu(0.001) = 3.000` -- because `decimal_code` refuses
-/// integers and only the sub-unit side had an escape. With the min gone, `mu(1/n) = mu(n) + 1`
-/// exactly for every `n >= 2`, `L(1) = log2(2)` being exactly one bit: the multiplicative
-/// inversion bit is EMERGENT from the notation (an integer writes no denominator; a unit
-/// fraction must write its numerator), the exact analogue of the additive sign bit, and it must
-/// not be charged a second time explicitly.
-///
-/// `decimal_code` survives for [`decimal_spelling_wins`] alone, which is now a PRINT rule with
-/// no bearing on cost -- a printed `/ 1 5` and a printed `0.2` re-parse to the SAME `Ex::Num`
-/// leaf, so complexity is spelling-independent either way.
+/// `q > 0` with the sign on the numerator, so the bit is unambiguous and charged once,
+/// inside EACH codeword total (it cancels in the min).
 pub fn mu_rat(r: &Rat) -> u64 {
-    let (fraction, _decimal) = mu_rat_codes(r);
-    let signed = fraction + if r.num() < 0 { MU_MILLI } else { 0 };
-    signed.max(2 * MU_MILLI)
+    let (fraction, decimal) = mu_rat_codeword_totals(r);
+    MU_MILLI
+        + match decimal {
+            Some(d) => fraction.min(d),
+            None => fraction,
+        }
 }
 
-/// The two codes' costs separately, in milli-bits and WITHOUT the sign bit or the floor
-/// (the caller applies both once): `(fraction, decimal_if_terminating)`.
+/// The two codewords' TOTAL prices, in milli-bits, each carrying its own floor and the
+/// sign bit, WITHOUT the selector (the caller adds it once): `(rational,
+/// decimal_scientific_if_terminating)`.
 ///
-/// An INTEGER pays only its own cost -- its denominator is implicit, not written. A genuine
-/// fraction pays BOTH components. The former blanket `- 1` made the implicit denominator
-/// free for integers (correct) but also made `1/q` cost exactly what `q` costs, so `p/q`
-/// and `q/p` were indistinguishable and mu could not tell a number from its reciprocal.
-fn mu_rat_codes(r: &Rat) -> (u64, Option<u64>) {
+/// Rational: `max(2 bits, L(p) [+ L(q) if q > 1] + sign)` -- an integer pays only its
+/// own cost (implicit denominator), a genuine fraction pays both components. Decimal-
+/// scientific: `max(2 bits, L(m)) + L(k) + sign` -- the mantissa at the integer price
+/// (exactly `c([str(mant)])` of the rescorer), the exponent on top. These are ALSO the
+/// exact quantities the serializer argmin compares (`decimal_spelling_wins`), so the
+/// spelling emitted is by construction the codeword the measure priced.
+/// The literal codeword FLOOR, in milli-bits: ONE bit, beyond the selector (owner ruling
+/// 2026-08-22; it was two, and two was blind).
+///
+/// At two, `0`, `1`, `2` and `3` all priced 3000 -- `L` is under the clamp there -- so the
+/// measure could not tell `x^2` from `x^3` from `x^4`. At one the clamp stops binding
+/// except at `0` and `+-1`, where a codeword cannot cost less than a bit anyway, and the
+/// exponent rows separate by `log2(3) - log2(2) = 415` milli-bits.
+///
+/// MEASURED before adoption, against the shipped floor of two: **0 of 5,451 shipped rules
+/// change direction** and **0 of 105 printed literal spellings move** -- the serializer
+/// argmin compares the same two codeword totals, and the floor shifts both. Four f64 rows
+/// and six corpus rows of the 400-row benchmark re-spell, and the corpus rests cheaper by
+/// 3,000 (f64) and 3,359 (corpus) milli-bits: a small genuine descent. The D38/B2
+/// numbers move with it -- `mu(1000)` is 4 bits where the ratified note says 5 -- but
+/// H-055's finding was the SYMMETRY, `mu(1000) == mu(0.001)`, and that holds at 4.
+/// Evidence: `audit-2026-08-21/floor/`.
+const MU_RAT_FLOOR: u64 = 1 * MU_MILLI;
+
+fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
+    let sign = if r.num() < 0 { MU_MILLI } else { 0 };
     let pb = l_millibits(r.num().unsigned_abs());
     let qb = l_millibits(r.den() as u128);
-    let fraction = if r.den() == 1 { pb } else { pb + qb };
-    let decimal = decimal_code(r).map(|(m, k)| m + k);
+    let fraction_raw = if r.den() == 1 { pb } else { pb + qb };
+    let floor = MU_RAT_FLOOR;
+    let fraction = (fraction_raw + sign).max(floor);
+    let decimal = decimal_code(r).map(|(m, k)| m.max(floor) + k + sign);
     (fraction, decimal)
 }
 
-/// Whether the DECIMAL spelling is the canonical PRINT for this value. Ties go to the
-/// fraction, which is what keeps the powers of two (`1/2`, `1/4`, `5/8`) spelled as fractions
-/// while anything carrying a factor of five (`1/5` -> `0.2`, `6/5` -> `1.2`) prints as a
-/// decimal.
+/// Whether the DECIMAL spelling is the canonical PRINT for this value: the serializer
+/// argmin over the SAME two codeword totals `mu_rat` mins over, so **mu'(state) is the
+/// cost of the representation actually emitted** (the D38 state/serializer factoring:
+/// states carry one exact rational per value and no spelling; the emitter realizes the
+/// best codeword at print time, locally and closed-form).
 ///
-/// **PRINT-ONLY since §10.10(1) (H-055).** It still compares the two codes, but `mu_rat` no
-/// longer does, so this no longer follows the cost -- it is a rendering choice and nothing
-/// more. That is sound because the choice is not observable in the measure: `/ 1 5` and `0.2`
-/// re-parse to the SAME `Ex::Num` leaf (`complexity(["/","1","5"]) == complexity(["0.2"]) ==
-/// 2.585`), so complexity is spelling-independent. Keeping the existing rule is deliberate --
-/// it holds the emitted dialect FIXED across the measure change, so the re-pins below have
-/// exactly one cause.
+/// TIES GO TO THE FRACTION -- the structurally distinguished caller-dialect member,
+/// mirroring the sign-trade tier-2 rule ("what you typed survives"; states carry no
+/// spelling, so the tie-break must be spelling-free, and either choice realizes the
+/// same mu'). Measured: NO exact tie was found in the i128 lattice -- every
+/// `(a, b)` with `q = 2^a * 5^b < 2^127` (3,563 pairs) scanned exhaustively over
+/// numerators `p <= 2000` and at 29 spread samples up to ~3.5e9 beyond; the closest
+/// calls observed are 3-4 milli-bits (`54321 / 2^45*5^14` and `19 / 2^28*5^9`, the
+/// falsifier suite's boundary pair) -- so the clause is defensive. Ties would also
+/// keep the powers of two (`1/2`, `5/8`) on the fraction side, exactly as before D38.
+///
+/// Callers gate integers upstream (`is_integer()` prints the bare digit string, which
+/// is the rendering of BOTH an integer's codewords), so the integer arm of
+/// `decimal_code` never surfaces a scientific print: `1000` never prints `1e3`.
 pub fn decimal_spelling_wins(r: &Rat) -> bool {
-    let (fraction, decimal) = mu_rat_codes(r);
+    let (fraction, decimal) = mu_rat_codeword_totals(r);
     decimal.is_some_and(|d| d < fraction)
 }
 
@@ -415,25 +610,43 @@ const MU_SCALE_KNEE: u64 = 1 << 32;
 const MU_SCALE_KNEE_COST: u64 = MU_SCALE_KNEE * L10_MILLI;
 
 /// Description length of a BEYOND-`Rat` numeric literal, from its canonical print, under
-/// exactly the rule `mu_rat` applies in range: every integer the spelling writes down
-/// costs `L(n) = log2(1 + |n|)`, a fraction pays both components, a decimal pays its
-/// mantissa and its SCALE, the sign costs a bit and the floor is two bits.
+/// exactly the mu' rule `mu_rat` applies in range (D38): one selector bit, then the
+/// cheaper of the RATIONAL codeword (every integer the spelling writes down costs
+/// `L(n)`, a fraction pays both components) and the DECIMAL-SCIENTIFIC codeword
+/// (`max(floor, L(m)) + L(|scale|)` for the shortest spelling `m * 10^scale`, the
+/// floor being `MU_RAT_FLOOR` -- one bit since the 2026-08-22 ruling), plus a sign
+/// bit inside each codeword total.
 ///
 /// Literals whose exact p/q exceeds 128 bits (`4.159653437657682e-35` has q = 10^50) live
 /// as numeric-string LEAVES, invisible to `mu_rat` -- pricing them at one vocabulary symbol
 /// would (a) invert the ordering at the `Rat` boundary (a ~220-bit object undercutting
 /// `0.001`), (b) reopen the literal-respell hole the old `lit_size` tier closed in exactly
-/// this range, and (c) let the mu-governed fold materialize deep-magnitude roundings
-/// (`exp(-80) -> 1.80485e-35`) that it refuses in-range.
+/// this range, and (c) decouple the fold's literal pricing from the in-range rule.
 ///
-/// An approximation of the true reduced p/q by design (the 2/5 gcd is ignored; the
-/// boundary this exists for cannot turn on a milli-bit), deterministic, and monotone in
-/// both the significand and the scale.
+/// The rational codeword stays an approximation of the true reduced p/q by design (the
+/// 2/5 gcd is ignored; the boundary this exists for cannot turn on a milli-bit) --
+/// under mu' it is also almost never the argmin out here, every finite-decimal string
+/// having a scientific codeword. Deterministic, and monotone in both the significand
+/// and the scale within each codeword.
 pub fn mu_numeric_str(s: &str) -> u64 {
     let negative = s.starts_with('-');
     let body = s.strip_prefix('-').unwrap_or(s);
     let sign = if negative { MU_MILLI } else { 0 };
-    let finish = |cost: u64| cost.saturating_add(sign).max(2 * MU_MILLI);
+    // Every priced numeric leaf pays the one selector bit on top of its cheapest
+    // codeword total; each total carries the sign and the codeword floor itself,
+    // mirroring `mu_rat_codeword_totals` exactly -- the SAME `MU_RAT_FLOOR`, or the
+    // boundary becomes an ordering cliff: with this side clamped at two bits while
+    // the in-range side moved to one, mu(1e-39) priced ABOVE mu(3e-38) (S15) -- the
+    // simpler mantissa at the adjacent magnitude cost more, purely for having
+    // crossed the i128 line.
+    let finish = |fraction: u64, decimal: Option<u64>| {
+        let f = fraction.saturating_add(sign).max(MU_RAT_FLOOR);
+        MU_MILLI
+            + match decimal {
+                Some(d) => f.min(d.saturating_add(sign)),
+                None => f,
+            }
+    };
 
     // Fraction-shaped beyond-`Rat` literals (`p/q` with a component past i128 -- in-range
     // fractions parse to `Num` and never reach the leaf pricing).
@@ -441,19 +654,58 @@ pub fn mu_numeric_str(s: &str) -> u64 {
         let ps = p.trim_start_matches('0');
         let qs = q.trim_start_matches('0');
         if ps.is_empty() {
-            return finish(0); // zero numerator: the value is 0
+            return finish(0, None); // zero numerator: the value is 0
         }
         let lp = l_millibits_digits(ps);
         if qs == "1" {
-            return finish(lp); // an implicit denominator is free, as for any integer
+            return finish(lp, None); // an implicit denominator is free, as for any integer
         }
-        // BOTH components, and no decimal code: §10.10(1) revoked the minimum over codes, so
-        // a `p/q` token pays for the integers it actually writes. The arm that used to offer
-        // the decimal code here is gone with it -- it existed to stop one value pricing ~14x
-        // apart by spelling alone (`1e-40` against `1/10^40`), and that agreement is now
-        // reached from the other side: both spellings pay the whole 10^40 denominator, 133.880
-        // bits, and the test pins BOTH so the boundary cannot drift apart again.
-        return finish(lp.saturating_add(l_millibits_digits(qs)));
+        let fraction = lp.saturating_add(l_millibits_digits(qs));
+        // The decimal-scientific codeword of a written p/q: strip the denominator's
+        // trailing zeros (10^t), factor the u128-sized head into 2^a * 5^b, and price
+        // the scaled mantissa `p * 2^(k-a') * 5^(k-b')`. Exactly `decimal_code`'s rule,
+        // carried across the boundary so `1e-40` and `1/1<40 zeros>` price EQUAL (the
+        // pre-D38 build pinned them one milli-bit apart under the fraction-only code).
+        // Refusals (head beyond u128, scaled mantissa beyond u128, non-2^a5^b head) fall
+        // back to the rational codeword -- the same bounded-effort boundary as in range.
+        let dec = (|| -> Option<u64> {
+            let head = qs.trim_end_matches('0');
+            let t = (qs.len() - head.len()) as u32;
+            let mut rest: u128 = head.parse().ok()?;
+            let (mut a, mut b) = (0u32, 0u32);
+            while rest % 2 == 0 {
+                rest /= 2;
+                a += 1;
+            }
+            while rest % 5 == 0 {
+                rest /= 5;
+                b += 1;
+            }
+            if rest != 1 {
+                return None;
+            }
+            let k = a.max(b) + t;
+            let (two, five) = (a.max(b) - a, a.max(b) - b);
+            let m_cost = if two == 0 && five == 0 {
+                // mantissa is p itself -- priced from its digits, any length
+                l_millibits_digits(ps)
+            } else {
+                let mut m: u128 = ps.parse().ok()?;
+                for _ in 0..two {
+                    m = m.checked_mul(2)?;
+                }
+                for _ in 0..five {
+                    m = m.checked_mul(5)?;
+                }
+                l_millibits(m)
+            };
+            Some(
+                m_cost
+                    .max(MU_RAT_FLOOR)
+                    .saturating_add(l_millibits(u128::from(k))),
+            )
+        })();
+        return finish(fraction, dec);
     }
 
     // A decimal/exponent spelling. An exponent too large for `i64` keeps its DIGIT STRING,
@@ -485,7 +737,7 @@ pub fn mu_numeric_str(s: &str) -> u64 {
     let trailing = sig.len() - sig.trim_end_matches('0').len();
     let sig_core = &sig[..sig.len() - trailing];
     if sig_core.is_empty() {
-        return finish(0); // the string denotes zero
+        return finish(0, None); // the string denotes zero
     }
     let l_sig = l_millibits_digits(sig_core);
     let scale = exp
@@ -500,34 +752,26 @@ pub fn mu_numeric_str(s: &str) -> u64 {
         Some(d) => l_millibits_digits(d),
         None => l_millibits(u128::from(scale.unsigned_abs())),
     };
-    // Two regimes, one knee (B22, doc at `MU_SCALE_KNEE`): the exact linear schedule up
-    // to the knee -- every honest literal, unchanged -- then `KNEE_COST + L(|scale|)`,
-    // monotone and far from u64::MAX where the old arms saturated and collided.
+    // The RATIONAL codeword writes the whole power of ten out (numerator zeros or the
+    // 10^|scale| denominator). Two regimes, one knee (B22, doc at `MU_SCALE_KNEE`): the
+    // exact linear schedule up to the knee, then `KNEE_COST + L(|scale|)`, monotone and
+    // far from u64::MAX where the old arms saturated and collided.
     let power_of_ten_cost = if exp_digits.is_none() && scale.unsigned_abs() <= MU_SCALE_KNEE {
         scale.unsigned_abs() * L10_MILLI // <= MU_SCALE_KNEE_COST: cannot overflow
     } else {
         MU_SCALE_KNEE_COST.saturating_add(scale_digits_cost)
     };
-    if scale >= 0 {
-        // An INTEGER: value = sig * 10^scale, and it is offered NO decimal code, exactly
-        // as `decimal_code` refuses one in range. Both sides of the boundary must agree
-        // or mu stops being monotone in magnitude -- offering it here once priced 10^38
-        // at 127 and 10^39 at 10, a value ten times larger costing 12.7x LESS.
-        return finish(l_sig.saturating_add(power_of_ten_cost));
-    }
-    // A non-integer. The fraction code writes the whole power of ten in the denominator; the
-    // decimal code would write only the SCALE, and taking the minimum of the two is exactly
-    // what §10.10(1) REVOKES -- mu is value complexity, not description length, so terminating
-    // in base ten earns no discount. This is also what keeps the two pricers in step: `mu_rat`
-    // takes the fraction code alone, and the `Rat` boundary must not be an ordering cliff.
-    //
-    // The deliberate consequence, named rather than implied: for a terminating decimal the
-    // denominator is FORCED by the scale and carries no independent information, so this class
-    // is charged its magnitude twice. `0.0293847502 = 146923751/5000000000` prices 59.350
-    // against the decimal code's 31.590, roughly double, and so does a full-precision decimal
-    // (`3.14159265358979`: 94.665 against 52.065). Owner-accepted as the consistent price of
-    // refusing the roundness discount for 1000.
-    finish(l_sig.saturating_add(power_of_ten_cost))
+    let fraction = l_sig.saturating_add(power_of_ten_cost);
+    // The DECIMAL-SCIENTIFIC codeword writes the SCALE as an integer: `sig_core` is
+    // trailing-zero-stripped, so `(sig, scale)` IS the shortest exact spelling --
+    // integers included, exactly as `decimal_code`'s integer arm reads them in range
+    // (a `scale = 0` codeword degenerates to the rational one and is refused).
+    let dec = if scale == 0 {
+        None
+    } else {
+        Some(l_sig.max(MU_RAT_FLOOR).saturating_add(scale_digits_cost))
+    };
+    finish(fraction, dec)
 }
 
 /// Structural equality MODULO literal content: two canonical trees are
@@ -578,11 +822,63 @@ pub fn eq_mod_nums(a: &Ex, b: &Ex, view: &TokenView) -> bool {
 // parts, exactly the direction that licenses false mu-descents (and it panics the debug
 // build outright). Saturating at the TOP is sound: a rewrite fires only on a STRICT
 // decrease, so two totals pinned at the ceiling can only ever REFUSE.
+/// CENSUS of the nodes `complexity` actually CHARGES, keyed by kind.
+///
+/// Mirrors the pricing arms exactly, including their silences: a +-1 rational coefficient
+/// inside a `Mul` bag is free, so it is not counted; a degenerate all-coefficient bag is
+/// the literal itself. Counting serialized TOKENS instead gets this wrong in both
+/// directions -- `-` and `/` are not nodes (they are an inverted member of an Add/Mul
+/// bag), and an n-ary bag is ONE node however many `+` the spelling shows.
+pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap<String, u64>) {
+    let mut bump = |k: &str| *out.entry(k.to_string()).or_insert(0) += 1;
+    match e {
+        Ex::Num(_) => bump("Num"),
+        Ex::Pi => bump("Pi"),
+        Ex::E => bump("E"),
+        Ex::PosInf => bump("PosInf"),
+        Ex::NegInf => bump("NegInf"),
+        Ex::NaN => bump("NaN"),
+        Ex::Const => bump("Const"),
+        Ex::Leaf(_) => bump("Leaf"),
+        Ex::Add(v) => {
+            bump("Add");
+            for x in v {
+                node_census(x, view, out);
+            }
+        }
+        Ex::Mul(v) => {
+            bump("Mul");
+            for f in v {
+                // The free +-1 coefficient slot is NOT charged, so it is not counted.
+                if let Ex::Num(r) = f {
+                    if r.is_one() || *r == Rat::NEG_ONE {
+                        continue;
+                    }
+                }
+                node_census(f, view, out);
+            }
+        }
+        Ex::Pow(b, ex) => {
+            bump("Pow");
+            node_census(b, view, out);
+            node_census(ex, view, out);
+        }
+        Ex::Fun(t, args) => {
+            let name = view.with_str(*t, |s| s.to_string());
+            *out.entry(format!("Fun:{name}")).or_insert(0) += 1;
+            for a in args {
+                node_census(a, view, out);
+            }
+        }
+    }
+}
+
 pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
-    let sym = mu_sym();
     match e {
         Ex::Num(r) => mu_rat(r),
-        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN => sym,
+        Ex::Pi => mu_pi(),
+        Ex::E => mu_e(),
+        Ex::PosInf | Ex::NegInf | Ex::NaN => mu_infinity(),
         // A vocabulary leaf is one symbol; a NUMERIC-STRING leaf is a beyond-`Rat`
         // literal and pays the description length of the value its print denotes
         // (see `mu_numeric_str` -- the boundary must not be an ordering cliff).
@@ -597,15 +893,16 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
             {
                 mu_numeric_str(s)
             } else {
-                sym
+                mu_leaf()
             }
         }),
         Ex::Const => mu_free(),
         Ex::Add(v) => v
             .iter()
-            .fold(sym, |t, x| t.saturating_add(complexity(x, view))),
+            .fold(mu_add(), |t, x| t.saturating_add(complexity(x, view))),
         Ex::Mul(v) => {
-            let mut total = sym;
+            let head = mu_mul();
+            let mut total = head;
             let mut members = 0u64;
             for f in v {
                 match f {
@@ -626,11 +923,12 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
             }
             if members == 0 {
                 // Degenerate all-coefficient bag: the literal (or bare Const) itself.
-                return (total - sym).max(2);
+                return (total - head).max(2);
             }
             total
         }
         Ex::Pow(b, ex) => {
+            let head = mu_pow();
             if let Ex::Num(r) = &**ex {
                 // Rational exponent as a coefficient slot: `x^-1` is division (pure
                 // structure, the sign is free), `x^2` pays cost(2), `x^-2` the same.
@@ -639,14 +937,18 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
                 } else {
                     mu_rat(r)
                 };
-                return sym.saturating_add(complexity(b, view)).saturating_add(mag);
+                return head.saturating_add(complexity(b, view)).saturating_add(mag);
             }
-            sym.saturating_add(complexity(b, view))
+            head.saturating_add(complexity(b, view))
                 .saturating_add(complexity(ex, view))
         }
-        Ex::Fun(_, args) => args
-            .iter()
-            .fold(sym, |t, x| t.saturating_add(complexity(x, view))),
+        // The head is priced by NAME (`mu_fun_bits`): the elementary/transcendental gap
+        // is the table's load-bearing entry. Read without allocating, like the leaf above.
+        Ex::Fun(t, args) => {
+            let head = view.with_str(*t, |s| sym_bits(mu_fun_bits(s)));
+            args.iter()
+                .fold(head, |acc, x| acc.saturating_add(complexity(x, view)))
+        }
     }
 }
 
@@ -724,9 +1026,22 @@ pub struct Cx<'a> {
     /// SYMBOLIC-exponent occurrence merge (see `mul`'s like-base collection) on
     /// sign-indefinite bases by proving the exponent's level sets are null.
     pub cert_nce: Option<&'a dyn Fn(&Ex) -> bool>,
-    /// LOSSY mode (the shipped `wildcard_all`): every gate in the constructors passes without
-    /// certification. Training-corpus canonicalisation only, never an inference path.
-    pub lossy: bool,
+    /// WHICH SOUNDNESS this construction preserves. Was a `lossy: bool`, which could only
+    /// ask "may I skip certification?" -- and that is the wrong question for a guard whose
+    /// reason is f64 saturation rather than recall. `real` needs those guards OFF (the
+    /// identities they protect are mathematically total) while keeping every recall
+    /// certificate ON, and no boolean can say that. Both old readings are derived below,
+    /// so the mode stays the single representation.
+    pub mode: RuleMode,
+    /// Whether the constructor may fold a ground transcendental to its f64 value.
+    /// DERIVED from the mode (`f64` only) by `Cx::for_mode`, and set explicitly in
+    /// exactly one place: corpus runs the whole pipeline TWICE, once with each
+    /// discipline, and keeps the cheaper endpoint. That is the only way corpus can have
+    /// both -- `atanh(tanh 30) -> 30`, which needs the fold OFF so the inverse-pair
+    /// collapse survives, AND `asin(1e-8) -> 1e-8`, which needs it ON. Folding is
+    /// bottom-up, so no ordering inside a node can deliver both: `tanh 30` becomes `1`
+    /// before `atanh` ever sees it. Selection between two finished endpoints can.
+    pub fold_f64: bool,
     /// SENTINEL EXPIRY (H-015 class (a), 2026-08-04): lossy parse deliberately keeps
     /// `inv(inf)`-class reciprocals unfolded so the mul bag can find their `$`-cancel
     /// partner (the mask-sentinel doctrine). That licence is for the SEARCH, not the
@@ -741,6 +1056,31 @@ pub struct Cx<'a> {
 }
 
 impl<'a> Cx<'a> {
+    /// THE DERIVATION of `fold_f64` from a mode: only `f64` folds transcendentals.
+    /// `real` cannot (the result is not representable -- `tan(1)` is irrational and no
+    /// literal spells it), and `corpus` gets both disciplines by running twice.
+    #[inline]
+    pub fn folds_for(mode: RuleMode) -> bool {
+        matches!(mode, RuleMode::Default)
+    }
+
+    /// The RECALL reading of the mode: may a constructor gate pass uncertified? Only
+    /// `corpus`. Derived from `RuleMode::wildcard_all` rather than restated, so the
+    /// engine has ONE answer to "is this the permissive mode".
+    #[inline]
+    pub fn lossy(&self) -> bool {
+        self.mode.wildcard_all()
+    }
+
+    /// The F64 reading: is this construction answerable only in what the deployed f64
+    /// evaluator computes? True for `f64` alone. `real` reasons over the reals, where
+    /// saturation does not exist, and `corpus` is permissive anyway -- so a guard that
+    /// exists BECAUSE of f64 saturation must ask this and not `lossy()`.
+    #[inline]
+    pub fn f64_semantics(&self) -> bool {
+        matches!(self.mode, RuleMode::Default)
+    }
+
     /// A certificate-free context (conversions, pattern handling, tests).
     pub fn bare(view: &'a TokenView<'a>) -> Self {
         Cx {
@@ -749,7 +1089,8 @@ impl<'a> Cx<'a> {
             cert_finnz: None,
             cert_nzae: None,
             cert_nce: None,
-            lossy: false,
+            mode: RuleMode::Default,
+            fold_f64: false,
             sentinels_expired: false,
         }
     }
@@ -765,7 +1106,7 @@ impl<'a> Cx<'a> {
     /// analytic identity, is refused. Fail-closed. (Audit finding: the sibling of the
     /// pow-distribution bug, with the fat set in the exponent.)
     fn sym_merge_licensed(&self, base: &Ex, y: &Ex) -> bool {
-        if self.lossy || self.certainly_nonneg(base) {
+        if self.lossy() || self.certainly_nonneg(base) {
             return true;
         }
         match self.cert_nce {
@@ -807,9 +1148,10 @@ impl<'a> Cx<'a> {
     }
 
     /// `certainly_finite` for every element of a term key (a key is the non-coefficient factor
-    /// list of an addend).
-    fn fin_licensed(&self, e: &Ex) -> bool {
-        if self.lossy || self.certainly_finite(e) {
+    /// list of an addend). Also the value-preservation licence of the D39 exploration
+    /// moves (`ac::search::distribute_product`), which is why it is crate-visible.
+    pub(crate) fn fin_licensed(&self, e: &Ex) -> bool {
+        if self.lossy() || self.certainly_finite(e) {
             return true;
         }
         // Ground expressions have no measure space: a.e. tolerance degenerates to exactness,
@@ -830,7 +1172,7 @@ impl<'a> Cx<'a> {
     /// still pass it (the null set `{0}` in c-space is what `forall c` quantifies over -- we
     /// stay conservative and leave `Const` to the certificate).
     fn finnz_licensed(&self, e: &Ex) -> bool {
-        if self.lossy {
+        if self.lossy() {
             return true;
         }
         match e {
@@ -855,7 +1197,7 @@ impl<'a> Cx<'a> {
     /// variables are zero on a null hyperplane; everything else goes to the structural
     /// zero-set certificate, fail-closed.
     pub(crate) fn nz_ae_licensed(&self, e: &Ex) -> bool {
-        if self.lossy {
+        if self.lossy() {
             return true;
         }
         self.nz_ae_certified(e)
@@ -1109,6 +1451,85 @@ impl<'a> Cx<'a> {
     /// Does `e` certainly take values in [-1, 1] wherever defined? Range facts only:
     /// sin/cos/tanh land there for EVERY argument. (Literal arguments never reach this
     /// predicate -- ground trig compounds fold numerically before licences run.)
+    /// A proven CEILING on `|e|`, in exact integers, or `None` when none is known.
+    ///
+    /// CONSERVATIVE BY CONSTRUCTION: a bound is returned only where it is provable and
+    /// anything unrecognised yields `None`. Read on the INTERNAL form, never on the token
+    /// spelling, so the canon unifying two spellings cannot change the answer (the F49
+    /// hazard) -- the discipline `certainly_nonneg` already follows. Integer arithmetic
+    /// throughout: this guard must not acquire an f64 reading of a `Rat`.
+    ///
+    /// EXISTS because the f64 evaluator saturates where the extended real line does not:
+    /// `tanh` attains exactly 1.0 from 18.990341103219276, `exp` overflows from
+    /// 709.782713 and underflows to +0 below -745.133219, `cosh`/`sinh` overflow from
+    /// 710.475860. An inverse pair that is a total bijection on the extended line is NOT
+    /// one under the deployed arithmetic past those points, which is precisely the gap
+    /// the contract judge cannot see (it models the extended reals, not f64).
+    fn magnitude_ceiling(&self, e: &Ex) -> Option<i128> {
+        match e {
+            Ex::Num(r) => r.ceil_abs(),
+            Ex::Pi => Some(4),
+            Ex::E => Some(3),
+            Ex::Fun(f, a) => {
+                let s = self.view.resolve_owned(*f);
+                match s.as_str() {
+                    // bounded RANGES, whatever the argument
+                    "sin" | "cos" | "tanh" => Some(1),
+                    "atan" | "asin" => Some(2),
+                    "acos" => Some(4),
+                    // magnitude-preserving
+                    "abs" | "neg" => a.first().and_then(|t| self.magnitude_ceiling(t)),
+                    _ => None,
+                }
+            }
+            // |sum| <= sum of ceilings, |product| <= product of ceilings -- each needs
+            // EVERY part bounded, and overflow abstains rather than wrapping.
+            Ex::Add(v) => v.iter().try_fold(0i128, |acc, t| {
+                self.magnitude_ceiling(t).and_then(|m| acc.checked_add(m))
+            }),
+            Ex::Mul(v) => v.iter().try_fold(1i128, |acc, t| {
+                self.magnitude_ceiling(t).and_then(|m| acc.checked_mul(m))
+            }),
+            _ => None,
+        }
+    }
+
+    /// Is `|e| <= bound` PROVEN? `false` whenever unknown -- refusal is the safe direction.
+    fn certainly_in_band(&self, e: &Ex, bound: i128) -> bool {
+        self.magnitude_ceiling(e).is_some_and(|m| m <= bound)
+    }
+
+    /// A PROVEN lower bound on |e| -- the mirror of `magnitude_ceiling`, for the
+    /// licences that need the argument bounded AWAY from a flat point (task 46: the
+    /// low-end collapse holes). Sound arms only: a literal's own floor, the named
+    /// constants, `cosh >= 1`, magnitude-preserving heads, and a product of floors.
+    /// A SUM abstains -- floors do not add across cancellation -- and everything
+    /// unknown abstains, so refusal stays the safe direction.
+    fn magnitude_floor(&self, e: &Ex) -> Option<i128> {
+        match e {
+            Ex::Num(r) => Some((r.num().unsigned_abs() / (r.den() as u128)) as i128),
+            Ex::Pi => Some(3),
+            Ex::E => Some(2),
+            Ex::Fun(f, a) => {
+                let s = self.view.resolve_owned(*f);
+                match s.as_str() {
+                    "cosh" => Some(1),
+                    "abs" | "neg" => a.first().and_then(|t| self.magnitude_floor(t)),
+                    _ => None,
+                }
+            }
+            Ex::Mul(v) => v.iter().try_fold(1i128, |acc, t| {
+                self.magnitude_floor(t).and_then(|m| acc.checked_mul(m))
+            }),
+            _ => None,
+        }
+    }
+
+    /// Is `|e| >= bound` PROVEN? `false` whenever unknown.
+    fn certainly_at_least(&self, e: &Ex, bound: i128) -> bool {
+        self.magnitude_floor(e).is_some_and(|m| m >= bound)
+    }
+
     fn certainly_in_unit(&self, e: &Ex) -> bool {
         match e {
             Ex::Fun(f, _) => {
@@ -1201,10 +1622,58 @@ impl<'a> Cx<'a> {
         let o = self.view.resolve_owned(outer);
         let i = self.view.resolve_owned(inner);
         match (o.as_str(), i.as_str()) {
-            ("log", "exp") | ("asinh", "sinh") | ("sinh", "asinh") | ("atanh", "tanh") => {
+            // TOTAL on the extended real line -- but NOT under the deployed f64 algebra
+            // outside the bands below, so each carries the band its own inner function
+            // survives. MODE-AWARE, and the guard asks the F64 question, not the recall
+            // one (owner ruling 2026-08-19). These identities are TOTAL over the reals --
+            // atanh(tanh x) = x for every real x -- and each band is derived from the
+            // REALISED criterion (`_ulp_gap <= REALISED_ULP = 8`, verify._contract), not
+            // from where the inner function attains its limit. The two are different
+            // diseases: OVERFLOW caps the HIGH end of `log o exp` and the sinh/cosh
+            // pairs (709/710, bisected to the ulp against the deployed evaluator), and
+            // COMPRESSION near a flat point of the inner function eats the LOW end --
+            // exp rounds a small argument into the neighbourhood of 1 and cosh is
+            // quadratically flat at 0, so `log o exp` breaches the 8-ULP bar for all
+            // |t| < ~0.0625 (worst 6.7e7 ULP at 1e-8) and `acosh o cosh` for all
+            // |t| < ~0.25 (worst ~4.5e18), while inside |t| >= 1 the measured worst is
+            // 0 and 1 ULP -- hence their `certainly_at_least(t, 1)` floor (task 46).
+            // The sinh pairs are clean over their whole bands, worst 2 ULP measured
+            // for asinh o sinh and 4 for sinh o asinh, and carry no floor. `atanh o tanh` fails by the same COMPRESSION but at the
+            // HIGH end -- tanh loses
+            // ~2|t|/ln2 bits of the argument approaching +-1, so the roundtrip drifts
+            // past 8 ULP at |t| ~ 2.7 (first breach measured 2.677 audit host / 2.808
+            // this host, libm-dependent; by |t|=18 the drift is ~0.03-0.06 ABSOLUTE),
+            // eleven-plus band-widths before saturation at 18.99 -- which is what the
+            // old attainment-derived band of 18 measured, and why it was wrong (S3).
+            // The integer bound below is the last magnitude ceiling on the SAFE side of
+            // every measured breach, with >= 2x margin on both hosts. So:
+            //   f64    -- band REQUIRED: the deployed evaluator is the authority.
+            //   real   -- band SKIPPED: mathematics has no saturation to protect against,
+            //             and requiring it here would refuse a rewrite that is simply true.
+            //   corpus -- band SKIPPED: the corpus is generated FROM the simplified form,
+            //             so no external function exists to disagree with the collapse.
+            // A `lossy: bool` could not express the middle row, which is why `Cx` now
+            // carries the mode itself.
+            ("atanh", "tanh") if !self.f64_semantics() || self.certainly_in_band(t, 2) => {
                 Some(t.clone())
             }
-            ("acosh", "cosh") => Some(fun(self.view.intern("abs"), vec![t.clone()], self)),
+            ("log", "exp")
+                if !self.f64_semantics()
+                    || (self.certainly_in_band(t, 709) && self.certainly_at_least(t, 1)) =>
+            {
+                Some(t.clone())
+            }
+            ("asinh", "sinh") | ("sinh", "asinh")
+                if !self.f64_semantics() || self.certainly_in_band(t, 710) =>
+            {
+                Some(t.clone())
+            }
+            ("acosh", "cosh")
+                if !self.f64_semantics()
+                    || (self.certainly_in_band(t, 710) && self.certainly_at_least(t, 1)) =>
+            {
+                Some(fun(self.view.intern("abs"), vec![t.clone()], self))
+            }
             ("exp", "log") if self.certainly_nonneg(t) => Some(t.clone()),
             ("cos", "acos") | ("sin", "asin") | ("tanh", "atanh") if self.certainly_in_unit(t) => {
                 Some(t.clone())
@@ -1646,10 +2115,16 @@ fn as_rational_power<'a>(e: &'a Ex, cx: &Cx) -> Option<(&'a Ex, Rat)> {
 /// THE FOLD CONDITION IS BOTH GATES AT ONCE, which is why the arm needs no licence:
 ///
 ///   * mu. With a symbolic `a` the product needs a `Mul` node and the composition stops
-///     paying: `pow(exp x0, x1)` and `exp(x0*x1)` both price 32,000, and through the root
-///     spelling the composition is an outright ASCENT -- `rootn(exp x0, 3)` is 26,000
-///     against 27,000 for `exp(x0/3)`. A constructor arm that does not descend has no
-///     business firing, so that case stays with the RULES: `pow exp (-1) _0 -> exp neg _0`
+///     paying: `pow(exp x0, x1)` and `exp(x0*x1)` both price 24,000. UNDER THE SYMBOL
+///     TABLE (2026-08-21) the LITERAL-exponent readings moved and no longer all agree:
+///     `pow(exp x0, 3)` ties its composition at 18,000, but `rootn(exp x0, 3)` is 21,000
+///     against 19,000 for `exp(x0/3)` -- a 2,000 DESCENT the arm declines, because a
+///     `rootn` head (6, elementary in the table) is dearer than the `Mul` plus unit
+///     fraction the composed spelling pays, where the flat unit priced them the other way
+///     round (26,000 against 27,000). The arm's gate was never mu -- it is the FOLD
+///     CONDITION, and that has not moved -- so this is a MISSED descent, not an unsound
+///     one, and it stays where it already lives: with the RULES. `pow exp (-1) _0 ->
+///     exp neg _0`
 ///     (a non-unit literal `a` against a symbolic `b`) is shipped and still needed. The
 ///     `E`-base rule `pow np.e _0 -> exp _0` is NOT -- `a = 1` needs no fold, so the arm
 ///     covers every exponent and the mine can no longer mint it.
@@ -2112,7 +2587,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // (b), owner ruling 2026-08-08: the filed orientation is the mu-CHEAPER one ("the
     // mirrors score equal; the bigger expression scores bigger"); the historical
     // first-in-sort-positive lex rule survives only as the exact-tie breaker. For a
-    // content-1 sum the flip's wrapper cost is one mu_sym (the `-1 x Add` wrapper exists
+    // content-1 sum the flip's wrapper cost is one Mul head (the `-1 x Add` wrapper exists
     // only in the flipped spelling); for a non-unit content the wrapper exists in BOTH
     // spellings and the flip pays only the coefficient's sign bit -- and the per-term
     // deltas must then be priced on the DIVIDED terms (the candidates actually stored),
@@ -2120,7 +2595,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     let sign_neg = if terms.iter().any(term_absorbs_negation) {
         false
     } else if g.is_one() {
-        flipped_orientation_wins(&terms, mu_sym() as i128, Tie::Keep, cx)
+        flipped_orientation_wins(&terms, mu_mul() as i128, Tie::Keep, cx)
     } else {
         let Some(ng) = g.checked_neg() else {
             return Ex::Add(terms);
@@ -2247,8 +2722,9 @@ enum Tie {
 fn flipped_orientation_wins(terms: &[Ex], wrapper_sign_delta: i128, tie: Tie, cx: &Cx) -> bool {
     // (b), owner ruling 2026-08-08: the mu-CHEAPER orientation wins. `wrapper_sign_delta`
     // is what the flip costs at the wrapper itself, signed from the caller's side:
-    // +mu_sym in `primitive_sum` for a content-1 sum (the wrapper exists only in the
-    // flipped spelling), NEGATIVE mu_sym in `mul()`'s distribution arm (the wrapper
+    // +mu_mul (the wrapper IS a `Mul[-1, .]` node, priced by the symbol table) in
+    // `primitive_sum` for a content-1 sum (the wrapper exists only in the
+    // flipped spelling), NEGATIVE mu_mul in `mul()`'s distribution arm (the wrapper
     // exists only in the CURRENT spelling), the coefficient sign-bit delta for a
     // non-unit content (wrapper in both spellings). The two callers' deltas are exact
     // mirrors, so their decisions cannot ping-pong.
@@ -2500,7 +2976,7 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     let mut buckets: Vec<FBucket> = Vec::new();
     let mut opaque: Vec<Ex> = Vec::new(); // Const-containing and merge-refused factors, verbatim
     let branch_ok = |cx: &Cx, base: &Ex, a: &Rat, b: &Rat| -> bool {
-        if cx.lossy || (a.is_integer() && b.is_integer()) {
+        if cx.lossy() || (a.is_integer() && b.is_integer()) {
             return true;
         }
         if cx.certainly_nonneg(base) {
@@ -2580,7 +3056,7 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
         };
         if cancels
             && sym_cancel_ok
-            && (cx.lossy || cx.finnz_licensed(&base))
+            && (cx.lossy() || cx.finnz_licensed(&base))
             && branch_ok(cx, &base, &pos, &neg)
         {
             match pos.checked_add(&neg) {
@@ -3072,7 +3548,7 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
         // the odd-literal fusion parks signs inside function arguments where no
         // coefficient shows them (measured: 5 corpus rows + 4 rust pins regressed
         // under mixed-sign counting).
-        if flipped_orientation_wins(&out, mu_sym() as i128, Tie::Keep, cx) {
+        if flipped_orientation_wins(&out, mu_mul() as i128, Tie::Keep, cx) {
             return None;
         }
         out.sort_by(|a, b| add_term_cmp(a, b, cx.view));
@@ -3228,7 +3704,7 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
             }
         })
         .collect();
-    let inner = mul(inner_members, cx);
+    let inner = mul(inner_members.clone(), cx);
     {
         let Ex::Mul(v) = &inner else {
             // The positive-power bag collapsed below two factors: no joined SHAPE exists.
@@ -3481,7 +3957,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // keep EXPIRES at the phase-1 fixpoint (`sentinels_expired`, H-015): a
     // surviving reciprocal is unpartnered, IS the value 0, and blocks the rules
     // its unfolded shape hides from.
-    if !cx.lossy || cx.sentinels_expired {
+    if !cx.lossy() || cx.sentinels_expired {
         if let Ex::Num(e) = &exp {
             if e.is_negative() {
                 match &base {
@@ -3580,7 +4056,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 // coefficients keep the standing §9.8.4-priced compression; only
                 // magnitude-carrying negative literals refuse. The BROAD line
                 // (every negative coefficient) is the same condition without it.
-                let neg_coeff_stuck = !cx.lossy
+                let neg_coeff_stuck = !cx.lossy()
                     && e.is_negative()
                     && e.as_integer().is_some_and(|n| n % 2 != 0)
                     && bag
@@ -3650,7 +4126,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if let (Some((inner_base, r)), Ex::Num(s)) = (as_rational_power(&base, cx), &exp) {
         {
             let r = &r;
-            let licence = if cx.lossy {
+            let licence = if cx.lossy() {
                 true
             } else if let Some(ri) = r.as_integer() {
                 s.is_integer()
@@ -3891,7 +4367,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             {
                 // FILES-BARE gate (same rule as sign_trade_flip): only adopt an
                 // orientation primitive_sum itself would file bare.
-                if !flipped_orientation_wins(&flipped, mu_sym() as i128, Tie::Keep, cx) {
+                if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
                     flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                     return pow(Ex::Add(flipped), exp, cx);
                 }
@@ -3906,7 +4382,85 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
 /// FALLBACKS, exactly as in the shipped engine -- running them at construction would destroy
 /// the exact rules' chance to fire first (`sin(pi) -> 0` must beat `sin(3.14159...) ->
 /// 1.22e-16`).
+/// EXPERIMENT (branch experiment/f64-folding, owner-ruled 2026-08-20 for 0.14.0):
+/// fold a ground function application to its f64 value, but ONLY when that is cheaper.
+///
+/// The 2026-08-02 ban had one rationale -- "an f64 evaluation landing exactly on a cheap
+/// literal while truly differing at 1e-17" -- and that conflation IS the f64/real
+/// distinction the mode split now represents. In `f64` the deployed evaluator is the
+/// authority, so its answer is exact BY DEFINITION of the mode. In `real` this never
+/// runs: `tan(1)` is irrational and no literal in the grammar spells it at any precision,
+/// so exact rational arithmetic is not a policy there but the only representable thing.
+///
+/// mu MAKES IT SELF-LIMITING, which is what makes "fold everything" safe to say:
+///     mu(tan 1)      = 11000   vs its float 58877  -> refused, `tan 1` survives
+///     mu(asin 1e-08) = 14170   vs its float  6170  -> folded
+/// so the canon does not fill with 17-digit literals; it folds exactly where the literal
+/// is genuinely the simpler object. That asymmetry is also why the 18-rule
+/// `f(+-10^-k) -> +-10^-k` family had to be MINED: the mine found as rules what the
+/// constructor was forbidden to do.
+///
+/// Two refusals carried over from `evaluate_constants`, both load-bearing: a non-finite
+/// result is never injected (that is the defect class that put a guard into flash-ansr),
+/// and anything that is not an exact rational operand is left alone (a `<constant>` is a
+/// fitted degree of freedom, not a value). A value whose shortest decimal will not fit
+/// `Rat`'s i128 also refuses -- fail-closed, and it costs only very large exponents.
+fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
+    // f64 ONLY. Corpus was included at first and it cost `atanh(tanh 30)`: f64 tanh(30)
+    // attains exactly 1.0, mu folds `tanh 30 -> 1`, and the literal-provenance arm then
+    // reads a WRITTEN atanh(1) as a limit and yields inf. In f64 that inf is CORRECT --
+    // np.arctanh(np.tanh(30.0)) really is inf -- but corpus is the beautification path,
+    // and turning a finite, mathematically-true 30 into a non-finite token is the exact
+    // defect class that put a guard into flash-ansr. Corpus gets both disciplines through
+    // the two-candidate selection at the simplify entry instead, which lets it keep 30
+    // AND fold where real cannot.
+    if !cx.fold_f64 {
+        return None;
+    }
+    let [Ex::Num(r)] = args else { return None };
+    let x = r.to_f64();
+    // `TokenView` compares by interned id, so the vocabulary is spelled out rather than
+    // matched on a &str.
+    const UNARY: [&str; 14] = [
+        "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh",
+        "atanh", "exp", "log",
+    ];
+    let which = UNARY.iter().position(|n| cx.view.tok_is(op, n))?;
+    let y = match which {
+        0 => x.sin(),
+        1 => x.cos(),
+        2 => x.tan(),
+        3 => x.asin(),
+        4 => x.acos(),
+        5 => x.atan(),
+        6 => x.sinh(),
+        7 => x.cosh(),
+        8 => x.tanh(),
+        9 => x.asinh(),
+        10 => x.acosh(),
+        11 => x.atanh(),
+        12 => x.exp(),
+        _ => x.ln(),
+    };
+    if !y.is_finite() {
+        return None;
+    }
+    // Rust's `{:?}` for f64 is the shortest string that round-trips, which is precisely
+    // the spelling whose f64 reading is this value again.
+    let folded = Rat::parse_decimal(&format!("{y:?}"))?;
+    let before = complexity(&Ex::Fun(op, args.to_vec()), cx.view);
+    let after = complexity(&Ex::Num(folded), cx.view);
+    if after < before {
+        Some(Ex::Num(folded))
+    } else {
+        None
+    }
+}
+
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
+    if let Some(folded) = f64_fold(op, &args, cx) {
+        return folded;
+    }
     // `exp(1) -> E`. The two spellings denote the SAME constant exactly -- this is a
     // choice of symbol, not an evaluation, so the rules-pass doctrine above does not
     // cover it (nothing is rounded and no exact rule can be preempted; `exp(0) -> 1`
@@ -3995,7 +4549,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     .collect::<Option<Vec<Ex>>>()
                 {
                     // FILES-BARE gate (same rule as sign_trade_flip).
-                    if !flipped_orientation_wins(&flipped, mu_sym() as i128, Tie::Keep, cx) {
+                    if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         return fun(op, vec![Ex::Add(flipped)], cx);
                     }
@@ -4124,7 +4678,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     // so `1/n` is a finite nonzero rational and the sign follows through the
                     // reciprocal for free: `rootn(e, -m) = 1/e^(1/m) = exp(-1/m)`. The
                     // 2026-08-07 predecessor of this arm handled the LEAF `e` only, and the
-                    // census that came out of it (`remine/probe_rule_reachability.py`) found
+                    // census that came out of it (the research harness) found
                     // its sibling still blind on the very next base: `pow(exp(-1), 1/2)` was
                     // shipping as `rootn(exp(-1), 2)` at mu 20,000 where `exp(-1/2)` is
                     // 11,585. One base is a patch; the family is the principle.
@@ -4191,7 +4745,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                             match &**ex {
                                 Ex::Num(k) => {
                                     Rat::new(1, n).and_then(|s| k.checked_mul(&s)).filter(|p| {
-                                        cx.lossy
+                                        cx.lossy()
                                             || cx.certainly_nonneg(inner)
                                             || match k.as_integer() {
                                                 Some(ki) => {
@@ -4424,7 +4978,8 @@ mod tests {
                 cert_finnz: None,
                 cert_nzae: None,
                 cert_nce: None,
-                lossy: false,
+                mode: RuleMode::Default,
+                fold_f64: Cx::folds_for(RuleMode::Default),
                 sentinels_expired: false,
             };
             assert_eq!(add(vec![lg.clone(), neg_lg], &cx2), Ex::int(0));
@@ -4811,51 +5366,67 @@ mod tests {
 
     #[test]
     fn complexity_weight_table() {
-        // The mu weight table (stage 2), in MILLI-BITS: structural nodes and vocabulary
-        // symbols 8 bits, literals pay L(n) = log2(1 + |n|) per written integer with a
-        // bit for a negative sign and a two-bit floor, magnitude-1 coefficient and
-        // exponent slots are free (a bare sign), <constant> = MU_FREE_WORST_CASE_F64
-        // = 1133 bits (contract Sec 10.10(5): the supremum of mu over f64 round-trip
-        // spellings plus the sign bit, rounded up -- DERIVED, not chosen).
+        // The mu weight table in MILLI-BITS, at the SYMBOL TABLE (2026-08-21): a leaf 6
+        // bits, Add/Mul/Pow 3, Pi/E 4, an elementary head 6, a transcendental head 8,
+        // an infinity 8 -- where mu' (D38/B2) charged a flat 8 for every one of them.
+        // Unchanged by the table: a priced literal pays ONE selector bit + its cheaper codeword
+        // (rational L(p)[+L(q)] vs decimal-scientific max(2,L(m))+L(|k|)) + a bit for a
+        // negative sign, mantissa floored at two bits; magnitude-1 coefficient and
+        // exponent slots stay free (a bare sign writes no number, so no selector
+        // either); <constant> = MU_FREE_WORST_CASE_F64 = 67 bits (the sup-construction
+        // re-derived under the mu' codebook -- DERIVED, not chosen).
         with_view(|view| {
             let cx = Cx::bare(view);
             let c = |e: &Ex| super::complexity(e, view);
-            // x - y = 32: Add(8) + x(8) + the sign-wrapper Mul (8, a real structural
-            // node of the canonical tree; the -1 slot itself is free) + y(8).
-            // x*y = 24; x/y = 32 (the Pow(y, -1) wrapper, exponent -1 free).
+            // x - y = 18: Add(3) + x(6) + the sign-wrapper Mul (3, a real structural
+            // node of the canonical tree; the -1 slot itself is free) + y(6).
+            // x*y = 15; x/y = 18 (the Pow(y, -1) wrapper at 3, exponent -1 free).
             let x_ = x(view);
             let y_ = y(view);
             let x_minus_y = add(
                 vec![x_.clone(), mul(vec![Ex::int(-1), y_.clone()], &cx)],
                 &cx,
             );
-            assert_eq!(c(&x_minus_y), 32_000);
-            assert_eq!(c(&mul(vec![x_.clone(), y_.clone()], &cx)), 24_000);
+            assert_eq!(c(&x_minus_y), 18_000);
+            assert_eq!(c(&mul(vec![x_.clone(), y_.clone()], &cx)), 15_000);
             let x_over_y = mul(vec![x_.clone(), pow(y_.clone(), Ex::int(-1), &cx)], &cx);
-            assert_eq!(c(&x_over_y), 32_000);
-            // 2x = 18 (the coefficient PAYS its bits: 8 + 2 + 8), x^2 = 18, 1/x = 16,
-            // sin(x) = 16.
-            assert_eq!(c(&mul(vec![Ex::int(2), x_.clone()], &cx)), 18_000);
-            assert_eq!(c(&pow(x_.clone(), Ex::int(2), &cx)), 18_000);
-            assert_eq!(c(&pow(x_.clone(), Ex::int(-1), &cx)), 16_000);
-            assert_eq!(c(&fun(view.intern("sin"), vec![x_.clone()], &cx)), 16_000);
-            // x^-2 costs as x^2 (exponent sign free); C*x = 144 (the priciest atom);
-            // -5 costs its magnitude's bits.
-            // The exponent -2 is a real literal now: L(2) + 1 sign bit = 2.585 bits.
-            assert_eq!(c(&pow(x_.clone(), Ex::int(-2), &cx)), 18_585);
-            // Mul(8) + <constant>(1_133_000) + x(8) = 1_149_000.
+            assert_eq!(c(&x_over_y), 18_000);
+            // 2x = 11.585 (the coefficient PAYS selector + its bits: 3 + 2.585 + 6),
+            // x^2 = 11.585, 1/x = 9, sin(x) = 12. The literal floor is ONE bit since
+            // 2026-08-22, so cost(2) = 2.585 clears it and no longer ties cost(3).
+            assert_eq!(c(&mul(vec![Ex::int(2), x_.clone()], &cx)), 11_585);
+            assert_eq!(c(&pow(x_.clone(), Ex::int(2), &cx)), 11_585);
+            // THE EXPONENTS ARE ORDERED AGAIN. Under the two-bit floor `x^2`, `x^3` and
+            // `x^4` all priced alike, because the clamp swallowed cost(2), cost(3) and
+            // cost(4) together -- the measure could not tell a square from a cube.
+            assert!(
+                c(&pow(x_.clone(), Ex::int(2), &cx)) < c(&pow(x_.clone(), Ex::int(3), &cx))
+                    && c(&pow(x_.clone(), Ex::int(3), &cx)) < c(&pow(x_.clone(), Ex::int(4), &cx))
+            );
+            assert_eq!(c(&pow(x_.clone(), Ex::int(-1), &cx)), 9_000);
+            assert_eq!(c(&fun(view.intern("sin"), vec![x_.clone()], &cx)), 12_000);
+            // x^-2 costs as x^2 plus the FULL sign bit (the -2 exponent is a priced
+            // literal: selector + L(2) + sign = 1 + 1.585 + 1, all of it clear of the
+            // one-bit floor; under the two-bit floor the clamp absorbed all but 0.585).
+            assert_eq!(c(&pow(x_.clone(), Ex::int(-2), &cx)), 12_585);
+            // Mul(3) + <constant>(67_000) + x(6) = 76_000. The free constant is a LITERAL
+            // price, so the table does not touch it: it now outweighs its own structure by
+            // more than it did, which is the direction the ordering wants.
             assert_eq!(
                 c(&mul(vec![Ex::Const, x_.clone()], &cx)),
-                2 * mu_sym() + MU_FREE_WORST_CASE_F64
+                mu_mul() + MU_FREE_WORST_CASE_F64 + mu_leaf()
             );
-            assert_eq!(mu_free(), 1_133 * MU_MILLI);
-            assert_eq!(c(&Ex::int(-5)), 3_585); // L(5) = 2.585, + 1 for the sign
-                                                // x8 + 1.2*x3 = 8 + 8 + (8 + cost(6/5) + 8).
-                                                // cost(6/5) = L(6) + L(5) = 2.807 + 2.585 = 5.392 under Sec 10.10(1): the decimal
-                                                // code (L(12) + L(1) = 4.700) is no longer consulted, mu being value complexity.
+            assert_eq!(mu_free(), 67 * MU_MILLI);
+            assert_eq!(c(&Ex::int(-5)), 4_585); // selector + L(5) + 1 for the sign
+                                                // x8 + 1.2*x3 = 3 + 6 + (3 + cost(6/5) + 6).
+                                                // cost(6/5) = selector + min(L(6)+L(5) = 5.392, max(2,L(12))+L(1) = 4.700)
+                                                // = 5.700: the decimal-scientific codeword takes it (D38 revoked the
+                                                // Sec 10.10(1) fraction-only rule).
             let t = mul(vec![Ex::Num(Rat::new(6, 5).unwrap()), y_.clone()], &cx);
-            assert_eq!(c(&add(vec![x_.clone(), t], &cx)), 37_392);
-            // The stage-2 point, in one line: an E factor undercuts its f64 image.
+            assert_eq!(c(&add(vec![x_.clone(), t], &cx)), 23_700);
+            // The stage-2 point, in one line: an E factor undercuts its f64 image --
+            // and by MORE than before, since the table cheapened the structure the
+            // symbolic spelling is made of and left the image's 56.272 bits alone.
             let sym = c(&mul(vec![Ex::E, x_.clone()], &cx));
             let mat = c(&mul(
                 vec![
@@ -4864,7 +5435,7 @@ mod tests {
                 ],
                 &cx,
             ));
-            assert!(sym == 24_000 && sym < mat, "{sym} vs {mat}");
+            assert!(sym == 13_000 && sym < mat, "{sym} vs {mat}");
         });
     }
 
@@ -4900,8 +5471,9 @@ mod tests {
         let frac = format!("{big41}/7");
         let c = mu_numeric_str(&frac);
         // Component model, both components PAID (the implicit-denominator discount applies
-        // only when there is no genuine denominator): L(111...1) + L(7) = 136.031 bits.
-        assert_eq!(c, 136_031);
+        // only when there is no genuine denominator), plus the mu' selector bit; the
+        // denominator 7 offers no decimal codeword: 1 + L(111...1) + L(7) = 137.031 bits.
+        assert_eq!(c, 137_031);
         // Far above any in-range literal; the boundary that matters is the ~105-BIT
         // 52-bit dyadics.
         assert!(c > 105 * MU_MILLI);
@@ -4909,37 +5481,82 @@ mod tests {
         assert!(mu_numeric_str(&format!("{big41}1/7")) > c);
         assert!(mu_numeric_str(&format!("{big41}/71")) > c);
         // The sign costs exactly one bit here, as it does in range (owner 2026-08-06);
-        // a zero numerator floors at two bits.
+        // a zero numerator floors at the one-bit codeword floor (+ the selector) --
+        // the 2026-08-22 ruling, mirrored across the i128 boundary (S15).
         assert_eq!(mu_numeric_str(&format!("-{big41}/7")), c + MU_MILLI);
         assert_eq!(mu_numeric_str("0/7"), 2 * MU_MILLI);
-        // The decimal path is unchanged by the new arm.
+        // The decimal path is case-insensitive in the exponent marker.
         assert_eq!(
             mu_numeric_str("4.159653437657682e-35"),
             mu_numeric_str("4.159653437657682E-35")
         );
-        // Sec 10.10(1) REVOKED the minimum over codes: `1e-40` pays the whole 10^40
-        // denominator again, L(1) + 40*log2(10) = 133.880 bits, not the 6.358 the decimal
-        // code used to buy. mu is VALUE complexity, so a short DESCRIPTION earns no
-        // discount -- 1e-40 is a genuinely extreme value. The boundary property this test
-        // exists for is unchanged and is the reason both spellings are asserted: the token
-        // pricer agrees with what `mu_rat` charges in range, and with the SAME value
-        // spelled as a fraction.
-        //
-        // The two spellings sit ONE MILLI-BIT apart, and that residue is pinned rather than
-        // papered over: the e-notation path multiplies by the ROUNDED `L10_MILLI = 3322`
-        // while the `p/q` path takes `l_millibits` of the digit string exactly. The min over
-        // codes used to hide it (both spellings took the decimal code). 0.001 bits is not an
-        // ordering cliff -- the property this test exists for -- but it IS spelling-dependent
-        // pricing, which §10.10 says should not happen, so the BOUND is asserted too and will
-        // fail loudly if the seam ever widens.
+        // D38 RESTORES the minimum over codes (revoking Sec 10.10(1)): `1e-40` takes its
+        // decimal-scientific codeword, selector + max(floor, L(1)) + L(40) = 7.358 bits
+        // under the one-bit floor, not the 133.880 the fraction-only rule charged. The boundary property this test
+        // exists for -- the token pricer agrees with `mu_rat`'s rule, and the SAME value
+        // prices the SAME from both spellings -- now holds EXACTLY: the pre-D38 build
+        // pinned a one-milli-bit seam between these two spellings (133.880 vs 133.879,
+        // the rounded-L10 residue of the fraction code); both now take the decimal
+        // codeword through the same `l_millibits(40)` and the seam is CLOSED.
         let e_notation = mu_numeric_str("1e-40");
         let as_fraction = mu_numeric_str(&format!("1/1{}", "0".repeat(40)));
-        assert_eq!(e_notation, 133_880);
-        assert_eq!(as_fraction, 133_879);
-        assert!(
-            e_notation.abs_diff(as_fraction) <= 1,
+        assert_eq!(e_notation, 7_358);
+        assert_eq!(as_fraction, 7_358);
+        assert_eq!(
+            e_notation, as_fraction,
             "the two spellings of 1e-40 drifted apart: {e_notation} vs {as_fraction}"
         );
+    }
+
+    /// c_free' derivation (D38/B2): `MU_FREE_WORST_CASE_F64` is the CEILED sup of mu'
+    /// over f64 round-trip spellings plus the sign bit -- recomputed here from the
+    /// engine's own token pricer, so the published constant cannot drift from the code
+    /// that defines it. The sweep: every f64 exponent field at six mantissa patterns
+    /// (binade edges and mid-grid probes), plus the recorded argmax
+    /// `8.9002954340287245e-308` (found offline by ulp-walking every binade top in the
+    /// boundary decades; the analytic feasibility cap -- a shortest repr's mantissa is
+    /// below `10 * 2^53` and its scale within +-343 -- bounds the sup under 64.92
+    /// bits, so the 67-bit ceiling is robust to argmax misses).
+    #[test]
+    fn c_free_prime_derivation() {
+        let price = |x: f64| -> u64 {
+            let tok = format!("{x:e}");
+            mu_numeric_str(&tok) - MU_MILLI // the codeword min, without the selector
+        };
+        let mantissas: [u64; 6] = [
+            0,                     // the binade bottom (a power of two)
+            1,                     // one ulp up
+            0x000F_FFFF_FFFF_FFFF, // the binade top
+            0x0008_0000_0000_0000,
+            0x0005_5555_5555_5555,
+            0x000A_AAAA_AAAA_AAAA,
+        ];
+        let mut sup = 0u64;
+        for exp in 0..2047u64 {
+            for m in mantissas {
+                let x = f64::from_bits((exp << 52) | m);
+                if x == 0.0 || !x.is_finite() {
+                    continue;
+                }
+                sup = sup.max(price(x));
+            }
+        }
+        // The recorded argmax reproduces the recorded supremum, and nothing in the
+        // sweep prices above it (the load-bearing safety direction).
+        let rec = price(8.9002954340287245e-308);
+        assert_eq!(rec, 64_649);
+        assert!(
+            sup <= rec,
+            "the sweep beat the recorded supremum: {sup} > {rec}"
+        );
+        assert!(
+            sup > rec - 2_000,
+            "the sweep never reached the extreme region: {sup}"
+        );
+        // + the sign bit + the selector bit, ceiled: the published constant, re-derived.
+        let derived = (rec + MU_MILLI + MU_MILLI).div_ceil(MU_MILLI) * MU_MILLI;
+        assert_eq!(derived, MU_FREE_WORST_CASE_F64);
+        assert_eq!(mu_free(), 67 * MU_MILLI);
     }
 
     /// B22, both halves. (1) PRICING: the linear schedule `|scale| * log2(10)` exhausts
@@ -5016,36 +5633,41 @@ mod tests {
                 );
                 assert!(cs >= bare, "composite priced below a bare variable: {cs}");
             }
-            // The saturation point itself: enough astronomic members that an UNCHECKED
-            // sum exceeds u64::MAX (with the pricing fixed, one leaf is ~1.4e13, so
-            // this is ~1.3M members -- a ~16 MB hostile input, well within a caller's
-            // reach). The property is stated so no wrap can hide: the total must be
-            // NON-DECREASING in member count across the overflow threshold. A wrapped
-            // sum shows as a decrease at the crossing pair wherever the modulus lands
-            // (asserting only `total >= part` misses wraps that alias into [part, MAX)),
-            // while a SATURATING sum only ever holds flat at the ceiling -- refusal is
-            // sound, a composite under its parts is not.
-            let q = usize::try_from(u64::MAX / ca).unwrap();
+            // The saturation CROSSING is no longer materializable (mu', D38): under
+            // the two-codeword pricing every leaf is bounded by ~3.32 bits per DIGIT
+            // of its own print (the scientific codeword prices the scale as an
+            // integer, so the old ~1.4e13-milli-bit astronomic leaves now price a few
+            // dozen bits -- this leaf is {ca} ~ 55 bits), and reaching u64::MAX would
+            // take a tree whose serialization is petabytes. The old crossing pin
+            // (`vec![leaf; u64::MAX / ca]`, ~1.3M members pre-D38) would today demand
+            // ~3e14 members and is deleted as physically unreachable; the
+            // `saturating_add` accumulation stays as pure defense-in-depth. What
+            // remains checkable at reachable scale: totals are exact (no wrap, no
+            // saturation) and strictly monotone in member count on the largest
+            // feasible astronomic bags.
+            let q = 100_000usize;
             let mut prev = 0u64;
-            for n in [q - 1, q, q + 1, q + 2] {
+            for n in [q - 1, q, q + 1] {
                 let cs = complexity(&Ex::Add(vec![a.clone(); n]), view);
                 assert!(
-                    cs >= prev,
-                    "the Add total WRAPPED crossing {n} members: {prev} -> {cs}"
+                    cs > prev,
+                    "the Add total failed to grow at {n} members: {prev} -> {cs}"
                 );
-                assert!(cs >= ca && cs >= bare, "an Add bag priced below a part");
+                assert_eq!(
+                    cs,
+                    mu_add() + ca * n as u64,
+                    "an astronomic Add bag mispriced at {n} members"
+                );
                 prev = cs;
             }
-            // The Mul and Fun arms accumulate through the same repaired path; one
-            // past-threshold bag each pins them at the saturated ceiling.
             for bag in [
-                Ex::Mul(vec![a.clone(); q + 1]),
-                Ex::Fun(view.intern("sin"), vec![a.clone(); q + 1]),
+                Ex::Mul(vec![a.clone(); q]),
+                Ex::Fun(view.intern("sin"), vec![a.clone(); q]),
             ] {
                 let cs = complexity(&bag, view);
                 assert!(
                     cs >= ca && cs >= bare,
-                    "an overflowing bag wrapped below its parts: {cs}"
+                    "a large astronomic bag priced below its parts: {cs}"
                 );
             }
         });

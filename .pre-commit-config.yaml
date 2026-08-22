@@ -1,3 +1,6 @@
+# Non-source trees must never be rewritten by a formatting hook -- flake8 and mypy
+# already exclude them; this makes that global.
+exclude: ^remine/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

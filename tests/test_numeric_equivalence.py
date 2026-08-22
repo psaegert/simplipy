@@ -1,6 +1,6 @@
 """The in-suite corpus gate: numeric equivalence of input vs simplified output.
 
-Port of the scale harness (remine/gate_scale.py, the 64k/1M campaign instrument) to the
+Port of the scale harness (the scale gate, the 64k/1M campaign instrument) to the
 tracked 400-row corpus, so the pytest suite itself can catch a numerically unsound
 engine change; before this wall the suite had no corpus walk at all -- both the
 structural and the numeric corpus gates lived in scripts that only ran when someone
@@ -15,7 +15,7 @@ judge_pair. A flag the judge cannot certify sound FAILS the suite -- fail-closed
 orphaned flags.
 
 Two instrument corrections dated 2026-07-29 (the campaign harness moved in lockstep,
-see remine/gate_scale.py):
+see the scale gate):
   * agreement is sign/kind-aware: both-NaN or isclose (numpy isclose certifies
     same-sign infinity pairs and rejects +inf vs -inf and NaN vs inf). The previous
     both-nonfinite clause hid every top-level pole-sign flip and every
@@ -167,7 +167,7 @@ def walk(eng, X):
                 raise ValueError(f'swap arity tables stale: consumed {consumed}/{len(sk)}')
             if eng.simplify(swapped) != out:
                 r['perm_rows'].append(i)
-            explicit = eng.simplify(sk, form='explicit')
+            explicit = eng.simplify(sk)
             r['complexity_in'] += eng.complexity(sk)
             r['complexity_out'] += eng.complexity(explicit)
             if '<constant>' not in sk and '<constant>' not in explicit:
@@ -202,13 +202,13 @@ class TestCorpusGate:
         assert walk['complexity_out'] <= walk['complexity_in'], (
             walk['complexity_in'], walk['complexity_out'])
         # EXACT pin, tied to the instrument (audit Tier-2, 2026-08-03): this is the SAME
-        # number as remine/gate_acj.py REFS['acj-4-3']['complexity'] -- measured in
+        # number as the artifact gate REFS['acj-4-3']['complexity'] -- measured in
         # both the native and the explicit projection (complexity is computed on the
         # canonical state, form-independent). The old `<= 97911` ratchet had accumulated
         # two pin generations of slack (97911 mu-ship -> 97623 -> 96443), a silent
         # 1468-point regression window; drift in EITHER direction now fails, exactly as
         # in the gate. Re-pin BOTH constants together, with the evidence recorded in
-        # remine/RECORDS.md. 96443 -> 96683 at H-020 (2026-08-04): the sign-fold into
+        # the research harness 96443 -> 96683 at H-020 (2026-08-04): the sign-fold into
         # Const-bearing sums moved 48 corpus rows (family-equal re-spellings) and the
         # divisor-side sign amendment re-spelled 2 more; every moved row audited
         # against the pre-fold walk (see gate_acj REFS comment). 96,687,890 ->
@@ -259,11 +259,46 @@ class TestCorpusGate:
         # 6.5e-13; NaN domains matched where present; the four Const rows (54,
         # 63, 337, 372) preserve occurrence counts. Row 288 +8,000 is the H-015
         # greedy-endpoint phenomenon again; five rows respell at +-0.
-        assert walk['complexity_out'] == 294730680, walk['complexity_out']
+        # B2 mu' (2026-08-17): 294,730,680 -> 84,650,486. The MEASURE changed (D38:
+        # two-codeword literal pricing + c_free' 1133 -> 67 bits), so the old pin is
+        # incommensurable, not comparable row-by-row; re-earned by running this walk
+        # under the mu' build. The drop is dominated by <constant> repricing (135
+        # Const-bearing rows at -1,066,000 mB each); made-bigger rows under native
+        # mu' descent: ZERO (the D38 3.79%-class is empty by construction, checked
+        # per-row in tests/test_mu_prime.py::TestNativeDescentNeverWorse).
+        # 84,650,486 -> 84,698,486 (+48,000) at the INVERSE-PAIR BAND (2026-08-19,
+        # owner-ratified). The four unguarded inverse-pair arms now carry a magnitude
+        # band in f64 mode, so one corpus row stops collapsing an `asinh(sinh(.))` the
+        # deployed evaluator cannot reproduce (sinh overflows at 710.475860) and keeps
+        # its larger form. LOSSY output is UNMOVED, 0 of 400 rows.
+        # RE-PINNED for the 0.14.0 triple: 84,698,486 -> 84,714,486. TWO corpus rows,
+        # +8,000 each, and TWO rules -- an earlier version of this comment named only
+        # the first and attributed the whole +16,000 to it.
+        #
+        #   cos(asin(sin x)) -> |cos x|     true on R; f64 disagrees
+        #   exp(x/0)         -> inf^x       true on R; at x = 0 f64 gives exp(nan) = nan
+        #                                   against inf^0 = 1
+        #
+        # Both are true and NOT f64-realised, so both serve `real` and no longer the
+        # default mode, and f64's own constructor reaches a form that costs 8,000 more
+        # in each case. This is the measured price of the mode split, not a regression.
+        # THE SYMBOL TABLE (2026-08-21): 84,714,486 -> 56,665,486. The MEASURE changed
+        # -- structure is no longer a flat 8 bits a node -- so the old pin is not
+        # comparable and this is a re-pin, not a movement. What is comparable, and
+        # measured beside it: sound (`f64`) and `real` outputs are BYTE-IDENTICAL on all
+        # 400 rows across the change, and 14 corpus-mode rows re-spell through the
+        # mu-driven reciprocal-rejoin projection, which is the one output decision the
+        # prices own.
+        # 56,665,486 -> 56,521,606 at the ONE-BIT LITERAL FLOOR (owner 2026-08-22). Also
+        # a measure change and also a re-pin, and this one DOES move outputs: four f64
+        # rows and six corpus rows re-spell, and the corpus rests cheaper by 3,000
+        # milli-bits. 0 of 5,451 shipped rules change direction; 0 of 105 printed literal
+        # spellings move. Evidence: research `audit-2026-08-21/floor/`.
+        assert walk['complexity_out'] == 56521606, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4-3":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 294730680, \
+            assert m and int(m.group(1)) == 56521606, \
                 'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):

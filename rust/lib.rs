@@ -46,6 +46,73 @@ type ValueSetBox = (bool, bool, bool, bool, f64, f64);
 /// authority there -- a malformed tagged input fails the parse, the kernel returns `None`,
 /// and the FFI raises the same ValueError as every other malformed input; audit Tier-2,
 /// 2026-08-03: it used to be returned UNCHANGED, silently). The length cap applies to both.
+/// The WIRE SPELLING of a rule mode (`ac_simplify_in_mode` and its infix twin), refused
+/// loudly on anything else: a mistyped mode must never silently select a different rule
+/// set. Same doctrine as `simplify(mode=...)`'s string handling in the Python shim -- a
+/// stray string that resolved to a rung by accident is exactly the bug that made
+/// `mode='lossy'` run SOUND.
+fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
+    engine::RuleMode::parse(name).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "unknown rule_mode {name:?}: expected 'default', 'real' or 'corpus'"
+        ))
+    })
+}
+
+/// The output projection's wire spelling, factored out of the three FFI entries that
+/// accept it so they cannot drift.
+fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
+    match name {
+        "tagged" => Ok(engine::AcForm::Tagged),
+        "explicit" => Ok(engine::AcForm::Explicit),
+        other => Err(PyValueError::new_err(format!(
+            "unknown form {other:?}: expected 'tagged' or 'explicit'"
+        ))),
+    }
+}
+
+/// THE ONE simplify implementation behind the FFI. `ac_simplify` (the `wildcard_all`
+/// spelling that shipped) and `ac_simplify_in_mode` (the mode spelling) both land here,
+/// so the bool is a SPELLING of a mode and never a second mechanism beside it.
+fn ac_simplify_impl(
+    inner: &engine::Engine,
+    py: Python<'_>,
+    tokens: Vec<String>,
+    max_passes: usize,
+    mode: engine::RuleMode,
+    form: engine::AcForm,
+) -> PyResult<Py<PyList>> {
+    // The documented empty-input contract: `simplify([]) == []` (the one valid
+    // case `is_valid` rejects). Restored explicitly after the malformed-input
+    // hardening accidentally made it raise (hardening H-003, 2026-08-03).
+    if tokens.is_empty() {
+        return Ok(PyList::empty(py).into());
+    }
+    ensure_ac_well_formed(inner, &tokens)?;
+    let out = py
+        .detach(|| inner.ac_simplify_proj(&tokens, max_passes, mode, form))
+        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
+    Ok(PyList::new(py, out)?.into())
+}
+
+/// The infix twin of [`ac_simplify_impl`], shared by `ac_simplify_infix` and
+/// `ac_simplify_infix_in_mode`.
+fn ac_simplify_infix_impl(
+    inner: &engine::Engine,
+    py: Python<'_>,
+    tokens: Vec<String>,
+    max_passes: usize,
+    mode: engine::RuleMode,
+) -> PyResult<String> {
+    // Empty-input contract, as in `ac_simplify` (H-003): the empty rendering.
+    if tokens.is_empty() {
+        return Ok(String::new());
+    }
+    ensure_ac_well_formed(inner, &tokens)?;
+    py.detach(|| inner.ac_simplify_infix(&tokens, max_passes, mode))
+        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+}
+
 fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<()> {
     ensure_tokens_are_tokens(tokens)?;
     // Tagged-form tokens and the `rootn` built-in live outside `is_valid`'s config
@@ -137,6 +204,7 @@ mod convert;
 pub mod engine;
 mod eval;
 mod fit;
+mod forms;
 mod hiprec;
 mod interval;
 mod numeric;
@@ -229,6 +297,9 @@ struct PyEngine {
 /// C1.9: deterministic digest of a pushed rule list (std SipHash with fixed keys --
 /// `DefaultHasher::new()` -- stable across processes of one build; both storers and
 /// the checker share this one function, so representation drift is impossible).
+/// One SERVED rule as the FFI hands it out: `(lhs, rhs, artifact index)`.
+type ServedRule = (Vec<String>, Vec<String>, usize);
+
 fn pushed_rules_digest(rules: &[(Vec<String>, Vec<String>)]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -291,36 +362,93 @@ impl PyEngine {
     /// `form` selects the output projection: "tagged" (default -- the strict delimited
     /// prefix form, `<add> ... </add>`), "explicit" (sugared old-token diagnostic form),
     /// Input accepts both the old grammar and
-    /// the tagged form. `wildcard_all` is the LOSSY switch, exactly as in `simplify`.
-    #[pyo3(signature = (tokens, node_budget=48, wildcard_all=false, form="tagged"))]
+    /// the tagged form. `max_passes` bounds the number of outer REWRITE PASSES (not nodes);
+    /// the chain stops early at its fixpoint, which measures at 2-4 passes against this
+    /// default of 48. `wildcard_all` is the LOSSY switch, exactly as in `simplify`.
+    #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false, form="tagged"))]
     fn ac_simplify(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
-        node_budget: usize,
+        max_passes: usize,
         wildcard_all: bool,
         form: &str,
     ) -> PyResult<Py<PyList>> {
-        let form = match form {
-            "tagged" => engine::AcForm::Tagged,
-            "explicit" => engine::AcForm::Explicit,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown form {other:?}: expected 'tagged' or 'explicit'"
-                )))
-            }
-        };
-        // The documented empty-input contract: `simplify([]) == []` (the one valid
-        // case `is_valid` rejects). Restored explicitly after the malformed-input
-        // hardening accidentally made it raise (hardening H-003, 2026-08-03).
+        // THE MAP, and the only one on this boundary: today's two-valued `simplipy.Mode`
+        // becomes a three-valued rule mode here. SOUND -> the default set, LOSSY -> the
+        // corpus set. Renaming `Mode` to `f64`/`real`/`corpus` retires this entry in
+        // favour of `ac_simplify_in_mode` below; nothing under it has to move.
+        ac_simplify_impl(
+            &self.inner,
+            py,
+            tokens,
+            max_passes,
+            engine::RuleMode::from_wildcard_all(wildcard_all),
+            parse_ac_form(form)?,
+        )
+    }
+
+    /// `ac_simplify` addressing the rule mode DIRECTLY -- `"default"` (`rules.json`),
+    /// `"real"` (`rules_real.json`) or `"corpus"` (`rules_corpus.json`). Each mode serves
+    /// ONE DISTINCT, COMPLETE set; `"default"`/`"corpus"` are exactly what
+    /// `wildcard_all=False`/`True` select above, and `"real"` is the rung today's
+    /// `simplipy.Mode` cannot yet name.
+    ///
+    /// Contracts (empty input, malformed input, forms) are the SAME code as `ac_simplify`
+    /// -- both entries are one call into `ac_simplify_impl`.
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged"))]
+    fn ac_simplify_in_mode(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        max_passes: usize,
+        rule_mode: &str,
+        form: &str,
+    ) -> PyResult<Py<PyList>> {
+        ac_simplify_impl(
+            &self.inner,
+            py,
+            tokens,
+            max_passes,
+            parse_rule_mode(rule_mode)?,
+            parse_ac_form(form)?,
+        )
+    }
+
+    /// D39 B1 -- `ac_simplify` with the OPT-IN post-fixpoint exploration phase (ledger
+    /// D39): the deterministic chain runs unchanged to its fixpoint, then a budgeted
+    /// exploration phase proposes expansion moves through the same certified machinery
+    /// and accepts only endpoints STRICTLY below in the serve ordering
+    /// (`ac_ordered_below`'s predicate -- measure-agnostic scaffolding, roadmap B1).
+    /// `explore_budget` counts candidate descents; 0 (the default) never enters the
+    /// phase, so this entry is then byte-identical to `ac_simplify` (the ledger's
+    /// effort=0 semantics). The public `effort=` API is deliberately NOT wired here
+    /// (roadmap B7); this is the scaffolding's FFI boundary, contracts (empty input,
+    /// malformed input, forms) exactly as `ac_simplify`.
+    #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false, form="tagged", explore_budget=0))]
+    fn ac_simplify_explore(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        max_passes: usize,
+        wildcard_all: bool,
+        form: &str,
+        explore_budget: usize,
+    ) -> PyResult<Py<PyList>> {
+        let form = parse_ac_form(form)?;
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
         ensure_ac_well_formed(&self.inner, &tokens)?;
         let out = py
             .detach(|| {
-                self.inner
-                    .ac_simplify_proj(&tokens, node_budget, wildcard_all, form)
+                self.inner.ac_explore_proj(
+                    &tokens,
+                    max_passes,
+                    engine::RuleMode::from_wildcard_all(wildcard_all),
+                    form,
+                    explore_budget,
+                )
             })
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
         Ok(PyList::new(py, out)?.into())
@@ -329,24 +457,39 @@ impl PyEngine {
     /// The PRETTY INFIX rendering of the AC-simplified expression:
     /// `x8 + 1.2*x3`, `-x0/3`, `(x0 + 1)^2`, `sin(x0)`. Round-trips through `parse`
     /// (the reserved constant names `pi`/`e`/`inf`/`nan` read back as constants).
-    #[pyo3(signature = (tokens, node_budget=48, wildcard_all=false))]
+    #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false))]
     fn ac_simplify_infix(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
-        node_budget: usize,
+        max_passes: usize,
         wildcard_all: bool,
     ) -> PyResult<String> {
-        // Empty-input contract, as in `ac_simplify` (H-003): the empty rendering.
-        if tokens.is_empty() {
-            return Ok(String::new());
-        }
-        ensure_ac_well_formed(&self.inner, &tokens)?;
-        py.detach(|| {
-            self.inner
-                .ac_simplify_infix(&tokens, node_budget, wildcard_all)
-        })
-        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        ac_simplify_infix_impl(
+            &self.inner,
+            py,
+            tokens,
+            max_passes,
+            engine::RuleMode::from_wildcard_all(wildcard_all),
+        )
+    }
+
+    /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`).
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default"))]
+    fn ac_simplify_infix_in_mode(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        max_passes: usize,
+        rule_mode: &str,
+    ) -> PyResult<String> {
+        ac_simplify_infix_impl(
+            &self.inner,
+            py,
+            tokens,
+            max_passes,
+            parse_rule_mode(rule_mode)?,
+        )
     }
 
     /// Semantic complexity of an expression, measured on its CANONICAL form (the functional
@@ -370,11 +513,42 @@ impl PyEngine {
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
-        node_budget: usize,
+        max_passes: usize,
     ) -> PyResult<(u64, u64, Vec<String>)> {
         ensure_tokens_are_tokens(&tokens)?;
-        py.detach(|| self.inner.ac_judge(&tokens, node_budget))
+        py.detach(|| self.inner.ac_judge(&tokens, max_passes))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+    }
+
+    /// THE DEDUP KEY (internal): the BARE-CONTEXT canonical serialization of each
+    /// expression -- exactly the internal form the rule loader (`AcRules::translate`)
+    /// builds for a rule side, in the engine's native tagged projection. Batched: a
+    /// ruleset is keyed side-by-side and one shared context serves the whole list.
+    /// `None` for an unparseable side, so the caller can fall back to the spelling
+    /// instead of failing a whole ruleset on one malformed entry.
+    ///
+    /// NOT interchangeable with `to_prefix`/`to_tagged`: those run the rewrite pass under
+    /// the LOADED RULESET, which on acj-4-3 turns `* (-1) asin _0` into `asin neg _0` --
+    /// that rule's own RHS. See `Engine::ac_canonical_key`.
+    /// Census of the nodes `mu` CHARGES, over the bare canonical forms of a batch.
+    /// The unit any symbol-cost table must be derived over -- serialized tokens are not it.
+    fn ac_node_census(
+        &self,
+        py: Python<'_>,
+        exprs: Vec<Vec<String>>,
+    ) -> PyResult<std::collections::HashMap<String, u64>> {
+        Ok(py.detach(|| self.inner.ac_node_census(&exprs)))
+    }
+
+    fn ac_canonical_keys(
+        &self,
+        py: Python<'_>,
+        exprs: Vec<Vec<String>>,
+    ) -> PyResult<Vec<Option<Vec<String>>>> {
+        for e in &exprs {
+            ensure_tokens_are_tokens(e)?;
+        }
+        Ok(py.detach(|| self.inner.ac_canonical_keys(&exprs)))
     }
 
     fn ac_complexity(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<u64> {
@@ -397,6 +571,52 @@ impl PyEngine {
     /// minted). Forces the lazy translation.
     fn ac_rules_info(&self, py: Python<'_>) -> PyResult<(usize, usize, usize, usize)> {
         Ok(py.detach(|| self.inner.ac_rules_info()))
+    }
+
+    /// The SERVED rule set -- asset rules AND load-minted orientation twins -- as
+    /// `(lhs, rhs, source)` triples in the explicit projection, where `source` indexes the
+    /// artifact ruleset. The audit surface for "judge what the engine serves, not what the
+    /// artifact says": the twins exist only after translation, so a sweep that reads
+    /// `rules.json` never sees them. Forces the lazy translation.
+    fn ac_served_rules(&self, py: Python<'_>) -> PyResult<Vec<ServedRule>> {
+        Ok(py.detach(|| self.inner.ac_served_rules()))
+    }
+
+    /// The four translation counts for ANY mode's served set (`"default"` / `"real"` /
+    /// `"corpus"`). `ac_rules_info` stays the DEFAULT mode's tuple, unwidened -- it is
+    /// pinned by the corpus gate, and answering it must never force another mode's index
+    /// to be built. Forces the named mode's lazy translation, and only that one.
+    #[pyo3(signature = (rule_mode="default"))]
+    fn ac_rules_info_in_mode(
+        &self,
+        py: Python<'_>,
+        rule_mode: &str,
+    ) -> PyResult<(usize, usize, usize, usize)> {
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner.ac_rules_info_in_mode(mode)))
+    }
+
+    /// [`PyEngine::ac_served_rules`] for ANY mode: what that mode actually fires, with
+    /// `source` indexing THAT MODE'S OWN file. The judge surface for the triple.
+    #[pyo3(signature = (rule_mode="default"))]
+    fn ac_served_rules_in_mode(
+        &self,
+        py: Python<'_>,
+        rule_mode: &str,
+    ) -> PyResult<Vec<ServedRule>> {
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner.ac_served_rules_in_mode(mode)))
+    }
+
+    /// How many rules this mode's OWN file was loaded with, BEFORE translation -- `None`
+    /// when the mode HAS no file of its own and therefore serves the default set.
+    ///
+    /// `None` vs `Some(0)` is the load-side statement the whole design rests on: "this
+    /// mode names no set" vs "this mode names an EMPTY set and serves nothing". Builds no
+    /// index -- it is a count of raw loaded pairs.
+    #[pyo3(signature = (rule_mode="default"))]
+    fn mode_rules_len(&self, rule_mode: &str) -> PyResult<Option<usize>> {
+        Ok(self.inner.mode_rules_len(parse_rule_mode(rule_mode)?))
     }
 
     /// Licence-registry load-consumer audit (C1.20): rules refused at AC load by the
@@ -491,6 +711,32 @@ impl PyEngine {
         };
         ensure_tokens_are_tokens(&tokens)?;
         py.detach(|| self.inner.prefix_to_infix(&tokens, power_mode, realization))
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    /// SYNTACTIC prefix -> tagged regrouping (`forms.rs`): the notation half of the
+    /// conversion/simplification split. Never consults the ruleset.
+    fn to_tagged_syntactic(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
+        ensure_tokens_are_tokens(&tokens)?;
+        let out = py
+            .detach(|| self.inner.to_tagged_syntactic(&tokens))
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(PyList::new(py, out)?.into())
+    }
+
+    /// SYNTACTIC tagged -> explicit binary prefix expansion (`forms.rs`).
+    fn to_prefix_syntactic(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
+        ensure_tokens_are_tokens(&tokens)?;
+        let out = py
+            .detach(|| self.inner.to_prefix_syntactic(&tokens))
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(PyList::new(py, out)?.into())
+    }
+
+    /// Well-formedness in either token dialect; `ValueError` names the malformation.
+    fn check_form(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<()> {
+        ensure_tokens_are_tokens(&tokens)?;
+        py.detach(|| self.inner.check_form(&tokens))
             .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
@@ -680,12 +926,12 @@ impl PyEngine {
     /// certificates. Rows `(carrier_prefix, exp_token, odd_neg_int, has_div_factor,
     /// [(factor_prefix, nzae, nonneg), ..])` -- the F80 nesting classification's
     /// bridge. Read-only diagnostics; nothing feeds the chain.
-    #[pyo3(signature = (tokens, node_budget=48))]
+    #[pyo3(signature = (tokens, max_passes=48))]
     fn ac_odd_neg_carriers(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
-        node_budget: usize,
+        max_passes: usize,
     ) -> PyResult<
         Vec<(
             Vec<String>,
@@ -696,7 +942,7 @@ impl PyEngine {
         )>,
     > {
         ensure_ac_well_formed(&self.inner, &tokens)?;
-        py.detach(|| self.inner.ac_odd_neg_carriers(&tokens, node_budget))
+        py.detach(|| self.inner.ac_odd_neg_carriers(&tokens, max_passes))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
@@ -858,7 +1104,7 @@ impl PyEngine {
     /// short-circuit + candidate scan (no-constant test / constant fit) + selection. Returns
     /// the chosen target token list, or None. `candidates` = the candidate library (expressions
     /// up to max_target); for the resident path see `build_candidate_library`/`find_rule_lib`.
-    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, fold_filter=true))]
+    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule(
         &self,
@@ -876,7 +1122,6 @@ impl PyEngine {
         rtol: f64,
         atol: f64,
         min_informative: Option<usize>,
-        fold_filter: bool,
     ) -> PyResult<Option<Vec<String>>> {
         ensure_tokens_are_tokens(&source)?;
         for c in &candidates {
@@ -901,7 +1146,6 @@ impl PyEngine {
                 rtol,
                 atol,
                 mi,
-                fold_filter,
             )
         })
         .map_err(PyValueError::new_err)
@@ -909,9 +1153,9 @@ impl PyEngine {
 
     /// OFFLINE miner: build a RESIDENT candidate library once per mine (precompiles every
     /// candidate's tape + precomputes const-free `y`). Pass the returned handle to
-    /// `find_rule_lib`. `fold_filter` (default on) drops var-free candidates of length >= 2 --
-    /// the sound "candidate minimization" lever; see `worker::CandidateLibrary::build`.
-    #[pyo3(signature = (candidates, var_names, x_flat, n_rows, fold_filter=true))]
+    /// `find_rule_lib`. Var-free candidates of length >= 2 are dropped unconditionally --
+    /// the library mirrors the emit guard; see `worker::CandidateLibrary::build`.
+    #[pyo3(signature = (candidates, var_names, x_flat, n_rows))]
     fn build_candidate_library(
         &self,
         py: Python<'_>,
@@ -919,20 +1163,14 @@ impl PyEngine {
         var_names: Vec<String>,
         x_flat: Vec<f64>,
         n_rows: usize,
-        fold_filter: bool,
     ) -> PyResult<PyCandidateLibrary> {
         for c in &candidates {
             ensure_tokens_are_tokens(c)?;
         }
         let inner = py
             .detach(|| {
-                self.inner.build_candidate_library(
-                    &candidates,
-                    &var_names,
-                    &x_flat,
-                    n_rows,
-                    fold_filter,
-                )
+                self.inner
+                    .build_candidate_library(&candidates, &var_names, &x_flat, n_rows)
             })
             .map_err(PyValueError::new_err)?;
         Ok(PyCandidateLibrary { inner })
@@ -1044,8 +1282,12 @@ impl PyEngine {
             // strict descent stopped refusing respells -- the skeleton guard is the
             // doctrine ("resolution recovers structure, never respells literals")
             // made structural. Fail closed on unparseable sides.
+            // One mu for the mark, used TWICE: as the resolved-target acceptance threshold
+            // and as the scan bound. They were separate criteria (mu vs a token ceiling);
+            // the ruling makes them one, so they must read the same number.
+            let mark_mu = mark.as_ref().and_then(|m| self.inner.ac_complexity(m));
             let accept_resolved = mark.as_ref().map(|m| {
-                let mark_c = self.inner.ac_complexity(m);
+                let mark_c = mark_mu;
                 move |t: &[String]| {
                     matches!(
                         (self.inner.ac_complexity(t), mark_c),
@@ -1057,6 +1299,7 @@ impl PyEngine {
                 &source,
                 simplified_length,
                 max_target,
+                mark_mu,
                 lib,
                 challenges,
                 retries,
@@ -1084,6 +1327,44 @@ impl PyEngine {
         }
         self.pushed_rules_digest = pushed_rules_digest(&rules);
         self.inner.set_rules(rules);
+        Ok(())
+    }
+
+    /// Install ONE MODE'S OWN COMPLETE RULE SET -- `"real"` (`rules_real.json`) or
+    /// `"corpus"` (`rules_corpus.json`), each a self-contained file carrying the core
+    /// rules AND that mode's own, never a supplement to `rules.json`.
+    ///
+    /// `rules=None` RETRACTS the set, and that mode falls back to the default one.
+    /// `rules=[]` is a DIFFERENT call: it installs an EMPTY set, and that mode then
+    /// serves nothing. Do not collapse them -- the distinction is what makes "the mode's
+    /// set is exactly the file it names" a statement rather than an inference.
+    ///
+    /// `rule_mode="default"` routes to `set_rules`, so there is one way to replace the
+    /// default set and it keeps that path's digest bookkeeping.
+    ///
+    /// The base-rule digest (`rules_in_sync`) deliberately does NOT cover these sets: it
+    /// answers "does the core hold the DEFAULT recipe it was pushed", and the other two
+    /// sets are separate recipes carried by the Python shim's own attributes, which
+    /// re-push them on every core rebuild.
+    #[pyo3(signature = (rule_mode, rules))]
+    fn set_mode_rules(
+        &mut self,
+        rule_mode: &str,
+        rules: Option<Vec<(Vec<String>, Vec<String>)>>,
+    ) -> PyResult<()> {
+        let mode = parse_rule_mode(rule_mode)?;
+        // H-043/D4: same cap + alphabet as every other token-taking entry -- rule compile
+        // parses each side into a tree, recursively.
+        if let Some(rules) = &rules {
+            for (lhs, rhs) in rules {
+                ensure_tokens_are_tokens(lhs)?;
+                ensure_tokens_are_tokens(rhs)?;
+            }
+        }
+        if mode == engine::RuleMode::Default {
+            return self.set_rules(rules.unwrap_or_default());
+        }
+        self.inner.set_mode_rules(mode, rules);
         Ok(())
     }
 

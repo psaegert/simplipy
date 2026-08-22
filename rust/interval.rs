@@ -27,6 +27,24 @@ use crate::operators::Operators;
 
 const INF: f64 = f64::INFINITY;
 
+// ===== f64 SATURATION THRESHOLDS =============================================
+// DERIVED, never declared: the image-derivation probe probes the deployed evaluator
+// and bisects to the ulp. These are the points where the f64 implementation ATTAINS a
+// value the idealized function only approaches -- so an interval that reaches them has a
+// CLOSED bound, not the open one mathematics prescribes.
+//
+// Modelling the deployed evaluator rather than the textbook function is the point: rules
+// certified against exact-real images are applied by an f64 evaluator, and every place the
+// two differ is a place a certified rule can be false in production.
+//
+// HOST-DEPENDENT by nature (libm differs; D20 already routes minting to the reference mint host for that
+// reason). Derived on glibc 2.43; re-derive per host and stamp with the libm.
+/// Smallest x with `tanh(x) == 1.0` exactly; just below it tanh gives 0.9999999999999999.
+const TANH_SAT: f64 = 18.990341103219276;
+/// Largest x with `exp(x) == 0.0` exactly; just above it exp gives 5e-324, the smallest
+/// subnormal.
+const EXP_UNDERFLOW: f64 = -745.1332191019412;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
     Finite,
@@ -50,6 +68,21 @@ pub struct Vs {
     /// POSITIVE-MEASURE semantics the domain gate's witness needs. Set only where PROVEN null;
     /// false is the conservative default (= the pre-flag behaviour, which blocks the witness).
     pub fin_null: bool,
+    /// The `lo` / `hi` bound is CLOSED **and attained on a POSITIVE-MEASURE x-set**, because a
+    /// modelled f64 SATURATION pins a whole ray of the input to it (`attain_pt`): `exp` is
+    /// exactly +0 on the entire ray below `EXP_UNDERFLOW`, `tanh` exactly +-1 past +-`TANH_SAT`.
+    ///
+    /// This is the bit that separates the two shapes a CLOSED bound can have, which are
+    /// otherwise identical in this struct:
+    ///   * `cosh(exp C)`'s `lo = 1` -- attained on the whole ray `C <= EXP_UNDERFLOW`; and
+    ///   * `cosh(inv C)`'s `lo = 1` -- the mathematical minimum, attained (in exact arithmetic)
+    ///     only where `inv C = 0`, which is a NULL set and in fact never.
+    ///
+    /// A domain edge grazed by the first is real support; grazed by the second it is an
+    /// over-approximation artifact. PROVEN-only: `false` is the conservative default and
+    /// reproduces the pre-flag behaviour everywhere, so under-propagation is fail-CLOSED.
+    pub sat_lo: bool,
+    pub sat_hi: bool,
     pub pinf: bool,
     pub ninf: bool,
     pub nan: bool,
@@ -64,6 +97,8 @@ impl Vs {
             hi_open: false,
             has_fin: false,
             fin_null: false,
+            sat_lo: false,
+            sat_hi: false,
             pinf: false,
             ninf: false,
             nan: false,
@@ -78,6 +113,8 @@ impl Vs {
             hi_open: true,
             has_fin: true,
             fin_null: false,
+            sat_lo: false,
+            sat_hi: false,
             pinf: false,
             ninf: false,
             nan: false,
@@ -91,6 +128,8 @@ impl Vs {
             hi_open,
             has_fin: true,
             fin_null: false,
+            sat_lo: false,
+            sat_hi: false,
             pinf: false,
             ninf: false,
             nan: false,
@@ -187,6 +226,58 @@ impl Vs {
         }
         Class::Empty
     }
+    /// Mark `v` as ATTAINED. `merge_pt` only WIDENS, so it cannot close a bound that
+    /// already sits at `v` but was recorded open -- and that is exactly the case the f64
+    /// saturations produce (`tanh`'s hi is already 1.0, open, when f64 attains 1.0).
+    fn attain_pt(&mut self, v: f64) {
+        // `merge_pt` clears `fin_null` -- conservative for a point of UNKNOWN support, but
+        // wrong here: attaining a value does not change WHERE the finite part is supported,
+        // only which value that support maps to. `mono` has already propagated the support
+        // character from the operand, so a PROVEN-null finite part must survive.
+        //
+        // Dropping it collapses the positive-measure / measure-zero separation this layer
+        // exists to maintain, and the domain gate reads exactly that predicate: with the
+        // marking lost, `exp(log x)` on [-64, 0] reported `defined_pm` and suppressed its
+        // own witness, halving the measured extension of `exp log x0 -> x0` from 64 to 32.
+        // Suppressed witnesses are unsound rules NOT rejected, so the failure was on the
+        // fail-open side.
+        let was_null = self.has_fin && self.fin_null;
+        self.merge_pt(v);
+        if was_null {
+            self.fin_null = true;
+        }
+        if self.has_fin {
+            if self.lo == v {
+                self.lo_open = false;
+                // The saturation attains `v` on a whole RAY of the operand, not at an
+                // isolated point: record it, so a later domain graze at this bound can be
+                // told apart from the mathematical-extremum graze that only LOOKS the same.
+                self.sat_lo = true;
+            }
+            if self.hi == v {
+                self.hi_open = false;
+                self.sat_hi = true;
+            }
+        }
+    }
+
+    /// Is `t` attained on a POSITIVE-MEASURE x-set? True only where PROVEN (`attain_pt`
+    /// provenance survived to this bound); `false` means "not proven", never "proven not".
+    fn attains_pm(&self, t: f64) -> bool {
+        self.has_fin
+            && ((self.lo == t && !self.lo_open && self.sat_lo)
+                || (self.hi == t && !self.hi_open && self.sat_hi))
+    }
+
+    /// Does this value set reach `t` or beyond, on the finite side?
+    fn reaches_up_to(&self, t: f64) -> bool {
+        self.pinf || (self.has_fin && (self.hi > t || (self.hi == t && !self.hi_open)))
+    }
+
+    fn reaches_down_to(&self, t: f64) -> bool {
+        self.ninf || (self.has_fin && (self.lo < t || (self.lo == t && !self.lo_open)))
+    }
+
     fn merge_pt(&mut self, v: f64) {
         self.fin_null = false; // a merged point has unknown x-support: conservative
         if !self.has_fin {
@@ -195,14 +286,22 @@ impl Vs {
             self.hi = v;
             self.lo_open = false;
             self.hi_open = false;
+            self.sat_lo = false;
+            self.sat_hi = false;
         } else {
+            // Only a bound the merge MOVES loses its provenance -- the merged point has
+            // unknown support, so the new bound is unproven. A bound left where it was keeps
+            // what it had proven (`u_tanh` attains +1 and then -1: the second call must not
+            // erase the first).
             if v < self.lo {
                 self.lo = v;
                 self.lo_open = false;
+                self.sat_lo = false;
             }
             if v > self.hi {
                 self.hi = v;
                 self.hi_open = false;
+                self.sat_hi = false;
             }
         }
     }
@@ -313,7 +412,10 @@ fn clip(v: &Vs, dlo: f64, dhi: f64) -> (Option<Vs>, bool) {
     if v.lo == v.hi {
         let c = v.lo;
         if c >= dlo && c <= dhi {
-            return (Some(Vs::interval(c, c, false, false)), false);
+            let mut kept = Vs::interval(c, c, false, false);
+            kept.sat_lo = v.sat_lo;
+            kept.sat_hi = v.sat_hi;
+            return (Some(kept), false);
         }
         return (None, true);
     }
@@ -340,14 +442,30 @@ fn clip(v: &Vs, dlo: f64, dhi: f64) -> (Option<Vs>, bool) {
         // `cos 0 -> 1`, `acosh 1 -> 0`); for a variable/Const-parameterized family the
         // measure-aware consumer (`value_class`) may still null-kill it (R3), restoring
         // the continuum verdicts. `defined_pm` witnesses stay blocked either way.
+        //
+        // NULL-supported is the DEFAULT, not the verdict. It is right for the artifact shape
+        // above and for a mathematical extremum that grazes the edge (`cosh(inv C)`'s `lo = 1`
+        // is reached only where `inv C = 0`, i.e. nowhere). It is WRONG when the operand
+        // SATURATES onto the edge: `cosh(exp C) = 1` on the entire ray `C <= EXP_UNDERFLOW`,
+        // so `acos(cosh(exp C))` really is 0 on positive measure (measured: 2005 of 4177
+        // samples), and calling that null is a finite part silently deleted. `sat_lo`/`sat_hi`
+        // carry exactly that proof; absent it we keep the conservative null marking.
+        let pm = v.attains_pm(lo);
         let mut kept = Vs::interval(lo, hi, false, false);
-        kept.fin_null = true;
+        kept.fin_null = !pm;
+        kept.sat_lo = pm;
+        kept.sat_hi = pm;
         return (Some(kept), true);
     }
     let escaped = v.lo < dlo || v.hi > dhi;
     let lo_open = if v.lo >= dlo { v.lo_open } else { false };
     let hi_open = if v.hi <= dhi { v.hi_open } else { false };
-    (Some(Vs::interval(lo, hi, lo_open, hi_open)), escaped)
+    let mut kept = Vs::interval(lo, hi, lo_open, hi_open);
+    // A bound the clip did not move keeps its provenance; a clipped one is a domain edge,
+    // with no claim to attainment.
+    kept.sat_lo = v.sat_lo && lo == v.lo;
+    kept.sat_hi = v.sat_hi && hi == v.hi;
+    (Some(kept), escaped)
 }
 
 /// monotone-increasing continuous op on a domain, with optional REGION nan outside it and
@@ -401,34 +519,73 @@ fn domain_op(
             }
         }
     }
+    // ATTAINED POLE (not an overflow). The module's standing doctrine -- "a float OVERFLOW
+    // means the value is finite but unrepresentable -> an unbounded EDGE, never an inf value"
+    // -- is about `safe()`, where `f` of a REPRESENTABLE argument leaves f64's range. It says
+    // nothing about this case, which is the opposite one: the argument itself lands exactly on
+    // a POLE of `f`, where the true value IS infinite and the evaluator returns that infinity.
+    //
+    // The pole is normally measure-zero (a continuum sweeping through `atanh`'s +-1 hits it on
+    // a null set) and the EDGE encoding is then right: unbounded range, no inf component. But
+    // when the operand SATURATES onto the domain edge, the whole clipped overlap degenerates to
+    // that one point AND it is reached on positive measure -- `cosh(exp C)` is exactly 1 on the
+    // ray `C <= EXP_UNDERFLOW`, so `atanh(cosh(exp C))` is +inf on 2005 of 4177 sampled C and
+    // FINITE on none of them. Reporting an unbounded finite EDGE there claims a finite value the
+    // evaluator never produces; the honest components are `pinf`/`ninf` with `has_fin = false`.
+    //
+    // Gated on the PROOF (`!fin_null`, set by `clip` only from `attain_pt` provenance), so an
+    // unproven graze keeps the previous EDGE encoding untouched.
+    if let Some(cl) = clipped.as_ref() {
+        if cl.lo == cl.hi && !cl.fin_null {
+            let pole = if cl.lo == dlo {
+                inf_at_lo
+            } else if cl.hi == dhi {
+                inf_at_hi
+            } else {
+                None
+            };
+            if let Some(sign) = pole {
+                if sign > 0.0 {
+                    r.pinf = true
+                } else {
+                    r.ninf = true
+                }
+                return r;
+            }
+        }
+    }
     if let Some(cl) = clipped {
         // `computed` marks endpoint images that came from f64 evaluation of `f` -- ONLY
         // those are stepped outward (H-019). Pole reaches and caller limits are exact
         // semantics; an irrational limit is the CALLER's job to pre-step (atan).
-        let (mut a, mut a_open, mut a_computed) = if pole_lo && cl.lo == dlo {
-            (-INF, true, false)
+        // `sat` rides along: only an EXACT image of a proven-attained bound stays proven.
+        let (mut a, mut a_open, mut a_computed, mut a_sat) = if pole_lo && cl.lo == dlo {
+            (-INF, true, false, false)
         } else if cl.lo.is_infinite() {
-            (lo_lim.unwrap_or(-INF), true, false)
+            (lo_lim.unwrap_or(-INF), true, false, false)
         } else {
-            (safe(&f, cl.lo), cl.lo_open, true)
+            (safe(&f, cl.lo), cl.lo_open, true, cl.sat_lo)
         };
-        let (mut b, mut b_open, mut b_computed) = if pole_hi && cl.hi == dhi {
-            (INF, true, false)
+        let (mut b, mut b_open, mut b_computed, mut b_sat) = if pole_hi && cl.hi == dhi {
+            (INF, true, false, false)
         } else if cl.hi.is_infinite() {
-            (hi_lim.unwrap_or(INF), true, false)
+            (hi_lim.unwrap_or(INF), true, false, false)
         } else {
-            (safe(&f, cl.hi), cl.hi_open, true)
+            (safe(&f, cl.hi), cl.hi_open, true, cl.sat_hi)
         };
         if a.is_infinite() {
             a_open = true;
+            a_sat = false;
         }
         if b.is_infinite() {
             b_open = true;
+            b_sat = false;
         }
         if !inc {
             std::mem::swap(&mut a, &mut b);
             std::mem::swap(&mut a_open, &mut b_open);
             std::mem::swap(&mut a_computed, &mut b_computed);
+            std::mem::swap(&mut a_sat, &mut b_sat);
         }
         // EXACT HITS never widen: libm guarantees these identically and they are true
         // (f(0) = 0 for the odd functions, exp(0) = cos(0) = cosh(0) = 1, log(1) =
@@ -441,15 +598,19 @@ fn domain_op(
         let (src_a, src_b) = if inc { (cl.lo, cl.hi) } else { (cl.hi, cl.lo) };
         if a_computed && !exact_hit(src_a, a) {
             a = out_lo(a, ULP_LIBM);
+            a_sat = false; // a stepped endpoint is no longer the attained value
         }
         if b_computed && !exact_hit(src_b, b) {
             b = out_hi(b, ULP_LIBM);
+            b_sat = false;
         }
         r.has_fin = true;
         r.lo = a;
         r.hi = b;
         r.lo_open = a_open;
         r.hi_open = b_open;
+        r.sat_lo = a_sat && !a_open;
+        r.sat_hi = b_sat && !b_open;
         // Image of a null x-support is null-supported; a degenerate boundary overlap
         // kept by `clip` (H-019) carries its own null marking.
         r.fin_null = v.fin_null || cl.fin_null;
@@ -476,6 +637,8 @@ fn u_neg(v: &Vs) -> Vs {
         r.hi = -v.lo;
         r.lo_open = v.hi_open;
         r.hi_open = v.lo_open;
+        r.sat_lo = v.sat_hi;
+        r.sat_hi = v.sat_lo;
         r.fin_null = v.fin_null;
     }
     r
@@ -612,13 +775,16 @@ fn u_exp(v: &Vs) -> Vs {
     if r.has_fin && r.lo <= 0.0 {
         r.lo = 0.0;
         r.lo_open = true;
+        r.sat_lo = false;
     }
     r.nan = v.nan;
     if v.pinf {
         r.pinf = true;
     }
-    if v.ninf {
-        r.merge_pt(0.0);
+    // f64 UNDERFLOWS to exactly +0 below EXP_UNDERFLOW (and at -inf). The clamp above
+    // restored the mathematical OPEN floor; the evaluator attains it, so close it.
+    if v.reaches_down_to(EXP_UNDERFLOW) {
+        r.attain_pt(0.0);
     }
     r
 }
@@ -654,16 +820,20 @@ fn u_tanh(v: &Vs) -> Vs {
     if r.has_fin && r.lo <= -1.0 {
         r.lo = -1.0;
         r.lo_open = true;
+        r.sat_lo = false;
     }
     if r.has_fin && r.hi >= 1.0 {
         r.hi = 1.0;
         r.hi_open = true;
+        r.sat_hi = false;
     }
-    if v.pinf {
-        r.merge_pt(1.0);
+    // f64 ATTAINS +-1 past +-TANH_SAT (and at +-inf). `merge_pt` cannot express that --
+    // hi is already 1.0 and open -- so the attainment must close the bound explicitly.
+    if v.reaches_up_to(TANH_SAT) {
+        r.attain_pt(1.0);
     }
-    if v.ninf {
-        r.merge_pt(-1.0);
+    if v.reaches_down_to(-TANH_SAT) {
+        r.attain_pt(-1.0);
     }
     r
 }
@@ -817,6 +987,10 @@ fn u_cosh(v: &Vs) -> Vs {
         if zero_attained {
             r.lo = 1.0; // the a-priori minimum, attained at 0: exact, never widened
             r.lo_open = false;
+            // ...but attained on POSITIVE MEASURE only if the operand attains 0 there.
+            // `exp C` does (saturation ray); `inv C` merely has 0 inside its over-approximated
+            // range and in truth never reaches it.
+            r.sat_lo = v.attains_pm(0.0);
             r.hi = if v.lo.is_infinite() || v.hi.is_infinite() {
                 INF
             } else if v.lo == 0.0 && v.hi == 0.0 {
@@ -2925,7 +3099,7 @@ pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators) -> bool {
     zsn(&renamed, ops, 0, true)
 }
 
-/// `e2` (owner-ratified 2026-08-11, audit F81; design in remine/E2_DESIGN.md):
+/// `e2` (owner-ratified 2026-08-11, audit F81; design in the research harness):
 /// the denominator-clearing fallback (`cleared_witness`) fires only from the
 /// `zero_set_null_generic_const` entry -- the odd-negative distribution
 /// licence's scoped certificate, mirroring E1's deliberate scoping. The plain
@@ -3102,7 +3276,7 @@ fn ground_leaf(t: &[String], i: usize, ops: &Operators) -> Option<usize> {
 
 // ---------------------------------------------------------------------------
 // E2 -- the denominator-clearing certificate (owner-ratified 2026-08-11, audit
-// F81; full design + soundness chain in remine/E2_DESIGN.md).
+// F81; full design + soundness chain in the research harness).
 //
 // A rational-level factor is rewritten as a PAIR (N, D) of ENTIRE spellings
 // with factor = N/D wherever the factor is defined, and the EXISTING identity-
@@ -3914,6 +4088,7 @@ pub fn defined_measure_p_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::RuleMode;
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
@@ -4014,6 +4189,110 @@ mod tests {
     /// surviving device shipping a `-inf` LITERAL for `inv(0/tanh(-2))` while every
     /// structurally-collapsing sibling spelling shipped +inf. Deployment's -inf on the -0
     /// slice at runtime is documented measurement error (§9.2), never a reachable value.
+    /// A pole reached at a SATURATION-ATTAINED argument is an INF VALUE, not an unbounded
+    /// finite edge. `exp` is exactly +0 on the whole ray below `EXP_UNDERFLOW` and `tanh`
+    /// exactly +-1 past +-`TANH_SAT`, so `cosh(exp C) = 1` and `exp(exp C) = 1` on a ray of
+    /// POSITIVE measure -- putting `atanh`'s pole and `log`'s pole at an attained argument.
+    ///
+    /// This is NOT the overflow case the module header rules on ("a float OVERFLOW means the
+    /// value is finite but unrepresentable -> an unbounded EDGE, never an inf value"): there,
+    /// `f` of a representable argument leaves f64's range and the true value is finite. Here
+    /// the argument lands exactly ON a pole and the true value IS infinite -- which is what the
+    /// deployed evaluator returns, on 2005 of 4177 sampled C for `atanh(cosh(exp C))`, with a
+    /// finite value on NONE of them. Reporting `has_fin` there certifies a finite value the
+    /// evaluator never produces.
+    #[test]
+    fn an_attained_pole_is_an_infinity_not_an_unbounded_edge() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        for src in [
+            &["atanh", "cosh", "exp", "<constant>"][..],
+            &["atanh", "exp", "exp", "<constant>"][..],
+        ] {
+            let v = value_set(&s(src), ops, &Vs::reals()).unwrap();
+            assert!(
+                v.pinf && !v.has_fin && v.nan,
+                "{src:?}: atanh at an attained +1 is +inf a.e. on the ray, never finite: {v:?}"
+            );
+            assert_eq!(value_class(&s(src), ops), Some(Class::Mixed));
+        }
+        // log at an attained -0: `neg(exp C)` is exactly -0 on the same ray.
+        let v = value_set(&s(&["log", "neg", "exp", "<constant>"]), ops, &Vs::reals()).unwrap();
+        assert!(
+            v.ninf && !v.has_fin && v.nan,
+            "log at an attained zero is -inf, never an unbounded finite edge: {v:?}"
+        );
+        assert_eq!(
+            value_class(&s(&["log", "neg", "exp", "<constant>"]), ops),
+            Some(Class::Mixed)
+        );
+    }
+
+    /// The twin of the above on the FINITE side: where the grazed domain edge carries no pole,
+    /// the attained graze is a real finite value on positive measure, so it must survive the
+    /// R3 null-kill and classify Mixed -- not NAN. `acos(cosh(exp C)) = 0` on 2005 of 4177
+    /// sampled C. The pre-image branch kept the graze but marked it null, which deleted a
+    /// finite part the evaluator really produces.
+    #[test]
+    fn an_attained_graze_is_supported_on_positive_measure() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        for src in [
+            &["acos", "cosh", "exp", "<constant>"][..],
+            &["asin", "exp", "exp", "<constant>"][..],
+            &["acosh", "tanh", "neg", "<constant>"][..],
+            &["acosh", "neg", "tanh", "<constant>"][..],
+        ] {
+            let v = value_set(&s(src), ops, &Vs::reals()).unwrap();
+            assert!(
+                v.has_fin && !v.fin_null && v.nan,
+                "{src:?}: the graze is attained on a saturation ray, not on a null set: {v:?}"
+            );
+            assert_eq!(
+                value_class(&s(src), ops),
+                Some(Class::Mixed),
+                "{src:?} is finite on one ray and nan on another: neither collapse is licensed"
+            );
+        }
+    }
+
+    /// ...and the conservatism it must NOT overturn. `cosh(inv C)`'s `lo = 1` is the
+    /// MATHEMATICAL minimum: reached only where `inv C = 0`, which the interval layer merely
+    /// over-approximates as reachable and exact arithmetic never reaches at all. No `attain_pt`
+    /// provenance stands behind it, so the graze stays NULL-supported and these keep the
+    /// verdicts they had before the f64-image work -- the flag is PROVEN-only, and absence of
+    /// proof stays fail-closed.
+    #[test]
+    fn an_unproven_graze_keeps_its_conservative_null_marking() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        for src in [
+            &["acos", "cosh", "inv", "<constant>"][..],
+            &["asin", "cosh", "inv", "<constant>"][..],
+            &["atanh", "cosh", "inv", "<constant>"][..],
+        ] {
+            let v = value_set(&s(src), ops, &Vs::reals()).unwrap();
+            assert!(
+                v.has_fin && v.fin_null && !v.pinf && !v.ninf,
+                "{src:?}: an unproven graze must stay the null-marked edge: {v:?}"
+            );
+            assert_eq!(value_class(&s(src), ops), Some(Class::Nan));
+        }
+        // The outward-rounding artifact graze (`acosh(cos x0)`, cos's enclosure [1-8u, 1]
+        // meeting acosh's domain in {1}) is the shape the null marking was introduced for.
+        let v = value_set(&s(&["acosh", "cos", "x0"]), ops, &Vs::reals()).unwrap();
+        assert!(
+            v.has_fin && v.fin_null,
+            "the artifact graze lost its null marking -- witnesses would unblock: {v:?}"
+        );
+    }
+
     #[test]
     fn inverse_of_a_point_zero_is_the_positive_pole() {
         let Some(e) = crate::test_engine() else {
@@ -4120,7 +4399,7 @@ mod tests {
     }
 
     /// E2 (F81, owner-ratified 2026-08-11; design + soundness chain in
-    /// remine/E2_DESIGN.md): the denominator-clearing certificate -- rational-
+    /// the research harness): the denominator-clearing certificate -- rational-
     /// level factors rewrite to an entire numerator N with Z(factor) subset
     /// Z(N), and the EXISTING identity-theorem witness decides N. Unlock pins,
     /// sound-refusal pins, the ratified boundary, the tier-0 ground-literal
@@ -4280,7 +4559,7 @@ mod tests {
             "float(\"-inf\")",
             "np.pi",
         ];
-        let out = e.ac_simplify(&s(&row), 48, false).unwrap();
+        let out = e.ac_simplify(&s(&row), 48, RuleMode::Default).unwrap();
         assert_ne!(
             out,
             s(&["float(\"inf\")"]),

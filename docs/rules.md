@@ -110,7 +110,7 @@ than during every candidate attempt, and memoized (per call, plus a generational
 per-engine cache), which makes `!`-bearing rulesets fast at scale with identical
 verdicts.
 
-These sort gates define the default **`SOUND`** apply-time contract. `Mode.LOSSY`
+These sort gates define the default **`f64`** apply-time contract. `Mode.corpus`
 (see [Soundness modes](guides/simplify.md#soundness-modes)) relaxes them together — every `!`/`$`
 placeholder then binds any subtree with the certificate skipped — which recovers extra
 reductions for training-data canonicalization at the cost of equivalence. Mined rules are
@@ -289,7 +289,8 @@ certified = engine.certify_rules(proposals, hints,
 
 dummies = ["x0", "x1"]
 engine.simplification_rules = deduplicate_rules(
-    engine.simplification_rules + [(s, t) for s, t, _ in certified], dummies)
+    engine.simplification_rules + [(s, t) for s, t, _ in certified], dummies,
+    engine=engine)   # dedup keys on the engine's internal form, not the spelling
 engine.compile_rules()
 ```
 
@@ -401,8 +402,8 @@ simplipy list --type engine
 # --- Available engine assets ---
 # - acj-4-3  [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
 #                         (sources to length 4, targets to length 3), ... Pairs with simplipy >= 0.12.
-# - acj-3-2  [installed]  Complete AC-judged rule mine ... (sources to length 3, targets to length 2), ...
-# - acj-2-1  [installed]  Complete AC-judged rule mine ... (sources to length 2, targets to length 1), ...
+# - acj-3-2               Complete AC-judged rule mine ... (sources to length 3, targets to length 2), ...
+# - acj-2-1               Complete AC-judged rule mine ... (sources to length 2, targets to length 1), ...
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.
 # - ...                   (pre-0.12 assets remain listed for older installs; they refuse to load on 0.12)

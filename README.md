@@ -42,46 +42,48 @@ engine = sp.SimpliPyEngine.load("acj-4-3", install=True)   # a published ruleset
 
 # Simplify prefix expressions
 engine.simplify(('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'))
-# > ('<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>')
+# > ('/', '<constant>', 'log', 'x3')
 
 # Simplify infix expressions
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # > '<constant>/x3'
 ```
 
-Token input returns the engine's native **tagged** form by default (n-ary `+`/`*` bags are
-delimited: `<add> ... </add>`, `<mul> ... </mul>`; tagged output is accepted back as input).
-The `form` parameter selects a different projection of the same canonical answer:
+`simplify` only **simplifies**: it answers in the form it was given -- a `str` in, a `str`
+out; explicit binary prefix in, explicit binary prefix out; the engine's native **tagged**
+form in (n-ary `+`/`*` bags are delimited: `<add> ... </add>`, `<mul> ... </mul>`), tagged
+out. To change the NOTATION, convert -- `to_infix` / `to_prefix` / `to_tagged` are pure
+syntactic conversions that never simplify -- and compose the two:
 
 ```python
 expr = ('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3')
 
-engine.simplify(expr, form='infix')      # the pretty rendering (a str)
-# > '<constant>/log(x3)'
+engine.to_infix(engine.simplify(expr))       # simplify, then render
+# > '<constant> / log(x3)'
 
-engine.simplify(expr, form='explicit')   # binary prefix -- what is_valid / prefix_to_infix read
-# > ('/', '<constant>', 'log', 'x3')
+engine.simplify(engine.to_tagged(expr))      # convert, then simplify: the tagged answer
+# > ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']
 ```
 
 ## Normalization
 
-The root-exported `normalize_skeleton`, `normalize_expression`, and
-`normalize_variable_token` helpers (also available as `simplipy.normalization`)
-canonicalize a prefix token sequence so that two expressions that are "the same"
-up to variable renaming / constant values compare equal. They are pure-string
-helpers with no engine state, so consumers such as holdout matching and
-symbolic-recovery scoring share identical behavior by construction.
+The root-exported `to_skeleton`, `to_expression`, and `normalize_variable_token`
+helpers (also available as `simplipy.normalization`) canonicalize an expression so
+that two expressions that are "the same" up to variable renaming / constant values
+compare equal. Each takes all three forms (infix `str`, explicit prefix, tagged)
+and returns the one it was given; the canonicalization runs through the engine's
+internal state, so the answer does not depend on the dialect you passed.
 
 ```python
 import simplipy as sp
 
-# Skeleton form: variables -> x{n}, numeric literals -> <constant>
-sp.normalize_skeleton(['+', 'v1', '2.5'])
+# Skeleton form: variables -> x{n}, EVERY numeric literal -> <constant>
+sp.to_skeleton(['+', 'v1', '2.5'], engine)
 # > ['+', 'x1', '<constant>']
 
-# Expression form: variables canonicalized, numeric literals kept intact
-sp.normalize_expression(['+', 'V1', '2.5'])
-# > ['+', 'x1', '2.5']
+# Expression form: variables canonicalized, numeric values kept
+sp.to_expression(['+', 'V1', '3'], engine)
+# > ['+', 'x1', '3']
 
 # Classify / canonicalize a single token -> (normalized_token, is_variable)
 sp.normalize_variable_token('X3')

@@ -107,6 +107,18 @@ impl Rat {
 
     /// The integer value, if this is an integer.
     #[inline]
+    /// `ceil(|p/q|)` exactly, in integers -- `None` on overflow. Used by the inverse-pair
+    /// band guard, which needs a magnitude comparison and must not acquire an f64 reading
+    /// (f64 has authority nowhere in the engine; see `to_f64`).
+    pub(crate) fn ceil_abs(&self) -> Option<i128> {
+        let p = self.p.checked_abs()?;
+        let q = self.q.abs();
+        if q == 0 {
+            return None;
+        }
+        p.checked_add(q - 1).map(|n| n / q)
+    }
+
     pub fn as_integer(&self) -> Option<i128> {
         if self.q == 1 {
             Some(self.p)
@@ -254,9 +266,13 @@ impl Rat {
         o.q as u128
     }
 
-    /// The f64 reading of this rational -- f64 has authority nowhere in the engine; this
-    /// exists only as the comparator benchmark's model of the replaced fallback.
-    #[cfg(test)]
+    /// The f64 reading of this rational.
+    ///
+    /// This used to be `#[cfg(test)]`, carrying the note "f64 has authority nowhere in
+    /// the engine". That was true of a single-mode engine and is exactly the sentence the
+    /// mode split overturns: in `Mode.f64` the deployed f64 evaluator IS the authority,
+    /// so the constructor must be able to ask it. `Mode.real` still never calls this --
+    /// there, f64 has authority nowhere, as before.
     pub fn to_f64(self) -> f64 {
         self.p as f64 / self.q as f64
     }

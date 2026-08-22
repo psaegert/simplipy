@@ -33,7 +33,7 @@ engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 
 The guarantee is honest about what it measures: the output is never costlier
 than the input **under μ** — which is a description length, not a token
-count — the default `SOUND` mode is equivalence-preserving and idempotent,
+count — the default `f64` mode is sound as the deployed evaluator computes,
 and everything the engine ships (mined rulesets, soundness certificates,
 verification verdicts) carries provenance that says exactly where it came
 from and on what machine it holds.

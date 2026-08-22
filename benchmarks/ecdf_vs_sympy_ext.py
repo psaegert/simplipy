@@ -5,7 +5,7 @@ Consumes benchmarks/ecdf_vs_sympy_results.pkl (run ecdf_vs_sympy.py first).
 1. NODE-COUNT scoring: the same outputs re-scored by the node count of the explicit
    prefix form (one token = one node of the binary tree): originals and the SymPy
    bridge output are already explicit prefix (len()); SimpliPy outputs are converted
-   tagged -> explicit through the idempotent ``simplify(out, form='explicit')``
+   tagged -> explicit through the idempotent ``simplify(out)``
    (idempotence at scale is gate-verified, so this is a pure form conversion).
    This isolates the yardstick question: mu prices signs and small literals FREE, so
    token-shrinking but mu-neutral rewrites count as "improved" here and as "unchanged"
@@ -54,7 +54,7 @@ def node_scores(corpus, res, e):
     n_orig = np.array([len(r) for r in corpus], dtype=float)
     scored = {'n_orig': n_orig}
     for label, d in res['simplipy'].items():
-        kw = {'mode': Mode.LOSSY} if label.endswith('lossy') else {}
+        kw = {'mode': Mode.corpus} if label.endswith('lossy') else {}
         n = np.array([len(bare.simplify(o, form='explicit', **kw))
                       for o in d['outputs']], dtype=float)
         scored[label] = n
@@ -158,10 +158,10 @@ def region_examples(corpus, res, e, n_per_region=12, seed=20260802):
             # infix of the ORIGINAL without simplifying is not expressible;
             # show explicit prefix for the original and infix for the output
             # (infix form returns a STRING for token input).
-            out_inf = e.simplify(d['outputs'][i], form='infix')
+            out_inf = e.simplify(e.to_infix(d['outputs'][i]))
             lines.append(f'- **row {i}** | mu {mu_orig[i]:.0f} -> {mu_out[i]:.0f} '
                          f'(ratio {ratio[i]:.3f}) | nodes {len(corpus[i])} -> '
-                         f'{len(e.simplify(d["outputs"][i], form="explicit"))}')
+                         f'{len(e.simplify(d["outputs"][i]))}')
             lines.append(f'  - orig: `{" ".join(corpus[i])}`')
             lines.append(f'  - simp: `{out_inf}`')
             if name == 'ratio > 1':

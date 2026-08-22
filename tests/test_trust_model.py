@@ -15,7 +15,8 @@ Two defects, both reproduced on the pre-fix engine before this file existed:
 The fix: an allowlist of canonical spellings (``math``, ``np``, ``scipy``,
 ``simplipy``) checked BEFORE any import, opt-in from outside the config only, and a
 per-engine evaluation namespace. ``np`` -- not ``numpy`` -- is the spelling, because
-``np.pi``/``np.e`` are normative token grammar carried by 316 shipped rules.
+``np.pi``/``np.e`` are normative token grammar carried by 396 rules across the
+shipped triple.
 
 The load-bearing test in this file is
 :meth:`TestConfigIsNotExecutable.test_refusal_happens_before_the_import`: refusing is
@@ -212,7 +213,7 @@ class TestDeployedEvaluationPath:
             variables = sorted({t for t in row if t.startswith('x') and t[1:].isdigit()})
             if not variables:
                 continue
-            simplified = engine.simplify(list(row), form='explicit')
+            simplified = engine.simplify(list(row))
             with_placeholders, constants = explicit_constant_placeholders(
                 simplified, convert_numbers_to_constant=False)
             infix = engine.prefix_to_infix(with_placeholders, realization=True)
@@ -267,3 +268,166 @@ class TestRealizationShapeIsTotal:
         builtin the module docstring promises, reference no module and stay allowed."""
         engine = SimpliPyEngine.from_config(_config(tmp_path, realization))
         assert engine.operator_realizations['probe'] == realization
+
+
+class TestTheWholeDottedPathIsChecked:
+    """SEC-L1 / audit S2: the root is only the FIRST hop, and the reach is in the rest.
+
+    A realization is resolved by attribute traversal in generated source, and a module's
+    attributes include every module IT imported. So ``simplipy.engine.os.system`` starts
+    at a default-trusted root, satisfies the root check, and lands on :func:`os.system`.
+    Reproduced before the fix on a copy of the shipped ``acj-4-3`` config with one line
+    changed: it loaded silently and the marker file appeared at first evaluation.
+
+    The door was not one hole to be blacklisted. A walk of the module-to-module attribute
+    graph from the four default roots reaches 53 distinct top-level packages within three
+    hops -- ``os``, ``ctypes``, ``importlib``, ``builtins``, ``shutil`` -- so the check has
+    to be on the chain. :func:`test_no_path_out_of_a_trusted_root_survives` is that
+    statement as a test: it re-walks the graph and requires EVERY escaping path to refuse.
+    """
+
+    ESCAPES = ['simplipy.engine.os.system', 'simplipy.io.os.abort',
+               'simplipy.engine.importlib.import_module', 'simplipy.engine.hashlib.sha256',
+               'simplipy.asset_manager.shutil.rmtree', 'simplipy.engine.os']
+
+    @pytest.mark.parametrize('realization', ESCAPES)
+    def test_a_trusted_root_does_not_grant_what_it_imported(self, tmp_path, realization):
+        with pytest.raises(UntrustedModuleError) as excinfo:
+            SimpliPyEngine.from_config(_config(tmp_path, realization))
+        message = str(excinfo.value)
+        assert "'probe'" in message, 'the refusal must point at the config line'
+        assert realization in message
+
+    def test_the_payload_never_reaches_the_evaluation_path(self, tmp_path):
+        """THE falsifier, in the shape the pre-fix engine failed it: build from a config
+        and evaluate. The refusal is worth nothing if `os.system` still runs."""
+        marker = tmp_path / 'PWNED_BY_CHAIN'
+        with pytest.raises(UntrustedModuleError):
+            engine = SimpliPyEngine.from_config(_config(tmp_path, 'simplipy.engine.os.system'))
+            engine.code_to_lambda(codify(engine.prefix_to_infix(['probe', 'x0'], realization=True),
+                                         ['x0']))(f'touch {marker}')
+        assert not marker.exists(), 'the realization executed'
+
+    def test_the_error_says_how_to_allow_it(self, tmp_path):
+        with pytest.raises(UntrustedModuleError) as excinfo:
+            SimpliPyEngine.from_config(_config(tmp_path, 'simplipy.engine.os.system'))
+        message = str(excinfo.value)
+        assert "'os'" in message
+        assert 'trusted_modules=' in message and 'SIMPLIPY_TRUSTED_MODULES' in message
+
+    def test_opting_in_still_grants_it(self, tmp_path):
+        """The grant surface is unchanged: trust is refused, not withdrawn. Whoever
+        deliberately trusts `os` from outside the config gets it, chain and all."""
+        engine = SimpliPyEngine.from_config(
+            _config(tmp_path, 'simplipy.engine.os.getcwd'), trusted_modules=['os'])
+        assert engine.code_to_lambda(codify('simplipy.engine.os.getcwd()', []))() == os.getcwd()
+
+    @pytest.mark.parametrize('realization', [
+        'simplipy.operators.__loader__', 'np.sin.__globals__', 'simplipy.__spec__.loader',
+    ])
+    def test_dunder_components_are_refused(self, tmp_path, realization):
+        """Dunders are the introspection surface, not realizations, and they are the
+        shortest way back out of any namespace -- the same reason a bare `_private` is
+        refused. Nothing legitimate is spelled through one."""
+        with pytest.raises(UntrustedModuleError) as excinfo:
+            SimpliPyEngine.from_config(_config(tmp_path, realization))
+        assert 'dunder' in str(excinfo.value)
+
+    def test_a_module_is_not_a_realization(self, tmp_path):
+        with pytest.raises(UntrustedModuleError) as excinfo:
+            SimpliPyEngine.from_config(_config(tmp_path, 'simplipy.operators'))
+        assert 'cannot be called' in str(excinfo.value)
+
+    def test_an_unresolvable_component_is_not_a_trust_refusal(self, tmp_path):
+        """`np.os` reaches nothing -- it is an AttributeError, not a door -- and refusing
+        it would turn version skew in a trusted dependency into a dead engine. So the walk
+        stops without refusing, and the name still cannot execute anything."""
+        engine = SimpliPyEngine.from_config(_config(tmp_path, 'np.os.system'))
+        code = codify(engine.prefix_to_infix(['probe', 'x0'], realization=True), ['x0'])
+        with pytest.raises(AttributeError):
+            engine.code_to_lambda(code)('touch /tmp/never')
+
+    def test_the_legacy_vocabulary_still_constructs(self):
+        """The concrete config the strict reading would have killed: the generation-1
+        table names sixteen realizations (`pow2`, `mult3`, ...) that `simplipy.operators`
+        does not define, and it is a supported INPUT language (conftest)."""
+        from conftest import construct_legacy_table
+        engine = construct_legacy_table()
+        assert engine.operator_realizations['pow2'] == 'simplipy.operators.pow2'
+
+    def test_no_path_out_of_a_trusted_root_survives(self):
+        """The general statement, not a list of payloads: walk the module-to-module
+        attribute graph from every default root, and require each path that steps onto an
+        untrusted module to be refused. Two hops keeps the walk quick; depth cannot hide a
+        hole, because every escape has a FIRST escaping hop and every hop is checked."""
+        import importlib
+        import types
+
+        from simplipy.trust import DEFAULT_TRUSTED_MODULES
+
+        escapes = set()
+        for spelling in DEFAULT_TRUSTED_MODULES:
+            frontier = [([spelling], importlib.import_module({'np': 'numpy'}.get(spelling, spelling)))]
+            for _ in range(2):
+                nxt = []
+                for path, module in frontier:
+                    for name in dir(module):
+                        if name.startswith('__'):
+                            continue
+                        reached = getattr(module, name, None)
+                        if not isinstance(reached, types.ModuleType):
+                            continue
+                        package = reached.__name__.split('.')[0]
+                        if {'numpy': 'np'}.get(package, package) in DEFAULT_TRUSTED_MODULES:
+                            nxt.append((path + [name], reached))
+                        else:
+                            escapes.add('.'.join(path + [name]))
+                frontier = nxt
+
+        assert len(escapes) > 20, f'the walk found almost nothing ({escapes}) -- it is not testing'
+        survivors = []
+        for realization in sorted(escapes):
+            try:
+                SimpliPyEngine(operators=_ops(realization), rules=[])
+            except UntrustedModuleError:
+                continue
+            survivors.append(realization)
+        assert not survivors, f'{len(survivors)} escaping realizations loaded: {survivors[:10]}'
+
+
+class TestBareNamesAreAnAllowlist:
+    """The bare half of the shape check, held to the same standard as the dotted half.
+
+    A bare realization imports nothing, which is why it was allowed on shape alone -- but
+    it is still interpolated into generated source, and a bare name resolves against
+    Python's own builtins, where `eval`, `exec`, `compile`, `open` and `__import__` sit
+    beside `abs`. Closing the dotted path while leaving this open would be false closure:
+    both doors reach arbitrary code given a string argument, and neither reaches anything
+    given a float. So the accepted names are enumerated (audit S2 sibling)."""
+
+    @pytest.mark.parametrize('realization', [
+        'eval', 'exec', 'compile', 'open', 'input', 'breakpoint',
+        'getattr', 'setattr', 'globals', 'vars', 'memoryview', 'print',
+    ])
+    def test_the_execution_builtins_are_refused(self, tmp_path, realization):
+        with pytest.raises(UntrustedModuleError) as excinfo:
+            SimpliPyEngine.from_config(_config(tmp_path, realization))
+        assert 'probe' in str(excinfo.value)
+
+    def test_eval_never_reaches_the_evaluation_path(self, tmp_path):
+        marker = tmp_path / 'PWNED_BY_BUILTIN'
+        with pytest.raises(UntrustedModuleError):
+            engine = SimpliPyEngine.from_config(_config(tmp_path, 'eval'))
+            engine.code_to_lambda(codify(engine.prefix_to_infix(['probe', 'x0'], realization=True),
+                                         ['x0']))(f'__import__("pathlib").Path(r"{marker}").touch()')
+        assert not marker.exists(), 'the realization executed'
+
+    def test_every_allowlisted_builtin_loads_and_computes(self, tmp_path):
+        """Controls: the names that compute a number from numbers stay allowed, and the
+        list is not so narrow that a plausible realization is caught in it."""
+        from simplipy.trust import _BARE_BUILTIN
+        assert 'abs' in _BARE_BUILTIN, 'the docstring promises abs'
+        for realization in sorted(_BARE_BUILTIN):
+            engine = SimpliPyEngine.from_config(_config(tmp_path, realization))
+            assert engine.operator_realizations['probe'] == realization
+        assert engine.code_to_lambda(codify('abs(-2.0)', []))() == 2.0

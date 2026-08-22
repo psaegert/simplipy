@@ -39,11 +39,18 @@ def eng():
     return SimpliPyEngine.from_config(CONFIG)
 
 
-def check(eng, tokens, expected, form=None):
-    kwargs = {'form': form} if form else {}
-    out = eng.simplify(list(tokens), **kwargs)
+TAGS = {'<add>', '</add>', '<mul>', '</mul>', '<sub>', '<div>'}
+
+
+def check(eng, tokens, expected):
+    """`simplify` answers in the DIALECT it was handed since the conversion split, so
+    the input is converted into the dialect the EXPECTATION is written in first --
+    `simplify(to_tagged(x))` / `simplify(to_prefix(x))`, the exact migration for the
+    retired `form=` parameter."""
+    convert = eng.to_tagged if TAGS.intersection(expected) else eng.to_prefix
+    out = eng.simplify(convert(list(tokens)))
     assert list(out) == list(expected), f'{tokens} -> {out}, expected {expected}'
-    again = eng.simplify(list(out), **kwargs)
+    again = eng.simplify(list(out))
     assert list(again) == list(out), f'not idempotent: {out} -> {again}'
     return out
 
@@ -55,13 +62,13 @@ class TestDivisorSideSpelling:
         check(eng, ['/', 'x0', '0.3333333333333333'],
               ['<mul>', 'x0', '<div>', '0.3333333333333333', '</mul>'])
         check(eng, ['/', 'x0', '0.3333333333333333'],
-              ['/', 'x0', '0.3333333333333333'], form='explicit')
+              ['/', 'x0', '0.3333333333333333'])
 
     def test_unit_fraction_coefficient(self, eng):
         # (1/3)*x0 == x0/3: the integer reciprocal is the shorter exact spelling
         # (and the tagged form catches up to what the explicit form already did).
         check(eng, ['*', '1/3', 'x0'], ['<mul>', 'x0', '<div>', '3', '</mul>'])
-        check(eng, ['*', '1/3', 'x0'], ['/', 'x0', '3'], form='explicit')
+        check(eng, ['*', '1/3', 'x0'], ['/', 'x0', '3'])
 
     def test_tie_stays_coefficient_side(self, eng):
         # len("22/7") == len("7/22"): ties keep the coefficient in the numerator.
@@ -113,6 +120,6 @@ class TestDivisorSideSpelling:
               ['<mul>', 'x0', '<div>', '0.3333333333333333', 'x1', '</mul>'])
 
     def test_masking_sees_the_divisor_side_coefficient(self, eng):
-        out = eng.simplify(['/', 'x0', '0.3333333333333333'])
+        out = eng.simplify(eng.to_tagged(['/', 'x0', '0.3333333333333333']))
         sites = masking.literal_sites(out, eng)
         assert sites == [(3, '0.3333333333333333', masking.Role.COEFFICIENT)]

@@ -8,6 +8,12 @@ name: pytest
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    # A hung job runs to GitHub's 6h default. On 2026-08-19 three runs hung on
+    # "Run tests" for 2h+ each (3 jobs apiece) while the suite passed locally in
+    # 107s against the same commit -- an environment stall, not a code deadlock.
+    # 20 minutes is ~11x the observed runtime: generous for a slow runner, cheap
+    # for a hang.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -81,7 +87,10 @@ jobs:
 
       # REQUIRE_ASSETS: the asset-gated python tests (the staged acj-4-3 engine and the
       # staged legacy refusal input above) must FAIL loudly if the assets vanish, never
-      # silently skip.
+      # silently skip. The triple-gated tests key on SIMPLIPY_TEST_REQUIRE_TRIPLE
+      # instead (set it in the job that validates a triple-shipping build): the cell
+      # ships its f64 third alone while the real/corpus sets are re-mined, and those
+      # tests self-activate the moment the two files land beside it.
       - name: Run tests
         run: pytest tests
         env:

@@ -1,5 +1,564 @@
 # Changelog
 
+## 0.14.0 (unreleased)
+
+### Changed — SOUNDNESS IS AN AXIS, NOT A LADDER (owner rulings, 2026-08-19/20)
+
+`Mode` is now `f64` (the default), `real` and `corpus`. It is a plain `Enum`, so `<`
+between modes raises `TypeError`.
+
+The old `IntEnum` encoded a premise — `EXACT ≤ SOUND ≤ AE ≤ LOSSY` — that measurement
+refuted. "True over ℝ" and "realised in f64" are *incomparable*: `atanh(tanh t) → t` is
+true for every real `t` and gives `inf` in f64 past 18.990341103219276, while
+`asin(1e-8) → 1e-8` is bit-identical in f64 and wrong by the cubic term. Neither is more
+sound than the other.
+
+- **`Mode.SOUND` and `Mode.LOSSY` are removed**, as are the strings `'sound'` and
+  `'lossy'`. Use `Mode.f64` and `Mode.corpus`. A retired spelling now raises rather than
+  resolving quietly, because the old names asserted a single soundness ordering that does
+  not exist.
+- **`Mode.f64` no longer folds `sin(np.pi)` to `0`.** Exactly `0` in mathematics,
+  `1.2246467991473532e-16` in f64 — the rewrite changes what the deployed evaluator
+  computes. It serves `real` and `corpus` instead. 102 rules move, nearly all of the same
+  symbolic-cancellation family.
+- **`Mode.real` fails closed** on an artifact with no `rules_real.json` rather than
+  serving it the f64 set, which would answer a request for mathematical soundness with
+  rules that are f64-exact and mathematically false.
+- `f64` mode preserves what the deployed evaluator computes for every rewrite it
+  applies, **not** your evaluation order: the canonical form re-associates, and IEEE-754
+  addition commutes but does not associate. Deterministic, and value-preserving for
+  well-conditioned expressions.
+
+### Upgrading from 0.13.x
+
+**What you get back changes, and mostly it gets better.** Measured on the 400-row
+benchmark corpus, comparing 0.13.1's `SOUND` against each 0.14.0 mode by cost under the
+serve ordering:
+
+| mode | vs 0.13.1 `SOUND` |
+|---|---|
+| `real` | identical on all 400 rows |
+| `f64` (the new default) | identical on 397, more complex on 3 |
+| `corpus` | simpler on 53, never worse |
+
+The three rows where the default gives up ground are rewrites that are true over ℝ but
+not realised in f64 — `asinh(sinh t) → t`, `cos(asin(sin x)) → |cos x|`,
+`pow(inf, x) → exp(inf·x)`. They did not disappear; they moved to `real` and `corpus`,
+which is the whole point of the split. If you were relying on them, ask for
+`mode='real'` and you are back where you were, exactly.
+
+**Expressions come back in a different dialect.** `simplify` now answers in the form it
+was given (see the conversion section below); 0.13.x returned the tagged form
+regardless. The expression is the same expression — cost is unchanged on every row above
+— but the tokens differ, so any test pinning literal output needs regenerating.
+
+**Everything deprecated is removed in this release.** There is no alias cycle: a retired
+name raises rather than warning, so the migration is mechanical and complete.
+
+| removed | use instead |
+|---|---|
+| `Mode.SOUND`, `Mode.LOSSY`, `'sound'`, `'lossy'` | `Mode.f64`, `Mode.corpus` |
+| `SimpliPyEngine.parse` | `read_infix` |
+| `simplify(..., form=…)` | convert first: `simplify(to_tagged(x))` |
+| `simplify(..., node_budget=)` | `max_passes=` |
+| `SimpliPyEngine.load(path=)` | `load(engine=)` |
+| `normalize_skeleton`, `normalize_expression` | `to_skeleton`, `to_expression` (now require `engine=`) |
+| `masking.mask_values_keep_structure` | `masking.mask_fittable` |
+| `utils.substitude_constants` | `utils.substitute_constants` |
+| `utils.numbers_to_constant` | `explicit_constant_placeholders` |
+
+**BREAKING for downstream packages: this is a hard cut.** New `flash-ansr` and `srbf`
+releases require simplipy >= 0.14.0. There is no compatibility shim, as with the last
+artifact-format break: the rule sets, the artifact layout and the returned dialect all
+move together, and a shim would have to lie about at least one of them. Pin the pair.
+
+### Removed — the superseded `acj-2-1` and `acj-3-2` engines
+
+Installs no longer bundle them; `acj-4-3` is the shipped engine. Both remain on the
+Hugging Face assets repository and still load by name, so nothing published is
+withdrawn — `simplipy install acj-3-2` fetches it as before.
+
+### Changed — the literal floor is one bit, not two
+
+Every numeric codeword was clamped at two bits, which swallowed `0`, `1`, `2` and `3`
+alike — so `mu` could not tell `x**2` from `x**3` from `x**4`. The clamp is now one bit,
+where it binds only at `0` and `±1`, values whose codeword could not be shorter anyway.
+The exponents order again, and the sign on `±1` becomes visible, which is what the rest
+of the measure already promised: a description length must tell a number from its
+negation.
+
+No rule of the 5,451 published changes direction and no printed literal spelling moves —
+the serializer compares the same two codeword totals the measure does, and the floor
+shifts both. `SimpliPyEngine.complexity` returns different numbers; pinned values
+downstream must be re-earned.
+
+### Changed — every grammar symbol carries its own price
+
+The simplicity measure `mu` charged a flat 8 bits for every grammar symbol: a bag, a
+`Pow`, a function head, a variable leaf and a named constant alike. A description length
+is not flat, and the flatness had a visible cost — `pi - 2` and `asin(sin 2)` priced
+identically, so the miner preferred the composition and shipped a whole parametrised
+family of them. Those rules are true and certified; they are simply not simplifications.
+
+`mu` now reads each symbol off a table: a variable leaf 6 bits, `Add`/`Mul`/`Pow` 3,
+`pi` and `e` 4, an elementary head (`exp log abs sin cos tan rootn`) 6, an
+inverse/hyperbolic head 8, an infinity or an unnamed head 8. Literal pricing is
+untouched. The entries are read against the same 1/8 unit and scale with it, so
+`SIMPLIPY_MU_SYM` keeps its meaning.
+
+Two entries are fixed by rules a frequency count cannot supply: **a named constant must
+cost less than the cheapest expression denoting it** (`acos(-1)` is 11 bits, `exp(1)`
+is 9), and **a leaf must also name which variable it is** — the reason it is 6 and not
+the 1.65 bits the census reads for the class.
+
+Measured across the change: no rule of the shipped 5,451 changes direction, no corpus
+output changes in any mode, and no literal spelling moves. What does change is the
+number `SimpliPyEngine.complexity` returns — it is a different measure, so any pinned
+`mu` value downstream must be re-earned. Published rule sets mined under the previous
+measure still load and serve; they warn (D25/R6) that their minimality and ordering
+claims were certified against the old prices, until the next mine replaces them.
+
+### Changed — the artifact is a TRIPLE
+
+A published asset is now six files, not four: `rules.json` (the f64 set, keeping its
+name so older configs load unchanged), `rules_real.json` and `rules_corpus.json`, plus
+`config.yaml`, `mine.yaml` and the provenance sidecar. One distinct, complete rule set
+per mode — no base plus overlays, so what is loaded is what is served. The triple is the
+unit of mining, pinning and distribution; rules licensed in no mode are recorded in the
+drop census rather than silently absent.
+
+### Added
+
+- `SimpliPyEngine.evaluate_constants(expression)` — the explicit door to numeric folding.
+  Folds maximal variable-free, slot-free subtrees; refuses a subtree carrying a
+  `<constant>` (a fitted degree of freedom, not a value) and refuses a non-finite result.
+  Never reached by `simplify`.
+- `verify_ruleset(..., mode=...)` and `verify_triple(...)` — cleanliness is now **per
+  mode**. `atanh(tanh t) → t` is exactly what belongs in `rules_real.json` and a defect in
+  `rules.json`; a single bucket count cannot say that. Omitting `mode` keeps the
+  pre-triple meaning.
+- `simplify(..., max_passes=)` replaces `node_budget=`, which never counted nodes. **The
+  old name is removed**; the bound is the number of outer rewrite passes, which is what
+  the new name says.
+- **`SimpliPyEngine.to_realization(expr)` — the fourth notation.** The same expression
+  with each operator spelled as the callable it runs (`sin` → `simplipy.operators.sin`),
+  and reversible like the other three: `to_prefix`, `to_infix` and `to_tagged` all accept
+  realization-spelled input. Operators realized as themselves (`+`, `-`, `*`) are
+  identical in both spellings, so only dotted realizations ever need detecting.
+  - Reading realization notation back requires the engine's realization map to be
+    injective. Two operators may legally share one realization, and then the spelling
+    names both; that refuses loudly rather than picking one. Writing never refuses.
+- **`SimpliPyEngine.as_code(expr)` and `as_callable(expr)` — the compile pipeline in one
+  step.** `as_callable` replaces the `prefix_to_infix(realization=True)` → `codify` →
+  `code_to_lambda` dance for the common case, binding the result to this engine's own
+  namespace. `expression_variables(expr)` exposes the signature it binds, in order of
+  first appearance.
+  - Named `as_`, not `to_`, and deliberately: every `to_*` in this API is a notation that
+    converts back, and a code object has no syntax to recover. `to_lambda` would advertise
+    a round-trip that cannot exist. Compiling also runs through `compile()`, so the trust
+    rules apply where the notation family's do not.
+- `simplipy.DEFAULT_ENGINE` and `simplipy.DEFAULT_ENGINE_REVISION` — the artifact this
+  version was built and tested against. `SimpliPyEngine.load()` with no argument resolves
+  it and says which it took. The pin lives in the package rather than the hosted manifest,
+  so what you get by default is answerable offline and does not change under you without a
+  simplipy release. The revision is what separates one name across versions: `acj-4` mined
+  under two different judges is legitimately `acj-4` both times, and only (name, revision)
+  names one artifact.
+- `SimpliPyEngine.load(engine=...)` replaces `load(path=...)`, which named neither a path
+  nor a version. **The old keyword is removed.**
+- **`simplipy.utils.substitude_constants` is removed** (the historic misspelling, warning
+  since 0.13.0); use `substitute_constants`.
+
+### Security — the trust model covers the whole dotted path
+
+A realization is resolved by attribute traversal, and a module's attributes include
+every module it imported. The trust check decided only the leading component, so a
+config that named a trusted root could walk past it: `simplipy.engine.os.system` loaded
+without an `UntrustedModuleError` and called `os.system` at first evaluation. The reach
+was general rather than incidental — a walk of the attribute graph from the four default
+roots lands on 53 distinct top-level packages within three hops, `os`, `ctypes`,
+`importlib` and `builtins` among them.
+
+The allowlist now applies to every hop. Any component that resolves to a module is held
+to the same trusted set as the root, dunder components are refused, and a realization
+that names a module rather than a callable is refused. `math`, `np`, `scipy` and
+`simplipy` remain trusted by default; `trusted_modules=` and `SIMPLIPY_TRUSTED_MODULES`
+remain the only ways to widen that, and they widen the whole path.
+
+A realization spelled as a **bare name** is now an allowlist too. It imports nothing,
+which is why it used to pass on shape alone, but it is still interpolated into generated
+source and resolved against Python's own builtins — where `eval`, `exec`, `compile`,
+`open` and `__import__` sit beside `abs`. The accepted names are `abs`, `round`, `min`,
+`max`, `sum`, `pow`, `divmod`, `float`, `int`, `bool` and `len`, alongside the bare
+operator symbols; anything else refuses at load.
+
+This affects any deployment that builds an engine from a config it did not write — a
+Hugging Face asset loaded by name, a colleague's file, a cloned repository. Shipped
+configs, the legacy vocabulary and every realization the deployed evaluation path uses
+are unchanged; upgrade to 0.14.0 to get the check.
+
+### Fixed
+
+- The infix reader bound a minus after a power operator outside the power: `2^-3`
+  parsed as `-(2^3)` and returned **-8** where the value is 0.125, `sin(x0)^-1` lost
+  its reciprocal entirely, and every `x^-c` collapsed to `-(x^c)`. The minus after
+  `^`/`**` is the exponent's sign -- positional, not precedential, exactly Python's
+  own grammar (`-x**2` is still `-(x**2)`) -- and the reader now binds it to the
+  exponent, including chained signs (`x^--2`) and exponent power chains (`x^-2**3`
+  is `x^(-(2**3))`). Only expressions read from infix with a negative exponent were
+  affected; prefix input and every mined artifact are untouched.
+
+- The `atanh(tanh(t))` → `t` collapse carried a band of |t| ≤ 18, derived from where
+  f64 `tanh` attains ±1 (18.99). But `tanh` fails by **compression** long before it
+  saturates -- it loses ~2|t|/ln2 bits of the argument approaching ±1 -- and under the
+  same realised 8-ULP criterion every rule is held to, the roundtrip first breaches at
+  |t| ≈ 2.7 (libm-dependent; by |t| = 18 the drift is ~0.03-0.06 *absolute*). The band
+  is now 2, the last magnitude ceiling on the safe side of every measured breach. The
+  overflow-derived bands (`log∘exp` 709, `sinh`/`cosh` pairs 710) are a different
+  failure mode and keep their attainment thresholds.
+
+- The same re-derivation exposed the sibling holes at the other end: the collapse
+  bands guarded only against **overflow**, but compression near a flat point of the
+  inner function eats the low end -- `log(exp(t))` breaches the realised bar for all
+  |t| below ~0.0625 and `acosh(cosh(t))` below ~0.25 (`exp` rounds a small argument
+  into the neighbourhood of 1; `cosh` is quadratically flat at 0). Both collapses now
+  require a *proven* magnitude floor of 1 beside their ceiling, where the measured
+  worst is 0 and 1 ULP; `asinh(sinh(t))` measured clean over its whole band and is
+  unchanged. The two shipped f64 rules of this shape (`log exp <constant>`,
+  `acosh cosh <constant>`) re-tier to `real` with the 0.14.0 artifact.
+
+- The literal codeword floor (one bit, ruled 2026-08-22) reached `mu_rat` but not the
+  beyond-i128 leaf pricer, whose clamp stayed at two bits -- so `1e-39` priced *above*
+  `3e-38`: the simpler mantissa at the adjacent magnitude, upcharged for crossing the
+  representation line. The floor is now one constant shared by both sides, the seam
+  (`1e-40` = `1/1⟨40 zeros⟩`) stays closed, and the measure fingerprint gained a
+  beyond-i128 probe so this class of drift can never again leave the digest unchanged.
+  Measured over all 16,018 shipped rules: zero prices move, zero directions flip.
+
+- The judge quantified a source-side `<constant>` over |c| ≤ 5 while the miner draws its
+  constants from [1e-3, 1e3] and sweeps magnitudes to 500 — so `forall c over the reals`
+  was checked on one decade. The battery now spans ±1e-3 to ±1e4. Reaching there needed
+  two fixes to the exists-witness search, both cases of answering at a point where the
+  answer cannot be read: a witness fitted where the deployed left-hand side has
+  **saturated** solves an *interval*, not a point, and its edge is not a witness (an
+  identity was convicted on the difference); and the fixed search grid thins out exactly
+  where the deployed algebra overflows, so the constant under test is now tried directly.
+  Rules true over the reals but unrealised at large constants move from `f64` to `real`,
+  where they belong — 107 of the 5,451 currently published, with no rule newly rejected.
+
+- The judge's realisation axis was measured with a `1e-9` tolerance carrying an absolute
+  floor — roughly 10⁷ ULP — so a rule the contract convicts could be stamped "realised"
+  and admitted to the default rule set. It now uses a bound derived from this platform's
+  measured libm error of the platform's own math library, and the two questions it used
+  to conflate —
+  "does f64 compute this?" and "has the deployed algebra diverged?" — have separate
+  comparisons.
+- The contract lane's second precision rung was a fixed dps 120, which confirms nothing
+  when intermediates are 10²¹⁷: both rungs are swamped alike and agree on a manufactured
+  verdict. It is now sized from the largest intermediate actually seen. This was killing
+  `log(cosh(25t) + sinh(25t)) = 25t`, which is exactly true.
+- The contract's finite comparison measured a RELATIVE separation, normalised by the
+  larger of the two sides. Against a side that is exactly zero that normaliser is the
+  other side, so the reading was `1.0` at every precision — it could not respond to
+  precision at all, which is the only question the comparison asks, and an identity whose
+  two sides agree exactly was convicted for its own arithmetic residue. The separation is
+  now measured absolutely, against a single scale held fixed across the precision rungs.
+  This was killing true identities of the form `log(eᵃ · e⁻ᵃ) = 0`, and the two judges
+  could disagree about them, because the verdict turned on whether the arbitrary-precision
+  library happened to return an exact zero at the upper rung.
+- The gate had no verdict at all for the saturation family — a bounded function claimed to
+  reach its limit. `tanh(cosh(10))` differs from 1 by 2e-9566, far inside the precision
+  band at any working precision anyone can afford, so a numeric comparison can only
+  abstain however deep it is taken, and 174 shipped rules were carried without the gate
+  ever forming an opinion on them. A bounded function does not attain its limit at a finite
+  argument, and the comparison now settles those rules from that fact rather than from a
+  measurement — confirming every one of them into the tier it already ships in. The gate
+  now returns a verdict for every rule in the artifact.
+- The judge could not check the constants the miner explores. Its source-constant battery
+  reached `|c| ≤ 5` plus π and e while the miner draws from `[10⁻³, 10³]`, and widened to
+  ±10⁴ it convicted 97 of the 343 constant-carrying rules in the shipped set — every one
+  of them true by construction, and every one an artifact of the instrument at a magnitude
+  it could not resolve. Six distinct causes, each fixed:
+  - The exists-witness search accepted `0` as the witness for a target of `4.4e-589`. Its
+    noise floor is an absolute band, there to stop a cancellation zero from being chased
+    as a witness; a value that is simply small — one power and no subtraction — fell
+    under it too. The floor is now consulted only where the target actually shrinks as
+    the working precision rises, which is what separates a residue from a value.
+  - That search also stopped eight decades short of the f64 ceiling, so a witness of
+    `7.6e300` had no bracket and the rule was reported as having none.
+  - A precision rung that read one side as exactly zero, while the other was not, was
+    still used to date the gap's decay. It cannot: the reading is pinned at the
+    instrument's rail. The comparison now measures the rate between two rungs that both
+    saw something, which can only ever move a conviction to a stricter pair of rungs.
+  - The rungs were sized only from the LARGEST intermediate. A small one costs the same:
+    `cos x = 1 - x²/2 + …` at `x = e⁻³⁰⁰` puts the whole content of the answer 261 digits
+    below the 1 it sits beside, so three rungs in a row read exactly `1.0` and `acos` of
+    that is `0`. Precision is now sized from both ends.
+  - The evaluator's own symbolic-cancellation floor was absolute, so `sin(e⁻³⁰⁰)` — which
+    is exactly the size its argument predicts, with nothing cancelled — read as `0` at two
+    precisions and as `5.1e-131` at a third. The floor is now relative to what the
+    argument predicts, and still fires for every cancellation it was written for.
+  - Past its own precision ceiling the judge convicted rather than abstaining, which is
+    the opposite of what that ceiling documents. Running out of evidence is a statement
+    about the judge, so the conviction is withheld — except against a value the rule
+    itself spells, which is exact at every precision and cannot be a casualty of running
+    short of it.
+- Two shipped rules of the form `exp(exp(sinh c)) = 1` were certified as true over ℝ. They
+  are not: at `c = -6` the left side differs from 1 by `2.5e-88`. They are exact in f64 and
+  stay in the same rule set; what changes is that the gate now says which of the two it is.
+- The miner asked one question where the judge asks two. Its row gate skips the contract
+  entirely wherever the deployed f64 sides "agree", and the bar for that was the band that
+  answers a different question — whether the deployed algebra has *diverged*, which is
+  deliberately loose because a few ULP of rounding is not a divergence. As a pre-screen it
+  is roughly 10⁷ ULP, and below 1 a pure absolute floor: it reads `e^sinh(-5) = 0` as an
+  equality when the sides are `5.9e-33` and `0.0`, so a rule that is false could be mined
+  without its truth ever being asked. The two questions now have the two comparisons the
+  judge already used — realisation in ULP for the pre-screen, the structural band for
+  divergence. Measured: 8 of 102 `real`-tier rules in a reference mine have a point that
+  now reaches the contract, up to 4.9 million ULP apart, and every mined artifact is
+  byte-for-byte what it was.
+- The D15 diagonal lane never received the precision coupling its commit claimed, and fed
+  the same measure that convicts.
+
+
+### Changed — CONVERSION and SIMPLIFICATION are separate (owner rulings, 2026-08-18)
+
+- **`to_infix` / `to_prefix` / `to_tagged` are now PURE, SYNTACTIC conversions.** They
+  re-notate and do nothing else: no canonical state is built, no rewrite rule fires,
+  nothing is collected, folded, reordered or re-spelled, and the answer no longer
+  depends on the engine ARTIFACT. `to_prefix(['+','x0','x0'])` is `['+','x0','x0']`
+  (it was `['*','2','x0']`), and `to_prefix(['pow','abs','x0','2'])` keeps the `abs`
+  under every ruleset (it was dropped under acj-4-3 and kept under acj-2-1 — a
+  *conversion* whose answer depended on which artifact was loaded).
+  - Why: `to_prefix(x)` was EXACTLY `simplify(x, form='explicit')` on every probe, so
+    the trio added no capability over `simplify(form=…)`, and there was no
+    spelling-preserving prefix↔tagged path at all. Measured before the change, on 400
+    raw corpus rows: **not one** of the nine in/out directions preserved the input's
+    spelling on more than 1/400 rows, and no 2-cycle or 3-cycle was an identity.
+  - What is guaranteed now, per direction (full table in the design note): `P→P`,
+    `T→T`, `I→I` and `T→P→T` are **byte identity** (400/400); `P→T→P` is identity **up
+    to associativity** of same-polarity `+`/`*` runs, with bag member ORDER preserved;
+    `P→I→P` is identity **up to the infix language's missing atoms** (`inv X ↦ / 1 X`,
+    `p/q ↦ / p q`). Every direction and every cycle preserves the canonical state
+    exactly: `simplify(to_X(y))` is byte-identical whichever dialect `y` arrived in
+    (400/400).
+- **`simplify` is DIALECT-PRESERVING: it answers in the form it was given.** `str` in →
+  `str` out; explicit binary prefix in → explicit binary prefix out; tagged in → tagged
+  out. Container mirroring (`tuple`/`ndarray`) is unchanged, and the simplification
+  itself — every canonical answer — is unchanged.
+  - **This closes the tagged leak.** `simplify(['*','2','atan','x0'])` returned
+    `['<mul>','2','atan','x0','</mul>']`; it now returns `['*','2','atan','x0']`. A
+    tag-free token input can never come back carrying tags.
+  - Dialect detection: a token sequence is TAGGED iff it carries a bag delimiter or an
+    inverse-section marker (`<add> </add> <mul> </mul> <sub> <div>`), else EXPLICIT.
+- **`simplify(..., form=…)` is REMOVED.** `simplify` answers in the form it was given;
+  choosing the notation is the conversion layer's job, not a simplification argument.
+  - The migration is **convert first, then simplify**: `simplify(x, form='tagged')` →
+    `simplify(to_tagged(x))`, `form='explicit'` → `simplify(to_prefix(x))`,
+    `form='infix'` → `simplify(to_infix(x))`. All three are byte-identical to the
+    parameter on every corpus row measured (400/400).
+  - The reverse composition `to_tagged(simplify(x))` is **not** the migration: the
+    tagged and explicit canonical emitters carry different sign/inverse/literal
+    doctrine, so it agrees with `form='tagged'` on only 186/400 rows.
+- **`prefix_to_infix` renders two things correctly that it rendered ambiguously.** A
+  compound numeric leaf (`7/3`, `-1/3`) now carries the precedence its spelling embeds,
+  so `* 7/3 7/3` renders `7/3 * (7/3)` instead of `7/3 * 7/3` (which re-read as
+  `((7/3)*7)/3`); and a config-declared binary operator outside `+ - * / **` renders as
+  a function call, like `rootn` and `pow`, instead of `x0 hypot2 x1` — a spelling this
+  engine's own reader could not read back.
+- **`read_infix` is unchanged**, and its exclusive capability is now clearly the
+  vocabulary TOLERANCE: `read_infix('sqrt(x0)')` is `['sqrt','x0']` where every
+  conversion refuses. The canonicalising contrast it used to draw with `to_prefix` is
+  now with `simplify`.
+- **`to_skeleton` / `to_expression` are unchanged in contract**; internally they now ask
+  for canonicalisation explicitly (`simplify(to_prefix(x))`) instead of relying on
+  `to_prefix` to canonicalise. `masking.mask`'s collect stage likewise dropped its
+  `form=` projection — dialect preservation is `simplify`'s own contract now.
+
+### Changed — `normalize_skeleton`/`normalize_expression` are now `to_skeleton`/`to_expression`
+- **The name states the OUTPUT form**, matching the engine's
+  `to_infix`/`to_prefix`/`to_tagged`. The old names hid what the skeleton form
+  actually does: it masks **every** numeric literal, `pow` exponents and `rootn`
+  indices included, so `pow(x0, 3)` becomes `pow(x0, <constant>)` — a family no
+  constant optimizer can fit. (`engine.mask(expr, 'fittable')` is the kind that
+  keeps the structural literals.) **The old spellings are removed**, from both
+  `simplipy.normalization` and the package root. They are out of the declared `__all__`, the same
+  treatment `masking.mask_values_keep_structure` got.
+- **`normalize_variable_token` keeps its name.** It is a single-TOKEN helper that
+  answers `(token, is_variable)`; it produces no form, reads no dialect and needs
+  no engine, so the `to_*` family naming would misdescribe it.
+
+### Changed — both forms accept all three dialects, and the answer no longer depends on which
+- **They take an infix `str`, an explicit binary-prefix token sequence or a tagged
+  token sequence, and return the dialect they were given** (`str`→`str`,
+  prefix→prefix, tagged→tagged), detected exactly as the conversion API detects it
+  (type first, then a liberal read of the tokens). Masking names an abstraction
+  level, not an output dialect, so neither function may silently re-spell.
+- **The CONTENT is now dialect-invariant, and that is a correctness fix, not a
+  convenience.** Masking the caller's own spelling one token at a time counted a
+  different number of `<constant>` slots for the same expression depending on the
+  dialect it arrived in, in both directions — `-x0*x1` is `neg * x0 x1` (0
+  constants) but `<mul> -1 x0 x1 </mul>` (1), and `-1/x0` is `/ -1 x0` (1) but
+  `neg inv x0` (0). Measured at **35/400 rows (8.8%)** of the repo corpus, and at
+  the same 35/400 for a role-aware `mask(mask_all)` applied per dialect — role
+  awareness does not help, because the disagreement is about what the SITES ARE.
+  A skeleton is what downstream holdout and decontamination key on, so a
+  dialect-dependent answer let a tagged-era pipeline silently fail to match
+  explicit-era keys and report clean. Every input is now canonicalised into the
+  internal AC state first, abstracted on the canonical **explicit binary prefix**
+  (where a sign and a reciprocal stay structure instead of being folded into a
+  literal), and only then rendered into the caller's dialect.
+- **BREAKING: both now require an `engine`.** That is the cost of the guarantee;
+  there is deliberately no engine-free path and no fall-back to the old positional
+  pass, because silently returning a dialect-dependent key is the failure the
+  change exists to prevent. Callers that passed a token list now pass
+  `to_skeleton(tokens, engine)`.
+- Consequences of canonicalising: the expression form carries the state's **exact
+  rationals** (`2.5` re-spells as `5/2`; the skeleton is unaffected, both halves
+  being one degree of freedom); undeclared vocabulary and reserved numeric
+  spellings (`inf`, `1_000`) now raise `ValueError` at the core's token grammar
+  instead of passing through; `<c>` folds to `<constant>` in **both** forms.
+
+### Changed — `to_skeleton` is not a third masking path
+- It is documented and implemented as exactly `to_expression` followed by the
+  ratified front door `engine.mask(..., policy='all')`. Two consequences are now
+  on the record: the collect stage re-runs the engine, so simplification **rules
+  fire** and a skeleton depends on the engine ARTIFACT and not only on the
+  expression; and `engine.mask(to_expression(e, engine), 'all', collect=False)` is
+  the escape for a rules-free, strictly positional abstraction of the canonical
+  spelling.
+### Removed — `simplipy.utils.numbers_to_constant`
+
+- **The standalone helper is gone** (owner ruling 2026-08-18: the removal lands
+  in 0.14.0 and the downstream packages adapt). It warned from 0.12.0 and the
+  0.13.0 changelog already named 0.14.0 as its removal version; until now it was
+  still present, so the two surfaces disagreed. Replacement:
+  `simplipy.masking.mask(tokens, engine, policy)` or the `engine.mask` front
+  door, with the policy that states the intent — `mask_all` for the legacy
+  mask-everything behaviour, `mask_fittable` for what a constant optimizer can
+  actually fit; `collect=False` gives the positional 1:1 substitution the helper
+  approximated.
+- **The replacement is deliberately not a drop-in**, because the helper was
+  wrong in ways a rename would have preserved. It classified by a bare `float()`
+  probe, so it minted a finite-by-doctrine `<constant>` for the reserved
+  spellings `inf`/`nan` (any case or sign) and `1_000` — masking a non-finite
+  literal into a placeholder that is finite by contract. Those now raise
+  `ValueError` at the masking boundary. The same probe raised on
+  `np.pi`/`np.e` and on the AC core's exact fraction `1/3`, so the helper walked
+  past all three; they are masking sites and `mask_all` masks them. And the
+  helper was role-blind and structure-blind: it never looked at the expression,
+  so a malformed sequence was rewritten positionally instead of refused.
+- **Two names that share a word with it did NOT move.**
+  `explicit_constant_placeholders(..., convert_numbers_to_constant=)` is a
+  keyword on a mechanical code-generation helper, still accepted with both
+  values, and shipped downstream call sites pass it explicitly.
+  `read_infix(..., mask_numbers=True)` keeps
+  masking through the internal Rust port, which is not reachable by name from
+  Python and is unchanged.
+### Changed — rule dedup compares the INTERNAL FORM, not the spelling
+- **`simplipy.utils.deduplicate_rules` now keys on the engine's internal form**
+  (owner ruling 2026-08-18: *"instead of comparing spelling, compare internal
+  form"*). Two rules are one rule when the loader translates their sources into the
+  same pattern. Keyed on the token spelling, `* (-1) asin _0` and `* asin _0 (-1)`
+  shipped as two entries for one pattern, and the second could never fire — the
+  first already owns every subject it matches.
+- **`engine=` is a REQUIRED, keyword-only argument.** There is no engine-free
+  reading of "the same rule": the internal form is defined by the operator table.
+  It is keyword-only on purpose — a positional third argument would silently have
+  swallowed an existing caller's positional `verbose`. Existing calls fail loudly
+  with a `TypeError` naming the argument.
+- **The key is deliberately not `to_prefix`/`to_tagged`.** Those run the rewrite
+  pass under the *loaded ruleset* and the full certificate context: on an engine
+  holding acj-4-3, `to_prefix(['*','(-1)','asin','_0'])` returns `asin neg _0` —
+  that rule's own target — while on a rules-less engine over the same vocabulary it
+  returns `neg asin _0`. A dedup key that depends on the ruleset being
+  deduplicated is circular. The new key is a pure function of the operator table.
+- **Measured effect on the shipped artifacts, at LOAD (the files on disk are
+  untouched and byte-identical):** acj-2-1 26 → 24 served (−2, 7.7%), acj-3-2
+  106 → 96 (−10, 9.4%), acj-4-3 6,594 → 5,545 (−1,049, 15.9%). Every collision is
+  DEAD — same lhs *and* same rhs internal form, zero shadowed — so first-match-wins
+  meant the dropped copies could never fire.
+- **Behaviour is unmoved**, measured four ways per artifact: zero byte-diffs over
+  the 443 corpus rows the operator set accepts (`benchmarks/corpus/raw_skeletons*`,
+  800 rows), zero diffs on a direct probe of every dropped rule's own LHS (raw and
+  variable-instantiated), the corpus-invariance gate's complexity, idempotence,
+  permutation and twin counts all identical (acj-4-3: 294,730,680 / 0 / 0 / 8), and a
+  differential fuzz of
+  the served engine against one force-fed the raw artifact over **65,536** random
+  expressions (lengths 3–11 over the mine alphabet): **0 differences, 0 raised**.
+- **Pins that move.** The translation census counts served patterns, so it drops
+  with the duplicates: 6602/0/0 → **5553/0/0** (rows, complexity and twins unmoved).
+  The gate and the loader move together, so no commit in between leaves the gate
+  green against a number the code no longer produces.
+  The in-suite twin of that pin (`tests/test_licence_registry.py`) is updated with
+  the evidence.
+
+### Changed — `parse` is now `read_infix` (the name states the contract)
+- **`SimpliPyEngine.parse` is renamed to `SimpliPyEngine.read_infix`, and `parse` is
+  removed.** The rename is not cosmetic: this reader is the only public entry that is
+  **tolerant of unknown vocabulary** (an undeclared `sqrt(...)` survives as a bare
+  leaf, which `to_prefix`/`to_infix`/`to_tagged`/`simplify` all refuse) and
+  **preserves the input's spelling** — it never enters the canonical state, so
+  `read_infix('x0+x0')` is `+ x0 x0` where `to_prefix('x0+x0')` is `* 2 x0`. Use
+  `read_infix` when the input's own spelling is the data, `to_prefix` when the
+  canonical spelling is. `mask_numbers=` and `convert_expression=` are unchanged
+  on both names.
+
+### Changed — the masking redundancy is cleared (one policy, one name)
+- **`simplipy.masking.mask_values_keep_structure` is removed**; use `mask_fittable`. They were never two policies: the older name was this module's
+  original spelling, `mask_fittable` landed as a rename, and the two have been the
+  same function object ever since. There is no third semantics — "mask the values,
+  keep the structure" partitions `Role` into `{COEFFICIENT, ADDEND, VALUE}` and
+  `{EXPONENT, ROOT_INDEX}`, exactly what `mask_fittable` applies; the names state
+  one criterion from two sides (what is kept, and why it must be). Because they were
+  one object, nothing about the behaviour changes — only the name you call it by.
+- **`simplipy.masking.__all__` now declares only the live surface** (`Role`,
+  `literal_sites`, `mask`, `mask_all`, `mask_fittable`). The deprecated spelling is
+  no longer advertised or bound by `from simplipy.masking import *`.
+
+### Added — `engine.mask(..., collect=False)`
+- **The front door reaches the toolkit's full behaviour.** `engine.mask` had no
+  `collect` escape while `masking.mask` did, so the raw positional substitution was
+  unreachable from the engine. The default (`collect=True`) is unchanged and stays
+  byte-identical. The docstring now states what the collect stage does and costs:
+  it re-runs the engine, which is what enforces one `<constant>` per degree of
+  freedom (`2*x0/3` is one free value, not two), and therefore fires rules and
+  re-imposes canonical order — terms may be re-ordered relative to the input
+  spelling.
+
+### Changed — `is_valid` accepts and verifies all three forms
+- **`is_valid` now reads infix strings and the tagged dialect**, not only explicit
+  binary prefix, detecting the form exactly as the conversion API does (type first,
+  then dialect). This closes a real seam rather than adding convenience: the tagged
+  form is the engine's own serialization *and* the v24 target format, and `is_valid`
+  answered `False` for every well-formed tagged sequence — a wrong verdict, not a
+  refusal. An infix `str` fared worse: the old call walked the string's
+  **characters**, so `is_valid('x0+x0')` was `False`.
+- Explicit binary-prefix verdicts are **unchanged**, including the sharp edges
+  (`[]` is `False`; undeclared vocabulary is `False`; `tuple` input keeps working).
+  Malformed input in any form is still a `False` verdict, never an exception; only a
+  non-expression type raises `TypeError`. The verbose diagnostic that used to say
+  "is_valid reads the explicit binary-prefix dialect" now explains a *malformed
+  tagged* sequence instead, which is the only case that still reaches it.
+- Note: `is_valid` verifies against the engine's vocabulary while `read_infix`
+  tolerates it, so `read_infix('sqrt(x0)')` reads and `is_valid('sqrt(x0)')` is
+  `False` when no `sqrt` is declared.
+
+### Changed — an engine that ends up with no rules says so
+- **`from_config` (and `load`) now warn on the resulting STATE, not just on a
+  missing file.** An engine with zero simplification rules is fully functional — it
+  parses, evaluates and returns canonical output — and simply never rewrites
+  anything, so the old silence turned a broken setup into merely disappointing
+  numbers. All three causes now warn: an unresolvable configured rules path, a
+  config with no `rules` key, and a rules file that loads and contains nothing.
+  The warning is **non-fatal**, as ruled.
+- When the cause is an unresolvable path the message names **both** the literal
+  config value and the resolved absolute path (previously only an unnormalized
+  join, so `./missing.json` printed as `/dir/./missing.json`).
+- Direct `SimpliPyEngine(operators=..., rules=[])` construction stays silent: the
+  caller asked for a bare engine explicitly, and it is the sanctioned idiom for
+  mining, pickling and testing.
+
 ## 0.13.1 — 2026-08-17
 
 ### Added — the fair-benchmark results

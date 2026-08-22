@@ -6,7 +6,10 @@ required compiled Rust core, ``simplipy._core``), expression-normalization
 helpers, token/rule utilities, and asset management for downloading and
 resolving engine rulesets and test data.
 """
-from .engine import SimpliPyEngine, Mode
+import warnings as _warnings
+from typing import Any as _Any
+
+from .engine import DEFAULT_ENGINE, DEFAULT_ENGINE_REVISION, SimpliPyEngine, Mode
 from . import engine
 from . import operators
 from . import utils
@@ -15,7 +18,7 @@ from .utils import (
 )
 from . import normalization
 from .normalization import (
-    normalize_variable_token, normalize_skeleton, normalize_expression
+    normalize_variable_token, to_expression, to_skeleton
 )
 from . import masking
 from .asset_manager import (
@@ -34,8 +37,8 @@ except _PackageNotFoundError:  # running from a source checkout without an insta
 # they stay importable and documented, but `from simplipy import *` no longer
 # injects modules into the caller's namespace (simplipy.io shadowed stdlib io).
 __all__ = [
-    'Mode', 'SimpliPyEngine', '__version__',
+    'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION', 'Mode', 'SimpliPyEngine', '__version__',
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
     'get_path', 'install', 'list_assets', 'uninstall',
-    'normalize_expression', 'normalize_skeleton', 'normalize_variable_token',
+    'normalize_variable_token', 'to_expression', 'to_skeleton',
 ]

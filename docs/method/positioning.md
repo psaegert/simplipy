@@ -82,19 +82,20 @@ operator itself (SymRegg, 2026), and measured for its effect on the parameter op
 and de França, JSC 2024].
 
 SimpliPy prices the same axis. Its `<constant>` placeholder is their θ — an unknown a fit will
-supply — and μ charges it 1133 bits against 8 bits for a grammar symbol, so one free parameter is
-worth 141.6 symbols where their cost model makes it worth five nodes. Two differences are worth
+supply — and μ charges it 67 bits against 8 bits for a grammar symbol, so one free parameter is
+worth 8.4 symbols where their cost model makes it worth five nodes. Two differences are worth
 stating. First, that weight is derived rather than chosen: it is the supremum of μ over f64
-round-trip spellings plus a sign bit, so `<constant>` is guaranteed to dominate every literal it
-could be instantiated to. Second, and more substantially, μ has a middle tier their measure cannot
-express. Under μ, `E*x` costs 24 bits, `2.718281828459045*x` costs 112, and `<constant>*x` costs
-1149: a named exact constant, a rounded 52-bit literal and a free degree of freedom are three
-different prices. Their cost function collapses all three into one bucket, and their pipeline
-deliberately materialises constant subexpressions before saturation ("we do not keep expressions
-such as `exp(2+4)` in the e-graph and simply reduce it to its evaluated value"). That is the right
-choice in their regime, where every constant will be refitted and its exact value therefore carries
-no information, and the wrong one in ours, where the output is a symbolic artefact read by a human
-or a tokenizer. The systems solve adjacent problems under different terminal conditions.
+round-trip spellings plus a sign bit and a codeword-selector bit, so `<constant>` is guaranteed to
+dominate every literal it could be instantiated to. Second, and more substantially, μ has a middle
+tier their measure cannot express. Under μ, `E*x` costs 24 bits, `2.718281828459045*x` costs 72, and
+`<constant>*x` costs 83: a named exact constant, a rounded 52-bit literal and a free degree of
+freedom are three different prices. Their cost function collapses all three into one bucket, and
+their pipeline deliberately materialises constant subexpressions before saturation ("we do not keep
+expressions such as `exp(2+4)` in the e-graph and simply reduce it to its evaluated value"). That is
+the right choice in their regime, where every constant will be refitted and its exact value
+therefore carries no information, and the wrong one in ours, where the output is a symbolic artefact
+read by a human or a tokenizer. The systems solve adjacent problems under different terminal
+conditions.
 
 ### SMT-verified rule synthesis, and why we do not use a solver
 

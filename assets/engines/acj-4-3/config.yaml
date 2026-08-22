@@ -138,6 +138,11 @@ operators:
     precedence: 2
     commutative: false
 
+# ONE RULE SET PER MODE (owner ruling 2026-08-19): `rules:` carries the f64 set, and
+# `rules_real:`/`rules_corpus:` name the other two. This artifact declares only `rules:`,
+# so `Mode.real` and `Mode.corpus` have no set of their own here and the engine refuses
+# them rather than serving the f64 set under a different claim of soundness. The mined
+# `real` and `corpus` sets are published as their own asset revision.
 rules: "./rules.json"
 
 # The artifact-generation pin (simplipy.compat, owner ruling 2026-08-03):

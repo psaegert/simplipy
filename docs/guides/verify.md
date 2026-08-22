@@ -34,12 +34,54 @@ The second rule is the classic trap this package exists to catch:
 `exp(log(x0))` equals `x0` only on `x0 > 0` — rewriting it changes the
 function on a positive-measure set, so the judge kills it.
 
-**Every non-CERTIFIED/TOLERATED bucket is fatal** (`simplipy.verify.FATAL_BUCKETS`):
-a rule the judge cannot evaluate (`NO-WITNESS`, `UNSUPPORTED-SHAPE`,
-`JUDGE-TIMEOUT`) or cannot reconcile (`ENGINE-MISALIGN`,
-`UNRESOLVED-COVERAGE`) is exactly as unshippable as a `KILL` — the second
-authority never passed it. The same fatal set gates the miner's own output,
-so the two authorities cannot drift apart.
+A rule the judge cannot evaluate — `NO-WITNESS`, `UNSUPPORTED-SHAPE`,
+`JUDGE-TIMEOUT`, `UNRESOLVED-COVERAGE` — is unshippable in every mode: the
+second authority never reached an answer, and "confirmed by two independent
+authorities" is the claim a shipped rule makes.
+
+`KILL` and `ENGINE-MISALIGN` are different, and this is what the modes are for.
+Each rule also gets a **tier**, from two independent questions: is it true over
+ℝ, and does the deployed f64 evaluator reproduce it?
+
+| tier | true over ℝ | f64-realised | serves |
+|---|---|---|---|
+| `core` | yes | yes | every mode |
+| `real` | yes | no | `real`, `corpus` |
+| `f64` | no | yes | `f64`, `corpus` |
+| `reject` | no | no | nothing — recorded in the drop census |
+
+## Cleanliness is per mode
+
+`verify_ruleset(rules, mode=...)` asks whether every rule's tier is one that mode
+licenses. The same rule can be clean for one file and a defect in another, which is
+the whole point and which a bucket count cannot express:
+
+```python
+rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; f64 gives inf past 18.99
+
+verify_ruleset([rule], mode='real')['is_clean']    # -> True   belongs there
+verify_ruleset([rule], mode='corpus')['is_clean']  # -> True
+verify_ruleset([rule], mode='f64')['is_clean']     # -> False  f64 contradicts it
+```
+
+`report['offenders']` names the rules that fail, with their tier. Omitting `mode`
+keeps the pre-triple meaning — only `CERTIFIED`/`TOLERATED` are clean — because that
+is what every caller written before the split means by the word; it is **not** the
+right gate for a shipped artifact.
+
+For a whole artifact use `verify_triple`, which sweeps each file against its own
+mode's contract **and** checks the relationships between them. A routing bug that
+moved a rule between sets leaves every individual sweep clean:
+
+<!-- docs-example: skip: reads a published triple off disk; the paths are per-artifact -->
+```python
+from simplipy.verify import verify_triple
+report = verify_triple('rules.json', 'rules_real.json', 'rules_corpus.json')
+report['is_clean'], report['relationships']
+```
+
+The same tier routing gates the miner's own output, so the two authorities cannot
+drift apart.
 
 Single rules can be judged directly:
 

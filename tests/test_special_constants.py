@@ -52,8 +52,13 @@ def eng():
 
 
 def check(eng, tokens, expected):
-    """simplify, assert the exact canonical output and its idempotence."""
-    out = eng.simplify(list(tokens))
+    """simplify, assert the exact canonical output and its idempotence.
+
+    The expectations are the canonical TAGGED form, which `simplify` alone no longer
+    returns for explicit input (it answers in the dialect it was handed, owner ruling
+    2026-08-18): convert first, then simplify -- the exact migration for the retired
+    `form='tagged'`."""
+    out = eng.simplify(eng.to_tagged(list(tokens)))
     assert list(out) == list(expected), f'{tokens} -> {out}, expected {expected}'
     again = eng.simplify(list(out))
     assert list(again) == list(out), f'not idempotent: {out} -> {again}'
@@ -75,11 +80,18 @@ class TestGroundFoldLicence:
         # `f(special)` collapses ONLY to exact values, and those ship as MINED certified
         # rules -- the f64 fold may not approximate. This retires the documented
         # `sin(np.pi) -> 1.2246e-16` wart as a POLICY consequence (P-B3).
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         check(eng, ['cos', 'np.e'], ['cos', 'np.e'])
-        # REFRESH 2026-08-01: the mined exact collapse now SERVES (the policy's whole
-        # point -- owner: "cos(pi) should be simplified to -1"); inexact values stay.
-        check(eng, ['sin', 'np.pi'], ['0'])
         check(eng, ['exp', 'np.pi'], ['exp', 'np.pi'])
+        # `sin(np.pi) -> 0` is exactly true and NOT f64-realised: f64 computes
+        # 1.2246467991473532e-16 there, so the rewrite changes what the deployed
+        # evaluator returns. From 0.14.0 it is a `real`-tier rule -- served by `real`
+        # and `corpus`, declined by the default mode, which is the point of the split.
+        from simplipy import Mode
+        assert eng.simplify(['sin', 'np.pi'], mode=Mode.f64) == ['sin', 'np.pi']
+        assert eng.simplify(['sin', 'np.pi'], mode=Mode.real) == ['0']
+        assert eng.simplify(['sin', 'np.pi'], mode=Mode.corpus) == ['0']
 
     def test_pow_with_special_stays(self, eng):
         check(eng, ['pow', 'np.pi', '2'], ['pow', 'np.pi', '2'])
@@ -187,8 +199,22 @@ class TestExactCollapsesMint:
     def test_mined_engine_serves_the_collapse(self, mined):
         # The owner's ask, end to end: cos(pi) simplifies to -1 (via the mined rule).
         assert mined.simplify(['cos', 'np.pi']) == ['-1']
-        assert mined.simplify(['sin', 'np.pi']) == ['0']
         assert mined.simplify(['log', 'np.e']) == ['1']
+        # `sin(np.pi)` is the one of the three f64 does not realise, so it does not serve
+        # the default mode. Its presence in the MINE's output is what this test can speak
+        # to, and it is asserted from the mined rule set itself -- an earlier version
+        # installed the rule into `real` and then asserted that same rule fires, which
+        # says nothing about the mine at all.
+        # This fixture is a freshly-mined engine with ONE rule set (no triple), so the
+        # rule is in its default set and fires here. That is what "the mined engine serves
+        # the collapse" can mean for it. Where the rule LANDS -- `real`, not f64, because
+        # f64 computes 1.2246467991473532e-16 -- is a property of the ROUTED artifact and
+        # is pinned in `TestGroundFoldLicence` against the shipped triple.
+        rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
+        assert (('sin', 'np.pi'), ('0',)) in rules
+        assert mined.simplify(['sin', 'np.pi']) == ['0']
+        from simplipy.verify._contract import judge_rule
+        assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'real'
 
     def test_ground_rules_bypass_sort_promotion(self, eng):
         # The promotion sorts classify WILDCARD instantiation domains; a ground rule has
@@ -226,10 +252,24 @@ class TestExactCollapsesMint:
         assert cground_kill not in kept_set
         assert f64_respell in kept_set  # shape-blind bypass: promotion no longer contains
         assert report['stage_counts']['ground_passthrough'] == 5
-        # The pipeline's actual defense: the symbolic gate refuses the respell.
+        # The pipeline's answer to the respell CHANGED with the mode triple, and the
+        # old claim -- "the symbolic gate refuses it" -- is retired. The bucket is still
+        # KILL: `1 + e^-1 -> 1.3678794411714423` respells the exact value as its f64
+        # rounding, so it is mathematically false. But it is EXACTLY what f64 computes,
+        # so its tier is `f64` and the gate ROUTES it into rules.json rather than
+        # dropping it. That is correct under the split: in the mode whose authority is
+        # the deployed evaluator, the rewrite is exact.
         from simplipy.verify import verify_ruleset
+        from simplipy.verify._contract import judge_rule
         gate = verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]])
         assert gate['buckets']['KILL'] == [0], gate['buckets']
+        verdict = judge_rule(list(f64_respell[0]), list(f64_respell[1]))
+        assert verdict['realised'] is True and verdict['tier'] == 'f64', verdict
+        # ... and it is therefore clean for the f64 file and NOT for the real one
+        assert verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]],
+                              mode='f64')['is_clean'] is True
+        assert verify_ruleset([[list(f64_respell[0]), list(f64_respell[1])]],
+                              mode='real')['is_clean'] is False
 
     def test_inexact_values_still_refused(self, mined):
         # cos(e), exp(pi), e*pi have no exact alphabet spelling: nothing may mint, and
@@ -264,7 +304,8 @@ class TestConstAbsorptionLicence:
         # The introduced-mask direction stays refused: pi alone, and pi beside
         # variables with no mask present, keep their exact structure.
         check(eng, ['np.pi'], ['np.pi'])
-        assert eng.simplify(['*', 'np.pi', 'x0']) == ['<mul>', 'np.pi', 'x0', '</mul>']
+        assert eng.simplify(eng.to_tagged(['*', 'np.pi', 'x0'])) \
+            == ['<mul>', 'np.pi', 'x0', '</mul>']
 
     def test_special_base_pow_const(self, eng):
         # pi^C keeps its structure: pow is not an absorption site -- the family's

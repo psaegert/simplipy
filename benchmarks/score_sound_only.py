@@ -82,7 +82,7 @@ def main():
 
     const_free = np.array(['<constant>' not in r for r in corpus])
     out11 = [desugar(o)[0] for o in r011['outputs']]
-    out12 = [bare.simplify(o, form='explicit') for o in
+    out12 = [bare.simplify(o) for o in
              r012['simplipy']['acj-4-3']['outputs']]
     sy = r012['sympy']
     out_sy = [toks if status == 'ok' else None for (_, toks, status) in sy]
@@ -95,7 +95,7 @@ def main():
 
     # "changed" = the output is a different token sequence than the input's own
     # canonical projection (spelling-invariant via the bare projection of the input).
-    canon_in = [bare.simplify(r, form='explicit') for r in corpus]
+    canon_in = [bare.simplify(r) for r in corpus]
     ch11 = np.array([const_free[i] and out11[i] != canon_in[i]
                      for i in range(len(corpus))])
     ch12 = np.array([const_free[i] and out12[i] != canon_in[i]

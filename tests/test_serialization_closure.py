@@ -118,8 +118,12 @@ def referee() -> SimpliPyEngine:
 
 
 def ref_state(referee: SimpliPyEngine, tokens: list[str]) -> tuple[str, ...]:
-    """Canonical state under the full-vocabulary referee (the semantic oracle)."""
-    return tuple(referee.simplify(list(tokens), form="tagged"))
+    """Canonical state under the full-vocabulary referee (the semantic oracle).
+
+    Read through `to_prefix` so the oracle answers in ONE dialect whatever it is
+    handed: `simplify` preserves the input dialect since the conversion split, and a
+    tagged and an explicit spelling of one state are different token sequences."""
+    return tuple(referee.simplify(referee.to_prefix(list(tokens))))
 
 
 class TestPrefixClosureExhaustive:
@@ -132,14 +136,21 @@ class TestPrefixClosureExhaustive:
         failures: list[str] = []
         for src in universe(op_names, MAX_LEN):
             want = ref_state(referee, src)
-            for form in ("tagged", "explicit"):
-                out = engine.simplify(list(src), form=form)
+            for form, convert in (("tagged", engine.to_tagged),
+                                  ("explicit", engine.to_prefix)):
+                out = engine.simplify(convert(list(src)))
                 try:
-                    back = engine.simplify(list(out), form=form)
+                    # dialect-preserving: re-simplifying stays in the dialect the tokens
+                    # DECLARE. A tagged answer that carries no bag delimiter (`neg inv x0`,
+                    # `pow x0 -2`) is a sequence of BOTH token dialects, so it re-reads as
+                    # explicit and may re-spell -- the same state, a different projection.
+                    # Feeding it back through the answer's own dialect is the closure
+                    # question; the state check below is what pins "no drift".
+                    back = engine.simplify(convert(list(out)))
                 except ValueError as exc:  # noqa: PERF203 -- collecting all failures
                     failures.append(f"[{form}] {' '.join(src)} -> {out}: RAISE {exc}")
                     continue
-                if list(back) != list(out):
+                if list(back) != list(out) and ref_state(referee, back) != ref_state(referee, out):
                     failures.append(f"[{form}] {' '.join(src)} -> {out} -> {back}: not a fixpoint")
                     continue
                 got = ref_state(referee, list(out))
@@ -177,11 +188,14 @@ class TestInfixClosure:
         ["rootn", "x0", "3"],          # function-call rendering 'rootn(x0, 3)'
         ["+", "x0", "/", "1", "3"],    # exact fraction literal
         ["+", "x0", "inv", "x0"],      # 'x0 + 1/x0' -- precedence of the core symbols
+        ["pow", "x0", "-2"],           # negative-literal exponent -> '1/x0^2' (audit 9.10)
+        ["pow", "x0", "neg", "x1"],    # negated-variable exponent -> 'x0^(-x1)' (audit 9.10)
+        ["pow", "2", "-3"],            # fully literal negative power -> folds to '1/8' (audit 9.10)
     ]
 
     @pytest.mark.parametrize("src", CASES, ids=lambda s: " ".join(s))
     def test_full_config_feedback(self, src: list[str], referee: SimpliPyEngine) -> None:
-        rendered = referee.simplify(list(src), form="infix")
+        rendered = referee.simplify(referee.to_infix(list(src)))
         back = referee._core.parse(rendered, True, False)
         assert ref_state(referee, back) == ref_state(referee, src), (
             f"{' '.join(src)} -> {rendered!r} -> {back} changed canonical state"
@@ -203,7 +217,7 @@ class TestInfixClosure:
         failures: list[str] = []
         for src in universe(op_names, MAX_LEN):
             want = ref_state(referee, src)
-            rendered = engine.simplify(list(src), form="infix")
+            rendered = engine.simplify(engine.to_infix(list(src)))
             try:
                 back = engine._core.parse(rendered, True, False)
                 got = ref_state(referee, back)
@@ -213,6 +227,44 @@ class TestInfixClosure:
             if got != want:
                 failures.append(f"{' '.join(src)} -> {rendered!r} -> {back}: state {got} != {want}")
         assert not failures, f"{len(failures)} infix closure breaches, first 10:\n" + "\n".join(failures[:10])
+
+
+class TestExponentSignBindsToTheExponent:
+    """Audit 9.10: `x ^ -2` is x^(-2), never -(x^2). The reader reclassified a minus
+    after a power operator as unary but bound it OUTSIDE the power, so the public
+    entry point returned the wrong VALUE: simplify('2^-3') gave -8 where the value
+    is 0.125, and 'sin(x0)^-1' lost its reciprocal entirely. The binding is
+    positional, not precedential (`-x ** 2` IS -(x**2), and stays so): a minus whose
+    left neighbor is a power operator is the exponent's sign. The six hand-confirmed
+    shapes, pinned at parse and at canonical state."""
+
+    SHAPES = [
+        ("2^-3", ["pow", "2", "-3"], ("/", "1", "8")),
+        ("2**-3", ["pow", "2", "-3"], ("/", "1", "8")),
+        ("sin(x0)^-1", ["pow", "sin", "x0", "-1"], ("inv", "sin", "x0")),
+        ("2^-x0", ["pow", "2", "neg", "x0"], ("pow", "/", "1", "2", "x0")),
+        ("x0^-2", ["pow", "x0", "-2"], ("inv", "pow", "x0", "2")),
+        ("x1 ** -x2", ["pow", "x1", "neg", "x2"], ("pow", "x1", "neg", "x2")),
+    ]
+
+    @pytest.mark.parametrize("infix,parsed,state", SHAPES, ids=[s[0] for s in SHAPES])
+    def test_the_sign_is_the_exponents(self, infix: str, parsed: list[str],
+                                       state: tuple, referee: SimpliPyEngine) -> None:
+        got = referee._core.parse(infix, True, False)
+        assert got == parsed
+        assert ref_state(referee, got) == state
+
+    def test_the_old_binding_is_a_different_function(self, referee: SimpliPyEngine) -> None:
+        """-(2^3) and 2^(-3) are different canonical states, so this corpus can
+        never report green with the reader bound the old way."""
+        wrong = referee._core.parse("-(2^3)", True, False)
+        right = referee._core.parse("2^-3", True, False)
+        assert ref_state(referee, wrong) != ref_state(referee, right)
+
+    def test_prefix_position_is_unchanged(self, referee: SimpliPyEngine) -> None:
+        """The one shape where the minus really is outside: '-x0 ** 2' is -(x0^2),
+        Python's own reading -- the 9.10 fix must not touch it."""
+        assert referee._core.parse("-x0 ** 2", True, False) == ["neg", "pow", "x0", "2"]
 
 
 class TestCoreTokenGuard:
@@ -244,7 +296,7 @@ class TestCoreTokenGuard:
 
     def test_declaring_core_tokens_normally_is_fine(self) -> None:
         engine = make_engine(list(OPS_FULL))
-        assert engine.simplify(["+", "x0", "x0"], form="explicit") == ["*", "2", "x0"]
+        assert engine.simplify(["+", "x0", "x0"]) == ["*", "2", "x0"]
 
     def test_core_token_without_precedence_gets_the_core_value(self) -> None:
         """C1.18 guard hole: a core token declared WITHOUT `precedence:` used to slip
@@ -254,7 +306,7 @@ class TestCoreTokenGuard:
         ops = {"+": OPS_FULL["+"],
                "/": {k: v for k, v in OPS_FULL["/"].items() if k != "precedence"}}
         engine = make_engine(["+", "/"], operators=ops)
-        assert engine.simplify(["/", "+", "x0", "x1", "x2"], form="infix") == "(x0 + x1)/x2"
+        assert engine.simplify(engine.to_infix(["/", "+", "x0", "x1", "x2"])) == "(x0 + x1)/x2"
 
 
 class TestOperatorSpecValidation:
@@ -286,7 +338,7 @@ class TestOperatorSpecValidation:
                "sq": {"realization": "np.square", "alias": [], "inverse": None,
                       "arity": 1, "commutative": False}}
         engine = make_engine(["+", "sq"], operators=ops)
-        assert engine.simplify(["sq", "+", "x0", "x1"], form="infix") == "sq(x0 + x1)"
+        assert engine.simplify(engine.to_infix(["sq", "+", "x0", "x1"])) == "sq(x0 + x1)"
 
     def test_declared_rootn_realization_wins_and_evaluates(self) -> None:
         # rootn was the one core sugar token no suite config DECLARED (C1.18): a
@@ -326,11 +378,11 @@ class TestSignedNumericLeafSplit:
         expr = "- / - 2 1.7976931348623157e308 10000000000000000001 pow x2 3.402823669209385e38".split()
         out = engine.simplify(list(expr))
         assert engine.simplify(list(out)) == out
-        infix = engine.simplify(list(expr), form="infix")
-        back = engine.parse(infix, mask_numbers=False)
+        infix = engine.simplify(engine.to_infix(list(expr)))
+        back = engine.read_infix(infix, mask_numbers=False)
         assert engine.simplify(list(back)) == out
-        exp_out = engine.simplify(list(expr), form="explicit")
-        assert engine.simplify(list(exp_out), form="explicit") == exp_out
+        exp_out = engine.simplify(list(expr))
+        assert engine.simplify(list(exp_out)) == exp_out
 
 
 class TestProvenanceRecordsTheMeasure:
@@ -351,7 +403,7 @@ class TestProvenanceRecordsTheMeasure:
         assert fp['mu_sym'] == engine.complexity(['x0'])
         assert fp['mu_free'] == engine.complexity(['<constant>'])
         # each probe separates a change the measure has actually undergone
-        for probe in ('1000', '1/2', '355/113', '0.2', '<constant>', 'x0'):
+        for probe in ('1000', '1/2', '355/113', '0.2', '1e-40', '<constant>', 'x0'):
             assert isinstance(fp['probes'][probe], int), probe
         assert len(fp['digest']) == 16
 
@@ -418,3 +470,44 @@ class TestCoreTableHasOneSource:
         # semantics already match the engine's.
         for tok in ('+', '-', '*'):
             assert table[tok]['realization'] is None, tok
+
+
+class TestTheMeasureFingerprintReadsTheWholeMeasure:
+    """D25/R6 exists so an artifact mined under one measure cannot be mistaken for one
+    mined under another. That only works if every dial the measure turns moves at least
+    one probe -- and for a while six of the symbol table's nine entries turned nothing.
+    Changing `Pow` from 4 bits to 3 left the digest at `355f6ba90801f603`.
+    """
+
+    def test_every_node_kind_the_measure_prices_is_probed(self, referee) -> None:
+        """The probe set must exercise each kind, or a change to that kind is invisible.
+        Checked structurally rather than by value: two kinds can price the same (an `Add`
+        and a `Mul` of two leaves both cost 15,000 today) and still need separate probes,
+        because a change to ONE of them must move the digest."""
+        probes = {t[0]: list(t) for t in type(referee)._MEASURE_PROBES}
+        kinds = {
+            'leaf': ['x0'], 'Add': ['+', 'x0', 'x1'], 'Mul': ['*', 'x0', 'x1'],
+            'Pow': ['pow', 'x0', '2'], 'Pi': ['np.pi'], 'E': ['np.e'],
+            'elementary head': ['sin', 'x0'], 'transcendental head': ['asin', 'x0'],
+            'infinity': ['float("inf")'], 'free constant': ['<constant>'],
+        }
+        missing = [k for k, toks in kinds.items() if toks not in probes.values()]
+        assert not missing, f'no fingerprint probe exercises: {missing}'
+
+    def test_the_probes_have_distinct_heads(self, referee) -> None:
+        """The digest keys on the FIRST token, so two probes sharing a head would
+        silently collapse into one entry."""
+        heads = [t[0] for t in type(referee)._MEASURE_PROBES]
+        assert len(heads) == len(set(heads)), heads
+
+    def test_the_digest_moves_when_a_probe_moves(self, referee) -> None:
+        """The digest is a hash of the probe readings, so a changed reading must change
+        it. Pinned because a fingerprint that cannot move is worse than none: it reports
+        agreement it never checked."""
+        import hashlib
+        fp = referee._measure_fingerprint()
+        assert fp['digest'] == hashlib.sha256(
+            repr(sorted(fp['probes'].items())).encode()).hexdigest()[:16]
+        tampered = dict(fp['probes'], **{'pow': (fp['probes']['pow'] or 0) + 1000})
+        assert hashlib.sha256(
+            repr(sorted(tampered.items())).encode()).hexdigest()[:16] != fp['digest']
