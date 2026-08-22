@@ -111,7 +111,7 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     # such a rule into the triple as `core`, `verify_ruleset` on the mine's own
     # output reads tier None -> `reject` and reports dirty in every mode -- the gate
     # disagreeing with the router about a ratified decision (audit U3, 2026-08-22).
-    def _eff_tier(d):
+    def _eff_tier(d: dict) -> str:
         if d.get('detail') == CONST_CHANNEL_DETAIL:
             return 'core'
         return d.get('tier') or 'reject'
