@@ -54,7 +54,9 @@ def test_quirk3_neg_literal_toggles_one_minus(engine):
 # -- #4: '^' parses unary minus like '**' ---------------------------------------------------------
 def test_quirk4_caret_matches_starstar_for_unary_minus(engine):
     assert engine.infix_to_prefix("x1 ^ - x2") == engine.infix_to_prefix("x1 ** - x2")
-    assert engine.infix_to_prefix("x1 ^ - x2") == ["neg", "**", "x1", "x2"]
+    # the minus is the EXPONENT'S sign (audit 9.10): x1^(-x2), never -(x1^x2). This
+    # line pinned the wrong binding until the 9.10 fix.
+    assert engine.infix_to_prefix("x1 ^ - x2") == ["**", "x1", "neg", "x2"]
 
 
 # -- #5: operator associativity, fixed as a COORDINATED parse+render change (left-assoc parse +

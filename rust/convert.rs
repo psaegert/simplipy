@@ -523,6 +523,39 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
                         .unwrap_or(false))
             {
                 token = "neg".to_string();
+                // EXPONENT POSITION (audit 9.10). A unary minus whose original LEFT
+                // neighbor is a power operator is the exponent's sign: `x ^ -2` is
+                // x^(-2), never -(x^2). The generic precedence machinery cannot say
+                // this -- `neg` binds looser than `**` on the base side (`-x ** 2` is
+                // -(x**2), pinned below) and tighter on the exponent side, which is
+                // positional, not precedential (Python: power ::= primary ['**' u_expr],
+                // u_expr ::= power | '-' u_expr). So the exponent case bypasses the
+                // stack: on the reversed stream the exponent operand is already fully
+                // processed, and `neg` emitted NOW applies to exactly that operand.
+                // The minus may sit behind a chain of its own (`x ^ - - 2`): walk the
+                // run of '-'s to its original-left terminator before deciding.
+                let mut j = i + 1;
+                while tokens.get(j).map(|s| s.as_str()) == Some("-") {
+                    j += 1;
+                }
+                let chain_left = match tokens.get(j).map(|s| s.as_str()) {
+                    Some("^") => Some("**"),
+                    other => other,
+                };
+                if matches!(chain_left, Some("**") | Some("pow")) {
+                    // The exponent's own right-assoc power chain is still parked on
+                    // the stack (`x ^ -2 ** 3` is x^(-(2**3))): it belongs to the
+                    // operand, so it flushes first. Only a consecutive top run of
+                    // power operators can be operand-internal -- functions emit
+                    // directly and parens flush at '(' -- and anything below a
+                    // lower-precedence top (`x ^ -2 + 1`) is outside the exponent.
+                    while stack.last().is_some_and(|t| t == "**" || t == "pow") {
+                        prefix_expr.push(stack.pop().unwrap());
+                    }
+                    prefix_expr.push(token);
+                    i += 1;
+                    continue;
+                }
             }
             // `token != ')'` is always true here. The ELSE block is provably a plain
             // push (`stack.insert(-1)` only runs on an empty stack, where it == push).
@@ -1146,9 +1179,34 @@ mod tests {
         // leading unary (only reachable insert(-1)==push path); standalone '-'.
         assert_eq!(i2p(&e, "-x1"), v(&["neg", "x1"]));
         assert_eq!(i2p(&e, "-"), v(&["neg"]));
-        // '^' normalizes to '**' in the unary-minus lookahead too.
-        assert_eq!(i2p(&e, "x1 ** - x2"), v(&["neg", "**", "x1", "x2"]));
-        assert_eq!(i2p(&e, "x1 ^ - x2"), v(&["neg", "**", "x1", "x2"]));
+        // '^' normalizes to '**' in the unary-minus lookahead too. These two pinned
+        // the 9.10 bug for a while (the minus bound OUTSIDE the power, a value
+        // change on a public entry point): a minus in exponent position is the
+        // exponent's sign.
+        assert_eq!(i2p(&e, "x1 ** - x2"), v(&["**", "x1", "neg", "x2"]));
+        assert_eq!(i2p(&e, "x1 ^ - x2"), v(&["**", "x1", "neg", "x2"]));
+        // The 9.10 exponent-sign corpus: literal and variable exponents, both power
+        // spellings, a call base, a chained sign, an exponent power chain, and the
+        // one shape where the minus really is outside (prefix position, unchanged).
+        assert_eq!(i2p(&e, "2^-3"), v(&["**", "2", "neg", "3"]));
+        assert_eq!(i2p(&e, "2**-3"), v(&["**", "2", "neg", "3"]));
+        assert_eq!(i2p(&e, "x0^-2"), v(&["**", "x0", "neg", "2"]));
+        assert_eq!(i2p(&e, "2^-x0"), v(&["**", "2", "neg", "x0"]));
+        assert_eq!(i2p(&e, "sin(x0)^-1"), v(&["**", "sin", "x0", "neg", "1"]));
+        assert_eq!(i2p(&e, "x0 ^ - - 2"), v(&["**", "x0", "neg", "neg", "2"]));
+        assert_eq!(
+            i2p(&e, "x0 ^ -2 ** 3"),
+            v(&["**", "x0", "neg", "**", "2", "3"])
+        );
+        assert_eq!(
+            i2p(&e, "x0 ^ -2 + 1"),
+            v(&["+", "**", "x0", "neg", "2", "1"])
+        );
+        assert_eq!(
+            i2p(&e, "a ** -b ** c"),
+            v(&["**", "a", "neg", "**", "b", "c"])
+        );
+        assert_eq!(i2p(&e, "x0 ^ (-2)"), v(&["**", "x0", "neg", "2"]));
         // function-name left neighbor -> unary; neg float precedence both ways.
         assert_eq!(i2p(&e, "sin - x1"), v(&["neg", "sin", "x1"]));
         assert_eq!(i2p(&e, "-x1 ** 2"), v(&["neg", "**", "x1", "2"]));
@@ -1370,10 +1428,13 @@ mod tests {
         let Some(e) = engine() else { return };
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         let p = |s: &str, c: bool, m: bool| e.parse(s, c, m).unwrap();
-        // default (convert=True, mask=False): integer power + negative exponent -> neg (NOT inv).
+        // default (convert=True, mask=False): integer power + negative exponent -> inv,
+        // the reciprocal. (Until the 9.10 fix the reader bound the exponent's minus
+        // OUTSIDE the power, this pinned `x1 ** -2` to neg(pow2(x1)) = -(x1^2), and the
+        // old comment declared 'neg (NOT inv)' as if the wrong value were the contract.)
         assert_eq!(p("x1 ^ 2", true, false), v(&["pow2", "x1"]));
-        assert_eq!(p("x1 ** -2", true, false), v(&["neg", "pow2", "x1"]));
-        assert_eq!(p("x1 ** -1", true, false), v(&["neg", "x1"]));
+        assert_eq!(p("x1 ** -2", true, false), v(&["inv", "pow2", "x1"]));
+        assert_eq!(p("x1 ** -1", true, false), v(&["inv", "x1"]));
         // mask_numbers=True -> numbers_to_constant (float()-based).
         assert_eq!(
             p("3.14 * x1 + 2", true, true),

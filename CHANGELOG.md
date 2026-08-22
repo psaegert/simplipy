@@ -199,6 +199,15 @@ are unchanged; upgrade to 0.14.0 to get the check.
 
 ### Fixed
 
+- The infix reader bound a minus after a power operator outside the power: `2^-3`
+  parsed as `-(2^3)` and returned **-8** where the value is 0.125, `sin(x0)^-1` lost
+  its reciprocal entirely, and every `x^-c` collapsed to `-(x^c)`. The minus after
+  `^`/`**` is the exponent's sign -- positional, not precedential, exactly Python's
+  own grammar (`-x**2` is still `-(x**2)`) -- and the reader now binds it to the
+  exponent, including chained signs (`x^--2`) and exponent power chains (`x^-2**3`
+  is `x^(-(2**3))`). Only expressions read from infix with a negative exponent were
+  affected; prefix input and every mined artifact are untouched.
+
 - The judge quantified a source-side `<constant>` over |c| ≤ 5 while the miner draws its
   constants from [1e-3, 1e3] and sweeps magnitudes to 500 — so `forall c over the reals`
   was checked on one decade. The battery now spans ±1e-3 to ±1e4. Reaching there needed

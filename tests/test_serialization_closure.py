@@ -188,6 +188,9 @@ class TestInfixClosure:
         ["rootn", "x0", "3"],          # function-call rendering 'rootn(x0, 3)'
         ["+", "x0", "/", "1", "3"],    # exact fraction literal
         ["+", "x0", "inv", "x0"],      # 'x0 + 1/x0' -- precedence of the core symbols
+        ["pow", "x0", "-2"],           # negative-literal exponent -> '1/x0^2' (audit 9.10)
+        ["pow", "x0", "neg", "x1"],    # negated-variable exponent -> 'x0^(-x1)' (audit 9.10)
+        ["pow", "2", "-3"],            # fully literal negative power -> folds to '1/8' (audit 9.10)
     ]
 
     @pytest.mark.parametrize("src", CASES, ids=lambda s: " ".join(s))
@@ -224,6 +227,44 @@ class TestInfixClosure:
             if got != want:
                 failures.append(f"{' '.join(src)} -> {rendered!r} -> {back}: state {got} != {want}")
         assert not failures, f"{len(failures)} infix closure breaches, first 10:\n" + "\n".join(failures[:10])
+
+
+class TestExponentSignBindsToTheExponent:
+    """Audit 9.10: `x ^ -2` is x^(-2), never -(x^2). The reader reclassified a minus
+    after a power operator as unary but bound it OUTSIDE the power, so the public
+    entry point returned the wrong VALUE: simplify('2^-3') gave -8 where the value
+    is 0.125, and 'sin(x0)^-1' lost its reciprocal entirely. The binding is
+    positional, not precedential (`-x ** 2` IS -(x**2), and stays so): a minus whose
+    left neighbor is a power operator is the exponent's sign. The six hand-confirmed
+    shapes, pinned at parse and at canonical state."""
+
+    SHAPES = [
+        ("2^-3", ["pow", "2", "-3"], ("/", "1", "8")),
+        ("2**-3", ["pow", "2", "-3"], ("/", "1", "8")),
+        ("sin(x0)^-1", ["pow", "sin", "x0", "-1"], ("inv", "sin", "x0")),
+        ("2^-x0", ["pow", "2", "neg", "x0"], ("pow", "/", "1", "2", "x0")),
+        ("x0^-2", ["pow", "x0", "-2"], ("inv", "pow", "x0", "2")),
+        ("x1 ** -x2", ["pow", "x1", "neg", "x2"], ("pow", "x1", "neg", "x2")),
+    ]
+
+    @pytest.mark.parametrize("infix,parsed,state", SHAPES, ids=[s[0] for s in SHAPES])
+    def test_the_sign_is_the_exponents(self, infix: str, parsed: list[str],
+                                       state: tuple, referee: SimpliPyEngine) -> None:
+        got = referee._core.parse(infix, True, False)
+        assert got == parsed
+        assert ref_state(referee, got) == state
+
+    def test_the_old_binding_is_a_different_function(self, referee: SimpliPyEngine) -> None:
+        """-(2^3) and 2^(-3) are different canonical states, so this corpus can
+        never report green with the reader bound the old way."""
+        wrong = referee._core.parse("-(2^3)", True, False)
+        right = referee._core.parse("2^-3", True, False)
+        assert ref_state(referee, wrong) != ref_state(referee, right)
+
+    def test_prefix_position_is_unchanged(self, referee: SimpliPyEngine) -> None:
+        """The one shape where the minus really is outside: '-x0 ** 2' is -(x0^2),
+        Python's own reading -- the 9.10 fix must not touch it."""
+        assert referee._core.parse("-x0 ** 2", True, False) == ["neg", "pow", "x0", "2"]
 
 
 class TestCoreTokenGuard:
