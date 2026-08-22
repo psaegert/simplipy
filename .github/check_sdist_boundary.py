@@ -10,28 +10,40 @@ corpus) because it denied by extension at a single level while allowing recursio
 This script is the check that fails instead. It asserts BOTH halves, because either
 alone is silently wrong:
 
-* nothing under `remine/` or `design/` ships except the twelve allowlisted files -- a
-  new private file is out by default, and a hole shows up here rather than on PyPI;
-* all twelve DO ship -- the shipped test suite loads them, so a tarball without them is
-  one whose tests cannot run at all (audit C54).
+* nothing under `remine/` or `design/` ships, no exceptions -- a private file is out
+  by default, and a hole shows up here rather than on PyPI;
+* every artifact file the CHECKOUT carries under `assets/engines/` ships -- the shipped
+  test suite loads them, so a tarball missing one is a tarball whose tests cannot run
+  (audit C54). The required set is DERIVED from the checkout, not hardcoded: a
+  hardcoded list demanded the retired `acj-2-1`/`acj-3-2` cells forever (audit U1),
+  and would go stale again the day the acj-4-3 cell grows its `real`/`corpus` thirds.
+  Deriving it keeps the meaning fixed while the inventory moves: whatever the tree
+  ships, the sdist ships whole.
 
 Usage:  python .github/check_sdist_boundary.py dist/simplipy-*.tar.gz
 """
 from __future__ import annotations
 
 import glob
+import os
+import pathlib
 import sys
 import tarfile
 
-ALLOWED_PRIVATE = {
-    f'assets/engines/acj-{cell}/{name}'
-    for cell in ('2-1', '3-2', '4-3')
-    for name in ('config.yaml', 'mine.yaml', 'rules.json', 'rules.json.provenance.json')
-}
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_ARTIFACT_TREE = _REPO_ROOT / 'assets' / 'engines'
+
 PRIVATE_PREFIXES = ('remine/', 'design/')
 
 
-def check(tarball: str) -> list[str]:
+def required_artifacts() -> frozenset[str]:
+    """Every artifact file the checkout carries, as sdist-relative posix paths."""
+    return frozenset(
+        path.relative_to(_REPO_ROOT).as_posix()
+        for path in _ARTIFACT_TREE.rglob('*') if path.is_file())
+
+
+def check(tarball: str, required: frozenset[str]) -> list[str]:
     """Return the list of failures (empty means the boundary holds)."""
     with tarfile.open(tarball) as archive:
         members = archive.getnames()
@@ -39,24 +51,27 @@ def check(tarball: str) -> list[str]:
     paths = {name.split('/', 1)[1] for name in members if '/' in name}
 
     failures = []
-    leaked = sorted(
-        path for path in paths
-        if path.startswith(PRIVATE_PREFIXES) and path not in ALLOWED_PRIVATE)
+    leaked = sorted(path for path in paths if path.startswith(PRIVATE_PREFIXES))
     if leaked:
         failures.append(
-            f'{len(leaked)} private path(s) in the sdist that the allowlist does not permit:\n  '
+            f'{len(leaked)} private path(s) in the sdist:\n  '
             + '\n  '.join(leaked[:40])
             + (f'\n  ... and {len(leaked) - 40} more' if len(leaked) > 40 else ''))
 
-    missing = sorted(ALLOWED_PRIVATE - paths)
+    missing = sorted(required - paths)
     if missing:
         failures.append(
-            f'{len(missing)} allowlisted artifact file(s) MISSING -- the shipped tests cannot '
-            f'load an engine without them:\n  ' + '\n  '.join(missing))
+            f'{len(missing)} artifact file(s) in the checkout but MISSING from the sdist -- '
+            f'the shipped tests cannot load an engine without them:\n  ' + '\n  '.join(missing))
     return failures
 
 
 def main() -> int:
+    required = required_artifacts()
+    if not required:
+        print(f'no artifact files under {_ARTIFACT_TREE} -- the checkout this script derives '
+              f'the required set from is not one that could have built a shippable sdist')
+        return 2
     patterns = sys.argv[1:] or ['dist/*.tar.gz']
     tarballs = sorted({path for pattern in patterns for path in glob.glob(pattern)})
     if not tarballs:
@@ -64,14 +79,15 @@ def main() -> int:
         return 2
     exit_code = 0
     for tarball in tarballs:
-        failures = check(tarball)
+        failures = check(tarball, required)
         if failures:
             exit_code = 1
             print(f'FAIL {tarball}')
             for failure in failures:
                 print(f'  {failure}')
         else:
-            print(f'ok   {tarball}: {len(ALLOWED_PRIVATE)} allowlisted artifact files, no other private path')
+            print(f'ok   {os.path.basename(tarball)}: all {len(required)} checkout artifact '
+                  f'files ship, no private path')
     return exit_code
 
 
