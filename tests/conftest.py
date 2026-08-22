@@ -52,16 +52,42 @@ def acj_real_rules_path() -> str:
     return os.path.join(acj_asset_dir(), 'rules_real.json')
 
 
-def require_triple_or_skip(why: str = 'the shipped asset carries the f64 set only') -> None:
-    """Skip when the staged asset ships no `real`/`corpus` set of its own.
+def acj_corpus_rules_path() -> str:
+    return os.path.join(acj_asset_dir(), 'rules_corpus.json')
 
-    The published asset carries the f64 third alone while the other two are re-mined,
-    so a test whose subject is a `real` or `corpus` RULE SET has no subject and says so.
-    It skips rather than passing vacuously: under `SIMPLIPY_TEST_REQUIRE_ASSETS` -- what
-    the release job sets -- the same call FAILS, so a triple that is supposed to be
-    staged and is not can never be mistaken for a clean run.
+
+def require_triple_or_skip(why: str = 'the shipped asset carries the f64 set only') -> None:
+    """Skip when the acj-4-3 cell ships no `real`/`corpus` set of its own.
+
+    The cell carries the f64 third alone while the other two are re-mined, so a test
+    whose subject is a `real` or `corpus` RULE SET has no subject and says so -- locally
+    AND in CI. `SIMPLIPY_TEST_REQUIRE_ASSETS` deliberately does NOT harden this gate:
+    that switch guards the assets CI actually STAGES (the f64 four and the legacy
+    refusal input) against a silently broken staging step, and hardening the triple on
+    the same switch turned the documented interim into 11 CI failures (audit U1). The
+    gate never goes quietly wrong instead, because both of its failure channels are
+    loud on their own terms:
+
+    * a PARTIAL triple always fails, in every environment -- no intended state ships
+      one file of the pair, so half a triple is breakage wherever it is observed;
+    * `SIMPLIPY_TEST_REQUIRE_TRIPLE` is the release-gate switch for the job that
+      validates a build whose artifact IS the triple: there, absence must read as
+      failure, never as a skip.
+
+    No switch needs flipping for the tests themselves: the moment `rules_real.json`
+    and `rules_corpus.json` land beside the f64 set, every gated test runs everywhere.
     """
-    require_or_skip(acj_real_rules_path(), why)
+    real, corpus = acj_real_rules_path(), acj_corpus_rules_path()
+    present = [p for p in (real, corpus) if os.path.exists(p)]
+    if len(present) == 2:
+        return
+    if present:
+        pytest.fail(
+            f'the acj-4-3 cell carries PART of a triple ({os.path.basename(present[0])} '
+            f'without its sibling) -- a triple ships whole or not at all')
+    if os.environ.get('SIMPLIPY_TEST_REQUIRE_TRIPLE'):
+        pytest.fail(f'SIMPLIPY_TEST_REQUIRE_TRIPLE is set but {why}')
+    pytest.skip(why)
 
 
 def require_or_skip(path: str, why: str) -> None:

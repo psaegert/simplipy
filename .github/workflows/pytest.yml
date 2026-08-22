@@ -87,7 +87,10 @@ jobs:
 
       # REQUIRE_ASSETS: the asset-gated python tests (the staged acj-4-3 engine and the
       # staged legacy refusal input above) must FAIL loudly if the assets vanish, never
-      # silently skip.
+      # silently skip. The triple-gated tests key on SIMPLIPY_TEST_REQUIRE_TRIPLE
+      # instead (set it in the job that validates a triple-shipping build): the cell
+      # ships its f64 third alone while the real/corpus sets are re-mined, and those
+      # tests self-activate the moment the two files land beside it.
       - name: Run tests
         run: pytest tests
         env:

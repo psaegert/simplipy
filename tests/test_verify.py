@@ -258,8 +258,9 @@ class TestShippingArtifact:
         """The other half of the split, kept as its own test so that shipping the f64
         set WITHOUT a triple reports honestly: the census above still runs and passes,
         and this one skips for want of a subject rather than dragging the pair down."""
+        from conftest import require_triple_or_skip
+        require_triple_or_skip()
         real_path = ACJ_RULES.replace('rules.json', 'rules_real.json')
-        _staged_or_skip(real_path)
         real_rules = json.load(open(real_path))
         real_keys = {(tuple(a), tuple(b)) for a, b in real_rules}
         assert (('/', '$0', '$0'), ('1',)) in real_keys      # x/x -> 1
@@ -605,12 +606,12 @@ class TestCleanlinessIsPerMode:
         """The regression that made this necessary: `verify_triple` kept enforcing the
         retired union identity after the miner stopped, so the documented artifact gate
         reported the 0.14.0 artifact as dirty while every per-file sweep was clean."""
-        from conftest import acj_config_path, require_or_skip
+        from conftest import acj_config_path, require_triple_or_skip
         from simplipy.verify import verify_triple
         base = acj_config_path().replace('config.yaml', '')
         # the TRIPLE is the subject, so guard on the triple and not merely on the config:
         # the f64 set ships on its own while the real/corpus sets are re-mined
-        require_or_skip(base + 'rules_real.json', 'needs the shipped acj-4-3 triple')
+        require_triple_or_skip('needs the shipped acj-4-3 triple')
         report = verify_triple(base + 'rules.json', base + 'rules_real.json',
                                base + 'rules_corpus.json',
                                engine_config=acj_config_path())
