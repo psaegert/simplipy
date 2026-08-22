@@ -2429,7 +2429,6 @@ mod tests {
                 1e-5,
                 1e-8,
                 8,
-                true,
             )
             .unwrap();
         assert_eq!(r, Some(s(&["x0"])));
@@ -2449,7 +2448,6 @@ mod tests {
                 1e-5,
                 1e-8,
                 8,
-                true,
             )
             .unwrap();
         assert_eq!(r2, None);
@@ -2483,7 +2481,6 @@ mod tests {
                 1e-9,
                 1e-12,
                 8,
-                false,
             )
             .unwrap();
         assert_eq!(
@@ -2506,7 +2503,6 @@ mod tests {
                 1e-9,
                 1e-12,
                 8,
-                false,
             )
             .unwrap();
         assert_eq!(
@@ -2674,17 +2670,8 @@ mod tests {
         // Both candidates are numerically equivalent to the source x0+x0+x0 = 3*x0:
         // `* 3 x0` at length 3, `neg * -3 x0` at length 4.
         let cands = vec![s(&["*", "3", "x0"]), s(&["neg", "*", "-3", "x0"])];
-        let lib = CandidateLibrary::build(
-            ops,
-            &cands,
-            &vec![None; cands.len()],
-            &vec![false; cands.len()],
-            &vars,
-            &xf,
-            n,
-            true,
-        )
-        .unwrap();
+        let lib = CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n)
+            .unwrap();
         let src = s(&["+", "+", "x0", "x0", "x0"]);
         // Without acceptance the length-3 spelling wins.
         let free = find_rule_with_lib(
@@ -2831,7 +2818,6 @@ mod tests {
                 1e-9,
                 1e-12,
                 32,
-                false,
             )
             .unwrap()
         };

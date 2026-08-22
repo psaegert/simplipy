@@ -572,6 +572,30 @@ class TestFoldFilter:
                 f"var-free composite RHS shipped: {lhs} -> {rhs}")
 
 
+class TestTheLibraryIsQuotientedByCanonicalClass:
+    """audit §7.1 (2026-08-22). One canonical class, many spellings: the scan judged
+    every spelling. The quotient keeps, per (class, variable multiset, `<constant>`
+    count), the spelling the scan would pick -- cheapest mu, then library order --
+    and it is byte-identity-gated: two 400-source control slices mine the same 28
+    rules with the quotient on (1,313 -> 1,071 on the control cell)."""
+
+    def test_duplicate_spellings_collapse_to_the_scan_winner(self, engine) -> None:
+        n = 64
+        x_flat = [0.13 * i - 4.0 for i in range(2 * n)]
+        cands = [["x0"], ["x1"], ["*", "x0", "x1"], ["*", "x1", "x0"]]
+        lib = engine._core.build_candidate_library(cands, ["x0", "x1"], x_flat, n)
+        assert lib.n_candidates == 3, "the commuted spelling is the same class and must collapse"
+
+    def test_a_different_variable_multiset_is_never_dropped(self, engine) -> None:
+        """`* x0 x0` and `pow2 x0` are one class -- and NOT interchangeable: the
+        wildcard-multiplicity guard reads the spelling's variable occurrences."""
+        n = 64
+        x_flat = [0.13 * i - 4.0 for i in range(n)]
+        cands = [["x0"], ["*", "x0", "x0"], ["pow2", "x0"]]
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        assert lib.n_candidates == 3, "different variable multisets: both spellings stay"
+
+
 class TestProvenance:
     """The mined artifact must carry a reproducibility sidecar, and sampled sources are
     validated as universe members per run (exercised via the sampled length below -- a

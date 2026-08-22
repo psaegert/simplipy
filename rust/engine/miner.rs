@@ -105,10 +105,65 @@ impl Engine {
         // bare context), and the library builder only has the operator table. Bare-context mu
         // depends on no mined rule, so scoring once at build time is stable for the whole mine.
         let mus: Vec<Option<u64>> = candidates.iter().map(|c| self.ac_complexity(c)).collect();
+        // THE AC-CLASS QUOTIENT (2026-08-22 audit §7.1). The enumeration spells one
+        // canonical class many ways -- commutative orderings, odd-sign twins, inv/abs
+        // pairs -- and the scan judged every spelling: 31.6% of the variable-carrying
+        // acj-4 library was duplicate classes. Two spellings of one class compute the
+        // same function, so they match identically; the one the scan would PICK --
+        // cheapest mu tier, then earliest in library order -- makes every later
+        // spelling with the SAME variable multiset and `<constant>` count unreachable:
+        // it sits in a same-or-later tier, sorts identically in select_best (stable by
+        // `<constant>` count), and passes the wildcard-multiplicity and mu-acceptance
+        // checks whenever the dropped one would. Spellings whose variable multiset or
+        // `<constant>` count differ (`* x0 x0` vs `pow2 x0`) are NEVER dropped: their
+        // guard behaviour is not interchangeable, and the byte-identity gate only
+        // certifies the dominated class.
+        let mut keeper: std::collections::HashMap<(Vec<String>, Vec<String>, usize), (u64, usize)> =
+            std::collections::HashMap::new();
+        let sig = |c: &[String]| -> (Vec<String>, usize) {
+            let mut vars: Vec<String> = c
+                .iter()
+                .filter(|t| var_names.iter().any(|v| v == *t))
+                .cloned()
+                .collect();
+            vars.sort();
+            let n_const = c.iter().filter(|t| t.as_str() == "<constant>").count();
+            (vars, n_const)
+        };
+        for (i, c) in candidates.iter().enumerate() {
+            let Some(k) = self.ac_canonical_key(c) else {
+                continue; // unkeyed spellings are never quotiented
+            };
+            let (vars, n_const) = sig(c);
+            let mu_i = mus[i].unwrap_or(u64::MAX);
+            keeper
+                .entry((k, vars, n_const))
+                .and_modify(|best| {
+                    if (mu_i, i) < *best {
+                        *best = (mu_i, i);
+                    }
+                })
+                .or_insert((mu_i, i));
+        }
+        let mut cands_q: Vec<Vec<String>> = Vec::with_capacity(candidates.len());
+        let mut mus_q: Vec<Option<u64>> = Vec::with_capacity(candidates.len());
+        for (i, c) in candidates.iter().enumerate() {
+            let keep = match self.ac_canonical_key(c) {
+                None => true,
+                Some(k) => {
+                    let (vars, n_const) = sig(c);
+                    keeper.get(&(k, vars, n_const)).is_none_or(|&(_, j)| j == i)
+                }
+            };
+            if keep {
+                cands_q.push(c.clone());
+                mus_q.push(mus[i]);
+            }
+        }
         crate::worker::CandidateLibrary::build(
             &self.operators,
-            candidates,
-            &mus,
+            &cands_q,
+            &mus_q,
             var_names,
             x_flat,
             n_rows,
