@@ -1303,3 +1303,51 @@ class TestNanIsInTheWidestSortsQuantifier:
         assert r['verdict'] == 'CERTIFIED', r
         r = judge_rule('- !0 !0'.split(), ['0'])
         assert r['verdict'] == 'TOLERATED', r
+
+
+class TestTheGateAgreesWithTheRouterAndTheClock:
+    """audit U3 (2026-08-22): two ways the gate's verdict depended on something other
+    than the rules. (a) `_route_triple` applies the ratified D36 multi-`<constant>`
+    carve-out and `verify_ruleset` did not, so the mine's own output judged dirty the
+    moment it contained one such rule. (b) JUDGE-TIMEOUT is fatal and was decided by a
+    single 30 s wall-clock alarm -- a fact about the box's load, not the rule -- so the
+    artifact was non-reproducible under load; timed-out rules are now retried serially
+    at 4x after the sweep."""
+
+    def test_the_d36_carve_out_reaches_verify_ruleset(self) -> None:
+        from simplipy.verify import verify_ruleset
+        rules = [[['+', '<constant>', '*', '<constant>', 'x0'],
+                  ['+', '*', '<constant>', 'x0', '<constant>']]]
+        for mode in (None, 'f64', 'real', 'corpus'):
+            rep = verify_ruleset(rules, mode=mode)
+            assert rep['is_clean'] is True, (mode, rep)
+        # and the carve-out opens NOTHING else: a false rule stays dirty everywhere
+        bad = [[['pow1_2', 'pow2', '?0'], ['?0']]]
+        for mode in (None, 'f64'):
+            assert verify_ruleset(bad, mode=mode)['is_clean'] is False, mode
+
+    def test_a_timed_out_rule_is_retried_serially(self, monkeypatch) -> None:
+        from simplipy.verify import _gate
+        calls = {'n': 0}
+        real_judge = _gate.judge_rule
+
+        def flaky(lhs, rhs):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise _gate._JudgeTimeout()   # the load spike, deterministically
+            return real_judge(lhs, rhs)
+
+        monkeypatch.setattr(_gate, 'judge_rule', flaky)
+        code = _gate.sweep([(['neg', 'neg', '?0'], ['?0'])])
+        assert calls['n'] == 2, "the timed-out rule must be re-judged"
+        assert code == 0, "and the retry's CERTIFIED verdict must replace the timeout"
+
+    def test_a_double_timeout_stays_fatal(self, monkeypatch) -> None:
+        from simplipy.verify import _gate
+
+        def hung(lhs, rhs):
+            raise _gate._JudgeTimeout()
+
+        monkeypatch.setattr(_gate, 'judge_rule', hung)
+        code = _gate.sweep([(['neg', 'neg', '?0'], ['?0'])])
+        assert code != 0, "fail-closed: a rule that times out twice is held out"

@@ -104,8 +104,22 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
                        judge_timeout_s=judge_timeout_s,
                        announce_report=report_path is not None)
     report = json.load(open(tmp))
+    # D36 carve-out, mirrored from `mining._route_triple`: the multi-`<constant>`
+    # family's soundness authority is the Const-channel chain, not the contract, so
+    # the judge's non-jurisdiction sentinel (UNSUPPORTED-SHAPE + CONST_CHANNEL_DETAIL)
+    # is not a verdict about the rule. Without this mirror, the moment a mine routes
+    # such a rule into the triple as `core`, `verify_ruleset` on the mine's own
+    # output reads tier None -> `reject` and reports dirty in every mode -- the gate
+    # disagreeing with the router about a ratified decision (audit U3, 2026-08-22).
+    def _eff_tier(d):
+        if d.get('detail') == CONST_CHANNEL_DETAIL:
+            return 'core'
+        return d.get('tier') or 'reject'
+
     if mode is None:
-        dirty = any(report['buckets'].get(k) for k in FATAL_BUCKETS)
+        d36 = {d.get('idx') for d in report.get('detail', [])
+               if d.get('detail') == CONST_CHANNEL_DETAIL}
+        dirty = any(set(report['buckets'].get(k) or []) - d36 for k in FATAL_BUCKETS)
         report['is_clean'] = not dirty
         report['exit_code'] = code
         return report
@@ -114,7 +128,7 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     offenders = [{'idx': d.get('idx'), 'lhs': d.get('lhs'), 'rhs': d.get('rhs'),
                   'verdict': d.get('verdict'), 'tier': d.get('tier')}
                  for d in report.get('detail', [])
-                 if (d.get('tier') or 'reject') not in allowed]
+                 if _eff_tier(d) not in allowed]
     report['mode'] = mode
     report['offenders'] = offenders
     report['is_clean'] = not offenders
