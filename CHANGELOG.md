@@ -169,6 +169,27 @@ drop census rather than silently absent.
 - **`simplipy.utils.substitude_constants` is removed** (the historic misspelling, warning
   since 0.13.0); use `substitute_constants`.
 
+### Security — the trust model covers the whole dotted path
+
+A realization is resolved by attribute traversal, and a module's attributes include
+every module it imported. The trust check decided only the leading component, so a
+config that named a trusted root could walk past it: `simplipy.engine.os.system` loaded
+without an `UntrustedModuleError` and called `os.system` at first evaluation. The reach
+was general rather than incidental — a walk of the attribute graph from the four default
+roots lands on 53 distinct top-level packages within three hops, `os`, `ctypes`,
+`importlib` and `builtins` among them.
+
+The allowlist now applies to every hop. Any component that resolves to a module is held
+to the same trusted set as the root, dunder components are refused, and a realization
+that names a module rather than a callable is refused. `math`, `np`, `scipy` and
+`simplipy` remain trusted by default; `trusted_modules=` and `SIMPLIPY_TRUSTED_MODULES`
+remain the only ways to widen that, and they widen the whole path.
+
+This affects any deployment that builds an engine from a config it did not write — a
+Hugging Face asset loaded by name, a colleague's file, a cloned repository. Shipped
+configs, the legacy vocabulary and every realization the deployed evaluation path uses
+are unchanged; upgrade to 0.14.0 to get the check.
+
 ### Fixed
 
 - The judge quantified a source-side `<constant>` over |c| ≤ 5 while the miner draws its

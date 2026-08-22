@@ -25,7 +25,7 @@ import yaml
 from simplipy.utils import (
     is_numeric_string,
     deduplicate_rules)
-from simplipy.trust import check_realization, check_root, package_for, resolve_trusted
+from simplipy.trust import check_chain, check_realization, check_root, package_for, resolve_trusted
 from simplipy.io import load_config
 from simplipy.asset_manager import get_path
 
@@ -757,7 +757,9 @@ class SimpliPyEngine:
 
         Each realization's leading component is checked against the trusted set
         BEFORE anything is imported (importing runs top-level code, so the check has
-        to come first), then imported into this engine's own evaluation namespace --
+        to come first), and the rest of its dotted path is then walked against the
+        same set, because attribute traversal from a trusted root reaches whatever
+        that root imported. The module is bound into this engine's own namespace --
         not into shared module globals, so engines cannot contaminate each other's
         expression namespaces. ``np`` is always bound, because ``np.pi`` and ``np.e``
         are token grammar and may appear in any expression regardless of config.
@@ -766,13 +768,24 @@ class SimpliPyEngine:
         ------
         simplipy.trust.UntrustedModuleError
             If a realization names a module root that is neither trusted by default
-            nor opted into via ``trusted_modules=`` or ``SIMPLIPY_TRUSTED_MODULES``.
+            nor opted into via ``trusted_modules=`` or ``SIMPLIPY_TRUSTED_MODULES``,
+            or if the rest of its dotted path reaches a module outside that set.
             See :mod:`simplipy.trust` for why the opt-in cannot live in the config.
         """
         namespace: dict[str, Any] = {'np': np}
         for root, operators in sorted(self._realization_roots.items()):
             check_root(root, operators, self._trusted_modules)
-            namespace[root] = importlib.import_module(package_for(root))
+            module = importlib.import_module(package_for(root))
+            # THE ROOT IS ONLY THE FIRST HOP (audit S2). The realization is resolved by
+            # attribute traversal, and a module's attributes include every module it
+            # imported, so a trusted root is a doorway to `os`, `shutil`, `importlib`.
+            # `check_chain` walks the rest against the same allowlist. It runs AFTER the
+            # import because the walk needs the resolved objects -- which costs nothing,
+            # since the only module imported by then is the one `check_root` licensed.
+            for operator in operators:
+                check_chain(str(self.operator_realizations[operator]), str(operator),
+                            module, self._trusted_modules)
+            namespace[root] = module
         self._eval_namespace = namespace
 
     @classmethod
