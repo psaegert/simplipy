@@ -910,7 +910,17 @@ def battery_for(sort):
     if sort == '?':
         return reals  # data is real; +-inf is outside the quantifier
     if sort == '_':
-        return reals + [((lambda: PINF), 'dirac-inf'), ((lambda: NINF), 'dirac-inf')]
+        # nan atom (S14, owner ruling 2026-08-22): `_` binds an ARBITRARY subtree, and
+        # a subtree can evaluate to nan on a positive-measure set of its own inputs
+        # (`log x0` on the whole negative half-line). nan is therefore IN `_`'s
+        # quantification domain -- a full citizen, not an extension point -- and the
+        # 'nan-dom' tag routes any non-eq event at this binding to the fatal clause
+        # `a-nan-domain` instead of the EXT/SHRINK tolerance, which exists for events
+        # arising on null sets of a REAL binding. The other sorts keep their
+        # batteries: they are certificate-scoped, and whether `!`/`$` owe nan the
+        # same treatment is a separate doctrine question, not ruled by S14.
+        return reals + [((lambda: PINF), 'dirac-inf'), ((lambda: NINF), 'dirac-inf'),
+                        ((lambda: NAN), 'nan-dom')]
     if sort == '!':
         return reals + [((lambda: PINF), 'nullx'), ((lambda: NINF), 'nullx')]
     if sort == '$':
@@ -1704,7 +1714,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     'detail': f'cl={sorted(unwitnessed_cl)} (LHS defined)'}
         cl_battery = kept_cl if has_cl else [(None, None)]
 
-    a_kills, tolerated, dep_div = [], [], []
+    a_kills, nan_kills, tolerated, dep_div = [], [], [], []
     # F100, the REALISATION axis. `dep_div` answers "the contract certifies but
     # deployment diverges" and is therefore gated on the contract agreeing -- which
     # means a KILLed rule's realisation was never recorded, and the SOUND/LOSSY tier
@@ -1758,7 +1768,13 @@ def judge_rule(lhs, rhs, deployed_check=True):
                 point['<C_L>'] = clkey
             if cr is not None:
                 point['<C_R>'] = float(cr)
-            if v == 'REAL-CHANGE':
+            if v not in (None, 'eq') and any(t == 'nan-dom' for t in tags.values()):
+                # S14: at a nan binding of a `_` slot, every disagreement is a change
+                # of the function on a set the sort quantifies. EXT here is
+                # nan-ERASURE (`- _0 _0 -> 0` erasing `log x0 - log x0` on x0 < 0),
+                # SHRINK is nan-introduction. Fatal, not tolerated.
+                nan_kills.append((v, point))
+            elif v == 'REAL-CHANGE':
                 if all(t == 'real' for t in tags.values()):
                     # SINGULAR-INPUT gate (2026-08-11), the twin of the monitor's:
                     # clause (a)'s authority is REAL points where mathematics answers.
@@ -1929,6 +1945,12 @@ def judge_rule(lhs, rhs, deployed_check=True):
         return {'verdict': 'KILL', 'clause': 'a-real-change', 'points': a_kills[:3],
                 'measure': meas, 'skipped_cl': skipped_cl,
                 'realised': _realised, 'tier': _tier('KILL', _realised)}
+    if nan_kills:
+        return {'verdict': 'KILL', 'clause': 'a-nan-domain',
+                'points': [p for _, p in nan_kills[:3]],
+                'kinds': sorted({k for k, _ in nan_kills}),
+                'measure': meas, 'skipped_cl': skipped_cl,
+                'realised': _realised, 'tier': _tier('KILL', _realised)}
     if meas > MEASURE_KILL:
         return {'verdict': 'KILL', 'clause': 'bc-positive-measure', 'measure': meas,
                 'tolerated_events': len(tolerated), 'skipped_cl': skipped_cl,
@@ -2035,6 +2057,10 @@ TOUCHSTONES = [
     ('- <constant> <constant>', '0', 'UNSUPPORTED-SHAPE',
      'two LHS constants bind independently in the deployed matcher; the one-symbol '
      'diagonal model must refuse, fail-closed'),
+    ('- _0 _0', '0', 'KILL',
+     'nan-erasure at a `_` binding: `_` quantifies nan (S14, owner ruling '
+     '2026-08-22) -- `log x0 - log x0` is nan on the whole negative half-line and '
+     'this rewrite defines it'),
 ]
 
 

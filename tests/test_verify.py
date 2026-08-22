@@ -399,9 +399,14 @@ class TestD15DiagonalBinding:
     def test_sound_multislot_rules_stay_certified(self):
         from simplipy.verify import verify_rule
         # diagonal-safe multi-slot rules must not be collateral: x*y -> y*x is exact
-        # everywhere including the diagonal; (a-b)+(b-a) -> 0 is nan == nan there.
+        # everywhere including the diagonal (nan*x and x*nan agree at the atom too).
         assert verify_rule(['*', '_0', '_1'], ['*', '_1', '_0'])['verdict'] in ('CERTIFIED', 'TOLERATED')
-        assert verify_rule(['+', '-', '_0', '_1', '-', '_1', '_0'], ['0'])['verdict'] != 'KILL'
+        # (a-b)+(b-a) -> 0 at `_` died with S14 (2026-08-22): it erases nan whenever
+        # EITHER subtree is nan-valued -- off the diagonal, not because of it. The
+        # data-sort spelling keeps this test's question -- the DIAGONAL must not
+        # convict -- alive without the nan question: at ?0 = ?1 the residual is 0.
+        assert verify_rule(['+', '-', '_0', '_1', '-', '_1', '_0'], ['0'])['verdict'] == 'KILL'
+        assert verify_rule(['+', '-', '?0', '?1', '-', '?1', '?0'], ['0'])['verdict'] != 'KILL'
 
 
 class TestTheRealisationAxis:
@@ -844,13 +849,16 @@ class TestAnExactZeroIsNotAnUndecayableGap:
 
     #: True on the reals, with one side EXACTLY zero -- so the judge is comparing pure
     #: precision residue against an exact zero, the shape that could never decay.
+    #: Spelled `?` since S14 (2026-08-22): every row drops its slot into a constant
+    #: RHS, which erases nan at a `_` binding and correctly dies `a-nan-domain` there
+    #: -- the exact-zero question this class pins is sort-independent.
     TRUE_ZERO_SIDE = [
-        (['log', '*', 'exp', '_0', 'exp', 'neg', '_0'], ['0']),
-        (['-', 'atanh', 'tanh', '_0', '_0'], ['0']),
-        (['-', 'asinh', 'sinh', '_0', '_0'], ['0']),
-        (['-', 'log', '+', 'cosh', '_0', 'sinh', '_0', '_0'], ['0']),
-        (['-', '*', 'tanh', '_0', 'cosh', '_0', 'sinh', '_0'], ['0']),
-        (['-', 'log', 'exp', '_0', '_0'], ['0']),
+        (['log', '*', 'exp', '?0', 'exp', 'neg', '?0'], ['0']),
+        (['-', 'atanh', 'tanh', '?0', '?0'], ['0']),
+        (['-', 'asinh', 'sinh', '?0', '?0'], ['0']),
+        (['-', 'log', '+', 'cosh', '?0', 'sinh', '?0', '?0'], ['0']),
+        (['-', '*', 'tanh', '?0', 'cosh', '?0', 'sinh', '?0'], ['0']),
+        (['-', 'log', 'exp', '?0', '?0'], ['0']),
     ]
 
     def test_a_true_identity_against_an_exact_zero_is_not_killed(self) -> None:
@@ -864,6 +872,16 @@ class TestAnExactZeroIsNotAnUndecayableGap:
             if got.get('verdict') == 'KILL' or got.get('tier') == 'reject':
                 bad.append((' '.join(lhs), got.get('verdict'), got.get('clause')))
         assert not bad, f'true zero-side identities convicted: {bad}'
+
+    def test_the_wildcard_spelling_of_a_slot_dropper_dies_at_the_nan_atom(self) -> None:
+        """The same identities at `_` claim soundness for nan-valued subtrees they
+        cannot deliver -- `atanh(tanh(log x0)) - log x0` is nan on x0 < 0 and the
+        rewrite defines it. S14 routes that to `a-nan-domain`, and the honest sort
+        for a slot-dropping rule is `?` (above), never `_`."""
+        from simplipy.verify._contract import judge_rule
+        got = judge_rule(['-', 'atanh', 'tanh', '_0', '_0'], ['0'])
+        assert got['verdict'] == 'KILL', got
+        assert got['clause'] == 'a-nan-domain', got
 
     def test_the_saturation_family_is_still_convicted(self) -> None:
         """The other direction, and the reason the floor cannot simply be widened to
@@ -956,8 +974,10 @@ class TestABoundedFunctionNeverAttainsItsLimit:
         identities that live at the same asymptote stay untouched."""
         from simplipy.verify._contract import judge_rule
         assert judge_rule(['tanh', '30'], ['1'])['clause'] == 'a-real-change'
+        # the slot-dropping identity is spelled `?` since S14: its `_` spelling
+        # correctly dies `a-nan-domain`, which is sort doctrine, not the ladder's.
         for lhs, rhs in ((['cos', 'asin', 'tanh', '_0'], ['inv', 'cosh', '_0']),
-                         (['log', '*', 'exp', '_0', 'exp', 'neg', '_0'], ['0'])):
+                         (['log', '*', 'exp', '?0', 'exp', 'neg', '?0'], ['0'])):
             got = judge_rule(lhs, rhs)
             assert got.get('verdict') != 'KILL', (lhs, got)
             assert got.get('tier') == 'real', (lhs, got)
@@ -1237,3 +1257,49 @@ class TestAtanGetsTheBoundaryBandTanhAlreadyHad:
                 assert abs(abs(v) - mp.pi / 2) >= mpf(10) ** (-mp.dps + 10), a
         finally:
             mp.dps = old
+
+
+class TestNanIsInTheWidestSortsQuantifier:
+    """S14 (owner ruling 2026-08-22): `_` binds an ARBITRARY subtree, and a subtree can
+    evaluate to nan on a positive-measure set of its own inputs -- `log x0` on the whole
+    negative half-line. The `_` battery therefore carries a nan atom, and any
+    disagreement at that binding is the fatal clause `a-nan-domain`, not a tolerated
+    extension: EXT there is nan-ERASURE, SHRINK is nan-introduction. The other sorts
+    keep their own licences -- `?` is the data sort (nan outside the quantifier), and
+    whether `!`/`$` owe nan the same treatment is a separate, unruled question.
+    """
+
+    def test_nan_erasure_at_a_wildcard_binding_is_fatal(self) -> None:
+        """`- _0 _0 -> 0` erases nan for every nan-valued subtree; before S14 this
+        judged TOLERATED/real and `verify_ruleset` called it clean."""
+        r = judge_rule('- _0 _0'.split(), ['0'])
+        assert r['verdict'] == 'KILL', r
+        assert r['clause'] == 'a-nan-domain', r
+        assert r['kinds'] == ['EXT'], r
+
+    def test_nan_arising_at_a_real_binding_stays_clause_c(self) -> None:
+        """`atan tan asin _0 -> asin _0`: the nan lives on the singular manifold of a
+        REAL binding (|_0| near 1), a null set -- the touchstone's standing TOLERATED
+        verdict must survive the atom, because the interception keys on the nan ATOM
+        binding, never on nan appearing during evaluation."""
+        r = judge_rule('atan tan asin _0'.split(), 'asin _0'.split())
+        assert r['verdict'] == 'TOLERATED', r
+        assert r['classes'] == ['EXT'], r
+
+    def test_strict_wildcard_identities_are_unmoved(self) -> None:
+        """nan propagates through strict identities: both sides read nan at the atom,
+        compare 'eq', and the verdict cannot move."""
+        for lhs, rhs in (('/ 1 abs _0', 'abs inv _0'),
+                         ('pow1_3 pow3 _0', '_0'),
+                         ('inv abs abs _0', 'inv abs _0')):
+            r = judge_rule(lhs.split(), rhs.split())
+            assert r['verdict'] == 'CERTIFIED', (lhs, r)
+
+    def test_the_data_sorts_keep_their_own_licences(self) -> None:
+        """`- ?0 ?0 -> 0` stays CERTIFIED (data slots never carry nan) and
+        `- !0 !0 -> 0` stays TOLERATED (its +-inf atoms are null-excused, and S14
+        deliberately does not extend to `!`)."""
+        r = judge_rule('- ?0 ?0'.split(), ['0'])
+        assert r['verdict'] == 'CERTIFIED', r
+        r = judge_rule('- !0 !0'.split(), ['0'])
+        assert r['verdict'] == 'TOLERATED', r
