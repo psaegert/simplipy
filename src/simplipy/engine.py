@@ -1767,8 +1767,10 @@ class SimpliPyEngine:
     _MEASURE_PROBES = (
         # the LITERAL codebook: an integer (the L-formula), a unit fraction and a
         # non-unit one (the fraction code and the inversion bit), a decimal whose
-        # denominator carries a five (the print/argmin split), and `<constant>`.
-        ('1000',), ('1/2',), ('355/113',), ('0.2',), ('<constant>',),
+        # denominator carries a five (the print/argmin split), a beyond-i128 leaf
+        # (the numeric-string pricer -- invisible until 2026-08-22: its clamp stayed
+        # at two bits after the floor ruling and NO probe moved, S15), and `<constant>`.
+        ('1000',), ('1/2',), ('355/113',), ('0.2',), ('1e-40',), ('<constant>',),
         # the SYMBOL TABLE, one probe per entry (2026-08-21). Before these, six of the
         # nine entries were invisible to the fingerprint: changing `Pow` from 4 bits to
         # 3 left the digest at `355f6ba90801f603`, so an artifact mined under one table

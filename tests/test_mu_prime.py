@@ -482,6 +482,21 @@ class TestNativeDescentNeverWorse:
         assert made_bigger == [], f'{len(made_bigger)} rows ASCENDED under native mu\''
 
 
+class TestTheFloorIsMirroredAcrossTheI128Boundary:
+    """S15: the codeword floor moved to one bit (2026-08-22) in `mu_rat`, but the
+    beyond-i128 leaf pricer kept its own clamp at two -- so `1e-39` (denominator past
+    i128, priced as a numeric-string leaf) cost MORE than `3e-38` (in range, priced by
+    `mu_rat`): the simpler mantissa at the adjacent magnitude, upcharged one bit purely
+    for crossing the representation line. The boundary must not be an ordering cliff."""
+
+    def test_no_ordering_cliff_at_the_boundary(self, eng):
+        assert eng.complexity(['1e-39']) < eng.complexity(['3e-38'])
+
+    def test_the_two_spellings_of_one_value_still_price_equal(self, eng):
+        # the D38 seam stays closed under the mirrored floor: both sides moved together
+        assert eng.complexity(['1e-40']) == eng.complexity(['1/1' + '0' * 40])
+
+
 class TestFingerprintAndArtifactLoad:
     """The load contract: acj-4-3 (mined under mu) still loads and serves; the
     measure fingerprint MOVES (that is what it is for) and is write-only at load --
@@ -495,6 +510,7 @@ class TestFingerprintAndArtifactLoad:
             '1/2': 3585,              # rational wins: selector + L(1) + L(2)
             '355/113': 16309,         # no decimal codeword: selector + old price
             '0.2': 3585,              # (2, 1): selector + L(2) + L(1)
+            '1e-40': 7358,            # beyond-i128 leaf: selector + max(floor, L(1)) + L(40)
             '<constant>': MU_FREE_PRIME,
             # the symbol table, one probe per entry (2026-08-21). Add and Mul price the
             # same here and still need separate probes: a change to ONE of them has to

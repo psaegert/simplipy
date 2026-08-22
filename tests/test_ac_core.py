@@ -780,6 +780,34 @@ class TestOneZeroPoleContract:
             assert engine._core.interval_class(list(tokens)) == 'POSINF', tokens
 
 
+class TestAtanhTanhBandIsPrecisionDerived:
+    """S3: the atanh(tanh(t)) -> t collapse carried a band of 18, derived from where
+    f64 tanh ATTAINS +-1 (18.99). But tanh fails by COMPRESSION long before it
+    saturates -- it loses ~2|t|/ln2 bits of the argument approaching +-1 -- and under
+    the realised criterion (`_ulp_gap <= REALISED_ULP = 8`, the same bar the judge
+    holds every rule to) the roundtrip first breaches at |t| ~ 2.7 (2.677 audit host,
+    2.808 this host, libm-dependent; by |t| = 18 the drift is ~0.03-0.06 ABSOLUTE).
+    The band is now 2: the last integer magnitude ceiling on the safe side of every
+    measured breach. The overflow-derived bands (log/exp 709, sinh/cosh 710) are a
+    different disease and keep their attainment thresholds."""
+
+    def test_collapses_inside_the_band(self, engine: SimpliPyEngine) -> None:
+        assert engine.simplify(['atanh', 'tanh', 'sin', 'x0']) == ['sin', 'x0']
+        assert engine.simplify(['atanh', 'tanh', '*', '2', 'sin', 'x0']) == \
+            ['*', '2', 'sin', 'x0']
+        assert engine.simplify(['atanh', 'tanh', '2']) == ['2']
+
+    def test_refused_outside_the_band(self, engine: SimpliPyEngine) -> None:
+        """Ceiling 3 admits measured breaches (scattered from ~2.68 up), so the
+        collapse is refused -- these all collapsed under the old band of 18."""
+        assert engine.simplify(['atanh', 'tanh', '*', '3', 'sin', 'x0']) == \
+            ['atanh', 'tanh', '*', '3', 'sin', 'x0']
+        assert engine.simplify(['atanh', 'tanh', '3']) == ['atanh', 'tanh', '3']
+
+    def test_unbounded_argument_never_collapses(self, engine: SimpliPyEngine) -> None:
+        assert engine.simplify(['atanh', 'tanh', 'x0']) == ['atanh', 'tanh', 'x0']
+
+
 class TestTranscendentalAtomEnclosures:
     """Hardening H-018 (2026-08-03, S0): the interval layer rendered ``np.pi``/``np.e``
     as exact f64 points, so it could certify facts about the RENDERING that are false of

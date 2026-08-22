@@ -403,7 +403,7 @@ class TestProvenanceRecordsTheMeasure:
         assert fp['mu_sym'] == engine.complexity(['x0'])
         assert fp['mu_free'] == engine.complexity(['<constant>'])
         # each probe separates a change the measure has actually undergone
-        for probe in ('1000', '1/2', '355/113', '0.2', '<constant>', 'x0'):
+        for probe in ('1000', '1/2', '355/113', '0.2', '1e-40', '<constant>', 'x0'):
             assert isinstance(fp['probes'][probe], int), probe
         assert len(fp['digest']) == 16
 

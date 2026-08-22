@@ -208,6 +208,23 @@ are unchanged; upgrade to 0.14.0 to get the check.
   is `x^(-(2**3))`). Only expressions read from infix with a negative exponent were
   affected; prefix input and every mined artifact are untouched.
 
+- The `atanh(tanh(t))` → `t` collapse carried a band of |t| ≤ 18, derived from where
+  f64 `tanh` attains ±1 (18.99). But `tanh` fails by **compression** long before it
+  saturates -- it loses ~2|t|/ln2 bits of the argument approaching ±1 -- and under the
+  same realised 8-ULP criterion every rule is held to, the roundtrip first breaches at
+  |t| ≈ 2.7 (libm-dependent; by |t| = 18 the drift is ~0.03-0.06 *absolute*). The band
+  is now 2, the last magnitude ceiling on the safe side of every measured breach. The
+  overflow-derived bands (`log∘exp` 709, `sinh`/`cosh` pairs 710) are a different
+  failure mode and keep their attainment thresholds.
+
+- The literal codeword floor (one bit, ruled 2026-08-22) reached `mu_rat` but not the
+  beyond-i128 leaf pricer, whose clamp stayed at two bits -- so `1e-39` priced *above*
+  `3e-38`: the simpler mantissa at the adjacent magnitude, upcharged for crossing the
+  representation line. The floor is now one constant shared by both sides, the seam
+  (`1e-40` = `1/1⟨40 zeros⟩`) stays closed, and the measure fingerprint gained a
+  beyond-i128 probe so this class of drift can never again leave the digest unchanged.
+  Measured over all 16,018 shipped rules: zero prices move, zero directions flip.
+
 - The judge quantified a source-side `<constant>` over |c| ≤ 5 while the miner draws its
   constants from [1e-3, 1e3] and sweeps magnitudes to 500 — so `forall c over the reals`
   was checked on one decade. The battery now spans ±1e-3 to ±1e4. Reaching there needed

@@ -329,7 +329,7 @@ fn mu_fun_bits(name: &str) -> u64 {
 /// SCOPED TO THE f64 RANGE ON PURPOSE, as before: a beyond-f64 literal is not a value a
 /// fit can produce, so it is not a value `<constant>` stands for. NOTE the direction of
 /// the old "beyond-f64 literals outprice the free constant" consequence PARTLY inverts
-/// under mu': a deep-but-thin beyond-f64 literal (`1e-400`, now 11.651 bits via its
+/// under mu': a deep-but-thin beyond-f64 literal (`1e-400`, now 10.651 bits via its
 /// scientific codeword) undercuts c_free'. Nothing load-bearing rests on the old
 /// direction -- G3 refuses Const-introducing rules regardless of price, and the
 /// dominance the ordering needs (over every FITTABLE value) is exactly what the sup
@@ -613,7 +613,8 @@ const MU_SCALE_KNEE_COST: u64 = MU_SCALE_KNEE * L10_MILLI;
 /// exactly the mu' rule `mu_rat` applies in range (D38): one selector bit, then the
 /// cheaper of the RATIONAL codeword (every integer the spelling writes down costs
 /// `L(n)`, a fraction pays both components) and the DECIMAL-SCIENTIFIC codeword
-/// (`max(2, L(m)) + L(|scale|)` for the shortest spelling `m * 10^scale`), plus a sign
+/// (`max(floor, L(m)) + L(|scale|)` for the shortest spelling `m * 10^scale`, the
+/// floor being `MU_RAT_FLOOR` -- one bit since the 2026-08-22 ruling), plus a sign
 /// bit inside each codeword total.
 ///
 /// Literals whose exact p/q exceeds 128 bits (`4.159653437657682e-35` has q = 10^50) live
@@ -632,10 +633,14 @@ pub fn mu_numeric_str(s: &str) -> u64 {
     let body = s.strip_prefix('-').unwrap_or(s);
     let sign = if negative { MU_MILLI } else { 0 };
     // Every priced numeric leaf pays the one selector bit on top of its cheapest
-    // codeword total; each total carries the sign and the two-bit floor itself,
-    // mirroring `mu_rat_codeword_totals` exactly.
+    // codeword total; each total carries the sign and the codeword floor itself,
+    // mirroring `mu_rat_codeword_totals` exactly -- the SAME `MU_RAT_FLOOR`, or the
+    // boundary becomes an ordering cliff: with this side clamped at two bits while
+    // the in-range side moved to one, mu(1e-39) priced ABOVE mu(3e-38) (S15) -- the
+    // simpler mantissa at the adjacent magnitude cost more, purely for having
+    // crossed the i128 line.
     let finish = |fraction: u64, decimal: Option<u64>| {
-        let f = fraction.saturating_add(sign).max(2 * MU_MILLI);
+        let f = fraction.saturating_add(sign).max(MU_RAT_FLOOR);
         MU_MILLI
             + match decimal {
                 Some(d) => f.min(d.saturating_add(sign)),
@@ -696,7 +701,7 @@ pub fn mu_numeric_str(s: &str) -> u64 {
             };
             Some(
                 m_cost
-                    .max(2 * MU_MILLI)
+                    .max(MU_RAT_FLOOR)
                     .saturating_add(l_millibits(u128::from(k))),
             )
         })();
@@ -764,7 +769,7 @@ pub fn mu_numeric_str(s: &str) -> u64 {
     let dec = if scale == 0 {
         None
     } else {
-        Some(l_sig.max(2 * MU_MILLI).saturating_add(scale_digits_cost))
+        Some(l_sig.max(MU_RAT_FLOOR).saturating_add(scale_digits_cost))
     };
     finish(fraction, dec)
 }
@@ -1587,13 +1592,22 @@ impl<'a> Cx<'a> {
         let i = self.view.resolve_owned(inner);
         match (o.as_str(), i.as_str()) {
             // TOTAL on the extended real line -- but NOT under the deployed f64 algebra
-            // past the saturation points below, so each carries the band its own inner
-            // function survives. Thresholds bisected to the ulp against the deployed
-            // evaluator (see `magnitude_bound`); the constants are the last SAFE argument.
-            // MODE-AWARE, and the guard asks the F64 question, not the recall one (owner
-            // ruling 2026-08-19). These identities are TOTAL over the reals -- atanh(tanh x)
-            // = x for every real x -- and the band exists only because f64 saturates: tanh
-            // attains +-1 from 18.990341103219276, so atanh of it is +-inf. So:
+            // outside the bands below, so each carries the band its own inner function
+            // survives. MODE-AWARE, and the guard asks the F64 question, not the recall
+            // one (owner ruling 2026-08-19). These identities are TOTAL over the reals --
+            // atanh(tanh x) = x for every real x -- and each band is derived from the
+            // REALISED criterion (`_ulp_gap <= REALISED_ULP = 8`, verify._contract), not
+            // from where the inner function attains its limit. The two are different
+            // diseases: `log o exp` and the sinh/cosh pairs fail by OVERFLOW, so their
+            // bands sit at the last safe argument (709/710, bisected to the ulp against
+            // the deployed evaluator); `atanh o tanh` fails by COMPRESSION -- tanh loses
+            // ~2|t|/ln2 bits of the argument approaching +-1, so the roundtrip drifts
+            // past 8 ULP at |t| ~ 2.7 (first breach measured 2.677 audit host / 2.808
+            // this host, libm-dependent; by |t|=18 the drift is ~0.03-0.06 ABSOLUTE),
+            // eleven-plus band-widths before saturation at 18.99 -- which is what the
+            // old attainment-derived band of 18 measured, and why it was wrong (S3).
+            // The integer bound below is the last magnitude ceiling on the SAFE side of
+            // every measured breach, with >= 2x margin on both hosts. So:
             //   f64    -- band REQUIRED: the deployed evaluator is the authority.
             //   real   -- band SKIPPED: mathematics has no saturation to protect against,
             //             and requiring it here would refuse a rewrite that is simply true.
@@ -1601,7 +1615,7 @@ impl<'a> Cx<'a> {
             //             so no external function exists to disagree with the collapse.
             // A `lossy: bool` could not express the middle row, which is why `Cx` now
             // carries the mode itself.
-            ("atanh", "tanh") if !self.f64_semantics() || self.certainly_in_band(t, 18) => {
+            ("atanh", "tanh") if !self.f64_semantics() || self.certainly_in_band(t, 2) => {
                 Some(t.clone())
             }
             ("log", "exp") if !self.f64_semantics() || self.certainly_in_band(t, 709) => {
@@ -5422,17 +5436,18 @@ mod tests {
         assert!(mu_numeric_str(&format!("{big41}1/7")) > c);
         assert!(mu_numeric_str(&format!("{big41}/71")) > c);
         // The sign costs exactly one bit here, as it does in range (owner 2026-08-06);
-        // a zero numerator floors at two bits (+ the selector).
+        // a zero numerator floors at the one-bit codeword floor (+ the selector) --
+        // the 2026-08-22 ruling, mirrored across the i128 boundary (S15).
         assert_eq!(mu_numeric_str(&format!("-{big41}/7")), c + MU_MILLI);
-        assert_eq!(mu_numeric_str("0/7"), 3 * MU_MILLI);
+        assert_eq!(mu_numeric_str("0/7"), 2 * MU_MILLI);
         // The decimal path is case-insensitive in the exponent marker.
         assert_eq!(
             mu_numeric_str("4.159653437657682e-35"),
             mu_numeric_str("4.159653437657682E-35")
         );
         // D38 RESTORES the minimum over codes (revoking Sec 10.10(1)): `1e-40` takes its
-        // decimal-scientific codeword, selector + max(2, L(1)) + L(40) = 8.358 bits, not
-        // the 133.880 the fraction-only rule charged. The boundary property this test
+        // decimal-scientific codeword, selector + max(floor, L(1)) + L(40) = 7.358 bits
+        // under the one-bit floor, not the 133.880 the fraction-only rule charged. The boundary property this test
         // exists for -- the token pricer agrees with `mu_rat`'s rule, and the SAME value
         // prices the SAME from both spellings -- now holds EXACTLY: the pre-D38 build
         // pinned a one-milli-bit seam between these two spellings (133.880 vs 133.879,
@@ -5440,8 +5455,8 @@ mod tests {
         // codeword through the same `l_millibits(40)` and the seam is CLOSED.
         let e_notation = mu_numeric_str("1e-40");
         let as_fraction = mu_numeric_str(&format!("1/1{}", "0".repeat(40)));
-        assert_eq!(e_notation, 8_358);
-        assert_eq!(as_fraction, 8_358);
+        assert_eq!(e_notation, 7_358);
+        assert_eq!(as_fraction, 7_358);
         assert_eq!(
             e_notation, as_fraction,
             "the two spellings of 1e-40 drifted apart: {e_notation} vs {as_fraction}"
