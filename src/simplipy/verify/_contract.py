@@ -1120,7 +1120,18 @@ def fit_witness(tl, tr, shared, cl_val=None):
         return None
     env0, L0, g, vals, ok = found
     best = None
-    for i in range(len(_XS) - 1):
+    if tr == ('slot', '<C_R>'):
+        # BARE-<C_R> SHORTCUT (audit §7.2, 2026-08-22): the whole target IS the
+        # constant, so the residual is g(c) = c - L0 exactly -- linear, monotone,
+        # witness c_t = L0, nothing to search. 272 of the 343 constant-carrying
+        # shipped rules have this shape, and each was paying the 500-point bracket
+        # scan and up to 300 bisections per (rule, cl) to approximate the number the
+        # identity hands over. Beyond the cost, the scan machinery is where S20/S21's
+        # first-bracket and sign-of-zero misfires live -- this shape cannot reach
+        # them any more. Every downstream check still applies: the snap candidates,
+        # the two-env validation, and the caller's mp polish.
+        best = float(L0)
+    for i in range(len(_XS) - 1) if best is None else ():
         if ok[i] and vals[i] == 0:
             best = _XS[i]
             break
