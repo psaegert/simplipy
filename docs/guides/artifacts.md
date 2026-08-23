@@ -27,7 +27,8 @@ f64-exact and mathematically false.
 
 **The triple is the unit of mining, pinning and distribution.** A mine run is valid only
 if all three fall out of it; a partial triple is not shippable. The provenance sidecar
-covers the triple as a whole, and so does D29 byte-identity. Rules the mine finds and
+covers the triple as a whole, and so does the byte-identity promise: a re-mine at the
+recorded environment reproduces all three files. Rules the mine finds and
 can license in no mode are **recorded** in the sidecar's drop census rather than
 silently absent.
 
@@ -59,15 +60,15 @@ treated as not installed.
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-4-3", install=True)   # resolve, installing on demand
+engine = sp.SimpliPyEngine.load("acj-4", install=True)   # resolve, installing on demand
 ```
 
 <!-- docs-example: skip: cache-mutating -- installs into and removes from the user's shared asset cache -->
 ```python
-sp.install("acj-4-3")          # explicit install (alias of asset_manager.install_asset)
-sp.get_path("acj-4-3")         # resolve an installed asset to its entrypoint path
+sp.install("acj-4")            # explicit install (alias of asset_manager.install_asset)
+sp.get_path("acj-4")           # resolve an installed asset to its entrypoint path
 sp.list_assets("engine")       # list available and installed engine assets
-sp.uninstall("acj-4-3")        # remove (alias of asset_manager.uninstall_asset)
+sp.uninstall("acj-4")          # remove (alias of asset_manager.uninstall_asset)
 ```
 
 Resolution works offline once installed: a network failure falls back to the

@@ -16,7 +16,7 @@ Masking is a separate **terminal** step: apply it to `simplify`'s output.
 import simplipy as sp
 from simplipy import masking
 
-engine = sp.SimpliPyEngine.load("acj-4-3", install=True)
+engine = sp.SimpliPyEngine.load("acj-4", install=True)
 
 masking.mask(engine.simplify(['+', 'x1', '3.14']), engine,
              masking.mask_fittable)

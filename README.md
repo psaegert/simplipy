@@ -38,7 +38,7 @@ pip install simplipy
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-4-3", install=True)   # a published ruleset artifact
+engine = sp.SimpliPyEngine.load("acj-4", install=True)   # a published ruleset artifact
 
 # Simplify prefix expressions
 engine.simplify(('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'))
@@ -150,7 +150,7 @@ pytest tests --cov src --cov-report html -m "not integration"
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2026,
     publisher = {GitHub},
-    version = {0.13.1},
+    version = {0.14.0},
     url = {https://github.com/psaegert/simplipy}
 }
 ```

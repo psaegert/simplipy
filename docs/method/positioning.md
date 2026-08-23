@@ -4,7 +4,7 @@ Where SimpliPy sits in the literature, stated the way we would want a
 referee to read it: neighbours named, differences derived from the domain
 rather than from taste, and the limits of every analogy spelled out. The
 measured figures on this page were re-verified against the published
-`acj-4-3` artifact and the deployed engine (2026-08-17); every citation was
+`acj-4` artifact and the deployed engine (2026-08-23); every citation was
 independently confirmed before this page was published.
 
 SimpliPy's design sits in four well-populated neighbourhoods, and we would rather name our
@@ -13,7 +13,7 @@ neighbours than be mistaken for a pioneer.
 ### Rewrite-rule inference
 
 SimpliPy's mining phase is an instance of the enumerate–select–minimize schema for rewrite-rule
-inference introduced by Ruler [Nandi et al. 2021], and we adopt it deliberately. The correspondence
+inference introduced by Ruler [Nandi et al. 2021]. The correspondence
 is close enough to be worth stating precisely. Ruler's term enumeration modulo the equivalences its
 own learned rules already prove is our per-length complete enumeration of the source universe
 combined with the AC-judged Kruskal prune, which simplifies each source under the rules mined so far
@@ -82,13 +82,13 @@ operator itself (SymRegg, 2026), and measured for its effect on the parameter op
 and de França, JSC 2024].
 
 SimpliPy prices the same axis. Its `<constant>` placeholder is their θ — an unknown a fit will
-supply — and μ charges it 67 bits against 8 bits for a grammar symbol, so one free parameter is
-worth 8.4 symbols where their cost model makes it worth five nodes. Two differences are worth
+supply — and μ charges it 67 bits against 6 for a variable leaf, so one free parameter is
+worth about eleven leaves where their cost model makes it worth five nodes. Two differences are worth
 stating. First, that weight is derived rather than chosen: it is the supremum of μ over f64
 round-trip spellings plus a sign bit and a codeword-selector bit, so `<constant>` is guaranteed to
 dominate every literal it could be instantiated to. Second, and more substantially, μ has a middle
-tier their measure cannot express. Under μ, `E*x` costs 24 bits, `2.718281828459045*x` costs 72, and
-`<constant>*x` costs 83: a named exact constant, a rounded 52-bit literal and a free degree of
+tier their measure cannot express. Under μ, `E*x` costs 13 bits, `2.718281828459045*x` costs 65.3, and
+`<constant>*x` costs 76: a named exact constant, a rounded 52-bit literal and a free degree of
 freedom are three different prices. Their cost function collapses all three into one bucket, and
 their pipeline deliberately materialises constant subexpressions before saturation ("we do not keep
 expressions such as `exp(2+4)` in the e-graph and simply reduce it to its evaluated value"). That is
@@ -208,8 +208,8 @@ of their exact value. MDL objectives in symbolic regression price constants the 
 adds is two things. First, the treatment of the *inexact* literal: Mathematica charges any inexact
 real a flat 2 and SymPy's `count_ops` charges a Float 0, so both rank the rounded surrogate as
 strictly *simpler* than the exact rational it approximates — the incentive is inverted, not merely
-absent. μ prices the written decimal by its exact value as a rational, so `1/3` costs 3,000
-millibits and `0.3333333333333333` costs 104,717, a factor of 35. (Maple is the honest exception: it
+absent. μ prices the written decimal by its exact value, so `1/3` costs 4,000
+millibits and `0.3333333333333333` costs 56,653, a factor of 14. (Maple is the honest exception: it
 does charge floats by representation, so it does not invert the incentive.) Second, the *role*: in
 Mathematica and Maple the measure is a search-time ranking heuristic over candidates, and in Carette
 it is a definition rather than an algorithm, whereas in SimpliPy μ is the well-founded descent order
@@ -238,10 +238,10 @@ representation itself, so commutative rearrangement is free and never enters a s
 The trade runs in both directions, and it is worth being plain about the losing half. Because
 SimpliPy normalizes rather than saturates, it will not find rewrites that require exploring a space.
 On that same term, egg proves `x1*(x2+x3) − x1*x2 = x1*x3` at iteration 5 in 0.52 ms, while SimpliPy
-— which has AC cancellation but no distributivity rule — returns the expression unchanged in 24 µs.
+— which has AC cancellation but no distributivity rule — returns the expression unchanged in 23 µs.
 What SimpliPy buys in exchange is throughput at ruleset scale on the workload it targets. Its
-shipped asset is a mined identity table rather than a hand-written rewrite system: 97.1% of left-hand
-sides contain no wildcard (re-measured on the published acj-4-3, 2026-08-17), none is non-linear, and none exceeds four tokens. A bucketed index with a
+shipped asset is a mined identity table rather than a hand-written rewrite system: 95.0% of left-hand
+sides contain no wildcard (measured on the published acj-4, 2026-08-23), one is non-linear, and none exceeds four tokens. A bucketed index with a
 Bloom prefilter answers that shape in about 1.72 ns per candidate rule, which is what makes
 normalizing millions of machine-generated expressions practical. Equality saturation is built for a
 different question — find the best member of an equivalence class under a small, carefully chosen

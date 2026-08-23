@@ -86,7 +86,7 @@ Behaviour changes in 0.14.0 that are **not** deprecations, because no name chang
   associate. The association is deterministic and well-conditioned expressions keep
   their value; ill-conditioned ones may not.
 
-Python: 0.13.0 supports Python ≥ 3.12. New minor releases may raise the
+Python ≥ 3.12 is supported. New minor releases may raise the
 floor to the oldest Python receiving full upstream support ("new but stable"
 policy).
 
@@ -120,11 +120,3 @@ they are recorded in the provenance sidecar of any mine run under them.
 All other `SIMPLIPY_*` switches are observability/debug knobs: undocumented
 and unstable. See [environment variables](environment.md).
 
-## Downstream pins
-
-The three known consumers (`symbolic-data`, `flash-ansr`, `srbf`) pin
-`simplipy>=0.3.1` with no upper bound. One (`srbf`) already breaks on 0.12.0
-via names removed with the hyper-operator vocabulary. Consumers are advised
-to cap at `<0.14` until they build against the declared surface; the declared
-surface was chosen so that no current downstream import of an existing name
-breaks in 0.13.0.

@@ -15,7 +15,7 @@ verification pull the full numeric stack; plain simplification does not.
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-4-3", install=True)   # the published AC-engine artifact
+engine = sp.SimpliPyEngine.load("acj-4", install=True)   # the published AC-engine artifact
 
 expr = ['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3']
 
@@ -50,13 +50,14 @@ asset manager handles listing, installing, and uninstalling:
 ```python
 sp.list_assets("engine")
 # --- Available engine assets ---
-# - acj-4-3  [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
-#                         (sources to length 4, targets to length 3), ... Pairs with simplipy >= 0.12.
-# - acj-3-2               Complete AC-judged rule mine ... (sources to length 3, targets to length 2), ...
-# - acj-2-1               Complete AC-judged rule mine ... (sources to length 2, targets to length 1), ...
+# - acj-4    [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
+#                         (sources and targets to length 4). First cell mined as a triple under
+#                         the 0.14.0 instrument ... Pairs with simplipy >= 0.14.
+# - acj-4-3               Complete AC-judged rule mine ... (sources to length 4, targets to length 3), ...
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.
-# - ...                   (pre-0.12 assets remain listed for older installs; they refuse to load on 0.12)
+# - ...                   (older assets remain listed for older installs; generation-1 artifacts
+#                         refuse to load on >= 0.12)
 ```
 
 Every published artifact is identity-pinned (a manifest revision plus

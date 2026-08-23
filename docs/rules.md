@@ -40,8 +40,7 @@ reported, and the drawn sample is validated per run.
 5. **Deduplicate**: rules are canonicalized into wildcard patterns, keeping the shortest
    target per source.
 
-The same pipeline as one picture (Algorithm 1 in
-[the formal specification](algorithm.md) is the line-by-line version):
+The same pipeline as one picture:
 
 ```mermaid
 flowchart TD
@@ -65,7 +64,10 @@ flowchart TD
 ```
 
 The whole procedure is **deterministic**: a fixed `seed` reproduces the ruleset
-byte-for-byte, independent of process, hash randomization, or thread count. Alongside the
+byte-for-byte, independent of process, hash randomization, or thread count — one master
+seed derives the evaluation matrices and every per-length, per-source and per-rule seed,
+so chunked and monolithic runs are bit-identical and stage-2 verdicts are
+order-independent (per-rule seeds derive from content). Alongside the
 output, a **provenance sidecar** (`<output>.provenance.json`) records every parameter,
 derived seed, the evaluation-matrix specification, and per-length universe coverage, so a
 published ruleset is reproducible from its artifact alone.
@@ -179,10 +181,10 @@ constants_fit_challenges: 16
 # Optimizer restarts per constant fit (accounts for non-convergence)
 constants_fit_retries: 16
 
-# Acceptance tolerances (relative / absolute, per row). The 2026-08 sensitivity
-# audit of the published mines characterized the rtol window: 1e-9 admitted a
-# tanh-saturation near-miss family (residuals ~2e-10, lossy), 1e-7 admits the
-# next shelf AND degrades literal resolution; 1e-11 is the audited value.
+# Acceptance tolerances (relative / absolute, per row). The rtol window is
+# sensitivity-measured on the published mines: 1e-9 admits a tanh-saturation
+# near-miss family (residuals ~2e-10, not sound), 1e-7 admits the next shelf
+# AND degrades literal resolution; 1e-11 holds.
 rtol: 1.0e-11
 atol: 1.0e-12
 
@@ -273,7 +275,7 @@ To certify proposals against an already-built engine without re-mining, use the
 import simplipy as sp
 from simplipy.utils import deduplicate_rules
 
-engine = sp.SimpliPyEngine.load("acj-4-3")
+engine = sp.SimpliPyEngine.load("acj-4")
 
 proposals = [
     ["+", "pow", "sin", "x0", "2", "pow", "cos", "x0", "2"],           # sin^2 + cos^2
@@ -311,7 +313,7 @@ matrices and seeds, and the provenance record).
 
 ### How we use this (and what to expect)
 
-The rule packs for the upcoming engine asset were proposed by Claude, prompted with the
+The rule packs for the published `acj-4-3-llm` engine asset were proposed by Claude, prompted with the
 exact grammar (the operator inventory, the leaf symbols including the `<constant>`
 wildcard, prefix arity rules, and a source-length window) and split across identity
 families — trigonometric, hyperbolic, exponential/logarithmic, algebraic cancellations,
@@ -352,13 +354,13 @@ result to a JSON file (they do not modify the installed asset in place):
 
 ```sh
 # Remove rules that the remaining rules already cover compositionally
-simplipy prune-covered-rules -e "acj-4-3" -o "path/to/pruned_rules.json" -v
+simplipy prune-covered-rules -e "acj-4" -o "path/to/pruned_rules.json" -v
 
 # Replace <constant> placeholders with concrete numeric values in all-numeric rules
-simplipy resolve-rules -e "acj-4-3" -o "path/to/resolved_rules.json" -v
+simplipy resolve-rules -e "acj-4" -o "path/to/resolved_rules.json" -v
 ```
 
-- `-e` is the engine name (e.g. `acj-4-3`) or a path to an engine configuration file
+- `-e` is the engine name (e.g. `acj-4`) or a path to an engine configuration file
 - `-o` is the output path for the post-processed rules
 - `-v` enables verbose progress output
 
@@ -400,13 +402,14 @@ already installed locally:
 ```sh
 simplipy list --type engine
 # --- Available engine assets ---
-# - acj-4-3  [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
-#                         (sources to length 4, targets to length 3), ... Pairs with simplipy >= 0.12.
-# - acj-3-2               Complete AC-judged rule mine ... (sources to length 3, targets to length 2), ...
-# - acj-2-1               Complete AC-judged rule mine ... (sources to length 2, targets to length 1), ...
+# - acj-4    [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
+#                         (sources and targets to length 4). First cell mined as a triple under
+#                         the 0.14.0 instrument ... Pairs with simplipy >= 0.14.
+# - acj-4-3               Complete AC-judged rule mine ... (sources to length 4, targets to length 3), ...
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.
-# - ...                   (pre-0.12 assets remain listed for older installs; they refuse to load on 0.12)
+# - ...                   (older assets remain listed for older installs; generation-1 artifacts
+#                         refuse to load on >= 0.12)
 
 simplipy list --installed        # only assets already downloaded
 ```
@@ -414,8 +417,8 @@ simplipy list --installed        # only assets already downloaded
 Install or remove an asset by name:
 
 ```sh
-simplipy install acj-4-3         # download an asset from Hugging Face (--force to reinstall)
-simplipy remove acj-4-3          # remove a locally installed asset
+simplipy install acj-4           # download an asset from Hugging Face (--force to reinstall)
+simplipy remove acj-4            # remove a locally installed asset
 ```
 
 The same operations are available from Python (this is also what the engine loader uses under the hood):
@@ -424,10 +427,10 @@ The same operations are available from Python (this is also what the engine load
 ```python
 import simplipy as sp
 
-sp.install("acj-4-3")     # download an asset from Hugging Face
-sp.uninstall("acj-4-3")   # remove a locally installed asset
-sp.get_path("acj-4-3", install=True)  # resolve a local path, installing if needed
+sp.install("acj-4")       # download an asset from Hugging Face
+sp.uninstall("acj-4")     # remove a locally installed asset
+sp.get_path("acj-4", install=True)  # resolve a local path, installing if needed
 ```
 
-`sp.SimpliPyEngine.load("acj-4-3", install=True)` installs the engine
+`sp.SimpliPyEngine.load("acj-4", install=True)` installs the engine
 on demand as part of loading.

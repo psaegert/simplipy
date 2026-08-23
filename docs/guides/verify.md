@@ -106,6 +106,5 @@ before their verdicts are trusted.
 The sort-promotion certifier: it re-derives each pattern rule's binding sort
 (`_`/`?`/`!`/`$` — see [Creating rulesets](../rules.md)) from its own
 numeric evidence, promoting a rule to a wider sort only on a certified
-witness. Its internals are a verbatim port of an external ratified certifier
-and are private; `promote(rules, engine)` is the entry point. Mining calls it
-for you (`find_rules(promote_sorts=True)`).
+witness. Its internals are private; `promote(rules, engine)` is the entry
+point. Mining calls it for you (`find_rules(promote_sorts=True)`).
