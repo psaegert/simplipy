@@ -18,6 +18,11 @@ from simplipy import masking
 
 engine = sp.SimpliPyEngine.load("acj-4", install=True)
 
+# The front door takes any form, with policies by name:
+engine.mask(engine.simplify('x1 + 3.14'), 'fittable')
+# -> 'x1 + <constant>'
+
+# The module is the mechanism, with explicit policy objects over token forms:
 masking.mask(engine.simplify(['+', 'x1', '3.14']), engine,
              masking.mask_fittable)
 # -> ['+', 'x1', '<constant>']

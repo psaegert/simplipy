@@ -3,9 +3,8 @@
 Where SimpliPy sits in the literature, stated the way we would want a
 referee to read it: neighbours named, differences derived from the domain
 rather than from taste, and the limits of every analogy spelled out. The
-measured figures on this page were re-verified against the published
-`acj-4` artifact and the deployed engine (2026-08-23); every citation was
-independently confirmed before this page was published.
+measured figures on this page were verified against the published `acj-4`
+artifact and the deployed engine (2026-08-23).
 
 SimpliPy's design sits in four well-populated neighbourhoods, and we would rather name our
 neighbours than be mistaken for a pioneer.

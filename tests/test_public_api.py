@@ -42,6 +42,16 @@ MODULE_ALLS = {
     },
     'simplipy.engine': {'SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES'},
     'simplipy.mining': {'RuleMiner'},
+    # Joined 2026-08-23: the two public modules the D11 landing missed. The
+    # compatibility policy says every public module declares its column; these
+    # rows make that sentence literally true and pin it.
+    'simplipy.operators': {
+        'neg', 'inv', 'div', 'abs',
+        'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
+        'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
+        'exp', 'log', 'rootn', 'pow',
+    },
+    'simplipy.promotion': {'promote'},
 }
 
 

@@ -57,7 +57,7 @@ licenses. The same rule can be clean for one file and a defect in another, which
 the whole point and which a bucket count cannot express:
 
 ```python
-rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; f64 gives inf past 18.99
+rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; f64 saturates to inf at large t
 
 verify_ruleset([rule], mode='real')['is_clean']    # -> True   belongs there
 verify_ruleset([rule], mode='corpus')['is_clean']  # -> True

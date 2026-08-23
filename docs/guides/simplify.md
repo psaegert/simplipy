@@ -72,7 +72,7 @@ flowchart TD
 
     subgraph WALK["inside the rewrite pass: per subtree, top-down"]
         EXACT["exact rule lookup"] -- miss --> PATT["pattern scan,<br/>first match wins"]
-        PATT -- "match completed" --> CERT["certify !-bindings<br/>(skipped in corpus)"]
+        PATT -- "wide slots bind" --> CERT["bind-time !-certificates<br/>(skipped in corpus)"]
         PATT -- "no match" --> FOLD["EXACT fold + &lt;constant&gt; collapse<br/>(positive-measure licence;<br/>relaxed in corpus)"]
         FOLD -- "no fold" --> REC["recurse into operands,<br/>re-check the rebuilt node"]
     end
@@ -96,7 +96,7 @@ floating point and mathematically false:
 
 | rewrite | true over ℝ? | what f64 computes |
 |---|---|---|
-| `atanh(tanh t) → t` | yes, for every real `t` | `inf` past `t = 18.990341103219276`, where `tanh` attains exactly `1.0` |
+| `atanh(tanh t) → t` | yes, for every real `t` | `inf` once `tanh t` rounds to exactly `1.0` — from `t ≈ 19.06` on the release host; the exact threshold is libm-dependent |
 | `asin(1e-8) → 1e-8` | no — wrong by the cubic term, `1.667e-25` | bit-identical |
 
 Neither rule is "more sound" than the other, so there is no rung to put them on, and `<`
@@ -125,11 +125,11 @@ from simplipy import Mode
 
 # log(C) is undefined for C <= 0. The default is strict about it; only the permissive
 # mode collapses it.
-engine.simplify(['exp', 'log', '<constant>'], mode=Mode.f64)     # -> ['exp', 'log', '<constant>']
-engine.simplify(['exp', 'log', '<constant>'], mode=Mode.corpus)  # -> ['<constant>']
+engine.simplify('exp(log(<constant>))', mode=Mode.f64)     # -> 'exp(log(<constant>))'
+engine.simplify('exp(log(<constant>))', mode=Mode.corpus)  # -> '<constant>'
 
 # A finite-a.e. subtree (pole at a single measure-zero constant) folds in every mode:
-engine.simplify(['inv', '<constant>'])                    # -> ['<constant>']   (1/C)
+engine.simplify('1/<constant>')                            # -> '<constant>'
 ```
 
 `Mode.real` needs a `rules_real.json`, and **fails closed** on an artifact without one
@@ -137,8 +137,8 @@ rather than quietly serving it the f64 set. Against the shipped triple it shows 
 soundnesses disagreeing on a single expression:
 
 ```python
-engine.simplify(['atanh', 'tanh', '30'], mode=Mode.f64)   # -> ['float("inf")']  what f64 computes
-engine.simplify(['atanh', 'tanh', '30'], mode=Mode.real)  # -> ['30']            what is true
+engine.simplify('atanh(tanh(30))', mode=Mode.f64)   # -> 'inf'   what f64 computes
+engine.simplify('atanh(tanh(30))', mode=Mode.real)  # -> '30'    what is true
 ```
 
 
@@ -241,9 +241,9 @@ See the [Normalization](../api.md#normalization) API reference for details.
 ## Performance
 
 The inline phase (`simplify`, conversions, validation) runs in a compiled Rust extension
-(`simplipy._core`) on interned token ids. `!`-sort certificates are evaluated only after a
-completed syntactic match and memoized — per call, and in a generational per-engine cache —
-and the fixpoint loop memoizes whole passes and rule-normal subtrees. There is one compiled
+(`simplipy._core`) on interned token ids. `!`-sort certificates are memoized —
+per call, and in a generational per-engine cache — so repeated match attempts cost
+nothing, and the fixpoint loop memoizes whole passes and rule-normal subtrees. There is one compiled
 engine line; the published ruleset artifacts are the distinguishing factor between engines,
 and rule application always considers every pattern in the loaded artifact.
 

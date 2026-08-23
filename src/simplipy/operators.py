@@ -16,6 +16,15 @@ from typing import Iterable
 from types import ModuleType
 import numpy as np
 
+# The declared surface: the operator realizations that engine configs name
+# (`simplipy.operators.sin`, ...). These spellings are normative -- the trust
+# model resolves them and shipped config.yaml files reference them.
+__all__ = [
+    'neg', 'inv', 'div', 'abs',
+    'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
+    'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
+    'exp', 'log', 'rootn', 'pow',
+]
 
 _torch_module: ModuleType | None = None
 _torch_checked = False

@@ -32,6 +32,9 @@ import numpy as np
 
 from . import _f64_eval, _pointwise, _const_bearing, _overturn, _refund, _ladder
 
+# The declared surface: the entry point alone -- the stages are private.
+__all__ = ['promote']
+
 
 def promote(rules, engine, *, run_positive_controls=True):
     """Assign each ``?``-sorted mined rule its strongest sound sort; prune derivable rules.

@@ -8,7 +8,8 @@ pip install simplipy
 
 Python ≥ 3.12. The package ships a required compiled Rust core
 (`simplipy._core`); there is no pure-Python fallback. Rule mining and
-verification pull the full numeric stack; plain simplification does not.
+verification are the only paths that use scipy and mpmath at runtime; plain
+simplification touches only numpy (all three install as required dependencies).
 
 ## First simplification
 
@@ -17,9 +18,14 @@ import simplipy as sp
 
 engine = sp.SimpliPyEngine.load("acj-4", install=True)   # the published AC-engine artifact
 
+# Simplify infix expressions: a str in, a str out
+engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
+# -> '<constant>/x3'
+
+# Pipelines carry expressions as prefix token lists; `simplify` answers in the
+# form it was GIVEN
 expr = ['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3']
 
-# Simplify prefix expressions: `simplify` answers in the form it was GIVEN
 engine.simplify(expr)
 # -> ['/', '<constant>', 'log', 'x3']            (explicit binary prefix: C/log(x3))
 
@@ -30,10 +36,6 @@ engine.simplify(engine.to_tagged(expr))
 
 engine.to_infix(engine.simplify(expr))
 # -> '<constant> / log(x3)'
-
-# Simplify infix expressions
-engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
-# -> '<constant>/x3'
 ```
 
 `simplify`'s default `Mode.f64` is sound as the deployed f64 evaluator computes;

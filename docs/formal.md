@@ -280,7 +280,7 @@ entering a comparison. In bits, each grammar symbol carries its own price -- the
 The entries are read against the $1/8$-bit unit and scale with it, so the
 symbol-vs-literal *ratio* — the sensitivity axis that matters — is independent of the unit. Two of them are fixed by
 laws a frequency count cannot see: a **named constant costs less than the cheapest
-expression denoting it** ($\mathrm{acos}(-1) = 11$ bits, $\exp(1) = 9$, so $4$ has
+expression denoting it** ($\mathrm{acos}(-1) = 11$ bits, $\exp(1) = 8$, so $4$ has
 room), and a **leaf must also name which variable it is** -- the class `Leaf` carries
 $1.65$ bits of the corpus census, a specific variable among eighteen carries $5.82$, and
 it is the second number the code has to charge for Kraft's inequality to hold and for
@@ -317,7 +317,7 @@ reaches) plus the sign bit and the selector bit, ceiled. The ceiling is robust t
 exact argmax — analytically $L(m) < 56.48$ and $|k| \leq 343$ put the supremum below
 $64.92$ — and the supremum is scoped to the f64 range on purpose: $\diamond$ stands
 for a value a fit will supply, and dominating exactly those is what the construction
-guarantees (a beyond-f64 literal can price below it — $\mu(10^{-400}) = 11.647$
+guarantees (a beyond-f64 literal can price below it — $\mu(10^{-400}) = 10.647$
 via its scientific codeword — and nothing rests on outpricing those). Final ties are broken
 by the canonical total order `cmp_ex` (rank, then structural lexicographic comparison,
 with *exact* rational comparison — the 256-bit `cmp_exact`). There is no separate
@@ -326,7 +326,7 @@ the ordering is a pair, not a triple.
 
 **Two codewords, one value.** The minimum is over *codes for the same exact value*,
 never over values — $\mu$ stays spelling-free, and the symmetry the codebook buys is
-at the codeword level: $\mu(1000) = \mu(0.001) = 5$, both being the codeword
+at the codeword level: $\mu(1000) = \mu(0.001) = 4$, both being the codeword
 $(1, 3)$, where a fraction-only code would price them $9.967$ against $10.967$ — a scale
 asymmetry with no informational content, since fitted constants arrive as
 decimal-printed f64s and a fraction-only code forces them through "two arbitrary
@@ -388,7 +388,7 @@ substitution or context: $\mu$ is *not additive* (coefficients and exponents car
 positional costs), and every fire renormalizes. Example: the hypothetical rule
 $\mathrm{Pow}(\_0, 2) \to \mathrm{Mul}[2, \_0]$ ties on patterns ($\mu = 11.585$ both,
 decided by `cmp_ex`), but the instance $\_0 \mapsto 5$ folds both sides to literals
-($25$ at $\mu = 5.7$, $10$ at $\mu = 4$) whose comparison the pattern cannot see. This is why orientation is enforced **per
+($25$ at $\mu = 5.7$, $10$ at $\mu = 3$) whose comparison the pattern cannot see. This is why orientation is enforced **per
 instance at the fire site** (the `oriented` gate), and why G7's static pattern check is an
 *alignment* gate, not the termination mechanism. It also means the published system's
 static termination conditions (non-duplication + size decrease of the rule) do not
@@ -403,7 +403,7 @@ passes $t_{i+1} = \mathrm{pass}(t_i)$ until fixpoint or budget.
 **Lemma L2 (step descent)** [BY CONSTRUCTION]. Every step strictly descends $<_o$ at its
 node: all three step kinds carry an explicit `oriented` gate — fires and rebuilds in
 `try_rules_at` / `rewrite_pass`, and the fold by §4's own acceptance clause ("accepted
-only if $u' <_o u$"; since the $\mu$ ship the class literal or $\diamond$ is checked
+only if $u' <_o u$"; the class literal or $\diamond$ is checked
 against the ordering, not assumed smaller).
 
 **Lemma L3 (pass contraction)** [THEOREM, from L2]. For every canonical $t$:
@@ -474,9 +474,8 @@ certificate verdicts. On the set of canonical states where the round-trip identi
 holds ($\mathrm{canon}(\mathrm{parse}(\mathrm{serialize}(t))) = t$, the `stable()`
 assertion), `to_prefix` has a left inverse and is therefore injective — two states
 sharing a serialization would be mapped back to the same state by the left inverse.
-The identity is exercised per state in debug builds (2026-08-02: the full suites run
-green under debug after the determined-pole fix, so every state reached by the tests
-and the mini-mines satisfies it); its one known exception class is the documented I3
+The identity is exercised per state in debug builds (the full suites run green under
+debug, so every state reached by the tests and the mini-mines satisfies it); its one known exception class is the documented I3
 i128-boundary residual (2/50k fuzz, corpus-unreachable), which therefore also scopes
 the cache guarantee — the same boundary, the same bignum cure if ever needed.
 
@@ -526,7 +525,7 @@ fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in corpus m
 | terms: binary prefix trees | canonical bags (I1–I4) | redefinition required (done here, §2) |
 | cancellation procedure outside the TRS | $\mathrm{nf}$ (§3), much larger | same architectural role; L1 replaces the informal argument |
 | rule conditions: $\mathrm{Vars}(\rho) \subseteq \mathrm{Vars}(\ell)$, $|\rho| < |\ell|$, non-duplication | G6; G7; (non-duplication measured on the shipped asset: 5,337/5,338, not required) | **the static proof device does not transfer** — $c$ is non-additive and fires renormalize (§5), so orientation is enforced per instance instead |
-| termination: length is a reduction order | T-wf/T6: the pair $(\mu, \mathrm{cmp\_ex})$ is a well-founded strict total order (the former literal-size middle tier is absorbed into $\mu$, §5) | **new proof, done here, unconditional** |
+| termination: length is a reduction order | T-wf/T6: the pair $(\mu, \mathrm{cmp\_ex})$ is a well-founded strict total order (no separate literal-size tier — literal content lives in $\mu$, §5) | **new proof, done here, unconditional** |
 | iteration cap $K = 5$ | `max_passes` | demoted to defense-in-depth: T6 guarantees the fixpoint in finitely many passes |
 | syntactic matching | AC sub-multiset matching with remainder | Peterson–Stickel extension rules; matching soundness is the matcher's contract |
 
@@ -549,7 +548,7 @@ well-foundedness would need re-establishing for the new order.
 |---|---|
 | the rule asset | nothing — G1–G7 re-vet on every load (drops are counted, visible in `ac_rules_info`) |
 | the $\mu$ weight table or `cmp_ex` | T-wf (well-foundedness of the new pair — L5's finite-level-set argument must survive, including the numeric-string-leaf clause); G7 re-vets every asset on load; re-run the corpus gates AND the unit-sensitivity grid: the *reachable* normal forms change |
-| a constructor (`add`/`mul`/`pow`/`fun`) | L1 (check any new self-call has a decreasing measure), I1–I4; the fold needs no descent premise (it is `oriented`-gated at the pass since the $\mu$ ship); then the corpus gates |
+| a constructor (`add`/`mul`/`pow`/`fun`) | L1 (check any new self-call has a decreasing measure), I1–I4; the fold needs no descent premise (it is `oriented`-gated at the pass); then the corpus gates |
 | the matcher | the step-relation definition of §4 (binding soundness); L2 is unaffected (orientation checks the result, not the match) |
 | `rewrite_pass` control flow | L2 (every state change gated), L3 (no ungated mutation path), memo semantics (§6 L6 caveat) |
 | serialization | L6's round-trip premise (`stable()`), the corpus gates |

@@ -23,11 +23,14 @@ reported, and the drawn sample is validated per run.
    already reaches are accepted (`relaxed_kruskal`, the default; pass
    `relaxed_kruskal=False` to skip already-shortened sources entirely).
 2. **Scan**: the source is compared against every candidate replacement, in
-   order of increasing length, so the first match is a *minimal* target. The candidate
-   library is built once per mine; variable-free candidates of length ≥ 2 are excluded
-   (`candidate_fold_filter`, default on) — a provably behavior-preserving optimization,
-   since any source they could match is already matched by the length-1 `<constant>`
-   candidate.
+   order of increasing cost under the serve-time reduction ordering, so the first
+   certified match is a *minimal* target. The candidate library is built once per
+   mine, with variable-free composites filtered out — any source they could match
+   is already matched by the length-1 `<constant>` candidate.
+   `max_target_pattern_length` caps only the library, never the criterion:
+   acceptance is decided by μ(target) < μ(source), so a target may carry more
+   tokens than its source and still certify (a cheaper literal can take more
+   tokens to spell).
 3. **Certify**: a candidate matches only if it reproduces the source's values on a
    heavy-tailed, seeded evaluation matrix — across `constants_fit_challenges` re-drawings
    of the source's constants, with constants in candidates fitted by a deterministic
@@ -50,8 +53,8 @@ flowchart TD
     LIB --> L["next source length, ascending"]
     L --> S1
     subgraph P2["Phase 2: one length (sources in parallel, per-source seeds)"]
-        S1["simplify under the rules so far"] --> S2["target bound = simplified length<br/>(relaxed Kruskal)"]
-        S2 --> S3["scan candidates,<br/>shortest first"]
+        S1["simplify under the rules so far"] --> S2["mark to beat = the engine's own<br/>result (relaxed Kruskal)"]
+        S2 --> S3["scan candidates,<br/>cheapest (μ) first"]
         S3 --> S4{"Equivalent+ certifies?<br/>(constant challenges, evidence gate,<br/>high-precision rescue)"}
         S4 -- "no: next candidate" --> S3
         S4 -- yes --> S5["minimal source-target pair"]
@@ -107,10 +110,9 @@ flowchart TB
 Sorts exist because a rewrite can be value-sound when a slot holds a variable yet
 unsound when it holds a composite carrying poles or infinities into the pattern — the
 certificate is what lets a rule make the wider claim without giving up soundness.
-Since 0.6.0 the certificate is evaluated once per *completed* syntactic match rather
-than during every candidate attempt, and memoized (per call, plus a generational
-per-engine cache), which makes `!`-bearing rulesets fast at scale with identical
-verdicts.
+The certificate is evaluated at bind time — bag backtracking must be able to retry
+a different assignment after a refusal — and memoized in a generational per-engine
+cache (plus per call), so repeated attempts cost nothing and verdicts are identical.
 
 These sort gates define the default **`f64`** apply-time contract. `Mode.corpus`
 (see [Soundness modes](guides/simplify.md#soundness-modes)) relaxes them together — every `!`/`$`
@@ -131,45 +133,37 @@ simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yam
 - `-v` enables verbose output
 - `--reset-rules` will start with an empty rule set, otherwise it will append to the existing rules loaded with the engine
 
-A complete mining configuration:
+The published `acj-4` artifact was mined with the configuration below — it ships
+with the asset as `mine.yaml`, and `simplipy find-rules -e config.yaml -c mine.yaml
+-o rules.json -v --reset-rules` reproduces the artifact byte-for-byte at the
+recorded environment:
 
 ```yaml
 # Special symbols available as expression leaves (beyond the dummy variables).
-# <constant> is the wildcard that matches any fitted constant.
-extra_internal_terms: [
-  '<constant>',
-  '0',
-  '1',
-  '(-1)',
-  'np.pi',
-  'np.e',
-  'float("inf")',
-  'float("-inf")',
-  'float("nan")'
-]
+# <constant> is the wildcard that matches any fitted constant; the integer span
+# matches the downstream vocabulary.
+extra_internal_terms: ['<constant>', '(-10)', '(-9)', '(-8)', '(-7)', '(-6)', '(-5)',
+                       '(-4)', '(-3)', '(-2)', '(-1)', '0', '1', '2', '3', '4', '5',
+                       '6', '7', '8', '9', '10', 'np.e', 'np.pi',
+                       'float("inf")', 'float("-inf")', 'float("nan")']
 
-# Number of dummy variables (null = derived from max_source_pattern_length)
-dummy_variables: null
+# Dummy variables for pattern slots: ceil(max_source_pattern_length / 2) — beyond
+# that, a source can only repeat variables it already carries.
+dummy_variables: 2
 
 # Maximum number of tokens in a source (left-hand side) expression
-max_source_pattern_length: 7
+max_source_pattern_length: 4
 
-# Maximum number of tokens in a target (replacement) expression.
-# Targets are never sampled: the candidate library must stay complete,
-# or the minimality guarantee is lost.
+# Maximum number of tokens in a target (replacement) expression. The cap bounds
+# only the candidate LIBRARY; acceptance is decided by mu(target) < mu(source),
+# so a target may carry more tokens than its source and still certify.
 max_target_pattern_length: 4
 
-# Universe policy: lengths whose complete universe is infeasible to enumerate
-# are drawn uniformly from the complete universe instead. With the operator
-# set above, lengths through 5 are enumerable; 6 and 7 are sampled.
-# The sample size is a coverage-vs-cost dial. It is cheaper than it looks: the
-# per-source rate is roughly FLAT from length 5 upward (measured ~36 src/s at
-# length 5 vs ~31 at length 6, where length 4 runs at ~4,800), so the exhaustive
-# length-5 tier dominates the run and raising 6/7 from 200k to 1M costs hours on
-# a multi-day climb, not days.
-source_sample_per_length:
-  6: 1000000
-  7: 1000000
+# Universe policy: null = complete enumeration at every length. A length whose
+# complete universe is infeasible to enumerate can instead carry a uniform
+# sample size here; coverage is always reported, and the drawn sample is
+# validated per run.
+source_sample_per_length: null
 
 # Rows of the evaluation matrix (heavy-tailed mixture, drawn from `seed`)
 n_samples: 1024
@@ -188,36 +182,46 @@ constants_fit_retries: 16
 rtol: 1.0e-11
 atol: 1.0e-12
 
+# Evidence floor: minimum informative rows per certification (null = built-in)
+min_informative: null
+
 # Master seed: reproduces the entire mine, byte-for-byte
 seed: 42
 
 # Re-verify every mined rule on an independent evaluation matrix
 confirm: true
 
-# Exclude variable-free candidates from the library (behavior-preserving speedup)
-candidate_fold_filter: true
+# Tighten (rather than skip) sources the rules found so far already shorten
+relaxed_kruskal: true
+
+# Post-mine stages: the covered prune and sort promotion
+prune: covered
+promote_sorts: true
 
 # Optional: LLM/human-proposed rules, certified against the mined state at the
 # end of the run (see "LLM-proposed rules" below). Paths starting with ./ are
-# resolved relative to this config file; absolute paths are used as-is.
-proposals: ./llm_proposals.json
+# resolved relative to this config file. The published LLM merge is a second,
+# separately-gated run over this same configuration with the key enabled.
+# proposals: ./llm_proposals.json
 ```
 
-Complete enumeration through length 5 covers about 21 million sources (with this operator
-set) and is the dominant cost: a multi-day run even on a busy 30-plus-core CPU (throughput
-is tens of sources/second once the length-5 tier is saturated). The sampled lengths add
-time proportional to their sample sizes. Progress, per-length rule counts, and universe coverage are printed
+With this operator set the complete universes through length 4 hold 413,772 sources
+(29 / 493 / 13,427 / 399,823 at lengths 1–4), the enumeration is cross-checked
+against the counting recurrence, and the length-4 tier dominates: the published
+mine completes in about 25 minutes on a 16-core desktop host. Cost climbs steeply
+with either cap — length 5 alone adds roughly 13 million sources, and the target
+cap sizes the candidate library every source is judged against. Progress, per-length rule counts, and universe coverage are printed
 as the mine advances, and the output file plus its provenance sidecar are updated after
 every completed length.
 
 ## LLM-proposed rules
 
-Mining guarantees completeness where enumeration or sampling reaches, but the source
-universe grows so fast with expression length (billions at length 7, and worse beyond)
-that uniform sampling essentially never draws the *mathematically salient* long
-identities — `sin²x + cos²x → 1` is a length-7 source with a ~0.03% chance of appearing
-in a million-draw sample. A language model, by contrast, can name such identities
-directly. SimpliPy therefore supports a complementary channel:
+Mining guarantees completeness where enumeration (or sampling) reaches, but the
+source universe grows by roughly a factor of thirty per token — 413,772 sources
+through length 4, about 13 million more at length 5, billions by length 7 — so the
+*mathematically salient* long identities sit far beyond any enumerable horizon:
+`sin²x + cos²x → 1` is a nine-token source in this vocabulary. A language model,
+by contrast, can name such identities directly. SimpliPy therefore supports a complementary channel:
 
 **an LLM proposes candidate source expressions; the engine certifies them with the
 exact same gates as mined rules.** Proposals only ever *add* source expressions, so a
@@ -302,8 +306,9 @@ still searched — coverage is decided by the search, with the engine's own resu
 the ordering mark to beat), and re-verifies the winning pair on an independent
 evaluation matrix. If no library-sized target exists, an optional per-proposal
 **hint** is verified instead — sound, but marked `'verified'` rather than `'minimal'`
-since no shorter form was ruled out. Targets certified this way may have any length,
-as long as they are shorter than the source. Finally, every accepted pair is
+since no shorter form was ruled out. Targets certified this way may have any
+length; what is enforced is the serve-time reduction ordering — the target must
+price strictly below the source's mark. Finally, every accepted pair is
 re-judged by the independent symbolic verifier (`verify_ruleset`, the
 precision-stability discriminator) and KILLs are dropped — the instrument that
 separates true exact identities from impostors below every usable numeric tolerance,
@@ -313,7 +318,9 @@ matrices and seeds, and the provenance record).
 
 ### How we use this (and what to expect)
 
-The rule packs for the published `acj-4-3-llm` engine asset were proposed by Claude, prompted with the
+The rule packs for the published `acj-4-3-llm` engine asset were proposed by two
+independent language models under the frozen prompt spec shipped with the asset,
+prompted with the
 exact grammar (the operator inventory, the leaf symbols including the `<constant>`
 wildcard, prefix arity rules, and a source-length window) and split across identity
 families — trigonometric, hyperbolic, exponential/logarithmic, algebraic cancellations,
@@ -322,12 +329,13 @@ with each family asked to enumerate systematically and to include operand-order 
 factored variants as separate entries (rule matching is syntactic, so distinct tree
 spellings of one identity are distinct rules).
 
-Observed over ~2,400 proposals: generating a wave takes minutes; certification runs at
-roughly 1–2 seconds per proposal; about half of all proposals are true identities the
-engine already covers (rejected as redundant); under 1% fail numerical verification
-outright; and roughly a third certify — the majority at source lengths that uniform
-sampling would never reach, with the model's own target suggestion matching the
-certified-minimal target about 85–90% of the time.
+Observed on the published batch (recorded in its provenance sidecar): 169 proposals
+from the two models; 73 certified against the freshly mined state — 54 served after
+the covered prune and sort promotion, 19 dropped by those later sound stages — 26
+already covered by the mine, 70 refused by the gates, and none lost to numerical
+confirmation. Generating a wave takes minutes; certification runs at roughly 1–2
+seconds per proposal, and the certified rules land at source lengths beyond the
+mine's enumerated horizon.
 
 ## Replicating a large ruleset end to end
 
@@ -337,10 +345,9 @@ certified-minimal target about 85–90% of the time.
 2. **Mine + certify** with the configuration above, including its `proposals:` key —
    one command (`simplipy find-rules ...`) runs the mine and then certifies every
    proposal against the freshly mined state (roughly 1–2 seconds per proposal).
-   Complete enumeration through length 5 (about 21 million sources) plus million-source
-   samples at lengths 6 and 7 is a week-scale run on a busy many-core CPU, with length 5
-   dominating the cost; the provenance sidecar records everything needed to reproduce the
-   run from its seed, including the proposal file's sha256 and per-outcome counts.
+   The complete 4→4 mine is a half-hour run on a 16-core host; the provenance
+   sidecar records everything needed to reproduce the run from its seed,
+   including the proposal file's sha256 and per-outcome counts.
 3. **Post-process** (optional): `prune-covered-rules` / `resolve-rules`, below.
 
 Steps 2–3 are deterministic given the seed and the proposals file; step 1 is
@@ -381,9 +388,8 @@ One prune shrinks a ruleset without changing what the engine can simplify:
   rules, so the result is **deterministic** for a given rule list — and greedy: valid,
   not necessarily minimal.
 
-(The former `prune_redundant_rules` — explicit rules shadowed by pattern rules under
-an equality criterion — died with the legacy kernel and is gone; `find_rules(prune=True)`
-now fails fast.)
+(`find_rules(prune=True)` is refused with a pointer here: `'covered'` and `False`
+are the two valid settings.)
 
 The prune is also available at the end of a mine through the `prune` parameter:
 `find_rules(prune='covered')`, or a `prune: 'covered'` key in the mine configuration.
