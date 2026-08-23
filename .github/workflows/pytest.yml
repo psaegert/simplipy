@@ -72,17 +72,18 @@ jobs:
 
       # The engine suites load the SERVED acj-4 asset from the cache, exactly like a
       # user install (the tree carries no artifact copy).
-      - name: Stage the acj-4 engine asset (the asset-gated suites load it)
+      - name: Stage the acj-4 and acj-4-3 engine assets (the asset-gated suites load them)
         run: |
           python - <<'PY'
           import json, os
           from huggingface_hub import hf_hub_download
           manifest = json.load(open(hf_hub_download("psaegert/simplipy-assets", "manifest.json", repo_type="dataset")))
-          info = manifest["acj-4"]
           cache = os.path.expanduser("~/.cache/simplipy")
-          for f in info["files"]:
-              hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
-          print("staged acj-4 ->", os.path.join(cache, info["directory"]))
+          for name in ("acj-4", "acj-4-3"):
+              info = manifest[name]
+              for f in info["files"]:
+                  hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
+              print("staged", name, "->", os.path.join(cache, info["directory"]))
           PY
 
       # REQUIRE_ASSETS: the asset-gated python tests (the staged acj-4 engine and the
@@ -120,11 +121,12 @@ jobs:
           import json, os
           from huggingface_hub import hf_hub_download
           manifest = json.load(open(hf_hub_download("psaegert/simplipy-assets", "manifest.json", repo_type="dataset")))
-          info = manifest["acj-4"]
           cache = os.path.expanduser("~/.cache/simplipy")
-          for f in info["files"]:
-              hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
-          print("staged acj-4 ->", os.path.join(cache, info["directory"]))
+          for name in ("acj-4", "acj-4-3"):
+              info = manifest[name]
+              for f in info["files"]:
+                  hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
+              print("staged", name, "->", os.path.join(cache, info["directory"]))
           PY
       - name: rustfmt
         run: cargo fmt --check
