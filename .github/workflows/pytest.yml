@@ -70,22 +70,22 @@ jobs:
           print("staged legacy 4-3 ->", os.path.join(cache, info["directory"]))
           PY
 
-      # The engine suites load the SERVED acj-4-3 asset from the cache, exactly like a
+      # The engine suites load the SERVED acj-4 asset from the cache, exactly like a
       # user install (the tree carries no artifact copy).
-      - name: Stage the acj-4-3 engine asset (the asset-gated suites load it)
+      - name: Stage the acj-4 engine asset (the asset-gated suites load it)
         run: |
           python - <<'PY'
           import json, os
           from huggingface_hub import hf_hub_download
           manifest = json.load(open(hf_hub_download("psaegert/simplipy-assets", "manifest.json", repo_type="dataset")))
-          info = manifest["acj-4-3"]
+          info = manifest["acj-4"]
           cache = os.path.expanduser("~/.cache/simplipy")
           for f in info["files"]:
               hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
-          print("staged acj-4-3 ->", os.path.join(cache, info["directory"]))
+          print("staged acj-4 ->", os.path.join(cache, info["directory"]))
           PY
 
-      # REQUIRE_ASSETS: the asset-gated python tests (the staged acj-4-3 engine and the
+      # REQUIRE_ASSETS: the asset-gated python tests (the staged acj-4 engine and the
       # staged legacy refusal input above) must FAIL loudly if the assets vanish, never
       # silently skip. The triple-gated tests key on SIMPLIPY_TEST_REQUIRE_TRIPLE
       # instead (set it in the job that validates a triple-shipping build): the cell
@@ -110,7 +110,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Stage the acj-4-3 engine asset (the cargo asset-gated tests load it)
+      - name: Stage the acj-4 engine asset (the cargo asset-gated tests load it)
         # The generation-2 test universe (audit Tier-1 #3): the rust suite runs on the
         # engine the package actually serves. No legacy asset is staged anywhere in CI;
         # the legacy-vocabulary tests use the in-repo fixture (tests/fixtures/).
@@ -120,11 +120,11 @@ jobs:
           import json, os
           from huggingface_hub import hf_hub_download
           manifest = json.load(open(hf_hub_download("psaegert/simplipy-assets", "manifest.json", repo_type="dataset")))
-          info = manifest["acj-4-3"]
+          info = manifest["acj-4"]
           cache = os.path.expanduser("~/.cache/simplipy")
           for f in info["files"]:
               hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
-          print("staged acj-4-3 ->", os.path.join(cache, info["directory"]))
+          print("staged acj-4 ->", os.path.join(cache, info["directory"]))
           PY
       - name: rustfmt
         run: cargo fmt --check
