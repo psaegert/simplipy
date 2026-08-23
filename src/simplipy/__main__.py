@@ -16,7 +16,7 @@ def main(argv: str = None) -> None:
     find_simplifications_parser = subparsers.add_parser("find-rules")
     find_simplifications_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4-3) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
     )
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
     find_simplifications_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to the output json file')
@@ -28,7 +28,7 @@ def main(argv: str = None) -> None:
     prune_covered_rules_parser = subparsers.add_parser("prune-covered-rules", help="Remove rules that the remaining rules cover behaviorally")
     prune_covered_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4-3) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
     )
     prune_covered_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned rules json file')
     prune_covered_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
@@ -37,19 +37,19 @@ def main(argv: str = None) -> None:
     resolve_rules_parser = subparsers.add_parser("resolve-rules", help="Replace <constant> with actual numeric values in all-numeric rules")
     resolve_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4-3) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
     )
     resolve_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the resolved rules json file')
     resolve_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
     # Install command
     install_parser = subparsers.add_parser("install", help="Install an official asset from Hugging Face")
-    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-4-3)')
+    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-4)')
     install_parser.add_argument('--force', action='store_true', help='Force reinstall even if already installed')
 
     # Remove command
     remove_parser = subparsers.add_parser("remove", help="Remove an installed asset")
-    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. acj-4-3)')
+    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. acj-4)')
 
     # List command
     list_parser = subparsers.add_parser("list", help="List available or installed assets")

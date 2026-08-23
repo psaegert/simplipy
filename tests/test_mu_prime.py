@@ -57,7 +57,7 @@ ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 #: replaces the artifact. `test_acj_load_warns_until_the_remine` below pins that the
 #: warning is EXACTLY this one and nothing else, which is the only shape of allowance
 #: that cannot swallow a genuine mismatch (the last blanket one nearly did).
-ACJ_SHIPPED_DIGEST = '66ba8c4654ac9388'
+ACJ_SHIPPED_DIGEST = '32302640b359a348'
 
 
 def L(n) -> int:
@@ -526,31 +526,23 @@ class TestFingerprintAndArtifactLoad:
         }
         assert fp['digest'] != ACJ_MINED_DIGEST
 
-    def test_acj_load_warns_until_the_remine(self):
-        """D25 warn-not-refuse, on the real asset, for exactly as long as the asset
-        predates the measure.
+    def test_acj_load_is_fingerprint_clean(self):
+        """D25, on the real asset, after the re-mine: NO fingerprint warning.
 
-        The shipped triple was mined under `ACJ_SHIPPED_DIGEST`; the symbol table
-        (2026-08-21) changed the measure, so the engine computes a different one and
-        says so. The rules stay SOUND -- the warning is about their minimality and
-        ordering claims, which were certified against the old prices -- and the artifact
-        still loads and serves, which is the whole point of warn-not-refuse.
-
-        WHEN THE RE-MINE UNDER THE NEW MEASURE LANDS, this test must go back to
-        asserting NO fingerprint warning. It is written to force that: it pins the
-        mined digest verbatim, so a re-mined artifact fails it rather than sliding
-        through. A blanket "ignore fingerprint warnings" allowance is what this shape
-        deliberately avoids -- one existed before, and its own deletion note recorded
-        that while it stayed it would have silently swallowed a genuine mismatch."""
+        The served cell (acj-4, ×3 byte-identical on solomon 2026-08-23) was mined
+        under the symbol-table measure, so its provenance digest EQUALS the engine's
+        computed one -- pinned verbatim below, so a measure change without a re-mine
+        fails here rather than sliding through as a tolerated warning. This is the
+        empty-list state the predecessor test (`test_acj_load_warns_until_the_remine`)
+        was written to force."""
         import warnings as _w
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter('always')
             engine = SimpliPyEngine.from_config(acj_config_path())
         mismatch = [str(x.message) for x in caught
                     if 'measure fingerprint mismatch' in str(x.message)]
-        assert len(mismatch) == 1, caught
-        assert ACJ_SHIPPED_DIGEST in mismatch[0], mismatch[0]
-        assert engine._measure_fingerprint()['digest'] in mismatch[0], mismatch[0]
+        assert mismatch == [], mismatch
+        assert engine._measure_fingerprint()['digest'] == ACJ_SHIPPED_DIGEST
         out = engine.simplify(engine.to_prefix(['+', 'x0', 'x0']))
         assert list(out) == ['*', '2', 'x0']
 

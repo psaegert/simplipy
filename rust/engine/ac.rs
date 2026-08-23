@@ -1554,6 +1554,10 @@ mod tests {
     fn constructor_cannot_reach_the_probes() {
         let Some(mut e) = engine() else { return };
         e.set_rules(vec![]);
+        // The acj-4 asset ships a full triple, so the helper arrives with mode sets
+        // installed; a CONSTRUCTOR control must hold none anywhere.
+        e.set_mode_rules(RuleMode::Real, None);
+        e.set_mode_rules(RuleMode::Corpus, None);
         for r in [P_ALL, P_DEFAULT, P_REAL, P_CORPUS] {
             let (lhs, _) = probe(r);
             assert!(
@@ -1574,7 +1578,11 @@ mod tests {
     /// property hold by construction rather than by re-derivation.
     #[test]
     fn absent_mode_sets_are_the_default_set_itself() {
-        let Some(e) = engine() else { return };
+        let Some(mut e) = engine() else { return };
+        // The absent state under test is CONSTRUCTED: the shipped acj-4 triple installs
+        // both mode sets, so clearing them is what makes this the no-set engine.
+        e.set_mode_rules(RuleMode::Real, None);
+        e.set_mode_rules(RuleMode::Corpus, None);
         assert_eq!(e.mode_rules_len(RuleMode::Real), None);
         assert_eq!(e.mode_rules_len(RuleMode::Corpus), None);
         assert_eq!(e.mode_rules_len(RuleMode::Default), Some(e.rules.raw.len()));
@@ -1705,6 +1713,8 @@ mod tests {
     #[test]
     fn a_default_push_moves_every_mode_that_has_no_set() {
         let Some(mut e) = engine() else { return };
+        e.set_mode_rules(RuleMode::Real, None);
+        e.set_mode_rules(RuleMode::Corpus, None);
         e.set_rules(vec![rule(P_DEFAULT)]);
         assert!(fires(&e, P_DEFAULT, RuleMode::Real));
         assert!(fires(&e, P_DEFAULT, RuleMode::Corpus));

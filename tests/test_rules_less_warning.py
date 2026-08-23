@@ -33,7 +33,7 @@ from conftest import acj_config_path, require_or_skip
 
 @pytest.fixture(scope="module")
 def operators() -> dict:
-    require_or_skip(acj_config_path(), 'the acj-4-3 asset is not staged')
+    require_or_skip(acj_config_path(), 'the acj-4 asset is not staged')
     return load_config(acj_config_path())['operators']
 
 
@@ -106,25 +106,21 @@ class TestTheWarningIsNonFatal:
 class TestTheWarningStaysQuietWhenItShould:
     def test_a_real_ruleset_does_not_warn(self) -> None:
         """The rules-less warning must stay silent for a real ruleset, and so must
-        every other warning.
+        every other warning -- the list is asserted EMPTY, fingerprint included.
 
-        The measure-fingerprint allowance is BACK, and narrower than the one that was
-        deleted here. The symbol table (2026-08-21) changed the measure, so the shipped
-        acj-4-3 -- mined under the old one -- trips D25/R6 again, correctly, until the
-        re-mine replaces it. The old allowance was a substring filter that would have
-        swallowed a genuine mismatch on any artifact; this one asserts the mismatch is
-        the ONLY warning and leaves every other warning fatal. Delete it, and re-earn
-        the empty list, once the re-mine lands.
+        The measure-fingerprint allowance that lived here twice is gone for good: the
+        served cell (acj-4, mined 2026-08-23 under the symbol-table measure) matches
+        the instrument that certifies it, so a fingerprint mismatch on THIS artifact
+        is a real defect again, not a documented interim.
         """
-        require_or_skip(acj_config_path(), 'the acj-4-3 asset is not staged')
+        require_or_skip(acj_config_path(), 'the acj-4 asset is not staged')
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', UserWarning)
             engine = SimpliPyEngine.from_config(acj_config_path())
         assert len(engine.simplification_rules) > 0
         assert not [w for w in caught if 'NO simplification rules' in str(w.message)], \
             'a real ruleset must never raise the rules-less warning'
-        unexpected = [str(w.message) for w in caught
-                      if 'measure fingerprint mismatch' not in str(w.message)]
+        unexpected = [str(w.message) for w in caught]
         assert unexpected == [], f'unexpected warnings on a real ruleset: {unexpected}'
 
     def test_explicit_bare_construction_stays_silent(self, operators: dict) -> None:

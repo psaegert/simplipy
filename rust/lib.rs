@@ -222,7 +222,7 @@ pub use worker::CandidateLibrary;
 
 /// Test-suite thinning guard: when `SIMPLIPY_TEST_REQUIRE_ASSETS` is set (any value), an
 /// asset-gated test that would silently skip must PANIC instead. Roughly half the Rust suite
-/// is gated on the acj-4-3 asset; without this mode a fresh machine (or a CI job whose asset
+/// is gated on the acj-4 asset; without this mode a fresh machine (or a CI job whose asset
 /// staging broke) reports every one of those tests green while running none of them --
 /// `cargo test` has no skip verdict, so the only honest failure mode is a loud one. CI sets
 /// the variable right after staging the asset; local verification runs should do the same.
@@ -231,7 +231,7 @@ pub(crate) fn assets_required() -> bool {
     std::env::var_os("SIMPLIPY_TEST_REQUIRE_ASSETS").is_some()
 }
 
-/// Test helper: load the `acj-4-3` engine (the GENERATION-2 test universe: the clean
+/// Test helper: load the `acj-4` engine (the GENERATION-2 test universe: the clean
 /// 23-operator vocabulary the engine actually serves), or `None` if the HF asset is not staged
 /// in the local cache (e.g. a CI job or fresh checkout that did not download it). The
 /// asset-dependent tests early-return on `None` (skip) rather than panic; under
@@ -252,16 +252,32 @@ pub(crate) fn test_engine() -> Option<Engine> {
         eprintln!("SKIP: {why}");
     };
     let Ok(home) = std::env::var("HOME") else {
-        skip("HOME is unset, so the acj-4-3 asset cache cannot be located");
+        skip("HOME is unset, so the acj-4 asset cache cannot be located");
         return None;
     };
-    let cfg = format!("{home}/.cache/simplipy/engines/acj-4-3/config.yaml");
+    let cfg = format!("{home}/.cache/simplipy/engines/acj-4/config.yaml");
     if !std::path::Path::new(&cfg).exists() {
-        skip("acj-4-3 HF asset not staged in ~/.cache/simplipy");
+        skip("acj-4 HF asset not staged in ~/.cache/simplipy");
         return None;
     }
-    let rules = format!("{home}/.cache/simplipy/engines/acj-4-3/rules.json");
-    Some(Engine::from_paths(&cfg, &rules).expect("engine loads"))
+    let rules = format!("{home}/.cache/simplipy/engines/acj-4/rules.json");
+    let mut e = Engine::from_paths(&cfg, &rules).expect("engine loads");
+    // The acj-4 cell ships the full triple, and each mode serves ITS OWN complete file
+    // (the python loader reads the config's `rules_real:`/`rules_corpus:` keys; the
+    // rust core is handed resolved content). Loading only rules.json here would run
+    // Real/Corpus tests against the default set -- the doctrine-bearing mode rules
+    // (e.g. the corpus `/ $0 $0 -> 1` sentinel cancel) would silently not be served.
+    for (mode, file) in [
+        (engine::RuleMode::Real, "rules_real.json"),
+        (engine::RuleMode::Corpus, "rules_corpus.json"),
+    ] {
+        let path = format!("{home}/.cache/simplipy/engines/acj-4/{file}");
+        let text = std::fs::read_to_string(&path).expect("acj-4 ships a full triple");
+        let raw: Vec<(Vec<String>, Vec<String>)> =
+            serde_json::from_str(&text).expect("triple rules file parses");
+        e.set_mode_rules(mode, Some(raw));
+    }
+    Some(e)
 }
 
 /// Test helper: the LEGACY-VOCABULARY table (the dev_7-3 operator set, in-repo fixture,

@@ -237,7 +237,13 @@ class TestShippingArtifact:
         # f64 THIRD of a triple, so every rule that is true but not f64-realised has
         # moved to rules_real.json. TOLERATED reaching 0 follows from the same split:
         # a tolerated-but-unrealised rule is `real`-tier and is not in this file.
-        assert census == {'CERTIFIED': 3815, 'TOLERATED': 0}, census
+        # 3815 -> 3820 at THE acj-4 TRIPLE (2026-08-23, f64 5,319 -> 5,338). Fully
+        # enumerated, two families: +21 structural rootn admissions (neg-through-odd-root
+        # commutation, abs/rootn orderings, rootn->pow(+-0.2) respellings at |index| 5)
+        # under the widened judge; -16 `rootn {cosh,exp} <constant> k -> <constant>`
+        # constant-binding folds retired by the canonical-source-class certification.
+        # Net +5 in this subset, every one CERTIFIED; TOLERATED stays 0.
+        assert census == {'CERTIFIED': 3820, 'TOLERATED': 0}, census
         # ...and WHICH rules are excused, not merely how many. The count alone would
         # wave through a swap (a $-rule turning CERTIFIED while some rootn rule turns
         # TOLERATED); this pins the excused set itself. All four are the one documented

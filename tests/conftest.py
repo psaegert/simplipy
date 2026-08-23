@@ -27,12 +27,12 @@ _FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         'fixtures', 'legacy_vocab_config.yaml')
 
 
-_ACJ_REPO_DIR = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj-4-3')
-_ACJ_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'simplipy', 'engines', 'acj-4-3')
+_ACJ_REPO_DIR = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj-4')
+_ACJ_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'simplipy', 'engines', 'acj-4')
 
 
 def acj_asset_dir() -> str:
-    """Directory of the acj-4-3 asset the suites run on: the repo's own mine output
+    """Directory of the acj-4 asset the suites run on: the repo's own mine output
     when present (the dev tree), else the STAGED asset the package actually serves
     (public checkouts, CI, sdists) -- the same local-then-cache order as the rust
     test loader. Post-republish the two are byte-identical, so the suites test the
@@ -57,7 +57,7 @@ def acj_corpus_rules_path() -> str:
 
 
 def require_triple_or_skip(why: str = 'the shipped asset carries the f64 set only') -> None:
-    """Skip when the acj-4-3 cell ships no `real`/`corpus` set of its own.
+    """Skip when the acj-4 cell ships no `real`/`corpus` set of its own.
 
     The cell carries the f64 third alone while the other two are re-mined, so a test
     whose subject is a `real` or `corpus` RULE SET has no subject and says so -- locally
@@ -83,7 +83,7 @@ def require_triple_or_skip(why: str = 'the shipped asset carries the f64 set onl
         return
     if present:
         pytest.fail(
-            f'the acj-4-3 cell carries PART of a triple ({os.path.basename(present[0])} '
+            f'the acj-4 cell carries PART of a triple ({os.path.basename(present[0])} '
             f'without its sibling) -- a triple ships whole or not at all')
     if os.environ.get('SIMPLIPY_TEST_REQUIRE_TRIPLE'):
         pytest.fail(f'SIMPLIPY_TEST_REQUIRE_TRIPLE is set but {why}')

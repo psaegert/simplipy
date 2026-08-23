@@ -235,7 +235,7 @@ __all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES']
 #:
 #: The measure-fingerprint check (D25) remains the safety net for an artifact loaded by
 #: NAME across a measure change; this pin is what stops that happening by default.
-DEFAULT_ENGINE = 'acj-4-3'
+DEFAULT_ENGINE = 'acj-4'
 DEFAULT_ENGINE_REVISION: str | None = None
 
 
@@ -942,7 +942,7 @@ class SimpliPyEngine:
         Parameters
         ----------
         engine : str or None, optional
-            The NAME of an official engine artifact (e.g. ``'acj-4-3'``). Defaults to
+            The NAME of an official engine artifact (e.g. ``'acj-4'``). Defaults to
             :data:`simplipy.DEFAULT_ENGINE`, the artifact this simplipy version was
             built and tested against; when it is used implicitly, the choice is
             announced, because a silent default is one a user cannot reproduce.

@@ -87,7 +87,11 @@ class TestLoadConsumer:
         # declines the fold on an unbounded argument. Nothing is subsumed or dropped;
         # the artifact is untouched at 6,594 rows.
         # RE-PINNED for the 0.14.0 triple (the 0.13 artifact served 5,558).
-        assert (kept, subsumed, dropped, twins) == (5327, 0, 0, 8)
+        # THE acj-4 TRIPLE (2026-08-23): (5327, 0, 0, 8) -> (5347, 0, 0, 9). The re-mine
+        # under the current instrument ships 5,338 f64 rows (widened judge admits the
+        # atanh-tanh np.e literal and the F104-band refinements); translation stays
+        # PRISTINE 0/0 and the orientation twins go 8 -> 9 with the new row.
+        assert (kept, subsumed, dropped, twins) == (5347, 0, 0, 9)
 
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads

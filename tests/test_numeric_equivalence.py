@@ -294,11 +294,14 @@ class TestCorpusGate:
         # rows and six corpus rows re-spell, and the corpus rests cheaper by 3,000
         # milli-bits. 0 of 5,451 shipped rules change direction; 0 of 105 printed literal
         # spellings move. Evidence: research `audit-2026-08-21/floor/`.
-        assert walk['complexity_out'] == 56521606, walk['complexity_out']
+        # THE acj-4 TRIPLE (2026-08-23): same measure, new artifact -- a real movement,
+        # not a re-pin: 56,521,606 -> 56,508,606 (the refreshed mine rests the corpus
+        # 13,000 milli-bits cheaper; translation pristine 5347/0/0).
+        assert walk['complexity_out'] == 56508606, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
-            m = re.search(r'"acj-4-3":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 56521606, \
+            m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
+            assert m and int(m.group(1)) == 56508606, \
                 'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):

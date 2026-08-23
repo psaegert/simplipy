@@ -137,7 +137,7 @@ def check_asset_name(name: str) -> None:
         raise IncompatibleArtifactError(
             f"asset '{name}' is a generation-1 artifact (retired hyper-operator "
             f"vocabulary), served only by simplipy <= 0.11 -- {_PIN_HINT}. On this "
-            f"version use the acj-* family instead (e.g. 'acj-4-3').")
+            f"version use the acj-* family instead (e.g. 'acj-4').")
 
 
 def _package_version() -> str:
