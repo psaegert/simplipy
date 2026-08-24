@@ -132,12 +132,16 @@ claims were certified against the old prices, until the next mine replaces them.
 
 ### Changed — the artifact is a TRIPLE
 
-A published asset is now six files, not four: `rules.json` (the f64 set, keeping its
-name so older configs load unchanged), `rules_real.json` and `rules_corpus.json`, plus
+A published asset is now six files, not four: `rules_f64.json` (the f64 set; artifacts
+published before the naming ruling call it `rules.json`, and configs name their files,
+so they load unchanged), `rules_real.json` and `rules_corpus.json`, plus
 `config.yaml`, `mine.yaml` and the provenance sidecar. One distinct, complete rule set
 per mode — no base plus overlays, so what is loaded is what is served. The triple is the
 unit of mining, pinning and distribution; rules licensed in no mode are recorded in the
-drop census rather than silently absent.
+drop census rather than silently absent. `find-rules` derives the sibling file names
+from `-o` with the `_f64` marker replaced, so `-o rules_f64.json` writes
+`rules_real.json` / `rules_corpus.json` beside it and `-o rules.json` keeps its
+historic siblings.
 
 ### Added
 
