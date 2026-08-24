@@ -151,7 +151,9 @@ historic siblings.
   the same certified machinery, accepted only strictly below the incumbent in the serve
   ordering. `effort=0` is byte-identical to the plain chain; soundness, never-worse,
   termination and idempotence hold at every budget, in all three modes. The default is
-  `simplipy.DEFAULT_EFFORT`.
+  `simplipy.DEFAULT_EFFORT` = 4, measured on the 65,536-row acceptance panel: budget 4
+  strictly improves 3.18% of rows with zero regressions and captures every win budget
+  64 finds, at +18% median per-row cost.
 
 - `SimpliPyEngine.evaluate_constants(expression)` — the explicit door to numeric folding.
   Folds maximal variable-free, slot-free subtrees; refuses a subtree carrying a

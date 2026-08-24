@@ -82,13 +82,17 @@ class TestEffortValidation:
         # The pre-effort core entry is the reference: the new dispatch at budget 0
         # must reproduce it byte-for-byte, tokens and rendering alike.
         tokens = engine.to_prefix(HILL)
-        via_effort = engine.simplify(tokens, effort=0)
         via_plain = engine._core.ac_simplify(
             [str(t) for t in engine.to_tagged(tokens)], 48, False, "explicit")
-        assert via_effort == engine.simplify(tokens)  # default is 0 today
-        assert engine.simplify(HILL, effort=0) == engine.simplify(HILL)
         assert via_plain == engine._core.ac_simplify_in_mode(
             [str(t) for t in engine.to_tagged(tokens)], 48, "default", "explicit", 0)
+        # The RULED default (owner 2026-08-24, benchmark panel): 4 -- the default
+        # call explores, and explicitly asking for the chain alone differs on a
+        # mu-hill.
+        from simplipy import DEFAULT_EFFORT
+        assert DEFAULT_EFFORT == 4
+        assert engine.simplify(HILL) == engine.simplify(HILL, effort=4)
+        assert engine.simplify(HILL) != engine.simplify(HILL, effort=0)
 
     @pytest.mark.parametrize('bad', [-1, -64])
     def test_negative_budgets_raise(self, engine, bad) -> None:

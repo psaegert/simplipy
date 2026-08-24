@@ -239,9 +239,11 @@ DEFAULT_ENGINE = 'acj-4'
 DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given
-#: (D39 B7). The value is RULED from the acceptance benchmark's explore-budget
-#: arms (owner directive 2026-08-24), never chosen by taste; 0 pending that ruling.
-DEFAULT_EFFORT: int = 0
+#: (D39 B7). RULED from the acceptance benchmark's explore-budget arms (owner,
+#: 2026-08-24, 65,536-row panel): budget 4 strictly improves 2,084 rows (3.18%)
+#: with ZERO regressions and captures every win budget 64 finds, at +18% median
+#: per-row cost. Callers on throughput-critical paths pin ``effort=0`` explicitly.
+DEFAULT_EFFORT: int = 4
 
 
 class _ModeMeta(EnumMeta):
