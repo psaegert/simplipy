@@ -64,7 +64,6 @@ nav:
   - Method:
     - The simplification engine (formal): formal.md
     - The mining algorithm (formal): algorithm.md
-    - Positioning and prior art: method/positioning.md
     - Environment qualification: method/environment-qualification.md
 
 extra_javascript:
