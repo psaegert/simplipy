@@ -217,7 +217,7 @@ from .mining import (  # noqa: E402,F401
 
 # D11 column R27 (owner-ratified 2026-08-16): ARTIFACT_ENV_SWITCHES is the
 # documented machine-readable registry of artifact-affecting env switches.
-__all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES']
+__all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT']
 
 
 #: THE ARTIFACT THIS VERSION WAS BUILT AND TESTED AGAINST, resolved when `load()` is
@@ -237,6 +237,11 @@ __all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES']
 #: NAME across a measure change; this pin is what stops that happening by default.
 DEFAULT_ENGINE = 'acj-4'
 DEFAULT_ENGINE_REVISION: str | None = None
+
+#: The exploration budget ``simplify()`` runs under when ``effort`` is not given
+#: (D39 B7). The value is RULED from the acceptance benchmark's explore-budget
+#: arms (owner directive 2026-08-24), never chosen by taste; 0 pending that ruling.
+DEFAULT_EFFORT: int = 0
 
 
 class _ModeMeta(EnumMeta):
@@ -1550,7 +1555,8 @@ class SimpliPyEngine:
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             *,
             max_passes: int | None = None,
-            mode: Mode | str = Mode.f64) -> str | list[str] | tuple[str, ...] | np.ndarray:
+            mode: Mode | str = Mode.f64,
+            effort: int | None = None) -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
         The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
@@ -1591,6 +1597,18 @@ class SimpliPyEngine:
             defense-in-depth against an ordering bug (T6 proves the fixpoint is reached in
             finitely many passes) rather than a tuning knob. ``max_passes=0`` is treated as
             1: at least one pass always runs.
+        effort : int, optional
+            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, a
+            bounded exploration phase proposes expansion moves the strict descent
+            refuses (distributing a product over its sums, expanding an integer power
+            of a sum), runs each candidate through the same certified constructors and
+            the same descent loop, and replaces the result only when the candidate's
+            endpoint lands STRICTLY below it in the serve-time reduction ordering.
+            ``effort`` counts candidate descents; ``0`` never enters the phase and is
+            byte-identical to the plain chain. Every guarantee survives any budget:
+            soundness (same certificates), never-worse (strictly-below acceptance),
+            termination (well-founded ordering, independent of the budget) and
+            deterministic, idempotent output. Defaults to ``DEFAULT_EFFORT``.
 
             * ``'tagged'`` -- the STRICT prefix form, the AC engine's native serialization
               (default for token inputs): n-ary bags are delimited (``<add> ... </add>``,
@@ -1631,6 +1649,15 @@ class SimpliPyEngine:
             # would otherwise surface as a raw pyo3 OverflowError at the usize
             # conversion (hardening H-006, 2026-08-03)
             raise ValueError(f"max_passes must be non-negative, got {max_passes}")
+        if effort is None:
+            effort = DEFAULT_EFFORT
+        if isinstance(effort, bool) or not isinstance(effort, int):
+            # bool is an int subclass and would silently mean 0 or 1 candidate
+            # descents -- a type error, not a budget.
+            raise TypeError(
+                f"effort must be an int >= 0, not {type(effort).__name__} ({effort!r})")
+        if effort < 0:
+            raise ValueError(f"effort must be non-negative, got {effort}")
         # A STRING mode must coerce, never silently compare unequal to the enum:
         # `mode='lossy'` used to run the default because `'lossy' == Mode.LOSSY` was False
         # (audit Tier-2, 2026-08-03). Accept the enum, its names (any case), and its
@@ -1695,9 +1722,9 @@ class SimpliPyEngine:
         # for it by name, so the two output paths cannot end up serving different sets.
         rule_mode = _RULE_MODE[mode]
         if form == 'infix':
-            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode)
+            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort)
 
-        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form)
+        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort)
 
         if isinstance(expression, str):
             # The old infix converter cannot render the tagged form; a str input asking for

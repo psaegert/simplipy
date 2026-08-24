@@ -81,6 +81,7 @@ fn ac_simplify_impl(
     max_passes: usize,
     mode: engine::RuleMode,
     form: engine::AcForm,
+    explore_budget: usize,
 ) -> PyResult<Py<PyList>> {
     // The documented empty-input contract: `simplify([]) == []` (the one valid
     // case `is_valid` rejects). Restored explicitly after the malformed-input
@@ -89,8 +90,16 @@ fn ac_simplify_impl(
         return Ok(PyList::empty(py).into());
     }
     ensure_ac_well_formed(inner, &tokens)?;
+    // Budget 0 takes the chain's own entry, so unused exploration is byte-identical
+    // BY ROUTING, not by trusting the explore path's early return (D39 effort=0).
     let out = py
-        .detach(|| inner.ac_simplify_proj(&tokens, max_passes, mode, form))
+        .detach(|| {
+            if explore_budget > 0 {
+                inner.ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
+            } else {
+                inner.ac_simplify_proj(&tokens, max_passes, mode, form)
+            }
+        })
         .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
     Ok(PyList::new(py, out)?.into())
 }
@@ -103,14 +112,22 @@ fn ac_simplify_infix_impl(
     tokens: Vec<String>,
     max_passes: usize,
     mode: engine::RuleMode,
+    explore_budget: usize,
 ) -> PyResult<String> {
     // Empty-input contract, as in `ac_simplify` (H-003): the empty rendering.
     if tokens.is_empty() {
         return Ok(String::new());
     }
     ensure_ac_well_formed(inner, &tokens)?;
-    py.detach(|| inner.ac_simplify_infix(&tokens, max_passes, mode))
-        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+    // Same routing doctrine as `ac_simplify_impl`: budget 0 is the chain's own entry.
+    py.detach(|| {
+        if explore_budget > 0 {
+            inner.ac_simplify_infix_explore(&tokens, max_passes, mode, explore_budget)
+        } else {
+            inner.ac_simplify_infix(&tokens, max_passes, mode)
+        }
+    })
+    .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
 }
 
 fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<()> {
@@ -401,6 +418,7 @@ impl PyEngine {
             max_passes,
             engine::RuleMode::from_wildcard_all(wildcard_all),
             parse_ac_form(form)?,
+            0,
         )
     }
 
@@ -412,7 +430,9 @@ impl PyEngine {
     ///
     /// Contracts (empty input, malformed input, forms) are the SAME code as `ac_simplify`
     /// -- both entries are one call into `ac_simplify_impl`.
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged"))]
+    /// `explore_budget` is the D39 B7 wire: the public `effort=` rides this parameter.
+    /// 0 (the default) routes to the chain's own entry, byte-identical behaviour.
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged", explore_budget=0))]
     fn ac_simplify_in_mode(
         &self,
         py: Python<'_>,
@@ -420,6 +440,7 @@ impl PyEngine {
         max_passes: usize,
         rule_mode: &str,
         form: &str,
+        explore_budget: usize,
     ) -> PyResult<Py<PyList>> {
         ac_simplify_impl(
             &self.inner,
@@ -428,6 +449,7 @@ impl PyEngine {
             max_passes,
             parse_rule_mode(rule_mode)?,
             parse_ac_form(form)?,
+            explore_budget,
         )
     }
 
@@ -438,9 +460,10 @@ impl PyEngine {
     /// (`ac_ordered_below`'s predicate -- measure-agnostic scaffolding, roadmap B1).
     /// `explore_budget` counts candidate descents; 0 (the default) never enters the
     /// phase, so this entry is then byte-identical to `ac_simplify` (the ledger's
-    /// effort=0 semantics). The public `effort=` API is deliberately NOT wired here
-    /// (roadmap B7); this is the scaffolding's FFI boundary, contracts (empty input,
-    /// malformed input, forms) exactly as `ac_simplify`.
+    /// effort=0 semantics). The public `effort=` API (D39 B7, wired 2026-08-24) rides
+    /// the `_in_mode` entries' `explore_budget` parameter instead -- this bool-mode
+    /// entry stays as the B1 scaffolding surface its falsifier suite drives. Contracts
+    /// (empty input, malformed input, forms) exactly as `ac_simplify`.
     #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false, form="tagged", explore_budget=0))]
     fn ac_simplify_explore(
         &self,
@@ -487,17 +510,19 @@ impl PyEngine {
             tokens,
             max_passes,
             engine::RuleMode::from_wildcard_all(wildcard_all),
+            0,
         )
     }
 
     /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`).
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default"))]
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", explore_budget=0))]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
         rule_mode: &str,
+        explore_budget: usize,
     ) -> PyResult<String> {
         ac_simplify_infix_impl(
             &self.inner,
@@ -505,6 +530,7 @@ impl PyEngine {
             tokens,
             max_passes,
             parse_rule_mode(rule_mode)?,
+            explore_budget,
         )
     }
 

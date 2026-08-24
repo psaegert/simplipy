@@ -714,8 +714,8 @@ impl Engine {
     /// D39 B1 (ledger D39): [`Engine::ac_simplify_proj`] with the OPT-IN post-fixpoint
     /// exploration phase. `explore_budget` counts candidate descents in `ac::search`;
     /// 0 never enters the phase, making this entry byte-identical to `ac_simplify_proj`
-    /// (the ledger's effort=0 semantics). The public `effort=` API stays a later lane
-    /// (roadmap B7); this is the scaffolding's engine boundary.
+    /// (the ledger's effort=0 semantics). The public `effort=` API (D39 B7, wired
+    /// 2026-08-24) reaches this through the `_in_mode` FFI entries' budget parameter.
     pub fn ac_explore_proj(
         &self,
         tokens: &[String],
@@ -746,6 +746,22 @@ impl Engine {
     ) -> Option<String> {
         let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
         // `None` on malformed input, exactly as `ac_simplify_proj` (the FFI raises).
+        let best = best?;
+        let view = self.view(&ctx);
+        let bare = Cx::bare(&view);
+        Some(to_infix_pretty(&best, &bare))
+    }
+
+    /// The infix twin of [`Engine::ac_explore_proj`] -- `ac_simplify_infix` with the
+    /// D39 exploration budget threaded through, for the public `effort=` API.
+    pub fn ac_simplify_infix_explore(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        mode: RuleMode,
+        explore_budget: usize,
+    ) -> Option<String> {
+        let (ctx, best) = self.ac_simplify_ex_explore(tokens, max_passes, mode, explore_budget);
         let best = best?;
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);

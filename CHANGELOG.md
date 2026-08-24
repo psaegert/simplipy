@@ -145,6 +145,14 @@ historic siblings.
 
 ### Added
 
+- **`simplify(effort=...)`** — the search budget (ledger D39). The deterministic chain
+  runs unchanged to its fixpoint; a bounded exploration phase then tries expansion moves
+  strict descent refuses (distribute, pow-expand), each candidate re-descended through
+  the same certified machinery, accepted only strictly below the incumbent in the serve
+  ordering. `effort=0` is byte-identical to the plain chain; soundness, never-worse,
+  termination and idempotence hold at every budget, in all three modes. The default is
+  `simplipy.DEFAULT_EFFORT`, set from the acceptance benchmark's explore-budget arms.
+
 - `SimpliPyEngine.evaluate_constants(expression)` — the explicit door to numeric folding.
   Folds maximal variable-free, slot-free subtrees; refuses a subtree carrying a
   `<constant>` (a fitted degree of freedom, not a value) and refuses a non-finite result.

@@ -13,7 +13,7 @@ import pytest
 
 # R1-R13 + __version__ — the root column, verbatim.
 ROOT_ALL = {
-    'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION',
+    'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION',
     'Mode', 'SimpliPyEngine', '__version__',
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
     'get_path', 'install', 'list_assets', 'uninstall',
@@ -40,7 +40,7 @@ MODULE_ALLS = {
         'get_path', 'install_asset', 'uninstall_asset', 'list_assets',
         'AssetType',
     },
-    'simplipy.engine': {'SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES'},
+    'simplipy.engine': {'SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT'},
     'simplipy.mining': {'RuleMiner'},
     # Joined 2026-08-23: the two public modules the D11 landing missed. The
     # compatibility policy says every public module declares its column; these

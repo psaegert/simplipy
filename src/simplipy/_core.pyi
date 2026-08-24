@@ -33,6 +33,7 @@ class Engine:
         max_passes: int = ...,
         rule_mode: Literal["default", "real", "corpus"] = ...,
         form: Literal["tagged", "explicit"] = ...,
+        explore_budget: int = ...,
     ) -> list[str]: ...
     def ac_simplify_infix(
         self,
@@ -45,6 +46,7 @@ class Engine:
         tokens: list[str],
         max_passes: int = ...,
         rule_mode: Literal["default", "real", "corpus"] = ...,
+        explore_budget: int = ...,
     ) -> str: ...
     def ac_simplify_explore(
         self,

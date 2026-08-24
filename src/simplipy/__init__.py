@@ -9,7 +9,7 @@ resolving engine rulesets and test data.
 import warnings as _warnings
 from typing import Any as _Any
 
-from .engine import DEFAULT_ENGINE, DEFAULT_ENGINE_REVISION, SimpliPyEngine, Mode
+from .engine import DEFAULT_EFFORT, DEFAULT_ENGINE, DEFAULT_ENGINE_REVISION, SimpliPyEngine, Mode
 from . import engine
 from . import operators
 from . import utils
@@ -37,7 +37,7 @@ except _PackageNotFoundError:  # running from a source checkout without an insta
 # they stay importable and documented, but `from simplipy import *` no longer
 # injects modules into the caller's namespace (simplipy.io shadowed stdlib io).
 __all__ = [
-    'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION', 'Mode', 'SimpliPyEngine', '__version__',
+    'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION', 'Mode', 'SimpliPyEngine', '__version__',
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
     'get_path', 'install', 'list_assets', 'uninstall',
     'normalize_variable_token', 'to_expression', 'to_skeleton',

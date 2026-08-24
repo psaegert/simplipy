@@ -9,7 +9,7 @@ engine = sp.SimpliPyEngine.load("acj-4", install=True)
 ## The pipeline
 
 ```text
-function simplify(expr, max_passes=48, mode=f64):
+function simplify(expr, max_passes=48, mode=f64, effort=DEFAULT_EFFORT):
     state = canon(parse(expr))            # infix→prefix or validate, then the CANONICAL
                                           # form: flat AC bags, exact rationals, like
                                           # terms collected — this is state ZERO
@@ -94,9 +94,11 @@ the candidate's endpoint lands strictly below it in the engine's one reduction
 ordering. Acceptance is that ordering test and nothing else; no new measure or
 tolerance enters.
 
-Budget 0 is the default and is byte-identical to the chain alone; `simplify()` always
-runs at budget 0, and the budgeted phase is reached through the core's simplify entry
-point. Every guarantee above survives a budget: candidates are built under the same
+The budget is the `effort` parameter: `simplify(expr, effort=64)` explores with 64
+candidate descents, and `effort=0` never enters the phase — byte-identical to the
+chain alone. The default is `simplipy.DEFAULT_EFFORT`, and its value is measured, not
+chosen: the acceptance benchmark's explore-budget arms price what each budget buys.
+Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
 below it (the result is never worse than the fixpoint, hence never costlier than the
 input), the frontier only grows on strict descent of a well-founded ordering
