@@ -18,7 +18,6 @@ Equality gate (D29): full-mine byte-identity on ``rules.json``, machine-pinned
 import hashlib
 import os
 import re
-import warnings
 import signal
 import threading
 from typing import Callable, TYPE_CHECKING

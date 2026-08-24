@@ -250,7 +250,7 @@ deduplication path (shortest target per canonical source).
 Each proposal ends in exactly one of four outcomes — `certified` (joined the
 ruleset), `already_covered` (the mined rules already shorten it), `rejected`
 (invalid, no shorter equivalent found, or failed numerical verification), or
-`duplicate` (certified, but canonically identical to an earlier certified proposal) 
+`duplicate` (certified, but canonically identical to an earlier certified proposal)
 and the provenance sidecar records the proposals file, its sha256, and the
 per-outcome counts. The pass is deterministic: proposals are processed in file order
 with content-derived per-proposal seeds, so editing the file never rerolls the
