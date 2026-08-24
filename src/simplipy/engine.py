@@ -8,6 +8,7 @@ the compiled core is REQUIRED; there is no pure-Python fallback.
 """
 import hashlib
 import importlib
+import operator
 import os
 import warnings
 from itertools import product
@@ -634,6 +635,19 @@ class SimpliPyEngine:
         ----------
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
+
+        effort : int, optional
+            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, a
+            bounded exploration phase proposes expansion moves the strict descent
+            refuses (distributing a product over its sums, expanding an integer power
+            of a sum), runs each candidate through the same certified constructors and
+            the same descent loop, and replaces the result only when the candidate's
+            endpoint lands STRICTLY below it in the serve-time reduction ordering.
+            ``effort`` counts candidate descents; ``0`` never enters the phase and is
+            byte-identical to the plain chain. Every guarantee survives any budget:
+            soundness (same certificates), never-worse (strictly-below acceptance),
+            termination (well-founded ordering, independent of the budget) and
+            deterministic, idempotent output. Defaults to ``DEFAULT_EFFORT``.
 
         Returns
         -------
@@ -1597,18 +1611,6 @@ class SimpliPyEngine:
             defense-in-depth against an ordering bug (T6 proves the fixpoint is reached in
             finitely many passes) rather than a tuning knob. ``max_passes=0`` is treated as
             1: at least one pass always runs.
-        effort : int, optional
-            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, a
-            bounded exploration phase proposes expansion moves the strict descent
-            refuses (distributing a product over its sums, expanding an integer power
-            of a sum), runs each candidate through the same certified constructors and
-            the same descent loop, and replaces the result only when the candidate's
-            endpoint lands STRICTLY below it in the serve-time reduction ordering.
-            ``effort`` counts candidate descents; ``0`` never enters the phase and is
-            byte-identical to the plain chain. Every guarantee survives any budget:
-            soundness (same certificates), never-worse (strictly-below acceptance),
-            termination (well-founded ordering, independent of the budget) and
-            deterministic, idempotent output. Defaults to ``DEFAULT_EFFORT``.
 
             * ``'tagged'`` -- the STRICT prefix form, the AC engine's native serialization
               (default for token inputs): n-ary bags are delimited (``<add> ... </add>``,
@@ -1651,11 +1653,17 @@ class SimpliPyEngine:
             raise ValueError(f"max_passes must be non-negative, got {max_passes}")
         if effort is None:
             effort = DEFAULT_EFFORT
-        if isinstance(effort, bool) or not isinstance(effort, int):
+        if isinstance(effort, bool):
             # bool is an int subclass and would silently mean 0 or 1 candidate
             # descents -- a type error, not a budget.
+            raise TypeError(f"effort must be an int >= 0, not bool ({effort!r})")
+        try:
+            # operator.index: plain and numpy ints alike (max_passes takes numpy ints
+            # through pyo3's __index__ extraction; the two int knobs agree).
+            effort = operator.index(effort)
+        except TypeError:
             raise TypeError(
-                f"effort must be an int >= 0, not {type(effort).__name__} ({effort!r})")
+                f"effort must be an int >= 0, not {type(effort).__name__} ({effort!r})") from None
         if effort < 0:
             raise ValueError(f"effort must be non-negative, got {effort}")
         # A STRING mode must coerce, never silently compare unequal to the enum:

@@ -96,8 +96,7 @@ tolerance enters.
 
 The budget is the `effort` parameter: `simplify(expr, effort=64)` explores with 64
 candidate descents, and `effort=0` never enters the phase — byte-identical to the
-chain alone. The default is `simplipy.DEFAULT_EFFORT`, and its value is measured, not
-chosen: the acceptance benchmark's explore-budget arms price what each budget buys.
+chain alone. The default is `simplipy.DEFAULT_EFFORT`.
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
 below it (the result is never worse than the fixpoint, hence never costlier than the
