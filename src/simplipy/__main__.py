@@ -86,7 +86,7 @@ def main(argv: str = None) -> None:
                 'max_source_pattern_length', 'max_target_pattern_length',
                 'dummy_variables', 'extra_internal_terms', 'n_samples',
                 'constants_fit_challenges', 'constants_fit_retries', 'rtol', 'atol',
-                'min_informative', 'seed', 'confirm', 'source_sample_per_length',
+                'min_informative', 'seed', 'confirm',
                 'relaxed_kruskal', 'prune', 'proposals',
                 'promote_sorts', 'symbolic_gate', 'snapshot_at'}
             unknown_keys = sorted(set(rule_finding_config) - known_keys)
@@ -118,9 +118,6 @@ def main(argv: str = None) -> None:
                 min_informative=rule_finding_config.get('min_informative', None),
                 seed=rule_finding_config.get('seed', 42),
                 confirm=rule_finding_config.get('confirm', True),
-                source_sample_per_length={
-                    int(k): int(v) for k, v in
-                    (rule_finding_config.get('source_sample_per_length') or {}).items()},
                 relaxed_kruskal=rule_finding_config.get('relaxed_kruskal', True),
                 proposals=proposals,
                 promote_sorts=rule_finding_config.get('promote_sorts', True),

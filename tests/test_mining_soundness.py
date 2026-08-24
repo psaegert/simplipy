@@ -597,9 +597,8 @@ class TestTheLibraryIsQuotientedByCanonicalClass:
 
 
 class TestProvenance:
-    """The mined artifact must carry a reproducibility sidecar, and sampled sources are
-    validated as universe members per run (exercised via the sampled length below -- a
-    violation raises inside find_rules)."""
+    """The mined artifact must carry a reproducibility sidecar. The universe census is
+    complete-enumeration only: every mined length reports full coverage."""
 
     def test_sidecar_written_with_reproducibility_fields(self, tmp_path) -> None:
         (tmp_path / "rules.json").write_text(json.dumps([]))
@@ -609,15 +608,13 @@ class TestProvenance:
         out = str(tmp_path / "mined.json")
         eng.find_rules(max_source_pattern_length=3, dummy_variables=1,
                        extra_internal_terms=["0", "1", "<constant>"], X=256, seed=7,
-                       verbose=False, output_file=out,
-                       source_sample_per_length={3: 500}, promote_sorts=False)
+                       verbose=False, output_file=out, promote_sorts=False)
         side = json.load(open(out + ".provenance.json"))
         assert side["params"]["seed"] == 7
         assert side["params"]["mine_seed"] and side["params"]["confirm_seed"]
-        assert side["params"]["source_sample_per_length"] == {"3": 500}
+        assert "source_sample_per_length" not in side["params"]
         assert side["X"]["source"].startswith("seeded_mixture")
-        assert side["universe"]["3"]["sampled"] is True
-        assert 0 < side["universe"]["3"]["coverage"] <= 1
+        assert side["universe"]["3"]["coverage"] == 1.0
         assert side["universe"]["2"]["coverage"] == 1.0
         assert side["progress"]["final"] is True
         assert side["progress"]["rules_total"] == len(

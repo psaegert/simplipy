@@ -32,7 +32,7 @@ from simplipy.utils import (
     is_numeric_string,
     deduplicate_rules,
     _dedup_keyed_rules,
-    enumerate_expressions, count_expressions, sample_expression,
+    enumerate_expressions, count_expressions,
     remap_expression,
     violates_wildcard_multiplicity)
 
@@ -1070,9 +1070,6 @@ class RuleMiner:
             return None
         prov = deepcopy(provenance)
         prov['params']['max_source_pattern_length'] = length
-        prov['params']['source_sample_per_length'] = {
-            k: v for k, v in prov['params'].get('source_sample_per_length', {}).items()
-            if int(k) <= length}
         prov['universe'] = {k: v for k, v in prov.get('universe', {}).items() if int(k) <= length}
         prov['ladder_snapshot'] = {
             'emitted_at_source_length': length,
@@ -1121,68 +1118,27 @@ class RuleMiner:
             leaf_nodes: list[str],
             non_leaf_nodes: dict[str, int],
             max_source_pattern_length: int,
-            max_target_pattern_length: int | None,
-            source_sample_per_length: dict[int, int],
-            rng: np.random.Generator,
             verbose: bool) -> tuple[dict[int, set[tuple[str, ...]]], dict[int, int]]:
         """Phase 1 of :meth:`find_rules`: build the per-length source/candidate universe.
 
         COMPLETE bottom-up DP enumeration per length: enumeration must SATURATE each
         length, not merely reach it (a pass-based closure that stops once
         ``max_source_pattern_length`` is reached silently misses whole expression
-        families). Lengths whose complete universe is infeasible are drawn as a seeded
-        uniform sample from the complete universe instead
-        (``source_sample_per_length``).
+        families).
 
-        Returns ``(expressions_of_length, counts)``: the enumerated-or-sampled universe
-        per length, and the complete-universe count DP.
+        Returns ``(expressions_of_length, counts)``: the enumerated universe per
+        length, and the complete-universe count DP.
         """
         counts = count_expressions(len(leaf_nodes), non_leaf_nodes, max_source_pattern_length)
-        enumerate_max = max(
-            (length for length in range(1, max_source_pattern_length + 1)
-             if length not in source_sample_per_length),
-            default=1)
         if verbose:
-            print(f"Phase 1: enumerating all expressions up to length {enumerate_max}"
-                  + (f", sampling lengths {sorted(source_sample_per_length)}" if source_sample_per_length else ""))
+            print(f"Phase 1: enumerating all expressions up to length {max_source_pattern_length}")
 
-        expressions_of_length = enumerate_expressions(leaf_nodes, non_leaf_nodes, enumerate_max)
+        expressions_of_length = enumerate_expressions(leaf_nodes, non_leaf_nodes, max_source_pattern_length)
         # Two paths, one truth: the enumerated universe must match the count DP exactly.
         for length, expressions in expressions_of_length.items():
             if len(expressions) != counts[length]:
                 raise AssertionError(
                     f'enumeration incomplete at length {length}: {len(expressions):,} != {counts[length]:,}')
-
-        # Same bound as the library build above -- under the mu ruling an unset target cap
-        # admits every enumerated length, so SAMPLING any of them thins the candidate library.
-        max_candidate_length = (max_source_pattern_length if max_target_pattern_length is None
-                                else max_target_pattern_length)
-        for length in sorted(source_sample_per_length):
-            if not 1 < length <= max_source_pattern_length:
-                raise ValueError(f'source_sample_per_length length {length} outside 2..{max_source_pattern_length}')
-            if length <= max_candidate_length:
-                warnings.warn(
-                    f'length {length} is SAMPLED but lies inside the candidate/replacement range '
-                    f'(<= {max_candidate_length}): the candidate library will be INCOMPLETE and '
-                    f'shorter equivalents can be missed', UserWarning)
-            target = min(source_sample_per_length[length], counts[length])
-            draws: set[tuple[str, ...]] = set()
-            attempts = 0
-            while len(draws) < target and attempts < 20 * target:
-                draws.add(sample_expression(length, leaf_nodes, non_leaf_nodes, counts, rng))
-                attempts += 1
-            # Per-run sampler cross-check: the count-DP assertion above
-            # guards ENUMERATED lengths only, so validate every draw's membership in the
-            # intended universe (exact length, known tokens, well-formed arity).
-            vocabulary = set(leaf_nodes) | set(self.engine.operator_arity)
-            for expression in draws:
-                if (len(expression) != length or not set(expression) <= vocabulary
-                        or not self.engine.is_valid(list(expression))):
-                    raise AssertionError(f'sampler produced a non-member at length {length}: {expression}')
-            expressions_of_length[length] = draws
-            # NO silent caps: always state the achieved coverage.
-            print(f'Phase 1: length {length} SAMPLED: {len(draws):,} of {counts[length]:,} '
-                  f'({len(draws) / counts[length]:.3%} of the complete universe)')
 
         return expressions_of_length, counts
 
@@ -1192,7 +1148,6 @@ class RuleMiner:
             X_data: np.ndarray,
             counts: dict[int, int],
             expressions_of_length: dict[int, set[tuple[str, ...]]],
-            source_sample_per_length: dict[int, int],
             max_source_pattern_length: int,
             max_target_pattern_length: int | None,
             dummy_variables: list[str],
@@ -1275,7 +1230,6 @@ class RuleMiner:
                 'confirm': confirm,
                 'relaxed_kruskal': relaxed_kruskal,
                 'prune': prune, 'reset_rules': reset_rules,
-                'source_sample_per_length': {str(k): int(v) for k, v in source_sample_per_length.items()},
             },
             'X': x_spec,
             'universe': {
@@ -1286,7 +1240,6 @@ class RuleMiner:
                     # alphabet) is vacuously covered: all zero of its expressions were used.
                     'coverage': (len(expressions_of_length[length]) / counts[length]
                                  if counts[length] else 1.0),
-                    'sampled': length in source_sample_per_length,
                 } for length in sorted(expressions_of_length)
             },
             'operators': sorted(self.engine.operator_arity),
@@ -1733,7 +1686,6 @@ class RuleMiner:
             min_informative: int | None = None,
             seed: int | None = 42,
             confirm: bool = True,
-            source_sample_per_length: dict[int, int] | None = None,
             relaxed_kruskal: bool = True,
             proposals: str | list | dict | None = None,
             promote_sorts: bool = True,
@@ -1813,17 +1765,6 @@ class RuleMiner:
             If True (default), every mined rule is re-verified on an independent,
             twice-as-wide X with fresh constant draws before it enters the rule set
             (stage-2 confirmation; kills data-luck accepts).
-        source_sample_per_length : dict[int, int] or None, optional
-            The UNIVERSE POLICY for lengths whose complete expression universe is too
-            large to enumerate. A length mapped here is represented by that many
-            expressions drawn UNIFORMLY from its complete universe (seeded top-down
-            count-weighted sampler; see :func:`simplipy.utils.sample_expression`)
-            instead of exhaustive enumeration. All other lengths are enumerated
-            COMPLETELY (enumeration must saturate a length, not merely reach it).
-            Coverage is always logged; sampling a length inside the candidate/
-            replacement range additionally warns, because the candidate library then
-            no longer certifies "no shorter equivalent exists". The dev operator set
-            crosses enumeration feasibility between lengths 5 (6.8e6) and 6 (2.4e8).
         relaxed_kruskal : bool, optional
             If True (the default), EVERY source is searched with the engine's own
             result as the mark to beat: only targets strictly below that mark in
@@ -1967,10 +1908,8 @@ class RuleMiner:
         non_leaf_nodes = dict(sorted(self.engine.operator_arity.items(), key=lambda x: x[1]))
 
         # --- Phase 1: build the source/candidate universe (see _build_source_universe) ---
-        source_sample_per_length = dict(source_sample_per_length or {})
         expressions_of_length, counts = self._build_source_universe(
-            leaf_nodes, non_leaf_nodes, max_source_pattern_length, max_target_pattern_length,
-            source_sample_per_length, _rng, verbose)
+            leaf_nodes, non_leaf_nodes, max_source_pattern_length, verbose)
 
         total_expressions = sum(len(v) for v in expressions_of_length.values())
 
@@ -1983,7 +1922,6 @@ class RuleMiner:
         provenance = self._build_mine_provenance(
             X=X, X_data=X_data, counts=counts,
             expressions_of_length=expressions_of_length,
-            source_sample_per_length=source_sample_per_length,
             max_source_pattern_length=max_source_pattern_length,
             max_target_pattern_length=max_target_pattern_length,
             dummy_variables=dummy_variables,

@@ -78,6 +78,18 @@ Installs no longer bundle them; `acj-4-3` is the shipped engine. Both remain on 
 Hugging Face assets repository and still load by name, so nothing published is
 withdrawn — `simplipy install acj-3-2` fetches it as before.
 
+### Removed — mining source sampling (`source_sample_per_length`)
+
+`find_rules` no longer accepts `source_sample_per_length`, and mine configs naming it
+are rejected. The option represented a length by a uniform sample of its expression
+universe when complete enumeration was infeasible — but a sampled length cannot certify
+"no shorter equivalent exists", and no published artifact ever used it: every shipped
+mine is a complete enumeration. Phase 1 now always saturates every length, and the
+provenance sidecar drops the `source_sample_per_length` parameter and the per-length
+`sampled` flag (coverage is always complete or vacuous). The seeded uniform sampler
+itself, `simplipy.utils.sample_expression`, remains — the verification monitor draws
+its probe corpus with it.
+
 ### Changed — the literal floor is one bit, not two
 
 Every numeric codeword was clamped at two bits, which swallowed `0`, `1`, `2` and `3`
