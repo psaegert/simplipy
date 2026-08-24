@@ -99,7 +99,13 @@ round-trip (serialize → parse → canon) onto the *same state*, debug-asserted
 `simplify` call and exercised by the full suite and the corpus gates. The one measured
 divergence class (the odd-function literal-sign pair: `mul()`-built vs collector-built
 spellings of one value) was removed by the shared sign-trade owner; zero
-specimens remain. A route-invariant `canon()` proof is deferred with a named trigger:
+specimens remain. A second measured class (2026-08-24) sat not in `canon()` but in the
+*pricing instrument*: `complexity()` parsed fold-free while the `f64`/`corpus` chains
+parse fold-at-parse, so on 10 of 65,536 benchmark rows the instrument priced a
+different state than the chain descended from and $\mu(\mathrm{simplify}(e)) \le
+\mu(e)$ failed *as measured* while holding per route. Closed by construction: the
+instruments are route-parameterized and price each mode through that mode's own parse
+route. A route-invariant `canon()` proof is deferred with a named trigger:
 a *value-changing* divergence at entry canon reopens it immediately; a μ-equal
 divergence reopens the deferred route-invariance work. The assert's failure
 diagnostics classify any future specimen along exactly that line.

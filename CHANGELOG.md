@@ -155,6 +155,14 @@ historic siblings.
   strictly improves 3.18% of rows with zero regressions and captures every win budget
   64 finds, at +18% median per-row cost.
 
+- `complexity(..., mode=...)` / FFI `rule_mode=` — the pricing instruments are
+  **route-parameterized**. `complexity()` now parses its argument through the same
+  route the named mode's chain descends from (fold-at-parse for `f64`/`corpus`,
+  fold-free for `real`) instead of a single fold-free route for all modes. Pricing a
+  chain's output with another route's instrument is how the benchmark's ten "μ-ascent"
+  rows arose; the theorem μ(simplify(e)) ≤ μ(e) is stated — and now measured — with
+  each mode priced by its own instrument.
+
 - `SimpliPyEngine.evaluate_constants(expression)` — the explicit door to numeric folding.
   Folds maximal variable-free, slot-free subtrees; refuses a subtree carrying a
   `<constant>` (a fitted degree of freedom, not a value) and refuses a non-finite result.
@@ -224,6 +232,22 @@ configs, the legacy vocabulary and every realization the deployed evaluation pat
 are unchanged; upgrade to 0.14.0 to get the check.
 
 ### Fixed
+
+- The nonzero-a.e. certificate for cleared quotients dropped a side condition: the
+  clearing identity Z(t) = Z(numerator) presumes the cleared **denominator** is finite
+  almost everywhere. Without it, `inv(inf + h)` — identically zero in f64 — certified
+  as nonzero-a.e., licensing a per-factor sign move that flips the sign of infinity on
+  a positive-measure set (one judge VIOLATION in 65,536 benchmark rows). The
+  denominator now goes through the existing finiteness authority (`isn`); both
+  regression probes refuse.
+
+- `Mode.corpus` at nonzero `effort` could return a costlier serve form than
+  `Mode.f64` on the same input: exploration is mode-dependent, so the corpus
+  arbitration's two candidates (folded/unfolded corpus constructions) no longer
+  contained every f64 endpoint once `DEFAULT_EFFORT` became 4. The arbitration now
+  admits the default-mode result as a third candidate, so corpus-dominates-f64 is a
+  property of the construction rather than an empirical gate observation. Ties keep
+  the corpus-own winner.
 
 - The infix reader bound a minus after a power operator outside the power: `2^-3`
   parsed as `-(2^3)` and returned **-8** where the value is 0.125, `sin(x0)^-1` lost
