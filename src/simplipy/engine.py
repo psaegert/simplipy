@@ -8,7 +8,6 @@ the compiled core is REQUIRED; there is no pure-Python fallback.
 """
 import hashlib
 import importlib
-import operator
 import os
 import warnings
 from itertools import product
@@ -1658,10 +1657,10 @@ class SimpliPyEngine:
             # descents -- a type error, not a budget.
             raise TypeError(f"effort must be an int >= 0, not bool ({effort!r})")
         try:
-            # operator.index: plain and numpy ints alike (max_passes takes numpy ints
+            # __index__: plain and numpy ints alike (max_passes takes numpy ints
             # through pyo3's __index__ extraction; the two int knobs agree).
-            effort = operator.index(effort)
-        except TypeError:
+            effort = effort.__index__()
+        except AttributeError:
             raise TypeError(
                 f"effort must be an int >= 0, not {type(effort).__name__} ({effort!r})") from None
         if effort < 0:
