@@ -39,7 +39,11 @@ engine.to_infix(engine.simplify(expr))
 ```
 
 `simplify`'s default `Mode.f64` is sound as the deployed f64 evaluator computes;
-`Mode.real` is sound as mathematics defines; the training-only `Mode.corpus` trades
+`Mode.real` is sound as mathematics defines. The two disagree in both directions:
+`asin(1e-8) → 1e-8` is bit-identical in f64 yet wrong over the reals by the cubic
+term, while `atanh(tanh(t)) → t` is true for every real `t` yet returns `inf` in f64
+once `tanh` saturates to exactly `1.0` at large `|t|` — so each mode serves only the
+rules sound on its own axis. The training-only `Mode.corpus` trades
 soundness for recall. The
 [simplification guide](guides/simplify.md) covers the modes, the search
 budget, and the guarantee the engine actually makes.

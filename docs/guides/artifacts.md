@@ -1,40 +1,44 @@
 # Artifacts and assets
 
 Every published engine asset carries `config.yaml` (the operator table and engine
-configuration), the rule sets that config names — a 0.14.0 mine produces the full
-**TRIPLE**, `rules.json`, `rules_real.json` and `rules_corpus.json` — `mine.yaml` (the exact mine
-configuration — each artifact is byte-deterministically reproducible from it with one
-`simplipy find-rules` command **at the recorded environment**; what "recorded
-environment" means, and why it must be said, is the
-[environment qualification](../method/environment-qualification.md) page), and
-`rules.json.provenance.json`.
-## The triple
+configuration), the rule sets that config names. A 0.14.0 mine produces the full
+**TRIPLE**, `rules_f64.json`, `rules_real.json` and `rules_corpus.json`, and `mine.yaml` (the exact mine
+configuration). Each artifact is byte-deterministically reproducible from the config with one
+`simplipy find-rules` command at the recorded environment
+(see [environment qualification](../method/environment-qualification.md)).
 
-One distinct, complete rule set per mode, not a base plus overlays:
+
+## The triple
 
 | file | mode | contains |
 |---|---|---|
-| `rules.json` | `Mode.f64` (the default) | every rule the deployed f64 evaluator reproduces |
+| `rules_f64.json` | `Mode.f64` (the default) | every rule the deployed f64 evaluator reproduces |
 | `rules_real.json` | `Mode.real` | every rule that is true over ℝ |
 | `rules_corpus.json` | `Mode.corpus` | the permissive superset |
 
-`rules.json` keeps its name, so a config written before the triple goes on loading
-unchanged: the other two keys are optional, and a mode naming no set of its own serves
-the default one. `Mode.real` is the exception — it **fails closed** rather than fall
-back, because its only divergence from `f64` is which rules are certified, so serving
-it the f64 set would answer a request for mathematical soundness with rules that are
-f64-exact and mathematically false.
+The three files carry their mode in their name. Artifacts published before this
+convention (acj-4 among them) name the f64 file `rules.json`; they load unchanged,
+because `config.yaml` names its rule files explicitly and the loader serves whatever
+the config declares. The `rules_real:` and `rules_corpus:` config keys are optional,
+and a mode naming no set of its own serves the default (f64) set.
+
+`Mode.real` is the exception to that fallback: on an artifact without a real set,
+`simplify(mode=Mode.real)` **raises** instead of quietly using the f64 set. The f64
+set contains rules that floating point reproduces exactly but that are false as
+mathematics — `asin(1e-8) → 1e-8` is bit-identical in f64 and wrong over ℝ by the
+cubic term. A caller selecting `Mode.real` is asking precisely for those rules to be
+absent, so the fallback would serve them the one thing they opted out of.
 
 **The triple is the unit of mining, pinning and distribution.** A mine run is valid only
 if all three fall out of it; a partial triple is not shippable. The provenance sidecar
 covers the triple as a whole, and so does the byte-identity promise: a re-mine at the
 recorded environment reproduces all three files. Rules the mine finds and
-can license in no mode are **recorded** in the sidecar's drop census rather than
+can license in no mode are recorded in the sidecar's drop census rather than
 silently absent.
 
 Verify a shipped triple with `simplipy.verify.verify_triple`, which sweeps each file
-against **its own** mode's contract. Cleanliness is per mode: `atanh(tanh t) → t` is
-exactly what belongs in `rules_real.json` and would be a defect in `rules.json`.
+against its own mode's contract. Cleanliness is per mode: `atanh(tanh t) → t` is
+exactly what belongs in `rules_real.json` and would be a defect in `rules_f64.json`.
 
 The provenance
 sidecar records how the ruleset came to be: the mine parameters, the core build stamp

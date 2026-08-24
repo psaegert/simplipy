@@ -2546,3 +2546,30 @@ class TestVarFreeCandidatesNeverEnterTheLibrary:
                      if len(rhs) >= 2
                      and not any(t.startswith(("x", "_", "$", "?", "!")) for t in rhs)]
         assert not offenders, offenders
+
+
+class TestTriplePaths:
+    """The triple's file names derive from the requested output path (owner ruling
+    2026-08-24: the f64 file is named ``rules_f64.json``; the siblings replace the
+    mode marker rather than append to it)."""
+
+    def test_the_f64_marker_is_replaced_not_appended(self) -> None:
+        from simplipy.mining import _triple_paths
+        assert _triple_paths('rules_f64.json') == {
+            'f64': 'rules_f64.json', 'real': 'rules_real.json',
+            'corpus': 'rules_corpus.json'}
+
+    def test_directories_survive_the_derivation(self) -> None:
+        from simplipy.mining import _triple_paths
+        assert _triple_paths('path/to/my_rules_f64.json') == {
+            'f64': 'path/to/my_rules_f64.json', 'real': 'path/to/my_rules_real.json',
+            'corpus': 'path/to/my_rules_corpus.json'}
+
+    def test_a_markerless_name_keeps_its_historic_siblings(self) -> None:
+        # Every artifact published before the rename (acj-4 among them) was mined with
+        # `-o rules.json`, and the recorded re-mine command must go on reproducing it
+        # byte-for-byte, file names included.
+        from simplipy.mining import _triple_paths
+        assert _triple_paths('rules.json') == {
+            'f64': 'rules.json', 'real': 'rules_real.json',
+            'corpus': 'rules_corpus.json'}

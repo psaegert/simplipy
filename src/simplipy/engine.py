@@ -284,8 +284,10 @@ class Mode(Enum, metaclass=_ModeMeta):
       generated FROM the simplified form, so the target equals the data and there is no
       external function to violate. Do NOT use on an inference or scoring path.
 
-    Each mode names ONE DISTINCT, COMPLETE rule set -- ``rules.json`` / ``rules_real.json``
-    / ``rules_corpus.json`` -- so selecting a mode selects a file, and what is loaded IS
+    Each mode names ONE DISTINCT, COMPLETE rule set -- ``rules_f64.json`` /
+    ``rules_real.json`` / ``rules_corpus.json`` (artifacts published before the 0.14.0
+    naming ruling call the f64 file ``rules.json``; configs name their files, so they
+    load unchanged) -- so selecting a mode selects a file, and what is loaded IS
     what is served with nothing unioned at serve time.
 
     ``SOUND`` and ``LOSSY`` still resolve, with a ``DeprecationWarning``, to ``f64`` and
@@ -299,7 +301,8 @@ class Mode(Enum, metaclass=_ModeMeta):
 
 #: THE MAP from the public ``Mode`` onto the core's RULE MODE -- the one place the two
 #: vocabularies meet on the Python side, and the twin of ``RuleMode::from_wildcard_all``
-#: on the Rust side. ``'default'`` is the core's name for the set in ``rules.json``.
+#: on the Rust side. ``'default'`` is the core's name for the f64 set (the
+#: ``rules_f64.json`` file; ``rules.json`` in pre-rename artifacts).
 _RULE_MODE: dict[Mode, str] = {Mode.f64: 'default', Mode.real: 'real', Mode.corpus: 'corpus'}
 
 #: The retired STRING spellings, accepted by ``simplify(mode=...)`` with a notice. Kept
@@ -877,12 +880,18 @@ class SimpliPyEngine:
                 with open(mode_path, 'r') as f:
                     mode_rules[mode_name] = json.load(f)
             else:
+                # What the built engine then DOES differs by mode -- `corpus` falls
+                # back to the default set, `real` fails closed at call time -- and the
+                # warning says which, because "serves the default set" would be a lie
+                # for exactly the mode where the difference is soundness.
+                consequence = ("Mode 'real' FAILS CLOSED at call time "
+                               "(simplify(mode='real') raises)" if mode_name == 'real'
+                               else f"Mode {mode_name!r} serves the default rule set instead")
                 warnings.warn(
                     f"the config '{config_path}' declares a {mode_name!r}-mode rule set "
                     f"{declared!r} that could not be resolved (looked for "
-                    f"'{mode_path}'): the engine is built WITHOUT it, so Mode "
-                    f"{mode_name!r} serves the default rule set instead. The other "
-                    f"modes are unaffected -- each mode's set is its own file.",
+                    f"'{mode_path}'): the engine is built WITHOUT it, so {consequence}. "
+                    f"The other modes are unaffected -- each mode's set is its own file.",
                     UserWarning)
         engine = cls(operators=config['operators'], rules=rules,
                      rules_real=mode_rules['real'], rules_corpus=mode_rules['corpus'],

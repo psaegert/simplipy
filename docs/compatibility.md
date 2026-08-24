@@ -7,7 +7,7 @@ introduced in 0.13.0.
 ## What is stable
 
 The public API of `simplipy` is exactly the set of names declared in
-`__all__` — at the package root and in each public module. Those names, their
+`__all__` at the package root and in each public module. Those names, their
 signatures, and their documented behaviour follow the versioning rules below.
 
 Names *reachable* but not declared (helpers, `_`-prefixed modules,
@@ -31,7 +31,7 @@ The declared surface has three tiers:
 
 While the major version is 0: breaking changes to declared names happen only
 at a **minor** version bump (0.x → 0.x+1), are listed in the CHANGELOG under
-"Changed"/"Removed", and — where a replacement exists — the old spelling
+"Changed"/"Removed", and the old spelling
 warns for at least one minor release before removal. Patch releases (0.13.x)
 never break declared names or change artifact semantics.
 

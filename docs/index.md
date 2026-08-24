@@ -1,26 +1,21 @@
 # SimpliPy
 
-SimpliPy simplifies mathematical expressions the way a compiler optimizes
-code: fast, deterministically, and with a stated guarantee. One idea drives
-the whole engine — **expressions are canonicalized into flat bags with exact
-rational arithmetic, and a rewrite is taken only when a single integer price
-(the description length μ) strictly drops.** Termination, no rewrite loops,
-never-worse-than-the-input, and idempotence are not separate features; they
-all fall out of that one rule.
+SimpliPy simplifies mathematical expressions at corpus scale: millions of
+machine-generated expressions in symbolic-regression and ML-training
+pipelines, where per-expression cost is multiplied by the size of the dataset.
 
-It exists for workloads where classic computer-algebra tools struggle:
-millions of machine-generated expressions in symbolic-regression and
-ML-training pipelines, where expressions live as prefix token lists and every
-millisecond per expression is multiplied by a corpus. Instead of converting
-tokens into a general CAS object model and back, SimpliPy parses them straight
-into its own compact canonical state — interned token ids in flat AC bags — and
-serializes straight back out; it is the expression-engine leaf under
-[symbolic-data](https://github.com/psaegert/symbolic-data), and through it
-feeds [flash-ansr](https://github.com/psaegert/flash-ansr) training and the
-srbf benchmark framework. Measured comparisons against SymPy live in the
-[simplification guide](guides/simplify.md).
+One rule drives the engine. Expressions are canonicalized into flat AC bags
+with exact rational arithmetic, and a rewrite is applied only when the
+description length μ strictly drops. Termination, loop-freedom,
+never-worse-than-input, and idempotence follow from that rule.
 
-Thirty seconds of it:
+Tokens are parsed straight into the
+canonical state (interned ids in flat bags) and serialized straight back
+out, with no round trip through a general CAS object model. SimpliPy is the
+expression-engine used for
+[symbolic-data](https://github.com/psaegert/symbolic-data),
+[flash-ansr](https://github.com/psaegert/flash-ansr),
+and [srbf](https://github.com/psaegert/srbf).
 
 ```python
 import simplipy as sp
@@ -30,13 +25,6 @@ engine = sp.SimpliPyEngine.load("acj-4", install=True)
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # -> '<constant>/x3'
 ```
-
-The guarantee is honest about what it measures: the output is never costlier
-than the input **under μ** — which is a description length, not a token
-count — the default `f64` mode is sound as the deployed evaluator computes,
-and everything the engine ships (mined rulesets, soundness certificates,
-verification verdicts) carries provenance that says exactly where it came
-from and on what machine it holds.
 
 ## Where to go
 

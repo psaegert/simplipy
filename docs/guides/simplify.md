@@ -25,65 +25,83 @@ function simplify(expr, max_passes=48, mode=f64):
                                           # defence-in-depth, not the mechanism
 ```
 
-`simplify` is the **equivalence chain only**. Every step — like-term collection inside the
-canonical constructors, rule application, and the exact fold — preserves the function almost
-everywhere, so the result is sound, never costlier than the input under the engine's
-description-length measure μ (the input's canonical form is the first state), and idempotent
-at any fixpoint run. **μ is not token count**: on the 400-skeleton
-reference corpus, `complexity(simplify(e)) ≤ complexity(e)` holds 400/400, while 77 outputs are
-*longer in explicit tokens* than their inputs — 70 at exact μ ties and 7 that are strictly
-μ-cheaper yet longer (e.g. μ 214,510 → 206,510 at 31 → 39 tokens: a cheaper literal can take
-more tokens to spell). In the native *tagged* serialization, which writes explicit bag
-delimiters (`<mul>…</mul>`), 45 of 400 outputs are longer than their inputs. The guarantee the engine carries is the μ-non-increase, soundness, and
-idempotence — never an output-token bound in either serialization.
-There is no search, and that is the AC core's whole point: **cancellation IS
-canonicalization**: like-term collection in flat bags, computed by one deterministic
-function, so there is nothing to branch over. What remains is the deterministic chain above.
-Every changed pass output strictly descends the reduction ordering (μ, then the canonical
-order), and that ordering is well-founded, so the chain never revisits a state and reaches
-its fixpoint in finitely many passes as a theorem; the `max_passes` parameter (default 48)
-and the internal step cap are defence-in-depth against ordering-invariant bugs, not part of
-the argument. `max_passes` bounds the number of times that `loop` body runs — **passes, not
-nodes**: on the 400-skeleton reference corpus the chain converges in 2–4 passes, so the
-default of 48 is never reached and the knob is not a performance dial.
+Every step preserves the function almost everywhere: like-term collection inside the
+canonical constructors, rule application, and the exact fold. The result is therefore
+sound, never costlier than the input under the engine's description-length measure μ
+(the input's canonical form is the first state), and idempotent at any fixpoint run.
+
+The chain itself does not search: **cancellation IS canonicalization** — like-term
+collection in flat bags, computed by one deterministic function, so inside a pass there
+is nothing to branch over. Every changed pass output strictly descends the reduction
+ordering (μ, then the canonical order), and that ordering is well-founded, so the chain
+never revisits a state and reaches its fixpoint in finitely many passes as a theorem;
+the `max_passes` parameter (default 48) and the internal step cap are defence-in-depth
+against ordering-invariant bugs, not part of the argument. `max_passes` bounds the
+number of times that `loop` body runs — **passes, not nodes**: on the 400-skeleton
+reference corpus the chain converges in 2–4 passes, so the default of 48 is never
+reached and the knob is not a performance dial. What strict descent alone cannot do —
+pass through a state that prices *higher* on the way to a cheaper one — is the job of
+the [search budget](#the-search-budget) below.
 The full ledger of what is theorem, what is enforced, and what is empirical is
 [formal.md](../formal.md).
 
-**Masking is not part of `simplify`.** Relabelling numeric literals to the generic `<constant>`
-placeholder is a *representation* step for a downstream model that cannot consume literals, not
-an equivalence-preserving rewrite. It is a separate terminal step — see the
-[Masking guide](masking.md).
+**Masking is part of the same machinery.** Relabelling numeric literals to the generic
+`<constant>` placeholder is a *representation* step for a downstream model that cannot
+consume literals, and which literals to abstract is the caller's policy, so it is its own
+call, `mask()`, never a side effect of `simplify` (see the [Masking guide](masking.md)).
+It is not outside the engine, though: `<constant>` is a first-class token inside
+`simplify` — rules bind it, and the exact fold collapses constant subtrees into it under
+the positive-measure licence — and `mask()`'s collect stage is itself a `simplify` call
+over the substituted tokens, which is what enforces one `<constant>` per degree of
+freedom (`2*x0/3` is one free value, not two).
 
-The same call as a flowchart, with the memo state each stage touches drawn as
-cylinders (dotted links are lookups/inserts, not data flow):
+The same call as one procedure, with the memo state each stage touches noted where
+it applies:
 
-```mermaid
-flowchart TD
-    IN["input tokens"] --> INTERN["intern to token ids"]
-    INTERN --> CANON0["CANONICAL form: flat AC bags ·<br/>exact rationals · like terms collected<br/>(cancellation lives HERE) — state zero"]
-    CANON0 --> PASS
-    subgraph LOOP["the deterministic chain (no search)"]
-        PASS["rewrite pass over the state"] --> RECANON["re-canonicalize"]
-        RECANON --> CONV{"changed vs<br/>previous state?"}
-        CONV -- "yes (strict μ-descent)" --> PASS
-    end
-    CONV -- "no (fixpoint)" --> OUT["output tokens<br/>(μ ≤ input · sound · idempotent)"]
-    OUT -. "callers, when placeholders needed" .-> MASK["mask() — separate terminal step:<br/>literals → &lt;constant&gt;"]
-
-    subgraph WALK["inside the rewrite pass: per subtree, top-down"]
-        EXACT["exact rule lookup"] -- miss --> PATT["pattern scan,<br/>first match wins"]
-        PATT -- "wide slots bind" --> CERT["bind-time !-certificates<br/>(skipped in corpus)"]
-        PATT -- "no match" --> FOLD["EXACT fold + &lt;constant&gt; collapse<br/>(positive-measure licence;<br/>relaxed in corpus)"]
-        FOLD -- "no fold" --> REC["recurse into operands,<br/>re-check the rebuilt node"]
-    end
-    PASS -.- WALK
-
-    STORE[("token store:<br/>engine table +<br/>per-call overlay")] -.- INTERN
-    CCACHE[("certificate caches:<br/>per-call + per-engine<br/>generational")] -.- CERT
-```
+1. **Intern** the input tokens to token ids (the token store: the engine table plus a
+   per-call overlay).
+2. **Canonicalize** into state zero: flat AC bags, exact rationals, like terms
+   collected. Cancellation lives here.
+3. **Loop** — one rewrite pass over the state, then re-canonicalize; stop at the first
+   pass that changes nothing (the fixpoint). Every changed pass output is strictly
+   below its predecessor in the reduction ordering. Inside the pass, per subtree,
+   top-down:
+    1. exact rule lookup; on a miss, the pattern scan, first match wins;
+    2. a match that binds wide slots must pass the bind-time `!`/`$` certificates
+       (skipped in corpus mode); verdicts are memoized per call and in a
+       generational per-engine cache;
+    3. no match: the exact fold with the `<constant>` collapse (positive-measure
+       licence; relaxed in corpus mode);
+    4. still nothing: recurse into the operands and re-check the rebuilt node.
+4. **Serialize** back out: μ ≤ input, sound, idempotent. Callers that need
+   placeholders then run `mask()` — the separate call above.
 
 The compiled core implements one engine line: numeric constant folding (including
 non-finite results such as `1/0 -> float("inf")`) and real-semantics power evaluation.
+
+## The search budget
+
+Strict descent cannot cross a μ-hill. `x2*(x2 + (x1+1)/x2)` reaches the strictly
+cheaper `1 + x1 + x2**2` only by distributing first — which prices *higher* at that
+node — and recollecting after, so the chain above, which only ever takes descending
+steps, never finds that valley. The search budget exists for exactly this class.
+
+With a budget, the chain first runs unchanged to its fixpoint. A bounded exploration
+phase then proposes expansion moves the descent refuses — distributing a product over
+its sums, expanding an integer power of a sum — runs every candidate through the same
+certified constructors and the same descent loop, and replaces the incumbent only when
+the candidate's endpoint lands strictly below it in the engine's one reduction
+ordering. Acceptance is that ordering test and nothing else; no new measure or
+tolerance enters.
+
+Budget 0 is the default and is byte-identical to the chain alone; `simplify()` always
+runs at budget 0, and the budgeted phase is reached through the core's simplify entry
+point. Every guarantee above survives a budget: candidates are built under the same
+certificates (soundness), the incumbent is only ever replaced by something strictly
+below it (the result is never worse than the fixpoint, hence never costlier than the
+input), the frontier only grows on strict descent of a well-founded ordering
+(termination, independent of the budget), and the walk order is deterministic
+(idempotence and reproducibility).
 
 ## Soundness modes
 
@@ -102,23 +120,22 @@ floating point and mathematically false:
 Neither rule is "more sound" than the other, so there is no rung to put them on, and `<`
 between modes raises `TypeError`.
 
-- **`Mode.f64`** (the default) is sound as the **deployed f64 evaluator computes**. Use it
-  whenever the output will be evaluated in floating point — inference, recovery scoring,
-  holdout matching.
+- **`Mode.f64`** (the default) is sound as the deployed f64 evaluator computes. Use it
+  whenever the output will be evaluated in floating point.
 
-- **`Mode.real`** is sound as **mathematics defines**, independent of any float format. Use it
-  when a rewrite must hold symbolically — proofs, exact-arithmetic backends, publication — and
-  accept that some of what it does is not what f64 will compute.
+- **`Mode.real`** is sound as mathematics defines, independent of any float format. Use it
+  when a rewrite must hold symbolically.
 
-- **`Mode.corpus`** is the permissive superset, for training-corpus canonicalisation **only**.
+- **`Mode.corpus`** is the permissive superset, for training-corpus canonicalisation ("beautification").
   Every rule placeholder binds any subtree (the `!`-certificate is skipped), cancellation drops
   its group-axiom gate, and the constant-fold drops its finiteness gate. It is *not*
   equivalence-preserving. Do not use it on an inference or scoring path: the training data is
   generated *from* the simplified form, so the target equals the data and there is no external
   function to violate.
 
-Each mode names one **distinct, complete** rule set — `rules.json` / `rules_real.json` /
-`rules_corpus.json` — so selecting a mode selects a file, and what is loaded is what is served.
+Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /
+`rules_corpus.json` (artifacts published before the rename, acj-4 among them, call the f64
+file `rules.json`) — so selecting a mode selects a file, and what is loaded is what is served.
 
 ```python
 from simplipy import Mode

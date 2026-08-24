@@ -1,8 +1,8 @@
 # Creating Rulesets
 
-SimpliPy's simplification rules are not hand-written: they are **mined** — discovered by
-exhaustively enumerating candidate expressions and certifying, numerically, which longer
-expressions are equivalent to shorter ones. This page explains the procedure and shows a
+SimpliPy's simplification rules are discovered in a one-time offline phase by
+exhaustively enumerating candidate expressions and certifying numerically which shorter
+expressions are equivalent to longer ones. This page explains the procedure and shows a
 complete mining configuration.
 
 ## How mining works
@@ -11,28 +11,25 @@ complete mining configuration.
 
 **Phase 1 — building the source universe.** All valid prefix expressions up to
 `max_source_pattern_length` are enumerated bottom-up, and the enumeration is cross-checked
-against an exact counting recurrence — the two must agree exactly, or the mine aborts.
-Lengths whose complete universe is too large to enumerate can instead be represented by a
-uniform sample from the complete universe (`source_sample_per_length`); coverage is always
-reported, and the drawn sample is validated per run.
+against an exact counting recurrence.
 
 **Phase 2 — certifying rules, shortest sources first.** For each source expression:
 
 1. **Prune**: if the rules found so far already shorten the source, the search is
-   *tightened* rather than skipped — only targets strictly shorter than what `simplify`
+   tightened: only targets strictly shorter than what `simplify`
    already reaches are accepted (`relaxed_kruskal`, the default; pass
    `relaxed_kruskal=False` to skip already-shortened sources entirely).
 2. **Scan**: the source is compared against every candidate replacement, in
    order of increasing cost under the serve-time reduction ordering, so the first
-   certified match is a *minimal* target. The candidate library is built once per
-   mine, with variable-free composites filtered out — any source they could match
+   certified match is a minimal target. The candidate library is built once per
+   mine, with variable-free composites filtered out. Any source they could match
    is already matched by the length-1 `<constant>` candidate.
-   `max_target_pattern_length` caps only the library, never the criterion:
-   acceptance is decided by μ(target) < μ(source), so a target may carry more
+   `max_target_pattern_length` caps the overall length of the checked candidates.
+   Acceptance is decided by μ(target) < μ(source), so a target may carry more
    tokens than its source and still certify (a cheaper literal can take more
    tokens to spell).
 3. **Certify**: a candidate matches only if it reproduces the source's values on a
-   heavy-tailed, seeded evaluation matrix — across `constants_fit_challenges` re-drawings
+   heavy-tailed, seeded evaluation matrix across `constants_fit_challenges` re-drawings
    of the source's constants, with constants in candidates fitted by a deterministic
    closed-form solver where possible and a restarted optimizer otherwise. Rows where the
    source is finite must agree within `rtol`/`atol`; rows where the source is undefined
@@ -43,31 +40,27 @@ reported, and the drawn sample is validated per run.
 5. **Deduplicate**: rules are canonicalized into wildcard patterns, keeping the shortest
    target per source.
 
-The same pipeline as one picture:
+The same pipeline as one procedure:
 
-```mermaid
-flowchart TD
-    UNI["Phase 1: enumerate universe per length<br/>(complete / exhaustive slice / sampled)"] --> CNT{"enumeration matches<br/>counting recurrence?"}
-    CNT -- no --> AB["abort the mine"]
-    CNT -- yes --> LIB["build candidate library once<br/>(variable-free candidates filtered)"]
-    LIB --> L["next source length, ascending"]
-    L --> S1
-    subgraph P2["Phase 2: one length (sources in parallel, per-source seeds)"]
-        S1["simplify under the rules so far"] --> S2["mark to beat = the engine's own<br/>result (relaxed Kruskal)"]
-        S2 --> S3["scan candidates,<br/>cheapest (μ) first"]
-        S3 --> S4{"Equivalent+ certifies?<br/>(constant challenges, evidence gate,<br/>high-precision rescue)"}
-        S4 -- "no: next candidate" --> S3
-        S4 -- yes --> S5["minimal source-target pair"]
-    end
-    S5 --> C1["stage-2 confirm: independent,<br/>twice-as-wide matrix, fresh seeds"]
-    C1 --> C2["deduplicate: canonical wildcard patterns,<br/>shortest target per source"]
-    C2 --> C3["checkpoint: rules +<br/>provenance sidecar"]
-    C3 -- "next length" --> L
-    C3 -- "all lengths done" --> PR["optional prune<br/>(redundant / covered)"]
-```
+1. **Phase 1** — enumerate the complete expression universe per length, bottom-up.
+   Abort the mine unless the enumeration matches the counting recurrence exactly.
+2. Build the candidate library once (variable-free candidates filtered out).
+3. **Phase 2** — for each source length, ascending; for each source of that length
+   (in parallel, per-source seeds):
+    1. simplify the source under the rules mined so far;
+    2. take the engine's own result as the mark to beat (relaxed Kruskal);
+    3. scan the candidates cheapest-`μ` first;
+    4. accept the first candidate that certifies Equivalent+ (constant challenges,
+       evidence gate, high-precision rescue) — that is the minimal source–target pair;
+       if none certifies, the source yields no rule.
+4. **Stage-2 confirm** every accepted pair on an independent, twice-as-wide
+   evaluation matrix with fresh seeds.
+5. **Deduplicate** into canonical wildcard patterns (shortest target per source) and
+   checkpoint the rules with their provenance sidecar; continue with the next length.
+6. After the last length: the optional **prune** (redundant / covered rules).
 
-The whole procedure is **deterministic**: a fixed `seed` reproduces the ruleset
-byte-for-byte, independent of process, hash randomization, or thread count — one master
+The procedure is **deterministic**: a fixed `seed` reproduces the ruleset
+byte-for-byte, independent of process, hash randomization, or thread count. One master
 seed derives the evaluation matrices and every per-length, per-source and per-rule seed,
 so chunked and monolithic runs are bit-identical and stage-2 verdicts are
 order-independent (per-rule seeds derive from content). Alongside the
@@ -77,17 +70,17 @@ published ruleset is reproducible from its artifact alone.
 
 ## Rule sorts: `_`, `?`, `!`, and `$`
 
-Every placeholder in a shipped rule carries a *sort* — the binding claim its sigil
+Every placeholder in a shipped rule carries a *sort*: the binding claim its sigil
 encodes, enforced by the matcher at apply time:
 
-- **`_i` — any subtree.** The widest claim: the slot binds an arbitrary expression.
+- **`_i` — any subtree.** The widest claim: the slot binds an arbitrary expression, including subtrees that may evaluate to `nan`.
 - **`?i` — variable leaf only.** The narrowest claim: the slot binds a bare variable,
   never a composite subtree, a literal, or `<constant>`.
-- **`!i` — certified subtree.** Binds a variable leaf freely; a composite subtree binds
+- **`!i` — finite a.e. subtree.** Binds a variable leaf freely; a composite subtree binds
   only when a match-time certificate proves it defined and finite almost everywhere
   (an adaptive interval analysis over the reals). Fail-closed: what cannot be
   certified is not bound.
-- **`$i` — mult-certified subtree.** Binds a variable leaf freely; a composite subtree
+- **`$i` — finite a.e. & non-zero a.e. subtree.** Binds a variable leaf freely; a composite subtree
   binds only when the certificate proves it finite **and nonzero** almost everywhere.
   This is the licence behind cancelling a factor against its own inverse
   (`$0 / $0 → 1`, `$0 * inv($0) → 1`): where the bound subtree is zero the source is
@@ -96,35 +89,31 @@ encodes, enforced by the matcher at apply time:
 
 The four claims nest — everything a narrower sort binds, the wider sorts bind too:
 
-```mermaid
-flowchart TB
-    subgraph ANY["_i — any subtree (widest claim)"]
-        subgraph BANG["!i — subtree certified finite almost everywhere"]
-            subgraph DOLLAR["$i — certified finite AND nonzero almost everywhere"]
-                Q["?i — bare variable leaf only (narrowest claim)"]
-            end
-        end
-    end
-```
+    ?i  ⊂  $i  ⊂  !i  ⊂  _i
+
+- `?i` — a bare variable leaf only (narrowest claim);
+- `$i` — additionally any composite certified finite **and nonzero** almost everywhere;
+- `!i` — any composite certified finite almost everywhere;
+- `_i` — any subtree (widest claim).
 
 Sorts exist because a rewrite can be value-sound when a slot holds a variable yet
-unsound when it holds a composite carrying poles or infinities into the pattern — the
-certificate is what lets a rule make the wider claim without giving up soundness.
-The certificate is evaluated at bind time — bag backtracking must be able to retry
-a different assignment after a refusal — and memoized in a generational per-engine
-cache (plus per call), so repeated attempts cost nothing and verdicts are identical.
+unsound when it holds a composite carrying poles or infinities into the pattern.
+Take `!0 - !0 → 0`: with a bare variable the source is `0` everywhere, but with
+`log(x)` in the slot the source is `nan - nan` on the entire negative half-line while
+the target says `0` — so the certificate refuses `log(x)`, which is not finite almost
+everywhere, and the rule never sees it.
 
 These sort gates define the default **`f64`** apply-time contract. `Mode.corpus`
 (see [Soundness modes](guides/simplify.md#soundness-modes)) relaxes them together — every `!`/`$`
-placeholder then binds any subtree with the certificate skipped — which recovers extra
+placeholder then binds any subtree with the certificate skipped which recovers extra
 reductions for training-data canonicalization at the cost of equivalence. Mined rules are
-always *certified* under the sound gates regardless; the mode only changes how they bind
+always certified under the sound gates regardless. The mode only changes how they bind
 at apply time.
 
 ## Running a mine
 
 ```sh
-simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules.json" -v --reset-rules
+simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules_f64.json" -v --reset-rules
 ```
 
 - `-e` is the path to the engine configuration file to use as a backend
@@ -158,12 +147,6 @@ max_source_pattern_length: 4
 # only the candidate LIBRARY; acceptance is decided by mu(target) < mu(source),
 # so a target may carry more tokens than its source and still certify.
 max_target_pattern_length: 4
-
-# Universe policy: null = complete enumeration at every length. A length whose
-# complete universe is infeasible to enumerate can instead carry a uniform
-# sample size here; coverage is always reported, and the drawn sample is
-# validated per run.
-source_sample_per_length: null
 
 # Rows of the evaluation matrix (heavy-tailed mixture, drawn from `seed`)
 n_samples: 1024
@@ -209,23 +192,24 @@ With this operator set the complete universes through length 4 hold 413,772 sour
 (29 / 493 / 13,427 / 399,823 at lengths 1–4), the enumeration is cross-checked
 against the counting recurrence, and the length-4 tier dominates: the published
 mine completes in about 25 minutes on a 16-core desktop host. Cost climbs steeply
-with either cap — length 5 alone adds roughly 13 million sources, and the target
-cap sizes the candidate library every source is judged against. Progress, per-length rule counts, and universe coverage are printed
+with either cap. Length 5 adds roughly 13 million sources, and the target
+cap sizes the candidate library every source is judged against.
+Progress, per-length rule counts, and universe coverage are printed
 as the mine advances, and the output file plus its provenance sidecar are updated after
 every completed length.
 
 ## LLM-proposed rules
 
 Mining guarantees completeness where enumeration (or sampling) reaches, but the
-source universe grows by roughly a factor of thirty per token — 413,772 sources
-through length 4, about 13 million more at length 5, billions by length 7 — so the
+source universe grows by roughly a factor of thirty per token so the
 *mathematically salient* long identities sit far beyond any enumerable horizon:
-`sin²x + cos²x → 1` is a nine-token source in this vocabulary. A language model,
+`sin²x + cos²x → 1` is a nine-token source in this vocabulary
+(`+ pow sin x 2 pow cos x 2`). A language model,
 by contrast, can name such identities directly. SimpliPy therefore supports a complementary channel:
 
 **an LLM proposes candidate source expressions; the engine certifies them with the
-exact same gates as mined rules.** Proposals only ever *add* source expressions, so a
-certified proposal is precisely as sound as a mined rule — the model's correctness is
+exact same gates as mined rules.** Proposals only ever add source expressions, so a
+certified proposal is precisely as sound as a mined rule. The LLM's correctness is
 never trusted, only its taste in candidates. Wrong proposals cost about a CPU-second
 each and are rejected.
 
@@ -240,30 +224,33 @@ YAML and run `find-rules` as usual.
 proposals: ./llm_proposals.json
 ```
 
-```sh
-simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules.json" -v --reset-rules
+The proposals file is a JSON object with a `"proposals"` key whose entries carry a
+`"source"` (a prefix token list) and an optional `"target"` (a prefix token list, used
+as the certification *hint*); any other keys (`why`, `family`, `tier`, ...) are
+ignored. A bare list of such `{source, target?}` objects is accepted too.
+
+```json
+{"proposals": [
+  {"source": ["+", "pow", "sin", "x0", "2", "pow", "cos", "x0", "2"],
+   "target": ["1"]}
+]}
 ```
 
-After the mining length loop completes — and before the optional prune, so certified
-proposals face the same pruning as mined rules — every proposal is certified against
+```sh
+simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yaml" -o "path/to/my_rules_f64.json" -v --reset-rules
+```
+
+After the mining length loop completes and before the optional prune, every proposal is certified against
 the just-mined rule state with the exact machinery of the mine: the same evaluation
 matrices, constant challenges, tolerances, and seeds derived from the master `seed`.
 A proposal the mined rules already shorten is skipped exactly like an
 already-reducible source, and a certified proposal joins the ruleset through the same
 deduplication path (shortest target per canonical source).
 
-Two proposal-file schemas are accepted:
-
-- the **consolidated artifact format** — a JSON object with a `"proposals"` key whose
-  entries are objects with `"source"` (a prefix token list) and an optional
-  `"target"` (a prefix token list, used as the certification *hint*); any other keys
-  (`why`, `family`, `tier`, ...) are ignored;
-- a **bare list** of such `{source, target?}` objects.
-
 Each proposal ends in exactly one of four outcomes — `certified` (joined the
 ruleset), `already_covered` (the mined rules already shorten it), `rejected`
 (invalid, no shorter equivalent found, or failed numerical verification), or
-`duplicate` (certified, but canonically identical to an earlier certified proposal) —
+`duplicate` (certified, but canonically identical to an earlier certified proposal) 
 and the provenance sidecar records the proposals file, its sha256, and the
 per-outcome counts. The pass is deterministic: proposals are processed in file order
 with content-derived per-proposal seeds, so editing the file never rerolls the
@@ -376,20 +363,17 @@ simplipy resolve-rules -e "acj-4" -o "path/to/resolved_rules.json" -v
 One prune shrinks a ruleset without changing what the engine can simplify:
 
 - **`SimpliPyEngine.prune_covered_rules`** (CLI: `prune-covered-rules`) is the
-  compositional prune: it removes **any** rule — pattern rules included —
+  compositional prune: it removes any rule
   whose effect the remaining rules achieve on their own. A rule is covered only if
-  every instantiation variant of its source still simplifies to **at most** the length
+  every instantiation variant of its source still simplifies to at most the length
   of the corresponding target (a *≤-length* criterion): each slot is instantiated as a
   distinct variable leaf, `<constant>` is kept literal so native constant folding
   cannot fake coverage, and wide slots (`_`/`!` sigils) are additionally probed with
   composite subtrees, since leaf-only instantiation under-tests wide-sort claims.
   Rules are processed in source-length waves, longest first; each wave is tentatively
   removed and then repaired to a fixpoint against an engine rebuilt from the kept
-  rules, so the result is **deterministic** for a given rule list — and greedy: valid,
+  rules, so the result is deterministic for a given rule list and greedy: valid,
   not necessarily minimal.
-
-(`find_rules(prune=True)` is refused with a pointer here: `'covered'` and `False`
-are the two valid settings.)
 
 The prune is also available at the end of a mine through the `prune` parameter:
 `find_rules(prune='covered')`, or a `prune: 'covered'` key in the mine configuration.

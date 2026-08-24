@@ -1,11 +1,14 @@
 # Masking
 
-Masking is **downstream policy, not engine behavior**: the engine simplifies
-and delivers the full expression with explicit constants; consumers decide
-what to abstract. `simplipy.masking` is the mechanism. It walks the engine's
+Masking is the user's policy, applied by the library, never a side effect of
+simplification: the engine simplifies and delivers the full expression with explicit
+constants; which of those constants to abstract into `<constant>` placeholders is your
+decision, because it depends on what your application can represent (a model's numeric
+vocabulary, a fitter's parameter budget), not on the algebra. `simplipy.masking` is the
+mechanism for exactly that decision. It walks the engine's
 output (the native tagged form or the explicit binary form) and tells a policy
-the structural **role** of every literal it meets — a multiplicative
-coefficient, an additive constant, a `pow` exponent, a `rootn` index — so a
+the structural role of every literal it meets: a multiplicative
+coefficient, an additive constant, a `pow` exponent, a `rootn` index. A
 policy like "mask constants, but keep in-vocabulary integer exponents" is a
 single conditional, and position-blind accidents (masking a `rootn` index into
 a skeleton that is NaN almost everywhere) are impossible to write by accident.

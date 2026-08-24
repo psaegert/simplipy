@@ -213,6 +213,21 @@ _TIER_MODES: dict[str, frozenset] = {
 _SLOT_SIGILS = ('_', '?', '!', '$', '<')
 
 
+def _triple_paths(out_path: str) -> dict[str, str]:
+    """The three files a mine writes, derived from the requested output path.
+
+    The f64 set takes the path exactly as passed. The siblings replace the mode
+    marker rather than append to it: a trailing ``_f64`` on the stem is stripped
+    first, so ``rules_f64.json`` (the naming convention from 0.14.0 on) yields
+    ``rules_real.json`` / ``rules_corpus.json``, while a markerless ``rules.json``
+    (every artifact published before the rename) keeps its historic siblings.
+    """
+    base, ext = os.path.splitext(out_path)
+    if base.endswith('_f64'):
+        base = base[:-len('_f64')]
+    return {'f64': out_path, 'real': f'{base}_real{ext}', 'corpus': f'{base}_corpus{ext}'}
+
+
 def _is_ground(tokens: Any) -> bool:
     """No slots and no `<constant>`: the pattern IS its only instance."""
     return not any(str(t).startswith(_SLOT_SIGILS) for t in tokens)
@@ -896,14 +911,14 @@ class RuleMiner:
             if out_path is not None:
                 # THE ARTIFACT IS A TRIPLE (owner ruling 2026-08-19): a mine run is valid
                 # only if all three sets fall out of it, so they are routed and their
-                # invariants checked BEFORE a byte is written. `rules.json` keeps its name
-                # and carries the f64 set -- it is the default mode, and every config and
-                # loader that predates the ruling goes on reading it unchanged.
+                # invariants checked BEFORE a byte is written. The f64 file takes the
+                # name the caller passed; the convention from 0.14.0 on is
+                # `rules_f64.json` (owner ruling 2026-08-24), and `_triple_paths` strips
+                # the `_f64` marker before naming the siblings. Configs name their rule
+                # files explicitly, so artifacts published as `rules.json` load unchanged.
                 _triple, _rejected, _route_meta = _route_triple(self.engine, verbose=verbose)
-                _base, _ext = os.path.splitext(out_path)
-                for _mode, _path in (('f64', out_path),
-                                     ('real', f'{_base}_real{_ext}'),
-                                     ('corpus', f'{_base}_corpus{_ext}')):
+                _paths = _triple_paths(out_path)
+                for _mode, _path in _paths.items():
                     with open(_path, 'w') as file:
                         json.dump(_triple[_mode], file, indent=4)
                 if prov is not None:
@@ -919,9 +934,8 @@ class RuleMiner:
                         # count, and "smaller than expected" is indistinguishable from
                         # "something was lost".
                         'preempted': _route_meta['preempted'],
-                        'files': {'f64': os.path.basename(out_path),
-                                  'real': os.path.basename(f'{_base}_real{_ext}'),
-                                  'corpus': os.path.basename(f'{_base}_corpus{_ext}')}}
+                        'files': {_mode: os.path.basename(_path)
+                                  for _mode, _path in _paths.items()}}
                 # The sidecar covers the TRIPLE, not one third of it (owner ruling:
                 # "the provenance sidecar covers the triple, the manifest entry lists
                 # three files as ONE artifact"), so its totals describe everything the

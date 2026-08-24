@@ -19,7 +19,11 @@ def main(argv: str = None) -> None:
         help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
     )
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
-    find_simplifications_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to the output json file')
+    find_simplifications_parser.add_argument(
+        '-o', '--output-file', type=str, required=True,
+        help='Path of the f64 rules file (convention: rules_f64.json). The real/corpus '
+             'siblings are derived from it with the _f64 marker replaced: '
+             'rules_f64.json writes rules_real.json and rules_corpus.json beside it')
     find_simplifications_parser.add_argument('-s', '--save-every', type=int, default=100_000, help='Save the simplifications every n rules')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
