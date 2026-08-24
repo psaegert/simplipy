@@ -3486,10 +3486,20 @@ fn clear_pair(
 
 /// The E2 certificate body: clear the whole slice, witness the numerator.
 fn cleared_witness(t: &[String], ops: &Operators) -> bool {
-    let Some((end, n, _d)) = clear_pair(t, 0, ops, 0) else {
+    let Some((end, n, d)) = clear_pair(t, 0, ops, 0) else {
         return false;
     };
     if end != t.len() || n.len() > CLEAR_BUDGET {
+        return false;
+    }
+    // The clearing identity Z(t) = Z(n) PRESUMES the cleared denominator is finite
+    // a.e.: `1/g = 0` exactly on {g = +-inf}, so an a.e.-infinite denominator mints
+    // a FAT zero set the numerator never sees. Without this side condition the
+    // certificate declared `inv(inf + h)` nonzero-a.e. while it is identically 0,
+    // licensing a per-factor move that flips the sign of infinity on positive
+    // measure (F1, 2026-08-24, benchmark row 17425). `isn` is the existing
+    // authority for exactly this question; an empty denominator cleared nothing.
+    if !d.is_empty() && !isn(&d, ops, 0) {
         return false;
     }
     analytic_nonzero_witness(&n, ops)

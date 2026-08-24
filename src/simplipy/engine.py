@@ -1744,7 +1744,8 @@ class SimpliPyEngine:
     def complexity(
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
-            certified: bool = True) -> int:
+            certified: bool = True,
+            mode: Mode | str = Mode.f64) -> int:
         """The SEMANTIC COMPLEXITY of an expression, measured on its canonical form.
 
         This is the functional :meth:`simplify` minimizes (the unified measure mu),
@@ -1768,9 +1769,11 @@ class SimpliPyEngine:
             tokens = expression.tolist()
         else:
             tokens = list(expression)
+        rule_mode = _RULE_MODE[mode if isinstance(mode, Mode)
+                               else {m.name.lower(): m for m in Mode}[str(mode).strip().lower()]]
         if certified:
-            return self._core.ac_complexity_certified(tokens)
-        return self._core.ac_complexity(tokens)
+            return self._core.ac_complexity_certified(tokens, rule_mode)
+        return self._core.ac_complexity(tokens, rule_mode)
 
     def _denormalize(
             self,

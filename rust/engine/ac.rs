@@ -798,7 +798,7 @@ impl Engine {
         tokens: &[String],
         max_passes: usize,
     ) -> Option<(u64, u64, Vec<String>)> {
-        let src_c = self.ac_complexity(tokens)?;
+        let src_c = self.ac_complexity(tokens, RuleMode::Default)?;
         // THE MINE CANONICALISES UNFOLDED (owner ruling 2026-08-20). The default RULE
         // SET, but with transcendental folding OFF -- `real`'s discipline, which is the
         // finest-grained canonical form there is, so every rule is discoverable.
@@ -822,12 +822,22 @@ impl Engine {
     /// The semantic complexity of an expression (either grammar), measured on its canonical
     /// form -- the same functional the simplify search minimizes (`ac::expr::complexity`).
     /// `None` on malformed input.
-    pub fn ac_complexity(&self, tokens: &[String]) -> Option<u64> {
+    pub fn ac_complexity(&self, tokens: &[String], mode: RuleMode) -> Option<u64> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
+        // Parse with the CHAIN'S context for the REQUESTED mode (F2 route fix,
+        // 2026-08-24): the instrument must price the state that mode's chain
+        // actually starts from -- a fold-free parse reached a different canonical
+        // fixpoint on 10 of 65,536 benchmark rows and broke
+        // mu(simplify(e)) <= mu(e) as measured; pricing corpus outputs in the
+        // default route reopened the same gap one mode over. Canon stays bare:
+        // that is this instrument's contract.
+        let mut pbare = Cx::bare(&view);
+        pbare.mode = mode;
+        pbare.fold_f64 = Cx::folds_for(mode);
         let bare = Cx::bare(&view);
-        let e = from_prefix(&toks, &bare)?;
+        let e = from_prefix(&toks, &pbare)?;
         Some(complexity(&canon(e, &bare), &view))
     }
 
@@ -926,7 +936,7 @@ impl Engine {
     /// bare context cannot re-derive keeps its own (possibly higher) measure --
     /// found live as 0.48% of 64k corpus rows measuring above ratio 1, in quanta of
     /// one symbol unit (2026-08-02).
-    pub fn ac_complexity_certified(&self, tokens: &[String]) -> Option<u64> {
+    pub fn ac_complexity_certified(&self, tokens: &[String], mode: RuleMode) -> Option<u64> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
@@ -944,8 +954,14 @@ impl Engine {
             fold_f64: Cx::folds_for(RuleMode::Default),
             sentinels_expired: false,
         };
-        let bare = Cx::bare(&view);
-        let e = from_prefix(&toks, &bare)?;
+        // Parse with the CHAIN'S context for the requested mode (F2 route fix,
+        // 2026-08-24) -- see ac_complexity; this is the theorem-bearing
+        // instrument, and its parse route must be the one the descent actually
+        // starts from.
+        let mut pbare = Cx::bare(&view);
+        pbare.mode = mode;
+        pbare.fold_f64 = Cx::folds_for(mode);
+        let e = from_prefix(&toks, &pbare)?;
         Some(complexity(&canon(e, &cx), &view))
     }
 
@@ -1104,14 +1120,37 @@ impl Engine {
         }
         let unfolded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, false);
         let folded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, true);
+        // THE THIRD CANDIDATE (owner ruling 2026-08-24): the DEFAULT-mode result at
+        // the same budget. Corpus is the permissive superset by doctrine, yet
+        // exploration is mode-dependent -- the certified descent can steer a
+        // candidate past a structure the relaxed descent freezes, so at nonzero
+        // budgets f64 can out-simplify corpus on individual rows (first observed on
+        // the shipped triple's dominance gate the day DEFAULT_EFFORT became 4).
+        // Arbitrating over the default-mode result too makes corpus dominance a
+        // THEOREM rather than an empirical gate property: corpus picks the best of
+        // its own two constructions and the sound chain's. Strictly-better wins
+        // only -- ties keep the corpus-own winner, so outputs churn exactly where
+        // the default candidate genuinely improves.
+        let default_arm = self.ac_simplify_ex_fold(
+            tokens,
+            max_passes,
+            RuleMode::Default,
+            explore_budget,
+            Cx::folds_for(RuleMode::Default),
+        );
         let cost = |p: &(SimplifyCtx, Option<Ex>)| -> Option<u64> {
             p.1.as_ref().map(|e| complexity(e, &self.view(&p.0)))
         };
-        match (cost(&unfolded), cost(&folded)) {
+        let own = match (cost(&unfolded), cost(&folded)) {
             (Some(cu), Some(cf)) if cu < cf => unfolded,
             (Some(_), Some(_)) => folded,
             (Some(_), None) => unfolded,
             _ => folded,
+        };
+        match (cost(&own), cost(&default_arm)) {
+            (Some(co), Some(cd)) if cd < co => default_arm,
+            (None, Some(_)) => default_arm,
+            _ => own,
         }
     }
 
@@ -2167,7 +2206,7 @@ mod tests {
                     .unwrap();
                 for out in [&tagged, &explicit] {
                     assert!(
-                        e.ac_complexity(out).is_some(),
+                        e.ac_complexity(out, RuleMode::Default).is_some(),
                         "cfg {ops:?}: {src:?} -> {out:?} does not re-parse"
                     );
                     assert_eq!(
@@ -2586,7 +2625,7 @@ mod tests {
         // clears the clamp and cost(3) = 3 does not, so a square root prices BELOW a cube
         // root -- which is the measure telling two different operators apart, not a
         // parity being lost. (The pow1_3 spelling needs the sugar-declaring fixture.)
-        assert_eq!(sugar.ac_complexity(&t(&["pow1_3", "x0"])), Some(15_000));
+        assert_eq!(sugar.ac_complexity(&t(&["pow1_3", "x0"]), RuleMode::Default), Some(15_000));
         assert_eq!(e.ac_complexity(&t(&["rootn", "x0", "2"])), Some(14_585));
         assert!(
             e.ac_complexity(&t(&["rootn", "x0", "2"])) < e.ac_complexity(&t(&["rootn", "x0", "3"]))

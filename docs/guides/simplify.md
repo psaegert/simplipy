@@ -28,7 +28,10 @@ function simplify(expr, max_passes=48, mode=f64, effort=DEFAULT_EFFORT):
 Every step preserves the function almost everywhere: like-term collection inside the
 canonical constructors, rule application, and the exact fold. The result is therefore
 sound, never costlier than the input under the engine's description-length measure μ
-(the input's canonical form is the first state), and idempotent at any fixpoint run.
+as `complexity()` prices it — the instrument parses through the same route the chain
+descends from, mode for mode — and idempotent at any fixpoint run. Two *different
+spellings* of the same value may still settle at different fixpoints; each obeys its
+own bound.
 
 The chain itself does not search: **cancellation IS canonicalization** — like-term
 collection in flat bags, computed by one deterministic function, so inside a pass there

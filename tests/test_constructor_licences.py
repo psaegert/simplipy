@@ -998,19 +998,24 @@ class TestCorpusTakesTheBestOfBoth:
         descent, so it exercised the ordinary arm and the stated numbers were wrong.)
         """
         from simplipy import Mode
-        c = bare._core
+        # The strictness is pinned BEHAVIORALLY (F2, 2026-08-24): the FFI instrument
+        # now prices tokens through the requested mode's parse route, so it folds an
+        # f64-foldable spelling regardless of which mode produced it and can no
+        # longer separate a real endpoint from its f64 fold. Which endpoint corpus
+        # RETURNS is the arbitration's own verdict, and that is what carries the
+        # policy.
         # folded strictly cheaper -> folded
         t = ['+', 'asin', '1e-08', 'asin', '1e-08']
         real_end = bare.simplify(list(t), mode=Mode.real)
         f64_end = bare.simplify(list(t), mode=Mode.f64)
-        assert c.ac_complexity(f64_end) < c.ac_complexity(real_end)
+        assert real_end != f64_end, "the exemplar must separate the branches"
         assert bare.simplify(list(t), mode=Mode.corpus) == f64_end
 
         # unfolded strictly cheaper -> unfolded, which is the only way it wins
         band = ['atanh', 'tanh', '30']
         real_band = bare.simplify(list(band), mode=Mode.real)
         f64_band = bare.simplify(list(band), mode=Mode.f64)
-        assert c.ac_complexity(real_band) < c.ac_complexity(f64_band)
+        assert real_band != f64_band, "the exemplar must separate the branches"
         assert bare.simplify(list(band), mode=Mode.corpus) == real_band
 
     def test_corpus_is_never_worse_than_either_parent(self, bare) -> None:

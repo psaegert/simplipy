@@ -593,18 +593,22 @@ impl PyEngine {
         Ok(py.detach(|| self.inner.ac_canonical_keys(&exprs)))
     }
 
-    fn ac_complexity(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<u64> {
+    #[pyo3(signature = (tokens, rule_mode="default"))]
+    fn ac_complexity(&self, py: Python<'_>, tokens: Vec<String>, rule_mode: &str) -> PyResult<u64> {
         ensure_ac_well_formed(&self.inner, &tokens)?;
-        py.detach(|| self.inner.ac_complexity(&tokens))
+        let mode = parse_rule_mode(rule_mode)?;
+        py.detach(|| self.inner.ac_complexity(&tokens, mode))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
     /// Certified-canon complexity (the serve ordering's own pricing; see
     /// `engine::ac::ac_complexity_certified`): `mu(simplify(e)) <= mu(e)` is a
     /// theorem under this pricing, unlike the bare `ac_complexity`.
-    fn ac_complexity_certified(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<u64> {
+    #[pyo3(signature = (tokens, rule_mode="default"))]
+    fn ac_complexity_certified(&self, py: Python<'_>, tokens: Vec<String>, rule_mode: &str) -> PyResult<u64> {
         ensure_ac_well_formed(&self.inner, &tokens)?;
-        py.detach(|| self.inner.ac_complexity_certified(&tokens))
+        let mode = parse_rule_mode(rule_mode)?;
+        py.detach(|| self.inner.ac_complexity_certified(&tokens, mode))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
@@ -1327,12 +1331,12 @@ impl PyEngine {
             // One mu for the mark, used TWICE: as the resolved-target acceptance threshold
             // and as the scan bound. They were separate criteria (mu vs a token ceiling);
             // the ruling makes them one, so they must read the same number.
-            let mark_mu = mark.as_ref().and_then(|m| self.inner.ac_complexity(m));
+            let mark_mu = mark.as_ref().and_then(|m| self.inner.ac_complexity(m, engine::RuleMode::Default));
             let accept_resolved = mark.as_ref().map(|m| {
                 let mark_c = mark_mu;
                 move |t: &[String]| {
                     matches!(
-                        (self.inner.ac_complexity(t), mark_c),
+                        (self.inner.ac_complexity(t, engine::RuleMode::Default), mark_c),
                         (Some(tc), Some(mc)) if tc < mc
                     ) && !self.inner.ac_same_literal_skeleton(t, m).unwrap_or(true)
                 }

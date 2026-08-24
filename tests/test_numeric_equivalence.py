@@ -297,11 +297,17 @@ class TestCorpusGate:
         # THE acj-4 TRIPLE (2026-08-23): same measure, new artifact -- a real movement,
         # not a re-pin: 56,521,606 -> 56,508,606 (the refreshed mine rests the corpus
         # 13,000 milli-bits cheaper; translation pristine 5347/0/0).
-        assert walk['complexity_out'] == 56508606, walk['complexity_out']
+        # THE F1/F2 SOUNDNESS ROUND (2026-08-24): 56,508,606 -> 56,310,982. Three
+        # movements land together: the cleared-witness certificate gains its
+        # denominator-finiteness side condition (F1), the instruments price the
+        # chain's own parse route (F2 -- the re-pin half), and the ruled
+        # DEFAULT_EFFORT=4 explores every walk row (a real movement: outputs rest
+        # 197,624 milli-bits cheaper). The inflation bound held throughout.
+        assert walk['complexity_out'] == 56310982, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 56508606, \
+            assert m and int(m.group(1)) == 56310982, \
                 'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):

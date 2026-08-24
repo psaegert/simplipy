@@ -104,7 +104,7 @@ impl Engine {
         // mu is scored HERE because it is an engine-level measure (`ac_complexity` reads the
         // bare context), and the library builder only has the operator table. Bare-context mu
         // depends on no mined rule, so scoring once at build time is stable for the whole mine.
-        let mus: Vec<Option<u64>> = candidates.iter().map(|c| self.ac_complexity(c)).collect();
+        let mus: Vec<Option<u64>> = candidates.iter().map(|c| self.ac_complexity(c, RuleMode::Default)).collect();
         // THE AC-CLASS QUOTIENT (2026-08-22 audit §7.1). The enumeration spells one
         // canonical class many ways -- commutative orderings, odd-sign twins, inv/abs
         // pairs -- and the scan judged every spelling: 31.6% of the variable-carrying
@@ -501,9 +501,9 @@ impl Engine {
                         // respell. Structure-recovering resolutions (different
                         // skeleton: `/ acos 0 np.pi -> 0.5`) are untouched. Fail
                         // closed on unparseable sides.
-                        let mark_c = self.ac_complexity(&ac_out);
+                        let mark_c = self.ac_complexity(&ac_out, RuleMode::Default);
                         let accept_resolved = |t: &[String]| {
-                            matches!((self.ac_complexity(t), mark_c), (Some(tc), Some(mc)) if tc < mc)
+                            matches!((self.ac_complexity(t, RuleMode::Default), mark_c), (Some(tc), Some(mc)) if tc < mc)
                                 && !self.ac_same_literal_skeleton(t, &ac_out).unwrap_or(true)
                         };
                         // THE SEARCH BOUND IS THE ACCEPTANCE MARK (owner ruling, re-mine
