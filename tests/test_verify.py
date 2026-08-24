@@ -486,6 +486,28 @@ class TestTheRealisationAxis:
         assert got['verdict'] == 'KILL' and got['realised'] is True
 
 
+class TestUlpGapZeroCanonicalization:
+    """view(-0.0) is int64-min: the raw view subtraction against a positive double
+    wrapped (RuntimeWarning at the F-flag site, seen live in the acj-5-4 sweep) and
+    convicted 1-ULP agreements as real changes. Owner-approved fix 2026-08-24: both
+    zeros canonicalize to +0.0 on entry; everything else is pinned unchanged."""
+
+    def test_negative_zero_pairs_like_positive_zero(self) -> None:
+        import warnings
+        from simplipy.verify._contract import _ulp_gap
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            assert _ulp_gap(-0.0, 5e-324) == 1
+            assert _ulp_gap(-0.0, 1.0) == _ulp_gap(0.0, 1.0) != float('inf')
+            assert _ulp_gap(-0.0, 0.0) == 0
+
+    def test_the_unfixed_semantics_are_pinned(self) -> None:
+        from simplipy.verify._contract import _ulp_gap
+        assert _ulp_gap(-0.0, -5e-324) == float('inf')    # zero vs negative half-line
+        assert _ulp_gap(-5e-324, 5e-324) == float('inf')  # a genuine sign change
+        assert _ulp_gap(-1.0, -1.0000000000000002) == 1   # ordinary negative pair
+
+
 class TestTheRealisationBound:
     """`realised` decides the `f64` tier and therefore what ships in `rules.json`. The
     bar it uses is derived (see `compare_deployed_realised`), and these pin the three

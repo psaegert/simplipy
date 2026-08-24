@@ -811,7 +811,14 @@ REALISED_ULP = 8
 
 def _ulp_gap(a, b):
     """ULP distance between two finite doubles of the same sign; inf across a sign
-    change, which is never a rounding difference."""
+    change, which is never a rounding difference. Both zeros canonicalize to +0.0
+    first (owner-approved fix, 2026-08-24): view(-0.0) is int64-min, so the raw
+    subtraction against a positive view wrapped and convicted 1-ULP agreements
+    like -0.0 vs 5e-324 as real changes (fail-closed, but wrong and noisy)."""
+    if a == 0.0:
+        a = 0.0
+    if b == 0.0:
+        b = 0.0
     if a == b:
         return 0
     if (a < 0) != (b < 0):
