@@ -96,14 +96,16 @@ More examples can be found in the [documentation](https://simplipy.readthedocs.i
 
 # Performance
 
-On a 65,536-expression symbolic-regression benchmark, paired per-row against SymPy's `simplify` (serial single-core):
+On a 65,536-expression symbolic-regression benchmark, paired per-row against SymPy's `simplify` (serial single-core, 1 s cap):
 
 | | SimpliPy | SymPy |
 |---|---:|---:|
-| Rows won head-to-head | **18.7%** | 17.1% |
-| Mean size ratio (lower is better) | **0.98** | 1.07 |
-| Expressions made bigger | **0.00%** | 40.5% |
-| Median per-row speedup | **≈780×** | 1× |
+| Mean size ratio (lower is better) | **0.97** | 1.08 |
+| Expressions strictly simplified | 11.7% | 15.1% |
+| Expressions made bigger | **0.00%** | 40.1% |
+| Median per-row speedup | **≈650×** | 1× |
+
+![Compression on the SR benchmark](docs/assets/benchmarks/ecdf_readme.png)
 
 Full results, figures, and methodology: [simplify guide](https://simplipy.readthedocs.io/en/stable/guides/simplify/) · [paper](https://arxiv.org/abs/2602.08885).
 

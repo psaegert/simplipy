@@ -272,32 +272,37 @@ engine line; the published ruleset artifacts are the distinguishing factor betwe
 and rule application always considers every pattern in the loaded artifact.
 
 The published fair benchmark is pre-registered: serial
-single-core for every arm, paired per-row scoring against SymPy 1.13.1
+single-core for every arm, paired per-row scoring against SymPy 1.14.0
 (1 s cap, censoring stated on the panel), three corpora — an SR training
 prior (n = 65,536), its raw-masked transform (n = 65,536), and an
 external neutral problem set (n = 528). Scored in the deployment space
 under the MDL measure, with bootstrap 95% CIs; ratio = output/input, lower
 is better; "made bigger" = the fraction of rows an arm inflated. Measured
-on the 0.13.1 release, whose `f64` mode was then spelled `sound`.
+on the 0.14.0 release: `f64` is the shipped default (`effort=4`), `corpus`
+is `Mode.corpus` at its default.
 
 | corpus | arm | mean ratio | wins | made bigger |
 |---|---|---|---|---|
-| SR prior, unmasked | simplipy f64 | **0.964** | 9.1% | **0.0%** |
-| | sympy simplify | 1.081 | 17.2% | 41.7% |
-| SR prior, masked raw | simplipy f64 | **0.982** | **18.7%** | **0.0%** |
-| | sympy simplify | 1.072 | 17.1% | 40.5% |
-| external set | simplipy f64 | 0.999 | 1.3% | **0.0%** |
-| | sympy simplify | 1.023 | 19.1% | 19.3% |
+| SR prior, unmasked | simplipy f64 (default) | **0.966** | 11.7% | **0.0%** |
+| | simplipy corpus | **0.940** | **29.5%** | **0.0%** |
+| | sympy simplify | 1.078 | 15.1% | 40.1% |
+| SR prior, masked raw | simplipy f64 (default) | **0.993** | 7.0% | **0.0%** |
+| | simplipy corpus | **0.961** | **28.4%** | **0.0%** |
+| | sympy simplify | 1.059 | 14.9% | 38.0% |
+| external set | simplipy f64 (default) | 0.995 | 4.0% | **0.0%** |
+| | simplipy corpus | 0.995 | 4.5% | **0.0%** |
+| | sympy simplify | 1.045 | 15.0% | 22.7% |
 
-The simplipy arm never inflated a single row of 131,600: refusal semantics
-mean an unprovable rewrite returns the input unchanged. SymPy's `simplify`
-inflates roughly four rows in ten on SR-shaped corpora and hits its 1 s
-timeout on ~14% of raw-masked rows. Paired wall-clock on the same rows:
-median speedup **~780×** (masked raw) / ~600–800× across corpora, medians
-at 92–130 µs per row against SymPy's ~69 ms. On the external set both
-systems are near the fixpoint; SymPy's 19.1% wins there are dominated by
-number-respelling (floats rewritten as exact rationals), not structural
-simplification.
+No simplipy arm inflated a single row of 131,600, in either mode: refusal
+semantics mean an unprovable rewrite returns the input unchanged, and the
+serve construction never returns a costlier form than the input under its
+own mode's measure. SymPy's `simplify` inflates roughly four rows in ten
+on SR-shaped corpora and hits its 1 s timeout on ~20% of them (censored
+rows score ratio 1, the charitable choice). Paired wall-clock on the same
+rows: median speedup **~650–780×** across corpora, medians at 211–265 µs
+per row against SymPy's ~171 ms. On the external set both systems are
+near the fixpoint; SymPy's wins there are dominated by number-respelling
+(floats rewritten as exact rationals), not structural simplification.
 
 ![ECDF, masked raw corpus](../assets/benchmarks/ecdf_masked_raw.png)
 

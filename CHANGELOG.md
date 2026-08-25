@@ -155,6 +155,13 @@ historic siblings.
   strictly improves 3.18% of rows with zero regressions and captures every win budget
   64 finds, at +18% median per-row cost.
 
+- The fair benchmark is re-measured on the release build (three corpora,
+  131,600 rows): every simplipy arm at zero inflated rows, `f64` default at
+  0.966/0.993/0.995 mean ratio per corpus, `corpus` at 0.940/0.961/0.995,
+  SymPy 1.14.0 at 1.045–1.078 with 38–40% of SR-shaped rows made bigger.
+  README carries the headline panel; the simplify guide carries the full
+  figures.
+
 - `complexity(..., mode=...)` / FFI `rule_mode=` — the pricing instruments are
   **route-parameterized**. `complexity()` now parses its argument through the same
   route the named mode's chain descends from (fold-at-parse for `f64`/`corpus`,
