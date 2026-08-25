@@ -2574,3 +2574,27 @@ class TestTriplePaths:
         assert _triple_paths('rules.json') == {
             'f64': 'rules.json', 'real': 'rules_real.json',
             'permissive': 'rules_permissive.json'}
+
+
+class TestWitnessWallClock:
+    def test_budget_exceeded_reads_no_witness_loudly(self, monkeypatch) -> None:
+        # acj-5-4 run 1 (2026-08-24): one pathological overflow landscape ground the
+        # mine for 21 hours inside certify_rule with nothing on the log. Every inner
+        # piece is bounded; the PRODUCT was not. The budget turns that stall into a
+        # loud NO-WITNESS in bounded time.
+        import numpy as np
+        import pytest as _pytest
+        from simplipy.promotion import _const_bearing as cb
+        monkeypatch.setattr(cb, 'WITNESS_WALL_CLOCK_S', -1.0)   # budget already spent
+        rng = np.random.default_rng(0)
+        with _pytest.warns(RuntimeWarning, match='wall-clock budget'):
+            v, info = cb.certify_rule(['*', '<constant>', '_0'], ['<constant>'], rng)
+        assert v == 'NO-WITNESS'
+        assert 'wall-clock' in str(info)
+
+    def test_normal_rules_are_untouched_by_the_budget(self) -> None:
+        import numpy as np
+        from simplipy.promotion import _const_bearing as cb
+        rng = np.random.default_rng(0)
+        v, info = cb.certify_rule(['+', '<constant>', '_0'], ['+', '_0', '<constant>'], rng)
+        assert v != 'NO-WITNESS' or 'wall-clock' not in str(info)

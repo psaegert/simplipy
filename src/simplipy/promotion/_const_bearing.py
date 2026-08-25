@@ -34,6 +34,9 @@ DEMOTE and NO-WITNESS both cost only composite-binding recall (the rule ships in
 weaker sort, exactly what its certification established). PROMOTE is the only verdict
 that changes deployment.
 """
+import time
+import warnings
+
 import numpy as np
 
 from ._pointwise import judge, valuations_for, wildcards
@@ -51,6 +54,14 @@ N_CS_RAND = 4
 N_V_FIT = 48          # finite wildcard draws for witness fitting/screening
 FIT_TOL = 1e-7        # a witness must reproduce finite behaviour to this rel tol
 MAX_SOLVER_STARTS = 6
+#: Per-RULE wall-clock budget for the whole forall-exists certification. Every inner
+#: piece is bounded (max_nfev, MAX_SOLVER_STARTS, finite draw counts) but their product
+#: is not, and one pathological overflow landscape ground a mine for 21 hours inside
+#: this loop with nothing on the log (acj-5-4 run 1, 2026-08-24, killed). Typical rules
+#: certify in milliseconds; on exceed the rule reads NO-WITNESS -- the fail-safe
+#: outcome both callers already handle (it ships without composite binding) -- with a
+#: LOUD marker and a warning, never a silent stall.
+WITNESS_WALL_CLOCK_S = 30.0
 
 
 def bind(tokens, consts):
@@ -176,7 +187,14 @@ def certify_rule(lhs, rhs, rng, judge_fn=None, vals_override=None):
                          for _ in ws]) if ws else np.zeros((N_V_FIT, 1))
     vals = vals_override if vals_override is not None else valuations_for(ws, rng)
     n_no_witness = 0
-    for cs in cs_list:
+    t_start = time.monotonic()
+    for k, cs in enumerate(cs_list):
+        if time.monotonic() - t_start > WITNESS_WALL_CLOCK_S:
+            warnings.warn(
+                f"witness certification wall-clock budget ({WITNESS_WALL_CLOCK_S:.0f}s) "
+                f"exceeded after {k}/{len(cs_list)} constant draws for {lhs} -> {rhs}; "
+                f"rule reads NO-WITNESS", RuntimeWarning, stacklevel=2)
+            return 'NO-WITNESS', f'wall-clock budget exceeded after {k}/{len(cs_list)} draws'
         lhs_b = bind(lhs, cs)
         try:
             y_src = eval_on(lhs_b, ws, V)
