@@ -272,7 +272,8 @@ engine line; the published ruleset artifacts are the distinguishing factor betwe
 and rule application always considers every pattern in the loaded artifact.
 
 The published fair benchmark is pre-registered: serial
-single-core for every arm, paired per-row scoring against SymPy 1.14.0
+single-core for every arm (one pinned core of an otherwise idle AMD Ryzen 5 2600,
+BLAS thread caps at 1), paired per-row scoring against SymPy 1.14.0
 (1 s cap, censoring stated on the panel), three corpora — an SR training
 prior (n = 65,536), its raw-masked transform (n = 65,536), and an
 external neutral problem set (n = 528). Scored in the deployment space
