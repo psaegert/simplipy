@@ -605,7 +605,12 @@ impl PyEngine {
     /// `engine::ac::ac_complexity_certified`): `mu(simplify(e)) <= mu(e)` is a
     /// theorem under this pricing, unlike the bare `ac_complexity`.
     #[pyo3(signature = (tokens, rule_mode="default"))]
-    fn ac_complexity_certified(&self, py: Python<'_>, tokens: Vec<String>, rule_mode: &str) -> PyResult<u64> {
+    fn ac_complexity_certified(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        rule_mode: &str,
+    ) -> PyResult<u64> {
         ensure_ac_well_formed(&self.inner, &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
         py.detach(|| self.inner.ac_complexity_certified(&tokens, mode))
@@ -1331,7 +1336,9 @@ impl PyEngine {
             // One mu for the mark, used TWICE: as the resolved-target acceptance threshold
             // and as the scan bound. They were separate criteria (mu vs a token ceiling);
             // the ruling makes them one, so they must read the same number.
-            let mark_mu = mark.as_ref().and_then(|m| self.inner.ac_complexity(m, engine::RuleMode::Default));
+            let mark_mu = mark
+                .as_ref()
+                .and_then(|m| self.inner.ac_complexity(m, engine::RuleMode::Default));
             let accept_resolved = mark.as_ref().map(|m| {
                 let mark_c = mark_mu;
                 move |t: &[String]| {

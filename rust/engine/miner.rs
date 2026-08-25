@@ -104,7 +104,10 @@ impl Engine {
         // mu is scored HERE because it is an engine-level measure (`ac_complexity` reads the
         // bare context), and the library builder only has the operator table. Bare-context mu
         // depends on no mined rule, so scoring once at build time is stable for the whole mine.
-        let mus: Vec<Option<u64>> = candidates.iter().map(|c| self.ac_complexity(c, RuleMode::Default)).collect();
+        let mus: Vec<Option<u64>> = candidates
+            .iter()
+            .map(|c| self.ac_complexity(c, RuleMode::Default))
+            .collect();
         // THE AC-CLASS QUOTIENT (2026-08-22 audit §7.1). The enumeration spells one
         // canonical class many ways -- commutative orderings, odd-sign twins, inv/abs
         // pairs -- and the scan judged every spelling: 31.6% of the variable-carrying

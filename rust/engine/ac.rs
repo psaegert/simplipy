@@ -2625,10 +2625,17 @@ mod tests {
         // clears the clamp and cost(3) = 3 does not, so a square root prices BELOW a cube
         // root -- which is the measure telling two different operators apart, not a
         // parity being lost. (The pow1_3 spelling needs the sugar-declaring fixture.)
-        assert_eq!(sugar.ac_complexity(&t(&["pow1_3", "x0"]), RuleMode::Default), Some(15_000));
-        assert_eq!(e.ac_complexity(&t(&["rootn", "x0", "2"])), Some(14_585));
+        assert_eq!(
+            sugar.ac_complexity(&t(&["pow1_3", "x0"]), RuleMode::Default),
+            Some(15_000)
+        );
+        assert_eq!(
+            e.ac_complexity(&t(&["rootn", "x0", "2"]), RuleMode::Default),
+            Some(14_585)
+        );
         assert!(
-            e.ac_complexity(&t(&["rootn", "x0", "2"])) < e.ac_complexity(&t(&["rootn", "x0", "3"]))
+            e.ac_complexity(&t(&["rootn", "x0", "2"]), RuleMode::Default)
+                < e.ac_complexity(&t(&["rootn", "x0", "3"]), RuleMode::Default)
         );
         // The pretty infix is function-call style (x^(1/3) would claim the WRONG function).
         assert_eq!(
@@ -2896,7 +2903,7 @@ mod tests {
         );
         // Pow(3) + Mul(3) + [acos(8) + Mul(3) + inf(8) + leaf(6)] + [atan(8) + asinh(8)
         // + leaf(6)] = 53; the -1 exponent slot is a bare sign and free.
-        assert_eq!(e.ac_complexity(&lossy), Some(53_000));
+        assert_eq!(e.ac_complexity(&lossy, RuleMode::Default), Some(53_000));
 
         let partner = t(&["*", "acos", "x0", "inv", "*", "acos", "x0", "atan", "x1"]);
         assert_eq!(
@@ -3407,8 +3414,12 @@ mod tests {
                 lossy,
                 "lossy permutation variance on {expr:?}"
             );
-            let cs = e.ac_complexity(&sound).expect("sound parses");
-            let cl = e.ac_complexity(&lossy).expect("lossy parses");
+            let cs = e
+                .ac_complexity(&sound, RuleMode::Default)
+                .expect("sound parses");
+            let cl = e
+                .ac_complexity(&lossy, RuleMode::Default)
+                .expect("lossy parses");
             comp_sound += cs;
             comp_lossy += cl;
             if cl < cs {
