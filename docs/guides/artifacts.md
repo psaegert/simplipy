@@ -2,7 +2,7 @@
 
 Every published engine asset carries `config.yaml` (the operator table and engine
 configuration), the rule sets that config names. A 0.14.0 mine produces the full
-**TRIPLE**, `rules_f64.json`, `rules_real.json` and `rules_corpus.json`, and `mine.yaml` (the exact mine
+**TRIPLE**, `rules_f64.json`, `rules_real.json` and `rules_permissive.json`, and `mine.yaml` (the exact mine
 configuration). Each artifact is byte-deterministically reproducible from the config with one
 `simplipy find-rules` command at the recorded environment
 (see [environment qualification](../method/environment-qualification.md)).
@@ -14,12 +14,14 @@ configuration). Each artifact is byte-deterministically reproducible from the co
 |---|---|---|
 | `rules_f64.json` | `Mode.f64` (the default) | every rule the deployed f64 evaluator reproduces |
 | `rules_real.json` | `Mode.real` | every rule that is true over ℝ |
-| `rules_corpus.json` | `Mode.corpus` | the permissive superset |
+| `rules_permissive.json` | `Mode.permissive` | the permissive superset |
 
 The three files carry their mode in their name. Artifacts published before this
 convention (acj-4 among them) name the f64 file `rules.json`; they load unchanged,
 because `config.yaml` names its rule files explicitly and the loader serves whatever
-the config declares. The `rules_real:` and `rules_corpus:` config keys are optional,
+the config declares. The `rules_real:` and `rules_permissive:` config keys are optional
+(artifacts published before the rename declare the latter as `rules_corpus:`, which the
+loader reads unchanged),
 and a mode naming no set of its own serves the default (f64) set.
 
 `Mode.real` is the exception to that fallback: on an artifact without a real set,

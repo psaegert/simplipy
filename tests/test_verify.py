@@ -589,12 +589,12 @@ class TestCleanlinessIsPerMode:
         evaluator contradicts. One rule, two answers -- which a bucket count cannot say."""
         from simplipy.verify import verify_ruleset
         assert verify_ruleset([self.REAL], mode='real')['is_clean'] is True
-        assert verify_ruleset([self.REAL], mode='corpus')['is_clean'] is True
+        assert verify_ruleset([self.REAL], mode='permissive')['is_clean'] is True
         assert verify_ruleset([self.REAL], mode='f64')['is_clean'] is False
 
     def test_no_mode_may_carry_a_reject(self) -> None:
         from simplipy.verify import verify_ruleset
-        for mode in ('f64', 'real', 'corpus'):
+        for mode in ('f64', 'real', 'permissive'):
             rep = verify_ruleset([self.CORE, self.REJECT], mode=mode)
             assert rep['is_clean'] is False, mode
             assert [o['tier'] for o in rep['offenders']] == ['reject'], mode
@@ -634,18 +634,20 @@ class TestCleanlinessIsPerMode:
         """The regression that made this necessary: `verify_triple` kept enforcing the
         retired union identity after the miner stopped, so the documented artifact gate
         reported the 0.14.0 artifact as dirty while every per-file sweep was clean."""
-        from conftest import acj_config_path, require_triple_or_skip
+        from conftest import acj_config_path, acj_corpus_rules_path, require_triple_or_skip
         from simplipy.verify import verify_triple
         base = acj_config_path().replace('config.yaml', '')
         # the TRIPLE is the subject, so guard on the triple and not merely on the config:
-        # the f64 set ships on its own while the real/corpus sets are re-mined
+        # the f64 set ships on its own while the real/permissive sets are re-mined
         require_triple_or_skip('needs the shipped acj-4-3 triple')
+        # the third file keeps its published name on pre-rename artifacts; the
+        # conftest helper resolves whichever spelling the cell actually ships
         report = verify_triple(base + 'rules.json', base + 'rules_real.json',
-                               base + 'rules_corpus.json',
+                               acj_corpus_rules_path(),
                                engine_config=acj_config_path())
         assert report['is_clean'] is True, report['relationships']
         assert all(r['is_clean'] for r in report['modes'].values())
-        assert report['corpus_dominance'] == []
+        assert report['permissive_dominance'] == []
 
 
 class TestOperandScaledPrecision:
@@ -1347,7 +1349,7 @@ class TestTheGateAgreesWithTheRouterAndTheClock:
         from simplipy.verify import verify_ruleset
         rules = [[['+', '<constant>', '*', '<constant>', 'x0'],
                   ['+', '*', '<constant>', 'x0', '<constant>']]]
-        for mode in (None, 'f64', 'real', 'corpus'):
+        for mode in (None, 'f64', 'real', 'permissive'):
             rep = verify_ruleset(rules, mode=mode)
             assert rep['is_clean'] is True, (mode, rep)
         # and the carve-out opens NOTHING else: a false rule stays dirty everywhere

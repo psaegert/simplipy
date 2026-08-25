@@ -342,7 +342,7 @@ class TestContracts:
         # LOSSY's structural-cancel contract is untouched for non-determined
         # structures (see the (x^2)^0.5 -> x and exp(log C) -> C pins).
         expr = ["-", "/", "1", "0", "/", "1", "0"]
-        assert engine.simplify(expr, mode=Mode.corpus) == ['float("nan")']
+        assert engine.simplify(expr, mode=Mode.permissive) == ['float("nan")']
         assert engine.simplify(expr) == ['float("nan")']
 
     def test_free_rhs_wildcards_are_dropped_at_translation(self, tmp_path) -> None:
@@ -563,7 +563,7 @@ class TestMatcherAssignmentCompleteness:
 class TestApiFootguns:
     """Audit Tier-2 (2026-08-03): the two API footguns, pinned closed.
 
-    A STRING mode must mean what it says: ``mode='corpus'`` must compare equal to
+    A STRING mode must mean what it says: ``mode='permissive'`` must compare equal to
     the enum and silently run SOUND. And malformed input through the tagged/``rootn``
     entry -- the one path that skips ``is_valid`` -- must raise like every other
     malformed input: it used to be returned unchanged, with no signal."""
@@ -574,8 +574,8 @@ class TestApiFootguns:
         # training-canonicalisation example. The string and the enum must take the
         # SAME branch.
         expr = ['exp', 'log', '<constant>']
-        enum_out = engine.simplify(list(expr), mode=Mode.corpus)
-        str_out = engine.simplify(list(expr), mode='corpus')
+        enum_out = engine.simplify(list(expr), mode=Mode.permissive)
+        str_out = engine.simplify(list(expr), mode='permissive')
         assert str_out == enum_out
         assert str_out != engine.simplify(list(expr)), \
             'the LOSSY observable collapsed: this expression no longer distinguishes modes'
@@ -946,27 +946,27 @@ class TestLossyReciprocalRejoinProjection:
         x = engine.to_tagged(['inv', '*', 'acos', '*', 'float("inf")', 'x4',
                               'atan', 'asinh', 'x0'])
         sound = engine.simplify(list(x))
-        lossy = engine.simplify(list(x), mode=Mode.corpus)
+        lossy = engine.simplify(list(x), mode=Mode.permissive)
         assert lossy == sound, (lossy, sound)
         assert lossy[:2] == ['inv', '<mul>'], lossy
 
     def test_partner_cancellation_survives(self, engine: SimpliPyEngine) -> None:
         x = ['*', 'acos', 'x0', 'inv', '*', 'acos', 'x0', 'atan', 'x1']
-        assert engine.simplify(list(x), mode=Mode.corpus) == ['inv', 'atan', 'x1']
+        assert engine.simplify(list(x), mode=Mode.permissive) == ['inv', 'atan', 'x1']
 
     def test_certified_pair_stays_distributed(self, engine: SimpliPyEngine) -> None:
         # Where sound's zero-set licence certifies the split, both modes keep the
         # distributed form: the two canons agree and mined rules keep matching.
         x = engine.to_tagged(['inv', '*', 'acos', 'x0', 'atan', 'x1'])
         sound = engine.simplify(list(x))
-        lossy = engine.simplify(list(x), mode=Mode.corpus)
+        lossy = engine.simplify(list(x), mode=Mode.permissive)
         assert lossy == sound == ['<mul>', '<div>', 'acos', 'x0', 'atan', 'x1', '</mul>']
 
     def test_literal_infinity_never_joins(self, engine: SimpliPyEngine) -> None:
         # inv(inf) is a determined zero (the mask-sentinel cancellation partner);
         # joining it into an opaque base would hide that fold.
         x = ['inv', '*', 'float("inf")', '*', 'acos', '*', 'x4', 'x1', 'atan', 'x0']
-        out = engine.simplify(list(x), mode=Mode.corpus)
+        out = engine.simplify(list(x), mode=Mode.permissive)
         assert out[:2] != ['inv', '<mul>'], out
 
     def test_lossy_idempotent_through_projection(self, engine: SimpliPyEngine) -> None:
@@ -975,8 +975,8 @@ class TestLossyReciprocalRejoinProjection:
             ['*', 'acos', 'x0', 'inv', '*', 'acos', 'x0', 'atan', 'x1'],
             ['inv', '*', 'float("inf")', '*', 'acos', '*', 'x4', 'x1', 'atan', 'x0'],
         ):
-            once = engine.simplify(list(x), mode=Mode.corpus)
-            assert engine.simplify(list(once), mode=Mode.corpus) == once, x
+            once = engine.simplify(list(x), mode=Mode.permissive)
+            assert engine.simplify(list(once), mode=Mode.permissive) == once, x
 
 
 class TestF68ConstructionRouteConfluence:
@@ -1021,8 +1021,8 @@ class TestF68ConstructionRouteConfluence:
 
     @pytest.mark.parametrize('row,src', LOSSY_ROWS, ids=[r for r, _ in LOSSY_ROWS])
     def test_lossy_is_a_fixpoint(self, engine: SimpliPyEngine, row: str, src: str) -> None:
-        once = engine.simplify(src.split(), mode=Mode.corpus)
-        assert engine.simplify(list(once), mode=Mode.corpus) == once, once
+        once = engine.simplify(src.split(), mode=Mode.permissive)
+        assert engine.simplify(list(once), mode=Mode.permissive) == once, once
 
     def test_kept_zero_files_one_state_for_both_mirrors(self, engine: SimpliPyEngine) -> None:
         # 0 * (1/2 - acos x4) and 0 * (acos x4 - 1/2) are value-equal (the zero eats
@@ -1042,8 +1042,8 @@ class TestF68ConstructionRouteConfluence:
             '<mul> x0 <div> <add> x1 <sub> log x4 </add> <add> x2 <sub> 1 </add> </mul>',
             '<mul> x0 <div> <add> log x4 <sub> x1 </add> <add> 1 <sub> x2 </add> </mul>',
         ):
-            once = engine.simplify(spelling.split(), mode=Mode.corpus)
-            assert engine.simplify(list(once), mode=Mode.corpus) == once, spelling
+            once = engine.simplify(spelling.split(), mode=Mode.permissive)
+            assert engine.simplify(list(once), mode=Mode.permissive) == once, spelling
 
 
 class TestF72ArrivalInvariantSignDecisions:
@@ -1094,8 +1094,8 @@ class TestF72ArrivalInvariantSignDecisions:
     def test_p2_rows_are_permutation_invariant(
             self, engine: SimpliPyEngine, row: str, src: str, swapped: str) -> None:
         assert engine.simplify(src.split()) == engine.simplify(swapped.split())
-        assert (engine.simplify(src.split(), mode=Mode.corpus)
-                == engine.simplify(swapped.split(), mode=Mode.corpus))
+        assert (engine.simplify(src.split(), mode=Mode.permissive)
+                == engine.simplify(swapped.split(), mode=Mode.permissive))
 
     def test_partition_sign_host_is_route_invariant(self, engine: SimpliPyEngine) -> None:
         a = engine.simplify(['*', '-0.9999999999999999', self.P])
@@ -1250,7 +1250,7 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
 
     def test_unpartnered_sentinel_expires_and_chain_continues(self, engine: SimpliPyEngine) -> None:
         x = ['sin', 'cos', '+', '*', '<constant>', 'inv', 'float("inf")', 'neg', 'x2']
-        assert engine.simplify(list(x), mode=Mode.corpus) == \
+        assert engine.simplify(list(x), mode=Mode.permissive) == \
             engine.simplify(list(x)) == ['sin', 'cos', 'x2']
 
     def test_mask_doctrine_survives_expiry(self, engine: SimpliPyEngine) -> None:
@@ -1258,12 +1258,12 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
         from conftest import require_triple_or_skip
         require_triple_or_skip()
         x = ['*', '/', 'float("inf")', 'float("inf")', 'x0']
-        assert engine.simplify(list(x), mode=Mode.corpus) == ['x0']
+        assert engine.simplify(list(x), mode=Mode.permissive) == ['x0']
 
     def test_coefficient_reciprocates_into_joined_base(self, engine: SimpliPyEngine) -> None:
         x = engine.to_tagged(
             ['*', '0.5', 'inv', '*', 'x4', '+', 'x3', '+', 'tan', 'x0', '/', '1', '3'])
-        out = engine.simplify(list(x), mode=Mode.corpus)
+        out = engine.simplify(list(x), mode=Mode.permissive)
         # RE-PINNED 2026-08-11 (E2, audit F81): the tan-bearing sum now passes the
         # zero-set licence (denominator clearing), so the kept carrier DISTRIBUTES
         # and renders in the flat F80 spelling. The guarded behaviour is unchanged:
@@ -1274,14 +1274,14 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
         assert out == ['<mul>', '1', '<div>', '2', 'x4', '<add>', 'x3', 'tan', 'x0',
                        '<mul>', '1', '<div>', '3', '</mul>',
                        '</add>', '</mul>'], out
-        assert engine.simplify(list(out), mode=Mode.corpus) == out
+        assert engine.simplify(list(out), mode=Mode.permissive) == out
 
     def test_neg_one_coefficient_joins_inside(self, engine: SimpliPyEngine) -> None:
         x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'pow', 'x3', 'x4'])
-        out = engine.simplify(list(x), mode=Mode.corpus)
+        out = engine.simplify(list(x), mode=Mode.permissive)
         assert out == ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3',
                        'x4', '</add>', '</mul>'], out
-        assert engine.simplify(list(out), mode=Mode.corpus) == out
+        assert engine.simplify(list(out), mode=Mode.permissive) == out
 
 
 class TestC36DropCensus:

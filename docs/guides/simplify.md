@@ -71,10 +71,10 @@ it applies:
    top-down:
     1. exact rule lookup; on a miss, the pattern scan, first match wins;
     2. a match that binds wide slots must pass the bind-time `!`/`$` certificates
-       (skipped in corpus mode); verdicts are memoized per call and in a
+       (skipped in permissive mode); verdicts are memoized per call and in a
        generational per-engine cache;
     3. no match: the exact fold with the `<constant>` collapse (positive-measure
-       licence; relaxed in corpus mode);
+       licence; relaxed in permissive mode);
     4. still nothing: recurse into the operands and re-check the rebuilt node.
 4. **Serialize** back out: μ ≤ input, sound, idempotent. Callers that need
    placeholders then run `mask()` — the separate call above.
@@ -113,7 +113,7 @@ input), the frontier only grows on strict descent of a well-founded ordering
 ## Soundness modes
 
 `simplify(expr, mode=...)` selects a point on an **axis**, not a rung on a ladder.
-`simplipy.Mode` has three members: `f64` (the default), `real` and `corpus`.
+`simplipy.Mode` has three members: `f64` (the default), `real` and `permissive`.
 
 The axis exists because soundness is two *incomparable* notions, not one ordering. A rewrite
 can be true in mathematics and not reproduced by floating point, or reproduced exactly by
@@ -133,7 +133,7 @@ between modes raises `TypeError`.
 - **`Mode.real`** is sound as mathematics defines, independent of any float format. Use it
   when a rewrite must hold symbolically.
 
-- **`Mode.corpus`** is the permissive superset, for training-corpus canonicalisation ("beautification").
+- **`Mode.permissive`** is the permissive superset, for training-corpus canonicalisation ("beautification").
   Every rule placeholder binds any subtree (the `!`-certificate is skipped), cancellation drops
   its group-axiom gate, and the constant-fold drops its finiteness gate. It is *not*
   equivalence-preserving. Do not use it on an inference or scoring path: the training data is
@@ -141,7 +141,7 @@ between modes raises `TypeError`.
   function to violate.
 
 Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /
-`rules_corpus.json` (artifacts published before the rename, acj-4 among them, call the f64
+`rules_permissive.json` (artifacts published before the rename, acj-4 among them, call the f64
 file `rules.json`) — so selecting a mode selects a file, and what is loaded is what is served.
 
 ```python
@@ -150,7 +150,14 @@ from simplipy import Mode
 # log(C) is undefined for C <= 0. The default is strict about it; only the permissive
 # mode collapses it.
 engine.simplify('exp(log(<constant>))', mode=Mode.f64)     # -> 'exp(log(<constant>))'
-engine.simplify('exp(log(<constant>))', mode=Mode.corpus)  # -> '<constant>'
+engine.simplify('exp(log(<constant>))', mode=Mode.permissive)  # -> '<constant>'
+
+# sqrt(x^2) is |x| over the reals -- but rewriting to abs(x) is value-changing in f64
+# (sqrt(fl(x^2)) crosses ULP boundaries, and x^2 overflows to inf beyond ~1.3e154), so
+# the strict modes refuse, and the permissive mode takes the sign-ignoring algebraic
+# collapse instead:
+engine.simplify('rootn(x0^2, 2)')                          # -> unchanged
+engine.simplify('rootn(x0^2, 2)', mode=Mode.permissive)    # -> 'x0'
 
 # A finite-a.e. subtree (pole at a single measure-zero constant) folds in every mode:
 engine.simplify('1/<constant>')                            # -> '<constant>'
@@ -196,10 +203,10 @@ stated here rather than left to be discovered.
 ([flash-ansr](https://github.com/psaegert/flash-ansr), a transformer for symbolic regression)
 uses each mode on a different side of its pipeline:
 
-- **Training-data generation uses `Mode.corpus`.** A skeleton is corpus-simplified and the numeric
+- **Training-data generation uses `Mode.permissive`.** A skeleton is permissive-simplified and the numeric
   data is then generated *from that simplified form* — so the target the model learns and the data
   it is trained on are the *same* expression (`target == data`). There is no external ground-truth
-  function for `corpus` to violate, so the aggressive reductions are safe here and they give the model
+  function for `permissive` to violate, so the aggressive reductions are safe here and they give the model
   the shortest, most canonical target. (An `exp(log(<constant>))` that survives cancellation, for
   instance, becomes a plain `<constant>`, which is what the generated data reflects.)
 
@@ -208,7 +215,7 @@ uses each mode on a different side of its pipeline:
   the fit and the score would drift, and the data is evaluated in floating point -- which is
   exactly the soundness `f64` preserves.
 
-That split is the whole reason the permissive mode exists: `corpus` maximizes canonicalization where the
+That split is the whole reason the permissive mode exists: `permissive` maximizes canonicalization where the
 simplified form *defines* the data, and `f64` preserves what the evaluator computes where
 it must not change.
 
@@ -279,19 +286,19 @@ prior (n = 65,536), its raw-masked transform (n = 65,536), and an
 external neutral problem set (n = 528). Scored in the deployment space
 under the MDL measure, with bootstrap 95% CIs; ratio = output/input, lower
 is better; "made bigger" = the fraction of rows an arm inflated. Measured
-on the 0.14.0 release: `f64` is the shipped default (`effort=4`), `corpus`
-is `Mode.corpus` at its default.
+on the 0.14.0 release: `f64` is the shipped default (`effort=4`), `permissive`
+is `Mode.permissive` at its default.
 
 | corpus | arm | mean ratio | wins | made bigger |
 |---|---|---|---|---|
 | SR prior, unmasked | simplipy f64 (default) | **0.966** | 11.7% | **0.0%** |
-| | simplipy corpus | **0.940** | **29.5%** | **0.0%** |
+| | simplipy permissive | **0.940** | **29.5%** | **0.0%** |
 | | sympy simplify | 1.078 | 15.1% | 40.1% |
 | SR prior, masked raw | simplipy f64 (default) | **0.993** | 7.0% | **0.0%** |
-| | simplipy corpus | **0.961** | **28.4%** | **0.0%** |
+| | simplipy permissive | **0.961** | **28.4%** | **0.0%** |
 | | sympy simplify | 1.059 | 14.9% | 38.0% |
 | external set | simplipy f64 (default) | 0.995 | 4.0% | **0.0%** |
-| | simplipy corpus | 0.995 | 4.5% | **0.0%** |
+| | simplipy permissive | 0.995 | 4.5% | **0.0%** |
 | | sympy simplify | 1.045 | 15.0% | 22.7% |
 
 No simplipy arm inflated a single row of 131,600, in either mode: refusal

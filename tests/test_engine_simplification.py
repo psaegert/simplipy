@@ -186,9 +186,9 @@ class TestMode:
         type-check -- a comparison between modes is a category error, not a question
         with a wrong answer."""
         from simplipy import Mode
-        assert [m.name for m in Mode] == ["f64", "real", "corpus"]
+        assert [m.name for m in Mode] == ["f64", "real", "permissive"]
         with pytest.raises(TypeError):
-            Mode.f64 < Mode.corpus        # type: ignore[operator]
+            Mode.f64 < Mode.permissive        # type: ignore[operator]
 
     def test_an_unknown_mode_attribute_is_still_an_attribute_error(self) -> None:
         """`__getattr__` serves the two retired names; it must not swallow typos."""
@@ -205,7 +205,7 @@ class TestMode:
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         engine.simplify(["x0"], mode=Mode.f64)
-        engine.simplify(["x0"], mode=Mode.corpus)
+        engine.simplify(["x0"], mode=Mode.permissive)
         with pytest.raises(ValueError, match="mode='real' needs a ruleset mined for it"):
             engine.simplify(["x0"], mode=Mode.real)
 
@@ -214,7 +214,7 @@ class TestMode:
         documented spelling, since the members are lower-case."""
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
-        for spelling in ("f64", "F64", "CORPUS"):
+        for spelling in ("f64", "F64", "PERMISSIVE"):
             engine.simplify(["x0"], mode=spelling)
         # ` real ` still BINDS (it reaches the fail-closed check, not the unknown-mode
         # branch), which is what this test is about
@@ -243,7 +243,7 @@ class TestMode:
         training-path parity corner, revisited at the flash-ansr migration)."""
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
-        assert engine.simplify(engine.to_tagged(["/", "<constant>", "0"]), mode=Mode.corpus) \
+        assert engine.simplify(engine.to_tagged(["/", "<constant>", "0"]), mode=Mode.permissive) \
             == ["<mul>", 'float("inf")', "<constant>", "</mul>"]
 
     def test_finite_ae_fold_is_mode_independent(self) -> None:
@@ -251,13 +251,13 @@ class TestMode:
         from simplipy import Mode
         engine = SimpliPyEngine(operators=_MINIMAL_OPERATORS, rules=[])
         assert engine.simplify(["inv", "<constant>"], mode=Mode.f64) == ["<constant>"]
-        assert engine.simplify(["inv", "<constant>"], mode=Mode.corpus) == ["<constant>"]
+        assert engine.simplify(["inv", "<constant>"], mode=Mode.permissive) == ["<constant>"]
 
     def test_lossy_relaxes_cancellation_group_axioms(self) -> None:
         """The THIRD edge: SOUND cancellation respects the group axioms (`inf/inf`, `inf-inf`
         stay the sound `nan`); LOSSY relaxes them (structural cancel) -- the same relaxation LOSSY
         applies to the rule matcher's `!`-cert and the constant-fold's finiteness gate, so all
-        three edges behave consistently under `Mode.corpus`."""
+        three edges behave consistently under `Mode.permissive`."""
         from conftest import require_triple_or_skip
         require_triple_or_skip()
         from simplipy import Mode
@@ -267,13 +267,13 @@ class TestMode:
         # structural cancel fires.
         c = ["*", "/", 'float("inf")', 'float("inf")', "x0"]
         assert list(engine.simplify(list(c), mode=Mode.f64)) == ['float("nan")']
-        assert list(engine.simplify(list(c), mode=Mode.corpus)) == ["x0"]
+        assert list(engine.simplify(list(c), mode=Mode.permissive)) == ["x0"]
         # (inf-inf)+x0: the AC CONSTRUCTORS compute inf + (-inf) = nan exactly (total
         # extended-real arithmetic, mode-independent) before any cancel could see it, so
         # BOTH modes return the true value -- there is no unsound step for LOSSY to relax.
         c = ["+", "-", 'float("inf")', 'float("inf")', "x0"]
         assert list(engine.simplify(list(c), mode=Mode.f64)) == ['float("nan")']
-        assert list(engine.simplify(list(c), mode=Mode.corpus)) == ['float("nan")']
+        assert list(engine.simplify(list(c), mode=Mode.permissive)) == ['float("nan")']
 
 
 class TestOperatorConversions:
@@ -1031,7 +1031,7 @@ class TestMultSort:
     def test_lossy_skips_the_certificate(self, tmp_path) -> None:
         from simplipy.engine import Mode
         engine = self._engine(tmp_path)
-        assert list(engine.simplify(["/", "asin", "x0", "asin", "x0"], mode=Mode.corpus)) == ["1"]
+        assert list(engine.simplify(["/", "asin", "x0", "asin", "x0"], mode=Mode.permissive)) == ["1"]
 
     def test_judge_bang_mult_bar(self, tmp_path) -> None:
         # The promotion-side twin: the plain `!` bar demotes A/A -> 1 (0/0 = nan at the atom
@@ -1092,7 +1092,7 @@ class TestB9MuGuarantee:
 
 class TestApi1ModeParameter:
     """api-1 + fmux-mode-1: the `mode` parameter accepted things it must refuse and
-    then silently selected DIFFERENT semantics. `simplify(expr, Mode.corpus)` bound
+    then silently selected DIFFERENT semantics. `simplify(expr, Mode.permissive)` bound
     the Mode POSITIONALLY to the pass budget and ran SOUND; `mode=3` and
     `mode=np.float64(3.0)` silently selected LOSSY -- a caller whose mode came out
     of a JSON config got the mode that trades soundness for recall. max_passes /
@@ -1106,7 +1106,7 @@ class TestApi1ModeParameter:
     def test_positional_arguments_are_refused(self, eng) -> None:
         from simplipy import Mode
         with pytest.raises(TypeError):
-            eng.simplify(['exp', 'log', '<constant>'], Mode.corpus)
+            eng.simplify(['exp', 'log', '<constant>'], Mode.permissive)
         with pytest.raises(TypeError):
             eng.simplify(['+', 'x0', 'x0'], 48)
 
@@ -1118,8 +1118,8 @@ class TestApi1ModeParameter:
 
     def test_mode_members_and_names_still_work(self, eng) -> None:
         from simplipy import Mode
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.corpus)) == ['<constant>']
-        assert list(eng.simplify(['exp', 'log', '<constant>'], mode='corpus')) == ['<constant>']
+        assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.permissive)) == ['<constant>']
+        assert list(eng.simplify(['exp', 'log', '<constant>'], mode='permissive')) == ['<constant>']
         assert list(eng.simplify(['exp', 'log', '<constant>'], mode=Mode.f64)) \
             == ['exp', 'log', '<constant>']
 

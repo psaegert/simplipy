@@ -618,7 +618,7 @@ class TestProvenance:
         assert side["universe"]["2"]["coverage"] == 1.0
         assert side["progress"]["final"] is True
         assert side["progress"]["rules_total"] == len(
-            json.load(open(out.replace(".json", "_corpus.json"))))
+            json.load(open(out.replace(".json", "_permissive.json"))))
         assert side["simplipy_version"]
 
     def test_sidecar_records_soundness_state(self, tmp_path) -> None:
@@ -763,7 +763,7 @@ class TestCertifyRules:
         #
         # Under the triple that verdict is no longer a death sentence: ENGINE-MISALIGN is
         # the `real` tier, so the pair SURVIVES certification and is routed into
-        # rules_real.json / rules_corpus.json and out of rules.json. Deleting it here
+        # rules_real.json / rules_permissive.json and out of rules.json. Deleting it here
         # would break the parity `certify_rules` promises with the mine, which keeps it.
         assert by_src[tuple(proposals[3])][0] == ('+', 'x0', 'x1')
         from simplipy.verify._contract import judge_rule
@@ -1107,9 +1107,9 @@ class TestProposalChannel:
         # comparison against the retired `corpus == f64 UNION real` identity.)
         from simplipy.mining import _preempted_by
         saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(out.replace('.json', '_corpus.json')))}
+                 for rule in json.load(open(out.replace('.json', '_permissive.json')))}
         saved |= {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules
-                  if _preempted_by(eng, lhs, rhs, 'corpus')}
+                  if _preempted_by(eng, lhs, rhs, 'permissive')}
         assert rules == saved, "the artifact must contain the merged (mined + certified) ruleset"
         assert sidecar["proposals"]["outcomes"] == {
             "certified": 1, "already_covered": 0, "rejected": 1, "duplicate": 1,
@@ -1283,9 +1283,9 @@ class TestProposalTargetAllowance:
         # comparison against the retired `corpus == f64 UNION real` identity.)
         from simplipy.mining import _preempted_by
         saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(out.replace('.json', '_corpus.json')))}
+                 for rule in json.load(open(out.replace('.json', '_permissive.json')))}
         saved |= {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules
-                  if _preempted_by(eng, lhs, rhs, 'corpus')}
+                  if _preempted_by(eng, lhs, rhs, 'permissive')}
         assert rules == saved, "the artifact must carry the merged ruleset"
         # The allowance is only real if the rule FIRES at serve time: the engine's
         # endpoint for the source must now sit strictly below it in the ordering.
@@ -1660,7 +1660,7 @@ class TestProposalHintLengthAllowance:
         assert (("-", "1", "cos", "*", "2", "?0"),
                 ("*", "2", "pow", "sin", "?0", "2")) in rules
         saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(artifact.replace('.json', '_corpus.json')))}
+                 for rule in json.load(open(artifact.replace('.json', '_permissive.json')))}
         assert rules == saved, "the artifact must carry the merged ruleset"
         # SERVE. `simplify` is DIALECT-PRESERVING (owner-ruled): it answers in the
         # dialect it was handed, and SIN_SRC is explicit binary prefix, so the answer is
@@ -1870,7 +1870,7 @@ class TestCertifiedThenDropped:
         # present in the mine's output. For census reconciliation -- "did this certified
         # pair survive, or must it name its drop?" -- the honest denominator is the
         # CORPUS set, which is exactly f64 UNION real.
-        with open(out.replace('.json', '_corpus.json')) as fh:
+        with open(out.replace('.json', '_permissive.json')) as fh:
             artifact = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(fh)]
         return eng, sidecar, artifact
 
@@ -2027,15 +2027,15 @@ class TestTripleRouting:
         from simplipy.mining import _assert_triple_invariants
         _assert_triple_invariants(
             {'f64': [self.A, self.B], 'real': [self.A, self.C],
-             'corpus': [self.A, self.B, self.C]},
+             'permissive': [self.A, self.B, self.C]},
             [], [self.A, self.B, self.C], self._allowed())
 
     @pytest.mark.parametrize('label,triple,rejected', [
         # served AND rejected -- the two must stay disjoint
-        ('inv3-both', {'f64': [A, B], 'real': [A, C], 'corpus': [A, B, C]}, [A]),
+        ('inv3-both', {'f64': [A, B], 'real': [A, C], 'permissive': [A, B, C]}, [A]),
         # a rule in a file its tier does not license (invariant 4, the direction the
         # per-mode prune does NOT excuse)
-        ('inv4', {'f64': [A, B, C], 'real': [A, C], 'corpus': [A, B, C]}, []),
+        ('inv4', {'f64': [A, B, C], 'real': [A, C], 'permissive': [A, B, C]}, []),
     ])
     def test_each_invariant_can_actually_fail(self, label, triple, rejected) -> None:
         """An invariant that restates its own construction proves nothing. Two of these
@@ -2055,7 +2055,7 @@ class TestTripleRouting:
         with pytest.raises(AssertionError, match='not licensed for that mode'):
             _assert_triple_invariants(
                 {'f64': [self.A, self.B], 'real': [self.A, self.B],
-                 'corpus': [self.A, self.B]},
+                 'permissive': [self.A, self.B]},
                 [], [self.A, self.B], allowed)
 
     def test_invariant_4_catches_what_the_other_three_cannot(self) -> None:
@@ -2069,7 +2069,7 @@ class TestTripleRouting:
         with pytest.raises(AssertionError, match='invariant 4|not licensed for that mode'):
             _assert_triple_invariants(
                 {'f64': [self.A], 'real': [self.A, self.B, self.C],
-                 'corpus': [self.A, self.B, self.C]},
+                 'permissive': [self.A, self.B, self.C]},
                 [], [self.A, self.B, self.C], self._allowed())
 
     def test_corpus_is_derived_so_it_cannot_disagree_with_the_union(self) -> None:
@@ -2077,7 +2077,7 @@ class TestTripleRouting:
         serves in either other mode, so invariant 2 holds by construction. A fourth entry
         would make it possible to break."""
         from simplipy.mining import _TIER_MODES
-        assert 'corpus' not in _TIER_MODES
+        assert 'permissive' not in _TIER_MODES
         assert _TIER_MODES['core'] == frozenset({'f64', 'real'})
         assert _TIER_MODES['reject'] == frozenset()
 
@@ -2095,7 +2095,7 @@ class TestTripleRouting:
         # artifact predates the triple" -- which stopped being true when the asset became
         # one, and a `<=` bound passes any under-population. The identity that holds under
         # the per-mode prune is: what a file omits, that mode's own constructor performs.
-        assert len(triple['corpus']) + len(rejected) + meta['preempted']['corpus'] == served
+        assert len(triple['permissive']) + len(rejected) + meta['preempted']['permissive'] == served
         assert len(triple['f64']) + meta['preempted']['f64'] <= served
         assert len(triple['real']) + meta['preempted']['real'] <= served
         assert 0 < len(triple['f64']) and 0 < len(triple['real'])
@@ -2131,13 +2131,13 @@ class TestTheGateRoutesInsteadOfDeleting:
 
         f64 = json.load(open(out))
         real = json.load(open(str(tmp_path / 'mined_real.json')))
-        corpus = json.load(open(str(tmp_path / 'mined_corpus.json')))
+        corpus = json.load(open(str(tmp_path / 'mined_permissive.json')))
 
         def keys(rs):
             return {(tuple(lhs), tuple(rhs)) for lhs, rhs in rs}
 
         # `corpus == f64 UNION real` is RETIRED and its replacement is BEHAVIOURAL
-        # (`assert_corpus_dominates`), so there is no set identity to assert here. An
+        # (`assert_permissive_dominates`), so there is no set identity to assert here. An
         # intermediate version asserted `keys(f64) <= mined` where `mined` was DEFINED as
         # the union of the three files -- unconditionally true. What the files must show
         # is the routing itself, checked below.
@@ -2162,7 +2162,7 @@ class TestTheGateRoutesInsteadOfDeleting:
         # the carve-out is visible in the sidecar, never silent
         prov = json.load(open(out + '.provenance.json'))
         assert prov['triple']['counts'] == {'f64': len(f64), 'real': len(real),
-                                            'corpus': len(corpus)}
+                                            'permissive': len(corpus)}
         assert prov['symbolic_gate']['routed_to_tier'].get('real')
 
     def test_the_unjudgeable_buckets_still_fail_closed(self) -> None:
@@ -2243,11 +2243,11 @@ class TestTheUntestedBranchesOfTheRouter:
                           X=128, seed=7, promote_sorts=False, output_file=out)
         prov = json.load(open(out + '.provenance.json'))
         assert 'triple' in prov
-        assert set(prov['triple']['counts']) == {'f64', 'real', 'corpus'}
+        assert set(prov['triple']['counts']) == {'f64', 'real', 'permissive'}
         # present even when empty: a key that appears only on failure cannot be audited
         assert 'rejected' in prov['triple']
         assert isinstance(prov['triple']['rejected'], list)
-        assert set(prov['triple']['files']) == {'f64', 'real', 'corpus'}
+        assert set(prov['triple']['files']) == {'f64', 'real', 'permissive'}
 
     def test_a_twins_licence_is_the_INTERSECTION_not_the_union(self) -> None:
         """A source rule minting several served entries may serve a mode only if EVERY
@@ -2298,10 +2298,10 @@ class TestTheUntestedBranchesOfTheRouter:
         from simplipy.mining import _assert_triple_invariants, _TIER_MODES
         A, B = [['x0'], ['x0']], [['y0'], ['y0']]
         # B is licensed nowhere, so it must be REJECTED, not quietly served
-        _assert_triple_invariants({'f64': [A], 'real': [A], 'corpus': [A]},
+        _assert_triple_invariants({'f64': [A], 'real': [A], 'permissive': [A]},
                                   [B], [A, B], {0: _TIER_MODES['core'], 1: frozenset()})
         with pytest.raises(AssertionError, match='triple invariant'):
-            _assert_triple_invariants({'f64': [A, B], 'real': [A], 'corpus': [A, B]},
+            _assert_triple_invariants({'f64': [A, B], 'real': [A], 'permissive': [A, B]},
                                       [], [A, B], {0: _TIER_MODES['core'], 1: frozenset()})
 
 
@@ -2350,7 +2350,7 @@ class TestCorpusDominanceReplacesTheSetInvariant:
 
     def test_it_holds_on_the_shipped_corpus(self) -> None:
         from conftest import acj_config_path, require_or_skip
-        from simplipy.mining import assert_corpus_dominates
+        from simplipy.mining import assert_permissive_dominates
         require_or_skip(acj_config_path(), 'needs the acj-4-3 asset')
         from conftest import require_triple_or_skip
         require_triple_or_skip('needs the shipped corpus set')
@@ -2361,7 +2361,7 @@ class TestCorpusDominanceReplacesTheSetInvariant:
         rows = json.load(open(os.path.join(
             os.path.dirname(acj_config_path()), '..', '..', '..',
             'benchmarks', 'corpus', 'raw_skeletons_nv.json')))[:120]
-        assert assert_corpus_dominates(engine, rows) == []
+        assert assert_permissive_dominates(engine, rows) == []
 
     def test_it_CAN_fail(self) -> None:
         """An invariant that cannot fail proves nothing -- three tautologies shipped in
@@ -2369,7 +2369,7 @@ class TestCorpusDominanceReplacesTheSetInvariant:
         must report it."""
         from simplipy import Mode
         from conftest import acj_config_path, require_or_skip
-        from simplipy.mining import assert_corpus_dominates
+        from simplipy.mining import assert_permissive_dominates
         require_or_skip(acj_config_path(), 'needs the acj-4-3 asset')
         engine = SimpliPyEngine.from_config(acj_config_path())
         engine._core.set_mode_rules('real', [])
@@ -2379,12 +2379,12 @@ class TestCorpusDominanceReplacesTheSetInvariant:
                 self._e, self._core = e, e._core
 
             def simplify(self, expr, mode=None):
-                return self._e.simplify(expr, mode=Mode.real if mode is Mode.corpus else mode)
+                return self._e.simplify(expr, mode=Mode.real if mode is Mode.permissive else mode)
 
         rows = json.load(open(os.path.join(
             os.path.dirname(acj_config_path()), '..', '..', '..',
             'benchmarks', 'corpus', 'raw_skeletons_nv.json')))[:120]
-        assert assert_corpus_dominates(CorpusCrippled(engine), rows) != []
+        assert assert_permissive_dominates(CorpusCrippled(engine), rows) != []
 
 
 class TestThePruneIsInstanceSafe:
@@ -2403,15 +2403,15 @@ class TestThePruneIsInstanceSafe:
         from simplipy.mining import _preempted_by
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
         engine = SimpliPyEngine.from_config(acj_config_path())
-        assert _preempted_by(engine, ['/', '$0', '$0'], ['1'], 'corpus') is False
+        assert _preempted_by(engine, ['/', '$0', '$0'], ['1'], 'permissive') is False
 
         bare = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
                               rules=[])
         bare._core.set_mode_rules('real', [])
         # the two answers that must not be conflated
-        assert bare.simplify(['/', '$0', '$0'], mode=Mode.corpus) == ['1']
+        assert bare.simplify(['/', '$0', '$0'], mode=Mode.permissive) == ['1']
         assert bare.simplify(['/', 'float("inf")', 'float("inf")'],
-                             mode=Mode.corpus) == ['float("nan")']
+                             mode=Mode.permissive) == ['float("nan")']
 
     def test_a_ground_rule_still_prunes(self) -> None:
         """The bound costs nothing the prune was for: every literal evaluation folding
@@ -2557,19 +2557,20 @@ class TestTriplePaths:
         from simplipy.mining import _triple_paths
         assert _triple_paths('rules_f64.json') == {
             'f64': 'rules_f64.json', 'real': 'rules_real.json',
-            'corpus': 'rules_corpus.json'}
+            'permissive': 'rules_permissive.json'}
 
     def test_directories_survive_the_derivation(self) -> None:
         from simplipy.mining import _triple_paths
         assert _triple_paths('path/to/my_rules_f64.json') == {
             'f64': 'path/to/my_rules_f64.json', 'real': 'path/to/my_rules_real.json',
-            'corpus': 'path/to/my_rules_corpus.json'}
+            'permissive': 'path/to/my_rules_permissive.json'}
 
     def test_a_markerless_name_keeps_its_historic_siblings(self) -> None:
-        # Every artifact published before the rename (acj-4 among them) was mined with
-        # `-o rules.json`, and the recorded re-mine command must go on reproducing it
-        # byte-for-byte, file names included.
+        # A markerless name gets the SAME siblings as a marked one. The historic
+        # `rules_corpus.json` carve-out was retired with the 'permissive' rename:
+        # reproducing a pre-rename artifact byte for byte pins the pre-rename
+        # simplipy, so a filename carve-out in THIS build protected nothing.
         from simplipy.mining import _triple_paths
         assert _triple_paths('rules.json') == {
             'f64': 'rules.json', 'real': 'rules_real.json',
-            'corpus': 'rules_corpus.json'}
+            'permissive': 'rules_permissive.json'}

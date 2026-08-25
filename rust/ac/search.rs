@@ -269,7 +269,7 @@ mod tests {
         let row156 = t(&["*", "x2", "+", "x2", "/", "+", "x1", "1", "x2"]);
         let plain = t(&["+", "x1", "x2"]);
         for toks in [&row156, &plain] {
-            for mode in [RuleMode::Default, RuleMode::Corpus] {
+            for mode in [RuleMode::Default, RuleMode::Permissive] {
                 for form in [
                     crate::engine::AcForm::Tagged,
                     crate::engine::AcForm::Explicit,

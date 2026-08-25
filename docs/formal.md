@@ -100,7 +100,7 @@ round-trip (serialize → parse → canon) onto the *same state*, debug-asserted
 divergence class (the odd-function literal-sign pair: `mul()`-built vs collector-built
 spellings of one value) was removed by the shared sign-trade owner; zero
 specimens remain. A second measured class (2026-08-24) sat not in `canon()` but in the
-*pricing instrument*: `complexity()` parsed fold-free while the `f64`/`corpus` chains
+*pricing instrument*: `complexity()` parsed fold-free while the `f64`/`permissive` chains
 parse fold-at-parse, so on 10 of 65,536 benchmark rows the instrument priced a
 different state than the chain descended from and $\mu(\mathrm{simplify}(e)) \le
 \mu(e)$ failed *as measured* while holding per route. Closed by construction: the
@@ -449,7 +449,7 @@ bound now *proves* an implementation bug. When one binds, rewriting stops and th
 reached is returned — sound, possibly non-minimal.
 
 **Equal-$\mu$ ties, measured** [EMPIRICAL — instrumented build over 50,800 simplify
-calls: the 400-expression mined corpus in strict and corpus modes, plus 50,000 fuzz
+calls: the 400-expression mined corpus in strict and permissive modes, plus 50,000 fuzz
 expressions biased toward coefficient/exponent cost shifts and i128-boundary literals].
 Tie **fires**: none occurred (0). Tie **rebuilds**: 169 calls (0.3%), every one on a
 fuzz input carrying overflow-magnitude literals, at most 4 per call, none from the
@@ -508,7 +508,7 @@ above. (The scale gates hold 0 idempotence and 0 permutation failures at head.)
 
 **Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
 (training-corpus canonicalization). It relaxes *soundness* licences, never the ordering:
-fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in corpus mode.
+fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in permissive mode.
 
 ## 7. Where each property is checked
 

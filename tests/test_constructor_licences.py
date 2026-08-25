@@ -100,8 +100,8 @@ class TestPowDistributionLicence:
         lo = check(eng, 'pow * -3 exp x1 -1'.split())
         assert lo.count('inv') + lo.count('/') + lo.count('<div>') <= 1
         # LOSSY is licensed for a.e. changes and still distributes the magnitude
-        assert eng.simplify('pow / neg x0 3 -1'.split(), mode=Mode.corpus) == \
-            eng.simplify('/ -3 x0'.split(), mode=Mode.corpus)
+        assert eng.simplify('pow / neg x0 3 -1'.split(), mode=Mode.permissive) == \
+            eng.simplify('/ -3 x0'.split(), mode=Mode.permissive)
 
     def test_asin_class_factors_are_licensed(self, eng):
         # zero-set-null is the licence, NOT finite-nonzero-a.e.: asin has a fat NaN
@@ -265,10 +265,10 @@ class TestCertificateCompletenessTowers:
         src = '/ pow x5 5 * -0.0009765625 * pow x5 5 pow - x3 exp x10 -5'.split()
         out = check(eng, src)
         assert 'x5' in out, f'pair unexpectedly cancelled in sound mode: {out}'
-        lossy = eng.simplify(list(src), mode=Mode.corpus)
+        lossy = eng.simplify(list(src), mode=Mode.permissive)
         assert 'x5' not in lossy, f'lossy cancel lost: {lossy}'
         assert lossy == eng.simplify('* -1024 pow - x3 exp x10 5'.split(),
-                                     mode=Mode.corpus), f'{lossy}'
+                                     mode=Mode.permissive), f'{lossy}'
 
     def test_fat_nan_acosh_tower_cancels(self, eng):
         # x8/(x8/(x8 - acosh(2 x8))) (row-9624 shape): A has a FAT NaN domain but is
@@ -615,7 +615,7 @@ class TestInversePairsCollapse:
             unbounded = pair + ['x0']
             assert bare.simplify(list(unbounded)) == unbounded, unbounded
             # LOSSY answers to no external evaluator, so it still collapses
-            assert bare.simplify(list(unbounded), mode=Mode.corpus) == ['x0'], unbounded
+            assert bare.simplify(list(unbounded), mode=Mode.permissive) == ['x0'], unbounded
         for pair in (['asinh', 'sinh'], ['sinh', 'asinh'], ['atanh', 'tanh']):
             bounded = pair + ['sin', 'x0']
             assert bare.simplify(list(bounded)) == ['sin', 'x0'], bounded
@@ -648,15 +648,15 @@ class TestInversePairsCollapse:
         # `np.arctanh(np.tanh(30.0))` really is inf. Faithful, and still not `30`.
         assert bare.simplify(list(band), mode=Mode.f64) == ['float("inf")']
         assert bare.simplify(list(band), mode=Mode.real) == ['30']
-        assert bare.simplify(list(band), mode=Mode.corpus) == ['30']
+        assert bare.simplify(list(band), mode=Mode.permissive) == ['30']
 
         recall = ['exp', 'log', '<constant>']   # needs <constant> > 0
         assert bare.simplify(list(recall), mode=Mode.f64) == recall
         assert bare.simplify(list(recall), mode=Mode.real) == recall
-        assert bare.simplify(list(recall), mode=Mode.corpus) == ['<constant>']
+        assert bare.simplify(list(recall), mode=Mode.permissive) == ['<constant>']
 
         inside = ['atanh', 'tanh', '1']         # inside every band: all three agree
-        for mode in (Mode.f64, Mode.real, Mode.corpus):
+        for mode in (Mode.f64, Mode.real, Mode.permissive):
             assert bare.simplify(list(inside), mode=mode) == ['1']
 
     def test_real_is_equally_sound_not_more_permissive(self, bare) -> None:
@@ -676,13 +676,13 @@ class TestInversePairsCollapse:
         unproven = ['exp', 'log', '<constant>']
         assert bare.simplify(list(unproven), mode=Mode.f64) == unproven
         assert bare.simplify(list(unproven), mode=Mode.real) == unproven
-        assert bare.simplify(list(unproven), mode=Mode.corpus) == ['<constant>']
+        assert bare.simplify(list(unproven), mode=Mode.permissive) == ['<constant>']
 
         # The owner's concrete example is GROUND, so no rule is involved at all: the
         # engine evaluates it exactly and `log(-3)` is nan. Every mode answers nan, and
         # the property that matters is the one none of them has -- none returns `-3`.
         ground = ['exp', 'log', '(-3)']
-        for mode in (Mode.f64, Mode.real, Mode.corpus):
+        for mode in (Mode.f64, Mode.real, Mode.permissive):
             got = bare.simplify(list(ground), mode=mode)
             assert got == ['float("nan")'], (mode, got)
             assert got != ['(-3)'], mode
@@ -973,14 +973,14 @@ class TestCorpusTakesTheBestOfBoth:
         from simplipy import Mode
         assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.f64) == ['float("inf")']
         assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.real) == ['30']
-        assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.corpus) == ['30']
+        assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.permissive) == ['30']
 
     def test_corpus_still_folds_where_real_cannot(self, bare) -> None:
         """The other half: `real` leaves `asin(1e-8)` alone because no literal spells the
         true value, and the f64 endpoint is cheaper, so corpus takes it."""
         from simplipy import Mode
         assert bare.simplify(['asin', '1e-08'], mode=Mode.real) == ['asin', '0.00000001']
-        assert bare.simplify(['asin', '1e-08'], mode=Mode.corpus) == ['0.00000001']
+        assert bare.simplify(['asin', '1e-08'], mode=Mode.permissive) == ['0.00000001']
 
     def test_the_selection_is_STRICT_so_a_tie_goes_to_the_folded_form(self, bare) -> None:
         """POLICY, not derivation -- and it is enforced by the shape of the comparison
@@ -1009,14 +1009,14 @@ class TestCorpusTakesTheBestOfBoth:
         real_end = bare.simplify(list(t), mode=Mode.real)
         f64_end = bare.simplify(list(t), mode=Mode.f64)
         assert real_end != f64_end, "the exemplar must separate the branches"
-        assert bare.simplify(list(t), mode=Mode.corpus) == f64_end
+        assert bare.simplify(list(t), mode=Mode.permissive) == f64_end
 
         # unfolded strictly cheaper -> unfolded, which is the only way it wins
         band = ['atanh', 'tanh', '30']
         real_band = bare.simplify(list(band), mode=Mode.real)
         f64_band = bare.simplify(list(band), mode=Mode.f64)
         assert real_band != f64_band, "the exemplar must separate the branches"
-        assert bare.simplify(list(band), mode=Mode.corpus) == real_band
+        assert bare.simplify(list(band), mode=Mode.permissive) == real_band
 
     def test_corpus_is_never_worse_than_either_parent(self, bare) -> None:
         """The property that makes 'most capable' checkable rather than aspirational."""
@@ -1026,5 +1026,5 @@ class TestCorpusTakesTheBestOfBoth:
                  ['+', 'asin', '1e-08', 'asin', '1e-08']]
         for t in cases:
             mu = {m: bare._core.ac_complexity(bare.simplify(list(t), mode=m))
-                  for m in (Mode.f64, Mode.real, Mode.corpus)}
-            assert mu[Mode.corpus] <= min(mu[Mode.f64], mu[Mode.real]), (t, mu)
+                  for m in (Mode.f64, Mode.real, Mode.permissive)}
+            assert mu[Mode.permissive] <= min(mu[Mode.f64], mu[Mode.real]), (t, mu)

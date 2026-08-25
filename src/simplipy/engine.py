@@ -284,33 +284,35 @@ class Mode(Enum, metaclass=_ModeMeta):
     - ``real``: sound as MATHEMATICS defines, independent of any float format. Use when
       the rewrite must hold symbolically -- proofs, exact-arithmetic backends, or
       publication -- and accept that some of it is not what f64 will compute.
-    - ``corpus``: both of the above UNION-ed, trading soundness for recall -- every rule
-      placeholder binds any subtree (the ``!``-sort finite-a.e. certificate is skipped)
-      and the constant-fold's finiteness gate is relaxed (so ``<constant>/0`` collapses
-      to ``<constant>``). For training-corpus canonicalisation ONLY: the training data is
-      generated FROM the simplified form, so the target equals the data and there is no
-      external function to violate. Do NOT use on an inference or scoring path.
+    - ``permissive``: both of the above UNION-ed, trading soundness for recall -- every
+      rule placeholder binds any subtree (the ``!``-sort finite-a.e. certificate is
+      skipped) and the constant-fold's finiteness gate is relaxed (so ``<constant>/0``
+      collapses to ``<constant>``). NOT equivalence-preserving. For training-corpus
+      canonicalisation ONLY: the training data is generated FROM the simplified form, so
+      the target equals the data and there is no external function to violate. Do NOT
+      use on an inference or scoring path.
 
     Each mode names ONE DISTINCT, COMPLETE rule set -- ``rules_f64.json`` /
-    ``rules_real.json`` / ``rules_corpus.json`` (artifacts published before the 0.14.0
-    naming ruling call the f64 file ``rules.json``; configs name their files, so they
-    load unchanged) -- so selecting a mode selects a file, and what is loaded IS
-    what is served with nothing unioned at serve time.
+    ``rules_real.json`` / ``rules_permissive.json`` (artifacts published before the
+    0.14.0 naming rulings call the f64 file ``rules.json`` and the permissive file
+    ``rules_permissive.json``; configs name their files, so they load unchanged) -- so
+    selecting a mode selects a file, and what is loaded IS what is served with nothing
+    unioned at serve time.
 
     ``SOUND`` and ``LOSSY`` still resolve, with a ``DeprecationWarning``, to ``f64`` and
-    ``corpus``.
+    ``permissive``.
     """
 
     f64 = 'f64'
     real = 'real'
-    corpus = 'corpus'
+    permissive = 'permissive'
 
 
 #: THE MAP from the public ``Mode`` onto the core's RULE MODE -- the one place the two
 #: vocabularies meet on the Python side, and the twin of ``RuleMode::from_wildcard_all``
 #: on the Rust side. ``'default'`` is the core's name for the f64 set (the
 #: ``rules_f64.json`` file; ``rules.json`` in pre-rename artifacts).
-_RULE_MODE: dict[Mode, str] = {Mode.f64: 'default', Mode.real: 'real', Mode.corpus: 'corpus'}
+_RULE_MODE: dict[Mode, str] = {Mode.f64: 'default', Mode.real: 'real', Mode.permissive: 'permissive'}
 
 #: The retired STRING spellings, accepted by ``simplify(mode=...)`` with a notice. Kept
 #: beside ``_ModeMeta._DEPRECATED`` deliberately: the enum path and the string path are
@@ -345,9 +347,9 @@ class SimpliPyEngine:
         ``None`` (the default) means this engine names no ``real`` set of its own and
         that mode serves ``rules``; ``[]`` is the different, sayable statement "the
         ``real`` mode serves nothing".
-    rules_corpus : list[tuple] or None, optional
-        The ``corpus`` mode's OWN COMPLETE rule set, same discipline as ``rules_real``.
-        This is the set ``Mode.corpus`` serves.
+    rules_permissive : list[tuple] or None, optional
+        The ``permissive`` mode's OWN COMPLETE rule set, same discipline as ``rules_real``.
+        This is the set ``Mode.permissive`` serves.
     trusted_modules : list[str] or None, optional
         Extra module roots this engine may import for its operator realizations,
         on top of the defaults (``math``, ``np``, ``scipy``, ``simplipy``) and
@@ -369,8 +371,8 @@ class SimpliPyEngine:
     real_simplification_rules : list[tuple] or None
         The ``real`` mode's own complete rule set, or ``None`` when this engine names
         none and that mode serves ``simplification_rules``.
-    corpus_simplification_rules : list[tuple] or None
-        The ``corpus`` mode's own complete rule set, same convention.
+    permissive_simplification_rules : list[tuple] or None
+        The ``permissive`` mode's own complete rule set, same convention.
     modules : list[str]
         The importable package names this engine's realizations need (``numpy`` is
         always present: ``np.pi``/``np.e`` are token grammar). These are PACKAGE
@@ -379,7 +381,7 @@ class SimpliPyEngine:
     """
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None, *,
                  rules_real: list[tuple] | None = None,
-                 rules_corpus: list[tuple] | None = None,
+                 rules_permissive: list[tuple] | None = None,
                  trusted_modules: list[str] | None = None) -> None:
         # C1.18: loud spec validation + normalization BEFORE anything reads a key --
         # the first consumer used to be a bare `KeyError: 'alias'`.
@@ -447,14 +449,14 @@ class SimpliPyEngine:
         # unsayable -- the same computed-instead-of-stated mistake the triple exists to
         # remove.
         self.real_simplification_rules = self._normalized_mode_rules(rules_real)
-        self.corpus_simplification_rules = self._normalized_mode_rules(rules_corpus)
+        self.permissive_simplification_rules = self._normalized_mode_rules(rules_permissive)
 
         # Build the compiled core (REQUIRED; see the module docstring): every
         # construction path (from_config/load AND direct in-memory construction) attaches it
         # here, from the SAME in-memory state, so no path can exist without a core.
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
-            self.real_simplification_rules, self.corpus_simplification_rules)
+            self.real_simplification_rules, self.permissive_simplification_rules)
 
     @staticmethod
     def _normalized_mode_rules(rules: list[tuple] | None) -> list[tuple] | None:
@@ -468,13 +470,13 @@ class SimpliPyEngine:
     @staticmethod
     def _build_core(operators: dict[str, dict[str, Any]], rules: list[tuple],
                     rules_real: list[tuple] | None = None,
-                    rules_corpus: list[tuple] | None = None) -> Any:
+                    rules_permissive: list[tuple] | None = None) -> Any:
         """Build the compiled core (``simplipy._core``) from in-memory config + rules.
 
         The core is REQUIRED: a missing extension or a load failure is a hard error --
         the pure-Python engine was removed.
 
-        ``rules_real``/``rules_corpus`` are those modes' OWN COMPLETE sets, pushed after
+        ``rules_real``/``rules_permissive`` are those modes' OWN COMPLETE sets, pushed after
         construction through the core's ``set_mode_rules``. ``None`` means the push does
         not happen at all, so a config naming neither key builds byte-for-byte the call
         this function has always made -- the no-op property holds because there is
@@ -490,7 +492,7 @@ class SimpliPyEngine:
         config_text = yaml.safe_dump({'operators': operators}, sort_keys=False)
         rules_text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules])
         core = _RustEngine.from_strs(config_text, rules_text)
-        for mode_name, mode_rules in (('real', rules_real), ('corpus', rules_corpus)):
+        for mode_name, mode_rules in (('real', rules_real), ('permissive', rules_permissive)):
             if mode_rules is not None:
                 core.set_mode_rules(
                     mode_name, [(list(lhs), list(rhs)) for lhs, rhs in mode_rules])
@@ -555,7 +557,7 @@ class SimpliPyEngine:
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.__dict__.setdefault('real_simplification_rules', None),
-            self.__dict__.setdefault('corpus_simplification_rules', None))
+            self.__dict__.setdefault('permissive_simplification_rules', None))
 
     def compile_rules(self) -> None:
         """Sync the compiled core's rule set from ``self.simplification_rules``.
@@ -575,7 +577,7 @@ class SimpliPyEngine:
         """
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
-            self.real_simplification_rules, self.corpus_simplification_rules)
+            self.real_simplification_rules, self.permissive_simplification_rules)
 
     def _replace_rules(self, rules: list) -> None:
         """Build-first-or-unchanged (conc-2): compile a fresh core from the CANDIDATE
@@ -586,7 +588,7 @@ class SimpliPyEngine:
         rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
         new_core = self._build_core(
             self._operators_config, rules,
-            self.real_simplification_rules, self.corpus_simplification_rules)
+            self.real_simplification_rules, self.permissive_simplification_rules)
         self.simplification_rules = rules
         self._core = new_core
 
@@ -873,7 +875,7 @@ class SimpliPyEngine:
                          f"resolved (looked for '{rules_path}')")
                 rules_path = None
 
-        # THE OTHER TWO THIRDS OF THE TRIPLE (`rules_real:` / `rules_corpus:`), read by
+        # THE OTHER TWO THIRDS OF THE TRIPLE (`rules_real:` / `rules_permissive:`), read by
         # the same resolver as `rules:` above. Each names a COMPLETE, self-contained set
         # for its mode -- not a supplement to `rules.json` -- so what is loaded is what
         # is served (owner ruling, 2026-08-19). Only triples are mined and distributed;
@@ -890,9 +892,14 @@ class SimpliPyEngine:
         #
         # An EMPTY file is honoured as an empty set, not as an absent one: `[]` says
         # "this mode serves nothing" and the loader has no business overruling it.
-        mode_rules: dict[str, list | None] = {'real': None, 'corpus': None}
+        mode_rules: dict[str, list | None] = {'real': None, 'permissive': None}
         for mode_name in mode_rules:
             declared = config.get(f'rules_{mode_name}')
+            if not declared and mode_name == 'permissive':
+                # Artifacts published before the 'permissive' rename declare this set
+                # under the pre-release key `rules_corpus:` (acj-4 among them). The key
+                # and its file keep their published spellings; the loader reads both.
+                declared = config.get('rules_corpus')
             if not declared:
                 continue
             mode_path = resolve_artifact_path(declared)
@@ -900,7 +907,7 @@ class SimpliPyEngine:
                 with open(mode_path, 'r') as f:
                     mode_rules[mode_name] = json.load(f)
             else:
-                # What the built engine then DOES differs by mode -- `corpus` falls
+                # What the built engine then DOES differs by mode -- `permissive` falls
                 # back to the default set, `real` fails closed at call time -- and the
                 # warning says which, because "serves the default set" would be a lie
                 # for exactly the mode where the difference is soundness.
@@ -914,7 +921,7 @@ class SimpliPyEngine:
                     f"The other modes are unaffected -- each mode's set is its own file.",
                     UserWarning)
         engine = cls(operators=config['operators'], rules=rules,
-                     rules_real=mode_rules['real'], rules_corpus=mode_rules['corpus'],
+                     rules_real=mode_rules['real'], rules_permissive=mode_rules['permissive'],
                      trusted_modules=trusted_modules)
         # WARNING ON THE RESULTING STATE (owner ruling 2026-08-18: "Warning on engine
         # without rules"), broadened from the missing-file case it replaces: an engine
@@ -1711,7 +1718,7 @@ class SimpliPyEngine:
             form = 'explicit'
         if mode is Mode.real and self._core.mode_rules_len('real') is None:
             # FAIL CLOSED. A mode naming no set of its own falls back to the default
-            # set, which is right for `corpus` (its divergence is search semantics, so
+            # set, which is right for `permissive` (its divergence is search semantics, so
             # the fallback reproduces today's LOSSY exactly) and WRONG for `real`, whose
             # only divergence IS which rules are certified. Silently serving the f64 set
             # here would answer a request for mathematical soundness with rules known to
@@ -1721,7 +1728,7 @@ class SimpliPyEngine:
             # answer this question, so it says so.
             raise ValueError(
                 "mode='real' needs a ruleset mined for it, and this artifact has none: "
-                "it predates the rules_f64/rules_real/rules_corpus triple. Falling back "
+                "it predates the rules_f64/rules_real/rules_permissive triple. Falling back "
                 "to the default set would serve f64-certified rules under a claim of "
                 "MATHEMATICAL soundness, and the two are incomparable -- some f64 rules "
                 "are mathematically false. Use mode='f64' for the deployed semantics, or "

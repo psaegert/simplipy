@@ -103,7 +103,7 @@ Take `!0 - !0 → 0`: with a bare variable the source is `0` everywhere, but wit
 the target says `0` — so the certificate refuses `log(x)`, which is not finite almost
 everywhere, and the rule never sees it.
 
-These sort gates define the default **`f64`** apply-time contract. `Mode.corpus`
+These sort gates define the default **`f64`** apply-time contract. `Mode.permissive`
 (see [Soundness modes](guides/simplify.md#soundness-modes)) relaxes them together — every `!`/`$`
 placeholder then binds any subtree with the certificate skipped which recovers extra
 reductions for training-data canonicalization at the cost of equivalence. Mined rules are

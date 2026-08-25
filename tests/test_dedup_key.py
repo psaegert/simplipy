@@ -174,7 +174,7 @@ def test_corpus_behaviour_is_unchanged_by_the_dedup():
     AC collapse (the core keeps first-match-wins, so a duplicate can only ever lose)."""
     require_or_skip(acj_config_path(), 'acj-4-3 asset not staged')
     corpus_path = os.path.join(os.path.dirname(__file__), '..', 'benchmarks',
-                               'corpus', 'raw_skeletons_nv.json')
+                               'permissive', 'raw_skeletons_nv.json')
     require_or_skip(corpus_path, 'nv corpus not present')
     corpus = json.load(open(corpus_path))
     engine = SimpliPyEngine.from_config(acj_config_path())

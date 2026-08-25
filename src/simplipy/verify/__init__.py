@@ -52,12 +52,12 @@ def verify_rule(lhs: list[str], rhs: list[str], deployed_check: bool = True) -> 
     return _contract.judge_rule(list(lhs), list(rhs), deployed_check=deployed_check)
 
 
-#: Which judged tiers each mode's rule set is allowed to contain. `corpus` carries both
+#: Which judged tiers each mode's rule set is allowed to contain. `permissive` carries both
 #: off-diagonal tiers because it is their union; no mode may carry `reject`.
 MODE_TIERS: dict[str, frozenset] = {
     'f64': frozenset({'core', 'f64'}),
     'real': frozenset({'core', 'real'}),
-    'corpus': frozenset({'core', 'f64', 'real'}),
+    'permissive': frozenset({'core', 'f64', 'real'}),
 }
 
 
@@ -67,7 +67,7 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     """Gate a whole rule set: judge every rule at its own trigger points.
 
     ``rules``: a list of ``[lhs, rhs]`` token-list pairs, or a path to such a JSON file.
-    ``mode``: which mode's set this is -- ``'f64'``, ``'real'`` or ``'corpus'``. See
+    ``mode``: which mode's set this is -- ``'f64'``, ``'real'`` or ``'permissive'``. See
     below; ``None`` keeps the pre-triple meaning.
     ``report_path``: optional path to dump the full per-rule report.
     ``build_path``: optional path to write the kept set (CERTIFIED + TOLERATED).
@@ -137,43 +137,43 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
 
 
 def verify_triple(f64_rules: list | str, real_rules: list | str,
-                  corpus_rules: list | str, *, engine_config: str | None = None,
+                  permissive_rules: list | str, *, engine_config: str | None = None,
                   corpus_rows: list | None = None, judge_timeout_s: int = 30) -> dict:
-    """Gate a whole TRIPLE: each file against its own mode, plus corpus capability.
+    """Gate a whole TRIPLE: each file against its own mode, plus permissive capability.
 
     A mine run is valid only if all three sets fall out of it, so the artifact is verified
     as one thing. Three per-file sweeps answer "is every rule in this file licensed for
     this mode".
 
     WHAT IS *NOT* CHECKED, AND WHY. An earlier version required
-    ``rules_corpus == rules_f64 UNION rules_real``. That is wrong once folding is
+    ``rules_permissive == rules_f64 UNION rules_real``. That is wrong once folding is
     mode-dependent, because the three modes then reduce in different canonical worlds and
     each file omits what its OWN constructor already performs -- so set overlap measures
-    SPELLING, not capability. On the shipped 0.14.0 artifact the union exceeds the corpus
-    file by 362 rules and corpus performs every one of them; the identity would report a
+    SPELLING, not capability. On the shipped 0.14.0 artifact the union exceeds the permissive
+    file by 362 rules and permissive performs every one of them; the identity would report a
     correct artifact as dirty.
 
-    The property it stood proxy for is behavioural: **corpus is at least as capable as
+    The property it stood proxy for is behavioural: **permissive is at least as capable as
     either other mode**. Pass ``engine_config`` (and optionally ``corpus_rows``) to check
-    it -- the report then carries ``corpus_dominance``. Without an engine there is nothing
+    it -- the report then carries ``permissive_dominance``. Without an engine there is nothing
     sound to say about the relationship between the files, and ``relationships`` stays
     empty rather than asserting something false.
 
     Returns ``{'is_clean', 'modes': {mode: report}, 'relationships': [...],
-    'corpus_dominance': ... }``.
+    'permissive_dominance': ... }``.
     """
     reports = {}
-    for mode, rules in (('f64', f64_rules), ('real', real_rules), ('corpus', corpus_rules)):
+    for mode, rules in (('f64', f64_rules), ('real', real_rules), ('permissive', permissive_rules)):
         reports[mode] = verify_ruleset(rules, mode=mode, judge_timeout_s=judge_timeout_s)
 
     problems: list = []
     dominance: list | None = None
     if engine_config is not None:
         from ..engine import SimpliPyEngine
-        from ..mining import assert_corpus_dominates
+        from ..mining import assert_permissive_dominates
         engine = SimpliPyEngine.from_config(engine_config)
         rows = corpus_rows if corpus_rows is not None else _default_corpus_rows()
-        dominance = assert_corpus_dominates(engine, rows)
+        dominance = assert_permissive_dominates(engine, rows)
         if dominance:
             problems.append(
                 f'corpus is not the most capable mode on {len(dominance)} rows, '
@@ -181,7 +181,7 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
 
     return {'is_clean': all(x['is_clean'] for x in reports.values()) and not problems,
             'modes': reports, 'relationships': problems,
-            'corpus_dominance': dominance}
+            'permissive_dominance': dominance}
 
 
 def _default_corpus_rows() -> list:

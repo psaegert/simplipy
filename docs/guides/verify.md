@@ -46,8 +46,8 @@ Each rule also gets a **tier**, from two independent questions: is it true over
 | tier | true over ℝ | f64-realised | serves |
 |---|---|---|---|
 | `core` | yes | yes | every mode |
-| `real` | yes | no | `real`, `corpus` |
-| `f64` | no | yes | `f64`, `corpus` |
+| `real` | yes | no | `real`, `permissive` |
+| `f64` | no | yes | `f64`, `permissive` |
 | `reject` | no | no | nothing — recorded in the drop census |
 
 ## Cleanliness is per mode
@@ -60,7 +60,7 @@ the whole point and which a bucket count cannot express:
 rule = [['atanh', 'tanh', 'x0'], ['x0']]     # true over R; f64 saturates to inf at large t
 
 verify_ruleset([rule], mode='real')['is_clean']    # -> True   belongs there
-verify_ruleset([rule], mode='corpus')['is_clean']  # -> True
+verify_ruleset([rule], mode='permissive')['is_clean']  # -> True
 verify_ruleset([rule], mode='f64')['is_clean']     # -> False  f64 contradicts it
 ```
 
@@ -76,7 +76,7 @@ moved a rule between sets leaves every individual sweep clean:
 <!-- docs-example: skip: reads a published triple off disk; the paths are per-artifact -->
 ```python
 from simplipy.verify import verify_triple
-report = verify_triple('rules.json', 'rules_real.json', 'rules_corpus.json')
+report = verify_triple('rules.json', 'rules_real.json', 'rules_permissive.json')
 report['is_clean'], report['relationships']
 ```
 

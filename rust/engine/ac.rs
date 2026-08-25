@@ -114,7 +114,7 @@ impl Engine {
     /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE (owner
     /// ruling, 2026-08-19: "I'd like one distinct rule set for each mode"), never a base
     /// plus a supplement. `rules.json` is the DEFAULT set, `rules_real.json` the `Real`
-    /// set, `rules_corpus.json` the `Corpus` set; each file is self-contained, so WHAT IS
+    /// set, `rules_permissive.json` the `Corpus` set; each file is self-contained, so WHAT IS
     /// LOADED IS WHAT IS SERVED, and nothing has to be unioned to answer "which rules
     /// fire here".
     ///
@@ -128,7 +128,7 @@ impl Engine {
     /// ABSENCE, NOT EMPTINESS, is the fallback key. A mode with NO SET OF ITS OWN
     /// (`None`) serves the DEFAULT set -- the very same `&AcRules`, pointer-equal, not a
     /// second identical index -- which is what makes the no-op property ("a config naming
-    /// no `rules_real:`/`rules_corpus:` is byte-for-byte the engine that shipped") hold by
+    /// no `rules_real:`/`rules_permissive:` is byte-for-byte the engine that shipped") hold by
     /// CONSTRUCTION rather than by re-derivation. A set that is PRESENT BUT EMPTY
     /// (`Some([])`) is a DIFFERENT statement and is honoured as one: that mode serves
     /// NOTHING. Keying the fallback on emptiness would collapse the two and make an
@@ -138,7 +138,9 @@ impl Engine {
         match mode {
             RuleMode::Default => self.ac_rules(),
             RuleMode::Real => self.ac_mode_rules(&self.real_rules, &self.ac_real_rules_cell),
-            RuleMode::Corpus => self.ac_mode_rules(&self.corpus_rules, &self.ac_corpus_rules_cell),
+            RuleMode::Permissive => {
+                self.ac_mode_rules(&self.permissive_rules, &self.ac_permissive_rules_cell)
+            }
         }
     }
 
@@ -230,7 +232,7 @@ impl Engine {
     }
 
     /// The same four counts for ANY mode's served set. `ac_rules_info` stays the
-    /// DEFAULT mode's four-tuple untouched and unwidened: it is pinned by the corpus
+    /// DEFAULT mode's four-tuple untouched and unwidened: it is pinned by the corpus-walk
     /// gate and by tests, and answering it must never force another mode's index to be
     /// built. On a mode with no set of its own this reads the default translation
     /// itself, so the two agree exactly and nothing extra is indexed.
@@ -251,7 +253,7 @@ impl Engine {
         match mode {
             RuleMode::Default => Some(self.rules.raw.len()),
             RuleMode::Real => self.real_rules.as_ref().map(|c| c.raw.len()),
-            RuleMode::Corpus => self.corpus_rules.as_ref().map(|c| c.raw.len()),
+            RuleMode::Permissive => self.permissive_rules.as_ref().map(|c| c.raw.len()),
         }
     }
 
@@ -668,8 +670,8 @@ impl Engine {
         mode: RuleMode,
         form: AcForm,
     ) -> Option<Vec<String>> {
-        // THE DISPATCHER, not `ac_simplify_ex_fold`: corpus decides between two
-        // disciplines here, and routing this entry past it silently made corpus stop
+        // THE DISPATCHER, not `ac_simplify_ex_fold`: permissive decides between two
+        // disciplines here, and routing this entry past it silently made permissive stop
         // folding entirely. Only the mine's entry below bypasses the dispatcher, and it
         // does so on purpose.
         let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
@@ -830,7 +832,7 @@ impl Engine {
         // 2026-08-24): the instrument must price the state that mode's chain
         // actually starts from -- a fold-free parse reached a different canonical
         // fixpoint on 10 of 65,536 benchmark rows and broke
-        // mu(simplify(e)) <= mu(e) as measured; pricing corpus outputs in the
+        // mu(simplify(e)) <= mu(e) as measured; pricing permissive outputs in the
         // default route reopened the same gap one mode over. Canon stays bare:
         // that is this instrument's contract.
         let mut pbare = Cx::bare(&view);
@@ -1083,8 +1085,8 @@ impl Engine {
     /// phase (`ac::search`, ledger D39): after the calling mode's own chain settles,
     /// `explore_budget > 0` runs the budgeted expansion search under the SAME pass
     /// context and accepts only endpoints strictly below in the reduction ordering.
-    /// Dispatcher. Every mode but `corpus` runs once, with the fold discipline its mode
-    /// derives. `corpus` runs TWICE and keeps the cheaper endpoint.
+    /// Dispatcher. Every mode but `permissive` runs once, with the fold discipline its mode
+    /// derives. `permissive` runs TWICE and keeps the cheaper endpoint.
     ///
     /// "Real where possible, f64 as a fallback" cannot be a sequencing rule: folding is
     /// bottom-up, so `tanh 30` becomes `1` before `atanh` ever sees it, and no ordering
@@ -1099,7 +1101,7 @@ impl Engine {
     /// ```
     ///
     /// A TIE GOES TO THE FOLDED FORM, and that is a policy choice rather than a
-    /// derivation: mu is indifferent, and corpus exists for the flash-ansr training path
+    /// derivation: mu is indifferent, and permissive exists for the flash-ansr training path
     /// where one literal token beats four. Recorded as policy so it can be revisited
     /// without anyone mistaking it for arithmetic.
     fn ac_simplify_ex_explore(
@@ -1109,7 +1111,7 @@ impl Engine {
         mode: RuleMode,
         explore_budget: usize,
     ) -> (SimplifyCtx, Option<Ex>) {
-        if !matches!(mode, RuleMode::Corpus) {
+        if !matches!(mode, RuleMode::Permissive) {
             return self.ac_simplify_ex_fold(
                 tokens,
                 max_passes,
@@ -1124,12 +1126,12 @@ impl Engine {
         // the same budget. Corpus is the permissive superset by doctrine, yet
         // exploration is mode-dependent -- the certified descent can steer a
         // candidate past a structure the relaxed descent freezes, so at nonzero
-        // budgets f64 can out-simplify corpus on individual rows (first observed on
+        // budgets f64 can out-simplify permissive on individual rows (first observed on
         // the shipped triple's dominance gate the day DEFAULT_EFFORT became 4).
-        // Arbitrating over the default-mode result too makes corpus dominance a
-        // THEOREM rather than an empirical gate property: corpus picks the best of
+        // Arbitrating over the default-mode result too makes permissive dominance a
+        // THEOREM rather than an empirical gate property: permissive picks the best of
         // its own two constructions and the sound chain's. Strictly-better wins
-        // only -- ties keep the corpus-own winner, so outputs churn exactly where
+        // only -- ties keep the permissive-own winner, so outputs churn exactly where
         // the default candidate genuinely improves.
         let default_arm = self.ac_simplify_ex_fold(
             tokens,
@@ -1334,12 +1336,12 @@ impl Engine {
                 cert_finnz: Some(&cfz),
                 cert_nzae: Some(&czn),
                 cert_nce: Some(&cnc),
-                mode: RuleMode::Corpus,
+                mode: RuleMode::Permissive,
                 fold_f64: fold_tr,
                 sentinels_expired: true,
             };
             let mut pbare2 = Cx::bare(&view);
-            pbare2.mode = RuleMode::Corpus;
+            pbare2.mode = RuleMode::Permissive;
             pbare2.fold_f64 = fold_tr;
             pbare2.sentinels_expired = true;
             let pass2 = PassCtx {
@@ -1405,18 +1407,18 @@ impl Engine {
 }
 
 /// THE ENGINE'S RULE MODE -- three inhabitants, one distinct COMPLETE rule set each
-/// (`rules.json`, `rules_real.json`, `rules_corpus.json`). This is the internal
+/// (`rules.json`, `rules_real.json`, `rules_permissive.json`). This is the internal
 /// selection key; the Python-facing `simplipy.Mode` is still `SOUND`/`LOSSY` and maps
 /// onto it at exactly ONE place per boundary (`rust/lib.rs`'s
 /// `RuleMode::from_wildcard_all`, and `SimpliPyEngine.simplify`), so the coming
-/// `Mode` -> `f64`/`real`/`corpus` change is a RENAME of that map, not a rebuild of the
+/// `Mode` -> `f64`/`real`/`permissive` change is a RENAME of that map, not a rebuild of the
 /// plumbing underneath it.
 ///
 /// ```text
 ///     Default  today's `Mode.SOUND`   -- rules.json, the shipped f64 set
 ///     Real     not yet reachable from `simplipy.Mode` (deliberately: renaming `Mode` is
 ///              a separate step) -- rules_real.json
-///     Corpus   today's `Mode.LOSSY`   -- rules_corpus.json, training-corpus canonicalisation
+///     Corpus   today's `Mode.LOSSY`   -- rules_permissive.json, training-corpus canonicalisation
 /// ```
 ///
 /// `wildcard_all` (the blanket-placeholder RECALL switch) is a FUNCTION of the mode, not
@@ -1429,23 +1431,23 @@ impl Engine {
 pub enum RuleMode {
     Default,
     Real,
-    Corpus,
+    Permissive,
 }
 
 impl RuleMode {
     /// The RECALL switch this mode runs under -- the `wildcard_all` every layer below
     /// the mode selection already speaks. Derived here and nowhere else.
     pub fn wildcard_all(self) -> bool {
-        matches!(self, RuleMode::Corpus)
+        matches!(self, RuleMode::Permissive)
     }
 
     /// TODAY'S MAP, and the only place the two-valued `simplipy.Mode` becomes a
-    /// three-valued rule mode: `SOUND` -> the default set, `LOSSY` -> the corpus set.
+    /// three-valued rule mode: `SOUND` -> the default set, `LOSSY` -> the permissive set.
     /// The `Mode` rename replaces this function with a total three-way map; nothing else
     /// in the core has to move.
     pub fn from_wildcard_all(wildcard_all: bool) -> Self {
         if wildcard_all {
-            RuleMode::Corpus
+            RuleMode::Permissive
         } else {
             RuleMode::Default
         }
@@ -1456,7 +1458,7 @@ impl RuleMode {
         match name {
             "default" => Some(RuleMode::Default),
             "real" => Some(RuleMode::Real),
-            "corpus" => Some(RuleMode::Corpus),
+            "permissive" => Some(RuleMode::Permissive),
             _ => None,
         }
     }
@@ -1612,7 +1614,7 @@ mod tests {
         // The acj-4 asset ships a full triple, so the helper arrives with mode sets
         // installed; a CONSTRUCTOR control must hold none anywhere.
         e.set_mode_rules(RuleMode::Real, None);
-        e.set_mode_rules(RuleMode::Corpus, None);
+        e.set_mode_rules(RuleMode::Permissive, None);
         for r in [P_ALL, P_DEFAULT, P_REAL, P_CORPUS] {
             let (lhs, _) = probe(r);
             assert!(
@@ -1620,7 +1622,7 @@ mod tests {
                 "constructor reaches {lhs:?}"
             );
             assert!(
-                !fires(&e, r, RuleMode::Corpus),
+                !fires(&e, r, RuleMode::Permissive),
                 "constructor reaches {lhs:?}"
             );
         }
@@ -1637,11 +1639,11 @@ mod tests {
         // The absent state under test is CONSTRUCTED: the shipped acj-4 triple installs
         // both mode sets, so clearing them is what makes this the no-set engine.
         e.set_mode_rules(RuleMode::Real, None);
-        e.set_mode_rules(RuleMode::Corpus, None);
+        e.set_mode_rules(RuleMode::Permissive, None);
         assert_eq!(e.mode_rules_len(RuleMode::Real), None);
-        assert_eq!(e.mode_rules_len(RuleMode::Corpus), None);
+        assert_eq!(e.mode_rules_len(RuleMode::Permissive), None);
         assert_eq!(e.mode_rules_len(RuleMode::Default), Some(e.rules.raw.len()));
-        for mode in [RuleMode::Real, RuleMode::Corpus] {
+        for mode in [RuleMode::Real, RuleMode::Permissive] {
             assert_eq!(e.ac_rules_info_in_mode(mode), e.ac_rules_info());
             assert!(std::ptr::eq(e.ac_rules_for(mode), e.ac_rules()));
         }
@@ -1656,17 +1658,17 @@ mod tests {
         e.set_rules(vec![rule(P_ALL), rule(P_DEFAULT)]);
         e.set_mode_rules(RuleMode::Real, Some(vec![rule(P_ALL), rule(P_REAL)]));
         e.set_mode_rules(
-            RuleMode::Corpus,
+            RuleMode::Permissive,
             Some(vec![rule(P_ALL), rule(P_REAL), rule(P_CORPUS)]),
         );
         // WHAT IS LOADED IS WHAT IS SERVED: no rule is dropped or minted in between, so
         // the served counts are the file lengths and the behaviour below is attributable.
         assert_eq!(e.mode_rules_len(RuleMode::Default), Some(2));
         assert_eq!(e.mode_rules_len(RuleMode::Real), Some(2));
-        assert_eq!(e.mode_rules_len(RuleMode::Corpus), Some(3));
+        assert_eq!(e.mode_rules_len(RuleMode::Permissive), Some(3));
         assert_eq!(e.ac_rules_info_in_mode(RuleMode::Default).0, 2);
         assert_eq!(e.ac_rules_info_in_mode(RuleMode::Real).0, 2);
-        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Corpus).0, 3);
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Permissive).0, 3);
 
         let table = [
             (P_ALL, [true, true, true]),
@@ -1678,7 +1680,7 @@ mod tests {
             let got = [
                 fires(&e, r, RuleMode::Default),
                 fires(&e, r, RuleMode::Real),
-                fires(&e, r, RuleMode::Corpus),
+                fires(&e, r, RuleMode::Permissive),
             ];
             assert_eq!(got, want, "probe {:?} fired in the wrong modes", r.0);
         }
@@ -1718,16 +1720,16 @@ mod tests {
         let Some(mut e) = engine() else { return };
         e.set_rules(vec![]);
         e.set_mode_rules(
-            RuleMode::Corpus,
+            RuleMode::Permissive,
             Some(vec![
                 (t(&["sin", "_0"]), t(&["log", "_0"])),
                 (t(&["sin", "_0"]), t(&["tan", "_0"])),
             ]),
         );
-        assert_eq!(e.mode_rules_len(RuleMode::Corpus), Some(2));
-        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Corpus).0, 0);
+        assert_eq!(e.mode_rules_len(RuleMode::Permissive), Some(2));
+        assert_eq!(e.ac_rules_info_in_mode(RuleMode::Permissive).0, 0);
         assert_eq!(
-            simp_mode(&e, &t(&["sin", "x0"]), RuleMode::Corpus),
+            simp_mode(&e, &t(&["sin", "x0"]), RuleMode::Permissive),
             t(&["sin", "x0"])
         );
     }
@@ -1740,26 +1742,26 @@ mod tests {
     fn no_mode_pays_for_another_modes_index() {
         let Some(mut e) = engine() else { return };
         e.set_mode_rules(RuleMode::Real, Some(vec![rule(P_REAL)]));
-        e.set_mode_rules(RuleMode::Corpus, Some(vec![rule(P_CORPUS)]));
+        e.set_mode_rules(RuleMode::Permissive, Some(vec![rule(P_CORPUS)]));
         assert!(e.ac_rules_cell.get().is_none());
         assert!(e.ac_real_rules_cell.get().is_none());
-        assert!(e.ac_corpus_rules_cell.get().is_none());
+        assert!(e.ac_permissive_rules_cell.get().is_none());
 
         // A DEFAULT call builds the default index and only that one.
         let (lhs, _) = probe(P_REAL);
         simp_mode(&e, &lhs, RuleMode::Default);
         assert!(e.ac_rules_cell.get().is_some());
         assert!(e.ac_real_rules_cell.get().is_none());
-        assert!(e.ac_corpus_rules_cell.get().is_none());
+        assert!(e.ac_permissive_rules_cell.get().is_none());
 
         // The mirror image on a fresh engine: a REAL call builds `real`'s index alone.
         let Some(mut f) = engine() else { return };
         f.set_mode_rules(RuleMode::Real, Some(vec![rule(P_REAL)]));
-        f.set_mode_rules(RuleMode::Corpus, Some(vec![rule(P_CORPUS)]));
+        f.set_mode_rules(RuleMode::Permissive, Some(vec![rule(P_CORPUS)]));
         simp_mode(&f, &lhs, RuleMode::Real);
         assert!(f.ac_real_rules_cell.get().is_some());
         assert!(f.ac_rules_cell.get().is_none());
-        assert!(f.ac_corpus_rules_cell.get().is_none());
+        assert!(f.ac_permissive_rules_cell.get().is_none());
     }
 
     /// Replacing the DEFAULT set must move a mode that has NO SET OF ITS OWN: such a mode
@@ -1769,15 +1771,15 @@ mod tests {
     fn a_default_push_moves_every_mode_that_has_no_set() {
         let Some(mut e) = engine() else { return };
         e.set_mode_rules(RuleMode::Real, None);
-        e.set_mode_rules(RuleMode::Corpus, None);
+        e.set_mode_rules(RuleMode::Permissive, None);
         e.set_rules(vec![rule(P_DEFAULT)]);
         assert!(fires(&e, P_DEFAULT, RuleMode::Real));
-        assert!(fires(&e, P_DEFAULT, RuleMode::Corpus));
+        assert!(fires(&e, P_DEFAULT, RuleMode::Permissive));
         e.set_rules(vec![rule(P_REAL)]);
         assert!(!fires(&e, P_DEFAULT, RuleMode::Real));
-        assert!(!fires(&e, P_DEFAULT, RuleMode::Corpus));
+        assert!(!fires(&e, P_DEFAULT, RuleMode::Permissive));
         assert!(fires(&e, P_REAL, RuleMode::Real));
-        assert!(fires(&e, P_REAL, RuleMode::Corpus));
+        assert!(fires(&e, P_REAL, RuleMode::Permissive));
     }
 
     /// Installing one mode's set can never move ANOTHER mode's answer -- the sets are
@@ -1788,7 +1790,7 @@ mod tests {
         e.set_rules(vec![rule(P_DEFAULT)]);
         let (lhs, _) = probe(P_DEFAULT);
         let before = simp_mode(&e, &lhs, RuleMode::Default);
-        e.set_mode_rules(RuleMode::Corpus, Some(vec![rule(P_CORPUS)]));
+        e.set_mode_rules(RuleMode::Permissive, Some(vec![rule(P_CORPUS)]));
         assert_eq!(simp_mode(&e, &lhs, RuleMode::Default), before);
         assert!(fires(&e, P_DEFAULT, RuleMode::Real));
     }
@@ -1799,13 +1801,16 @@ mod tests {
     #[test]
     fn the_mode_map_is_what_ships_today() {
         assert_eq!(RuleMode::from_wildcard_all(false), RuleMode::Default);
-        assert_eq!(RuleMode::from_wildcard_all(true), RuleMode::Corpus);
+        assert_eq!(RuleMode::from_wildcard_all(true), RuleMode::Permissive);
         assert!(!RuleMode::Default.wildcard_all());
         assert!(!RuleMode::Real.wildcard_all());
-        assert!(RuleMode::Corpus.wildcard_all());
+        assert!(RuleMode::Permissive.wildcard_all());
         assert_eq!(RuleMode::parse("default"), Some(RuleMode::Default));
         assert_eq!(RuleMode::parse("real"), Some(RuleMode::Real));
-        assert_eq!(RuleMode::parse("corpus"), Some(RuleMode::Corpus));
+        assert_eq!(RuleMode::parse("permissive"), Some(RuleMode::Permissive));
+        // the pre-release 'corpus' spelling is retired, not aliased: a stray string
+        // that resolves to a mode by accident is the bug the parse doctrine forbids
+        assert_eq!(RuleMode::parse("corpus"), None);
         assert_eq!(RuleMode::parse("lossy"), None);
     }
 
@@ -1818,10 +1823,10 @@ mod tests {
         let Some(mut e) = engine() else { return };
         e.set_rules(vec![rule(P_DEFAULT)]);
         e.set_mode_rules(
-            RuleMode::Corpus,
+            RuleMode::Permissive,
             Some(vec![rule(P_ALL), rule(P_REAL), rule(P_CORPUS)]),
         );
-        let served = e.ac_served_rules_in_mode(RuleMode::Corpus);
+        let served = e.ac_served_rules_in_mode(RuleMode::Permissive);
         assert_eq!(served.len(), 3);
         let srcs: Vec<usize> = served.iter().map(|(_, _, s)| *s).collect();
         assert_eq!(srcs, vec![0, 1, 2]);
@@ -2057,7 +2062,7 @@ mod tests {
             t(&["<add>", "x2", "<mul>", "0", "log", "x1", "</mul>", "</add>"])
         );
         // LOSSY mode: every factor is licence-blanketed, the zero collapses outright.
-        let l1 = e.ac_simplify(&t1, 48, RuleMode::Corpus).unwrap();
+        let l1 = e.ac_simplify(&t1, 48, RuleMode::Permissive).unwrap();
         assert_eq!(l1, t(&["x2"]));
     }
 
@@ -2896,7 +2901,7 @@ mod tests {
             "x0",
         ]);
         let sound = e.ac_simplify(&row1414, 48, RuleMode::Default).unwrap();
-        let lossy = e.ac_simplify(&row1414, 48, RuleMode::Corpus).unwrap();
+        let lossy = e.ac_simplify(&row1414, 48, RuleMode::Permissive).unwrap();
         assert_eq!(
             lossy, sound,
             "joined output must equal sound's refusal form"
@@ -2907,14 +2912,14 @@ mod tests {
 
         let partner = t(&["*", "acos", "x0", "inv", "*", "acos", "x0", "atan", "x1"]);
         assert_eq!(
-            e.ac_simplify(&partner, 48, RuleMode::Corpus).unwrap(),
+            e.ac_simplify(&partner, 48, RuleMode::Permissive).unwrap(),
             t(&["inv", "atan", "x1"]),
             "partner cancellation must survive the projection"
         );
 
         let certified = t(&["inv", "*", "acos", "x0", "atan", "x1"]);
         let cs = e.ac_simplify(&certified, 48, RuleMode::Default).unwrap();
-        let cl = e.ac_simplify(&certified, 48, RuleMode::Corpus).unwrap();
+        let cl = e.ac_simplify(&certified, 48, RuleMode::Permissive).unwrap();
         assert_eq!(cl, cs, "certified pair: both modes stay distributed");
         assert!(cs.contains(&"<div>".to_string()));
 
@@ -2933,15 +2938,15 @@ mod tests {
             "atan",
             "x0",
         ]);
-        let il = e.ac_simplify(&infbag, 48, RuleMode::Corpus).unwrap();
+        let il = e.ac_simplify(&infbag, 48, RuleMode::Permissive).unwrap();
         assert!(
             !il.starts_with(&["inv".to_string(), "<mul>".to_string()]),
             "literal-inf member must not be joined: {il:?}"
         );
 
         for toks in [&row1414, &partner, &certified, &infbag] {
-            let once = e.ac_simplify(toks, 48, RuleMode::Corpus).unwrap();
-            let twice = e.ac_simplify(&once, 48, RuleMode::Corpus).unwrap();
+            let once = e.ac_simplify(toks, 48, RuleMode::Permissive).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Permissive).unwrap();
             assert_eq!(
                 twice, once,
                 "lossy not idempotent through projection: {toks:?}"
@@ -2985,13 +2990,13 @@ mod tests {
         // positive-coefficient completion class stays live and stable
         let positive = t(&["*", "0.5", "inv", "*", "x4", "-", "x3", "np.pi"]);
         for toks in [&minimal, &row115616, &positive] {
-            let once = e.ac_simplify(toks, 48, RuleMode::Corpus).unwrap();
-            let twice = e.ac_simplify(&once, 48, RuleMode::Corpus).unwrap();
+            let once = e.ac_simplify(toks, 48, RuleMode::Permissive).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Permissive).unwrap();
             assert_eq!(twice, once, "lossy not idempotent: {toks:?}");
         }
         // Const-bearing class: the sign stays SPELLED (the H-020 fold inside the
         // completion would consume it -- absorbing it there was the defect).
-        let l = e.ac_simplify(&minimal, 48, RuleMode::Corpus).unwrap();
+        let l = e.ac_simplify(&minimal, 48, RuleMode::Permissive).unwrap();
         assert!(
             l.contains(&"-1".to_string()) || l.contains(&"<sub>".to_string()),
             "the sign must survive the projection: {l:?}"
@@ -3001,12 +3006,12 @@ mod tests {
         // lossy reaches sound's `inv(-1 * pi * rootn(3, x1))` refusal form exactly.
         let nonconst = t(&["inv", "*", "neg", "np.pi", "rootn", "3", "x1"]);
         let ns = e.ac_simplify(&nonconst, 48, RuleMode::Default).unwrap();
-        let nl = e.ac_simplify(&nonconst, 48, RuleMode::Corpus).unwrap();
+        let nl = e.ac_simplify(&nonconst, 48, RuleMode::Permissive).unwrap();
         assert_eq!(
             nl, ns,
             "re-derivable negative completion must join to sound's form"
         );
-        let nl2 = e.ac_simplify(&nl, 48, RuleMode::Corpus).unwrap();
+        let nl2 = e.ac_simplify(&nl, 48, RuleMode::Permissive).unwrap();
         assert_eq!(nl2, nl, "and stay idempotent: {nonconst:?}");
     }
 
@@ -3039,13 +3044,13 @@ mod tests {
             "x2",
         ]);
         let s = e.ac_simplify(&sentinel, 48, RuleMode::Default).unwrap();
-        let l = e.ac_simplify(&sentinel, 48, RuleMode::Corpus).unwrap();
+        let l = e.ac_simplify(&sentinel, 48, RuleMode::Permissive).unwrap();
         assert_eq!(l, s, "expired sentinel must reach the sound endpoint");
         assert_eq!(l, t(&["sin", "cos", "x2"]));
         // The mask doctrine survives: a PARTNERED sentinel cancels in phase 1.
         let mask = t(&["*", "/", "float(\"inf\")", "float(\"inf\")", "x0"]);
         assert_eq!(
-            e.ac_simplify(&mask, 48, RuleMode::Corpus).unwrap(),
+            e.ac_simplify(&mask, 48, RuleMode::Permissive).unwrap(),
             t(&["x0"])
         );
         // Coefficient completion: the rational coefficient rides inside the joined
@@ -3053,7 +3058,7 @@ mod tests {
         let coeff = t(&[
             "*", "0.5", "inv", "*", "x4", "+", "x3", "+", "tan", "x0", "/", "1", "3",
         ]);
-        let lc = e.ac_simplify(&coeff, 48, RuleMode::Corpus).unwrap();
+        let lc = e.ac_simplify(&coeff, 48, RuleMode::Permissive).unwrap();
         // RE-PINNED 2026-08-11 (E2, audit F81): the tan-bearing sum now passes the
         // zero-set licence (denominator clearing: N = (x3 + 1/3)*cos(x0) + sin(x0),
         // witnessed nonzero), so the kept carrier DISTRIBUTES and renders in the
@@ -3071,8 +3076,8 @@ mod tests {
             "coefficient must reciprocate into the joined (now distributed) base"
         );
         for toks in [&sentinel, &mask, &coeff] {
-            let once = e.ac_simplify(toks, 48, RuleMode::Corpus).unwrap();
-            let twice = e.ac_simplify(&once, 48, RuleMode::Corpus).unwrap();
+            let once = e.ac_simplify(toks, 48, RuleMode::Permissive).unwrap();
+            let twice = e.ac_simplify(&once, 48, RuleMode::Permissive).unwrap();
             assert_eq!(twice, once, "lossy not idempotent: {toks:?}");
         }
     }
@@ -3401,16 +3406,16 @@ mod tests {
         let mut n_lossy_wins = 0usize;
         for expr in corpus.iter() {
             let sound = e.ac_simplify(expr, 48, RuleMode::Default).unwrap();
-            let lossy = e.ac_simplify(expr, 48, RuleMode::Corpus).unwrap();
+            let lossy = e.ac_simplify(expr, 48, RuleMode::Permissive).unwrap();
             // Idempotence and permutation invariance under LOSSY.
             assert_eq!(
-                e.ac_simplify(&lossy, 48, RuleMode::Corpus).unwrap(),
+                e.ac_simplify(&lossy, 48, RuleMode::Permissive).unwrap(),
                 lossy,
                 "lossy not idempotent on {expr:?}"
             );
             let swapped = swap_commutative(expr, &e);
             assert_eq!(
-                e.ac_simplify(&swapped, 48, RuleMode::Corpus).unwrap(),
+                e.ac_simplify(&swapped, 48, RuleMode::Permissive).unwrap(),
                 lossy,
                 "lossy permutation variance on {expr:?}"
             );

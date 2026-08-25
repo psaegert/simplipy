@@ -4,7 +4,14 @@
 
 ### Changed — SOUNDNESS IS AN AXIS, NOT A LADDER (owner rulings, 2026-08-19/20)
 
-`Mode` is now `f64` (the default), `real` and `corpus`. It is a plain `Enum`, so `<`
+The third mode is spelled **`Mode.permissive`** (renamed from the pre-release
+`corpus` spelling before it ever shipped, 2026-08-25): the name states the
+contract — certificates skipped, gates dropped, not equivalence-preserving —
+instead of the application it was built for. The pre-release string raises
+with a pointer; artifact configs that declare `rules_corpus:` (acj-4 among
+them) load unchanged via a reader-side fallback.
+
+`Mode` is now `f64` (the default), `real` and `permissive`. It is a plain `Enum`, so `<`
 between modes raises `TypeError`.
 
 The old `IntEnum` encoded a premise — `EXACT ≤ SOUND ≤ AE ≤ LOSSY` — that measurement
@@ -14,12 +21,12 @@ true for every real `t` and gives `inf` in f64 past 18.990341103219276, while
 sound than the other.
 
 - **`Mode.SOUND` and `Mode.LOSSY` are removed**, as are the strings `'sound'` and
-  `'lossy'`. Use `Mode.f64` and `Mode.corpus`. A retired spelling now raises rather than
+  `'lossy'`. Use `Mode.f64` and `Mode.permissive`. A retired spelling now raises rather than
   resolving quietly, because the old names asserted a single soundness ordering that does
   not exist.
 - **`Mode.f64` no longer folds `sin(np.pi)` to `0`.** Exactly `0` in mathematics,
   `1.2246467991473532e-16` in f64 — the rewrite changes what the deployed evaluator
-  computes. It serves `real` and `corpus` instead. 102 rules move, nearly all of the same
+  computes. It serves `real` and `permissive` instead. 102 rules move, nearly all of the same
   symbolic-cancellation family.
 - **`Mode.real` fails closed** on an artifact with no `rules_real.json` rather than
   serving it the f64 set, which would answer a request for mathematical soundness with
@@ -39,11 +46,11 @@ serve ordering:
 |---|---|
 | `real` | identical on all 400 rows |
 | `f64` (the new default) | identical on 397, more complex on 3 |
-| `corpus` | simpler on 53, never worse |
+| `permissive` | simpler on 53, never worse |
 
 The three rows where the default gives up ground are rewrites that are true over ℝ but
 not realised in f64 — `asinh(sinh t) → t`, `cos(asin(sin x)) → |cos x|`,
-`pow(inf, x) → exp(inf·x)`. They did not disappear; they moved to `real` and `corpus`,
+`pow(inf, x) → exp(inf·x)`. They did not disappear; they moved to `real` and `permissive`,
 which is the whole point of the split. If you were relying on them, ask for
 `mode='real'` and you are back where you were, exactly.
 
@@ -57,7 +64,7 @@ name raises rather than warning, so the migration is mechanical and complete.
 
 | removed | use instead |
 |---|---|
-| `Mode.SOUND`, `Mode.LOSSY`, `'sound'`, `'lossy'` | `Mode.f64`, `Mode.corpus` |
+| `Mode.SOUND`, `Mode.LOSSY`, `'sound'`, `'lossy'` | `Mode.f64`, `Mode.permissive` |
 | `SimpliPyEngine.parse` | `read_infix` |
 | `simplify(..., form=…)` | convert first: `simplify(to_tagged(x))` |
 | `simplify(..., node_budget=)` | `max_passes=` |
@@ -134,13 +141,13 @@ claims were certified against the old prices, until the next mine replaces them.
 
 A published asset is now six files, not four: `rules_f64.json` (the f64 set; artifacts
 published before the naming ruling call it `rules.json`, and configs name their files,
-so they load unchanged), `rules_real.json` and `rules_corpus.json`, plus
+so they load unchanged), `rules_real.json` and `rules_permissive.json`, plus
 `config.yaml`, `mine.yaml` and the provenance sidecar. One distinct, complete rule set
 per mode — no base plus overlays, so what is loaded is what is served. The triple is the
 unit of mining, pinning and distribution; rules licensed in no mode are recorded in the
 drop census rather than silently absent. `find-rules` derives the sibling file names
 from `-o` with the `_f64` marker replaced, so `-o rules_f64.json` writes
-`rules_real.json` / `rules_corpus.json` beside it and `-o rules.json` keeps its
+`rules_real.json` / `rules_permissive.json` beside it and `-o rules.json` keeps its
 historic siblings.
 
 ### Added
@@ -157,14 +164,14 @@ historic siblings.
 
 - The fair benchmark is re-measured on the release build (three corpora,
   131,600 rows): every simplipy arm at zero inflated rows, `f64` default at
-  0.966/0.993/0.995 mean ratio per corpus, `corpus` at 0.940/0.961/0.995,
+  0.966/0.993/0.995 mean ratio per corpus, `permissive` at 0.940/0.961/0.995,
   SymPy 1.14.0 at 1.045–1.078 with 38–40% of SR-shaped rows made bigger.
   README carries the headline panel; the simplify guide carries the full
   figures.
 
 - `complexity(..., mode=...)` / FFI `rule_mode=` — the pricing instruments are
   **route-parameterized**. `complexity()` now parses its argument through the same
-  route the named mode's chain descends from (fold-at-parse for `f64`/`corpus`,
+  route the named mode's chain descends from (fold-at-parse for `f64`/`permissive`,
   fold-free for `real`) instead of a single fold-free route for all modes. Pricing a
   chain's output with another route's instrument is how the benchmark's ten "μ-ascent"
   rows arose; the theorem μ(simplify(e)) ≤ μ(e) is stated — and now measured — with
@@ -248,13 +255,13 @@ are unchanged; upgrade to 0.14.0 to get the check.
   denominator now goes through the existing finiteness authority (`isn`); both
   regression probes refuse.
 
-- `Mode.corpus` at nonzero `effort` could return a costlier serve form than
-  `Mode.f64` on the same input: exploration is mode-dependent, so the corpus
-  arbitration's two candidates (folded/unfolded corpus constructions) no longer
+- `Mode.permissive` at nonzero `effort` could return a costlier serve form than
+  `Mode.f64` on the same input: exploration is mode-dependent, so the permissive
+  arbitration's two candidates (folded/unfolded permissive constructions) no longer
   contained every f64 endpoint once `DEFAULT_EFFORT` became 4. The arbitration now
-  admits the default-mode result as a third candidate, so corpus-dominates-f64 is a
+  admits the default-mode result as a third candidate, so permissive-dominates-f64 is a
   property of the construction rather than an empirical gate observation. Ties keep
-  the corpus-own winner.
+  the permissive-own winner.
 
 - The infix reader bound a minus after a power operator outside the power: `2^-3`
   parsed as `-(2^3)` and returned **-8** where the value is 0.125, `sin(x0)^-1` lost

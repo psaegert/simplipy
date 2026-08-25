@@ -195,9 +195,9 @@ def _load_proposals(
     return entries, record
 
 
-#: Which modes a judged tier licenses a rule to serve in. `corpus` is DERIVED (a rule
+#: Which modes a judged tier licenses a rule to serve in. `permissive` is DERIVED (a rule
 #: serves there iff it serves in either), never listed: the ledger's invariant
-#: `rules_corpus == rules_f64 UNION rules_real` then holds by construction rather than by
+#: `rules_permissive == rules_f64 UNION rules_real` then holds by construction rather than by
 #: assertion, and a fourth entry here could silently break it.
 _TIER_MODES: dict[str, frozenset] = {
     'core': frozenset({'f64', 'real'}),
@@ -218,13 +218,14 @@ def _triple_paths(out_path: str) -> dict[str, str]:
     The f64 set takes the path exactly as passed. The siblings replace the mode
     marker rather than append to it: a trailing ``_f64`` on the stem is stripped
     first, so ``rules_f64.json`` (the naming convention from 0.14.0 on) yields
-    ``rules_real.json`` / ``rules_corpus.json``, while a markerless ``rules.json``
-    (every artifact published before the rename) keeps its historic siblings.
+    ``rules_real.json`` / ``rules_permissive.json``. Markerless names get the same
+    siblings: reproducing a pre-rename artifact byte for byte pins the pre-rename
+    simplipy anyway, so a historic-filename carve-out here would protect nothing.
     """
     base, ext = os.path.splitext(out_path)
     if base.endswith('_f64'):
         base = base[:-len('_f64')]
-    return {'f64': out_path, 'real': f'{base}_real{ext}', 'corpus': f'{base}_corpus{ext}'}
+    return {'f64': out_path, 'real': f'{base}_real{ext}', 'permissive': f'{base}_permissive{ext}'}
 
 
 def _is_ground(tokens: Any) -> bool:
@@ -250,11 +251,11 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
     # prune then silently answered "not preempted" for everything.
     # GROUND RULES ONLY, and this is a correctness bound rather than caution. Asking the
     # constructor about a PATTERN answers a question about the pattern, not about the
-    # instances the rule matches, and the two genuinely differ: in corpus the constructor
+    # instances the rule matches, and the two genuinely differ: in permissive the constructor
     # takes `/ $0 $0` to `1` -- the slot carries a nonzero-a.e. certificate -- while
     # taking the instance `inf / inf` to `nan`. Pruning on the pattern therefore deleted
     # `/ $0 $0 -> 1` and with it the mask-sentinel doctrine, which is exactly the rule
-    # that makes `inf/inf * x0` collapse to `x0` in corpus.
+    # that makes `inf/inf * x0` collapse to `x0` in permissive.
     #
     # For a GROUND rule the pattern IS its only instance, so the question the constructor
     # answers is the question asked. That still retires what the prune was for: the
@@ -279,7 +280,7 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
 def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]:
     """Judge the FINAL served set and route every source rule into the triple.
 
-    -> ({'f64': [...], 'real': [...], 'corpus': [...]}, rejected, tiers)
+    -> ({'f64': [...], 'real': [...], 'permissive': [...]}, rejected, tiers)
 
     Judged HERE and not reused from the symbolic gate, even though that is a second full
     pass: the gate runs before the covered-prune and the sort promotion, both of which
@@ -310,9 +311,9 @@ def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]
         tiers.setdefault(src, set()).add(tier)
         allowed[src] = allowed.get(src, _TIER_MODES['core']) & _TIER_MODES.get(tier, frozenset())
 
-    triple: dict[str, list] = {'f64': [], 'real': [], 'corpus': []}
+    triple: dict[str, list] = {'f64': [], 'real': [], 'permissive': []}
     rejected: list = []
-    preempted: dict[str, int] = {'f64': 0, 'real': 0, 'corpus': 0}
+    preempted: dict[str, int] = {'f64': 0, 'real': 0, 'permissive': 0}
     for i, (lhs, rhs) in enumerate(engine.simplification_rules):
         # A rule with no served entry cannot fire at all, so it is licensed nowhere. This
         # is the load-minted-twins lesson in the other direction: never infer a licence
@@ -322,8 +323,8 @@ def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]
         if not modes:
             rejected.append(pair)
             continue
-        for m in ('f64', 'real', 'corpus'):
-            if m != 'corpus' and m not in modes:
+        for m in ('f64', 'real', 'permissive'):
+            if m != 'permissive' and m not in modes:
                 continue
             # PER-MODE PRUNE. A mode's file carries only what that mode can actually
             # serve. Folding is mode-dependent, so a rule can be load-bearing in `real`
@@ -341,7 +342,7 @@ def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]
                               preempted)
     if verbose:
         print(f'Triple: f64={len(triple["f64"])} real={len(triple["real"])} '
-              f'corpus={len(triple["corpus"])} rejected={len(rejected)}')
+              f'permissive={len(triple["permissive"])} rejected={len(rejected)}')
     return triple, rejected, {'tiers': {i: sorted(t) for i, t in tiers.items()},
                               'preempted': preempted}
 
@@ -361,16 +362,16 @@ def _assert_triple_invariants(triple: dict, rejected: list, mined: list,
     def keys(rs: Any) -> set:
         return {(tuple(lhs), tuple(rhs)) for lhs, rhs in rs}
 
-    f64, real, corpus = keys(triple['f64']), keys(triple['real']), keys(triple['corpus'])
+    f64, real, permissive = keys(triple['f64']), keys(triple['real']), keys(triple['permissive'])
     rej = keys(rejected)
     mined_keys = keys(mined)
     # INVARIANT 1 and INVARIANT 2 are RETIRED, and this is why. They compared three rule
     # sets as if they lived in ONE canonical world. Once folding is mode-dependent they do
-    # not: `acos 1 -> 0` is absent from the corpus set purely because corpus's own
-    # constructor performs it, and corpus performs all 15 such rules -- measured 15/15.
+    # not: `acos 1 -> 0` is absent from the permissive set purely because permissive's own
+    # constructor performs it, and permissive performs all 15 such rules -- measured 15/15.
     # Set overlap was therefore measuring SPELLING, not capability, and the property it
-    # stood proxy for ("corpus can do everything the other two can") is behavioural.
-    # It is checked as behaviour, by `assert_corpus_dominates`, on the corpus sweep the
+    # stood proxy for ("permissive can do everything the other two can") is behavioural.
+    # It is checked as behaviour, by `assert_permissive_dominates`, on the walk sweep the
     # invariance gate already runs. Owner ruling 2026-08-20.
     #
     # What every set here must still satisfy: a rule may only appear where its tier
@@ -386,13 +387,13 @@ def _assert_triple_invariants(triple: dict, rejected: list, mined: list,
                 raise AssertionError(
                     f'triple invariant broken: {len(ks - licensed)} rules in rules_{m} '
                     f'are not licensed for that mode')
-    if corpus & rej:
+    if permissive & rej:
         raise AssertionError(
-            f'triple invariant 3 broken: {len(corpus & rej)} rules are BOTH served and '
+            f'triple invariant 3 broken: {len(permissive & rej)} rules are BOTH served and '
             f'rejected')
-    if (corpus | rej) - mined_keys:
+    if (permissive | rej) - mined_keys:
         raise AssertionError(
-            f'triple invariant 3 broken: {len((corpus | rej) - mined_keys)} rules are '
+            f'triple invariant 3 broken: {len((permissive | rej) - mined_keys)} rules are '
             f'served or rejected but were never mined')
     for i, (lhs, rhs) in enumerate(mined):
         k = (tuple(lhs), tuple(rhs))
@@ -939,7 +940,7 @@ class RuleMiner:
                 # "the provenance sidecar covers the triple, the manifest entry lists
                 # three files as ONE artifact"), so its totals describe everything the
                 # mine serves. The per-mode split lives in `prov['triple']['counts']`.
-                self._write_provenance(out_path, prov, _triple['corpus'], final=True)
+                self._write_provenance(out_path, prov, _triple['permissive'], final=True)
             return [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
 
         snapshot_at = dict(snapshot_at or {})
@@ -2007,10 +2008,10 @@ class RuleMiner:
             _MINE_LOCK.release()
 
 
-def assert_corpus_dominates(engine: Any, expressions: Any) -> list:
+def assert_permissive_dominates(engine: Any, expressions: Any) -> list:
     """`corpus` must be at least as capable as `f64` and as `real`, on every expression.
 
-    THE REPLACEMENT for `rules_corpus == rules_f64 UNION rules_real`, which was retired
+    THE REPLACEMENT for `rules_permissive == rules_f64 UNION rules_real`, which was retired
     once folding made the three modes live in different canonical worlds (owner ruling
     2026-08-20). That set identity was a proxy for this, and a bad one: it measured
     spelling overlap, so it read `acos 1 -> 0` as "missing from corpus" when corpus
@@ -2025,12 +2026,12 @@ def assert_corpus_dominates(engine: Any, expressions: Any) -> list:
     for expr in expressions:
         try:
             mu = {m: engine._core.ac_complexity(engine.simplify(list(expr), mode=m))
-                  for m in (Mode.f64, Mode.real, Mode.corpus)}
+                  for m in (Mode.f64, Mode.real, Mode.permissive)}
         except Exception:
             continue
         if None in mu.values():
             continue
-        if mu[Mode.corpus] > min(mu[Mode.f64], mu[Mode.real]):
+        if mu[Mode.permissive] > min(mu[Mode.f64], mu[Mode.real]):
             bad.append({'expression': list(expr),
                         'mu': {m.name: v for m, v in mu.items()}})
     return bad

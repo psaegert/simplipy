@@ -57,8 +57,8 @@ outstanding, so a retired name raises rather than warning:
 
 | removed in 0.14.0 | replacement |
 |---|---|
-| `Mode.SOUND`, `Mode.LOSSY` | `Mode.f64`, `Mode.corpus` |
-| `mode='sound'`, `mode='lossy'` | `mode='f64'`, `mode='corpus'` (matched case-insensitively) |
+| `Mode.SOUND`, `Mode.LOSSY` | `Mode.f64`, `Mode.permissive` |
+| `mode='sound'`, `mode='lossy'` | `mode='f64'`, `mode='permissive'` (matched case-insensitively) |
 | `SimpliPyEngine.parse` | `read_infix` |
 | `simplify(..., form=)` | convert first: `simplify(to_tagged(x))` |
 | `simplify(..., node_budget=)` | `max_passes=` — it bounds outer rewrite passes, and never counted nodes |
@@ -78,7 +78,7 @@ Behaviour changes in 0.14.0 that are **not** deprecations, because no name chang
 
 - **`Mode.f64` no longer folds `sin(np.pi)` to `0`.** It is exactly `0` in mathematics
   and `1.2246467991473532e-16` in f64, so the rewrite changes what the deployed
-  evaluator computes. It moves to `Mode.real` and `Mode.corpus`, which still fold it.
+  evaluator computes. It moves to `Mode.real` and `Mode.permissive`, which still fold it.
   102 rules are affected, nearly all of the same symbolic-cancellation family.
 - **`f64` mode preserves what the deployed evaluator computes for every rewrite it
   applies, but not your evaluation order.** The canonical form flattens sums and

@@ -91,7 +91,7 @@ class TestGroundFoldLicence:
         from simplipy import Mode
         assert eng.simplify(['sin', 'np.pi'], mode=Mode.f64) == ['sin', 'np.pi']
         assert eng.simplify(['sin', 'np.pi'], mode=Mode.real) == ['0']
-        assert eng.simplify(['sin', 'np.pi'], mode=Mode.corpus) == ['0']
+        assert eng.simplify(['sin', 'np.pi'], mode=Mode.permissive) == ['0']
 
     def test_pow_with_special_stays(self, eng):
         check(eng, ['pow', 'np.pi', '2'], ['pow', 'np.pi', '2'])

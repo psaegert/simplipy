@@ -38,7 +38,7 @@ class TestTheBudgetCrossesTheHill:
         assert engine.complexity(out) == engine.complexity(HILL), \
             'effort=0 must not enter the exploration phase'
 
-    @pytest.mark.parametrize('mode', [Mode.f64, Mode.corpus])
+    @pytest.mark.parametrize('mode', [Mode.f64, Mode.permissive])
     def test_the_valley_is_reached_and_is_idempotent(self, engine, mode) -> None:
         lo = engine.simplify(HILL, mode=mode, effort=0)
         hi = engine.simplify(HILL, mode=mode, effort=BUDGET)

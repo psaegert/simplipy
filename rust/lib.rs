@@ -54,7 +54,8 @@ type ValueSetBox = (bool, bool, bool, bool, f64, f64);
 fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
     engine::RuleMode::parse(name).ok_or_else(|| {
         PyValueError::new_err(format!(
-            "unknown rule_mode {name:?}: expected 'default', 'real' or 'corpus'"
+            "unknown rule_mode {name:?}: expected 'default', 'real' or 'permissive' \
+             ('corpus' is the pre-release spelling of 'permissive')"
         ))
     })
 }
@@ -280,16 +281,25 @@ pub(crate) fn test_engine() -> Option<Engine> {
     let rules = format!("{home}/.cache/simplipy/engines/acj-4/rules.json");
     let mut e = Engine::from_paths(&cfg, &rules).expect("engine loads");
     // The acj-4 cell ships the full triple, and each mode serves ITS OWN complete file
-    // (the python loader reads the config's `rules_real:`/`rules_corpus:` keys; the
+    // (the python loader reads the config's `rules_real:`/`rules_permissive:` keys; the
     // rust core is handed resolved content). Loading only rules.json here would run
     // Real/Corpus tests against the default set -- the doctrine-bearing mode rules
-    // (e.g. the corpus `/ $0 $0 -> 1` sentinel cancel) would silently not be served.
-    for (mode, file) in [
-        (engine::RuleMode::Real, "rules_real.json"),
-        (engine::RuleMode::Corpus, "rules_corpus.json"),
+    // (e.g. the permissive `/ $0 $0 -> 1` sentinel cancel) would silently not be served.
+    for (mode, files) in [
+        (engine::RuleMode::Real, &["rules_real.json"][..]),
+        // pre-rename artifacts (acj-4 among them) ship the permissive file under
+        // its published name; a re-mined cell ships the new one
+        (
+            engine::RuleMode::Permissive,
+            &["rules_permissive.json", "rules_corpus.json"][..],
+        ),
     ] {
-        let path = format!("{home}/.cache/simplipy/engines/acj-4/{file}");
-        let text = std::fs::read_to_string(&path).expect("acj-4 ships a full triple");
+        let text = files
+            .iter()
+            .find_map(|file| {
+                std::fs::read_to_string(format!("{home}/.cache/simplipy/engines/acj-4/{file}")).ok()
+            })
+            .expect("acj-4 ships a full triple");
         let raw: Vec<(Vec<String>, Vec<String>)> =
             serde_json::from_str(&text).expect("triple rules file parses");
         e.set_mode_rules(mode, Some(raw));
@@ -409,7 +419,7 @@ impl PyEngine {
     ) -> PyResult<Py<PyList>> {
         // THE MAP, and the only one on this boundary: today's two-valued `simplipy.Mode`
         // becomes a three-valued rule mode here. SOUND -> the default set, LOSSY -> the
-        // corpus set. Renaming `Mode` to `f64`/`real`/`corpus` retires this entry in
+        // permissive set. Renaming `Mode` to `f64`/`real`/`permissive` retires this entry in
         // favour of `ac_simplify_in_mode` below; nothing under it has to move.
         ac_simplify_impl(
             &self.inner,
@@ -423,8 +433,8 @@ impl PyEngine {
     }
 
     /// `ac_simplify` addressing the rule mode DIRECTLY -- `"default"` (`rules.json`),
-    /// `"real"` (`rules_real.json`) or `"corpus"` (`rules_corpus.json`). Each mode serves
-    /// ONE DISTINCT, COMPLETE set; `"default"`/`"corpus"` are exactly what
+    /// `"real"` (`rules_real.json`) or `"permissive"` (`rules_permissive.json`). Each mode serves
+    /// ONE DISTINCT, COMPLETE set; `"default"`/`"permissive"` are exactly what
     /// `wildcard_all=False`/`True` select above, and `"real"` is the rung today's
     /// `simplipy.Mode` cannot yet name.
     ///
@@ -634,7 +644,7 @@ impl PyEngine {
     }
 
     /// The four translation counts for ANY mode's served set (`"default"` / `"real"` /
-    /// `"corpus"`). `ac_rules_info` stays the DEFAULT mode's tuple, unwidened -- it is
+    /// `"permissive"`). `ac_rules_info` stays the DEFAULT mode's tuple, unwidened -- it is
     /// pinned by the corpus gate, and answering it must never force another mode's index
     /// to be built. Forces the named mode's lazy translation, and only that one.
     #[pyo3(signature = (rule_mode="default"))]
@@ -1384,7 +1394,7 @@ impl PyEngine {
     }
 
     /// Install ONE MODE'S OWN COMPLETE RULE SET -- `"real"` (`rules_real.json`) or
-    /// `"corpus"` (`rules_corpus.json`), each a self-contained file carrying the core
+    /// `"permissive"` (`rules_permissive.json`), each a self-contained file carrying the core
     /// rules AND that mode's own, never a supplement to `rules.json`.
     ///
     /// `rules=None` RETRACTS the set, and that mode falls back to the default one.

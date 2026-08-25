@@ -100,14 +100,14 @@ pub struct Engine {
     /// OF ITS OWN and serves the default set. `Some(vec![])` is the different, sayable
     /// statement "this mode serves nothing"; see `Engine::ac_rules_for`.
     real_rules: Option<CompiledRules>,
-    /// THE `corpus` MODE'S OWN COMPLETE RULE SET (`rules_corpus.json`), same discipline:
-    /// core plus BOTH the real-only and corpus-only rules, in one self-contained file.
-    corpus_rules: Option<CompiledRules>,
+    /// THE `permissive` MODE'S OWN COMPLETE RULE SET (`rules_permissive.json`), same discipline:
+    /// core plus BOTH the real-only and permissive-only rules, in one self-contained file.
+    permissive_rules: Option<CompiledRules>,
     /// `real`'s translated set, lazily built by the same `translate_rules` as the default
     /// cell. Untouched by a consumer that never asks for `real`.
     ac_real_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
-    /// `corpus`'s translated set, same discipline as `ac_real_rules_cell`.
-    ac_corpus_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
+    /// `permissive`'s translated set, same discipline as `ac_real_rules_cell`.
+    ac_permissive_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
 }
 
 impl Engine {
@@ -222,9 +222,9 @@ impl Engine {
             // names them -- arrive afterwards through `set_mode_rules`. That is what makes
             // "absent files are a no-op" true by construction rather than by argument.
             real_rules: None,
-            corpus_rules: None,
+            permissive_rules: None,
             ac_real_rules_cell: std::sync::OnceLock::new(),
-            ac_corpus_rules_cell: std::sync::OnceLock::new(),
+            ac_permissive_rules_cell: std::sync::OnceLock::new(),
         })
     }
 

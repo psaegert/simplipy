@@ -53,7 +53,13 @@ def acj_real_rules_path() -> str:
 
 
 def acj_corpus_rules_path() -> str:
-    return os.path.join(acj_asset_dir(), 'rules_corpus.json')
+    # the published acj-4 artifact predates the 'permissive' rename and ships the
+    # file under its historic name; a re-mined cell ships the new one
+    for name in ('rules_permissive.json', 'rules_corpus.json'):
+        path = os.path.join(acj_asset_dir(), name)
+        if os.path.exists(path):
+            return path
+    return os.path.join(acj_asset_dir(), 'rules_permissive.json')
 
 
 def require_triple_or_skip(why: str = 'the shipped asset carries the f64 set only') -> None:
@@ -75,7 +81,7 @@ def require_triple_or_skip(why: str = 'the shipped asset carries the f64 set onl
       failure, never as a skip.
 
     No switch needs flipping for the tests themselves: the moment `rules_real.json`
-    and `rules_corpus.json` land beside the f64 set, every gated test runs everywhere.
+    and `rules_permissive.json` land beside the f64 set, every gated test runs everywhere.
     """
     real, corpus = acj_real_rules_path(), acj_corpus_rules_path()
     present = [p for p in (real, corpus) if os.path.exists(p)]

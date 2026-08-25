@@ -6,14 +6,14 @@ triples." So the artifact is three COMPLETE, self-contained files::
 
     rules.json          `Mode.f64`    -- every rule the deployed evaluator reproduces
     rules_real.json     `Mode.real`   -- every rule that is true over R
-    rules_corpus.json   `Mode.corpus` -- the permissive superset
+    rules_permissive.json   `Mode.permissive` -- the permissive superset
 
 Each file is COMPLETE and carries only what its mode can serve: the per-mode prune drops
 what that mode's own constructor already performs, so `rules_corpus` is NOT the union of
 the other two. That set identity was retired once folding became mode-dependent -- the
 three modes reduce in different canonical worlds, so overlap measures spelling rather
 than capability -- and the property it stood proxy for is checked behaviourally, by
-`assert_corpus_dominates`.
+`assert_permissive_dominates`.
 
 WHY IT IS WORTH 2.9 MB AGAINST 1.0 MB. The provenance hole closed earlier existed
 PRECISELY because the served set was COMPUTED rather than STATED: `rules.json` said
@@ -37,7 +37,7 @@ import yaml
 from conftest import acj_config_path, acj_rules_path, require_or_skip
 from simplipy import Mode, SimpliPyEngine
 
-MODES = ('default', 'real', 'corpus')
+MODES = ('default', 'real', 'permissive')
 
 # Four PROBE RULES taken verbatim from the shipped acj-4-3 artifact, each of which the
 # canonical CONSTRUCTORS cannot reach unaided. That property is what makes them
@@ -79,7 +79,7 @@ def write_artifact(tmp_path, rules, *, real=None, corpus=None, declare=()) -> st
     config.pop('rules_corpus', None)
     config['rules'] = 'rules.json'
     json.dump(rules, open(os.path.join(tmp_path, 'rules.json'), 'w'))
-    for name, content in (('real', real), ('corpus', corpus)):
+    for name, content in (('real', real), ('permissive', corpus)):
         if name in declare or content is not None:
             config[f'rules_{name}'] = f'rules_{name}.json'
         if content is not None:
@@ -133,13 +133,13 @@ class TestAbsentFilesAreANoOp:
         config = yaml.safe_load(open(acj_config_path()))
         assert config['rules'] == './rules.json'
         # THE CONFIG AND THE DIRECTORY MUST AGREE, in both directions. Naming a set it
-        # does not ship makes `Mode.real` fail closed and `Mode.corpus` fall back
+        # does not ship makes `Mode.real` fail closed and `Mode.permissive` fall back
         # SILENTLY, and shipping a set it does not name makes that set dead weight no
         # loader will ever read. Asserting the pair holds while the asset carries the f64
         # third alone AND once the re-mine stages all three, which asserting three
         # literal filenames did not.
         for key, fname in (('rules_real', 'rules_real.json'),
-                           ('rules_corpus', 'rules_corpus.json')):
+                           ('rules_corpus', 'rules_permissive.json')):
             staged = os.path.exists(base + fname)
             named = config.get(key) == f'./{fname}'
             assert named == staged, (
@@ -166,9 +166,9 @@ class TestAbsentFilesAreANoOp:
         yaml.safe_dump(cfg, open(os.path.join(d, 'config.yaml'), 'w'))
         e = SimpliPyEngine.from_config(os.path.join(d, 'config.yaml'))
         assert e.real_simplification_rules is None
-        assert e.corpus_simplification_rules is None
+        assert e.permissive_simplification_rules is None
         assert e._core.mode_rules_len('real') is None
-        assert e._core.mode_rules_len('corpus') is None
+        assert e._core.mode_rules_len('permissive') is None
         assert e._core.mode_rules_len('default') == len(e.simplification_rules)
         base = e._core.ac_rules_info()
         for mode in MODES:
@@ -232,7 +232,7 @@ class TestAbsentFilesAreANoOp:
         declared = SimpliPyEngine.from_config(write_artifact(
             str(declared_dir), rules=rules, real=rules, corpus=rules))
         for row in rows:
-            for mode in (Mode.f64, Mode.corpus):
+            for mode in (Mode.f64, Mode.permissive):
                 assert declared.simplify(row, mode=mode) == plain.simplify(row, mode=mode)
 
     def test_a_declared_but_missing_file_is_not_an_error(self, tmp_path):
@@ -240,11 +240,11 @@ class TestAbsentFilesAreANoOp:
         that mode the default set. Refusing would make a partially-synced asset
         directory unloadable, for a file whose absence costs nothing; being silent is
         how a broken layout survives to production."""
-        cfg = write_artifact(tmp_path, rules=[P_DEFAULT], declare=('real', 'corpus'))
+        cfg = write_artifact(tmp_path, rules=[P_DEFAULT], declare=('real', 'permissive'))
         with pytest.warns(UserWarning, match="could not be resolved"):
             e = SimpliPyEngine.from_config(cfg)
         assert e.real_simplification_rules is None
-        assert e.corpus_simplification_rules is None
+        assert e.permissive_simplification_rules is None
         for mode in MODES:
             assert fires(e, P_DEFAULT, mode)
 
@@ -276,10 +276,10 @@ class TestEachModeServesExactlyItsOwnFile:
                 assert not fires(e, probe, mode)
 
     @pytest.mark.parametrize('probe,expected', [
-        (P_ALL, {'default', 'real', 'corpus'}),
+        (P_ALL, {'default', 'real', 'permissive'}),
         (P_DEFAULT, {'default'}),
-        (P_REAL, {'real', 'corpus'}),
-        (P_CORPUS, {'corpus'}),
+        (P_REAL, {'real', 'permissive'}),
+        (P_CORPUS, {'permissive'}),
     ])
     def test_a_rule_fires_in_exactly_the_modes_whose_file_holds_it(
             self, triple, probe, expected):
@@ -295,7 +295,7 @@ class TestEachModeServesExactlyItsOwnFile:
         on_disk = {
             'default': json.load(open(os.path.join(d, 'rules.json'))),
             'real': json.load(open(os.path.join(d, 'rules_real.json'))),
-            'corpus': json.load(open(os.path.join(d, 'rules_corpus.json'))),
+            'permissive': json.load(open(os.path.join(d, 'rules_permissive.json'))),
         }
         for mode in MODES:
             assert e._core.mode_rules_len(mode) == len(on_disk[mode])
@@ -309,7 +309,7 @@ class TestEachModeServesExactlyItsOwnFile:
         e = SimpliPyEngine.from_config(triple)
         assert len(e.simplification_rules) == 2
         assert len(e.real_simplification_rules) == 2
-        assert len(e.corpus_simplification_rules) == 3
+        assert len(e.permissive_simplification_rules) == 3
 
     def test_public_modes_map_onto_all_three_sets(self, triple):
         """Each public mode selects its OWN file. This pinned the retired two-valued
@@ -320,10 +320,10 @@ class TestEachModeServesExactlyItsOwnFile:
         r_lhs, r_rhs = instantiate(P_REAL)
         c_lhs, c_rhs = instantiate(P_CORPUS)
         assert e.simplify(d_lhs, mode=Mode.f64) == d_rhs
-        assert e.simplify(d_lhs, mode=Mode.corpus) != d_rhs
+        assert e.simplify(d_lhs, mode=Mode.permissive) != d_rhs
         assert e.simplify(r_lhs, mode=Mode.real) == r_rhs
         assert e.simplify(r_lhs, mode=Mode.f64) != r_rhs
-        assert e.simplify(c_lhs, mode=Mode.corpus) == c_rhs
+        assert e.simplify(c_lhs, mode=Mode.permissive) == c_rhs
         assert e.simplify(c_lhs, mode=Mode.f64) != c_rhs
 
     def test_the_infix_rendering_selects_the_same_set(self, triple):
@@ -332,13 +332,13 @@ class TestEachModeServesExactlyItsOwnFile:
         Pinned at the core entry and through the convert-then-simplify route."""
         e = SimpliPyEngine.from_config(triple)
         lhs, _ = instantiate(P_CORPUS)
-        assert 'tan' in e._core.ac_simplify_infix_in_mode(lhs, 48, 'corpus')
+        assert 'tan' in e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
         assert e._core.ac_simplify_infix_in_mode(lhs, 48, 'default') != \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, 'corpus')
+            e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
         # The old `form='infix'` shim is removed in 0.14.0; CONVERTING first is the
         # documented equivalent, and it must still select by mode identically.
-        assert e.simplify(e.to_infix(lhs), mode=Mode.corpus) == \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, 'corpus')
+        assert e.simplify(e.to_infix(lhs), mode=Mode.permissive) == \
+            e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
         assert e.simplify(e.to_infix(lhs), mode=Mode.f64) == \
             e._core.ac_simplify_infix_in_mode(lhs, 48, 'default')
 
@@ -359,7 +359,7 @@ class TestAnEmptySetIsNotAnAbsentOne:
         assert not fires(e, P_DEFAULT, 'real')
         # ...while the modes that name no set still serve the default one.
         assert fires(e, P_DEFAULT, 'default')
-        assert fires(e, P_DEFAULT, 'corpus')
+        assert fires(e, P_DEFAULT, 'permissive')
 
     def test_retraction_restores_the_default_set(self):
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
@@ -380,7 +380,7 @@ class TestTheSetsSurviveEveryRebuild:
         e = SimpliPyEngine.from_config(triple)
         back = pickle.loads(pickle.dumps(e))
         assert back.real_simplification_rules == e.real_simplification_rules
-        assert back.corpus_simplification_rules == e.corpus_simplification_rules
+        assert back.permissive_simplification_rules == e.permissive_simplification_rules
         for probe in (P_ALL, P_DEFAULT, P_REAL, P_CORPUS):
             for mode in MODES:
                 assert fires(back, probe, mode) == fires(e, probe, mode)
@@ -396,8 +396,8 @@ class TestTheSetsSurviveEveryRebuild:
         e = SimpliPyEngine.from_config(triple)
         e.compile_rules()
         assert e._core.mode_rules_len('real') == 2
-        assert e._core.mode_rules_len('corpus') == 3
-        assert fires(e, P_CORPUS, 'corpus')
+        assert e._core.mode_rules_len('permissive') == 3
+        assert fires(e, P_CORPUS, 'permissive')
         assert not fires(e, P_CORPUS, 'default')
 
     def test_a_pickle_written_before_the_triple_still_loads(self, triple):
@@ -406,11 +406,11 @@ class TestTheSetsSurviveEveryRebuild:
         e = SimpliPyEngine.from_config(triple)
         state = e.__getstate__()
         del state['real_simplification_rules']
-        del state['corpus_simplification_rules']
+        del state['permissive_simplification_rules']
         back = SimpliPyEngine.__new__(SimpliPyEngine)
         back.__setstate__(state)
         assert back.real_simplification_rules is None
-        assert back.corpus_simplification_rules is None
+        assert back.permissive_simplification_rules is None
         assert fires(back, P_DEFAULT, 'real')
 
 
@@ -435,7 +435,7 @@ class TestTheModeSurfaceRefusesNonsense:
         bad = [[['sin', '_0'], ['log', '_0']], [['sin', '_0'], ['tan', '_0']]]
         cfg = write_artifact(tmp_path, rules=[P_DEFAULT], corpus=bad)
         e = SimpliPyEngine.from_config(cfg)
-        assert e._core.mode_rules_len('corpus') == 2
-        assert e._core.ac_rules_info_in_mode('corpus')[0] == 0
-        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'corpus', 'explicit') \
+        assert e._core.mode_rules_len('permissive') == 2
+        assert e._core.ac_rules_info_in_mode('permissive')[0] == 0
+        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'permissive', 'explicit') \
             == ['sin', 'x0']

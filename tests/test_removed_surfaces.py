@@ -29,7 +29,7 @@ class TestModeAliasesAreGone:
             getattr(Mode, name)
 
     def test_the_members_that_remain(self) -> None:
-        assert [m.name for m in Mode] == ['f64', 'real', 'corpus']
+        assert [m.name for m in Mode] == ['f64', 'real', 'permissive']
 
     @pytest.mark.parametrize('spelling', ['sound', 'lossy', 'SOUND', 'LOSSY'])
     def test_the_string_spellings_are_refused(self, spelling: str, eng) -> None:

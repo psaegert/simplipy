@@ -535,7 +535,7 @@ pub fn mu_rat(r: &Rat) -> u64 {
 /// change direction** and **0 of 105 printed literal spellings move** -- the serializer
 /// argmin compares the same two codeword totals, and the floor shifts both. Four f64 rows
 /// and six corpus rows of the 400-row benchmark re-spell, and the corpus rests cheaper by
-/// 3,000 (f64) and 3,359 (corpus) milli-bits: a small genuine descent. The D38/B2
+/// 3,000 (f64) and 3,359 (permissive) milli-bits: a small genuine descent. The D38/B2
 /// numbers move with it -- `mu(1000)` is 4 bits where the ratified note says 5 -- but
 /// H-055's finding was the SYMMETRY, `mu(1000) == mu(0.001)`, and that holds at 4.
 /// Evidence: `audit-2026-08-21/floor/`.
@@ -1035,8 +1035,8 @@ pub struct Cx<'a> {
     pub mode: RuleMode,
     /// Whether the constructor may fold a ground transcendental to its f64 value.
     /// DERIVED from the mode (`f64` only) by `Cx::for_mode`, and set explicitly in
-    /// exactly one place: corpus runs the whole pipeline TWICE, once with each
-    /// discipline, and keeps the cheaper endpoint. That is the only way corpus can have
+    /// exactly one place: permissive runs the whole pipeline TWICE, once with each
+    /// discipline, and keeps the cheaper endpoint. That is the only way permissive can have
     /// both -- `atanh(tanh 30) -> 30`, which needs the fold OFF so the inverse-pair
     /// collapse survives, AND `asin(1e-8) -> 1e-8`, which needs it ON. Folding is
     /// bottom-up, so no ordering inside a node can deliver both: `tanh 30` becomes `1`
@@ -1058,14 +1058,14 @@ pub struct Cx<'a> {
 impl<'a> Cx<'a> {
     /// THE DERIVATION of `fold_f64` from a mode: only `f64` folds transcendentals.
     /// `real` cannot (the result is not representable -- `tan(1)` is irrational and no
-    /// literal spells it), and `corpus` gets both disciplines by running twice.
+    /// literal spells it), and `permissive` gets both disciplines by running twice.
     #[inline]
     pub fn folds_for(mode: RuleMode) -> bool {
         matches!(mode, RuleMode::Default)
     }
 
     /// The RECALL reading of the mode: may a constructor gate pass uncertified? Only
-    /// `corpus`. Derived from `RuleMode::wildcard_all` rather than restated, so the
+    /// `permissive`. Derived from `RuleMode::wildcard_all` rather than restated, so the
     /// engine has ONE answer to "is this the permissive mode".
     #[inline]
     pub fn lossy(&self) -> bool {
@@ -1074,7 +1074,7 @@ impl<'a> Cx<'a> {
 
     /// The F64 reading: is this construction answerable only in what the deployed f64
     /// evaluator computes? True for `f64` alone. `real` reasons over the reals, where
-    /// saturation does not exist, and `corpus` is permissive anyway -- so a guard that
+    /// saturation does not exist, and `permissive` skips the gate anyway -- so a guard that
     /// exists BECAUSE of f64 saturation must ask this and not `lossy()`.
     #[inline]
     pub fn f64_semantics(&self) -> bool {
@@ -1650,7 +1650,7 @@ impl<'a> Cx<'a> {
             //   f64    -- band REQUIRED: the deployed evaluator is the authority.
             //   real   -- band SKIPPED: mathematics has no saturation to protect against,
             //             and requiring it here would refuse a rewrite that is simply true.
-            //   corpus -- band SKIPPED: the corpus is generated FROM the simplified form,
+            //   permissive -- band SKIPPED: the training corpus is generated FROM the simplified form,
             //             so no external function exists to disagree with the collapse.
             // A `lossy: bool` could not express the middle row, which is why `Cx` now
             // carries the mode itself.

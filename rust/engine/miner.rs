@@ -239,10 +239,10 @@ impl Engine {
         // answer moved even though its file did not. Retaining them would leave such a
         // mode serving a rule set the engine no longer holds.
         self.ac_real_rules_cell = std::sync::OnceLock::new();
-        self.ac_corpus_rules_cell = std::sync::OnceLock::new();
+        self.ac_permissive_rules_cell = std::sync::OnceLock::new();
     }
 
-    /// Install ONE MODE'S OWN COMPLETE RULE SET (`rules_real.json` / `rules_corpus.json`),
+    /// Install ONE MODE'S OWN COMPLETE RULE SET (`rules_real.json` / `rules_permissive.json`),
     /// or -- with `None` -- retract it so that mode falls back to the default set again.
     ///
     /// `Some(vec![])` is NOT the same call as `None`: it installs an EMPTY set, and that
@@ -254,7 +254,7 @@ impl Engine {
     /// Shaped like `set_rules` otherwise: the same `&mut self` token-table extension (the
     /// table is append-only, so existing ids -- including `bang_cache` keys -- stay valid)
     /// and the same lazy-cell invalidation. Only the named mode's cell dies; installing
-    /// `real` can never move a `default` or `corpus` answer.
+    /// `real` can never move a `default` or `permissive` answer.
     pub fn set_mode_rules(&mut self, mode: RuleMode, raw: Option<Vec<(Vec<String>, Vec<String>)>>) {
         if mode == RuleMode::Default {
             self.set_rules(raw.unwrap_or_default());
@@ -266,9 +266,9 @@ impl Engine {
                 self.real_rules = compiled;
                 self.ac_real_rules_cell = std::sync::OnceLock::new();
             }
-            RuleMode::Corpus => {
-                self.corpus_rules = compiled;
-                self.ac_corpus_rules_cell = std::sync::OnceLock::new();
+            RuleMode::Permissive => {
+                self.permissive_rules = compiled;
+                self.ac_permissive_rules_cell = std::sync::OnceLock::new();
             }
             RuleMode::Default => unreachable!("handled above"),
         }
