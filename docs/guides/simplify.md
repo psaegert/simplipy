@@ -103,6 +103,15 @@ chain alone. The default is `simplipy.DEFAULT_EFFORT` = 4, set from the acceptan
 benchmark's explore-budget arms (65,536 rows): budget 4 strictly improves 3.18% of
 rows with zero regressions and captures every win a 16x larger budget finds, at +18%
 median per-row cost. Pass `effort=0` on throughput-critical paths.
+
+The sweep, re-measured on the release build over the same 65,536 rows, is the whole
+argument for the default in one panel: effort 0 to 4 moves the mean ratio from 0.968
+to 0.966 and lifts strictly-simplified rows from 8.7% to 11.7% for 40 µs of median
+cost, and effort 64 retraces the effort-4 curve exactly — the exploration saturates
+at 4 on this corpus, so a larger budget buys nothing.
+
+![Search-budget sweep, effort 0 / 4 / 64](../assets/benchmarks/ecdf_effort_sweep.png)
+
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
 below it (the result is never worse than the fixpoint, hence never costlier than the
