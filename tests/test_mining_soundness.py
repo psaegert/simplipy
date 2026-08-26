@@ -2598,3 +2598,31 @@ class TestWitnessWallClock:
         rng = np.random.default_rng(0)
         v, info = cb.certify_rule(['+', '<constant>', '_0'], ['+', '_0', '<constant>'], rng)
         assert v != 'NO-WITNESS' or 'wall-clock' not in str(info)
+
+
+class TestBoundaryMagnitudeProbes:
+    def test_pool_reaches_the_overflow_boundaries(self) -> None:
+        # sqrt(x^2)=|x| diverges from its LHS only above 1.34e154 (fl(x^2) = inf);
+        # x^6 versions from 4.6e51. A pool ending at |v| <= 40 certified all three
+        # into the acj-5-4 f64 tier (2026-08-26). The probes must stay.
+        from simplipy.promotion._pointwise import ATOMS
+        mags = [abs(float(a.strip('()'))) for a in ATOMS
+                if 'inf' not in a and 'nan' not in a]
+        assert max(mags) >= 1e300
+        assert any(1e150 < m < 1e155 for m in mags)      # brackets sqrt overflow
+        assert any(4e51 <= m < 1e52 for m in mags)       # brackets x^6 overflow
+        assert any(0 < m <= 1.6e-162 for m in mags)      # subnormal-square underflow
+
+    def test_sqrt_square_is_convicted_at_the_f64_bar(self) -> None:
+        import numpy as np
+        from conftest import acj_config_path, require_or_skip
+        require_or_skip(acj_config_path(), 'acj asset not staged')
+        from simplipy import SimpliPyEngine
+        from simplipy.promotion import _f64_eval
+        from simplipy.promotion._pointwise import judge, valuations_for, wildcards
+        _f64_eval.configure(SimpliPyEngine.from_config(acj_config_path()))
+        lhs, rhs = ['rootn', 'pow', '_0', '2', '2'], ['abs', '_0']
+        ws = wildcards(lhs + rhs)
+        rng = np.random.default_rng(0)
+        v, info = judge(lhs, rhs, valuations_for(ws, rng))
+        assert v not in ('PROMOTE', 'PASS'), (v, info)
