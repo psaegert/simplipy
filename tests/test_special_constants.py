@@ -226,8 +226,13 @@ class TestExactCollapsesMint:
         from simplipy.promotion import promote
         bare = [(('cos', 'np.pi'), ('(-1)',)), (('sin', 'np.pi'), ('0',)),
                 (('tan', 'np.pi'), ('0',)), (('log', 'np.e'), ('1',))]
-        controls = [(('cos', '+', '_0', 'np.pi'), ('neg', 'cos', '_0')),
-                    (('pow', 'np.e', '_0'), ('exp', '_0'))]
+        controls = [(('pow', 'np.e', '_0'), ('exp', '_0'))]
+        # A wildcard rule is JUDGED, never bypassed -- the other half of the property
+        # this test guards. `cos(x + pi) -> -cos(x)` is the sharp case: true over the
+        # reals (judge_rule certifies it at tier `real`), false in f64 wherever pi falls
+        # below the ulp of x, so `1e20 + pi == 1e20` and the rule returns cos(x) with the
+        # wrong SIGN. Promotion demotes it to `?0` on that witness and kills it at 1.2e77.
+        judged_not_bypassed = (('cos', '+', '_0', 'np.pi'), ('neg', 'cos', '_0'))
         # The bypass is ALL pure-literal ground rules (widened with fold
         # unification, 2026-08-02: special-free exact collapses like `cos 0 -> 1`
         # are now legitimate mined rows, and the ladder's wildcard universe would
@@ -243,11 +248,12 @@ class TestExactCollapsesMint:
         cground_pass = (('/', '<constant>', 'float("inf")'), ('0',))
         cground_kill = (('acos', 'pow', '<constant>', 'float("inf")'), ('<constant>',))
         f64_respell = (('+', '1', 'exp', '(-1)'), ('1.3678794411714423',))
-        kept, report = promote(bare + controls + [cground_pass, cground_kill, f64_respell],
-                               eng)
+        kept, report = promote(bare + controls + [judged_not_bypassed, cground_pass,
+                                                  cground_kill, f64_respell], eng)
         kept_set = {(tuple(lhs), tuple(rhs)) for lhs, rhs in kept}
         for rule in bare + controls:
             assert rule in kept_set, (rule, sorted(kept_set))
+        assert judged_not_bypassed not in kept_set, "a wildcard rule must be judged, not bypassed"
         assert cground_pass in kept_set
         assert cground_kill not in kept_set
         assert f64_respell in kept_set  # shape-blind bypass: promotion no longer contains
