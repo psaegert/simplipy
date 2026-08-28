@@ -134,6 +134,38 @@ BIN = {
 }
 
 
+#: Periodic functions: evaluating one at an argument of astronomical magnitude forces the
+#: arbitrary-precision backend to reduce mod 2*pi, which needs pi to as many digits as the
+#: argument's exponent. That cost grows without bound in the argument, and a rule like
+#: `cos exp <constant>` reaches it on ordinary probe draws.
+_PERIODIC = ('sin', 'cos', 'tan')
+
+#: Largest BINARY EXPONENT a periodic argument may carry. Reducing sin/cos/tan mod 2*pi
+#: costs pi to as many digits as the argument's exponent, so the cost is linear in this
+#: number and unbounded without a cap.
+#:
+#: The bound is not a performance knob. Past it the value is not determined by the input at
+#: any finite precision -- one ulp of the argument already spans many periods -- so a
+#: verdict there would describe the probe's spelling, not the rule. Refusing is FAIL-CLOSED:
+#: the caller reads EVAL-ERR and the rule is dropped, never certified.
+#:
+#: 4096 bits (~1233 decimal digits) sits far above every legitimate probe and far below the
+#: pathology. Measured on the acj-5-4 ground tier: ordinary calls in these rules carry
+#: log2|arg| <= 10, the probe atom lattice reaches 1e300 (log2 ~ 997), and the stalling
+#: calls carry log2|arg| ~ 1.4e20 -- an argument of ~4.3e19 decimal digits, produced by
+#: exp(1e300), which mpmath represents exactly rather than overflowing to inf as f64 does.
+#: The distribution is bimodal with nothing in between, so the cap is not near a boundary.
+#:
+#: A MAGNITUDE bound, deliberately, not a wall-clock timeout: a mine must give the same
+#: verdicts on a loaded machine as on an idle one, and a timeout makes soundness depend on
+#: how busy the host was.
+PERIODIC_ARG_EXP_LIMIT = 4096
+
+
+class PeriodicRangeRefusal(ArithmeticError):
+    """A periodic function was asked for a value whose argument is beyond decidable range."""
+
+
 def _ev(tokens, i, env, consts, ci):
     t = tokens[i]
     i += 1
@@ -141,6 +173,10 @@ def _ev(tokens, i, env, consts, ci):
         v, i, ci = _ev(tokens, i, env, consts, ci)
         if isnan(v):
             return nan, i, ci
+        if t in _PERIODIC and not isinf(v) and v != 0 and mp.mag(v) > PERIODIC_ARG_EXP_LIMIT:
+            raise PeriodicRangeRefusal(
+                f"{t} of an argument with binary exponent {int(mp.mag(v))} > "
+                f"{PERIODIC_ARG_EXP_LIMIT}: beyond the range where the value is decidable")
         try:
             r = UN[t](v)
         except (OverflowError, ValueError, ZeroDivisionError):
