@@ -247,6 +247,25 @@ are unchanged; upgrade to 0.14.0 to get the check.
 
 ### Fixed
 
+- Sort promotion could sit on a single rule indefinitely. The high-precision evaluator
+  runs on mpf, which carries no exponent limit, so an intermediate like `cosh(2**1.4e10)`
+  is represented exactly and any later operation on it is unbounded — one observed mine
+  spent 26 h inside `cos` of an argument with a binary exponent of 1.4e20, computing pi
+  to that many places. `sin`/`cos`/`tan` and now `exp`/`cosh`/`sinh` refuse an ARGUMENT
+  whose binary exponent exceeds `PERIODIC_ARG_EXP_LIMIT` (4096). The check is on the
+  argument, not the result: magnitude alone is cheap, and bounding the result would
+  refuse `exp <constant>` and `cosh <constant>`, both sound.
+
+  The refusal is fail-closed — the evaluator raises, the caller reads EVAL-ERR, and a
+  rule is never certified on an evaluation that did not finish. Over the 31,315 rules of
+  a 163,002-rule corpus that reach the ladder: **0 timeouts at a 15 s per-rule deadline**
+  (whole set, 52.1 min; 66 rules take 1–15 s, the slowest 5.71 s), and the guard fires on
+  1,225 rules — 3.91% of those reaching the ladder, 0.752% of the corpus — spread over
+  all six functions. Their shape is a nested growth chain (`asin exp cosh <constant>`,
+  `sin acos cos cosh ?0`), 77.5% ground tier and 22.5% `?cf` on a 5,000-rule sample.
+
+  `PeriodicRangeRefusal` remains as an alias of the new `RangeRefusal`.
+
 - The nonzero-a.e. certificate for cleared quotients dropped a side condition: the
   clearing identity Z(t) = Z(numerator) presumes the cleared **denominator** is finite
   almost everywhere. Without it, `inv(inf + h)` — identically zero in f64 — certified
