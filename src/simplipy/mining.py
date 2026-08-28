@@ -860,7 +860,8 @@ class RuleMiner:
             # covers). Emits the deployment-strength ruleset directly.
             if promote_sorts and not interrupted():
                 from .promotion import promote
-                kept, promotion_report = promote(self.engine.simplification_rules, self.engine)
+                kept, promotion_report = promote(self.engine.simplification_rules, self.engine,
+                                                 verbose=verbose)
                 self.engine._replace_rules(kept)
                 # F94: the ladder's own per-rule verdict lists name the reason a pair
                 # left here (`killed_q` -- unsound at the `?` sort, `unsupported`, ...);

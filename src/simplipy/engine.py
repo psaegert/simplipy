@@ -657,6 +657,9 @@ class SimpliPyEngine:
         int
             The number of rules that were pruned.
         """
+        from .progress import Progress
+        prog = Progress(verbose, prefix='  [prune] ')
+
         full = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.simplification_rules]
         if not full:
             return 0
@@ -699,8 +702,15 @@ class SimpliPyEngine:
             rounds = 0
             while True:
                 rounds += 1
+                # Both of these run for hours on a large wave and neither reports anything
+                # on its own: the rebuild is one call over the whole kept set, and the scan
+                # is one AC judge per pending rule per coverage variant.
+                prog.stage(f'wave {wave_length} round {rounds}: rebuilding probe engine',
+                           kept=len(kept), pending=len(pending))
                 core = self._build_core(self._operators_config, [rule for rule in full if rule in kept])
-                readd = [rule for rule in pending if not covered(core, *rule)]
+                readd = [rule for rule in
+                         prog.track(list(pending), f'  wave {wave_length} round {rounds}: coverage scan')
+                         if not covered(core, *rule)]
                 if not readd:
                     if verbose:
                         print(f'Wave length {wave_length}: removed {len(pending)} / {len(wave)} '
