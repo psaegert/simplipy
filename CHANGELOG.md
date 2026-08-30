@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.2 (unreleased)
+## 0.14.2 (2026-08-30)
 
 - **Per-mode lazy rule loading: `modes=` on `load`/`from_config`/`__init__`, plus the
   operational drop `unload_mode`** (task #88). The default `modes='all'` builds every
