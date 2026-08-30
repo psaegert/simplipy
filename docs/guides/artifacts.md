@@ -31,6 +31,15 @@ mathematics — `asin(1e-8) → 1e-8` is bit-identical in f64 and wrong over ℝ
 cubic term. A caller selecting `Mode.real` is asking precisely for those rules to be
 absent, so the fallback would serve them the one thing they opted out of.
 
+Loading is per-mode on request: `SimpliPyEngine.load(..., modes=('f64', 'permissive'))`
+builds only the named sets eagerly — the profile a training worker runs, inference plus
+corpus canonicalisation, at 469 MB instead of 569 MB on acj-5-4-llm — and any other
+config-named set builds on its mode's first use, once, announced with one log line. The
+default `modes='all'` builds everything, exactly as always. `engine.unload_mode(mode)`
+is the paired operational RAM knob: it drops that mode's built structures (about 130 MB
+per used set on acj-5-4-llm) and the mode's next use lazily reloads them; the default
+f64 set is always present and refuses to unload.
+
 **The triple is the unit of mining, pinning and distribution.** A mine run is valid only
 if all three fall out of it; a partial triple is not shippable. The provenance sidecar
 covers the triple as a whole, and so does the byte-identity promise: a re-mine at the

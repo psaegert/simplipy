@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.14.2 (unreleased)
+
+- **Per-mode lazy rule loading: `modes=` on `load`/`from_config`/`__init__`, plus the
+  operational drop `unload_mode`** (task #88). The default `modes='all'` builds every
+  set the artifact names, byte-identical to the historical behavior — lean is opted
+  into, never inherited. A lean selection (e.g. the worker profile
+  `modes=('f64', 'permissive')`) defers any other config-named set: its file is not
+  even read at load; it builds on the mode's first `simplify`/`complexity` use —
+  once, lock-guarded against double-building (with a fairness gate so the install
+  lands under concurrent traffic), announced with one loud log line on the same
+  channel as the default-engine announcement. The machinery is additive-only:
+  nothing is ever evicted implicitly. `unload_mode(mode)` is the paired public RAM
+  knob: it drops the mode's built structures (for config-named sets the parsed list
+  too) and the next use lazily rebuilds from the recorded recipe; the default f64
+  set is the core's construction substrate and loudly refuses to unload. Measured on
+  acj-5-4-llm (fresh process, RSS after `load`): `'all'` 569 MB,
+  `('f64', 'permissive')` 469 MB, `('f64',)` 338 MB, with a deferred set costing
+  ~4 s and ~130 MB on first use. Eager, lazy-on-first-use, and reloaded-after-unload
+  engines produce byte-identical per-mode outputs (pinned by the identity suite in
+  `tests/test_lazy_modes.py`).
+
 ## 0.14.1 (2026-08-30)
 
 - **The triple router judges the spellings as they will be WRITTEN** (task #83).

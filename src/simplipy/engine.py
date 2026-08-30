@@ -9,6 +9,8 @@ the compiled core is REQUIRED; there is no pure-Python fallback.
 import hashlib
 import importlib
 import os
+import threading
+import time
 import warnings
 from itertools import product
 from types import CodeType, FunctionType
@@ -314,6 +316,16 @@ class Mode(Enum, metaclass=_ModeMeta):
 #: ``rules_f64.json`` file; ``rules.json`` in pre-rename artifacts).
 _RULE_MODE: dict[Mode, str] = {Mode.f64: 'default', Mode.real: 'real', Mode.permissive: 'permissive'}
 
+#: The wrapper attribute carrying each NON-DEFAULT rule mode's own set -- the two sets
+#: the lazy machinery (``modes=...`` at construction, :meth:`SimpliPyEngine.unload_mode`)
+#: can defer and drop. The default (f64) set is deliberately absent from this map: it is
+#: the core's construction substrate (the canon context, the dedup key, and the set every
+#: absent mode falls back to), so it is always built eagerly and never unloadable.
+_MODE_RULES_ATTR: dict[str, str] = {
+    'real': 'real_simplification_rules',
+    'permissive': 'permissive_simplification_rules',
+}
+
 #: The retired STRING spellings, accepted by ``simplify(mode=...)`` with a notice. Kept
 #: beside ``_ModeMeta._DEPRECATED`` deliberately: the enum path and the string path are
 #: two doors onto the same rename and must not drift.
@@ -350,6 +362,30 @@ class SimpliPyEngine:
     rules_permissive : list[tuple] or None, optional
         The ``permissive`` mode's OWN COMPLETE rule set, same discipline as ``rules_real``.
         This is the set ``Mode.permissive`` serves.
+    modes : str or Mode or tuple or list, optional
+        Which mode rule sets are built EAGERLY, at construction. The default ``'all'``
+        builds every set the engine names -- byte-identical to the historical
+        behavior, so lean loading is opted into and never inherited. A tuple/list of
+        mode names or :class:`Mode` members (e.g. ``modes=('f64', 'permissive')``)
+        builds exactly those; a set NOT named builds LAZILY on its mode's first use
+        (any ``simplify``/``complexity`` call addressing it) -- once,
+        lock-guarded, announced with one loud log line on the same channel as the
+        default-engine announcement in :meth:`load`, and with a pause of a few
+        seconds for a large artifact while the set loads and compiles. The machinery
+        is ADDITIVE-ONLY: a lazy build never evicts another mode's structures, and
+        nothing is ever dropped implicitly -- dropping is :meth:`unload_mode`, an
+        explicit call. The default (f64) set is always built eagerly regardless of
+        ``modes``: it is the core's construction substrate (the canon context, the
+        dedup key, and the set every absent mode falls back to). Naming ``'f64'`` in
+        the tuple is therefore allowed but redundant.
+
+        Measured on the acj-5-4-llm artifact (fresh process each, RSS directly after
+        ``load``): ``modes='all'`` 569 MB, ``modes=('f64', 'permissive')`` 469 MB,
+        ``modes=('f64',)`` 338 MB; a deferred set then costs its build on first use
+        (~4 s and ~130 MB per set on this artifact, announced by the log line). The
+        worker profile ``modes=('f64', 'permissive')`` is the intended lean
+        deployment: inference (f64) plus training-corpus canonicalisation, without
+        the ``real`` set's RAM.
     trusted_modules : list[str] or None, optional
         Extra module roots this engine may import for its operator realizations,
         on top of the defaults (``math``, ``np``, ``scipy``, ``simplipy``) and
@@ -370,7 +406,11 @@ class SimpliPyEngine:
         never appear here, so a consumer reading this reads exactly what it is served.
     real_simplification_rules : list[tuple] or None
         The ``real`` mode's own complete rule set, or ``None`` when this engine names
-        none and that mode serves ``simplification_rules``.
+        none and that mode serves ``simplification_rules``. Under a lean ``modes=``
+        selection, a config-named set that has not been USED yet also reads ``None``
+        here -- it materializes on the mode's first use (and returns to ``None``
+        after :meth:`unload_mode`); the engine still knows the set's file and the
+        mode still serves it, lazily.
     permissive_simplification_rules : list[tuple] or None
         The ``permissive`` mode's own complete rule set, same convention.
     modules : list[str]
@@ -382,7 +422,11 @@ class SimpliPyEngine:
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None, *,
                  rules_real: list[tuple] | None = None,
                  rules_permissive: list[tuple] | None = None,
+                 modes: 'str | Mode | tuple | list' = 'all',
                  trusted_modules: list[str] | None = None) -> None:
+        # Loud validation FIRST, like the operator specs below: a mistyped `modes`
+        # must never construct an engine that silently built the wrong sets.
+        self._modes = self._normalized_modes(modes)
         # C1.18: loud spec validation + normalization BEFORE anything reads a key --
         # the first consumer used to be a bare `KeyError: 'alias'`.
         operators = _normalized_operator_specs(operators)
@@ -454,9 +498,68 @@ class SimpliPyEngine:
         # Build the compiled core (REQUIRED; see the module docstring): every
         # construction path (from_config/load AND direct in-memory construction) attaches it
         # here, from the SAME in-memory state, so no path can exist without a core.
+        #
+        # LAZY MODES (task #88): only the EAGER sets are pushed. A mode outside the
+        # `modes=` selection keeps its recipe (the attribute above, or a file source
+        # `from_config` attaches after construction) and builds on first use through
+        # `_ensure_mode_loaded` -- see the class docstring's `modes` entry.
+        eager = self._modes if self._modes != 'all' else ('f64', 'real', 'permissive')
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
-            self.real_simplification_rules, self.permissive_simplification_rules)
+            self.real_simplification_rules if 'real' in eager else None,
+            self.permissive_simplification_rules if 'permissive' in eager else None)
+        # The lazy-mode bookkeeping. `_mode_rule_sources` maps a rule mode name to the
+        # FILE its set loads from (attached by `from_config` for every config-named
+        # set); `_core_loaded_modes` holds the non-default modes whose sets the CURRENT
+        # core carries (or that were checked and name nothing to load); the lock
+        # guards every first-use build and unload so two threads cannot double-build.
+        self._mode_rule_sources: dict[str, str] = {}
+        self._mode_load_lock = threading.Lock()
+        self._push_gate = threading.Condition()
+        self._push_waiting = False
+        self._core_loaded_modes = {
+            m for m in _MODE_RULES_ATTR
+            if m in eager and getattr(self, _MODE_RULES_ATTR[m]) is not None}
+
+    @staticmethod
+    def _normalized_modes(modes: 'str | Mode | tuple | list') -> 'str | tuple[str, ...]':
+        """Validate + normalize the ``modes=`` selection: ``'all'``, or the tuple of
+        PUBLIC mode names built eagerly (``'f64'`` always present -- the default set
+        is the core's construction substrate and cannot be deferred).
+
+        Loud on everything else: a bare mode-name string is refused with the tuple
+        spelling suggested (a ``str`` is also a sequence of characters, and iterating
+        it would silently select nothing), an unknown name or a non-mode element
+        raises exactly as ``simplify(mode=...)`` would.
+        """
+        if isinstance(modes, str):
+            if modes.strip().lower() == 'all':
+                return 'all'
+            raise TypeError(
+                f"modes must be 'all' or a tuple/list of mode names or simplipy.Mode "
+                f"members; a bare mode name is refused because a string is also a "
+                f"sequence of characters -- did you mean modes=({modes!r},)?")
+        if isinstance(modes, Mode):
+            modes = (modes,)
+        if not isinstance(modes, (tuple, list, set, frozenset)):
+            raise TypeError(
+                f"modes must be 'all', a simplipy.Mode, or a tuple/list of mode names "
+                f"or Mode members, not {type(modes).__name__} ({modes!r})")
+        names = {'f64'}
+        for m in modes:
+            if isinstance(m, str):
+                match = {mm.name.lower(): mm for mm in Mode}.get(m.strip().lower())
+                if match is None:
+                    raise ValueError(
+                        f"unknown mode {m!r} in modes=...: expected one of "
+                        f"{[mm.name for mm in Mode]} (or a simplipy.Mode)")
+                m = match
+            elif not isinstance(m, Mode):
+                raise TypeError(
+                    f"modes entries must be mode names or simplipy.Mode members, "
+                    f"not {type(m).__name__} ({m!r})")
+            names.add(m.name)
+        return tuple(n for n in ('f64', 'real', 'permissive') if n in names)
 
     @staticmethod
     def _normalized_mode_rules(rules: list[tuple] | None) -> list[tuple] | None:
@@ -537,6 +640,17 @@ class SimpliPyEngine:
         state = self.__dict__.copy()
         del state['_core']
         state.pop('_eval_namespace', None)
+        # The lazy-mode runtime state: the lock is process-local (and has no pickle
+        # surface), and `_core_loaded_modes` describes the CORE, which the unpickling
+        # side rebuilds and re-derives. The RECIPE halves (`_modes`,
+        # `_mode_rule_sources`) stay in the state: a worker unpickling a lean engine
+        # inherits the same lean profile and lazily loads a deferred set from the same
+        # file on first use -- note this makes such a pickle portable exactly as far
+        # as the recorded artifact paths resolve (the spawn-worker case it serves).
+        state.pop('_mode_load_lock', None)
+        state.pop('_push_gate', None)
+        state.pop('_push_waiting', None)
+        state.pop('_core_loaded_modes', None)
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -553,11 +667,24 @@ class SimpliPyEngine:
         # The other two modes' sets travel IN the state (plain attributes), so the recipe
         # a worker unpickles is complete. `setdefault(..., None)` keeps pickles written
         # before the triple existed loadable: they rebuild with no set of their own,
-        # which is exactly what they were.
+        # which is exactly what they were. The same treatment keeps pickles written
+        # before the lazy-mode machinery (task #88) loadable: they rebuild as
+        # `modes='all'` engines with no file sources, which is exactly what they were.
+        self.__dict__.setdefault('_modes', 'all')
+        self.__dict__.setdefault('_mode_rule_sources', {})
+        self._mode_load_lock = threading.Lock()
+        self._push_gate = threading.Condition()
+        self._push_waiting = False
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.__dict__.setdefault('real_simplification_rules', None),
             self.__dict__.setdefault('permissive_simplification_rules', None))
+        # The fresh core carries exactly the non-None in-memory sets `_build_core`
+        # just pushed; a set that was deferred (or unloaded) in the parent stays
+        # deferred here and lazily loads from its recorded source on first use.
+        self._core_loaded_modes = {
+            m for m in _MODE_RULES_ATTR
+            if getattr(self, _MODE_RULES_ATTR[m]) is not None}
 
     def compile_rules(self) -> None:
         """Sync the compiled core's rule set from ``self.simplification_rules``.
@@ -573,11 +700,185 @@ class SimpliPyEngine:
 
         The other two modes' sets are re-pushed alongside: a fresh core starts with no
         set of its own for either, so NOT re-pushing them would silently retract both on
-        every default-rule sync.
+        every default-rule sync. Re-pushed means the IN-MEMORY sets: a set deferred by a
+        lean ``modes=`` selection (or dropped by :meth:`unload_mode`) stays deferred and
+        lazily loads from its recorded source on first use, exactly as before the sync.
+        The swap runs under the mode-load lock so it cannot race a first-use build.
         """
-        self._core = self._build_core(
-            self._operators_config, self.simplification_rules,
-            self.real_simplification_rules, self.permissive_simplification_rules)
+        with self._mode_load_lock:
+            self._core = self._build_core(
+                self._operators_config, self.simplification_rules,
+                self.real_simplification_rules, self.permissive_simplification_rules)
+            self._core_loaded_modes = {
+                m for m in _MODE_RULES_ATTR
+                if getattr(self, _MODE_RULES_ATTR[m]) is not None}
+
+    def _await_no_pending_push(self) -> None:
+        """The reader half of the lazy-install fairness gate: hold a NEW
+        ``simplify``/``complexity`` core entry while a mode-set push is waiting.
+
+        Without this, a push under sustained concurrent traffic starves: the core's
+        exclusive (`&mut`) entry only opens when NO call is in flight, and
+        overlapping detached readers keep it closed indefinitely (measured: two
+        threads of long ``simplify`` calls held it closed past a 60 s deadline).
+        Readers pausing at this gate drain the in-flight calls, the push lands in
+        roughly one call duration, and the gate reopens. The fast path -- no push
+        pending, i.e. always, outside a lazy first use or an ``unload_mode`` -- is
+        one attribute test.
+        """
+        if self._push_waiting:
+            with self._push_gate:
+                while self._push_waiting:
+                    self._push_gate.wait(timeout=1.0)
+
+    def _push_mode_rules(self, rule_mode: str, rules: list[tuple] | None) -> None:
+        """Push (or with ``None`` retract) one mode's set into the LIVE core, riding
+        out in-flight borrow contention.
+
+        The core's ``set_mode_rules`` needs exclusive access (`&mut` -- the token
+        table is deliberately lock-free), so pyo3 refuses it with ``RuntimeError:
+        Already borrowed`` while any other thread is inside a core call. The refusal
+        is transient -- a reader's borrow ends with its call -- so this helper
+        raises the fairness flag (parking NEW ``simplify``/``complexity`` entries at
+        :meth:`_await_no_pending_push`) and retries until the in-flight calls drain
+        and the push lands; it re-raises loudly, with the cause named, only if the
+        core never falls quiet within the deadline (e.g. long-running core work
+        outside the gated methods). Single-threaded callers never retry. Callers
+        hold ``_mode_load_lock``, so pushes cannot race each other -- only readers.
+        """
+        payload = (None if rules is None
+                   else [(list(lhs), list(rhs)) for lhs, rhs in rules])
+        deadline = time.monotonic() + 60.0
+        self._push_waiting = True
+        try:
+            while True:
+                try:
+                    self._core.set_mode_rules(rule_mode, payload)
+                    return
+                except RuntimeError as exc:
+                    if 'Already borrowed' not in str(exc) or time.monotonic() > deadline:
+                        raise RuntimeError(
+                            f"could not install the {rule_mode!r} rule set: the "
+                            f"compiled core stayed exclusively unavailable (other "
+                            f"threads kept it busy for 60 s). Retry at a quieter "
+                            f"moment, or build the set eagerly (modes=...) at "
+                            f"construction.") from exc
+                    time.sleep(0.002)
+        finally:
+            with self._push_gate:
+                self._push_waiting = False
+                self._push_gate.notify_all()
+
+    def _ensure_mode_loaded(self, rule_mode: str) -> None:
+        """Build ``rule_mode``'s set NOW if this engine names one that the core does
+        not currently hold -- the first-use half of the lazy ``modes=`` machinery.
+
+        Called on every :meth:`simplify`/:meth:`complexity` call that addresses a
+        non-default mode; the fast path is one set-membership test. The slow path
+        runs ONCE per set (lock-guarded, so two threads' first calls cannot
+        double-build), is ADDITIVE-ONLY (it installs into the live core and evicts
+        nothing), and announces itself with one loud line on the same channel as
+        :meth:`load`'s default-engine announcement, because the build pauses the
+        call for a few seconds on a large artifact.
+        """
+        if rule_mode not in _MODE_RULES_ATTR or rule_mode in self._core_loaded_modes:
+            return
+        with self._mode_load_lock:
+            if rule_mode in self._core_loaded_modes:
+                return
+            attr = _MODE_RULES_ATTR[rule_mode]
+            rules = getattr(self, attr)
+            if rules is None:
+                source = self._mode_rule_sources.get(rule_mode)
+                if source is None:
+                    # This engine names no set for the mode: nothing to build, and
+                    # (sources only ever attach at load) nothing will ever arrive.
+                    # Marking it loaded makes every later call take the fast path.
+                    self._core_loaded_modes.add(rule_mode)
+                    return
+                print(f"simplipy: building the {rule_mode!r} rule set on first use "
+                      f"from '{source}' (deferred by modes={self._modes!r}); "
+                      f"expect a pause while it loads and compiles")
+                with open(source, 'r') as f:
+                    rules = self._normalized_mode_rules(json.load(f))
+                setattr(self, attr, rules)
+            else:
+                print(f"simplipy: building the {rule_mode!r} rule set on first use "
+                      f"from its in-memory recipe (deferred by "
+                      f"modes={self._modes!r}); expect a pause while it compiles")
+            self._push_mode_rules(rule_mode, rules)
+            self._core_loaded_modes.add(rule_mode)
+
+    def unload_mode(self, mode: 'Mode | str') -> None:
+        """Drop ``mode``'s built rule structures; the next use lazily rebuilds them.
+
+        The OPERATIONAL RAM KNOB paired with lean loading (``modes=`` at
+        construction): a long-lived process that needed a mode only transiently --
+        say a worker that canonicalised one corpus in ``permissive`` and then serves
+        ``f64`` -- calls this to hand the memory back. Dropping is EXPLICIT and only
+        ever happens here: no lazy build, sync, or other call evicts a set
+        implicitly. The engine keeps the set's recipe (its config-named file, or the
+        in-memory list it was constructed with), so the mode's next use rebuilds the
+        set exactly as a lazy first use would -- announced by the same log line, with
+        the same pause, serving byte-identical results.
+
+        What is freed depends on the recipe. A CONFIG-NAMED set (built by
+        ``from_config``/``load``) drops both the compiled core structures and the
+        wrapper's parsed rule list -- the mode's full footprint, measured at roughly
+        130 MB per used set on the acj-5-4-llm artifact (~100-130 MB parsed plus
+        50-65 MB compiled; how much of it the allocator returns to the OS
+        immediately depends on heap layout). A set handed IN MEMORY to ``__init__``
+        drops the compiled structures only: the wrapper's list is the sole recipe,
+        so it stays.
+
+        The DEFAULT (f64) set is REFUSED, loudly: it is the core's construction
+        substrate -- the canon every mode's rewrite descends runs on it, the dedup
+        key is a function of it, and every mode naming no set of its own serves it --
+        so an engine without it cannot exist, and half-supporting the call would turn
+        the refusal into a silent lie. Unloading a mode that names no set of its own
+        is a no-op, and the call is idempotent.
+
+        Operational discipline: call it at a QUIET moment for the mode being
+        unloaded. The drop itself is guarded (it waits for in-flight core calls and
+        cannot corrupt one), but a call racing into that mode on ANOTHER thread may
+        pass its already-loaded check before the drop lands and then run against the
+        core's absence semantics for the mode -- ``permissive`` falling back to the
+        default set for that one call. The next call lazily rebuilds.
+
+        Parameters
+        ----------
+        mode : Mode or str
+            The mode to unload, as a :class:`Mode` member or its name
+            (``'real'``, ``'permissive'``). ``Mode.f64`` raises ``ValueError``.
+        """
+        if isinstance(mode, str):
+            match = {m.name.lower(): m for m in Mode}.get(mode.strip().lower())
+            if match is None:
+                raise ValueError(
+                    f"unknown mode {mode!r}: expected one of "
+                    f"{[m.name for m in Mode]} (or a simplipy.Mode)")
+            mode = match
+        elif not isinstance(mode, Mode):
+            raise TypeError(
+                f"mode must be a simplipy.Mode or one of "
+                f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
+        if mode is Mode.f64:
+            raise ValueError(
+                "the default (f64) rule set cannot be unloaded: it is the core's "
+                "construction substrate (the canon every mode's rewrite descends "
+                "runs on it, the dedup key is a function of it, and every mode "
+                "naming no set of its own serves it), so an engine without it "
+                "cannot exist. Unload 'real' or 'permissive' instead.")
+        rule_mode = _RULE_MODE[mode]
+        with self._mode_load_lock:
+            # Retract from the live core: drops the compiled (interned) set and its
+            # translated index. `None` is the core's documented retraction spelling.
+            self._push_mode_rules(rule_mode, None)
+            if rule_mode in self._mode_rule_sources:
+                # File-backed: the parsed list is re-readable, so it is dropped too --
+                # this is where the bulk of the RAM comes back.
+                setattr(self, _MODE_RULES_ATTR[rule_mode], None)
+            self._core_loaded_modes.discard(rule_mode)
 
     def _replace_rules(self, rules: list) -> None:
         """Build-first-or-unchanged (conc-2): compile a fresh core from the CANDIDATE
@@ -586,11 +887,15 @@ class SimpliPyEngine:
         push left the wrapper and the core silently diverged; this turns that into
         loud-and-unchanged."""
         rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
-        new_core = self._build_core(
-            self._operators_config, rules,
-            self.real_simplification_rules, self.permissive_simplification_rules)
-        self.simplification_rules = rules
-        self._core = new_core
+        with self._mode_load_lock:
+            new_core = self._build_core(
+                self._operators_config, rules,
+                self.real_simplification_rules, self.permissive_simplification_rules)
+            self.simplification_rules = rules
+            self._core = new_core
+            self._core_loaded_modes = {
+                m for m in _MODE_RULES_ATTR
+                if getattr(self, _MODE_RULES_ATTR[m]) is not None}
 
     def prune_covered_rules(self, verbose: bool = False) -> int:
         """Remove rules that the remaining rules already cover behaviorally.
@@ -824,7 +1129,8 @@ class SimpliPyEngine:
         self._eval_namespace = namespace
 
     @classmethod
-    def from_config(cls, config_path: str, *, trusted_modules: list[str] | None = None) -> "SimpliPyEngine":
+    def from_config(cls, config_path: str, *, modes: 'str | Mode | tuple | list' = 'all',
+                    trusted_modules: list[str] | None = None) -> "SimpliPyEngine":
         """Creates a SimpliPyEngine instance from a YAML configuration file.
 
         The configuration file should specify the `operators` and can
@@ -834,6 +1140,14 @@ class SimpliPyEngine:
         ----------
         config_path : str
             The absolute or relative path to the YAML configuration file.
+        modes : str or Mode or tuple or list, optional
+            Which mode rule sets are built eagerly at load; the default ``'all'``
+            builds every set the config names, byte-identical to the historical
+            behavior. Under a lean selection (e.g. ``modes=('f64', 'permissive')``)
+            a config-named set outside it is not even read here -- its resolved
+            path is recorded and the file loads on the mode's first use. See the
+            class docstring's ``modes`` entry for the full contract and measured
+            RSS numbers, and :meth:`unload_mode` for the explicit drop.
         trusted_modules : list[str] or None, optional
             Extra module roots the config is allowed to import (see
             :mod:`simplipy.trust`). Deliberately an argument HERE and not a key in
@@ -844,6 +1158,9 @@ class SimpliPyEngine:
         SimpliPyEngine
             A new instance of the engine configured as per the file.
         """
+        # Loud validation BEFORE any file is read: a mistyped `modes` must fail here,
+        # not after the multi-megabyte rule files are already parsed.
+        eager = cls._normalized_modes(modes)
         config_path = os.path.abspath(config_path)
         config = load_config(config_path)
         # ARTIFACT-GENERATION GATE (owner ruling 2026-08-03): generation-1 artifacts
@@ -903,6 +1220,11 @@ class SimpliPyEngine:
         # An EMPTY file is honoured as an empty set, not as an absent one: `[]` says
         # "this mode serves nothing" and the loader has no business overruling it.
         mode_rules: dict[str, list | None] = {'real': None, 'permissive': None}
+        # Resolved paths of every config-named mode file that EXISTS, attached to the
+        # engine below: the recipe `unload_mode` re-reads from, and -- for a set
+        # outside a lean `modes=` selection -- the source its lazy first-use build
+        # loads, instead of being read here.
+        mode_sources: dict[str, str] = {}
         for mode_name in mode_rules:
             declared = config.get(f'rules_{mode_name}')
             if not declared and mode_name == 'permissive':
@@ -914,8 +1236,12 @@ class SimpliPyEngine:
                 continue
             mode_path = resolve_artifact_path(declared)
             if os.path.exists(mode_path):
-                with open(mode_path, 'r') as f:
-                    mode_rules[mode_name] = json.load(f)
+                mode_sources[mode_name] = mode_path
+                if eager == 'all' or mode_name in eager:
+                    with open(mode_path, 'r') as f:
+                        mode_rules[mode_name] = json.load(f)
+                # else: deferred -- the existence check above keeps the
+                # missing-file warning at load time even for a lazy set.
             else:
                 # What the built engine then DOES differs by mode -- `permissive` falls
                 # back to the default set, `real` fails closed at call time -- and the
@@ -932,7 +1258,11 @@ class SimpliPyEngine:
                     UserWarning)
         engine = cls(operators=config['operators'], rules=rules,
                      rules_real=mode_rules['real'], rules_permissive=mode_rules['permissive'],
-                     trusted_modules=trusted_modules)
+                     modes=modes, trusted_modules=trusted_modules)
+        # The file recipe, attached AFTER construction because paths are this
+        # loader's knowledge, not `__init__`'s: a deferred set lazily loads from
+        # here on first use, and `unload_mode` re-reads from here after a drop.
+        engine._mode_rule_sources.update(mode_sources)
         # WARNING ON THE RESULTING STATE (owner ruling 2026-08-18: "Warning on engine
         # without rules"), broadened from the missing-file case it replaces: an engine
         # that ends up with zero rules says so however it got there. NON-FATAL by the
@@ -979,6 +1309,7 @@ class SimpliPyEngine:
     def load(cls, engine: str | None = None, install: bool = False,
              local_dir: Path | str | None = None, repo_id: str | None = None,
              manifest_filename: str | None = None, *,
+             modes: 'str | Mode | tuple | list' = 'all',
              trusted_modules: list[str] | None = None) -> "SimpliPyEngine":
         """Loads a pre-defined engine configuration from the asset manager.
 
@@ -1004,6 +1335,12 @@ class SimpliPyEngine:
             The Hugging Face repository ID where the manifest is stored. If None, the default repository ID is used.
         manifest_filename : str or None, optional
             The filename of the manifest file. If None, the default filename is used.
+        modes : str or Mode or tuple or list, optional
+            Which mode rule sets are built eagerly at load; ``'all'`` (the default)
+            is the historical behavior, a lean selection such as
+            ``modes=('f64', 'permissive')`` defers the rest to first use. See
+            :meth:`from_config` and the class docstring's ``modes`` entry (with the
+            measured RSS numbers); :meth:`unload_mode` is the paired explicit drop.
         trusted_modules : list[str] or None, optional
             Extra module roots the fetched config is allowed to import (see
             :mod:`simplipy.trust`). A hosted asset is third-party input like any
@@ -1032,7 +1369,7 @@ class SimpliPyEngine:
         return cls.from_config(
             get_path(engine, install=install, local_dir=local_dir, repo_id=repo_id,
                      manifest_filename=manifest_filename),
-            trusted_modules=trusted_modules)
+            modes=modes, trusted_modules=trusted_modules)
 
     def is_valid(self, prefix_expression: 'str | list[str] | tuple[str, ...] | np.ndarray',
                  verbose: bool = False) -> bool:
@@ -1707,6 +2044,16 @@ class SimpliPyEngine:
                 f"mode must be a simplipy.Mode or one of "
                 f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
 
+        # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds
+        # HERE, on the mode's first use -- once, lock-guarded, announced. Under the
+        # default `modes='all'` this is one set-membership test. Runs BEFORE the
+        # fail-closed `real` check below, so that check judges the loaded state.
+        if mode is not Mode.f64:
+            self._ensure_mode_loaded(_RULE_MODE[mode])
+        # The reader half of the lazy-install fairness gate (one attribute test
+        # when no push is pending -- i.e. always, outside a first-use build).
+        self._await_no_pending_push()
+
         if isinstance(expression, str):
             tokens = self._core.parse(expression, True, False)
         elif isinstance(expression, np.ndarray):
@@ -1809,6 +2156,11 @@ class SimpliPyEngine:
             tokens = list(expression)
         rule_mode = _RULE_MODE[mode if isinstance(mode, Mode)
                                else {m.name.lower(): m for m in Mode}[str(mode).strip().lower()]]
+        # LAZY MODES (task #88): same first-use hook as `simplify` -- the mode
+        # argument reaches the core below, so a deferred set must be built first --
+        # and the same reader half of the install fairness gate.
+        self._ensure_mode_loaded(rule_mode)
+        self._await_no_pending_push()
         canon = str(canon).strip().lower()
         if canon not in ('default', 'mode'):
             raise ValueError(
