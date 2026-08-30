@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.1 (unreleased)
+## 0.14.1 (2026-08-30)
 
 - **The triple router judges the spellings as they will be WRITTEN** (task #83).
   `mining._route_triple` used to tier every rule by judging its served-canon form
