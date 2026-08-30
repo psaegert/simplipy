@@ -22,7 +22,7 @@ import tempfile
 
 import yaml
 
-import simplipy as sp
+from conftest import acj_config_path
 from simplipy import SimpliPyEngine
 
 OPS = {
@@ -52,18 +52,18 @@ class TestSumOrientationTwins:
     def test_flipped_subject_fires(self) -> None:
         e = make_engine(DOUBLE_ANGLE)
         # the rule's own orientation (sanity)
-        assert e.simplify(["-", "1", "*", "2", "pow", "sin", "x0", "2"], form="explicit") == \
+        assert e.simplify(["-", "1", "*", "2", "pow", "sin", "x0", "2"]) == \
             ["cos", "*", "2", "x0"]
         # the FLIPPED subject: 2sin^2(x) - 1 == -cos(2x)
-        out = e.simplify(["-", "*", "2", "pow", "sin", "x0", "2", "1"], form="explicit")
+        out = e.simplify(["-", "*", "2", "pow", "sin", "x0", "2", "1"])
         assert out == ["neg", "cos", "*", "2", "x0"], out
         # idempotent
-        assert e.simplify(list(out), form="explicit") == out
+        assert e.simplify(list(out)) == out
 
     def test_flipped_subject_fires_with_remainder(self) -> None:
         e = make_engine(DOUBLE_ANGLE)
-        got = e.simplify(["+", "x1", "-", "*", "2", "pow", "sin", "x0", "2", "1"], form="tagged")
-        want = e.simplify(["+", "x1", "neg", "cos", "*", "2", "x0"], form="tagged")
+        got = e.simplify(e.to_tagged(["+", "x1", "-", "*", "2", "pow", "sin", "x0", "2", "1"]))
+        want = e.simplify(e.to_tagged(["+", "x1", "neg", "cos", "*", "2", "x0"]))
         assert got == want, (got, want)
 
     def test_twin_accounting_and_dedupe(self) -> None:
@@ -80,7 +80,7 @@ class TestSumOrientationTwins:
         # and both engines rewrite both orientations identically
         for s in (["-", "1", "*", "2", "pow", "sin", "x0", "2"],
                   ["-", "*", "2", "pow", "sin", "x0", "2", "1"]):
-            assert e.simplify(list(s), form="explicit") == e2.simplify(list(s), form="explicit")
+            assert e.simplify(list(s)) == e2.simplify(list(s))
 
     def test_function_rooted_rules_mint_no_twin(self) -> None:
         # -f(x) keeps f(x) as an intact subtree, so the source rule fires on the child;
@@ -91,7 +91,7 @@ class TestSumOrientationTwins:
         _, _, _, twins = e._core.ac_rules_info()
         assert twins == 0
         # the source rule fires on the intact child of the negated subject
-        assert e.simplify(["neg", "sin", "+", "x0", "np.pi"], form="explicit") == ["sin", "x0"]
+        assert e.simplify(["neg", "sin", "+", "x0", "np.pi"]) == ["sin", "x0"]
 
 
 class TestShippedArtifactTwin:
@@ -99,7 +99,60 @@ class TestShippedArtifactTwin:
         """The one live orientation gap in acj-4-3: pi - acos(x) -> acos(-x) never had its
         twin mined (the flipped target exceeds the tier's token budget); the load-time
         closure supplies it: acos(x) - pi -> -acos(-x)."""
-        e = SimpliPyEngine.from_config(sp.get_path("acj-4-3"))
-        got = e.simplify(["-", "acos", "x0", "np.pi"], form="explicit")
-        want = e.simplify(["neg", "acos", "neg", "x0"], form="explicit")
+        e = SimpliPyEngine.from_config(acj_config_path())
+        got = e.simplify(["-", "acos", "x0", "np.pi"])
+        want = e.simplify(["neg", "acos", "neg", "x0"])
         assert got == want, (got, want)
+
+
+class TestTheServedSetIsWhatGetsJudged:
+    """The soundness sweep must judge what the matcher SERVES, not what the artifact says.
+
+    Translation is not the identity on an artifact: it drops rules, and it MINTS the
+    orientation twins above. A twin exists only after a load -- it is a function of the
+    LOADING engine's canon, so no artifact can carry it and no sweep that reads
+    ``rules.json`` can see it. Those twins fire (the tests above measure it), which means
+    a rules.json-based gate ships rules no authority ever judged. ``ac_served_rules`` is
+    the matcher's own rule set, so coverage is 100% of what can fire, and stays 100% when
+    a later engine mints a different closure.
+    """
+
+    def test_served_set_is_the_artifact_plus_exactly_the_twins(self) -> None:
+        e = SimpliPyEngine.from_config(acj_config_path())
+        kept, _, _, twins = e._core.ac_rules_info()
+        served = e._core.ac_served_rules()
+        # RELATIONSHIPS, not absolute counts. The served total moves with any change to
+        # the constructor -- the inverse-pair band alone took it 5553 -> 5558 by
+        # declining folds it cannot reproduce -- and a literal here would pin the test
+        # to one combination of branches. What must hold is that the served set is the
+        # artifact plus exactly the twins, whatever those totals happen to be.
+        assert len(served) == kept
+        assert len(served) - len(e.simplification_rules) == twins
+        assert twins > 0, 'no twins minted: this test would hold vacuously'
+
+    def test_every_served_entry_names_the_artifact_rule_it_answers_for(self) -> None:
+        """A verdict is only actionable if it names a row to drop. A twin has no row of
+        its own, so it reports its SOURCE -- condemning a twin drops the rule that mints
+        it, which is the only edit that removes it from a later load."""
+        e = SimpliPyEngine.from_config(acj_config_path())
+        served = e._core.ac_served_rules()
+        artifact = e.simplification_rules
+        assert all(0 <= src < len(artifact) for _, _, src in served)
+        twins = e._core.ac_rules_info()[3]
+        for lhs, rhs, src in served[-twins:]:
+            src_lhs, src_rhs = artifact[src]
+            # the twin is a DIFFERENT rule from the row it is attributed to
+            assert (tuple(lhs), tuple(rhs)) != (tuple(src_lhs), tuple(src_rhs))
+
+    def test_served_spelling_is_the_one_the_judge_parses(self) -> None:
+        """The EXPLICIT projection, not the tagged one: the tagged form carries
+        ``<mul>``/``</mul>`` brackets the contract judge has no grammar for."""
+        from simplipy.verify import verify_rule
+        e = make_engine(DOUBLE_ANGLE)
+        for lhs, rhs, _ in e._core.ac_served_rules():
+            assert verify_rule(list(lhs), list(rhs))["verdict"] != "UNSUPPORTED-SHAPE"
+
+    def test_small_engine_serves_more_than_it_was_given(self) -> None:
+        e = make_engine(DOUBLE_ANGLE)
+        assert len(e.simplification_rules) == 1
+        assert len(e._core.ac_served_rules()) == 2

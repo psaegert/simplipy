@@ -393,7 +393,13 @@ class TestPairDps:
         assert d >= 650          # must resolve 1 - cos(1e-320) ~ 5e-641
 
     def test_derivation_is_capped(self):
-        assert _pair_dps(['+', '1e309', 'pow', '5e-324', '3']) <= 3000
+        """The probe must SATURATE the cap, or the test passes with the cap removed.
+        The old one spanned 1e309..5e-324 and derived 1336 -- comfortably under 3000, so
+        `<= 3000` held for any ceiling at all, and for none."""
+        # 2 * span + 70 would be 3088 here; the cap is what makes it 3000
+        assert _pair_dps(['+', '1e309', '1e-1200']) == 3000
+        # ... and an ordinary span is still derived, not clamped
+        assert _pair_dps(['+', '1e309', 'pow', '5e-324', '3']) == 1336
 
 
 # ---------------------------------------------------------------------------------------

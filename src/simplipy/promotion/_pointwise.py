@@ -58,9 +58,22 @@ ATOMS = ['0.0', '1.0', '(-1.0)', 'float("inf")', 'float("-inf")', 'float("nan")'
          '2.718281828459045', '(-2.718281828459045)',
          '1.5707963267948966', '(-1.5707963267948966)',
          '6.283185307179586', '(-6.283185307179586)',
-         '0.7853981633974483', '(-0.7853981633974483)']
+         '0.7853981633974483', '(-0.7853981633974483)',
+         # BOUNDARY-MAGNITUDE PROBES (2026-08-26). The pool ended at |v| <= 40 with
+         # +-inf beyond, so any rule whose sides diverge only at extreme magnitude --
+         # overflow of an inner power (sqrt(x^2)=|x| breaks at 1.34e154 where fl(x^2)
+         # is inf; x^4 at 1.19e77; x^6 at 4.6e51) or underflow of an inner square --
+         # judged as exact agreement everywhere the pool looked. Three such rules
+         # certified into the acj-5-4 f64 tier (caught at artifact verification).
+         # Probes bracket the f64 overflow/underflow boundaries of low-degree inner
+         # powers; at +-inf both sides of such rules agree, so inf atoms cannot do
+         # this job.
+         '1e20', '(-1e20)', '1e50', '(-1e50)', '4.7e51', '(-4.7e51)',
+         '1.2e77', '(-1.2e77)', '1e100', '(-1e100)',
+         '1.35e154', '(-1.35e154)', '1e300', '(-1e300)',
+         '1e-300', '(-1e-300)', '1.5e-162', '(-1.5e-162)', '1e-10', '(-1e-10)']
 N_RAND = 24            # random finite draws appended per wildcard (mixture, seeded)
-MAX_PRODUCT = 32768    # cap on the valuation product (30 atoms: full product through k=3)
+MAX_PRODUCT = 131072   # cap on the valuation product (50 atoms: full product through k=3)
 SEED = 20260717
 
 

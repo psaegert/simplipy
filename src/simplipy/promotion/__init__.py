@@ -32,16 +32,26 @@ import numpy as np
 
 from . import _f64_eval, _pointwise, _const_bearing, _overturn, _refund, _ladder
 
+# The declared surface: the entry point alone -- the stages are private.
+__all__ = ['promote']
 
-def promote(rules, engine, *, run_positive_controls=True):
+
+def promote(rules, engine, *, run_positive_controls=True, verbose=False, progress=None):
     """Assign each ``?``-sorted mined rule its strongest sound sort; prune derivable rules.
 
     ``rules``: iterable of (lhs, rhs) prefix-token sequences, all ``?``-sorted.
     ``engine``: the ``SimpliPyEngine`` whose operator realizations define the semantics.
+    ``verbose`` reports each stage and heartbeats inside it; ``progress`` overrides the
+    reporter (see :mod:`simplipy.progress`). Promotion is the longest single-threaded stage
+    of a mine and scales worse than linearly in the rule count, so it reports by default
+    whenever the mine is verbose.
     Returns ``(kept_rules, report)`` where ``kept_rules`` is a list of ``[lhs, rhs]`` lists.
     """
+    from ..progress import Progress
+    prog = progress if progress is not None else Progress(verbose, prefix="  [promote] ")
     _f64_eval.configure(engine)
     rules = [(tuple(l), tuple(r)) for l, r in rules]
+    prog.stage("sort promotion starting", rules=len(rules))
 
     # SPECIAL-BEARING pure-literal ground rules (no wildcards, no `<constant>`, an
     # `np.pi`/`np.e` in the LHS) BYPASS promotion: the sorts classify WILDCARD
@@ -74,13 +84,14 @@ def promote(rules, engine, *, run_positive_controls=True):
 
     ground = [(l, r) for l, r in rules if _pure_literal_ground(l, r)]
     rules = [(l, r) for l, r in rules if not _pure_literal_ground(l, r)]
+    prog.stage("split", ground_passthrough=len(ground), to_judge=len(rules))
 
     # STAGE 1 -- pointwise `_`-bar on const-free wildcard rules.
     rng1 = np.random.default_rng(_pointwise.SEED)
     scoped_cf = [(l, r) for l, r in rules
                  if _pointwise.wildcards(l) and _pointwise.is_const_free(list(l) + list(r))]
     pw = {'PROMOTE': [], 'DEMOTE': [], 'UNDECIDED': [], 'EVAL-ERR': []}
-    for lhs, rhs in scoped_cf:
+    for lhs, rhs in prog.track(scoped_cf, "stage 1/5 pointwise const-free bar"):
         ws = _pointwise.wildcards(list(lhs) + list(rhs))
         v, info = _pointwise.judge(list(lhs), list(rhs), _pointwise.valuations_for(ws, rng1))
         pw[v].append((lhs, rhs, info))
@@ -90,7 +101,7 @@ def promote(rules, engine, *, run_positive_controls=True):
     scoped_cb = [(l, r) for l, r in rules
                  if _pointwise.wildcards(list(l)) and '<constant>' in (list(l) + list(r))]
     cb = {'PROMOTE': [], 'DEMOTE': [], 'NO-WITNESS': [], 'EVAL-ERR': []}
-    for lhs, rhs in scoped_cb:
+    for lhs, rhs in prog.track(scoped_cb, "stage 2/5 const-bearing witness bar"):
         v, info = _const_bearing.certify_rule(lhs, rhs, rng2)
         cb[v].append((lhs, rhs, info))
 
@@ -101,7 +112,7 @@ def promote(rules, engine, *, run_positive_controls=True):
     finite_kills = [(l, r, info) for l, r, info in pw['DEMOTE']
                     if not all(v in _pointwise.ATOMS for v in info[0].values())]
     overturned = []
-    for lhs, rhs, info in finite_kills:
+    for lhs, rhs, info in prog.track(finite_kills, "stage 3/5 exact-arbiter overturn"):
         ws = _pointwise.wildcards(list(lhs) + list(rhs))
         v, _kill = _overturn.judge_exact(list(lhs), list(rhs), _pointwise.valuations_for(ws, rng3))
         if v == 'PROMOTE':
@@ -113,13 +124,17 @@ def promote(rules, engine, *, run_positive_controls=True):
     # STAGE 4 -- apply ?->_ for the promoted set, then refund the derivable instances.
     promote_set = {(tuple(l), tuple(r)) for l, r, *_ in pw['PROMOTE']} \
         | {(tuple(l), tuple(r)) for l, r, *_ in cb['PROMOTE']}
+    prog.stage("stage 4/5 derivability refund", candidates=len(rules), promoted=len(promote_set))
     sorted_rules = _refund.refund(rules, engine._operators_config, promote_set)
+    prog.stage("stage 4/5 derivability refund: done", kept=len(sorted_rules))
 
     # STAGE 5 -- the _->!->? ladder on the enriched lattice + moving-spike refusal.
     kept, report = _ladder.promote_rules(sorted_rules, engine,
-                                         run_positive_controls=run_positive_controls)
+                                         run_positive_controls=run_positive_controls,
+                                         progress=prog)
     kept = list(kept) + [[list(l), list(r)] for l, r in ground]
     report = dict(report)
+    prog.stage("sort promotion complete", final=len(kept), elapsed=prog.total_elapsed())
     report['stage_counts'] = {
         'pointwise_promote': len(pw['PROMOTE']), 'pointwise_demote': len(pw['DEMOTE']),
         'cb_promote': len(cb['PROMOTE']), 'overturned': len(overturned),

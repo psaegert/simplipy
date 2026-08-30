@@ -35,7 +35,7 @@ reproducer where possible.
   asset install/uninstall (asset paths are resolved and contained under the
   asset root by design).
 - Denial of service through crafted expressions or configs that bypass the
-  documented budgets (`node_budget`, mining caps).
+  documented budgets (`max_passes`, mining caps).
 
 **Out of scope (report as ordinary bugs instead):**
 

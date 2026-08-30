@@ -10,8 +10,7 @@ The engine's transcendental constant folds (`exp`, `log`, `cosh`, …) go
 through the **system libm**, which resolves on the running machine. Two
 correct, standards-conforming libms may round a handful of values one ulp
 apart — and a one-ulp difference at a fold is enough to change what the miner
-can prove. This is not hypothetical; it was measured during the 0.13.0
-audit:
+can prove. This is not hypothetical; it is measured:
 
 > `cosh(acosh(2))` rounds to exactly `2` on glibc 2.43 and to a value one
 > ulp away on glibc 2.39, so a glibc 2.43 host mints `cosh acosh 2 → 2` — a

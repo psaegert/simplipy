@@ -7,6 +7,7 @@ from types import CodeType
 
 # Import all functions from the utils module to be tested
 from simplipy import utils
+from simplipy import SimpliPyEngine
 
 
 # ==============================================================================
@@ -56,24 +57,6 @@ def test_get_used_modules():
     assert 'numpy' in utils.get_used_modules(expression_no_modules)
 
 
-def test_substitude_constants():
-    """Tests the substitution of constants in a prefix expression."""
-    # Test with default '<constant>' placeholder
-    expr1 = ['*', '<constant>', '+', 'x', '<constant>']
-    result1 = utils.substitude_constants(expr1, [3.14, 2.71])
-    assert result1 == ['*', '3.14', '+', 'x', '2.71']
-
-    # Test with custom constant names
-    expr2 = ['*', 'k1', '+', 'x', 'k2']
-    result2 = utils.substitude_constants(expr2, [1.0, 2.0], constants=['k1', 'k2'])
-    assert result2 == ['*', '1.0', '+', 'x', '2.0']
-
-    # Test inplace modification
-    original_expr = ['+', 'C_0', 'C_1']
-    utils.substitude_constants(original_expr, [5, 10], inplace=True)
-    assert original_expr == ['+', '5', '10']
-
-
 def test_apply_variable_mapping():
     """Tests renaming variables in a prefix expression."""
     expr = ['+', 'var1', '*', 'var2', 'var1']
@@ -81,23 +64,6 @@ def test_apply_variable_mapping():
     expected = ['+', 'x', '*', 'y', 'x']
     result = utils.apply_variable_mapping(expr, mapping)
     assert result == expected
-
-
-def test_numbers_to_constant():
-    """The deprecated shadow masker still behaves, and it WARNS (its replacement is
-    simplipy.masking with an explicit role-aware policy)."""
-    expr = ['+', 'x', '3.14', '*', 'y', '-2', '5e-3']
-    expected = ['+', 'x', '<constant>', '*', 'y', '<constant>', '<constant>']
-    # Test not in-place
-    with pytest.warns(DeprecationWarning, match="masking"):
-        result = utils.numbers_to_constant(expr, inplace=False)
-    assert result == expected
-    assert expr[2] == '3.14'  # Original should be unchanged
-
-    # Test in-place
-    with pytest.warns(DeprecationWarning, match="masking"):
-        utils.numbers_to_constant(expr, inplace=True)
-    assert expr == expected
 
 
 def test_explicit_constant_placeholders():
@@ -192,7 +158,15 @@ def test_deduplicate_rules():
         (('+', 'z', 'y'), ('+', 'y', 'z')),
     ]
 
-    deduped = utils.deduplicate_rules(rules, dummy_vars)
+    # `engine` is REQUIRED and keyword-only: the dedup key is the engine's internal
+    # form, so there is no engine-free reading of "the same rule".
+    ops = {'+': {'realization': '+', 'alias': [], 'inverse': '-', 'arity': 2,
+                 'precedence': 1, 'commutative': True}}
+    engine = SimpliPyEngine(operators=ops, rules=[])
+    with pytest.raises(TypeError):
+        utils.deduplicate_rules(rules, dummy_vars)   # type: ignore[call-arg]
+
+    deduped = utils.deduplicate_rules(rules, dummy_vars, engine=engine)
 
     # Canonical forms of the expected rules (?-sorted: the miner's default --
     # dedup emits variable-leaf wildcards)
@@ -422,15 +396,6 @@ def test_explicit_constant_placeholders_numeral_conversion_is_deprecated():
     # while '-3' / '2.0' / '3.14' would not -- the incoherence that got it deprecated
     assert result_expr == ['*', 'C_0', 'pow', 'x1', 'C_1']
     assert result_constants == ['C_0', 'C_1']
-
-
-def test_substitute_constants_canonical_name_and_alias():
-    expr = ['*', '<constant>', '+', 'x', 'C_2']
-    assert utils.substitute_constants(expr, [3.5, 2.0]) == ['*', '3.5', '+', 'x', '2.0']
-    # The historic alias warns from 0.13.0 (D11 column R19) but keeps the
-    # exact behaviour; full deprecation coverage lives in test_public_api.py.
-    with pytest.warns(DeprecationWarning):
-        assert utils.substitude_constants(expr, [3.5, 2.0]) == ['*', '3.5', '+', 'x', '2.0']
 
 
 def test_is_constant_placeholder_predicate():

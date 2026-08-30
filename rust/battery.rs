@@ -38,9 +38,21 @@ use crate::fit::Rng;
 use crate::hiprec::ProbeAtom;
 use crate::operators::Operators;
 
-/// The deployed-consistency comparison scale: `|a - b| <= 1e-9 * max(1, |a|, |b|)`.
+/// The STRUCTURAL deployed band: `|a - b| <= 1e-9 * max(1, |a|, |b|)`, the mirror of
+/// `_contract.compare_deployed_structural`. It answers "has the deployed algebra DIVERGED"
+/// -- an infinity where a finite value belongs, a gap far outside rounding -- and a few ULP
+/// is none of those. Deliberately loose: convicting rounding here renames sound rules as
+/// misaligned, measured in Python at 396 against a true 10.
 pub const JUDGE_REL: f64 = 1e-9;
 
+/// The deployed-REALISATION bound, in ULP -- the mirror of `_contract.REALISED_ULP`, and
+/// the same derivation. IEEE-754 mandates correct rounding only for + - * / and sqrt; the
+/// measured libm error reaches 1 ULP on cos, cosh, sinh and tanh; a rewrite has TWO sides,
+/// each a composition of up to about four such calls with independent errors that can
+/// oppose: 2 x 4 x 1 = 8.
+pub const REALISED_ULP: f64 = 8.0;
+
+/// The spacing between `x` and the next double away from zero -- one ULP AT `x`.
 /// The per-variable battery of contract points.
 pub const BATTERY: [ProbeAtom; 21] = [
     ProbeAtom::Val(0.0),
@@ -69,7 +81,16 @@ pub const BATTERY: [ProbeAtom; 21] = [
 /// The source-constant battery: the core generic
 /// witnesses plus the special rationals and the symbolic transcendental atoms. A fitted or
 /// pattern-bound source constant reaches every one of these in deployment.
-pub const SPECIAL_CONSTS: [f64; 18] = [
+///
+/// SPAN MIRRORS THE JUDGE (audit U8, 2026-08-22). This battery reached |c| <= 5 while
+/// the gate's constant quantifier reaches |c| = 1e4 generically (`WIDE_CONSTS`, F107)
+/// and probes the f64 attainment magnitudes out to 1e17 (`SATURATION_CONSTS`) -- so
+/// the miner minted rows the gate then convicted, and every such row was judged,
+/// confirmed and routed before dying. The span below is the judge's own: the 18 core
+/// witnesses, the 20 generic decades (both signs), and the 10 saturation magnitudes.
+/// Skip semantics make the widening safe: an instance where no witness fits is
+/// SKIPPED with no verdict, so new points can only refuse rows the gate would refuse.
+pub const SPECIAL_CONSTS: [f64; 48] = [
     2.5,
     -1.5,
     3.0,
@@ -88,6 +109,38 @@ pub const SPECIAL_CONSTS: [f64; 18] = [
     -std::f64::consts::FRAC_PI_2,
     std::f64::consts::PI,
     std::f64::consts::E,
+    // WIDE_CONSTS: the generic magnitude span, decade-spaced, both signs (F107)
+    10.0,
+    -10.0,
+    30.0,
+    -30.0,
+    100.0,
+    -100.0,
+    300.0,
+    -300.0,
+    1e3,
+    -1e3,
+    3e3,
+    -3e3,
+    1e4,
+    -1e4,
+    0.1,
+    -0.1,
+    0.01,
+    -0.01,
+    0.001,
+    -0.001,
+    // SATURATION_CONSTS: where f64 ATTAINS a bound mathematics only approaches
+    19.0,
+    -19.0,
+    20.0,
+    -20.0,
+    50.0,
+    -50.0,
+    750.0,
+    -750.0,
+    1e17,
+    -1e17,
 ];
 
 /// Cap on battery combinations per source: the slot-product is capped at 500 with a
@@ -152,30 +205,97 @@ impl SpecialBattery {
     }
 }
 
-/// The deployed (f64) row comparison: class equality for nan/inf, and the reference
-/// tolerance joined with the mine's own (rtol, atol) row gate for finite pairs.
-fn dep_compare(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp {
+/// The nan/inf half of a deployed comparison, shared by both bars below -- the mirror of
+/// `_contract._deployed_classes`.
+fn dep_classes(s: f64, c: f64) -> Option<crate::hiprec::PointCmp> {
     use crate::hiprec::PointCmp as P;
     if s.is_nan() && c.is_nan() {
-        return P::Eq;
+        return Some(P::Eq);
     }
     if s.is_nan() {
-        return P::Ext;
+        return Some(P::Ext);
     }
     if c.is_nan() {
-        return P::Shrink;
+        return Some(P::Shrink);
     }
     if s.is_infinite() || c.is_infinite() {
-        return if s == c { P::Eq } else { P::InfChange };
+        return Some(if s == c { P::Eq } else { P::InfChange });
     }
-    // SUM, not max: a downstream consumer checks the rule at an exact (polished) witness,
-    // while the miner's fitted constants may sit anywhere in the (rtol, atol) acceptance
-    // band -- an exact constant rule with a band-edge witness is off by up to the band
-    // width at every row (observed live: C*(x+y)/(x+y) -> <constant> with the witness
-    // 1.01e-9 from C). The row passes iff SOME witness inside the band agrees at the
-    // reference scale: by the triangle inequality that is the band width plus the
-    // reference tolerance.
-    let tol = (atol + rtol * s.abs()) + JUDGE_REL * s.abs().max(c.abs()).max(1.0);
+    None
+}
+
+/// The mine's own witness allowance. SUM, not max: a downstream consumer checks the rule at
+/// an exact (polished) witness, while the miner's fitted constants may sit anywhere in the
+/// (rtol, atol) acceptance band -- an exact constant rule with a band-edge witness is off by
+/// up to the band width at every row (observed live: C*(x+y)/(x+y) -> <constant> with the
+/// witness 1.01e-9 from C). The row passes iff SOME witness inside the band agrees at the
+/// reference scale: by the triangle inequality that is the band width plus the reference
+/// tolerance.
+fn witness_band(s: f64, rtol: f64, atol: f64) -> f64 {
+    atol + rtol * s.abs()
+}
+
+/// "Does the deployed f64 engine compute this rewrite?" -- the REALISATION question, the
+/// mirror of `_contract.compare_deployed_realised`. Bounded in ULP, with NO absolute floor.
+///
+/// This is the PRE-SCREEN: a row that passes here never reaches the contract at all. At the
+/// structural band it passed `pow np.e sinh (-5) -> 0`, whose deployed sides are
+/// 5.942307292381135e-33 and 0.0 -- a rule that is FALSE, minted without its truth ever
+/// being asked, and convicted by the gate afterwards. 1e-9 relative is roughly 1e7 ULP and
+/// for any value below 1 a pure ABSOLUTE floor; it is verbatim the first of the three
+/// answers `compare_deployed_realised` documents as rejected.
+fn dep_realised(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp {
+    use crate::hiprec::PointCmp as P;
+    if let Some(cl) = dep_classes(s, c) {
+        return cl;
+    }
+    // The pre-screen's bar is the fit band PLUS ULP headroom, additively -- and that
+    // shape is deliberate, not sloppy (audit U8, resolved 2026-08-22 by measurement).
+    // A strict bit-distance OR-form was tried and refused true rules at the band
+    // EDGE: `adopt_snapped_witness` legitimately places a witness up to the band
+    // boundary, and the boundary case then measured the SNAP displacement (124,875
+    // bit-ulps on `rootn exp 7 <constant>` at source constant -5), not realisation
+    // -- while the judge, whose witness machinery re-polishes, CERTIFIES the rule
+    // core. The additive ulp term is the band's closure under its own arithmetic.
+    // Its binade-boundary factor-2 looseness (<= 16 effective bit-ulps) sits inside
+    // the REALISED_ULP derivation's own insensitivity envelope ("every bound in
+    // [8, 56] gives the identical partition"). The one genuine defect was
+    // `ulp_at(f64::MAX) = +inf` -- a literally vacuous bar at the top of the range
+    // -- which `ulp_at` now closes by pricing the top magnitude at its lower
+    // neighbour's spacing.
+    let tol = witness_band(s, rtol, atol) + REALISED_ULP * ulp_at(s.abs().max(c.abs()));
+    if (s - c).abs() <= tol {
+        P::Eq
+    } else {
+        P::RealChange
+    }
+}
+
+/// The ulp SPACING at |x|, finite for every finite input: at `f64::MAX` the next
+/// representable is inf, so the spacing is taken to the lower neighbour instead --
+/// an infinite tolerance is not a bar (audit U8).
+fn ulp_at(x: f64) -> f64 {
+    let a = x.abs();
+    if !a.is_finite() {
+        return f64::INFINITY;
+    }
+    if a == f64::MAX {
+        return a - f64::from_bits(a.to_bits() - 1);
+    }
+    f64::from_bits(a.to_bits() + 1) - a
+}
+
+/// "Has the deployed algebra DIVERGED?" -- the STRUCTURAL question, the mirror of
+/// `_contract.compare_deployed_structural`, and a DIFFERENT question from the one above.
+/// Python measured what answering both with one comparison costs: 396 misalignments against
+/// a true 10. Rust asked it once, so tightening that single bar to the realisation one would
+/// have rejected every sound rule whose two sides round a few ULP apart.
+fn dep_structural(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointCmp {
+    use crate::hiprec::PointCmp as P;
+    if let Some(cl) = dep_classes(s, c) {
+        return cl;
+    }
+    let tol = witness_band(s, rtol, atol) + JUDGE_REL * s.abs().max(c.abs()).max(1.0);
     if (s - c).abs() <= tol {
         P::Eq
     } else {
@@ -209,7 +329,7 @@ pub fn rows_consistent(
 ) -> bool {
     use crate::hiprec::PointCmp as P;
     for r in 0..battery.n_rows {
-        let dv = dep_compare(y_src[r], y_cand[r], rtol, atol);
+        let dv = dep_realised(y_src[r], y_cand[r], rtol, atol);
         if dv == P::Eq {
             continue;
         }
@@ -225,7 +345,13 @@ pub fn rows_consistent(
         let reject = match v {
             Some(P::RealChange) => true,
             Some(P::Ext) | Some(P::Shrink) | Some(P::InfChange) => false,
-            Some(P::Eq) | None => !snapped,
+            // The contract does not object, so the only thing left to convict is a
+            // DIVERGENCE -- and that is the structural question, not the realisation one.
+            // A few ULP between two spellings is rounding; asking the realisation bar here
+            // would reject sound rules for it.
+            Some(P::Eq) | None => {
+                !snapped && dep_structural(y_src[r], y_cand[r], rtol, atol) != P::Eq
+            }
         };
         if reject {
             if std::env::var("SIMPLIPY_BATTERY_TRACE").is_ok() {
@@ -293,6 +419,43 @@ mod tests {
         assert_eq!(sb3a.cols, sb3b.cols); // deterministic sample
                                           // a variable-free source gets the single EMPTY point
         assert_eq!(SpecialBattery::build(1, &[]).unwrap().n_rows, 1);
+    }
+
+    #[test]
+    fn the_pre_screen_asks_realisation_and_the_reject_asks_divergence() {
+        use crate::hiprec::PointCmp as P;
+        // `pow np.e sinh (-5) -> 0`: the deployed sides are 5.94e-33 and 0.0. Under the
+        // STRUCTURAL band -- `1e-9 * max(1, |a|, |b|)`, a pure ABSOLUTE floor for anything
+        // below 1 -- that reads as equal, so the row was minted and the contract was never
+        // asked whether it is true. It is not. In ULP the two are ~4.5e18 apart.
+        let (s, c) = (5.942_307_292_381_135e-33, 0.0);
+        assert_eq!(dep_realised(s, c, 0.0, 0.0), P::RealChange);
+        assert_eq!(dep_structural(s, c, 0.0, 0.0), P::Eq);
+
+        // ...and why the structural bar has to STAY loose: a few ULP between two spellings
+        // is rounding, not a divergence, and convicting it renames sound rules as
+        // misaligned. Python measured that at 396 against a true 10.
+        let a = 1.0_f64;
+        for k in [3u64, 100, 1_000_000] {
+            let b = f64::from_bits(a.to_bits() + k);
+            assert_eq!(
+                dep_structural(a, b, 0.0, 0.0),
+                P::Eq,
+                "{k} ULP is not a divergence"
+            );
+        }
+        assert_eq!(
+            dep_realised(a, f64::from_bits(a.to_bits() + 3), 0.0, 0.0),
+            P::Eq
+        );
+        assert_eq!(
+            dep_realised(a, f64::from_bits(a.to_bits() + 100), 0.0, 0.0),
+            P::RealChange,
+            "100 ULP is past the realisation bar"
+        );
+
+        // the mine's own witness band still rides on top of both
+        assert_eq!(dep_realised(1.0, 1.0 + 1e-6, 1e-5, 0.0), P::Eq);
     }
 
     #[test]

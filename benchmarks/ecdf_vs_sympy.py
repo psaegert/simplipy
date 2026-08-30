@@ -1,38 +1,50 @@
-"""SimpliPy vs SymPy ECDFs on the 64k nv corpus, scored in the unified measure (mu).
+"""The published SimpliPy-vs-SymPy benchmark, end to end.
 
-Successor of the 0.11-era 2x3 figure (assets/images/simplipy_vs_sympy.svg, commit
-7cd35ad), re-run against the 0.12 AC engine and the acj artifact family, with ONE
-deliberate scoring change: the simplification-ratio row is no longer raw prefix-token
-length. Both systems' outputs are parsed into SimpliPy token space and priced by the
-engine's internal description-length measure (``SimpliPyEngine.complexity``, the mu of
-docs/formal.md section 5) against the same denominator mu(original) -- SymPy's output is
-converted back through a sympy->prefix bridge (below), so both systems are judged by the
-same MDL yardstick instead of each by its own token count.
+Protocol (pre-registered; docs/guides/simplify.md states it alongside the
+results): every arm runs serially on one pinned core of an otherwise idle
+machine (the published numbers: an AMD Ryzen 9 9950X, BLAS thread caps at 1),
+paired per row against SymPy 1.14.0's ``simplify()`` under a 1 s cap, on three
+declared corpora — the v25 SR training prior (seed 20260830, n = 65,536), the
+same prior under the engine mask policy 'all' (n = 65,536), and an external
+neutral problem set (SOOSE fc/nc/wc, n = 600; every row compiles in the engine
+language). The engine is the pinned acj-5-4-llm artifact: ``f64`` is the
+shipped default, ``real`` is ``Mode.real``, ``permissive`` is
+``Mode.permissive``, every arm at the default ``effort=4``; the unmasked leg
+adds the explore-budget sweep arms ``effort=0`` and ``effort=64``.
 
-Protocol (matches the 0.11 figure where it still applies):
-  * corpus: remine/corpus_nv_64k.pkl -- 65,536 Lample-Charton expressions from the
-    Flash-ANSR v23.0 prior, desugared to the current 23-operator language;
-  * SimpliPy timed per call, single-threaded, gc off, median of REPS runs;
-  * SymPy: each ``<constant>`` occurrence becomes a DISTINCT real Symbol (mirrors the
-    engine's Const-independence doctrine), variables are real Symbols; ``simplify()``
-    inside a per-expression SIGALRM guard of 1 s, workers 24-wide; expressions SymPy
-    does not finish are scored as what they are -- infinite time, ratio 1 -- and stay
-    in the denominator (the ``ratio=None`` variant drops them instead; both are
-    plotted, as in the original figure);
-  * a SymPy output that has no spelling in the engine's real extended-value language
-    (Piecewise, sign, complex/zoo, ...) counts as a conversion failure: ratio 1, and
-    the count is reported (it is SymPy leaving the comparable language, not a win or
-    a loss the measure can price).
+Scoring runs in the deployment space: ratio = complexity(output) /
+complexity(input), priced by the engine's shipped ``complexity()`` instrument
+in the default (f64) canonicalization; lower is better. SymPy is censored — a
+1 s timeout, or an output with no spelling in the engine's language
+(Piecewise, sign, complex, ...) — and censored rows score ratio 1.0 in every
+mean and table stat, the charitable choice; in the ECDF panels the censored
+curves simply end below 1.
 
-Semantic caveat, carried from the original: ``rootn(x, n)`` (real odd root) maps to
-``x**Rational(1, n)`` for SymPy -- principal-branch semantics on x < 0 differ; the
-mismatch is confined to the negative branch of odd roots.
+Timing: the SimpliPy arms run in-process, single-threaded, gc off, wall clock
+per call, median of REPS = 3 calls per row. The SymPy leg runs in a supervised
+process pool (pebble) whose workers cap their address space at 4 GB; each row
+is timed inside its worker around ``simplify()`` alone, under an in-worker 1 s
+SIGALRM cap with a hard pool-side timeout as backstop.
 
-Usage: ecdf_vs_sympy.py [--sympy-only | --simplipy-only | --plot-only] [--limit N]
-Artifacts: benchmarks/ecdf_vs_sympy_results.pkl (untracked, regenerable),
-           benchmarks/ecdf_vs_sympy_summary.json (tracked),
-           benchmarks/out/simplipy_vs_sympy_012_mu.{png,svg}.
+SymPy bridge: each ``<constant>`` occurrence becomes a distinct real Symbol,
+variables are real Symbols. ``rootn(x, n)`` maps to ``x**Rational(1, n)``;
+principal-branch semantics differ on x < 0, the mismatch confined to the
+negative branch of odd roots.
+
+Corpora resolve through the symbolic-data artifact registry
+(``resolve("bench-nv25")``); the engine artifact installs on first use.
+
+Outputs: ``benchmarks/ecdf_vs_sympy_summary.json`` and the five figure panels
+under ``docs/assets/benchmarks/`` — ecdf_readme.png, ecdf_unmasked.png,
+ecdf_masked_raw.png, ecdf_external.png, ecdf_effort_sweep.png. A results
+pickle (untracked, regenerable) checkpoints each finished leg.
+
+Usage: ecdf_vs_sympy.py [--limit N] [--out DIR]
+  --limit N   slice every corpus to its first N rows (smoke runs)
+  --out DIR   write summary, figures and checkpoint to DIR (default: the
+              repo paths above)
 """
+import argparse
 import gc
 import json
 import os
@@ -40,24 +52,26 @@ import pickle
 import signal
 import sys
 import time
-from multiprocessing import Pool
 
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "src"))
-from simplipy import Mode, SimpliPyEngine  # noqa: E402
 
-CORPUS_PKL = os.path.join(REPO, "remine", "corpus_nv_64k.pkl")
-RESULTS_PKL = os.path.join(HERE, "ecdf_vs_sympy_results.pkl")
-SUMMARY_JSON = os.path.join(HERE, "ecdf_vs_sympy_summary.json")
-CELLS = {c: os.path.join(REPO, "remine", f"acj-{c}", "config.yaml")
-         for c in ("2-1", "3-2", "4-3")}
-BUDGETS = (1, 2, 4, 8, 16, 48)
+ENGINE_ASSET = 'acj-5-4-llm'
+CORPUS_ARTIFACT = 'bench-nv25'
+CORPUS_FILES = {
+    'unmasked': 'corpus_nv25unmasked_64k.pkl',
+    'masked': 'corpus_nv25masked_64k.pkl',
+    'external': 'corpus_external_soose.pkl',
+}
+CORPORA = ('unmasked', 'masked', 'external')
+SWEEP_EFFORTS = (0, 64)  # extra f64 arms on the unmasked leg
 REPS = 3
 SYMPY_TIMEOUT_S = 1.0
 SYMPY_WORKERS = 24
+SYMPY_RLIMIT_AS = 4 << 30  # per-worker address-space cap, bytes
+RESULTS_PKL_NAME = 'ecdf_vs_sympy_results.pkl'
 
 ARITY = {'+': 2, '-': 2, 'neg': 1, '*': 2, '/': 2, 'abs': 1, 'inv': 1, 'pow': 2,
          'rootn': 2, 'sin': 1, 'cos': 1, 'tan': 1, 'asin': 1, 'acos': 1, 'atan': 1,
@@ -65,7 +79,7 @@ ARITY = {'+': 2, '-': 2, 'neg': 1, '*': 2, '/': 2, 'abs': 1, 'inv': 1, 'pow': 2,
          'exp': 1, 'log': 1}
 
 
-# ----------------------------------------------------------------------------- sympy leg
+# ----------------------------------------------------------------------- sympy leg
 def _to_sympy(tokens):
     """Prefix tokens -> sympy expression. Each <constant> = a fresh real Symbol."""
     import sympy as sp
@@ -187,7 +201,7 @@ def _alarm(signum, frame):
 
 def _sympy_worker(tokens):
     """Returns (seconds_or_None, out_tokens_or_None, status)."""
-    import sympy as sp  # noqa: F401
+    import sympy as sp
     signal.signal(signal.SIGALRM, _alarm)
     try:
         e = _to_sympy(tokens)
@@ -210,191 +224,662 @@ def _sympy_worker(tokens):
     return (dt, out, 'ok')
 
 
-def run_sympy(corpus):
-    with Pool(SYMPY_WORKERS) as pool:
-        results = []
-        t_start = time.time()
-        for i, r in enumerate(pool.imap(_sympy_worker, corpus, chunksize=16)):
-            results.append(r)
-            if (i + 1) % 4096 == 0:
-                el = time.time() - t_start
-                print(f'  sympy {i + 1}/{len(corpus)}  ({el:.0f}s elapsed)', flush=True)
-    return results
+def _pool_init():
+    import resource
+    resource.setrlimit(resource.RLIMIT_AS, (SYMPY_RLIMIT_AS, SYMPY_RLIMIT_AS))
 
 
-# -------------------------------------------------------------------------- simplipy leg
-def run_simplipy(corpus):
-    """Per-variant: times (median of REPS) + outputs. Single-threaded, gc off."""
-    out = {}
-    for label, cfg, kwargs in (
-            [(f'acj-{c}', CELLS[c], {}) for c in CELLS]
-            + [('acj-4-3-lossy', CELLS['4-3'], {'mode': Mode.LOSSY})]
-            + [(f'acj-4-3-b{b}', CELLS['4-3'], {'node_budget': b})
-               for b in BUDGETS if b != 48]):
-        e = SimpliPyEngine.from_config(cfg)
-        for row in corpus[:20]:
-            e.simplify(row, **kwargs)
-        times = []
-        outputs = []
-        gc.disable()
-        for row in corpus:
-            ts = []
-            res = None
-            for _ in range(REPS):
-                t0 = time.perf_counter_ns()
-                res = e.simplify(row, **kwargs)
-                ts.append(time.perf_counter_ns() - t0)
-            times.append(float(np.median(ts)) / 1e9)
-            outputs.append(list(res))
-        gc.enable()
-        out[label] = {'seconds': times, 'outputs': outputs}
-        print(f'  {label}: p50={np.percentile(times, 50)*1e6:.0f}us '
-              f'mean={np.mean(times)*1e6:.0f}us', flush=True)
+def run_sympy(corpus, tag):
+    """Supervised pool: RLIMIT_AS-capped workers, hard per-row timeout backstop."""
+    try:
+        from pebble import ProcessPool
+    except ImportError:
+        sys.exit('the SymPy leg runs under pebble: pip install pebble')
+    from concurrent.futures import TimeoutError as FutTimeout
+    out = []
+    t0 = time.time()
+    with ProcessPool(max_workers=SYMPY_WORKERS, initializer=_pool_init) as pool:
+        futs = [pool.schedule(_sympy_worker, args=(row,),
+                              timeout=SYMPY_TIMEOUT_S + 1.5) for row in corpus]
+        for i, fut in enumerate(futs):
+            try:
+                out.append(fut.result())
+            except FutTimeout:
+                out.append((None, None, 'timeout'))
+            except Exception:
+                out.append((None, None, 'worker_lost'))
+            if (i + 1) % 8192 == 0:
+                print(f'  sympy[{tag}] {i + 1}/{len(corpus)} '
+                      f'({time.time() - t0:.0f}s)', flush=True)
+    print(f'  sympy[{tag}] done in {time.time() - t0:.0f}s', flush=True)
     return out
 
 
-# ------------------------------------------------------------------------------- scoring
-def score_mu(corpus, simplipy_res, sympy_res):
-    e = SimpliPyEngine.from_config(CELLS['4-3'])
-    mu_orig = np.array([e.complexity(r) for r in corpus], dtype=float)
-    scored = {'mu_orig': mu_orig.tolist()}
-    for label, d in simplipy_res.items():
-        mu = np.array([e.complexity(r) for r in d['outputs']], dtype=float)
-        scored[label] = {'seconds': d['seconds'], 'mu': mu.tolist()}
-    sy_sec, sy_mu, statuses = [], [], []
-    for (dt, toks, status), mo in zip(sympy_res, mu_orig):
-        statuses.append(status)
-        sy_sec.append(dt if status in ('ok', 'convert_fail') else None)
-        if status == 'ok':
-            try:
-                sy_mu.append(float(e.complexity(toks)))
-            except Exception:
-                statuses[-1] = 'convert_fail'
-                sy_mu.append(None)
-        else:
-            sy_mu.append(None)
-    scored['sympy'] = {'seconds': sy_sec, 'mu': sy_mu, 'status': statuses}
-    return scored
+# -------------------------------------------------------------------- simplipy legs
+def run_simplipy(cfg, corpus, label, **kwargs):
+    """One arm: fresh engine, 20-row warmup, per-row median of REPS calls, gc off."""
+    from simplipy import SimpliPyEngine
+    engine = SimpliPyEngine.from_config(cfg)
+    for row in corpus[:20]:
+        engine.simplify(row, **kwargs)
+    times, outputs = [], []
+    gc.disable()
+    for row in corpus:
+        ts, out = [], None
+        for _ in range(REPS):
+            t0 = time.perf_counter_ns()
+            out = engine.simplify(row, **kwargs)
+            ts.append(time.perf_counter_ns() - t0)
+        times.append(float(np.median(ts)) / 1e9)
+        outputs.append(list(out))
+    gc.enable()
+    print(f'  {label}: p50={np.percentile(times, 50) * 1e6:.0f}us '
+          f'mean={np.mean(times) * 1e6:.0f}us', flush=True)
+    return {'seconds': times, 'outputs': outputs}
 
 
-# ------------------------------------------------------------------------------ plotting
-def make_figure(scored):
+# ------------------------------------------------------------------------- scoring
+def score(cfg, corpora, results):
+    """Per-row ratio/time arrays + the tracked summary, priced by complexity()."""
+    from simplipy import SimpliPyEngine
+    pricer = SimpliPyEngine.from_config(cfg)
+    arrays, summary = {}, {}
+    for tag in CORPORA:
+        corpus = corpora[tag]
+        mu0 = np.array([pricer.complexity(r) for r in corpus], float)
+        arrays[f'{tag}/mu0'] = mu0
+        for label, d in results[tag]['modes'].items():
+            mu = np.array([pricer.complexity(r) for r in d['outputs']], float)
+            ratio = mu / mu0
+            arrays[f'{tag}/{label}/t'] = np.array(d['seconds'], float)
+            arrays[f'{tag}/{label}/ratio'] = ratio
+            summary[f'{tag}/{label}'] = {
+                't_p50_us': float(np.percentile(d['seconds'], 50) * 1e6),
+                'ratio_mean': float(np.mean(ratio)),
+                'wins': float(np.mean(ratio < 1)),
+                'inflated': int(np.sum(ratio > 1))}
+        sy_t, sy_ratio = [], []
+        for (dt, toks, status), m0 in zip(results[tag]['sympy'], mu0):
+            sy_t.append(dt if (status in ('ok', 'convert_fail') and dt is not None)
+                        else np.nan)
+            val = np.nan
+            if status == 'ok':
+                try:
+                    val = float(pricer.complexity(toks)) / m0
+                except Exception:
+                    pass
+            sy_ratio.append(val)
+        arrays[f'{tag}/sympy/t'] = np.array(sy_t, float)
+        arrays[f'{tag}/sympy/ratio'] = np.array(sy_ratio, float)
+        r = np.array(sy_ratio, float)
+        fin = r[np.isfinite(r)]
+        summary[f'{tag}/sympy'] = {
+            't_p50_us': float(np.nanpercentile(np.array(sy_t, float), 50) * 1e6),
+            'censored': int(np.sum(~np.isfinite(r))),
+            'wins': float(np.sum(fin < 1) / len(r)),
+            'inflated': int(np.sum(fin > 1))}
+    return arrays, summary
+
+
+# --------------------------------------------------------------------- statistics
+def _boot_mean_ci(a, n_resamples=10000, seed=0):
+    rng = np.random.default_rng(seed)
+    n = len(a)
+    means = np.empty(n_resamples)
+    chunk = 200
+    for i in range(0, n_resamples, chunk):
+        k = min(chunk, n_resamples - i)
+        idx = rng.integers(0, n, size=(k, n))
+        means[i:i + k] = a[idx].mean(axis=1)
+    return np.percentile(means, [2.5, 97.5])
+
+
+def compute_stats(arrays):
+    """Everything the figures annotate: per-arm stats, bootstrap CIs, the sweep."""
+    out = {}
+    for c in CORPORA:
+        out[c] = {}
+        sy_t = arrays[f'{c}/sympy/t']
+        sy_fin = np.isfinite(sy_t)
+        for arm in ARMS:
+            r = arrays[f'{c}/{arm}/ratio']
+            t = arrays[f'{c}/{arm}/t']
+            cens_r = int(np.isnan(r).sum())
+            cens_t = int(np.isnan(t).sum())
+            r_imp = np.where(np.isnan(r), 1.0, r)  # censored -> 1.0 for stats
+            t_fin = t[np.isfinite(t)]
+            d = {
+                'n': len(r),
+                'censored_ratio': cens_r, 'censored_t': cens_t,
+                'ratio_mean': float(r_imp.mean()),
+                'ratio_median': float(np.median(r_imp)),
+                'wins': float((r_imp < 1).mean()),
+                'same': float((r_imp == 1).mean()),
+                'bigger': float((r_imp > 1).mean()),
+                'ratio_max': float(r_imp.max()),
+                't_p50_us': float(np.median(t_fin) * 1e6),
+                't_p95_us': float(np.percentile(t_fin, 95) * 1e6),
+                't_max_ms': float(t_fin.max() * 1e3),
+            }
+            if arm != 'sympy':
+                sp = sy_t[sy_fin] / t[sy_fin]
+                d['paired_speedup'] = {
+                    'median': float(np.median(sp)),
+                    'q25': float(np.percentile(sp, 25)),
+                    'q75': float(np.percentile(sp, 75)),
+                    'max': float(sp.max()),
+                    'n_pairs': int(sy_fin.sum())}
+            out[c][arm] = d
+    cis = {}
+    for arm in ARMS:
+        r = arrays[f'unmasked/{arm}/ratio']
+        r = np.where(np.isnan(r), 1.0, r)
+        lo, hi = _boot_mean_ci(r)
+        cis[f'unmasked/{arm}'] = [float(lo), float(hi)]
+    for eff in SWEEP_EFFORTS:
+        lo, hi = _boot_mean_ci(arrays[f'unmasked/f64_e{eff}/ratio'])
+        cis[f'unmasked/f64_e{eff}'] = [float(lo), float(hi)]
+    out['boot_ci_mean_ratio'] = cis
+    sweep = {}
+    for arm in ('f64_e0', 'f64', 'f64_e64'):
+        r = arrays[f'unmasked/{arm}/ratio']
+        t = arrays[f'unmasked/{arm}/t']
+        sweep[arm] = {'mean': float(r.mean()), 'wins': float((r < 1).mean()),
+                      'same': float((r == 1).mean()),
+                      'bigger': float((r > 1).mean()),
+                      't_p50_us': float(np.median(t) * 1e6)}
+    out['sweep'] = sweep
+    return out
+
+
+# ---------------------------------------------------------------------- figures
+BG = '#fbfbf9'
+INK = '#1a1a1a'
+SUB = '#5a5a5a'
+FOOT = '#666666'
+GRID = '#e3e3df'
+SPINE = '#c9c9c4'
+ANNOT = '#444444'
+
+C = {'f64': '#1f77b4', 'real': '#9467bd', 'permissive': '#2ca02c',
+     'sympy': '#d62728'}
+LBL = {'f64': 'SimpliPy f64 (default)', 'real': 'SimpliPy real',
+       'permissive': 'SimpliPy permissive', 'sympy': 'SymPy simplify'}
+ARMS = ['f64', 'real', 'permissive', 'sympy']
+ENGINE_ARMS = ['f64', 'real', 'permissive']
+
+DPI = 170
+
+TIME_TICKS = ([1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 10],
+              ['1 us', '10 us', '100 us', '1 ms', '10 ms', '100 ms',
+               '1 s', '10 s'])
+SPEED_TICKS = ([1, 10, 100, 1e3, 1e4, 1e5, 1e6],
+               ['1x', '10x', '100x', '1,000x', '10,000x', '100,000x',
+                '1,000,000x'])
+
+CORPUS_META = {
+    'unmasked': dict(
+        head='Benchmark — SR prior, unmasked',
+        meta='Benchmark — unmasked leg  ·  engine acj-5-4-llm, '
+             'effort 4  ·  sympy 1.14.0 (1 s cap)  ·  corpus: SR prior '
+             'v25, seed 20260830  ·  scored by the shipped complexity()',
+        out='ecdf_unmasked.png'),
+    'masked': dict(
+        head='Benchmark — SR prior, masked',
+        meta='Benchmark — masked leg  ·  engine acj-5-4-llm, '
+             'effort 4  ·  sympy 1.14.0 (1 s cap)  ·  corpus: v25 prior, '
+             "seed 20260830, mask policy 'all'  ·  scored by the shipped "
+             'complexity()',
+        out='ecdf_masked_raw.png'),
+    'external': dict(
+        head='Benchmark — external: SOOSE',
+        meta='Benchmark — external leg  ·  engine acj-5-4-llm, '
+             'effort 4  ·  sympy 1.14.0 (1 s cap)  ·  corpus: SOOSE '
+             'fc/nc/wc, all rows compile  ·  scored by the '
+             'shipped complexity()',
+        out='ecdf_external.png'),
+}
+
+PANEL_X = [0.040, 0.373, 0.706]
+PANEL_W = 0.270
+
+
+def f_us(v):
+    return f'{v:,.0f}us'
+
+
+def f_ms(v):
+    return f'{v:,.1f}ms'
+
+
+def f_pct1(f):
+    return f'{f * 100:.1f}%'
+
+
+def f_big(frac):
+    p = frac * 100
+    if p == 0.0:
+        return '0.0%'
+    if p >= 0.1:
+        return f'{p:.1f}%'
+    if p >= 0.01:
+        return f'{p:.2f}%'
+    return f'{p:.3f}%'
+
+
+def f_x(v):
+    return f'{v:,.0f}x'
+
+
+def f_max(v):
+    return '1' if v == 1.0 else f'{v:.3f}'
+
+
+def ecdf(vals, n):
+    v = np.sort(np.asarray(vals)[np.isfinite(vals)])
+    return v, np.arange(1, len(v) + 1) / n
+
+
+def style_ax(ax, fs=10):
+    ax.set_facecolor(BG)
+    ax.grid(True, which='major', color=GRID, lw=0.9)
+    ax.set_axisbelow(True)
+    for side in ('top', 'right'):
+        ax.spines[side].set_visible(False)
+    for side in ('left', 'bottom'):
+        ax.spines[side].set_color(SPINE)
+    ax.tick_params(colors=INK, labelsize=fs, direction='out')
+    ax.tick_params(which='minor', colors=SPINE)
+
+
+def panel_title(fig, x, y, title, subtitle, fs=13, sfs=10.5, dy=0.017):
+    fig.text(x, y, title, fontweight='bold', fontsize=fs, color=INK)
+    fig.text(x, y - dy, subtitle, fontsize=sfs, color=SUB)
+
+
+def table(fig, label_x, y0, dy, cols, rows, fs=9.5, sw=0.011, sh=0.014,
+          label_pad=0.016):
+    """cols: [(header, x_right)]; rows: [(label, color_or_None, [cells])]."""
+    from matplotlib.patches import Rectangle
+    for h, xr in cols:
+        fig.text(xr, y0, h, ha='right', va='center', color=SUB,
+                 fontsize=fs, family='monospace')
+    for i, (label, color, cells) in enumerate(rows):
+        y = y0 - dy * (i + 1)
+        if color is not None:
+            fig.patches.append(Rectangle(
+                (label_x, y - sh / 2), sw, sh, transform=fig.transFigure,
+                facecolor=color, edgecolor='none', clip_on=False))
+        fig.text(label_x + label_pad, y, label, va='center',
+                 fontsize=fs + 0.5, color=INK)
+        for (h, xr), cell in zip(cols, cells):
+            fig.text(xr, y, cell, ha='right', va='center', fontsize=fs,
+                     color=INK, family='monospace')
+
+
+def footnote(fig, x, y, s, fs=8.7):
+    fig.text(x, y, s, fontsize=fs, color=FOOT, style='italic')
+
+
+def ratio_panel(ax, A, S, corpus, arms, lw=2.4, arrow=True):
+    n = S[corpus]['f64']['n']
+    for a in arms:
+        r = A[f'{corpus}/{a}/ratio']
+        x, y = ecdf(r, n)
+        ax.plot(x, y, color=C[a], lw=lw, solid_capstyle='butt', zorder=3)
+        ax.scatter([1.0], [S[corpus][a]['wins']], s=26, color=C[a], zorder=6)
+    ax.set_xlim(0, 2.0)
+    ax.set_ylim(0, 1.02)
+    ax.set_xticks(np.arange(0, 2.01, 0.25))
+    ax.set_xticklabels([f'{v:.2f}' for v in np.arange(0, 2.01, 0.25)])
+    ax.axvline(1.0, color=ANNOT, ls=(0, (4, 3)), lw=1.2, zorder=2)
+    ax.text(1.035, 0.56, 'ratio 1.0 = unchanged', fontsize=9, color=ANNOT,
+            bbox=dict(fc=BG, ec='none', pad=1))
+    if arrow:
+        ax.annotate('', xy=(0.08, 0.40), xytext=(0.60, 0.40),
+                    arrowprops=dict(arrowstyle='->', color=SUB, lw=1.2))
+        ax.text(0.34, 0.445, 'compresses more', fontsize=9.5, color=SUB,
+                ha='center')
+    ax.set_xlabel('compression ratio   (output MDL / input MDL)',
+                  fontsize=11, color=INK)
+    ax.set_ylabel('fraction of rows', fontsize=11, color=INK)
+
+
+def time_panel(ax, A, S, corpus, arms, lw=2.4, cap_note=None):
+    n = S[corpus]['f64']['n']
+    for a in arms:
+        t = A[f'{corpus}/{a}/t']
+        x, y = ecdf(t, n)
+        ax.plot(x, y, color=C[a], lw=lw, solid_capstyle='butt', zorder=3)
+    ax.set_xscale('log')
+    ax.set_xlim(1e-6, 10)
+    ax.set_ylim(0, 1.02)
+    ax.set_xticks(TIME_TICKS[0])
+    ax.set_xticklabels(TIME_TICKS[1])
+    ax.axvline(1.0, color=ANNOT, ls=(0, (4, 3)), lw=1.4, zorder=2)
+    ax.text(0.78, 0.30, '1 s cap', fontsize=9, color=ANNOT, rotation=90,
+            ha='right', va='bottom')
+    if cap_note:
+        ax.text(1.15, 0.45, cap_note, fontsize=9, color=ANNOT, va='center')
+    ax.set_xlabel('wall clock per row  (log scale)', fontsize=11, color=INK)
+    ax.set_ylabel('fraction of rows', fontsize=11, color=INK)
+
+
+def speed_panel(ax, A, S, corpus, lw=2.4):
+    sy_t = A[f'{corpus}/sympy/t']
+    fin = np.isfinite(sy_t)
+    n_pairs = int(fin.sum())
+    for a in ENGINE_ARMS:
+        sp = sy_t[fin] / A[f'{corpus}/{a}/t'][fin]
+        x, y = ecdf(sp, n_pairs)
+        ax.plot(x, y, color=C[a], lw=lw, solid_capstyle='butt', zorder=3)
+    ax.set_xscale('log')
+    ax.set_xlim(0.5, 1.2e6)
+    ax.set_ylim(0, 1.02)
+    ax.set_xticks(SPEED_TICKS[0])
+    ax.set_xticklabels(SPEED_TICKS[1])
+    ax.axvline(1.0, color=ANNOT, ls=(0, (4, 3)), lw=1.4, zorder=2)
+    ax.text(1.25, 0.05, 'parity with SymPy', fontsize=9, color=ANNOT)
+    med = S[corpus]['f64']['paired_speedup']['median']
+    ax.axvline(med, color=C['f64'], ls=(0, (1, 2)), lw=1.6, zorder=2)
+    ax.text(med * 0.8, 0.95, f'median {med:,.0f}x', fontsize=9.5,
+            color=C['f64'], ha='right', zorder=7)
+    ax.set_xlabel('SymPy time / SimpliPy time, same row  (log scale)',
+                  fontsize=11, color=INK)
+    ax.set_ylabel('fraction of rows', fontsize=11, color=INK)
+
+
+def make_readme(plt, A, S, figdir):
+    n = S['unmasked']['f64']['n']
+    fig = plt.figure(figsize=(12.4, 5.4), dpi=DPI, facecolor=BG)
+
+    # left: ratio ECDF
+    axl = fig.add_axes([0.055, 0.415, 0.42, 0.445])
+    style_ax(axl, fs=10.5)
+    ratio_panel(axl, A, S, 'unmasked', ARMS, lw=3.0)
+    panel_title(fig, 0.055, 0.945, 'Expression size after simplification',
+                'output MDL / input MDL, paired per row;  SR prior, '
+                f'unmasked (n={n:,})', fs=14.5, sfs=11, dy=0.037)
+
+    ci = S['boot_ci_mean_ratio']
+    rows = []
+    for a in ARMS:
+        d = S['unmasked'][a]
+        lo, hi = ci[f'unmasked/{a}']
+        rows.append((LBL[a], C[a], [
+            f"{d['ratio_mean']:.3f} [{lo:.3f}, {hi:.3f}]",
+            f_pct1(d['wins']), f_pct1(d['same']), f_big(d['bigger'])]))
+    table(fig, 0.055, 0.315, 0.052,
+          [('mean [95% CI]', 0.345), ('smaller', 0.40), ('same', 0.443),
+           ('bigger', 0.497)], rows, fs=9.2, sw=0.010, sh=0.022)
+    cens_pct = S['unmasked']['sympy']['censored_ratio'] / n * 100
+    footnote(fig, 0.055, 0.055,
+             "'smaller'/'same'/'bigger' = ratio <1/=1/>1;  sympy censored "
+             f'rows ({cens_pct:.1f}%: timeout/unpriceable)', fs=8.3)
+    footnote(fig, 0.055, 0.022,
+             'score ratio 1 and end the curve below 1;  engine acj-5-4-llm '
+             '(effort 4), sympy 1.14.0, one pinned core', fs=8.3)
+
+    # right: wall clock ECDF
+    axr = fig.add_axes([0.575, 0.415, 0.42, 0.445])
+    style_ax(axr, fs=10.5)
+    time_panel(axr, A, S, 'unmasked', ARMS, lw=3.0)
+    panel_title(fig, 0.575, 0.945, 'Wall clock: time to simplify one row',
+                'all arms serial on one pinned core;  sympy 1.14.0 under a '
+                '1 s cap', fs=14.5, sfs=11, dy=0.037)
+
+    rows = []
+    for a in ARMS:
+        d = S['unmasked'][a]
+        rows.append((LBL[a], C[a],
+                     [f_us(d['t_p50_us']), f_us(d['t_p95_us'])]))
+    table(fig, 0.575, 0.315, 0.052,
+          [('median', 0.83), ('p95', 0.94)], rows, fs=9.5, sw=0.010,
+          sh=0.022)
+    med = S['unmasked']['f64']['paired_speedup']['median']
+    n_pairs = S['unmasked']['f64']['paired_speedup']['n_pairs']
+    cap_pct = S['unmasked']['sympy']['censored_t'] / n * 100
+    footnote(fig, 0.575, 0.055,
+             f'median paired speedup {med:,.0f}x (sympy/f64, rows where '
+             f'sympy finished: {n_pairs:,})', fs=8.3)
+    footnote(fig, 0.575, 0.022,
+             f'{cap_pct:.1f}% of rows hit the cap (censored): curve ends '
+             'below 1; sympy stats are lower bounds', fs=8.3)
+
+    path = os.path.join(figdir, 'ecdf_readme.png')
+    fig.savefig(path, dpi=DPI, facecolor=BG)
+    plt.close(fig)
+    return path
+
+
+def make_corpus(plt, A, S, corpus, figdir):
+    meta = CORPUS_META[corpus]
+    d = S[corpus]
+    n = d['f64']['n']
+    cens_r, cens_t = d['sympy']['censored_ratio'], d['sympy']['censored_t']
+    n_pairs = d['f64']['paired_speedup']['n_pairs']
+
+    fig = plt.figure(figsize=(19.5, 6.5), dpi=DPI, facecolor=BG)
+    fig.text(0.008, 0.952, f"{meta['head']} (n={n:,})", fontweight='bold',
+             fontsize=15.5, color=INK)
+    fig.text(0.008, 0.912, meta['meta'], fontsize=9, color=SUB)
+
+    def col_ax(x0):
+        ax = fig.add_axes([x0, 0.40, PANEL_W, 0.40])
+        style_ax(ax)
+        return ax
+
+    def foot(x0, lines):
+        for i, text in enumerate(lines):
+            footnote(fig, x0, 0.104 - 0.027 * i, text, fs=8.4)
+
+    # --- left: headline MDL ECDF
+    x0 = PANEL_X[0]
+    panel_title(fig, x0, 0.858, 'Headline: MDL in SimpliPy space',
+                'scored in the deployment space', fs=12, sfs=10, dy=0.030)
+    ratio_panel(col_ax(x0), A, S, corpus, ARMS)
+    rows = []
+    for a in ARMS:
+        s = d[a]
+        rows.append((LBL[a], C[a], [
+            f"{s['ratio_median']:.3f}", f_pct1(s['wins']), f_pct1(s['same']),
+            f_big(s['bigger']), f_max(s['ratio_max'])]))
+    table(fig, x0, 0.300, 0.040,
+          [('median', x0 + 0.125), ('wins', x0 + 0.158),
+           ('same', x0 + 0.191), ('bigger', x0 + 0.228),
+           ('max', x0 + 0.268)], rows, sw=0.006, sh=0.021, label_pad=0.011)
+    foot(x0, [
+        "'wins'/'same'/'bigger' = ratio <1/=1/>1, summing to 100%;",
+        "'max' is the true max (axis clipped at 2.0)",
+        f'sympy censored rows — {cens_r:,} of {n:,} '
+        f'({cens_r / n * 100:.1f}%) — score ratio 1.0 in the stats',
+        'and end the curve below 1'])
+
+    # --- middle: wall clock
+    x0 = PANEL_X[1]
+    panel_title(fig, x0, 0.858, 'Wall clock: time to simplify one row',
+                'all arms serial on one pinned core;  sympy 1.14.0 under a '
+                '1 s cap', fs=12, sfs=10, dy=0.030)
+    time_panel(col_ax(x0), A, S, corpus, ARMS,
+               cap_note=f'{cens_t / n * 100:.1f}% of rows stop\nat the '
+                        'cap; curve\nends below 1')
+    rows = []
+    for a in ARMS:
+        s = d[a]
+        cens = f'{cens_t / n * 100:.1f}%' if a == 'sympy' else '-'
+        rows.append((LBL[a], C[a], [
+            f_us(s['t_p50_us']), f_us(s['t_p95_us']), f_ms(s['t_max_ms']),
+            cens]))
+    table(fig, x0, 0.300, 0.040,
+          [('median', x0 + 0.131), ('p95', x0 + 0.178),
+           ('max', x0 + 0.225), ('censored', x0 + 0.269)], rows,
+          sw=0.006, sh=0.021, label_pad=0.011)
+    foot(x0, [
+        'sympy stats cover finished rows; censored rows are ≥ 1 s:',
+        'true median/p95/max are larger'])
+
+    # --- right: paired speedup
+    x0 = PANEL_X[2]
+    panel_title(fig, x0, 0.858,
+                'Paired speedup: how much faster on the SAME expression',
+                f'over the {n_pairs:,} rows where sympy finished; censored '
+                'rows could only raise it', fs=12, sfs=10, dy=0.030)
+    speed_panel(col_ax(x0), A, S, corpus)
+    rows = []
+    for a in ENGINE_ARMS:
+        p = d[a]['paired_speedup']
+        rows.append((f'SymPy / {a}', C[a], [
+            f_x(p['median']), f_x(p['q25']), f_x(p['q75']), f_x(p['max'])]))
+    table(fig, x0, 0.300, 0.040,
+          [('median', x0 + 0.125), ('q25', x0 + 0.161),
+           ('q75', x0 + 0.201), ('max', x0 + 0.268)], rows,
+          sw=0.006, sh=0.021, label_pad=0.011)
+    foot(x0, [
+        'medians over rows where sympy finished; censored rows are',
+        "sympy's slowest, so every number here is an underestimate"])
+
+    path = os.path.join(figdir, meta['out'])
+    fig.savefig(path, dpi=DPI, facecolor=BG)
+    plt.close(fig)
+    return path
+
+
+def make_sweep(plt, A, S, figdir):
+    n = S['unmasked']['f64']['n']
+    fig = plt.figure(figsize=(8.6, 5.6), dpi=DPI, facecolor=BG)
+    panel_title(fig, 0.085, 0.945,
+                'Search budget: expression size at effort 0 / 4 / 64',
+                f'unmasked SR leg, {n:,} rows; effort 4 and 64 coincide '
+                '(budget 4 captures every budget-64 win)',
+                fs=13.5, sfs=10.5, dy=0.045)
+    ax = fig.add_axes([0.085, 0.40, 0.885, 0.445])
+    style_ax(ax, fs=10)
+    CE = {'f64_e0': '#666666', 'f64': '#1f77b4', 'f64_e64': '#e0a010'}
+    for a in ('f64_e0', 'f64_e64'):
+        x, y = ecdf(A[f'unmasked/{a}/ratio'], n)
+        ax.plot(x, y, color=CE[a], lw=2.6, zorder=3)
+    x, y = ecdf(A['unmasked/f64/ratio'], n)
+    ax.plot(x, y, color=CE['f64'], lw=2.6, ls=(0, (5, 3)), zorder=4)
+    for a, z in (('f64_e0', 5), ('f64_e64', 6), ('f64', 7)):
+        ax.scatter([1.0], [S['sweep'][a]['wins']], s=26 if z < 7 else 12,
+                   color=CE[a], zorder=z)
+    ax.set_xlim(0, 2.0)
+    ax.set_ylim(0, 1.02)
+    ax.set_xticks(np.arange(0, 2.01, 0.25))
+    ax.set_xticklabels([f'{v:.2f}' for v in np.arange(0, 2.01, 0.25)])
+    ax.axvline(1.0, color=ANNOT, ls=(0, (4, 3)), lw=1.2, zorder=2)
+    ax.text(1.035, 0.50, 'ratio 1.0 = unchanged', fontsize=9, color=ANNOT,
+            bbox=dict(fc=BG, ec='none', pad=1))
+    ax.set_xlabel('compression ratio   (output MDL / input MDL)',
+                  fontsize=11, color=INK)
+    ax.set_ylabel('fraction of rows', fontsize=11, color=INK)
+
+    ci = S['boot_ci_mean_ratio']
+    rows = []
+    for a, lbl in (('f64_e0', 'effort 0 (plain chain)'),
+                   ('f64', 'effort 4 (the default)'),
+                   ('f64_e64', 'effort 64')):
+        s = S['sweep'][a]
+        lo, hi = ci[f'unmasked/{a}']
+        rows.append((lbl, CE[a], [
+            f"{s['mean']:.4f} [{lo:.4f}, {hi:.4f}]",
+            f_pct1(s['wins']), f_pct1(s['same']), f_big(s['bigger']),
+            f_us(s['t_p50_us'])]))
+    table(fig, 0.10, 0.30, 0.055,
+          [('mean [95% CI]', 0.545), ('smaller', 0.635), ('same', 0.715),
+           ('bigger', 0.80), ('med', 0.90)], rows, fs=9.5, sw=0.012,
+          sh=0.022, label_pad=0.022)
+    footnote(fig, 0.085, 0.035,
+             'engine acj-5-4-llm, unmasked SR leg (v25 prior, seed '
+             '20260830); identical protocol and rows as the published '
+             'panels')
+    path = os.path.join(figdir, 'ecdf_effort_sweep.png')
+    fig.savefig(path, dpi=DPI, facecolor=BG)
+    plt.close(fig)
+    return path
+
+
+def make_figures(arrays, stats, figdir):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-
-    mu_orig = np.array(scored['mu_orig'])
-    n = len(mu_orig)
-
-    def ecdf(v):
-        v = np.sort(np.asarray(v))
-        return v, np.arange(1, len(v) + 1) / n  # denominator = FULL corpus
-
-    sy = scored['sympy']
-    sy_sec = np.array([s if s is not None else np.inf for s in sy['seconds']],
-                      dtype=float)
-    sy_status = np.array(sy['status'])
-    sy_mu = np.array([m if m is not None else np.nan for m in sy['mu']], dtype=float)
-    # ratio=1 convention: unresolved rows (timeout / no spelling) count as unsimplified
-    sy_ratio_1 = np.where(np.isnan(sy_mu), 1.0, sy_mu / mu_orig)
-    # ratio=None convention: unresolved rows dropped (curve saturates below 1)
-    sy_ratio_none = (sy_mu / mu_orig)[~np.isnan(sy_mu)]
-
-    greens = plt.cm.Greens
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8.5))
-    cols = {
-        'Mined Rulesets': [(f'acj-{c}', greens(0.45 + 0.2 * i))
-                           for i, c in enumerate(('2-1', '3-2', '4-3'))],
-        'Safe vs Aggressive': [('acj-4-3', greens(0.85)),
-                               ('acj-4-3-lossy', 'tab:purple')],
-        'Search Budget': [(f'acj-4-3-b{b}', greens(0.4 + 0.45 * i / (len(BUDGETS) - 1)))
-                          for i, b in enumerate(BUDGETS) if b != 48]
-                         + [('acj-4-3', greens(0.85))],
-    }
-    for j, (title, variants) in enumerate(cols.items()):
-        ax_t, ax_r = axes[0, j], axes[1, j]
-        for label, color in variants:
-            d = scored[label]
-            x, y = ecdf(d['seconds'])
-            ax_t.plot(x, y, color=color, label=label, lw=1.6)
-            x, y = ecdf(np.array(d['mu']) / mu_orig)
-            ax_r.plot(x, y, color=color, label=label, lw=1.6)
-        x, y = ecdf(sy_sec[np.isfinite(sy_sec)])
-        ax_t.plot(x, y, color='tab:orange', label='sympy', lw=1.6)
-        x, y = ecdf(sy_ratio_none)
-        ax_r.plot(x, y, color='tab:orange', label='sympy (ratio=None)', lw=1.6)
-        x, y = ecdf(sy_ratio_1)
-        ax_r.plot(x, y, color='tab:red', label='sympy (ratio=1)', lw=1.6)
-        ax_t.set_xscale('log')
-        ax_t.set_title(title)
-        ax_t.set_xlabel('simplification time [s]')
-        ax_r.set_xlabel(r'simplification ratio  $\mu(\mathrm{simp})/\mu(\mathrm{orig})$')
-        ax_t.set_ylim(0, 1.02)
-        ax_r.set_ylim(0, 1.02)
-        ax_r.set_xlim(0, 1.6)
-        ax_t.grid(alpha=0.25)
-        ax_r.grid(alpha=0.25)
-        ax_t.legend(fontsize=8, loc='lower right')
-        ax_r.legend(fontsize=8, loc='lower right')
-    axes[0, 0].set_ylabel('ECDF')
-    axes[1, 0].set_ylabel('ECDF')
-    fig.suptitle('SimpliPy 0.12 (acj family, unified measure) vs SymPy — 64k nv corpus; '
-                 'ratios scored by the internal description-length measure mu for BOTH systems',
-                 fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
-    os.makedirs(os.path.join(REPO, 'benchmarks', 'out'), exist_ok=True)
-    for ext in ('png', 'svg'):
-        fig.savefig(os.path.join(REPO, 'benchmarks', 'out',
-                                 f'simplipy_vs_sympy_012_mu.{ext}'), dpi=160)
-    print('figure -> benchmarks/out/simplipy_vs_sympy_012_mu.{png,svg}')
+    os.makedirs(figdir, exist_ok=True)
+    paths = [make_readme(plt, arrays, stats, figdir)]
+    for corpus in CORPORA:
+        paths.append(make_corpus(plt, arrays, stats, corpus, figdir))
+    paths.append(make_sweep(plt, arrays, stats, figdir))
+    return paths
 
 
-def summarize(scored):
-    mu_orig = np.array(scored['mu_orig'])
-    s = {}
-    for label in [k for k in scored if k not in ('mu_orig', 'sympy')]:
-        d = scored[label]
-        r = np.array(d['mu']) / mu_orig
-        t = np.array(d['seconds'])
-        s[label] = {'t_p50_us': float(np.percentile(t, 50) * 1e6),
-                    't_mean_us': float(np.mean(t) * 1e6),
-                    'ratio_p50': float(np.percentile(r, 50)),
-                    'ratio_mean': float(np.mean(r)),
-                    'frac_below_1': float(np.mean(r < 1.0)),
-                    'frac_above_1': float(np.mean(r > 1.0))}
-    sy = scored['sympy']
-    st = np.array(sy['status'])
-    mu = np.array([m if m is not None else np.nan for m in sy['mu']], dtype=float)
-    r1 = np.where(np.isnan(mu), 1.0, mu / mu_orig)
-    sec = np.array([x if x is not None else np.nan for x in sy['seconds']], dtype=float)
-    s['sympy'] = {'status_counts': {k: int((st == k).sum()) for k in set(st)},
-                  't_p50_us_completed': float(np.nanpercentile(sec, 50) * 1e6),
-                  'ratio1_p50': float(np.percentile(r1, 50)),
-                  'ratio1_mean': float(np.mean(r1)),
-                  'frac_below_1_ratio1': float(np.mean(r1 < 1.0))}
-    return s
+# ------------------------------------------------------------------------ driver
+def resolve_corpora(limit):
+    try:
+        from symbolic_data.resolver import resolve
+    except ImportError:
+        sys.exit('corpora resolve through symbolic-data: pip install symbolic-data')
+    artifact = resolve(CORPUS_ARTIFACT)
+    corpora = {}
+    for tag, fname in CORPUS_FILES.items():
+        with open(artifact.paths[fname], 'rb') as fh:
+            rows = pickle.load(fh)
+        corpora[tag] = rows[:limit] if limit else rows
+        print(f'{tag}: {len(corpora[tag])} rows ({fname})', flush=True)
+    return corpora
 
 
 def main():
-    args = sys.argv[1:]
-    limit = None
-    if '--limit' in args:
-        limit = int(args[args.index('--limit') + 1])
-    corpus = pickle.load(open(CORPUS_PKL, 'rb'))[:limit]
-    print(f'corpus: {len(corpus)} rows')
-    prev = pickle.load(open(RESULTS_PKL, 'rb')) if os.path.exists(RESULTS_PKL) else {}
-    if '--plot-only' not in args:
-        if '--sympy-only' not in args:
-            prev['simplipy'] = run_simplipy(corpus)
-            pickle.dump(prev, open(RESULTS_PKL, 'wb'))
-        if '--simplipy-only' not in args:
-            prev['sympy'] = run_sympy(corpus)
-            pickle.dump(prev, open(RESULTS_PKL, 'wb'))
-    scored = score_mu(corpus, prev['simplipy'], prev['sympy'])
-    summary = summarize(scored)
-    json.dump(summary, open(SUMMARY_JSON, 'w'), indent=1)
-    print(json.dumps(summary, indent=1))
-    make_figure(scored)
+    parser = argparse.ArgumentParser(
+        description='The published SimpliPy-vs-SymPy benchmark: four arms '
+                    '(f64/real/permissive at effort 4, sympy under a 1 s cap), '
+                    'three corpora, plus the effort 0/64 sweep on the '
+                    'unmasked leg.')
+    parser.add_argument('--limit', type=int, default=None,
+                        help='slice every corpus to its first N rows (smoke runs)')
+    parser.add_argument('--out', default=None,
+                        help='directory for summary + figures + checkpoint '
+                             '(default: the repo paths)')
+    args = parser.parse_args()
+
+    if args.out:
+        os.makedirs(args.out, exist_ok=True)
+        summary_path = os.path.join(args.out, 'ecdf_vs_sympy_summary.json')
+        figdir = args.out
+        results_pkl = os.path.join(args.out, RESULTS_PKL_NAME)
+    else:
+        summary_path = os.path.join(HERE, 'ecdf_vs_sympy_summary.json')
+        figdir = os.path.join(REPO, 'docs', 'assets', 'benchmarks')
+        results_pkl = os.path.join(HERE, RESULTS_PKL_NAME)
+
+    from simplipy import Mode
+    from simplipy.asset_manager import get_path
+    cfg = get_path(ENGINE_ASSET, install=True)
+    corpora = resolve_corpora(args.limit)
+
+    results = {}
+    for tag in CORPORA:
+        corpus = corpora[tag]
+        print(f'== {tag}: {len(corpus)} rows', flush=True)
+        sympy_res = run_sympy(corpus, tag)
+        modes = {}
+        for mode in (Mode.f64, Mode.real, Mode.permissive):
+            modes[mode.name] = run_simplipy(cfg, corpus, f'{tag}/{mode.name}',
+                                            mode=mode, effort=4)
+        if tag == 'unmasked':
+            for eff in SWEEP_EFFORTS:
+                modes[f'f64_e{eff}'] = run_simplipy(
+                    cfg, corpus, f'{tag}/f64_e{eff}', mode=Mode.f64, effort=eff)
+        results[tag] = {'sympy': sympy_res, 'modes': modes}
+        with open(results_pkl, 'wb') as fh:  # checkpoint after each leg
+            pickle.dump(results, fh)
+
+    arrays, summary = score(cfg, corpora, results)
+    with open(summary_path, 'w') as fh:
+        json.dump(summary, fh, indent=1)
+    print(f'summary -> {summary_path}', flush=True)
+
+    stats = compute_stats(arrays)
+    for path in make_figures(arrays, stats, figdir):
+        print(f'figure -> {path}', flush=True)
 
 
 if __name__ == '__main__':

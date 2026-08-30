@@ -63,6 +63,12 @@ pub struct AcRule {
 #[derive(Default)]
 pub struct AcRules {
     pub rules: Vec<AcRule>,
+    /// Provenance, parallel to `rules`: the index of the ARTIFACT rule each served entry
+    /// derives from. An asset rule reports its own position; a minted twin reports the
+    /// position of the rule it was negated from. This is what lets a consumer that judges
+    /// the SERVED set (`Engine::ac_served_rules`) act on the artifact -- a twin has no
+    /// artifact row of its own, so a verdict against it is attributed to its source.
+    pub src: Vec<usize>,
     pub add_idx: Vec<usize>,
     pub mul_idx: Vec<usize>,
     pub pow_idx: Vec<usize>,
@@ -181,7 +187,7 @@ impl AcRules {
         // deterministic ping-pong. First-match-wins resolves the direction: the earlier rule
         // owns it, the reversed later rule is dropped.
         let mut seen_pairs: FxHashSet<(Ex, Ex)> = FxHashSet::default();
-        for (lhs_t, rhs_t) in raw {
+        for (raw_idx, (lhs_t, rhs_t)) in raw.iter().enumerate() {
             let (Some(lhs0), Some(rhs0)) = (from_prefix(lhs_t, &cx), from_prefix(rhs_t, &cx))
             else {
                 out.note_drop("unparseable-side");
@@ -245,6 +251,7 @@ impl AcRules {
                 continue;
             }
             seen_pairs.insert((lhs.clone(), rhs.clone()));
+            out.src.push(raw_idx);
             let sig = atom_sig(&lhs, view);
             let is_pattern = lhs.contains_wildcard(view);
             let idx = out.rules.len();
@@ -335,6 +342,7 @@ impl AcRules {
             }
             seen_pairs.insert((tl.clone(), tr.clone()));
             seen_rules.insert((tl.clone(), tr.clone()));
+            out.src.push(out.src[i]);
             let sig = atom_sig(&tl, view);
             let is_pattern = tl.contains_wildcard(view);
             out.rules.push(AcRule {

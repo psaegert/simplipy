@@ -607,7 +607,7 @@ def run_controls(rng, core):
                 f'got {v} want {want} ({str(info)[:120]})')
 
 
-def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
+def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progress=None):
     """Certify `rules` down the `_` -> `!` -> `?` ladder (plus the ground tier) and return the
     promoted rules alongside a per-bucket report.
 
@@ -626,6 +626,9 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
         pass's fixed seed so behaviour is reproducible.
     run_positive_controls : bool
         Run the positive-control self-test first (raising on any miss) before promotion.
+    progress : simplipy.progress.Progress or None
+        Reports each tier and heartbeats inside it. The tiers here are the longest stretch
+        of a mine; without this they run to completion in silence.
 
     Returns
     -------
@@ -638,10 +641,13 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
     rng = np.random.default_rng(seed)
     if run_positive_controls:
         run_controls(rng, core)
+    from ..progress import Progress
+    prog = progress if progress is not None else Progress(False)
     rules = list(rules)
     tiers = {'_cf': [], '_cb': [], '?cf': [], '?cb': [], 'ground': []}
     for lhs, rhs in rules:
         tiers[tier_of(lhs, rhs)].append((lhs, rhs))
+    prog.stage("stage 5/5 ladder tiers", **{k: len(v) for k, v in tiers.items()})
 
     report = {'demoted_to_q': [], 'promoted_bang': [], 'refused_spike': [],
               'killed_q': [], 'killed_ground': [],
@@ -663,7 +669,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
             report['demoted_to_q'].append((lhs, rhs, verdict, str(info)[:120]))
             q_cf.append((respell(lhs), respell(rhs)))
 
-    for lhs, rhs in tiers['_cf']:
+    for lhs, rhs in prog.track(tiers['_cf'], "  tier _cf (exact-pointwise bar)"):
         ws = wildcards(list(lhs) + list(rhs))
         v, info = judge(list(lhs), list(rhs), valuations_for(ws, rng))
         if v == 'PROMOTE':
@@ -688,7 +694,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
         else:
             report['eval_err'].append((lhs, rhs, v, str(info)[:120]))
 
-    for lhs, rhs in tiers['_cb']:
+    for lhs, rhs in prog.track(tiers['_cb'], "  tier _cb (const-bearing bar)"):
         v, info = certify_rule(lhs, rhs, rng)
         if v == 'PROMOTE':
             ws = wildcards(list(lhs) + list(rhs))
@@ -719,7 +725,8 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
 
     # `?` const-free (incl. fresh demotions): the atom bar
     seen = set()
-    for lhs, rhs in q_cf:
+    # q_cf/q_cb are final here: the only appends happen in the `_` tiers above.
+    for lhs, rhs in prog.track(q_cf, "  tier ?cf (demoted + native, atom bar)"):
         if (lhs, rhs) in seen:
             continue
         seen.add((lhs, rhs))
@@ -751,7 +758,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
     # (forall c_s exists c_t; instantiated pairs held to judge_r2prime on atom-only valuations).
     # NO-WITNESS here is a solver limitation: held OUT of the artifact, conservative, reported
     # in its own bucket.
-    for lhs, rhs in q_cb:
+    for lhs, rhs in prog.track(q_cb, "  tier ?cb (demoted + native, witness bar)"):
         if (lhs, rhs) in seen:
             continue
         seen.add((lhs, rhs))
@@ -788,36 +795,55 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True):
     # artifact carries the rule, so leaving it out is a REGRESSION, not a soundness gain: at the
     # `!` bar the slot is finite a.e., 0 * finite = 0, and the null set where the operand is
     # +-inf/nan is licensed by R3. Certified through judge_bang like every other seed.
-    lhs_seen = {tuple(l) for l, _ in kept}
-    for lhs, rhs in [(('-', '!0', '!0'), ('0',)),
-                     (('+', '!0', 'neg', '!0'), ('0',)),
-                     (('+', 'neg', '!0', '!0'), ('0',)),
-                     (('*', '0', '!0'), ('0',))]:
-        if tuple(lhs) in lhs_seen:
+    # THE RE-SEED GUARD IS KEYED ON THE INTERNAL FORM, not the spelling (owner ruling
+    # 2026-08-18; audit F49: "a gate keyed on a spelling breaks whenever the canon unifies
+    # two spellings"). Each family below seeds THREE spellings of ONE cancellation identity
+    # (`- !0 !0` / `+ !0 neg !0` / `+ neg !0 !0`; `/ $0 $0` / `* $0 inv $0` / `* inv $0 $0`),
+    # which are AC-equal but textually distinct: a spelling key cannot see them as one, so
+    # every seeded twin landed in the artifact as an AC-duplicate row of the one before it
+    # (measured on acj-4-3: 4 excess rows, 2 per family). Same idiom as
+    # `utils._dedup_keyed_rules`: batched through the core in ONE call, and a side the AC
+    # parser refuses keeps its SPELLING as the key (so a reduced engine that cannot parse a
+    # seed guards exactly as before).
+    def ac_key(sides):
+        return [(True, tuple(k)) if k is not None else (False, tuple(s))
+                for k, s in zip(engine._core.ac_canonical_keys([list(s) for s in sides]),
+                                sides)]
+
+    lhs_seen = set(ac_key([l for l, _ in kept]))
+    add_seeds = [(('-', '!0', '!0'), ('0',)),
+                 (('+', '!0', 'neg', '!0'), ('0',)),
+                 (('+', 'neg', '!0', '!0'), ('0',)),
+                 (('*', '0', '!0'), ('0',))]
+    for (lhs, rhs), key in zip(add_seeds, ac_key([l for l, _ in add_seeds])):
+        if key in lhs_seen:
             continue
         bv, _ = judge_bang(lhs, rhs, rng)
         if bv == 'PROMOTE':
             report['promoted_bang'].append((lhs, rhs, 'seed', ''))
             kept.append((lhs, rhs))
+            lhs_seen.add(key)
 
     # The multiplicative twins (SELFCANCEL Part 2): same seed discipline, certified through
     # `judge_bang_mult` -- the judge_bang bar on the finite-NONZERO atom lattice, where the
     # identities hold exactly. The match-time certificate (`interval::finite_nonzero_ae`)
     # carries the instance-level burden; `<constant>`-bearing bindings are refused there and
     # by the sort-independent rebind guard.
-    for lhs, rhs in [(('/', '$0', '$0'), ('1',)),
-                     (('*', '$0', 'inv', '$0'), ('1',)),
-                     (('*', 'inv', '$0', '$0'), ('1',)),
-                     (('/', '0', '$0'), ('0',))]:
-        if tuple(lhs) in lhs_seen:
+    mult_seeds = [(('/', '$0', '$0'), ('1',)),
+                  (('*', '$0', 'inv', '$0'), ('1',)),
+                  (('*', 'inv', '$0', '$0'), ('1',)),
+                  (('/', '0', '$0'), ('0',))]
+    for (lhs, rhs), key in zip(mult_seeds, ac_key([l for l, _ in mult_seeds])):
+        if key in lhs_seen:
             continue
         bv, _ = judge_bang_mult(lhs, rhs, rng)
         if bv == 'PROMOTE':
             report['promoted_bang'].append((lhs, rhs, 'seed-mult', ''))
             kept.append((lhs, rhs))
+            lhs_seen.add(key)
 
     # ground tier: skeleton semantics, mpmath
-    for lhs, rhs in tiers['ground']:
+    for lhs, rhs in prog.track(tiers['ground'], "  tier ground"):
         v, info = judge_ground(list(lhs), list(rhs), rng)
         if v == 'PASS':
             kept.append((lhs, rhs))

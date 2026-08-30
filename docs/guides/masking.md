@@ -1,11 +1,14 @@
 # Masking
 
-Masking is **downstream policy, not engine behavior**: the engine simplifies
-and delivers the full expression with explicit constants; consumers decide
-what to abstract. `simplipy.masking` is the mechanism. It walks the engine's
+Masking is the user's policy, applied by the library, never a side effect of
+simplification: the engine simplifies and delivers the full expression with explicit
+constants; which of those constants to abstract into `<constant>` placeholders is your
+decision, because it depends on what your application can represent (a model's numeric
+vocabulary, a fitter's parameter budget), not on the algebra. `simplipy.masking` is the
+mechanism for exactly that decision. It walks the engine's
 output (the native tagged form or the explicit binary form) and tells a policy
-the structural **role** of every literal it meets — a multiplicative
-coefficient, an additive constant, a `pow` exponent, a `rootn` index — so a
+the structural role of every literal it meets: a multiplicative
+coefficient, an additive constant, a `pow` exponent, a `rootn` index. A
 policy like "mask constants, but keep in-vocabulary integer exponents" is a
 single conditional, and position-blind accidents (masking a `rootn` index into
 a skeleton that is NaN almost everywhere) are impossible to write by accident.
@@ -16,11 +19,16 @@ Masking is a separate **terminal** step: apply it to `simplify`'s output.
 import simplipy as sp
 from simplipy import masking
 
-engine = sp.SimpliPyEngine.load("acj-4-3", install=True)
+engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
 
+# The front door takes any form, with policies by name:
+engine.mask(engine.simplify('x1 + 3.14'), 'fittable')
+# -> 'x1 + <constant>'
+
+# The module is the mechanism, with explicit policy objects over token forms:
 masking.mask(engine.simplify(['+', 'x1', '3.14']), engine,
-             masking.mask_values_keep_structure)
-# -> ['<add>', 'x1', '<constant>', '</add>']
+             masking.mask_fittable)
+# -> ['+', 'x1', '<constant>']
 ```
 
 ## The shipped policies
@@ -28,8 +36,6 @@ masking.mask(engine.simplify(['+', 'x1', '3.14']), engine,
 Choosing what to abstract is a real decision with real failure modes, so the
 kinds ship in the module rather than being re-invented by every consumer:
 
-- **`mask_values_keep_structure`** — numeric literal *values* become
-  `<constant>` while structural literals stay.
 - **`mask_all`** — every number, including either half of a fraction and the
   special constants. For structural comparison.
 - **`mask_fittable`** — every number a constant optimizer can actually fit,

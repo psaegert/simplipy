@@ -134,6 +134,66 @@ BIN = {
 }
 
 
+#: Periodic functions are the sharpest case -- reducing mod 2*pi needs pi to as many digits
+#: as the argument's exponent -- but they are not the only one. Any intermediate with an
+#: astronomical exponent is unbounded to compute with, because mpf carries no exponent limit
+#: and will happily represent exp(1e300) exactly where f64 overflows to inf. Both are capped
+#: by the same bound below.
+_PERIODIC = ('sin', 'cos', 'tan')
+
+#: Growth functions. Magnitude alone is cheap -- exp(1e300) costs 0.3 ms and mpmath raises
+#: its own OverflowError past that -- so a bound on the RESULT buys nothing and would cost
+#: `exp <constant>` and `cosh <constant>`, both sound. What is expensive is applying one to
+#: an argument that is ITSELF astronomical: cosh(2**1.4e10) has an exponent no subsequent
+#: operation can work with in bounded time. Guarded on the argument, same bound, same reason.
+_GROWTH = ('exp', 'cosh', 'sinh')
+
+#: Largest BINARY EXPONENT a periodic argument may carry. Reducing sin/cos/tan mod 2*pi
+#: costs pi to as many digits as the argument's exponent, so the cost is linear in this
+#: number and unbounded without a cap.
+#:
+#: The bound is not a performance knob. Past it the value is not determined by the input at
+#: any finite precision -- one ulp of the argument already spans many periods -- so a
+#: verdict there would describe the probe's spelling, not the rule. Refusing is FAIL-CLOSED:
+#: the caller reads EVAL-ERR and the rule is dropped, never certified.
+#:
+#: 4096 bits (~1233 decimal digits) sits far above every legitimate probe and far below the
+#: pathology. Measured on the acj-5-4 ground tier: ordinary calls in these rules carry
+#: log2|arg| <= 10, the probe atom lattice reaches 1e300 (log2 ~ 997), and the stalling
+#: calls carry log2|arg| ~ 1.4e20 -- an argument of ~4.3e19 decimal digits, produced by
+#: exp(1e300), which mpmath represents exactly rather than overflowing to inf as f64 does.
+#: The distribution is bimodal with nothing in between, so the cap is not near a boundary.
+#:
+#: A MAGNITUDE bound, deliberately, not a wall-clock timeout: a mine must give the same
+#: verdicts on a loaded machine as on an idle one, and a timeout makes soundness depend on
+#: how busy the host was.
+PERIODIC_ARG_EXP_LIMIT = 4096
+
+
+class RangeRefusal(ArithmeticError):
+    """An intermediate went beyond the range where its value is decidable."""
+
+
+#: The periodic case is the one callers name explicitly; it is the same refusal.
+PeriodicRangeRefusal = RangeRefusal
+
+
+def _check_range(t, v):
+    """Refuse an intermediate whose exponent puts it beyond decidable range.
+
+    FAIL-CLOSED: callers map an evaluator exception to EVAL-ERR, so the rule is dropped,
+    never certified. That costs recall -- `acos cosh cosh inv <constant> -> nan` is sound
+    and is refused here -- and the trade is deliberate: an unbounded evaluation has no
+    verdict at all, and a mine that does not terminate certifies nothing.
+    """
+    if isinf(v) or isnan(v) or v == 0:
+        return
+    if mp.mag(v) > PERIODIC_ARG_EXP_LIMIT:
+        raise RangeRefusal(
+            f"{t}: intermediate with binary exponent {int(mp.mag(v))} > "
+            f"{PERIODIC_ARG_EXP_LIMIT}, beyond the range where the value is decidable")
+
+
 def _ev(tokens, i, env, consts, ci):
     t = tokens[i]
     i += 1
@@ -141,6 +201,12 @@ def _ev(tokens, i, env, consts, ci):
         v, i, ci = _ev(tokens, i, env, consts, ci)
         if isnan(v):
             return nan, i, ci
+        if t in _PERIODIC or t in _GROWTH:
+            # Checked on the ARGUMENT, never the result: for a periodic function the
+            # reduction happens inside the call, so waiting for the result would be waiting
+            # for the thing we are avoiding; for a growth function the result's magnitude is
+            # harmless on its own and only the argument predicts an unusable exponent.
+            _check_range(t, v)
         try:
             r = UN[t](v)
         except (OverflowError, ValueError, ZeroDivisionError):

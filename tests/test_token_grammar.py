@@ -47,8 +47,10 @@ LEGAL_NUMERIC = [
     ("5", ["5"]),
     ("+5", ["5"]),
     # `.5` PARSES (the grammar guard); it then takes its argmin spelling, which for a
-    # 2^a denominator is the fraction -- §10.10(1), owner-ratified 2026-08-07.
-    (".5", ["<mul>", "1", "<div>", "2", "</mul>"]),
+    # 2^a denominator is the fraction -- §10.10(1), owner-ratified 2026-08-07. A bare
+    # literal carries no bag delimiter, so it is EXPLICIT input and comes back in the
+    # explicit dialect's structural division (the tagged twin is `<mul> 1 <div> 2 </mul>`).
+    (".5", ["/", "1", "2"]),
     ("5.", ["5"]),
     ("1e-05", ["0.00001"]),
     ("1e+5", ["100000"]),
@@ -93,8 +95,8 @@ class TestReservedSpellingsRefused:
         # The infix tokenizer maps lowercase `inf`/`nan` to the CANONICAL spellings:
         # the infix surface reads them numerically (unambiguous there), so nothing
         # reserved survives into the token stream.
-        assert engine.parse("inf - inf") == ["-", 'float("inf")', 'float("inf")']
-        assert engine.parse("nan + x0", mask_numbers=True) == ["+", 'float("nan")', "x0"]
+        assert engine.read_infix("inf - inf") == ["-", 'float("inf")', 'float("inf")']
+        assert engine.read_infix("nan + x0", mask_numbers=True) == ["+", 'float("nan")', "x0"]
 
     def test_parse_refuses_unnormalized_nonfinites(self, engine: SimpliPyEngine) -> None:
         # Case variants the tokenizer does NOT normalize would enter the stream as
@@ -102,9 +104,9 @@ class TestReservedSpellingsRefused:
         # float() semantics WOULD read them) can absorb one into `<constant>`.
         for infix in ("Infinity - 1", "NaN * x0", "INF + 1"):
             with pytest.raises(ValueError, match="reserved numeric spelling"):
-                engine.parse(infix)
+                engine.read_infix(infix)
             with pytest.raises(ValueError, match="reserved numeric spelling"):
-                engine.parse(infix, mask_numbers=True)
+                engine.read_infix(infix, mask_numbers=True)
 
     def test_prefix_to_infix_refuses(self, engine: SimpliPyEngine) -> None:
         # The serializer feeds eval-bearing surfaces; a reserved token must not
@@ -220,7 +222,7 @@ class TestRealizationDialectIsClosed:
         import simplipy
         eng = SimpliPyEngine(operators={"*": self._MUL, "/": self._DIV, "rootn": self._ROOTN},
                              rules=[])
-        out = eng.simplify(["*", "rootn", "x0", "2", "x0"], form="explicit")
+        out = eng.simplify(["*", "rootn", "x0", "2", "x0"])
         code = eng.prefix_to_infix(list(out), realization=True)
         assert "simplipy.operators.pow" in code, code
         got = eval(code, {"simplipy": simplipy, "np": np}, {"x0": -2.0})
@@ -230,7 +232,7 @@ class TestRealizationDialectIsClosed:
     def test_core_ops_resolve_under_a_config_that_declares_none_of_them(self) -> None:
         eng = SimpliPyEngine(operators={"*": self._MUL}, rules=[])
         # the engine emits `pow` here although the config never declared it
-        out = eng.simplify(["*", "x0", "x0"], form="explicit")
+        out = eng.simplify(["*", "x0", "x0"])
         assert eng.prefix_to_infix(list(out), realization=True) == \
             "simplipy.operators.pow(x0, 2)"
         for tokens, want in ((["rootn", "x0", "3"], "simplipy.operators.rootn(x0, 3)"),

@@ -77,7 +77,7 @@ def test_prefix_to_infix_expected_output(
 )
 def test_prefix_to_infix_roundtrip_preserves_structure(engine: SimpliPyEngine, prefix: list[str]) -> None:
     infix = engine.prefix_to_infix(prefix, power='**')
-    reconstructed = engine.parse(infix, convert_expression=False)
+    reconstructed = engine.read_infix(infix, convert_expression=False)
 
     canonical_original = tuple(engine.convert_expression(prefix.copy()))
     canonical_roundtrip = tuple(engine.convert_expression(reconstructed.copy()))
@@ -104,15 +104,24 @@ def test_prefix_to_infix_names_the_tagged_dialect(engine: SimpliPyEngine) -> Non
     assert "form='explicit'" in message
 
 
-def test_is_valid_verbose_names_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:
-    # Same seam on the validity side: the verdict stays False (core-owned, explicit
-    # dialect only), but the verbose diagnostic must name the tagged dialect instead of
-    # the misleading 'Variable must be leaf node' (B1).
+def test_is_valid_accepts_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:
+    # SUPERSEDED CONTRACT (ruling 2026-08-18, evening batch 2 item 5): is_valid used to
+    # answer False for every tagged sequence and merely name the dialect in its verbose
+    # diagnostic. It now READS all three forms, so a well-formed tagged sequence is
+    # VALID and says nothing.
     tagged = ['<add>', '<mul>', '2', 'x0', '</mul>', '1', '</add>']
+    assert engine.is_valid(tagged, verbose=True) is True
+    assert capsys.readouterr().out == ''
+
+
+def test_is_valid_verbose_names_the_tagged_dialect(engine: SimpliPyEngine, capsys) -> None:
+    # The B1 diagnostic survives where it is still true: a MALFORMED tagged sequence must
+    # be explained as malformed tagged, never as the misleading 'Variable must be leaf
+    # node' the bare-prefix walk would print for the bag delimiters.
+    tagged = ['<add>', '<mul>', '2', 'x0', '</mul>', '1']  # unclosed <add>
     assert engine.is_valid(tagged, verbose=True) is False
     out = capsys.readouterr().out
     assert 'tagged-serialization' in out
-    assert "form='explicit'" in out
     assert 'Variable must be leaf node' not in out
 
 
@@ -134,9 +143,9 @@ def test_is_valid_verbose_names_the_tagged_dialect(engine: SimpliPyEngine, capsy
     ],
 )
 def test_infix_to_prefix_roundtrip_preserves_semantics(engine: SimpliPyEngine, infix: str) -> None:
-    prefix = engine.parse(infix, convert_expression=False)
+    prefix = engine.read_infix(infix, convert_expression=False)
     roundtrip_infix = engine.prefix_to_infix(prefix, power='**')
-    roundtrip_prefix = engine.parse(roundtrip_infix, convert_expression=False)
+    roundtrip_prefix = engine.read_infix(roundtrip_infix, convert_expression=False)
 
     canonical_original = tuple(engine.convert_expression(prefix.copy()))
     canonical_roundtrip = tuple(engine.convert_expression(roundtrip_prefix.copy()))
@@ -145,10 +154,10 @@ def test_infix_to_prefix_roundtrip_preserves_semantics(engine: SimpliPyEngine, i
 
 
 def test_parse_handles_scientific_notation(engine: SimpliPyEngine) -> None:
-    tokens = engine.parse('1.234e-5 * sin(v1)', convert_expression=False)
+    tokens = engine.read_infix('1.234e-5 * sin(v1)', convert_expression=False)
     assert tokens == ['*', '1.234e-5', 'sin', 'v1']
 
-    canonical_tokens = engine.parse('1.234e-5 * sin(v1)')
+    canonical_tokens = engine.read_infix('1.234e-5 * sin(v1)')
     assert canonical_tokens == ['*', '1.234e-5', 'sin', 'v1']
 
     rendered = engine.prefix_to_infix(canonical_tokens)
@@ -160,7 +169,7 @@ def test_parse_handles_caret_power(engine: SimpliPyEngine) -> None:
     # We don't assert the exact unconverted token layout (implementation details may vary
     # between engines), but the canonical converted form must represent a power
     # and the roundtrip infix must be a power expression.
-    canonical = engine.parse('x1 ^ 3')
+    canonical = engine.read_infix('x1 ^ 3')
     assert isinstance(canonical, list) and len(canonical) >= 1
 
     rendered = engine.prefix_to_infix(canonical, power='**')
@@ -199,7 +208,7 @@ def test_prefix_to_infix_roundtrip_functionally_equivalent(
     kwargs: dict,
 ) -> None:
     infix = engine.prefix_to_infix(prefix, **({'power': '**'} | kwargs))
-    reconstructed = engine.parse(infix, convert_expression=False)
+    reconstructed = engine.read_infix(infix, convert_expression=False)
 
     original_value = evaluate_prefix(engine, prefix, VARIABLES, TEST_POINT)
     reconstructed_value = evaluate_prefix(engine, reconstructed, VARIABLES, TEST_POINT, kwargs)

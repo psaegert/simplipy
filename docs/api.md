@@ -1,3 +1,13 @@
+# API reference
+
+This page renders the declared public surface: the names in each module's
+`__all__`. Names that are reachable but not declared carry no stability promise
+and are not rendered here — see the
+[compatibility policy](compatibility.md) for what that means in practice.
+
+Most work goes through `SimpliPyEngine`. `simplipy.verify`, `simplipy.promotion`
+and `simplipy.mining` are power-user surfaces with documented sharp edges.
+
 ## SimpliPy Engine
 
 ::: simplipy.engine
@@ -21,9 +31,8 @@
 
 ## Utilities
 
-<!-- DP-C (D11 column, ratified 2026-08-16): only the declared surface is
-rendered; being rendered here was never a stability promise, and the
-undeclared helpers are now omitted to keep the reference honest. -->
+<!-- Only the declared surface is rendered; the undeclared helpers in this
+module are omitted deliberately. -->
 ::: simplipy.utils
     options:
       heading_level: 3
@@ -35,7 +44,6 @@ undeclared helpers are now omitted to keep the reference honest. -->
         - remap_expression
         - substitute_constants
         - construct_expressions
-        - numbers_to_constant
         - is_numeric_string
         - enumerate_expressions
         - count_expressions
@@ -93,8 +101,7 @@ undeclared helpers are now omitted to keep the reference honest. -->
 
 ## Promotion
 
-<!-- The promotion internals (_ladder, _hp_equiv, ...) are a verbatim external
-port and stay private; only the entry point is public (D11 column R29). -->
+<!-- The promotion internals stay private; only the entry point is public. -->
 ::: simplipy.promotion
     options:
       heading_level: 3

@@ -8,32 +8,43 @@ pip install simplipy
 
 Python ≥ 3.12. The package ships a required compiled Rust core
 (`simplipy._core`); there is no pure-Python fallback. Rule mining and
-verification pull the full numeric stack; plain simplification does not.
+verification are the only paths that use scipy and mpmath at runtime; plain
+simplification touches only numpy (all three install as required dependencies).
 
 ## First simplification
 
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-4-3", install=True)   # the published AC-engine artifact
+engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)   # the published AC-engine artifact
 
-# Simplify prefix expressions
-engine.simplify(['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'])
-# -> ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']   (the native tagged form: C/log(x3))
-
-# The `form` parameter re-projects the same canonical answer: 'infix' renders it,
-# 'explicit' gives the binary-prefix dialect that is_valid / prefix_to_infix consume
-# (tagged output itself is accepted back as input by simplify/complexity/masking)
-engine.simplify(['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'], form='infix')
-# -> '<constant>/log(x3)'
-
-# Simplify infix expressions
+# Simplify infix expressions: a str in, a str out
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # -> '<constant>/x3'
+
+# Pipelines carry expressions as prefix token lists; `simplify` answers in the
+# form it was GIVEN
+expr = ['/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3']
+
+engine.simplify(expr)
+# -> ['/', '<constant>', 'log', 'x3']            (explicit binary prefix: C/log(x3))
+
+# To change the NOTATION, convert -- `to_infix` / `to_prefix` / `to_tagged` are pure
+# syntactic conversions that never simplify -- and compose the two calls:
+engine.simplify(engine.to_tagged(expr))
+# -> ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']   (the native tagged form)
+
+engine.to_infix(engine.simplify(expr))
+# -> '<constant> / log(x3)'
 ```
 
-`simplify`'s default `Mode.SOUND` is equivalence-preserving and idempotent;
-the training-only `Mode.LOSSY` trades soundness for recall. The
+`simplify`'s default `Mode.f64` is sound as the deployed f64 evaluator computes;
+`Mode.real` is sound as mathematics defines. The two disagree in both directions:
+`asin(1e-8) → 1e-8` is bit-identical in f64 yet wrong over the reals by the cubic
+term, while `atanh(tanh(t)) → t` is true for every real `t` yet returns `inf` in f64
+once `tanh` saturates to exactly `1.0` at large `|t|` — so each mode serves only the
+rules sound on its own axis. The training-only `Mode.permissive` trades
+soundness for recall. The
 [simplification guide](guides/simplify.md) covers the modes, the search
 budget, and the guarantee the engine actually makes.
 
@@ -45,13 +56,15 @@ asset manager handles listing, installing, and uninstalling:
 ```python
 sp.list_assets("engine")
 # --- Available engine assets ---
-# - acj-4-3  [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
-#                         (sources to length 4, targets to length 3), ... Pairs with simplipy >= 0.12.
-# - acj-3-2  [installed]  Complete AC-judged rule mine ... (sources to length 3, targets to length 2), ...
-# - acj-2-1  [installed]  Complete AC-judged rule mine ... (sources to length 2, targets to length 1), ...
+# - acj-5-4-llm [installed] Complete AC-judged rule mine of the clean 23-operator
+#                         vocabulary (sources to length 5, targets to length 4) plus the
+#                         LLM-augmented proposal lane, mined as a triple and independently
+#                         gate-verified ... Pairs with simplipy >= 0.14.
+# - acj-4                 Complete AC-judged rule mine ... (sources and targets to length 4), ...
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.
-# - ...                   (pre-0.12 assets remain listed for older installs; they refuse to load on 0.12)
+# - ...                   (older assets remain listed for older installs; generation-1 artifacts
+#                         refuse to load on >= 0.12)
 ```
 
 Every published artifact is identity-pinned (a manifest revision plus

@@ -57,12 +57,12 @@ class TestPruneStateCoverage:
         a sign INTO an odd function, `-sin(x) -> sin(-x)`, at 24,000 either way."""
         rule = (("*", "(-1)", "sin", "?0"), ("sin", "neg", "?0"))
         engine = SimpliPyEngine(operators=_PRUNE_OPS, rules=[rule])
-        assert engine.simplify(["*", "(-1)", "sin", "x0"], form="explicit") == ["sin", "neg", "x0"]
+        assert engine.simplify(["*", "(-1)", "sin", "x0"]) == ["sin", "neg", "x0"]
 
         assert engine.prune_covered_rules() == 0
         assert engine.simplification_rules == [rule]
         # and the kept rule still fires on the serving engine after recompile
-        assert engine.simplify(["abs", "neg", "x0"], form="explicit") == ["abs", "x0"]
+        assert engine.simplify(["abs", "neg", "x0"]) == ["abs", "x0"]
 
     def test_arithmetic_covered_rule_still_pruned(self) -> None:
         """Positive control: a rule whose promise the probe engine reaches EXACTLY
@@ -72,7 +72,7 @@ class TestPruneStateCoverage:
                                 rules=[(("*", "1", "?0"), ("?0",))])
         assert engine.prune_covered_rules() == 1
         assert engine.simplification_rules == []
-        assert engine.simplify(["*", "1", "x0"], form="explicit") == ["x0"]
+        assert engine.simplify(["*", "1", "x0"]) == ["x0"]
 
 
 class TestConstAbstractionFulfillment:
@@ -157,7 +157,7 @@ class TestStrictKruskalSearchesRespells:
             constants_fit_challenges=2, constants_fit_retries=2,
             seed=7, relaxed_kruskal=False, verbose=False)
 
-        assert engine.simplify(["/", "1", "exp", "x0"], form="explicit") == \
+        assert engine.simplify(["/", "1", "exp", "x0"]) == \
             ["exp", "neg", "x0"], engine.simplification_rules
 
 
@@ -187,11 +187,13 @@ class TestProposalVerdictHonesty:
         `exp(t)*exp(t) -> exp(t+t)` is genuinely lost at this target budget)."""
         _, outcomes = self._mine(str(tmp_path), [{"source": ["*", "exp", "x0", "exp", "x0"]}])
         assert outcomes == {
-            "certified": 0, "already_covered": 0, "rejected": 1, "duplicate": 0}
+            "certified": 0, "already_covered": 0, "rejected": 1, "duplicate": 0,
+            "certified_then_dropped": 0}
 
     def test_canon_owned_proposal_stays_already_covered(self, tmp_path) -> None:
         """Control: `+ x0 0` IS `x0` as a state -- the class collapsed at parse, the
         result is atomic, and no rule could sit below it. That is genuine coverage."""
         _, outcomes = self._mine(str(tmp_path), [{"source": ["+", "x0", "0"]}])
         assert outcomes == {
-            "certified": 0, "already_covered": 1, "rejected": 0, "duplicate": 0}
+            "certified": 0, "already_covered": 1, "rejected": 0, "duplicate": 0,
+            "certified_then_dropped": 0}

@@ -16,10 +16,14 @@ def main(argv: str = None) -> None:
     find_simplifications_parser = subparsers.add_parser("find-rules")
     find_simplifications_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4-3) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
     )
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
-    find_simplifications_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to the output json file')
+    find_simplifications_parser.add_argument(
+        '-o', '--output-file', type=str, required=True,
+        help='Path of the f64 rules file (convention: rules_f64.json). The real/corpus '
+             'siblings are derived from it with the _f64 marker replaced: '
+             'rules_f64.json writes rules_real.json and rules_corpus.json beside it')
     find_simplifications_parser.add_argument('-s', '--save-every', type=int, default=100_000, help='Save the simplifications every n rules')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
@@ -28,7 +32,7 @@ def main(argv: str = None) -> None:
     prune_covered_rules_parser = subparsers.add_parser("prune-covered-rules", help="Remove rules that the remaining rules cover behaviorally")
     prune_covered_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4-3) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
     )
     prune_covered_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned rules json file')
     prune_covered_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
@@ -37,19 +41,19 @@ def main(argv: str = None) -> None:
     resolve_rules_parser = subparsers.add_parser("resolve-rules", help="Replace <constant> with actual numeric values in all-numeric rules")
     resolve_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4-3) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
     )
     resolve_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the resolved rules json file')
     resolve_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
     # Install command
     install_parser = subparsers.add_parser("install", help="Install an official asset from Hugging Face")
-    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-4-3)')
+    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-4)')
     install_parser.add_argument('--force', action='store_true', help='Force reinstall even if already installed')
 
     # Remove command
     remove_parser = subparsers.add_parser("remove", help="Remove an installed asset")
-    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. acj-4-3)')
+    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. acj-4)')
 
     # List command
     list_parser = subparsers.add_parser("list", help="List available or installed assets")
@@ -86,8 +90,8 @@ def main(argv: str = None) -> None:
                 'max_source_pattern_length', 'max_target_pattern_length',
                 'dummy_variables', 'extra_internal_terms', 'n_samples',
                 'constants_fit_challenges', 'constants_fit_retries', 'rtol', 'atol',
-                'min_informative', 'seed', 'confirm', 'source_sample_per_length',
-                'candidate_fold_filter', 'relaxed_kruskal', 'prune', 'proposals',
+                'min_informative', 'seed', 'confirm',
+                'relaxed_kruskal', 'prune', 'proposals',
                 'promote_sorts', 'symbolic_gate', 'snapshot_at'}
             unknown_keys = sorted(set(rule_finding_config) - known_keys)
             if unknown_keys:
@@ -118,10 +122,6 @@ def main(argv: str = None) -> None:
                 min_informative=rule_finding_config.get('min_informative', None),
                 seed=rule_finding_config.get('seed', 42),
                 confirm=rule_finding_config.get('confirm', True),
-                source_sample_per_length={
-                    int(k): int(v) for k, v in
-                    (rule_finding_config.get('source_sample_per_length') or {}).items()},
-                candidate_fold_filter=rule_finding_config.get('candidate_fold_filter', True),
                 relaxed_kruskal=rule_finding_config.get('relaxed_kruskal', True),
                 proposals=proposals,
                 promote_sorts=rule_finding_config.get('promote_sorts', True),

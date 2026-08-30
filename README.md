@@ -38,50 +38,52 @@ pip install simplipy
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-4-3", install=True)   # a published ruleset artifact
-
-# Simplify prefix expressions
-engine.simplify(('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'))
-# > ('<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>')
+engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)   # a published ruleset artifact
 
 # Simplify infix expressions
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # > '<constant>/x3'
+
+# Simplify prefix expressions
+engine.simplify(('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3'))
+# > ('/', '<constant>', 'log', 'x3')
 ```
 
-Token input returns the engine's native **tagged** form by default (n-ary `+`/`*` bags are
-delimited: `<add> ... </add>`, `<mul> ... </mul>`; tagged output is accepted back as input).
-The `form` parameter selects a different projection of the same canonical answer:
+`simplify` only **simplifies**: it answers in the form it was given -- a `str` in, a `str`
+out; explicit binary prefix in, explicit binary prefix out; the engine's native **tagged**
+form in (n-ary `+`/`*` bags are delimited: `<add> ... </add>`, `<mul> ... </mul>`), tagged
+out. To change the NOTATION, convert -- `to_infix` / `to_prefix` / `to_tagged` are pure
+syntactic conversions that never simplify -- and compose the two:
 
 ```python
 expr = ('/', '<constant>', '*', '/', '*', 'x3', '<constant>', 'x3', 'log', 'x3')
 
-engine.simplify(expr, form='infix')      # the pretty rendering (a str)
-# > '<constant>/log(x3)'
+engine.to_infix(engine.simplify(expr))       # simplify, then render
+# > '<constant> / log(x3)'
 
-engine.simplify(expr, form='explicit')   # binary prefix -- what is_valid / prefix_to_infix read
-# > ('/', '<constant>', 'log', 'x3')
+engine.simplify(engine.to_tagged(expr))      # convert, then simplify: the tagged answer
+# > ['<mul>', '<constant>', '<div>', 'log', 'x3', '</mul>']
 ```
 
 ## Normalization
 
-The root-exported `normalize_skeleton`, `normalize_expression`, and
-`normalize_variable_token` helpers (also available as `simplipy.normalization`)
-canonicalize a prefix token sequence so that two expressions that are "the same"
-up to variable renaming / constant values compare equal. They are pure-string
-helpers with no engine state, so consumers such as holdout matching and
-symbolic-recovery scoring share identical behavior by construction.
+The root-exported `to_skeleton`, `to_expression`, and `normalize_variable_token`
+helpers (also available as `simplipy.normalization`) canonicalize an expression so
+that two expressions that are "the same" up to variable renaming / constant values
+compare equal. Each takes all three forms (infix `str`, explicit prefix, tagged)
+and returns the one it was given; the canonicalization runs through the engine's
+internal state, so the answer does not depend on the dialect you passed.
 
 ```python
 import simplipy as sp
 
-# Skeleton form: variables -> x{n}, numeric literals -> <constant>
-sp.normalize_skeleton(['+', 'v1', '2.5'])
+# Skeleton form: variables -> x{n}, EVERY numeric literal -> <constant>
+sp.to_skeleton(['+', 'v1', '2.5'], engine)
 # > ['+', 'x1', '<constant>']
 
-# Expression form: variables canonicalized, numeric literals kept intact
-sp.normalize_expression(['+', 'V1', '2.5'])
-# > ['+', 'x1', '2.5']
+# Expression form: variables canonicalized, numeric values kept
+sp.to_expression(['+', 'V1', '3'], engine)
+# > ['+', 'x1', '3']
 
 # Classify / canonicalize a single token -> (normalized_token, is_variable)
 sp.normalize_variable_token('X3')
@@ -94,14 +96,16 @@ More examples can be found in the [documentation](https://simplipy.readthedocs.i
 
 # Performance
 
-On a 65,536-expression symbolic-regression benchmark, paired per-row against SymPy's `simplify` (serial single-core):
+On a 65,536-expression symbolic-regression benchmark, paired per-row against SymPy's `simplify` (serial single-core, 1 s cap):
 
 | | SimpliPy | SymPy |
 |---|---:|---:|
-| Rows won head-to-head | **18.7%** | 17.1% |
-| Mean size ratio (lower is better) | **0.98** | 1.07 |
-| Expressions made bigger | **0.00%** | 40.5% |
-| Median per-row speedup | **≈780×** | 1× |
+| Mean size ratio (lower is better) | **0.97** | 1.09 |
+| Expressions strictly simplified | 13.2% | 22.3% |
+| Expressions made bigger | **0.00%** | 45.1% |
+| Median per-row speedup | **≈260×** | 1× |
+
+![Compression on the SR benchmark](docs/assets/benchmarks/ecdf_readme.png)
 
 Full results, figures, and methodology: [simplify guide](https://simplipy.readthedocs.io/en/stable/guides/simplify/) · [paper](https://arxiv.org/abs/2602.08885).
 
@@ -143,12 +147,12 @@ pytest tests --cov src --cov-report html -m "not integration"
 }
 
 % Optionally
-@software{simplipy-2025,
+@software{simplipy-2026,
     author = {Paul Saegert},
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2026,
     publisher = {GitHub},
-    version = {0.13.1},
+    version = {0.14.0},
     url = {https://github.com/psaegert/simplipy}
 }
 ```

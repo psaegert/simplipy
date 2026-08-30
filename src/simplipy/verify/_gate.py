@@ -119,6 +119,40 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
         if idx % 200 == 0:
             print(f"[{idx}/{len(rules)}] " +
                   ' '.join(f'{k}={len(v)}' for k, v in buckets.items()), flush=True)
+    # THE TIMEOUT MUST NOT DECIDE UNDER LOAD (audit U3, 2026-08-22). JUDGE-TIMEOUT is
+    # fatal downstream, and a 30 s wall-clock alarm is a fact about the BOX, not the
+    # rule: an ordinary CERTIFIED row measured 33-36 s on an idle 12-core host, so a
+    # 32-worker mine drops rules its own gate would pass -- a non-reproducible
+    # artifact, which D29 byte-identity cannot survive. Every timed-out rule is
+    # therefore re-judged SERIALLY here, after the sweep, at 4x the budget -- the
+    # retry environment is the quietest this process can offer, and the widened
+    # budget is deterministic. A rule that times out twice stays JUDGE-TIMEOUT:
+    # fail-closed, and recorded as retried.
+    if judge_timeout_s and buckets['JUDGE-TIMEOUT']:
+        retry = list(buckets['JUDGE-TIMEOUT'])
+        buckets['JUDGE-TIMEOUT'] = []
+        for idx in retry:
+            lhs, rhs = rules[idx]
+            signal.alarm(judge_timeout_s * 4)
+            try:
+                r = judge_rule(list(lhs), list(rhs))
+            except _JudgeTimeout:
+                r = {'verdict': 'JUDGE-TIMEOUT',
+                     'detail': f'> {judge_timeout_s}s, retried > {judge_timeout_s * 4}s'}
+            except Exception as ex:
+                r = {'verdict': 'NO-WITNESS',
+                     'detail': f'judge error {type(ex).__name__}: {ex}'}
+            finally:
+                signal.alarm(0)
+            r['idx'] = idx
+            r['lhs'] = ' '.join(lhs)
+            r['rhs'] = ' '.join(rhs)
+            r['retried'] = True
+            buckets[r['verdict']].append(idx)
+            detail[idx] = r
+        print(f"retried {len(retry)} timed-out rule(s): "
+              f"{len(retry) - len(buckets['JUDGE-TIMEOUT'])} resolved, "
+              f"{len(buckets['JUDGE-TIMEOUT'])} still out", flush=True)
     print('\n================ GATE RESULT ================')
     for k, v in buckets.items():
         print(f'  {k:16s} {len(v)}')
@@ -129,7 +163,8 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
             why = d.get('clause') or ','.join(d.get('kinds', [])) or d.get('detail', '')
             print(f"    {k} idx {i}: {d['lhs']}  ->  {d['rhs']}   [{why}]")
     if report_path:
-        json.dump({'buckets': buckets, 'detail': detail}, open(report_path, 'w'),
+        json.dump({'buckets': buckets, 'detail': detail,
+                   'timeout_protection': bool(judge_timeout_s)}, open(report_path, 'w'),
                   default=str)
         # Announced only when the CALLER chose the path: verify_ruleset routes its
         # read-back through an anonymous tempdir, and printing that random path

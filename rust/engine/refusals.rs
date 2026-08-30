@@ -10,7 +10,7 @@
 //! reified refusal lives here, the mint path consults it at candidate judgment, and
 //! the AC load path consults it as defense in depth. The completeness argument -- one
 //! disposition per doctrinal refusal, with the proof or falsifier that earned it --
-//! is `remine/c120_registry/SWEEP.md`; the standing obligation (every future
+//! is the research harness; the standing obligation (every future
 //! engine-side refusal ships with a registry disposition IN THE SAME COMMIT) is the
 //! contract clause recorded with this build.
 //!

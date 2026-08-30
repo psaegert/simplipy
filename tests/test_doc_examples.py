@@ -37,30 +37,47 @@ def _literal(text: str):
 
 
 def _instrument(body: str) -> str:
-    """Rewrite `expr` lines whose NEXT line is a literal output-comment into asserts."""
+    """Rewrite every top-level expression STATEMENT whose next line is a literal
+    output-comment into an assert.
+
+    Instrumenting PHYSICAL LINES missed every multi-line call, and a wrong claim was
+    sitting in that hole: `docs/guides/masking.md` promised a tagged result from a
+    two-line `masking.mask(...)` call that has returned explicit prefix since `simplify`
+    became dialect-preserving. Parsing the block once and using each statement's
+    `end_lineno` closes it -- a call spanning four lines is instrumented exactly as a
+    one-liner is.
+    """
     lines = body.split('\n')
-    out = []
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return body
+    # statement START line (1-indexed) -> its END line, so a multi-line call is replaced
+    # as one unit. Keying on the END emitted the first line twice -- once bare, leaving an
+    # unclosed paren, and once inside the assert.
+    spans = {}
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and node.end_lineno is not None:
+            spans[node.lineno] = node.end_lineno
+
+    out: list = []
     i = 0
     while i < len(lines):
-        line = lines[i]
-        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ''
+        end = spans.get(i + 1)
+        nxt = lines[end].strip() if end is not None and end < len(lines) else ''
         m = _OUT.match(nxt)
         ok, expected = _literal(m.group('lit')) if m else (False, None)
-        is_bare_expr = False
-        if ok and line and not line[0].isspace():
-            try:
-                is_bare_expr = isinstance(ast.parse(line).body[0], ast.Expr)
-            except SyntaxError:
-                pass
-        if is_bare_expr:
-            code, comment = (line.split('#', 1) + [''])[:2]
-            out.append(f'__doc_out = ({code.strip()})')
-            msg_prefix = f'doc example drifted: {code.strip()} -> '
+        if ok and end is not None:
+            start = i + 1
+            code = '\n'.join(lines[start - 1:end])
+            code = code.split('#', 1)[0].rstrip()
+            label = ' '.join(code.split())
+            out.append(f'__doc_out = ({code})')
             out.append(f'assert __doc_out == {expected!r}, '
-                       f'{msg_prefix!r} + repr(__doc_out)')
-            i += 2
+                       f'{f"doc example drifted: {label} -> "!r} + repr(__doc_out)')
+            i = end + 1
             continue
-        out.append(line)
+        out.append(lines[i])
         i += 1
     return '\n'.join(out)
 

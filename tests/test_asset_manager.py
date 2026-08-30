@@ -9,8 +9,12 @@ import huggingface_hub as hf_hub  # the lazy-import patch target (D30)
 # These tests use real, known assets from the psaegert/simplipy-assets-test manifest.
 # An active internet connection is required to run them. The asset MANAGER is
 # generation-agnostic (mirroring/inspection is a sanctioned-open boundary), but the
-# suite exercises it on the CURRENT generation-2 artifact (audit Tier-1 #3: no test
-# depends on a legacy asset).
+# suite exercises it on a generation-2 artifact. NOTE: the PUBLISHED test asset is
+# pre-triple -- four files, `rules.json` only -- so these tests cover the manager's
+# handling of an artifact that names no `rules_real`/`rules_corpus`, which is exactly
+# the backwards-compatibility case (such an asset loads, and every mode serves the
+# default set). They do NOT cover installing a triple; that wants a published
+# three-file test asset.
 VALID_ENGINE = "acj-4-3"
 VALID_TEST_DATA = "expressions_10k"
 INVALID_ASSET = "this-asset-does-not-exist"

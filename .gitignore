@@ -173,3 +173,7 @@ benchmarks/ecdf_011_results.pkl
 # Regenerable benchmark figure outputs (audit A4/D31: tracked renders shipped 2.9 MB
 # of stale figures in every sdist; the scripts write here instead).
 benchmarks/out/
+
+# Research scratch (D41): census dumps, mu-space enumerations and repro scripts.
+# Evidence lives in the research repo under remine/, never on a public branch.
+.audit/

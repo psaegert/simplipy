@@ -108,7 +108,7 @@ class TestMintCountInvariant:
         # the invariant holds across the whole mined set
         assert all(_n_const(rhs) <= _n_const(lhs) for lhs, rhs in rules)
         # and the state SERVES as itself: the owner-preferred symbolic form
-        assert engine.simplify(['exp', '*', 'np.pi', 'x0'], form='explicit') == \
+        assert engine.simplify(['exp', '*', 'np.pi', 'x0']) == \
             ['exp', '*', 'np.pi', 'x0']
 
     def test_const_preserving_family_still_mints(self, tmp_path) -> None:
@@ -173,10 +173,11 @@ class TestProposalChannel:
         with open(out + '.provenance.json') as fh:
             outcomes = json.load(fh)['proposals']['outcomes']
         assert outcomes == {'certified': 0, 'already_covered': 0,
-                            'rejected': 1, 'duplicate': 0}
+                            'rejected': 1, 'duplicate': 0,
+                            'certified_then_dropped': 0}
         rules = [(list(lhs), list(rhs)) for lhs, rhs in engine.simplification_rules]
         assert all(_n_const(rhs) <= _n_const(lhs) for lhs, rhs in rules)
-        out_form = engine.simplify(['exp', '*', 'np.pi', 'x0'], form='explicit')
+        out_form = engine.simplify(['exp', '*', 'np.pi', 'x0'])
         assert 'np.pi' in out_form and not any('23.14' in t for t in out_form), out_form
 
 
@@ -194,6 +195,6 @@ class TestEndToEndInvariant:
                  ['pow', '<constant>', 'x0']]
         for row in corpus + extra:
             n_in = _n_const(row)
-            for form in ('explicit', 'tagged'):
-                out = engine.simplify(list(row), form=form)
+            for convert in (engine.to_prefix, engine.to_tagged):
+                out = engine.simplify(convert(list(row)))
                 assert _n_const(out) <= n_in, (row, out)

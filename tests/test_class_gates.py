@@ -1,4 +1,4 @@
-"""Falsifiers for the ruled class gates (F75/F77) in remine/fuzz_properties.py.
+"""Falsifiers for the ruled class gates (F75/F77) in the research harness
 
 The gates replace hand-written row pins: a judge conviction may be tolerated
 WITHOUT a pin iff its SOURCE lies in an owner-ruled MECHANICAL class (F75: the
@@ -12,7 +12,7 @@ the two properties the gates must never lose:
      exact recorded corpus sources (rng call order copied from row(); drift
      between record and stream convicts here, not at hour N of a 1M run).
 
-remine/ is the research-branch harness (gitignored on public checkouts):
+The research-branch harness is gitignored on public checkouts:
 everything skips when it is not staged.
 """
 import os

@@ -143,3 +143,5 @@ rules: "./rules.json"
 # The artifact-generation pin (simplipy.compat, owner ruling 2026-08-03):
 # generation 2 = the AC engine's clean 23-operator vocabulary, simplipy >= 0.12.
 engine_generation: 2
+rules_real: "./rules_real.json"
+rules_corpus: "./rules_corpus.json"
