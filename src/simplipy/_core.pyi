@@ -35,6 +35,17 @@ class Engine:
         form: Literal["tagged", "explicit"] = ...,
         explore_budget: int = ...,
     ) -> list[str]: ...
+    #: DEFAULT-mode simplify with artifact rows (and their minted orientation twins)
+    #: suppressed at the matcher's fire site -- behaviorally the engine built without
+    #: those rows, up to the cross-rule translate state `ac_shadow_census` enumerates.
+    def ac_simplify_suppressed(
+        self,
+        tokens: list[str],
+        max_passes: int = ...,
+        form: Literal["tagged", "explicit"] = ...,
+        explore_budget: int = ...,
+        suppressed_rows: list[int] = ...,
+    ) -> list[str]: ...
     def ac_simplify_infix(
         self,
         tokens: list[str],
@@ -76,6 +87,11 @@ class Engine:
     #: orientation twins minted at load, which no artifact row corresponds to.
     def ac_served_rules(self) -> list[tuple[list[str], list[str], int]]: ...
     def ac_rules_drop_census(self) -> dict[str, int]: ...
+    #: The shadow census: every translate-time skip caused by cross-rule state, as
+    #: (victim_row, owner_row, owner_was_twin, kind) -- kind is "inverse",
+    #: "twin-shadow" or "twin-inverse". Removing an owner row resurrects its victims'
+    #: entries; see `ac_simplify_suppressed`.
+    def ac_shadow_census(self) -> list[tuple[int, int, bool, str]]: ...
     def ac_odd_neg_carriers(
         self, tokens: list[str], max_passes: int
     ) -> list[tuple[list[str], str, bool, bool, list[tuple[list[str], bool, bool]]]]: ...

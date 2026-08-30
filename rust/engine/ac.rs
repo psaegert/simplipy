@@ -324,6 +324,17 @@ impl Engine {
         out
     }
 
+    /// The SHADOW CENSUS (`AcRules::shadow_census`): every translate-time skip caused by
+    /// cross-rule state, as `(victim_row, owner_row, owner_was_twin, kind)` -- the rows
+    /// whose removal would resurrect another rewrite. Forces the lazy translation.
+    pub fn ac_shadow_census(&self) -> Vec<(usize, usize, bool, String)> {
+        self.ac_rules()
+            .shadow_census
+            .iter()
+            .map(|&(victim, owner, was_twin, kind)| (victim, owner, was_twin, kind.to_string()))
+            .collect()
+    }
+
     /// An AC-side certificate through the shared per-engine caches: serialize the expression
     /// into the explicit form and consult the SAME `finite_ae` / `finite_nonzero_ae` interval
     /// analysis (and the same generational memo) as the old kernel.
@@ -735,6 +746,30 @@ impl Engine {
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
         };
         Some(self.resolve_seq(&toks, &ctx))
+    }
+
+    /// DEFAULT-mode simplify with a SUPPRESSION SET of artifact rule rows: behaviorally
+    /// the run of an engine built without those rows (see `ac_simplify_ex_fold_sup` for
+    /// the equivalence argument). Default mode only -- the one consumer is the promotion
+    /// pipeline's derivability refund, which judges the default set; permissive's
+    /// three-arm dispatcher is deliberately not replicated here.
+    pub fn ac_simplify_proj_suppressed(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        form: AcForm,
+        explore_budget: usize,
+        suppressed: &FxHashSet<usize>,
+    ) -> Option<Vec<String>> {
+        let (ctx, best) = self.ac_simplify_ex_fold_sup(
+            tokens,
+            max_passes,
+            RuleMode::Default,
+            explore_budget,
+            Cx::folds_for(RuleMode::Default),
+            Some(suppressed),
+        );
+        self.project(ctx, best, form)
     }
 
     /// The PRETTY INFIX rendering of the simplified expression: `x8 + 1.2*x3`, `-x0/3`,
@@ -1164,6 +1199,32 @@ impl Engine {
         explore_budget: usize,
         fold_tr: bool,
     ) -> (SimplifyCtx, Option<Ex>) {
+        self.ac_simplify_ex_fold_sup(tokens, max_passes, mode, explore_budget, fold_tr, None)
+    }
+
+    /// [`Engine::ac_simplify_ex_fold`] with an optional SUPPRESSION SET of artifact rule
+    /// rows (`AcRules::src` values): a suppressed rule -- and every orientation twin
+    /// minted from it, which shares its source row -- is skipped at the matcher's single
+    /// fire site (`try_rules_at`), and nowhere else, so the run is BEHAVIORALLY the run
+    /// of an engine built without those artifact rows. That equivalence is exact because
+    /// translation is per-rule (no cross-rule state), bucket order is the ascending
+    /// asset order filtered in place (relative order of the surviving rules is the order
+    /// a rebuild would give them), and the canonical constructors, certificates and
+    /// folds never consult the rule set. `None` is byte-identical to the plain entry.
+    ///
+    /// The consumer is the promotion pipeline's derivability refund (stage 4), which
+    /// probes each `?`-rule under the engine WITHOUT that rule: per-candidate engine
+    /// rebuilds cost seconds each (lazy rule translation) and the refund needs tens of
+    /// thousands of them, while a per-probe suppression set costs microseconds.
+    fn ac_simplify_ex_fold_sup(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        mode: RuleMode,
+        explore_budget: usize,
+        fold_tr: bool,
+        suppressed: Option<&FxHashSet<usize>>,
+    ) -> (SimplifyCtx, Option<Ex>) {
         // The RECALL switch is DERIVED from the mode, once, here -- every layer below
         // this line already speaks `wildcard_all` and is untouched. Deriving it (rather
         // than taking it as a second parameter beside the mode) is what makes "which set
@@ -1221,6 +1282,7 @@ impl Engine {
             fires: Cell::new(0),
             normal: RefCell::new(FxHashSet::default()),
             explore: true,
+            suppressed,
         };
 
         let stable_in = |e: &Ex, pb: &Cx, cxx: &Cx| {
@@ -1356,6 +1418,7 @@ impl Engine {
                 fires: Cell::new(0),
                 normal: RefCell::new(FxHashSet::default()),
                 explore: true,
+                suppressed,
             };
             let stable2 = |e: &Ex| stable_in(e, &pbare2, &cx2);
             current = canon(current, &cx2);

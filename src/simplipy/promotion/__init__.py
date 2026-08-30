@@ -125,7 +125,7 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     promote_set = {(tuple(l), tuple(r)) for l, r, *_ in pw['PROMOTE']} \
         | {(tuple(l), tuple(r)) for l, r, *_ in cb['PROMOTE']}
     prog.stage("stage 4/5 derivability refund", candidates=len(rules), promoted=len(promote_set))
-    sorted_rules = _refund.refund(rules, engine._operators_config, promote_set)
+    sorted_rules = _refund.refund(rules, engine._operators_config, promote_set, progress=prog)
     prog.stage("stage 4/5 derivability refund: done", kept=len(sorted_rules))
 
     # STAGE 5 -- the _->!->? ladder on the enriched lattice + moving-spike refusal.

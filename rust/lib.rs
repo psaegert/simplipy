@@ -23,6 +23,7 @@ use pyo3::exceptions::PyValueError;
 static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use rustc_hash::FxHashSet;
 
 /// Reject inputs the recursive kernel cannot safely handle, with a clean `ValueError` BEFORE it runs.
 /// Two off-distribution hazards, both of which would otherwise ABORT the interpreter (uncatchable):
@@ -463,6 +464,47 @@ impl PyEngine {
         )
     }
 
+    /// DEFAULT-mode `ac_simplify` with a SUPPRESSION SET of artifact rule rows: rules at
+    /// the given `rules.json` indices -- and the orientation twins minted from them,
+    /// which report their source's row -- never fire, so the call answers exactly as an
+    /// engine built WITHOUT those rows would (per-rule translation, in-place bucket
+    /// filtering; see `PassCtx::suppressed`). The consumer is the promotion refund's
+    /// derivability probe, which needs "the engine minus this one rule" tens of
+    /// thousands of times per mine and cannot pay a rule-translation rebuild per probe.
+    ///
+    /// Contracts (empty input, malformed input, forms) are the SAME as `ac_simplify`;
+    /// an empty `suppressed_rows` is byte-identical to `ac_simplify_in_mode` at
+    /// `rule_mode="default"`.
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=0, suppressed_rows=vec![]))]
+    fn ac_simplify_suppressed(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        max_passes: usize,
+        form: &str,
+        explore_budget: usize,
+        suppressed_rows: Vec<usize>,
+    ) -> PyResult<Py<PyList>> {
+        if tokens.is_empty() {
+            return Ok(PyList::empty(py).into());
+        }
+        ensure_ac_well_formed(&self.inner, &tokens)?;
+        let form = parse_ac_form(form)?;
+        let suppressed: FxHashSet<usize> = suppressed_rows.into_iter().collect();
+        let out = py
+            .detach(|| {
+                self.inner.ac_simplify_proj_suppressed(
+                    &tokens,
+                    max_passes,
+                    form,
+                    explore_budget,
+                    &suppressed,
+                )
+            })
+            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
+        Ok(PyList::new(py, out)?.into())
+    }
+
     /// D39 B1 -- `ac_simplify` with the OPT-IN post-fixpoint exploration phase (ledger
     /// D39): the deterministic chain runs unchanged to its fixpoint, then a budgeted
     /// exploration phase proposes expansion moves through the same certified machinery
@@ -699,6 +741,20 @@ impl PyEngine {
             .detach(|| self.inner.ac_rules_drop_census())
             .into_iter()
             .collect())
+    }
+
+    /// The SHADOW CENSUS: every translate-time skip caused by CROSS-RULE state, as
+    /// `(victim_row, owner_row, owner_was_twin, kind)` tuples -- `kind` is `"inverse"`
+    /// (asset rule dropped as the reversed pair of the owner's), `"twin-shadow"` (the
+    /// victim's orientation twin skipped because the owner already carries the identical
+    /// rewrite) or `"twin-inverse"` (the victim's twin skipped as the owner's exact
+    /// inverse). Removing an OWNER row from the artifact resurrects its victims'
+    /// entries, which is exactly what fire-site suppression (`ac_simplify_suppressed`)
+    /// cannot reproduce -- a consumer that needs "the engine without rule i" consults
+    /// this census to learn for which rows suppression alone is not a rebuild. Forces
+    /// the lazy translation.
+    fn ac_shadow_census(&self, py: Python<'_>) -> PyResult<Vec<(usize, usize, bool, String)>> {
+        Ok(py.detach(|| self.inner.ac_shadow_census()))
     }
 
     /// The licence registry for one would-be rule (C1.20): the HINT/PROPOSAL channels'

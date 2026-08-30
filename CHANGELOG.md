@@ -2,6 +2,28 @@
 
 ## 0.14.1 (unreleased)
 
+- **Promotion stage 4 (the derivability refund) probes under one engine, not one
+  engine per rule.** The reference loop rebuilt a full `SimpliPyEngine` — ~5 s of
+  construction plus ~7 s of lazy rule translation — inside its serial per-`?`-rule
+  probe, which is ~49 hours over a real 163k-rule mine. "The engine WITHOUT this
+  rule" is now produced per probe by suppressing the rule's artifact row (and the
+  orientation twins minted from it) at the matcher's single fire site: behaviorally
+  the rebuild, because translation is per-rule and bucket order filters in place.
+  The one place that argument fails is translate's cross-rule state — removing a
+  rule can resurrect a sibling's shadowed orientation twin, which carries the
+  removed rule's identical rewrite — and the new SHADOW CENSUS enumerates exactly
+  those rows: the refund leaves such an owner unsuppressed as the stand-in for the
+  twin the rebuild would serve, and anything outside that argument (dedup-entangled
+  rules, inverse-pair drops) falls back to the reference per-candidate rebuild.
+  The keep/prune decision sequence and rule order are the reference loop's: on a
+  3,000-rule slice of the run5 corpus the old and new implementations return
+  identical keep lists (64.1 s vs 0.4 s); the full 163,002-rule snapshot runs its
+  13,061 probes in 40 s (1,401 pruned, zero fallbacks). The stage now reports
+  probes done/total every 500 through the `[promote]` reporter, so a mine's
+  longest silent stage is attributable while it runs.
+  Core: `Engine.ac_simplify_suppressed` (default-mode simplify with artifact rows
+  suppressed at the fire site) and `Engine.ac_shadow_census` (the translate-time
+  cross-rule dependency table) on `simplipy._core`.
 - **`verify_triple` no longer reports an unrunnable dominance check as a pass.** With
   `engine_config` given and a corpus of 0 rows (every wheel install lacks
   `benchmarks/corpus/raw_skeletons_nv.json`), `permissive_dominance` used to come back

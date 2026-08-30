@@ -97,6 +97,23 @@ pub struct AcRules {
     /// no accessor, so a user could not find out what was dropped from their own
     /// mine. Keys are stable strings; the FFI exposes this as a dict.
     pub drop_census: Vec<(&'static str, usize)>,
+    /// The SHADOW CENSUS: every translate-time skip caused by CROSS-RULE state, i.e.
+    /// every entry that would (re)appear if some OTHER artifact row were removed from
+    /// the input. `(victim_row, owner_row, owner_was_twin, kind)`:
+    ///   - `"inverse"`      -- asset rule `victim_row` dropped because `owner_row`
+    ///     already owns its reversed pair (`seen_pairs`),
+    ///   - `"twin-shadow"`  -- the orientation twin of `victim_row` skipped because
+    ///     `owner_row`'s entry (its asset rule, or its own twin when `owner_was_twin`)
+    ///     already carries the identical pair (`seen_rules`),
+    ///   - `"twin-inverse"` -- the twin of `victim_row` skipped as the exact inverse of
+    ///     `owner_row`'s entry (`seen_pairs`).
+    ///
+    /// Twin victims are recorded only when every OTHER admission gate passes, so an
+    /// entry states "removing the owner resurrects this rewrite", not merely "a hash
+    /// collided". This is what lets a consumer that needs the engine WITHOUT one rule
+    /// (the promotion refund's derivability probe) know for which rows fire-site
+    /// suppression alone is NOT behaviorally a rebuild.
+    pub shadow_census: Vec<(usize, usize, bool, &'static str)>,
 }
 
 impl AcRules {
@@ -185,8 +202,10 @@ impl AcRules {
         // canonicalizations (`* float("inf") !0 <-> / float("inf") !0`), which root at
         // DIFFERENT operators in the old tree but at the same `Mul` after desugaring -- a
         // deterministic ping-pong. First-match-wins resolves the direction: the earlier rule
-        // owns it, the reversed later rule is dropped.
-        let mut seen_pairs: FxHashSet<(Ex, Ex)> = FxHashSet::default();
+        // owns it, the reversed later rule is dropped. The map value is the OWNING artifact
+        // row (and whether the owner is a minted twin), feeding the shadow census; the
+        // guard's membership semantics are unchanged (first insert wins).
+        let mut seen_pairs: FxHashMap<(Ex, Ex), (usize, bool)> = FxHashMap::default();
         for (raw_idx, (lhs_t, rhs_t)) in raw.iter().enumerate() {
             let (Some(lhs0), Some(rhs0)) = (from_prefix(lhs_t, &cx), from_prefix(rhs_t, &cx))
             else {
@@ -224,8 +243,12 @@ impl AcRules {
                 out.note_drop("catch-all-lhs");
                 continue;
             }
-            if seen_pairs.contains(&(rhs.clone(), lhs.clone())) {
-                out.note_drop("inverse-of-earlier-rule"); // the exact inverse of an earlier rule: ping-pong fuel
+            if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(rhs.clone(), lhs.clone())) {
+                // The exact inverse of an earlier rule: ping-pong fuel. Removing the
+                // owner would let this rule load, so the census records the dependency.
+                out.shadow_census
+                    .push((raw_idx, owner, owner_was_twin, "inverse"));
+                out.note_drop("inverse-of-earlier-rule");
                 continue;
             }
             // Sixth drop reason: an RHS wildcard the canonical LHS does not bind would
@@ -250,7 +273,9 @@ impl AcRules {
                 out.note_drop("not-ordered-below");
                 continue;
             }
-            seen_pairs.insert((lhs.clone(), rhs.clone()));
+            seen_pairs
+                .entry((lhs.clone(), rhs.clone()))
+                .or_insert((raw_idx, false));
             out.src.push(raw_idx);
             let sig = atom_sig(&lhs, view);
             let is_pattern = lhs.contains_wildcard(view);
@@ -292,11 +317,12 @@ impl AcRules {
         // individually justified, and an unorientable one simply drops. Twins append
         // AFTER all asset rules (lowest priority within their bucket) and count
         // separately (`n_twins`), so the asset accounting keeps its meaning.
-        let mut seen_rules: FxHashSet<(Ex, Ex)> = out
-            .rules
-            .iter()
-            .map(|r| (r.lhs.clone(), r.rhs.clone()))
-            .collect();
+        let mut seen_rules: FxHashMap<(Ex, Ex), (usize, bool)> = FxHashMap::default();
+        for (r, &row) in out.rules.iter().zip(out.src.iter()) {
+            seen_rules
+                .entry((r.lhs.clone(), r.rhs.clone()))
+                .or_insert((row, false));
+        }
         let n_raw_kept = out.rules.len();
         for i in 0..n_raw_kept {
             let neg = |e: &Ex| canon(mul(vec![Ex::int(-1), e.clone()], &cx), &cx);
@@ -315,12 +341,12 @@ impl AcRules {
             // The Const gate and the composite gate are inherited (negation introduces
             // no `<constant>`, and an absorbed twin is bag-rooted by construction); the
             // remaining static gates run exactly as for asset rules.
-            if tl == tr || seen_rules.contains(&(tl.clone(), tr.clone())) {
-                continue; // arithmetic-subsumed, or the asset already carries the twin
+            if tl == tr {
+                continue; // arithmetic-subsumed
             }
-            if seen_pairs.contains(&(tr.clone(), tl.clone())) {
-                continue; // the exact inverse of a loaded rule: ping-pong fuel
-            }
+            // The PER-TWIN gates run before the cross-rule guards (they are pure checks,
+            // so the reordering cannot change which twins mint): a twin the gates refuse
+            // resurrects under NO removal, and must not enter the shadow census.
             let mut lhs_wilds = FxHashSet::default();
             let mut rhs_wilds = FxHashSet::default();
             collect_wildcards(&tl, view, &mut lhs_wilds);
@@ -334,14 +360,31 @@ impl AcRules {
             if !ordered_below(&tr, &tl, view) {
                 continue;
             }
+            if let Some(&(owner, owner_was_twin)) = seen_rules.get(&(tl.clone(), tr.clone())) {
+                // The asset (or an earlier twin) already carries this exact rewrite;
+                // removing its owner would mint this twin instead -- census.
+                out.shadow_census
+                    .push((out.src[i], owner, owner_was_twin, "twin-shadow"));
+                continue;
+            }
+            if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(tr.clone(), tl.clone())) {
+                // The exact inverse of a loaded rule: ping-pong fuel -- census.
+                out.shadow_census
+                    .push((out.src[i], owner, owner_was_twin, "twin-inverse"));
+                continue;
+            }
             let idx = out.rules.len();
             match &tl {
                 Ex::Add(_) => out.add_idx.push(idx),
                 Ex::Mul(_) => out.mul_idx.push(idx),
                 _ => continue, // unreachable given `absorbed`; fail closed
             }
-            seen_pairs.insert((tl.clone(), tr.clone()));
-            seen_rules.insert((tl.clone(), tr.clone()));
+            seen_pairs
+                .entry((tl.clone(), tr.clone()))
+                .or_insert((out.src[i], true));
+            seen_rules
+                .entry((tl.clone(), tr.clone()))
+                .or_insert((out.src[i], true));
             out.src.push(out.src[i]);
             let sig = atom_sig(&tl, view);
             let is_pattern = tl.contains_wildcard(view);
@@ -410,6 +453,15 @@ pub struct PassCtx<'a> {
     /// one level of exploration is what keeps oscillating reassemblies refused (their
     /// endpoint is the starting node, never strictly below) instead of regressing forever.
     pub explore: bool,
+    /// SUPPRESSED ARTIFACT ROWS (`AcRules::src` values), checked at the single fire site
+    /// (`try_rules_at`): a suppressed rule and every orientation twin minted from it (the
+    /// twin reports its source's row) never fires, so the walk is BEHAVIORALLY the walk
+    /// of an engine translated without those artifact rows -- translation is per-rule,
+    /// bucket order filtered in place is the order a rebuild would give the survivors,
+    /// and constructors/certificates/folds never consult the rule set. `None` (every
+    /// pre-existing entry point) is byte-identical to the field not existing. Consumer:
+    /// the promotion refund's per-candidate "engine WITHOUT this rule" probes.
+    pub suppressed: Option<&'a FxHashSet<usize>>,
 }
 
 /// The REDUCTION ORDERING: is `a` strictly smaller than `b` in the lexicographic pair
@@ -476,6 +528,14 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
         let rule = &p.rules.rules[ri];
         if rule.sig & !node_sig != 0 {
             continue;
+        }
+        if let Some(sup) = p.suppressed {
+            // Suppression by ARTIFACT row: `src[ri]` attributes minted orientation twins
+            // to the rule they were negated from, so suppressing a row silences the rule
+            // AND its twins -- exactly what a build without that row would not serve.
+            if sup.contains(&p.rules.src[ri]) {
+                continue;
+            }
         }
         // Acceptance rides the assignment enumeration (finding F1): a disoriented
         // assignment asks the matcher for the NEXT one, so a rule yields to later rules
@@ -689,6 +749,7 @@ pub fn rewrite_pass(e: Ex, p: &PassCtx) -> Ex {
                     fires: Cell::new(p.fires.get()),
                     normal: RefCell::new(FxHashSet::default()),
                     explore: false,
+                    suppressed: p.suppressed,
                 };
                 let endpoint = rewrite_pass(rebuilt, &sub);
                 p.fires.set(sub.fires.get());

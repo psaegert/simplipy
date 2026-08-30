@@ -1320,3 +1320,66 @@ class TestC36DropCensus:
 
     def test_clean_artifact_census_is_empty(self, engine: SimpliPyEngine) -> None:
         assert engine._core.ac_rules_drop_census() == {}
+
+
+class TestSuppressedProbeAndShadowCensus:
+    """`ac_simplify_suppressed` + `ac_shadow_census`: the promotion refund's probe surface.
+
+    The contract under test: suppressing artifact rows at the matcher's fire site is
+    BEHAVIORALLY the engine built without those rows, and the one place that fails --
+    translate's cross-rule state, where removing a rule resurrects a sibling's shadowed
+    orientation twin -- is exactly what the shadow census enumerates. The refund's
+    sequential prune (promotion stage 4) rides both surfaces, so a drift in either
+    silently changes which mined rules ship.
+    """
+
+    def test_empty_suppression_is_the_plain_simplify(self, engine: SimpliPyEngine) -> None:
+        from simplipy.engine import DEFAULT_EFFORT
+        for probe in (["sin", "neg", "x0"], ["*", "(-1)", "abs", "x1"],
+                      ["+", "x0", "*", "2", "x0"]):
+            assert engine._core.ac_simplify_suppressed(
+                probe, 48, "explicit", DEFAULT_EFFORT, []) == list(engine.simplify(probe))
+
+    def test_suppressing_a_row_is_the_engine_without_it(self, engine: SimpliPyEngine) -> None:
+        from simplipy.engine import DEFAULT_EFFORT
+        ops = engine._operators_config
+        rules = [
+            (["asinh", "abs", "?0"], ["abs", "asinh", "?0"]),
+            (["atan", "abs", "?0"], ["abs", "atan", "?0"]),
+            (["atan", "asinh", "abs", "?0"], ["abs", "atan", "asinh", "?0"]),
+        ]
+        full = SimpliPyEngine(operators=ops, rules=list(rules))
+        assert full._core.ac_shadow_census() == []  # no cross-rule state: suppression is exact
+        probe = ["atan", "asinh", "abs", "x0"]
+        for i in range(len(rules)):
+            without = SimpliPyEngine(
+                operators=ops, rules=[r for j, r in enumerate(rules) if j != i])
+            assert full._core.ac_simplify_suppressed(
+                probe, 48, "explicit", DEFAULT_EFFORT, [i]) == list(without.simplify(probe))
+
+    def test_shadow_census_names_the_sign_sibling_pair(self, engine: SimpliPyEngine) -> None:
+        # Each rule is canonically the other's orientation twin, so each one's twin is
+        # skipped with the OTHER as owner: removing either resurrects its sibling's twin,
+        # which is why fire-site suppression alone must not claim to be a rebuild here.
+        ops = engine._operators_config
+        sib = [
+            (["-", "acosh", "atanh", "?0", "?1"], ["-", "?0", "?1"]),
+            (["-", "?1", "acosh", "atanh", "?0"], ["-", "?1", "?0"]),
+        ]
+        e = SimpliPyEngine(operators=ops, rules=list(sib))
+        assert e._core.ac_shadow_census() == [
+            (0, 1, False, "twin-shadow"), (1, 0, False, "twin-shadow")]
+
+    def test_refund_prunes_exactly_one_of_a_mutually_derivable_pair(
+            self, engine: SimpliPyEngine) -> None:
+        # The SEQUENTIAL guarantee of promotion stage 4's derivability probe: of two
+        # rules that derive each other (through the minted orientation twin), the
+        # earlier is refunded and the later must survive -- both vanishing is the
+        # failure mode the sequential order exists to prevent.
+        from simplipy.promotion._refund import refund
+        sib = [
+            (("-", "acosh", "atanh", "?0", "?1"), ("-", "?0", "?1")),
+            (("-", "?1", "acosh", "atanh", "?0"), ("-", "?1", "?0")),
+        ]
+        kept = refund(list(sib), engine._operators_config, set())
+        assert kept == [sib[1]]
