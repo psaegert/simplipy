@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.1 (unreleased)
+
+- **`verify_triple` no longer reports an unrunnable dominance check as a pass.** With
+  `engine_config` given and a corpus of 0 rows (every wheel install lacks
+  `benchmarks/corpus/raw_skeletons_nv.json`), `permissive_dominance` used to come back
+  `[]` — indistinguishable from a genuine zero-violation sweep, which it did twice
+  during the 0.14.0 release verification. It is now an explicit sentinel
+  `{'checked': False, 'reason': …}` plus a `UserWarning`; a sweep that actually ran
+  returns `{'checked': True, 'violations': […]}`. `is_clean` is unaffected by an
+  unchecked dominance: unchecked means unknown, not passing.
+
 ## 0.14.0 (2026-08-30)
 
 ### Changed — SOUNDNESS IS AN AXIS, NOT A LADDER (owner rulings, 2026-08-19/20)

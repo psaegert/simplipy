@@ -647,7 +647,45 @@ class TestCleanlinessIsPerMode:
                                engine_config=acj_config_path())
         assert report['is_clean'] is True, report['relationships']
         assert all(r['is_clean'] for r in report['modes'].values())
-        assert report['permissive_dominance'] == []
+        # the repository checkout ships the corpus, so the sweep actually ran
+        assert report['permissive_dominance'] == {'checked': True, 'violations': []}
+
+    def test_an_empty_corpus_reports_UNCHECKED_never_a_clean_pass(self, monkeypatch) -> None:
+        """The 0.14.0 release-verification regression, twice: every wheel install lacks
+        benchmarks/corpus/raw_skeletons_nv.json, so `_default_corpus_rows()` resolved to
+        0 rows and `permissive_dominance` read `[]` -- indistinguishable from a genuine
+        zero-violation sweep. Unchecked must SAY unchecked, loudly, and must neither
+        pass nor fail `is_clean`."""
+        import simplipy.verify as V
+        monkeypatch.setattr(V, '_default_corpus_rows', lambda: [])
+        with pytest.warns(UserWarning, match='NOT checked'):
+            report = V.verify_triple([self.CORE], [self.CORE], [self.CORE],
+                                     engine_config='<never dereferenced on 0 rows>')
+        dom = report['permissive_dominance']
+        assert not isinstance(dom, list), 'an empty list would read as a pass'
+        assert dom['checked'] is False
+        assert dom['reason']  # a non-empty why, naming the missing corpus
+        # unchecked is unknown: it must not dirty an otherwise clean triple ...
+        assert report['is_clean'] is True and report['relationships'] == []
+        # ... and the same sentinel comes back for an explicitly empty corpus_rows
+        with pytest.warns(UserWarning, match='NOT checked'):
+            explicit = V.verify_triple([self.CORE], [self.CORE], [self.CORE],
+                                       engine_config='<never dereferenced>',
+                                       corpus_rows=[])
+        assert explicit['permissive_dominance']['checked'] is False
+
+    def test_rows_actually_swept_report_checked_True(self) -> None:
+        """The positive half of the contract: with rows given, the report says the sweep
+        ran (`checked: True`) and carries the violation list -- empty on a dominating
+        artifact, so a real pass is now spelled differently from a skipped check."""
+        from conftest import acj_config_path, require_triple_or_skip
+        require_triple_or_skip('the dominance sweep simplifies in all three modes')
+        from simplipy.verify import verify_triple
+        report = verify_triple([self.CORE], [self.CORE], [self.CORE],
+                               engine_config=acj_config_path(),
+                               corpus_rows=[['sin', 'x1'], ['+', 'x1', '1']])
+        assert report['permissive_dominance'] == {'checked': True, 'violations': []}
+        assert report['is_clean'] is True
 
 
 class TestOperandScaledPrecision:

@@ -159,6 +159,17 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
     sound to say about the relationship between the files, and ``relationships`` stays
     empty rather than asserting something false.
 
+    ``permissive_dominance`` CONTRACT. ``None`` when ``engine_config`` is not given
+    (nothing was asked). When it IS given but the corpus resolves to 0 rows -- every
+    wheel install lacks ``benchmarks/corpus/raw_skeletons_nv.json``, so the default
+    corpus is empty outside a repository checkout -- the check CANNOT run and the report
+    says so explicitly: ``{'checked': False, 'reason': '<why>'}`` plus a ``UserWarning``,
+    NEVER an empty list. (It reported ``[]`` on 0 rows twice during the 0.14.0 release
+    verification, indistinguishable from a genuine zero-violation sweep.) When rows were
+    actually swept: ``{'checked': True, 'violations': [...]}``, dirty iff ``violations``
+    is non-empty. ``is_clean`` is NEVER affected by an unchecked dominance: unchecked
+    means unknown -- not passing, and not failing either.
+
     Returns ``{'is_clean', 'modes': {mode: report}, 'relationships': [...],
     'permissive_dominance': ... }``.
     """
@@ -167,17 +178,33 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
         reports[mode] = verify_ruleset(rules, mode=mode, judge_timeout_s=judge_timeout_s)
 
     problems: list = []
-    dominance: list | None = None
+    dominance: dict | None = None
     if engine_config is not None:
-        from ..engine import SimpliPyEngine
-        from ..mining import assert_permissive_dominates
-        engine = SimpliPyEngine.from_config(engine_config)
         rows = corpus_rows if corpus_rows is not None else _default_corpus_rows()
-        dominance = assert_permissive_dominates(engine, rows)
-        if dominance:
-            problems.append(
-                f'corpus is not the most capable mode on {len(dominance)} rows, '
-                f'e.g. {dominance[0]}')
+        if not rows:
+            # UNCHECKED IS NOT A PASS. Never report an empty violation list here: on a
+            # wheel install `_default_corpus_rows()` is always empty, and `[]` read as
+            # "zero violations" twice during the 0.14.0 release verification.
+            reason = ('corpus_rows was given but is empty'
+                      if corpus_rows is not None else
+                      'the default corpus resolved to 0 rows '
+                      '(benchmarks/corpus/raw_skeletons_nv.json exists only in a '
+                      'repository checkout, never in a wheel install); pass '
+                      'corpus_rows to run the check')
+            warnings.warn(
+                f'verify_triple: permissive dominance was NOT checked -- {reason}. '
+                'is_clean does not cover it.', UserWarning)
+            dominance = {'checked': False, 'reason': reason}
+        else:
+            from ..engine import SimpliPyEngine
+            from ..mining import assert_permissive_dominates
+            engine = SimpliPyEngine.from_config(engine_config)
+            violations = assert_permissive_dominates(engine, rows)
+            dominance = {'checked': True, 'violations': violations}
+            if violations:
+                problems.append(
+                    f'permissive is not the most capable mode on {len(violations)} '
+                    f'rows, e.g. {violations[0]}')
 
     return {'is_clean': all(x['is_clean'] for x in reports.values()) and not problems,
             'modes': reports, 'relationships': problems,
