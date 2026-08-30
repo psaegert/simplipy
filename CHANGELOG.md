@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.0 (unreleased)
+## 0.14.0 (2026-08-30)
 
 ### Changed — SOUNDNESS IS AN AXIS, NOT A LADDER (owner rulings, 2026-08-19/20)
 
@@ -16,7 +16,8 @@ between modes raises `TypeError`.
 
 The old `IntEnum` encoded a premise — `EXACT ≤ SOUND ≤ AE ≤ LOSSY` — that measurement
 refuted. "True over ℝ" and "realised in f64" are *incomparable*: `atanh(tanh t) → t` is
-true for every real `t` and gives `inf` in f64 past 18.990341103219276, while
+true for every real `t` and gives `inf` in f64 past 18.990341103219276 on the
+release host (the exact threshold is libm-dependent), while
 `asin(1e-8) → 1e-8` is bit-identical in f64 and wrong by the cubic term. Neither is more
 sound than the other.
 

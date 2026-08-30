@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib"]
 # Pin to current-stable PyO3. VERIFY the exact patch at setup time:
 #   cargo search pyo3   (0.29 is the current pin; bump deliberately and re-check rust-version/MSRV).
 # abi3-py312 -> ONE wheel per (platform, arch) for CPython >= 3.12 (matches simplipy's
-# requires-python = ">=3.11"); no per-minor-version wheel matrix.
+# requires-python = ">=3.12"); no per-minor-version wheel matrix.
 pyo3 = { version = "0.29", features = ["abi3-py312", "extension-module"] }
 
 # Asset loading: REUSE simplipy's HF-hub config.yaml + rules.json UNCHANGED (one source of

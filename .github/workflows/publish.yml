@@ -1,5 +1,5 @@
 # Build cross-platform maturin wheels + sdist and publish to PyPI when a GitHub Release is published.
-# abi3-py311 -> ONE wheel per (platform, arch) covers CPython >= 3.11.
+# abi3-py312 -> ONE wheel per (platform, arch) covers CPython >= 3.12.
 
 name: Upload Python Package
 

@@ -147,7 +147,7 @@ pytest tests --cov src --cov-report html -m "not integration"
 }
 
 % Optionally
-@software{simplipy-2025,
+@software{simplipy-2026,
     author = {Paul Saegert},
     title = {Efficient Simplification of Mathematical Expressions},
     year = 2026,

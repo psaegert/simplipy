@@ -313,7 +313,7 @@ matrices and seeds, and the provenance record).
 
 ### How we use this (and what to expect)
 
-The rule packs for the published `acj-4-3-llm` engine asset were proposed by two
+The rule packs for the earlier `acj-4-3-llm` engine asset were proposed by two
 independent language models under the frozen prompt spec shipped with the asset,
 prompted with the
 exact grammar (the operator inventory, the leaf symbols including the `<constant>`

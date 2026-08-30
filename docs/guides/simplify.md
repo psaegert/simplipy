@@ -99,17 +99,16 @@ tolerance enters.
 
 The budget is the `effort` parameter: `simplify(expr, effort=64)` explores with 64
 candidate descents, and `effort=0` never enters the phase — byte-identical to the
-chain alone. The default is `simplipy.DEFAULT_EFFORT` = 4, set from the acceptance
-benchmark's explore-budget arms (65,536 rows): budget 4 strictly improves 3.18% of
-rows with zero regressions and captures every win a 16x larger budget finds, at +18%
-median per-row cost. Pass `effort=0` on throughput-critical paths.
+chain alone. The default is `simplipy.DEFAULT_EFFORT` = 4, set from the release
+benchmark's explore-budget sweep below: budget 4 captures every win a 16x larger
+budget finds, with zero regressions. Pass `effort=0` on throughput-critical paths.
 
 The sweep, re-measured on the release build over the same 65,536 rows, is the whole
 argument for the default in one panel: effort 0 to 4 moves the mean ratio from 0.9685
 to 0.9658 and lifts strictly-simplified rows from 10.2% to 13.2% for ~70 µs of median
-cost, and effort 64 retraces the effort-4 curve exactly — budget 4 captures every
-budget-64 win, the exploration saturates at 4 on this corpus, and a larger budget
-buys nothing.
+cost, and effort 64 is display-identical to effort 4 — budget 4 captures every
+budget-64 win, and the two mean ratios differ only in the fifth decimal (2.8e-5,
+what little there is sitting on the effort-64 side).
 
 ![Search-budget sweep, effort 0 / 4 / 64](../assets/benchmarks/ecdf_effort_sweep.png)
 
@@ -324,7 +323,7 @@ cap and end the wall-clock ECDFs below 1.
 | | sympy simplify | 1.006 | 26.3% | 15.0% |
 
 The shipped default arm (f64, effort 4) made no expression bigger: 0 of
-196,608 SR rows and 0 of 600 external rows. The real and permissive arms
+131,072 SR rows and 0 of 600 external rows. The real and permissive arms
 minimize their own mode's reduction ordering, which is not the default
 pricing: under the table's measure they returned a form pricing above
 the input on a handful of rows (real 23/65,536 unmasked and 2/65,536
