@@ -220,7 +220,7 @@ applies seven load-time gates:
 | G6 | RHS wildcards not bound by the **canonical** LHS | an unbound wildcard would panic substitution at rewrite time; canon can erase LHS wildcards, so the raw check is insufficient |
 | G7 | $\mathrm{nf}(\rho) \not<_o \mathrm{nf}(\ell)$ (disoriented patterns) | keep every loaded rule aligned with the ordering the pass fires under (§5) |
 
-All seven are counted; the shipped asset (`acj-4`, 5,338 rows, all reaching
+All seven are counted; asset `acj-4` (5,338 rows, all reaching
 translation, mined under $\mu$ itself on the deployed literal alphabet) loses **zero**
 rules and gains nine orientation twins, serving 5,347
 [EMPIRICAL — re-verified on every load, since translation runs the gates each time; a
@@ -530,7 +530,7 @@ fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in permissi
 |---|---|---|
 | terms: binary prefix trees | canonical bags (I1–I4) | redefinition required (done here, §2) |
 | cancellation procedure outside the TRS | $\mathrm{nf}$ (§3), much larger | same architectural role; L1 replaces the informal argument |
-| rule conditions: $\mathrm{Vars}(\rho) \subseteq \mathrm{Vars}(\ell)$, $|\rho| < |\ell|$, non-duplication | G6; G7; (non-duplication measured on the shipped asset: 5,337/5,338, not required) | **the static proof device does not transfer** — $c$ is non-additive and fires renormalize (§5), so orientation is enforced per instance instead |
+| rule conditions: $\mathrm{Vars}(\rho) \subseteq \mathrm{Vars}(\ell)$, $|\rho| < |\ell|$, non-duplication | G6; G7; (non-duplication measured on asset `acj-4`: 5,337/5,338, not required) | **the static proof device does not transfer** — $c$ is non-additive and fires renormalize (§5), so orientation is enforced per instance instead |
 | termination: length is a reduction order | T-wf/T6: the pair $(\mu, \mathrm{cmp\_ex})$ is a well-founded strict total order (no separate literal-size tier — literal content lives in $\mu$, §5) | **new proof, done here, unconditional** |
 | iteration cap $K = 5$ | `max_passes` | demoted to defense-in-depth: T6 guarantees the fixpoint in finitely many passes |
 | syntactic matching | AC sub-multiset matching with remainder | Peterson–Stickel extension rules; matching soundness is the matcher's contract |

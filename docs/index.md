@@ -20,7 +20,7 @@ and [srbf](https://github.com/psaegert/srbf).
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-4", install=True)
+engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
 
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
 # -> '<constant>/x3'

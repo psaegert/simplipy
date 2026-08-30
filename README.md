@@ -38,7 +38,7 @@ pip install simplipy
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-4", install=True)   # a published ruleset artifact
+engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)   # a published ruleset artifact
 
 # Simplify infix expressions
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')

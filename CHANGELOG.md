@@ -150,6 +150,30 @@ from `-o` with the `_f64` marker replaced, so `-o rules_f64.json` writes
 `rules_real.json` / `rules_permissive.json` beside it and `-o rules.json` keeps its
 historic siblings.
 
+### Published artifacts — the flagship is `acj-5-4-llm`
+
+- **`acj-5-4-llm`** (2026-08-30, `psaegert/simplipy-assets` manifest): complete
+  sources through length 5, targets through length 4, plus the LLM-augmented
+  proposal lane, certified by the same gates as the mined rules. Mined as a
+  triple at build 17dbf35 under the growth-argument range guard — zero judge
+  timeouts across the 163,649-rule certification — and independently
+  gate-verified: 138,651 rules in `rules_f64.json`, 133,294 in
+  `rules_real.json`, 139,299 in `rules_permissive.json`, all three modes clean,
+  permissive dominance at zero violations on the 400-row reference corpus.
+  13 real-tier constant folds are relocated out of the f64 set by the gate,
+  each present in the real and permissive sets. The exact mine configuration
+  ships with the asset as `mine.yaml`. Pairs with simplipy >= 0.14.
+- **The published benchmark is regenerated on the shipped artifact** — four
+  arms (`f64`, `real`, `permissive`, SymPy 1.14.0 under a 1 s cap) on three
+  declared corpora: the v25 SR prior (n = 65,536, seed 20260830), its
+  mask-policy-`'all'` transform, and the SOOSE external set (n = 600). The
+  made-bigger claim is scoped to what the shipped `complexity()` instrument
+  measures: `f64` inflates nothing on any corpus; `real` and `permissive`
+  minimize their own mode's ordering and price above the input on 23/2
+  (unmasked) and 2/0 (masked) of 65,536 rows, never via an uphill step. All
+  ECDF figures and the README headline panel are regenerated; the simplify
+  guide carries the protocol and full tables.
+
 ### Added
 
 - **`simplify(effort=...)`** — the search budget (ledger D39). The deterministic chain
@@ -161,13 +185,6 @@ historic siblings.
   `simplipy.DEFAULT_EFFORT` = 4, measured on the 65,536-row acceptance panel: budget 4
   strictly improves 3.18% of rows with zero regressions and captures every win budget
   64 finds, at +18% median per-row cost.
-
-- The fair benchmark is re-measured on the release build (three corpora,
-  131,600 rows): every simplipy arm at zero inflated rows, `f64` default at
-  0.966/0.993/0.995 mean ratio per corpus, `permissive` at 0.940/0.961/0.995,
-  SymPy 1.14.0 at 1.045–1.078 with 38–40% of SR-shaped rows made bigger.
-  README carries the headline panel; the simplify guide carries the full
-  figures.
 
 - `complexity(..., mode=...)` / FFI `rule_mode=` — the pricing instruments are
   **route-parameterized**. `complexity()` now parses its argument through the same

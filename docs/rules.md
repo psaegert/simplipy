@@ -122,10 +122,17 @@ simplipy find-rules -e "path/to/my_config.yaml" -c "path/to/create_my_config.yam
 - `-v` enables verbose output
 - `--reset-rules` will start with an empty rule set, otherwise it will append to the existing rules loaded with the engine
 
-The published `acj-4` artifact was mined with the configuration below — it ships
-with the asset as `mine.yaml`, and `simplipy find-rules -e config.yaml -c mine.yaml
--o rules.json -v --reset-rules` reproduces the artifact byte-for-byte at the
-recorded environment:
+The published `acj-5-4-llm` artifact is this machinery at its shipped scale:
+complete sources through length 5, targets through length 4, plus the
+LLM-augmented proposal lane, certified by the same gates as the mined rules.
+It is mined as a triple and independently gate-verified — 138,651 rules in
+`rules_f64.json`, 133,294 in `rules_real.json`, 139,299 in
+`rules_permissive.json`, all three modes clean, with 13 real-tier constant
+folds relocated out of the f64 set by the gate (each present in the real and
+permissive sets). The exact mine configuration ships with the asset as
+`mine.yaml`, and `simplipy find-rules -e config.yaml -c mine.yaml -o rules_f64.json -v --reset-rules`
+reproduces the triple byte-for-byte at the recorded environment. The
+configuration format, annotated:
 
 ```yaml
 # Special symbols available as expression leaves (beyond the dummy variables).
@@ -183,17 +190,18 @@ promote_sorts: true
 
 # Optional: LLM/human-proposed rules, certified against the mined state at the
 # end of the run (see "LLM-proposed rules" below). Paths starting with ./ are
-# resolved relative to this config file. The published LLM merge is a second,
-# separately-gated run over this same configuration with the key enabled.
+# resolved relative to this config file. The published artifact's LLM lane is
+# this key, enabled in its shipped mine.yaml.
 # proposals: ./llm_proposals.json
 ```
 
 With this operator set the complete universes through length 4 hold 413,772 sources
 (29 / 493 / 13,427 / 399,823 at lengths 1–4), the enumeration is cross-checked
-against the counting recurrence, and the length-4 tier dominates: the published
-mine completes in about 25 minutes on a 16-core desktop host. Cost climbs steeply
-with either cap. Length 5 adds roughly 13 million sources, and the target
-cap sizes the candidate library every source is judged against.
+against the counting recurrence, and the length-4 tier dominates: a full mine of
+this cell completes in about 25 minutes on a 16-core desktop host. Cost climbs
+steeply with either cap. Length 5 — the published artifact's source tier — adds
+roughly 13 million sources, and the target cap sizes the candidate library every
+source is judged against.
 Progress, per-length rule counts, and universe coverage are printed
 as the mine advances, and the output file plus its provenance sidecar are updated after
 every completed length.
@@ -266,7 +274,7 @@ To certify proposals against an already-built engine without re-mining, use the
 import simplipy as sp
 from simplipy.utils import deduplicate_rules
 
-engine = sp.SimpliPyEngine.load("acj-4")
+engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)
 
 proposals = [
     ["+", "pow", "sin", "x0", "2", "pow", "cos", "x0", "2"],           # sin^2 + cos^2
@@ -348,13 +356,13 @@ result to a JSON file (they do not modify the installed asset in place):
 
 ```sh
 # Remove rules that the remaining rules already cover compositionally
-simplipy prune-covered-rules -e "acj-4" -o "path/to/pruned_rules.json" -v
+simplipy prune-covered-rules -e "acj-5-4-llm" -o "path/to/pruned_rules.json" -v
 
 # Replace <constant> placeholders with concrete numeric values in all-numeric rules
-simplipy resolve-rules -e "acj-4" -o "path/to/resolved_rules.json" -v
+simplipy resolve-rules -e "acj-5-4-llm" -o "path/to/resolved_rules.json" -v
 ```
 
-- `-e` is the engine name (e.g. `acj-4`) or a path to an engine configuration file
+- `-e` is the engine name (e.g. `acj-5-4-llm`) or a path to an engine configuration file
 - `-o` is the output path for the post-processed rules
 - `-v` enables verbose progress output
 
@@ -392,10 +400,11 @@ already installed locally:
 ```sh
 simplipy list --type engine
 # --- Available engine assets ---
-# - acj-4    [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
-#                         (sources and targets to length 4). First cell mined as a triple under
-#                         the 0.14.0 instrument ... Pairs with simplipy >= 0.14.
-# - acj-4-3               Complete AC-judged rule mine ... (sources to length 4, targets to length 3), ...
+# - acj-5-4-llm [installed] Complete AC-judged rule mine of the clean 23-operator
+#                         vocabulary (sources to length 5, targets to length 4) plus the
+#                         LLM-augmented proposal lane, mined as a triple and independently
+#                         gate-verified ... Pairs with simplipy >= 0.14.
+# - acj-4                 Complete AC-judged rule mine ... (sources and targets to length 4), ...
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.
 # - ...                   (older assets remain listed for older installs; generation-1 artifacts
@@ -407,8 +416,8 @@ simplipy list --installed        # only assets already downloaded
 Install or remove an asset by name:
 
 ```sh
-simplipy install acj-4           # download an asset from Hugging Face (--force to reinstall)
-simplipy remove acj-4            # remove a locally installed asset
+simplipy install acj-5-4-llm     # download an asset from Hugging Face (--force to reinstall)
+simplipy remove acj-5-4-llm      # remove a locally installed asset
 ```
 
 The same operations are available from Python (this is also what the engine loader uses under the hood):
@@ -417,10 +426,10 @@ The same operations are available from Python (this is also what the engine load
 ```python
 import simplipy as sp
 
-sp.install("acj-4")       # download an asset from Hugging Face
-sp.uninstall("acj-4")     # remove a locally installed asset
-sp.get_path("acj-4", install=True)  # resolve a local path, installing if needed
+sp.install("acj-5-4-llm")       # download an asset from Hugging Face
+sp.uninstall("acj-5-4-llm")     # remove a locally installed asset
+sp.get_path("acj-5-4-llm", install=True)  # resolve a local path, installing if needed
 ```
 
-`sp.SimpliPyEngine.load("acj-4", install=True)` installs the engine
+`sp.SimpliPyEngine.load("acj-5-4-llm", install=True)` installs the engine
 on demand as part of loading.

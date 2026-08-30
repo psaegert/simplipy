@@ -16,7 +16,7 @@ simplification touches only numpy (all three install as required dependencies).
 ```python
 import simplipy as sp
 
-engine = sp.SimpliPyEngine.load("acj-4", install=True)   # the published AC-engine artifact
+engine = sp.SimpliPyEngine.load("acj-5-4-llm", install=True)   # the published AC-engine artifact
 
 # Simplify infix expressions: a str in, a str out
 engine.simplify('x3 * sin(<constant> + 1) / (x3 * x3)')
@@ -56,10 +56,11 @@ asset manager handles listing, installing, and uninstalling:
 ```python
 sp.list_assets("engine")
 # --- Available engine assets ---
-# - acj-4    [installed]  Complete AC-judged rule mine of the clean 23-operator vocabulary
-#                         (sources and targets to length 4). First cell mined as a triple under
-#                         the 0.14.0 instrument ... Pairs with simplipy >= 0.14.
-# - acj-4-3               Complete AC-judged rule mine ... (sources to length 4, targets to length 3), ...
+# - acj-5-4-llm [installed] Complete AC-judged rule mine of the clean 23-operator
+#                         vocabulary (sources to length 5, targets to length 4) plus the
+#                         LLM-augmented proposal lane, mined as a triple and independently
+#                         gate-verified ... Pairs with simplipy >= 0.14.
+# - acj-4                 Complete AC-judged rule mine ... (sources and targets to length 4), ...
 # - base                  Bare 23-operator engine configuration (no rules): the clean-vocabulary
 #                         starting point for fresh mining. Pairs with simplipy >= 0.12.
 # - ...                   (older assets remain listed for older installs; generation-1 artifacts
