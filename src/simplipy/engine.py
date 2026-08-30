@@ -235,7 +235,7 @@ __all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT']
 #:
 #: The measure-fingerprint check (D25) remains the safety net for an artifact loaded by
 #: NAME across a measure change; this pin is what stops that happening by default.
-DEFAULT_ENGINE = 'acj-4'
+DEFAULT_ENGINE = 'acj-5-4-llm'
 DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given
