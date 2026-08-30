@@ -100,10 +100,10 @@ On a 65,536-expression symbolic-regression benchmark, paired per-row against Sym
 
 | | SimpliPy | SymPy |
 |---|---:|---:|
-| Mean size ratio (lower is better) | **0.97** | 1.08 |
-| Expressions strictly simplified | 11.7% | 15.1% |
-| Expressions made bigger | **0.00%** | 40.1% |
-| Median per-row speedup | **≈650×** | 1× |
+| Mean size ratio (lower is better) | **0.97** | 1.09 |
+| Expressions strictly simplified | 13.2% | 22.3% |
+| Expressions made bigger | **0.00%** | 45.1% |
+| Median per-row speedup | **≈260×** | 1× |
 
 ![Compression on the SR benchmark](docs/assets/benchmarks/ecdf_readme.png)
 

@@ -105,10 +105,11 @@ rows with zero regressions and captures every win a 16x larger budget finds, at 
 median per-row cost. Pass `effort=0` on throughput-critical paths.
 
 The sweep, re-measured on the release build over the same 65,536 rows, is the whole
-argument for the default in one panel: effort 0 to 4 moves the mean ratio from 0.968
-to 0.966 and lifts strictly-simplified rows from 8.7% to 11.7% for 40 µs of median
-cost, and effort 64 retraces the effort-4 curve exactly — the exploration saturates
-at 4 on this corpus, so a larger budget buys nothing.
+argument for the default in one panel: effort 0 to 4 moves the mean ratio from 0.9685
+to 0.9658 and lifts strictly-simplified rows from 10.2% to 13.2% for ~70 µs of median
+cost, and effort 64 retraces the effort-4 curve exactly — budget 4 captures every
+budget-64 win, the exploration saturates at 4 on this corpus, and a larger budget
+buys nothing.
 
 ![Search-budget sweep, effort 0 / 4 / 64](../assets/benchmarks/ecdf_effort_sweep.png)
 
@@ -287,42 +288,61 @@ nothing, and the fixpoint loop memoizes whole passes and rule-normal subtrees. T
 engine line; the published ruleset artifacts are the distinguishing factor between engines,
 and rule application always considers every pattern in the loaded artifact.
 
-The published fair benchmark is pre-registered: serial
-single-core for every arm (one pinned core of an otherwise idle AMD Ryzen 5 2600,
-BLAS thread caps at 1), paired per-row scoring against SymPy 1.14.0
-(1 s cap, censoring stated on the panel), three corpora — an SR training
-prior (n = 65,536), its raw-masked transform (n = 65,536), and an
-external neutral problem set (n = 528). Scored in the deployment space
-under the MDL measure, with bootstrap 95% CIs; ratio = output/input, lower
-is better; "made bigger" = the fraction of rows an arm inflated. Measured
-on the 0.14.0 release: `f64` is the shipped default (`effort=4`), `permissive`
-is `Mode.permissive` at its default.
+The published benchmark is pre-registered: every arm runs serially on one
+pinned core of an otherwise idle AMD Ryzen 9 9950X (BLAS thread caps at 1),
+paired per row against SymPy 1.14.0's `simplify()` under a 1 s cap, on
+three declared corpora — the v25 SR training prior (seed 20260830,
+n = 65,536), the same prior under the engine mask policy 'all'
+(n = 65,536), and an external neutral problem set (SOOSE fc/nc/wc,
+n = 600; every row compiles in the engine language). The engine is the
+pinned acj-5-4-llm artifact: `f64` is the shipped default, `real` is
+`Mode.real`, `permissive` is `Mode.permissive`, every arm at the default
+`effort=4`. Scoring runs in the deployment space:
+ratio = `complexity(output)` / `complexity(input)`, priced by the engine's
+shipped `complexity()` instrument in the default (f64) canonicalization;
+lower is better, means carry bootstrap 95% CIs, and "made bigger" is the
+fraction of rows an arm inflated. SymPy is censored — a 1 s timeout, or an
+output with no spelling in the engine's language — on 8,232 / 5,895 / 8
+rows of the three corpora (12.6% / 9.0% / 1.3%); censored rows score
+ratio 1.0 in every mean and table stat, the charitable choice, and end the
+ratio ECDFs below 1. 5,689 / 5,485 / 8 rows (8.7% / 8.4% / 1.3%) hit the
+cap and end the wall-clock ECDFs below 1.
 
 | corpus | arm | mean ratio | wins | made bigger |
 |---|---|---|---|---|
-| SR prior, unmasked | simplipy f64 (default) | **0.966** | 11.7% | **0.0%** |
-| | simplipy permissive | **0.940** | **29.5%** | **0.0%** |
-| | sympy simplify | 1.078 | 15.1% | 40.1% |
-| SR prior, masked raw | simplipy f64 (default) | **0.993** | 7.0% | **0.0%** |
-| | simplipy permissive | **0.961** | **28.4%** | **0.0%** |
-| | sympy simplify | 1.059 | 14.9% | 38.0% |
-| external set | simplipy f64 (default) | 0.995 | 4.0% | **0.0%** |
-| | simplipy permissive | 0.995 | 4.5% | **0.0%** |
-| | sympy simplify | 1.045 | 15.0% | 22.7% |
+| SR prior, unmasked | simplipy f64 (default) | **0.966** | 13.2% | **0.0%** |
+| | simplipy real | **0.965** | 15.0% | 0.04% |
+| | simplipy permissive | **0.936** | **36.9%** | 0.003% |
+| | sympy simplify | 1.085 | 22.3% | 45.1% |
+| SR prior, masked | simplipy f64 (default) | **0.998** | 1.8% | **0.0%** |
+| | simplipy real | **0.997** | 3.4% | 0.003% |
+| | simplipy permissive | **0.958** | **33.5%** | **0.0%** |
+| | sympy simplify | 1.068 | 18.3% | 43.2% |
+| external set | simplipy f64 (default) | 0.995 | 3.8% | **0.0%** |
+| | simplipy real | 0.995 | 4.0% | **0.0%** |
+| | simplipy permissive | 0.992 | 9.8% | **0.0%** |
+| | sympy simplify | 1.006 | 26.3% | 15.0% |
 
-No simplipy arm inflated a single row of 131,600, in either mode: refusal
-semantics mean an unprovable rewrite returns the input unchanged, and the
-serve construction never returns a costlier form than the input under its
-own mode's measure. SymPy's `simplify` inflates roughly four rows in ten
-on SR-shaped corpora and hits its 1 s timeout on ~20% of them (censored
-rows score ratio 1, the charitable choice). Paired wall-clock on the same
-rows: median speedup **~650–780×** across corpora, medians at 211–265 µs
-per row against SymPy's ~171 ms. On the external set both systems are
-near the fixpoint; SymPy's wins there are dominated by number-respelling
-(floats rewritten as exact rationals), not structural simplification.
+The shipped default arm (f64, effort 4) made no expression bigger: 0 of
+196,608 SR rows and 0 of 600 external rows. The real and permissive arms
+minimize their own mode's reduction ordering, which is not the default
+pricing: under the table's measure they returned a form pricing above
+the input on a handful of rows (real 23/65,536 unmasked and 2/65,536
+masked; permissive 2/65,536 unmasked and 0 masked). Every such output is
+that mode's idempotent fixpoint; the increase enters through
+mode-specific respells — exact rational folds and pole materialization
+to `float("inf")` — never through an uphill rule application or search
+acceptance, which are descent-gated by construction. SymPy's `simplify`
+inflates 43–45% of rows on the SR-shaped corpora. Paired wall-clock on
+the same rows: median
+speedup **≈260× / 300× / 420×** across corpora (f64 vs sympy, over rows
+where sympy finished), f64 medians at 70–327 µs per row against SymPy's
+27–83 ms. On the external set both systems are near the fixpoint;
+SymPy's wins there are dominated by number-respelling (floats rewritten
+as exact rationals), not structural simplification.
 
-![ECDF, masked raw corpus](../assets/benchmarks/ecdf_masked_raw.png)
+![ECDF, masked corpus](../assets/benchmarks/ecdf_masked_raw.png)
 
 Full panels: [unmasked](../assets/benchmarks/ecdf_unmasked.png) ·
-[masked raw](../assets/benchmarks/ecdf_masked_raw.png) ·
+[masked](../assets/benchmarks/ecdf_masked_raw.png) ·
 [external](../assets/benchmarks/ecdf_external.png)
