@@ -1762,21 +1762,42 @@ class SimpliPyEngine:
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             certified: bool = True,
-            mode: Mode | str = Mode.f64) -> int:
+            mode: Mode | str = Mode.f64,
+            canon: str = 'default') -> int:
         """The SEMANTIC COMPLEXITY of an expression, measured on its canonical form.
 
         This is the functional :meth:`simplify` minimizes (the unified measure mu),
         measured by default on the CERTIFIED canonical state -- the same
-        certificate-carrying canonicalization the simplify chain runs on, so
+        certificate-carrying canonicalization the simplify chain runs on. The CANON is
+        pinned to the sound DEFAULT mode (owner ruling, SHIP BOTH): ``complexity()`` is
+        THE public measure, one Default-canon yardstick for every mode's output.
+        ``mode`` routes only the PARSE (the F2 route fix: the instrument prices the
+        state the requested mode's chain starts from), never the canon.
+
+        The theorem this instrument carries is therefore DEFAULT-scoped:
         ``complexity(simplify(e)) <= complexity(e)`` is a THEOREM (chain descent,
-        docs/formal.md L3). With ``certified=False`` the expression is priced on the
-        bare (certificate-less, fail-closed) canonicalization instead: still invariant
+        docs/formal.md L3) for the default ``f64`` mode, whose chain descends this very
+        pricing. A ``real``- or ``permissive``-mode chain descends ITS OWN mode's canon
+        measure -- an INTERNAL descent -- and a fixpoint it licenses may price ABOVE
+        its input under the public Default-canon yardstick.
+
+        ``canon='mode'`` is the engine-internal DIAGNOSTIC that routes the CANON
+        through the requested ``mode`` as well, pricing in the measure that mode's
+        chain actually descends -- exactly what makes the per-mode serve guarantee
+        ``complexity(simplify(e, mode=m), mode=m, canon='mode') <=
+        complexity(e, mode=m, canon='mode')`` checkable from the outside. Each mode's
+        diagnostic is its own yardstick: not comparable across modes and NOT the public
+        measure. Quote Default-canon numbers (``canon='default'``, byte-identical to
+        the pre-0.14.1 behaviour) everywhere a complexity is reported.
+
+        With ``certified=False`` the expression is priced on the bare
+        (certificate-less, fail-closed) canonicalization instead: still invariant
         to operand order, bracketing and serialization sugar, but a certificate-licensed
         respelling the bare context cannot re-derive keeps its own measure, so a
         simplify output can price ABOVE its input (measured live: 0.48% of 64k corpus
         rows, in quanta of one symbol unit; the certified default closes exactly this).
 
-        Invariant either way: mu prices structure and information, not spelling --
+        Invariant in every case: mu prices structure and information, not spelling --
         signs and magnitude-1 coefficient/exponent slots are free, literals pay their
         description length on the exact value, symbols pay one symbol unit.
         """
@@ -1788,9 +1809,14 @@ class SimpliPyEngine:
             tokens = list(expression)
         rule_mode = _RULE_MODE[mode if isinstance(mode, Mode)
                                else {m.name.lower(): m for m in Mode}[str(mode).strip().lower()]]
+        canon = str(canon).strip().lower()
+        if canon not in ('default', 'mode'):
+            raise ValueError(
+                f"unknown canon {canon!r}: expected 'default' (the public Default-pinned "
+                f"measure) or 'mode' (diagnostic: the canon routed through the requested mode)")
         if certified:
-            return self._core.ac_complexity_certified(tokens, rule_mode)
-        return self._core.ac_complexity(tokens, rule_mode)
+            return self._core.ac_complexity_certified(tokens, rule_mode, canon)
+        return self._core.ac_complexity(tokens, rule_mode, canon)
 
     def _denormalize(
             self,

@@ -835,7 +835,7 @@ impl Engine {
         tokens: &[String],
         max_passes: usize,
     ) -> Option<(u64, u64, Vec<String>)> {
-        let src_c = self.ac_complexity(tokens, RuleMode::Default)?;
+        let src_c = self.ac_complexity(tokens, RuleMode::Default, RuleMode::Default)?;
         // THE MINE CANONICALISES UNFOLDED (owner ruling 2026-08-20). The default RULE
         // SET, but with transcendental folding OFF -- `real`'s discipline, which is the
         // finest-grained canonical form there is, so every rule is discoverable.
@@ -859,7 +859,18 @@ impl Engine {
     /// The semantic complexity of an expression (either grammar), measured on its canonical
     /// form -- the same functional the simplify search minimizes (`ac::expr::complexity`).
     /// `None` on malformed input.
-    pub fn ac_complexity(&self, tokens: &[String], mode: RuleMode) -> Option<u64> {
+    ///
+    /// `canon` is the mode the CANON itself runs in. `RuleMode::Default` is the public
+    /// measure (owner ruling, SHIP BOTH: `complexity()` stays Default-pinned); any other
+    /// value is the engine-internal diagnostic that re-prices under that mode's own canon
+    /// licences, making the per-mode serve guarantee checkable. The canon context stays
+    /// certificate-free and fold-free either way: that is this instrument's contract.
+    pub fn ac_complexity(
+        &self,
+        tokens: &[String],
+        mode: RuleMode,
+        canon_mode: RuleMode,
+    ) -> Option<u64> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
@@ -873,7 +884,8 @@ impl Engine {
         let mut pbare = Cx::bare(&view);
         pbare.mode = mode;
         pbare.fold_f64 = Cx::folds_for(mode);
-        let bare = Cx::bare(&view);
+        let mut bare = Cx::bare(&view);
+        bare.mode = canon_mode;
         let e = from_prefix(&toks, &pbare)?;
         Some(complexity(&canon(e, &bare), &view))
     }
@@ -973,7 +985,20 @@ impl Engine {
     /// bare context cannot re-derive keeps its own (possibly higher) measure --
     /// found live as 0.48% of 64k corpus rows measuring above ratio 1, in quanta of
     /// one symbol unit (2026-08-02).
-    pub fn ac_complexity_certified(&self, tokens: &[String], mode: RuleMode) -> Option<u64> {
+    ///
+    /// `canon_mode` is the mode the certified CANON itself runs in. `RuleMode::Default`
+    /// pins the canon to the sound default -- THE public measure (owner ruling, SHIP
+    /// BOTH), and the theorem above is a theorem of THAT pricing for the default-mode
+    /// chain. Any other value is the engine-internal diagnostic that re-prices under
+    /// the requested mode's own canon (its fold discipline and licences) -- the measure
+    /// that mode's chain actually descends, which makes the per-mode serve guarantee
+    /// `mu_mode(simplify(e, mode)) <= mu_mode(e)` checkable from the outside.
+    pub fn ac_complexity_certified(
+        &self,
+        tokens: &[String],
+        mode: RuleMode,
+        canon_mode: RuleMode,
+    ) -> Option<u64> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
@@ -987,8 +1012,8 @@ impl Engine {
             cert_finnz: Some(&cfz),
             cert_nzae: Some(&czn),
             cert_nce: Some(&cnc),
-            mode: RuleMode::Default,
-            fold_f64: Cx::folds_for(RuleMode::Default),
+            mode: canon_mode,
+            fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
         };
         // Parse with the CHAIN'S context for the requested mode (F2 route fix,
@@ -2274,7 +2299,8 @@ mod tests {
                     .unwrap();
                 for out in [&tagged, &explicit] {
                     assert!(
-                        e.ac_complexity(out, RuleMode::Default).is_some(),
+                        e.ac_complexity(out, RuleMode::Default, RuleMode::Default)
+                            .is_some(),
                         "cfg {ops:?}: {src:?} -> {out:?} does not re-parse"
                     );
                     assert_eq!(
@@ -2694,16 +2720,27 @@ mod tests {
         // root -- which is the measure telling two different operators apart, not a
         // parity being lost. (The pow1_3 spelling needs the sugar-declaring fixture.)
         assert_eq!(
-            sugar.ac_complexity(&t(&["pow1_3", "x0"]), RuleMode::Default),
+            sugar.ac_complexity(&t(&["pow1_3", "x0"]), RuleMode::Default, RuleMode::Default),
             Some(15_000)
         );
         assert_eq!(
-            e.ac_complexity(&t(&["rootn", "x0", "2"]), RuleMode::Default),
+            e.ac_complexity(
+                &t(&["rootn", "x0", "2"]),
+                RuleMode::Default,
+                RuleMode::Default
+            ),
             Some(14_585)
         );
         assert!(
-            e.ac_complexity(&t(&["rootn", "x0", "2"]), RuleMode::Default)
-                < e.ac_complexity(&t(&["rootn", "x0", "3"]), RuleMode::Default)
+            e.ac_complexity(
+                &t(&["rootn", "x0", "2"]),
+                RuleMode::Default,
+                RuleMode::Default
+            ) < e.ac_complexity(
+                &t(&["rootn", "x0", "3"]),
+                RuleMode::Default,
+                RuleMode::Default
+            )
         );
         // The pretty infix is function-call style (x^(1/3) would claim the WRONG function).
         assert_eq!(
@@ -2971,7 +3008,10 @@ mod tests {
         );
         // Pow(3) + Mul(3) + [acos(8) + Mul(3) + inf(8) + leaf(6)] + [atan(8) + asinh(8)
         // + leaf(6)] = 53; the -1 exponent slot is a bare sign and free.
-        assert_eq!(e.ac_complexity(&lossy, RuleMode::Default), Some(53_000));
+        assert_eq!(
+            e.ac_complexity(&lossy, RuleMode::Default, RuleMode::Default),
+            Some(53_000)
+        );
 
         let partner = t(&["*", "acos", "x0", "inv", "*", "acos", "x0", "atan", "x1"]);
         assert_eq!(
@@ -3483,10 +3523,10 @@ mod tests {
                 "lossy permutation variance on {expr:?}"
             );
             let cs = e
-                .ac_complexity(&sound, RuleMode::Default)
+                .ac_complexity(&sound, RuleMode::Default, RuleMode::Default)
                 .expect("sound parses");
             let cl = e
-                .ac_complexity(&lossy, RuleMode::Default)
+                .ac_complexity(&lossy, RuleMode::Default, RuleMode::Default)
                 .expect("lossy parses");
             comp_sound += cs;
             comp_lossy += cl;

@@ -27,11 +27,17 @@ function simplify(expr, max_passes=48, mode=f64, effort=DEFAULT_EFFORT):
 
 Every step preserves the function almost everywhere: like-term collection inside the
 canonical constructors, rule application, and the exact fold. The result is therefore
-sound, never costlier than the input under the engine's description-length measure μ
-as `complexity()` prices it — the instrument parses through the same route the chain
-descends from, mode for mode — and idempotent at any fixpoint run. Two *different
-spellings* of the same value may still settle at different fixpoints; each obeys its
-own bound.
+sound, never costlier than the input in the measure the chain itself descends — each
+mode's own canonical pricing — and idempotent at any fixpoint run. The public
+instrument `complexity()` prices under the **Default canon**, one yardstick for every
+mode's output (`mode` routes only the parse, never the canon), so `μ(simplify(e)) ≤
+μ(e)` as `complexity()` states it is exact for the default `f64` mode, whose chain
+descends exactly this pricing. A `real`- or `permissive`-mode chain descends its *own*
+mode's canon measure — an internal descent — and a fixpoint it licenses may price above
+its input on the public Default yardstick; the engine-internal diagnostic
+`complexity(..., canon='mode')` prices in the requested mode's own measure and makes
+that per-mode guarantee checkable. Two *different spellings* of the same value may
+still settle at different fixpoints; each obeys its own bound.
 
 The chain itself does not search: **cancellation IS canonicalization** — like-term
 collection in flat bags, computed by one deterministic function, so inside a pass there

@@ -61,6 +61,22 @@ fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
     })
 }
 
+/// The complexity instruments' canon selector: `"default"` keeps the canon pinned to
+/// the sound default (THE public measure, owner ruling: SHIP BOTH), `"mode"` routes the
+/// canon through the requested rule mode itself -- the engine-internal diagnostic that
+/// makes the per-mode serve guarantee checkable. Two spellings only, so the knob cannot
+/// silently become a third pricing.
+fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine::RuleMode> {
+    match canon {
+        "default" => Ok(engine::RuleMode::Default),
+        "mode" => Ok(rule_mode),
+        other => Err(PyValueError::new_err(format!(
+            "unknown canon {other:?}: expected 'default' (the public Default-pinned \
+             measure) or 'mode' (diagnostic: canon routed through rule_mode)"
+        ))),
+    }
+}
+
 /// The output projection's wire spelling, factored out of the three FFI entries that
 /// accept it so they cannot drift.
 fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
@@ -645,28 +661,42 @@ impl PyEngine {
         Ok(py.detach(|| self.inner.ac_canonical_keys(&exprs)))
     }
 
-    #[pyo3(signature = (tokens, rule_mode="default"))]
-    fn ac_complexity(&self, py: Python<'_>, tokens: Vec<String>, rule_mode: &str) -> PyResult<u64> {
+    #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
+    fn ac_complexity(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        rule_mode: &str,
+        canon: &str,
+    ) -> PyResult<u64> {
         ensure_ac_well_formed(&self.inner, &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
-        py.detach(|| self.inner.ac_complexity(&tokens, mode))
+        let canon_mode = parse_canon_mode(canon, mode)?;
+        py.detach(|| self.inner.ac_complexity(&tokens, mode, canon_mode))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
     /// Certified-canon complexity (the serve ordering's own pricing; see
     /// `engine::ac::ac_complexity_certified`): `mu(simplify(e)) <= mu(e)` is a
-    /// theorem under this pricing, unlike the bare `ac_complexity`.
-    #[pyo3(signature = (tokens, rule_mode="default"))]
+    /// theorem under this pricing, unlike the bare `ac_complexity`. `canon="default"`
+    /// keeps the canon Default-pinned (THE public measure); `canon="mode"` is the
+    /// engine-internal diagnostic that routes the canon through `rule_mode` itself.
+    #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
     fn ac_complexity_certified(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         rule_mode: &str,
+        canon: &str,
     ) -> PyResult<u64> {
         ensure_ac_well_formed(&self.inner, &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
-        py.detach(|| self.inner.ac_complexity_certified(&tokens, mode))
-            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        let canon_mode = parse_canon_mode(canon, mode)?;
+        py.detach(|| {
+            self.inner
+                .ac_complexity_certified(&tokens, mode, canon_mode)
+        })
+        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
     /// AC translation audit: (rules kept incl. minted orientation twins, rules subsumed by
@@ -1404,12 +1434,12 @@ impl PyEngine {
             // the ruling makes them one, so they must read the same number.
             let mark_mu = mark
                 .as_ref()
-                .and_then(|m| self.inner.ac_complexity(m, engine::RuleMode::Default));
+                .and_then(|m| self.inner.ac_complexity(m, engine::RuleMode::Default, engine::RuleMode::Default));
             let accept_resolved = mark.as_ref().map(|m| {
                 let mark_c = mark_mu;
                 move |t: &[String]| {
                     matches!(
-                        (self.inner.ac_complexity(t, engine::RuleMode::Default), mark_c),
+                        (self.inner.ac_complexity(t, engine::RuleMode::Default, engine::RuleMode::Default), mark_c),
                         (Some(tc), Some(mc)) if tc < mc
                     ) && !self.inner.ac_same_literal_skeleton(t, m).unwrap_or(true)
                 }

@@ -2,6 +2,33 @@
 
 ## 0.14.1 (unreleased)
 
+- **The triple router judges the spellings as they will be WRITTEN** (task #83).
+  `mining._route_triple` used to tier every rule by judging its served-canon form
+  (`ac_served_rules`) — the in-memory respelling the load canon mints, with ground
+  subterms folded to exact rationals — while release verification judges the FILES,
+  which serialize `engine.simplification_rules` verbatim. For 13 constant-fold rules
+  of the run-5 mine (`+ tanh log 9 _0 → + inv 1.025 _0` and family) the folded served
+  form judged f64-realised and the router put them into `rules_f64.json`, which the
+  file-level gate — agreeing with the deployed f64 behaviour, measured at 1–6 ulp
+  drift — then rejected as `real`-tier. The router now judges exactly the pairs the
+  writer dumps, so the judged spelling and the written spelling coincide by
+  construction and the router cannot disagree with release verification. The served
+  set still decides EXISTENCE (a rule translation drops is licensed nowhere), and the
+  served twins' soundness remains the upstream symbolic gate's jurisdiction.
+- **`complexity()` stays Default-canon-pinned as THE public measure, and gains the
+  explicit diagnostic `canon='mode'`** (task #87, owner ruling: SHIP BOTH).
+  `canon='default'` (the default) is byte-identical to the previous behaviour: one
+  Default-canon yardstick for every mode's output, with `mode` routing only the parse.
+  The docs and the docstring now state this plainly — the descent theorem
+  `μ(simplify(e)) ≤ μ(e)` is a theorem of the public pricing for the default `f64`
+  mode; a `real`/`permissive` chain descends its own mode's canon measure (an internal
+  descent), and its fixpoint may price above its input on the public yardstick.
+  `canon='mode'` routes the CANON through the requested mode as well — the
+  engine-internal diagnostic that prices in the measure that mode's chain actually
+  descends, making the per-mode serve guarantee checkable from the outside. Validated
+  on the 25 run-5 inflated fixpoints (real/permissive arms whose outputs priced above
+  input under the public measure): under `canon='mode'` with the arm's mode, 0 of 25
+  price above input (14 strictly below, 11 equal).
 - **Promotion stage 4 (the derivability refund) probes under one engine, not one
   engine per rule.** The reference loop rebuilt a full `SimpliPyEngine` — ~5 s of
   construction plus ~7 s of lazy rule translation — inside its serial per-`?`-rule

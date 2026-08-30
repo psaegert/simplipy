@@ -2249,47 +2249,61 @@ class TestTheUntestedBranchesOfTheRouter:
         assert isinstance(prov['triple']['rejected'], list)
         assert set(prov['triple']['files']) == {'f64', 'real', 'permissive'}
 
-    def test_a_twins_licence_is_the_INTERSECTION_not_the_union(self) -> None:
-        """A source rule minting several served entries may serve a mode only if EVERY
-        way it can fire is licensed there. Flipping this to a union passed the whole
-        mining/mode/verify suite.
+    def test_the_licence_is_judged_on_the_WRITTEN_spelling_not_the_served_canon(self) -> None:
+        """Task #83. The writer serializes `engine.simplification_rules` verbatim, so
+        the routed licence must come from judging exactly those pairs -- the forms
+        release verification (`verify_ruleset` post-write) sees. The served entries are
+        load-minted RESPELLINGS (the canon folds ground subterms to exact rationals),
+        and judging those licensed 13 constant-fold rules for f64 while the file-level
+        gate and the deployed f64 drift (1-6 ulp) both said `real`.
 
-        Asserted through `_route_triple` itself. An earlier version hand-rolled `&` on
-        `_TIER_MODES` inside the test body, which restates set algebra and says nothing
-        about the router's combination operator -- the very thing that could be flipped.
+        Asserted through `_route_triple` itself with a spelling-keyed fake judge: the
+        file spelling judges `real`, the served respelling judges `core`. Routing on the
+        served canon puts the rule into rules_f64; routing on the written spelling must
+        put it into rules_real ONLY. A second source rule with no served entry stays
+        rejected -- EXISTENCE is still the served set's call.
         """
         import simplipy.mining as M
 
-        # ONE source rule (index 0) minting TWO served entries whose tiers differ: `core`
-        # through one twin and `f64` through the other. Intersection => f64 only. Union
-        # would put it in rules_real as well.
-        served = [(['sin', '_0'], ['_0'], 0), (['cos', '_0'], ['_0'], 0)]
-        detail = [{'idx': 0, 'tier': 'core', 'lhs': 'sin _0', 'rhs': '_0'},
-                  {'idx': 1, 'tier': 'f64', 'lhs': 'cos _0', 'rhs': '_0'}]
+        file_rule = (['+', 'tanh', 'log', '9', '_0'], ['+', 'inv', '1.025', '_0'])
+        served_respelling = (['+', '_0', 'tanh', 'log', '9'], ['+', '_0', '/', '40', '41'])
+        unserved = (['sin', '_0'], ['_0'])
 
         class FakeCore:
             def ac_served_rules(self):
-                return served
+                return [(served_respelling[0], served_respelling[1], 0)]
 
         class FakeEngine:
-            simplification_rules = [(['sin', '_0'], ['_0'])]
+            simplification_rules = [file_rule, unserved]
             _core = FakeCore()
             _operators_config: dict = {}
 
-        real_verify = M.verify_ruleset if hasattr(M, 'verify_ruleset') else None
+        tier_by_spelling = {
+            (tuple(file_rule[0]), tuple(file_rule[1])): 'real',
+            (tuple(served_respelling[0]), tuple(served_respelling[1])): 'core',
+            (tuple(unserved[0]), tuple(unserved[1])): 'core',
+        }
+
+        def spelling_keyed_judge(rules, **kw):
+            return {'detail': [
+                {'idx': i, 'tier': tier_by_spelling[(tuple(lhs), tuple(rhs))],
+                 'lhs': ' '.join(lhs), 'rhs': ' '.join(rhs)}
+                for i, (lhs, rhs) in enumerate(rules)]}
+
         import simplipy.verify as V
         saved = V.verify_ruleset
-        V.verify_ruleset = lambda rules, **kw: {'detail': detail}
+        V.verify_ruleset = spelling_keyed_judge
         try:
             triple, rejected, meta = M._route_triple(FakeEngine())
         finally:
             V.verify_ruleset = saved
-            assert real_verify is None or True
 
-        key = (('sin', '_0'), ('_0',))
+        key = (tuple(file_rule[0]), tuple(file_rule[1]))
         got = {m for m in ('f64', 'real') if key in {(tuple(a), tuple(b)) for a, b in triple[m]}}
-        assert got == {'f64'}, got            # union would give {'f64', 'real'}
-        assert rejected == []
+        assert got == {'real'}, got     # served-canon routing would say {'f64', 'real'}
+        # the unserved rule is rejected on EXISTENCE, whatever its spelling judges
+        assert [(tuple(lhs), tuple(rhs)) for lhs, rhs in rejected] == [
+            (tuple(unserved[0]), tuple(unserved[1]))]
 
     def test_a_rule_with_no_served_entry_is_licensed_nowhere(self) -> None:
         """The load-minted-twins lesson in the other direction: never infer a licence for
@@ -2303,6 +2317,51 @@ class TestTheUntestedBranchesOfTheRouter:
         with pytest.raises(AssertionError, match='triple invariant'):
             _assert_triple_invariants({'f64': [A, B], 'real': [A], 'permissive': [A, B]},
                                       [], [A, B], {0: _TIER_MODES['core'], 1: frozenset()})
+
+
+class TestTheRouterJudgesTheFileSpelling:
+    """Task #83 regression: the constant-fold offender family. Mined spelling
+    `op(hyperbolic(log n), slot)` with an exact-rational decimal respelling on the RHS:
+    true on R (the fold IS an exact rational -- tanh(log 9) = 40/41 = 1/1.025), 1-6 ulp
+    drift in deployed f64, so the file-level gate says `real`. The served canon folds the
+    ground subterm (`+ tanh log 9 ?0` serves as `+ ?0 / 40 41`) and judging THAT spelling
+    licensed f64 -- which put 13 such rules into a rules_f64.json that release
+    verification then rejected. Through the fixed router every one must land in
+    rules_real and stay out of rules_f64, judged end-to-end by the real contract judge on
+    a real engine -- no mine required.
+    """
+
+    #: The two named exemplars (task #83) verbatim, plus the measured divergent family
+    #: from the run-5 f64 set (the verify_triple report itself is gone; these are the
+    #: family members whose served respelling judges `core`/`f64` while their file
+    #: spelling judges `real` -- reconstructed with the shipped judge, 2026-08-30).
+    OFFENDERS = [
+        (['pow', 'cosh', 'log', '3', '_0'], ['pow', '0.6', 'neg', '_0']),
+        (['+', 'tanh', 'log', '9', '_0'], ['+', 'inv', '1.025', '_0']),
+        (['+', 'tanh', 'log', '9', '?0'], ['+', 'inv', '1.025', '?0']),
+        (['-', 'tanh', 'log', '9', '?0'], ['-', 'inv', '1.025', '?0']),
+        (['-', '?0', 'tanh', 'log', '9'], ['+', 'inv', '-1.025', '?0']),
+        (['pow', 'sinh', 'log', '3', '?0'], ['pow', '0.75', 'neg', '?0']),
+        (['pow', 'tanh', 'log', '9', '?0'], ['pow', '1.025', 'neg', '?0']),
+        (['pow', '?0', 'tanh', 'log', '9'], ['pow', '?0', 'inv', '1.025']),
+    ]
+
+    def test_the_offender_family_routes_to_real_not_f64(self) -> None:
+        import yaml
+        from conftest import acj_config_path, require_or_skip
+        from simplipy.mining import _route_triple
+        require_or_skip(acj_config_path(), 'needs the acj operator vocabulary')
+        ops = yaml.safe_load(open(acj_config_path()))['operators']
+        engine = SimpliPyEngine(operators=ops,
+                                rules=[[list(lhs), list(rhs)] for lhs, rhs in self.OFFENDERS])
+        triple, rejected, meta = _route_triple(engine)
+        f64 = {(tuple(lhs), tuple(rhs)) for lhs, rhs in triple['f64']}
+        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in triple['real']}
+        for lhs, rhs in self.OFFENDERS:
+            key = (tuple(lhs), tuple(rhs))
+            assert key in real, f'{lhs} -> {rhs} must serve in rules_real'
+            assert key not in f64, \
+                f'{lhs} -> {rhs} is real-tier at the file level: rules_f64 must not carry it'
 
 
 class TestThePerModePrune:

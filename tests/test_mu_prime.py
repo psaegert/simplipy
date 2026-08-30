@@ -497,6 +497,65 @@ class TestTheFloorIsMirroredAcrossTheI128Boundary:
         assert eng.complexity(['1e-40']) == eng.complexity(['1/1' + '0' * 40])
 
 
+class TestTheCanonKnob:
+    """Task #87 (owner ruling: SHIP BOTH). `complexity()` stays Default-canon-pinned as
+    THE public measure -- `canon='default'` is the default and byte-identical to the
+    pre-0.14.1 behaviour -- and `canon='mode'` is the explicit engine-internal
+    diagnostic that routes the CANON through the requested mode, pricing in the measure
+    that mode's chain actually descends. Validated on the 25 run-5 inflated fixpoints
+    (real/permissive arms priced above input under the Default yardstick): under
+    canon='mode' with the arm's mode, 0 of 25 price above input (2026-08-30)."""
+
+    SPECIMENS = [
+        ['*', '2', 'x0'],
+        ['+', 'x0', 'tan', '1'],
+        ['inv', 'log', '1.60604019536491'],
+        ['rootn', 'x0', '3'],
+    ]
+
+    def test_canon_default_is_the_default_and_identical_in_every_mode(self, eng):
+        for e in self.SPECIMENS:
+            assert eng.complexity(e) == eng.complexity(e, canon='default')
+            for mode in ('f64', 'real', 'permissive'):
+                assert eng.complexity(e, mode=mode) == \
+                    eng.complexity(e, mode=mode, canon='default'), (e, mode)
+                assert eng.complexity(e, certified=False, mode=mode) == \
+                    eng.complexity(e, certified=False, mode=mode, canon='default'), (e, mode)
+
+    def test_canon_mode_differs_on_a_known_real_mode_respell(self, eng):
+        # The real canon keeps `log <literal>` unfolded where the Default canon
+        # respells through the fold -- the two yardsticks price DIFFERENT states,
+        # which is the entire point of the diagnostic.
+        e = ['inv', 'log', '1.60604019536491']
+        assert eng.complexity(e, mode='real', canon='mode') != \
+            eng.complexity(e, mode='real', canon='default')
+
+    def test_canon_mode_with_the_default_mode_is_the_public_measure(self, eng):
+        # `mode='f64'` routes to the Default rule mode, so canon='mode' collapses to
+        # the pin: the diagnostic is a strict extension, never a fork, of the measure.
+        for e in self.SPECIMENS:
+            assert eng.complexity(e, mode='f64', canon='mode') == eng.complexity(e), e
+
+    def test_the_diagnostic_makes_the_per_mode_descent_checkable(self, eng):
+        # The serve guarantee the diagnostic exists to check: a mode's own fixpoint
+        # never prices above its input in that mode's own canon measure.
+        from simplipy.engine import Mode
+        exprs = [
+            ['*', 'x17', '+', '*', '4', '*', 'inv', 'log', '1.60604019536491', 'inv',
+             'pow', '+', 'x17', '1', '2.3456097805248', '/', '5', '9'],
+            ['+', 'x0', '*', 'cos', 'x1', 'tan', 'x1'],
+        ]
+        for expr in exprs:
+            for mode in (Mode.real, Mode.permissive):
+                out = list(eng.simplify(list(expr), mode=mode))
+                assert eng.complexity(out, mode=mode, canon='mode') <= \
+                    eng.complexity(list(expr), mode=mode, canon='mode'), (expr, mode)
+
+    def test_an_unknown_canon_is_refused(self, eng):
+        with pytest.raises(ValueError, match='canon'):
+            eng.complexity(['x0'], canon='certified')
+
+
 class TestFingerprintAndArtifactLoad:
     """The load contract: acj-4-3 (mined under mu) still loads and serves; the
     measure fingerprint MOVES (that is what it is for) and is write-only at load --

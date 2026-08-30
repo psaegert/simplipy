@@ -278,31 +278,49 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
 
 
 def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]:
-    """Judge the FINAL served set and route every source rule into the triple.
+    """Judge the rules AS THEY WILL BE WRITTEN and route each into the triple.
 
     -> ({'f64': [...], 'real': [...], 'permissive': [...]}, rejected, tiers)
 
     Judged HERE and not reused from the symbolic gate, even though that is a second full
     pass: the gate runs before the covered-prune and the sort promotion, both of which
     change which rules exist AND how they are spelled, so its verdicts describe a rule set
-    that is not the one being written. What is routed must be what is served.
+    that is not the one being written. What is routed must be what is served -- and what
+    is served to USERS is what the FILES say, so the judged spelling is the FILE spelling.
 
-    A source rule can mint several SERVED entries (orientation twins, minted at load from
-    the loading engine's canon). Its licence is the INTERSECTION over all of them, which is
-    the fail-closed combination and the same doctrine the symbolic gate already applies
-    when it condemns a twin by dropping the rule that mints it: a rule may serve in a mode
-    only if EVERY way it can fire is licensed there.
+    THE FILE SPELLING, NOT THE SERVED CANON (task #83). The writer downstream of this
+    router (`find_rules`' triple dump) serializes ``engine.simplification_rules`` pairs
+    verbatim -- the very list routed below -- so judging exactly those pairs makes the
+    judged spelling and the written spelling coincide by construction, and the router
+    agrees with release verification (`verify_ruleset` over the written files) by the
+    same construction. The served-canon spellings (`ac_served_rules`) are load-minted
+    RESPELLINGS -- the load canon folds ground subterms and respells literals as exact
+    rationals -- and judging those licensed 13 constant-fold rules for f64
+    (``+ tanh log 9 _0 -> + inv 1.025 _0`` serves as ``+ _0 / 40 41``, which judges
+    f64-realised) while the file-level gate and the DEPLOYED f64 behaviour (measured at
+    1-6 ulp drift) both say `real`. The served twins' own soundness remains the symbolic
+    gate's jurisdiction: it judges `ac_served_rules` upstream and drops any rule a
+    condemned twin convicts, fail-closed.
+
+    What the served set still decides here is EXISTENCE: a source rule that translation
+    drops mints no served entry, cannot fire at all, and is licensed nowhere -- never
+    infer a licence for something the matcher never saw.
     """
     from .verify import CONST_CHANNEL_DETAIL, verify_ruleset
 
-    served = engine._core.ac_served_rules()
-    report = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs, _ in served])
+    source = engine.simplification_rules
+    report = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs in source])
     detail = report['detail'] if isinstance(report, dict) else report
+    served_srcs = {src for _, _, src in engine._core.ac_served_rules()}
 
     allowed: dict[int, frozenset] = {}
     tiers: dict[int, set] = {}
     for d in detail:
-        src = served[d['idx']][2]
+        src = d['idx']
+        if src not in served_srcs:
+            # No served entry: the rule cannot fire, so it is licensed nowhere. Kept out
+            # of `allowed` entirely -- the routing loop's default is the empty set.
+            continue
         # D36: the multi-`<constant>` family's soundness authority is the Const-channel
         # chain, not the contract, so the judge's non-jurisdiction sentinel is not a
         # verdict about the rule. Treated as `core`, which is exactly where those rules
