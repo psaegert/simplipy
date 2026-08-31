@@ -75,6 +75,19 @@ pub struct AcRules {
     pub fun_idx: FxHashMap<Tok, Vec<usize>>,
     /// Patterns rooted at a leaf kind (literals, `Const`): matched by whole-node equality.
     pub leaf_idx: Vec<usize>,
+    /// O(1) EXACT dispatch (the old engine's exact-lookup-first protocol, restored for the
+    /// AC engine): canonical wildcard-free LHS -> rule indices in asset order, for NON-BAG
+    /// roots only. Sound because a wildcard-free pattern at a non-bag root matches a
+    /// canonical subject iff it structurally equals it: every `matches_each` arm without a
+    /// wildcard is strict equality, and nested bags match full-cover as multisets, which for
+    /// two bags sorted by the total order `cmp_ex` is vector equality. Bag ROOTS (`Add`/
+    /// `Mul`) match sub-multisets with a remainder, so they stay on the linear scan.
+    pub exact_map: FxHashMap<Ex, Vec<usize>>,
+    /// Partition points: `bucket[..n]` is the exact head (all wildcard-free), `bucket[n..]`
+    /// the pattern tail. Only meaningful for the non-bag buckets the exact map serves.
+    pub pow_exact_end: usize,
+    pub leaf_exact_end: usize,
+    pub fun_exact_end: FxHashMap<Tok, usize>,
     /// Rules dropped as arithmetic-subsumed (translated lhs == rhs) -- the count is reported,
     /// the rules are simply gone.
     pub n_subsumed: usize,
@@ -412,6 +425,37 @@ impl AcRules {
         for v in out.fun_idx.values_mut() {
             partition(v);
         }
+        // Exact-dispatch map over the non-bag buckets' exact heads (asset order preserved:
+        // bucket vectors are ascending, so same-LHS twins land in the map in fire order).
+        out.pow_exact_end = out
+            .pow_idx
+            .iter()
+            .take_while(|&&i| !rules[i].is_pattern)
+            .count();
+        out.leaf_exact_end = out
+            .leaf_idx
+            .iter()
+            .take_while(|&&i| !rules[i].is_pattern)
+            .count();
+        let mut fun_exact_end: FxHashMap<Tok, usize> = FxHashMap::default();
+        for (f, v) in &out.fun_idx {
+            fun_exact_end.insert(*f, v.iter().take_while(|&&i| !rules[i].is_pattern).count());
+        }
+        let mut exact_map: FxHashMap<Ex, Vec<usize>> = FxHashMap::default();
+        {
+            let mut insert = |idx: &[usize]| {
+                for &i in idx {
+                    exact_map.entry(rules[i].lhs.clone()).or_default().push(i);
+                }
+            };
+            insert(&out.pow_idx[..out.pow_exact_end]);
+            insert(&out.leaf_idx[..out.leaf_exact_end]);
+            for (f, v) in &out.fun_idx {
+                insert(&v[..fun_exact_end[f]]);
+            }
+        }
+        out.fun_exact_end = fun_exact_end;
+        out.exact_map = exact_map;
         out
     }
 
@@ -522,9 +566,39 @@ fn memo_log(what: &str, e: &Ex) {
 
 /// Try every applicable rule at this node (asset order, sig-prefiltered). On a bag fire the
 /// remainder joins the substituted RHS in a fresh canonical bag.
+/// Kill switch for the exact-dispatch map (`SIMPLIPY_EXACT_INDEX=0` restores the full
+/// linear bucket scan) -- an A/B and rollback lever, not a semantic knob: both paths are
+/// behavior-identical by the `exact_map` soundness argument.
+fn exact_index_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SIMPLIPY_EXACT_INDEX").as_deref() != Ok("0"))
+}
+
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     let node_sig = atom_sig(e, p.cx.view);
-    for &ri in p.rules.bucket_for(e) {
+    // Candidate selection. Non-bag roots: probe the exact map (one hash of the node) for
+    // the exact-head rules whose LHS equals the node -- the only exact rules that can fire
+    // there -- then scan just the bucket's pattern tail. Bag roots scan the whole bucket.
+    const EMPTY: &[usize] = &[];
+    let (exact_hits, scan): (&[usize], &[usize]) = match e {
+        Ex::Add(_) | Ex::Mul(_) => (EMPTY, p.rules.bucket_for(e)),
+        _ if exact_index_enabled() => {
+            let bucket = p.rules.bucket_for(e);
+            let end = match e {
+                Ex::Pow(..) => p.rules.pow_exact_end,
+                Ex::Fun(f, _) => p.rules.fun_exact_end.get(f).copied().unwrap_or(0),
+                _ => p.rules.leaf_exact_end,
+            };
+            let hits = if end == 0 {
+                EMPTY
+            } else {
+                p.rules.exact_map.get(e).map(Vec::as_slice).unwrap_or(EMPTY)
+            };
+            (hits, &bucket[end..])
+        }
+        _ => (EMPTY, p.rules.bucket_for(e)),
+    };
+    for &ri in exact_hits.iter().chain(scan.iter()) {
         let rule = &p.rules.rules[ri];
         if rule.sig & !node_sig != 0 {
             continue;
