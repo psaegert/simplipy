@@ -1,6 +1,6 @@
 [package]
 name = "simplipy-core"
-version = "0.14.2"             # kept in lockstep with the Python package version (pyproject.toml)
+version = "0.14.3"             # kept in lockstep with the Python package version (pyproject.toml)
 edition = "2021"
 rust-version = "1.83"          # MSRV floor of the resolved tree (pyo3 0.29 requires Rust >= 1.83)
 description = "Rust inline-phase backend for the SimpliPy prefix-expression simplifier (PyO3, the simplipy._core extension)"
@@ -80,8 +80,9 @@ default = []
 # Ships behind a feature so v1 stays on the unchanged HF asset (single source of truth).
 fast-assets = []
 
-# Swap the global allocator to mimalloc. OFF by default: it changes no output, only the memory
-# profile, and it must be measured per workload before being made the default.
+# Swap the global allocator to mimalloc. OFF by default for source builds; the WHEEL enables it
+# (pyproject [tool.maturin] features): measured 2026-08-31 on the v25 generation workload at
+# -8.6% per simplify call, and it changes no output, only the memory profile.
 mimalloc-allocator = ["dep:mimalloc"]
 # (The `stats-counters`/`stats-timers`/`profiling` gates were removed in D3, 2026-08-05:
 # they gated the deleted binary kernel's hot-path counters, whose bump sites went with

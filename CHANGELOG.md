@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.3 (2026-08-31)
+
+- **Wheels ship with the mimalloc allocator** (`mimalloc-allocator` is now in the maturin
+  feature set; the cargo feature stays opt-in for source builds). Measured on the v25
+  data-generation workload: **-8.6% per `simplify` call** on real draw inputs -- the AC
+  rewrite loop is allocation-heavy (~25% of simplify self-time is clone/alloc/free), and
+  mimalloc's per-thread heaps also address the long-standing glibc RSS growth under the
+  miner's allocation storm (the reason the feature exists). No output changes: an
+  allocator swap moves time and memory, never a result.
+
 ## 0.14.2 (2026-08-30)
 
 - **Per-mode lazy rule loading: `modes=` on `load`/`from_config`/`__init__`, plus the

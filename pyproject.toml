@@ -6,7 +6,7 @@ authors = [
     ]
 readme = "README.md"
 requires-python = ">=3.12"
-version = "0.14.2"
+version = "0.14.3"
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 keywords = ["symbolic-regression", "simplification", "expression", "prefix", "rewriting", "rust"]
@@ -91,7 +91,11 @@ build-backend = "maturin"
 # placed at simplipy/_core. The Rust crate lives under rust/ (Cargo.toml [lib] path = "rust/lib.rs").
 python-source = "src"
 module-name = "simplipy._core"
-features = ["pyo3/extension-module"]
+# mimalloc-allocator: measured on the v25 generation workload (task #92 S2,
+# 2026-08-31): -8.6% per simplify call on real draw inputs, and it is the standard
+# answer to the miner's glibc RSS growth (see Cargo.toml). Wheels ship it; source
+# builds still choose.
+features = ["pyo3/extension-module", "mimalloc-allocator"]
 # The sdist ships what building and testing the package needs. Of the tracked mining
 # workspace (remine/) that is exactly the acj artifact family the test suites load
 # (config.yaml, mine.yaml, rules.json and its provenance sidecar); the harness scripts,
