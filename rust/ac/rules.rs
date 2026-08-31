@@ -544,6 +544,17 @@ fn oriented(next: &Ex, node: &Ex, p: &PassCtx) -> bool {
     ordered_below(next, node, p.cx.view)
 }
 
+/// `oriented` with the node's complexity precomputed: the node is FIXED across every
+/// candidate attempt at a visit, so `try_rules_at` prices it once (lazily) instead of
+/// per candidate. Pure caching of a pure function -- behavior-identical.
+fn oriented_mu(next: &Ex, node_mu: u64, node: &Ex, p: &PassCtx) -> bool {
+    match complexity(next, p.cx.view).cmp(&node_mu) {
+        std::cmp::Ordering::Less => true,
+        std::cmp::Ordering::Greater => false,
+        std::cmp::Ordering::Equal => cmp_ex(next, node, p.cx.view) == std::cmp::Ordering::Less,
+    }
+}
+
 /// Diagnostic: with `SIMPLIPY_AC_TRACE=1` every rule fire is logged (rule index, subject).
 fn trace_fires() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -576,6 +587,16 @@ fn exact_index_enabled() -> bool {
 
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     let node_sig = atom_sig(e, p.cx.view);
+    // Lazy per-visit complexity of the subject (first candidate that needs it pays it).
+    let node_mu_cell: std::cell::Cell<Option<u64>> = std::cell::Cell::new(None);
+    let node_mu = || match node_mu_cell.get() {
+        Some(m) => m,
+        None => {
+            let m = complexity(e, p.cx.view);
+            node_mu_cell.set(Some(m));
+            m
+        }
+    };
     // Candidate selection. Non-bag roots: probe the exact map (one hash of the node) for
     // the exact-head rules whose LHS equals the node -- the only exact rules that can fire
     // there -- then scan just the bucket's pattern tail. Bag roots scan the whole bucket.
@@ -636,7 +657,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                             .collect();
                         parts.push(replacement);
                         let next = add(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
-                        if oriented(&next, e, p) {
+                        if oriented_mu(&next, node_mu(), e, p) {
                             out = Some(next);
                             true
                         } else {
@@ -666,7 +687,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                             .collect();
                         parts.push(replacement);
                         let next = mul(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
-                        if oriented(&next, e, p) {
+                        if oriented_mu(&next, node_mu(), e, p) {
                             out = Some(next);
                             true
                         } else {
@@ -681,7 +702,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                 let mut out: Option<Ex> = None;
                 matches_each(e, &rule.lhs, &mut binds, p.mcx, &mut |b| {
                     let next = canon(substitute(&rule.rhs, b, p.cx.view), p.cx);
-                    if oriented(&next, e, p) {
+                    if oriented_mu(&next, node_mu(), e, p) {
                         out = Some(next);
                         true
                     } else {
@@ -761,59 +782,74 @@ pub fn rewrite_pass(e: Ex, p: &PassCtx) -> Ex {
         }
         // Fold fallback, GOVERNED BY THE MEASURE (stage 2; owner 2026-07-31, option
         // (a)): the fold fires exactly when its result descends the reduction
-        // ordering. The old justification "a fold result is a leaf: always
-        // ordering-decreasing" is FALSE under mu -- a literal pays its bits, so
-        // folding `exp 1` into a ~105-unit decimal ASCENDS from the 10-unit
-        // symbolic state and is refused, while exact arithmetic keeps folding
-        // (`+ 2 3 -> 5`, `cos 0 -> 1`: small results are genuinely cheap). This one
-        // inequality is what dissolves the symbol/literal seam (design doc finding
-        // (b)): `exp(1)` stays symbolic, so no rule can serve on a state whose
-        // literal reading differs from its symbolic certificate.
+        // ordering. (Full rationale in the original site: literal bits are priced, so
+        // `exp 1` refuses its ~105-unit decimal while exact small arithmetic folds.)
         if let Some(folded) = (p.fold)(&node) {
             if oriented(&folded, &node, p) {
                 return folded;
             }
         }
 
-        // Recurse into children and rebuild canonically.
-        let rebuilt = match node.clone() {
-            Ex::Add(v) => add(v.into_iter().map(|x| rewrite_pass(x, p)).collect(), p.cx),
-            Ex::Mul(v) => mul(v.into_iter().map(|x| rewrite_pass(x, p)).collect(), p.cx),
-            Ex::Pow(b, ex) => super::expr::pow(rewrite_pass(*b, p), rewrite_pass(*ex, p), p.cx),
-            Ex::Fun(f, v) => {
-                super::expr::fun(f, v.into_iter().map(|x| rewrite_pass(x, p)).collect(), p.cx)
+        // Recurse into children, CLONE-ON-CHANGE (the B1 restructure): an unchanged child
+        // is never cloned and an unchanged node never re-runs its canonical constructor.
+        // Skipping the constructor on unchanged children is sound because constructors
+        // are idempotent on canonical input -- every node in this walk IS constructor
+        // output under this same `cx` (from_prefix+canon at entry, constructors
+        // everywhere after), so re-running them reproduces the node; the old code
+        // computed that reproduction and compared. The normal-form memo already relies
+        // on the same fact when it returns marked subtrees untouched.
+        let rebuilt: Option<Ex> = match &node {
+            Ex::Add(v) => rewrite_children(v, p).map(|k| add(k, p.cx)),
+            Ex::Mul(v) => rewrite_children(v, p).map(|k| mul(k, p.cx)),
+            Ex::Pow(b, ex) => {
+                let nb = rewrite_pass_opt(b, p);
+                let nx = rewrite_pass_opt(ex, p);
+                if nb.is_none() && nx.is_none() {
+                    None
+                } else {
+                    Some(super::expr::pow(
+                        nb.unwrap_or_else(|| (**b).clone()),
+                        nx.unwrap_or_else(|| (**ex).clone()),
+                        p.cx,
+                    ))
+                }
             }
-            leaf => leaf,
+            Ex::Fun(f, v) => {
+                let f = *f;
+                rewrite_children(v, p).map(|k| super::expr::fun(f, k, p.cx))
+            }
+            _ => None, // Leaf: no children
+        };
+
+        let rebuilt = match rebuilt {
+            None => {
+                // A true fixpoint of one full walk: children unchanged, no fire, no fold.
+                if p.fires.get() < STEP_CAP {
+                    if trace_memo() {
+                        memo_log("INSERT(fixpoint)", &node);
+                    }
+                    p.normal.borrow_mut().insert(node.clone());
+                }
+                return node;
+            }
+            Some(r) => r,
         };
 
         // A rebuild that changed anything must re-enter the full walk: the canonical
         // constructors can MINT new subterms during the rebuild (an integer power
         // distributing over a product, collection merging terms), and only a fresh
-        // top-down walk visits them -- a root-only re-check would leave a freshly minted
-        // foldable node unvisited and the normal-form memo would lock the incomplete
-        // result in. But the re-entry must satisfy the SAME reduction ordering as a rule
-        // fire: the canonical RE-ASSEMBLY can re-mint a redex it just consumed, and an
-        // unconditional re-entry would climb forever, one level deeper per round. A
-        // disoriented rebuild is REFUSED exactly like a disoriented fire: the pre-rebuild
-        // node (the smaller element in the ordering) is the pass's answer.
+        // top-down walk visits them. The re-entry must satisfy the SAME reduction
+        // ordering as a rule fire (a disoriented rebuild is REFUSED): see the composite
+        // step below for the one-level endpoint exploration.
         if rebuilt != node {
             if p.fires.get() < STEP_CAP && oriented(&rebuilt, &node, p) {
                 p.fires.set(p.fires.get() + 1);
                 node = rebuilt;
                 continue;
             }
-            // COMPOSITE-STEP acceptance (docs/formal.md, step relation): the reassembly
-            // may be an uphill INTERMEDIATE that pays for itself one fold later -- an
-            // integer power distributing over a freshly minted product is the canonical
-            // case (the distribution costs complexity, the all-literal factor it exposes
-            // folds it right back). Judge the SETTLED ENDPOINT, not the intermediate: run
-            // the ordinary pass from the rebuilt candidate with exploration DISABLED
-            // (one level -- an oscillating reassembly walks back to `node` itself, never
-            // strictly below, and is refused without regress) and a PRIVATE memo (its
-            // refusal-decision marks must not leak into the engine walk, which explores
-            // where the tentative walk may not), and commit iff the endpoint descends.
-            // Every COMMITTED composite step strictly descends the ordering at this node,
-            // so L2/L3/T6 hold verbatim; a discarded exploration is bounded wasted work.
+            // COMPOSITE-STEP acceptance (docs/formal.md, step relation): judge the
+            // SETTLED ENDPOINT of the rebuilt candidate under a one-level, private-memo
+            // walk, and commit iff the endpoint strictly descends.
             if p.explore && p.fires.get() < STEP_CAP {
                 let sub = PassCtx {
                     rules: p.rules,
@@ -856,15 +892,146 @@ pub fn rewrite_pass(e: Ex, p: &PassCtx) -> Ex {
             return node;
         }
 
-        // A true fixpoint of one full walk: children unchanged, no fire, no fold anywhere.
+        // rebuilt == node with changed children: the constructor undid the child moves
+        // (equality decided on the representation). A fixpoint by decision, as before.
         if p.fires.get() < STEP_CAP {
             if trace_memo() {
-                memo_log("INSERT(fixpoint)", &rebuilt);
+                memo_log("INSERT(fixpoint)", &node);
             }
-            p.normal.borrow_mut().insert(rebuilt.clone());
+            p.normal.borrow_mut().insert(node.clone());
         }
-        return rebuilt;
+        return node;
     }
+}
+
+/// Borrow-side single visit: `None` = this subtree is unchanged by the pass (no clone was
+/// made, no constructor was run); `Some(x)` = it rewrote to `x` (strictly below in the
+/// reduction ordering, by the same gates as [`rewrite_pass`]). The owned iterative loop
+/// handles everything past the first change, so fire chains never recurse.
+pub fn rewrite_pass_opt(node0: &Ex, p: &PassCtx) -> Option<Ex> {
+    if matches!(
+        node0,
+        Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
+    ) {
+        return None;
+    }
+    if p.normal.borrow().contains(node0) {
+        if trace_memo() {
+            memo_log("HIT", node0);
+        }
+        return None;
+    }
+    if p.fires.get() < STEP_CAP {
+        if let Some(next) = try_rules_at(node0, p) {
+            p.fires.set(p.fires.get() + 1);
+            return Some(rewrite_pass(next, p));
+        }
+    }
+    if let Some(folded) = (p.fold)(node0) {
+        if oriented(&folded, node0, p) {
+            return Some(folded);
+        }
+    }
+    let rebuilt: Option<Ex> = match node0 {
+        Ex::Add(v) => rewrite_children(v, p).map(|k| add(k, p.cx)),
+        Ex::Mul(v) => rewrite_children(v, p).map(|k| mul(k, p.cx)),
+        Ex::Pow(b, ex) => {
+            let nb = rewrite_pass_opt(b, p);
+            let nx = rewrite_pass_opt(ex, p);
+            if nb.is_none() && nx.is_none() {
+                None
+            } else {
+                Some(super::expr::pow(
+                    nb.unwrap_or_else(|| (**b).clone()),
+                    nx.unwrap_or_else(|| (**ex).clone()),
+                    p.cx,
+                ))
+            }
+        }
+        Ex::Fun(f, v) => {
+            let f = *f;
+            rewrite_children(v, p).map(|k| super::expr::fun(f, k, p.cx))
+        }
+        _ => None,
+    };
+    let rebuilt = match rebuilt {
+        None => {
+            if p.fires.get() < STEP_CAP {
+                if trace_memo() {
+                    memo_log("INSERT(fixpoint)", node0);
+                }
+                p.normal.borrow_mut().insert(node0.clone());
+            }
+            return None;
+        }
+        Some(r) => r,
+    };
+    if rebuilt != *node0 {
+        if p.fires.get() < STEP_CAP && oriented(&rebuilt, node0, p) {
+            p.fires.set(p.fires.get() + 1);
+            return Some(rewrite_pass(rebuilt, p));
+        }
+        if p.explore && p.fires.get() < STEP_CAP {
+            let sub = PassCtx {
+                rules: p.rules,
+                cx: p.cx,
+                mcx: p.mcx,
+                fold: p.fold,
+                fires: Cell::new(p.fires.get()),
+                normal: RefCell::new(FxHashSet::default()),
+                explore: false,
+                suppressed: p.suppressed,
+            };
+            let endpoint = rewrite_pass(rebuilt, &sub);
+            p.fires.set(sub.fires.get());
+            if p.fires.get() < STEP_CAP && oriented(&endpoint, node0, p) {
+                p.fires.set(p.fires.get() + 1);
+                if trace_fires() {
+                    eprintln!(
+                        "AC composite step committed:\n  node={node0:?}\n  endpoint={endpoint:?}"
+                    );
+                }
+                return Some(rewrite_pass(endpoint, p));
+            }
+            if trace_fires() {
+                eprintln!(
+                    "AC rebuild refused (endpoint not below):\n  node={node0:?}\n  endpoint={endpoint:?}"
+                );
+            }
+        } else if trace_fires() {
+            eprintln!("AC rebuild refused (disoriented):\n  node={node0:?}\n  rebuilt={rebuilt:?}");
+        }
+        if p.fires.get() < STEP_CAP {
+            if trace_memo() {
+                memo_log("INSERT(refused-rebuild)", node0);
+            }
+            p.normal.borrow_mut().insert(node0.clone());
+        }
+        return None;
+    }
+    if p.fires.get() < STEP_CAP {
+        if trace_memo() {
+            memo_log("INSERT(fixpoint)", node0);
+        }
+        p.normal.borrow_mut().insert(node0.clone());
+    }
+    None
+}
+
+/// Rewrite a bag's members clone-on-change: `None` = no member moved (nothing allocated).
+fn rewrite_children(v: &[Ex], p: &PassCtx) -> Option<Vec<Ex>> {
+    let mut out: Option<Vec<Ex>> = None;
+    for (i, x) in v.iter().enumerate() {
+        match rewrite_pass_opt(x, p) {
+            Some(nx) => out.get_or_insert_with(|| v[..i].to_vec()).push(nx),
+            None => {
+                if let Some(o) = out.as_mut() {
+                    o.push(x.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Diagnostic: no Add directly inside an Add, no Mul directly inside a Mul.

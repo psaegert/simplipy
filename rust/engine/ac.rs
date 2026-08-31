@@ -37,7 +37,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::ac::convert::{from_prefix, to_infix_pretty, to_prefix, to_prefix_tagged};
 use crate::ac::expr::{canon, complexity, rejoin_projection, Cx, Ex};
 use crate::ac::matcher::MCx;
-use crate::ac::rules::{rewrite_pass, AcRules, PassCtx};
+use crate::ac::rules::{rewrite_pass_opt, AcRules, PassCtx};
 use crate::rules::CompiledRules;
 use crate::tokens::{TokenOverlay, TokenView};
 
@@ -1375,7 +1375,10 @@ impl Engine {
         // idempotence would break). A budget-truncated run returns the last state
         // reached, which is sound.
         for _ in 0..max_passes.max(1) {
-            let next = rewrite_pass(current.clone(), &pass);
+            // Clone-free fixpoint detection: `None` = the pass moved nothing (B1).
+            let Some(next) = rewrite_pass_opt(&current, &pass) else {
+                break; // fixpoint, decided on the representation itself
+            };
             debug_assert!(
                 crate::ac::rules::no_nested_bags(&next),
                 "pass output has nested bags: {next:?}"
@@ -1384,9 +1387,6 @@ impl Engine {
                 stable(&next),
                 "pass output is not serialization-stable: {next:?}"
             );
-            if next == current {
-                break; // fixpoint, decided on the representation itself
-            }
             current = next;
         }
         // D39 EXPLORATION, sound mode (ledger D39; `ac::search`): the chain above ran
@@ -1452,7 +1452,9 @@ impl Engine {
                 "expired canonical state is not serialization-stable: {current:?}"
             );
             for _ in 0..max_passes.max(1) {
-                let next = rewrite_pass(current.clone(), &pass2);
+                let Some(next) = rewrite_pass_opt(&current, &pass2) else {
+                    break;
+                };
                 debug_assert!(
                     crate::ac::rules::no_nested_bags(&next),
                     "phase-2 pass output has nested bags: {next:?}"
@@ -1461,9 +1463,6 @@ impl Engine {
                     stable2(&next),
                     "phase-2 pass output is not serialization-stable: {next:?}"
                 );
-                if next == current {
-                    break;
-                }
                 current = next;
             }
             // D39 EXPLORATION, lossy mode: same phase, run on the sentinel-expired
