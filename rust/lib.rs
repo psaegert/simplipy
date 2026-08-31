@@ -18,8 +18,10 @@ use pyo3::exceptions::PyValueError;
 
 // See the `mimalloc` entry in Cargo.toml: glibc malloc grows RSS steadily under the miner's
 // 28-thread sustained churn, and the glibc knobs cost 11.5x throughput at that thread count.
-#[cfg(all(feature = "mimalloc-allocator",
-          not(all(target_os = "linux", target_arch = "aarch64"))))]
+#[cfg(all(
+    feature = "mimalloc-allocator",
+    not(all(target_os = "linux", target_arch = "aarch64"))
+))]
 #[global_allocator]
 static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use pyo3::prelude::*;
