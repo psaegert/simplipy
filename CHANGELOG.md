@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.14.3 (2026-08-31)
+## 0.14.4 (2026-08-31)
+
+- **The mimalloc wheels actually publish.** 0.14.3 never reached PyPI: the manylinux
+  aarch64 cross toolchain cannot compile libmimalloc-sys (its gcc rejects the
+  `-Wdate-time` probe), so the dependency is now scoped away from exactly that target --
+  linux-aarch64 wheels keep glibc malloc; every other platform ships the allocator as
+  0.14.3 intended. No other change.
+
+## 0.14.3 (2026-08-31, tagged but not published)
 
 - **Wheels ship with the mimalloc allocator** (`mimalloc-allocator` is now in the maturin
   feature set; the cargo feature stays opt-in for source builds). Measured on the v25

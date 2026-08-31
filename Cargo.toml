@@ -1,6 +1,6 @@
 [package]
 name = "simplipy-core"
-version = "0.14.3"             # kept in lockstep with the Python package version (pyproject.toml)
+version = "0.14.4"             # kept in lockstep with the Python package version (pyproject.toml)
 edition = "2021"
 rust-version = "1.83"          # MSRV floor of the resolved tree (pyo3 0.29 requires Rust >= 1.83)
 description = "Rust inline-phase backend for the SimpliPy prefix-expression simplifier (PyO3, the simplipy._core extension)"
@@ -35,7 +35,6 @@ pyo3 = { version = "0.29", features = ["abi3-py312", "extension-module"] }
 # because they serialise 28 threads onto 2 arenas and trim on every free. mimalloc is the
 # standard answer for this shape -- per-thread heaps with real decommit -- and it is opt-in so
 # the default build's behaviour is unchanged.
-mimalloc = { version = "0.1", default-features = false, optional = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -73,6 +72,14 @@ rayon = "1"
 # false ACCEPTs in the re-certifier. Measured before bumping (audit R2.8): rust suite 142/0 and
 # a full control mine byte-identical to the unbumped artifact.
 astro-float = "0.9.6"
+
+# mimalloc cannot build on the manylinux aarch64 CROSS toolchain (its gcc rejects
+# libmimalloc-sys's -Wdate-time probe: "cc1: error: -Werror=date-time: no option
+# -Wdate-time", publish run 2026-08-31), so the dependency is scoped away from that
+# one target -- linux-aarch64 wheels keep glibc malloc, every other platform gets the
+# allocator. The feature name stays valid everywhere; it just has no effect there.
+[target.'cfg(not(all(target_os = "linux", target_arch = "aarch64")))'.dependencies]
+mimalloc = { version = "0.1", default-features = false, optional = true }
 
 [features]
 default = []
