@@ -160,8 +160,16 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
         if i >= len(tokens):
             raise ValueError("malformed prefix expression: ran out of tokens")
         t = tokens[i]
+        # A TYPED position types its whole subtree: the exponent ``3/2`` is spelled
+        # structurally (``<mul> 3 <div> 2 </mul>``, or ``/ 3 2`` explicitly), and each of
+        # those literals controls the DOMAIN exactly as a bare exponent does -- so the
+        # openers and the arithmetic operators inside an exponent / root index pass the
+        # typed role down instead of their own COEFFICIENT / ADDEND roles.
+        typed = role in (Role.EXPONENT, Role.ROOT_INDEX)
         if t in _OPENERS:
             closer, section, child_role = _OPENERS[t]
+            if typed:
+                child_role = role
             i += 1
             while True:
                 if i >= len(tokens):
@@ -179,11 +187,13 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
             i = walk(i + 1, Role.VALUE)
             return walk(i, Role.ROOT_INDEX)
         if t in ("*", "/"):
-            i = walk(i + 1, Role.COEFFICIENT)
-            return walk(i, Role.COEFFICIENT)
+            child = role if typed else Role.COEFFICIENT
+            i = walk(i + 1, child)
+            return walk(i, child)
         if t in ("+", "-"):
-            i = walk(i + 1, Role.ADDEND)
-            return walk(i, Role.ADDEND)
+            child = role if typed else Role.ADDEND
+            i = walk(i + 1, child)
+            return walk(i, child)
         if t in _TRANSPARENT:
             return walk(i + 1, role)
         n = arity.get(t)

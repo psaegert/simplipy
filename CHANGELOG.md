@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.14.5 (2026-09-02)
+
+- **`literal_sites` types every literal inside an exponent or root-index subtree.** The
+  canonical spells a rational exponent structurally -- `pow(x, 3/2)` is
+  `pow x <mul> 3 <div> 2 </mul>` -- and the role walk entered that `<mul>` with its own
+  COEFFICIENT role, so `mask_fittable` masked both literals and the collect stage folded
+  them into one free exponent: exactly the real-valued exponent the policy exists to keep
+  (`pow(x, c)` is undefined on half the axis for almost every `c`). Openers and the
+  arithmetic operators now pass EXPONENT / ROOT_INDEX down through the whole typed
+  subtree (tagged and explicit spellings alike); the base of a `pow` stays a value
+  position, so its coefficients remain fittable. Measured on the 29-catalog holdout pool
+  (6,660 laws), the structural spelling occurs in 17% of them (20% of erbench-syneq, 5%
+  of the rest; `1/2`, `3/2` and `-1/2` carry most of it), and in every one of them the
+  fittable skeleton used to lose the exponent.
+
 ## 0.14.4 (2026-08-31)
 
 - **The mimalloc wheels actually publish.** 0.14.3 never reached PyPI: the manylinux
