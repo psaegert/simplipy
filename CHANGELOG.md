@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.5 (2026-09-02)
 
 - **`literal_sites` types every literal inside an exponent or root-index subtree.** The
   canonical spells a rational exponent structurally -- `pow(x, 3/2)` is
