@@ -32,6 +32,20 @@ class TestRoleClassification:
             (["pow", "2", "x0"], [("2", masking.Role.VALUE)]),
             (["neg", "2"], [("2", masking.Role.VALUE)]),
             (["sin", "<constant>"], []),  # <constant> is never a site
+            # A typed position types its whole subtree: the structural rational exponent
+            # (the canonical spelling of ``pow(x, 3/2)``) is exponent-roled literal by literal,
+            # tagged and explicit alike, and so is a root index spelled the same way.
+            (["pow", "x0", "<mul>", "3", "<div>", "2", "</mul>"],
+             [("3", masking.Role.EXPONENT), ("2", masking.Role.EXPONENT)]),
+            (["pow", "x0", "/", "3", "2"],
+             [("3", masking.Role.EXPONENT), ("2", masking.Role.EXPONENT)]),
+            (["rootn", "x0", "<mul>", "3", "<div>", "2", "</mul>"],
+             [("3", masking.Role.ROOT_INDEX), ("2", masking.Role.ROOT_INDEX)]),
+            (["pow", "x0", "<add>", "1", "<mul>", "2", "x1", "</mul>", "</add>"],
+             [("1", masking.Role.EXPONENT), ("2", masking.Role.EXPONENT)]),
+            # ...while the BASE stays a value position: its coefficients are fittable.
+            (["pow", "<mul>", "2", "x0", "</mul>", "3"],
+             [("2", masking.Role.COEFFICIENT), ("3", masking.Role.EXPONENT)]),
         ]
         for tokens, want in cases:
             got = [(v, r) for _, v, r in masking.literal_sites(tokens, engine)]
@@ -142,6 +156,14 @@ class TestSpecialConstantsAreSites:
         out = engine.simplify(engine.to_tagged(["+", "x0", "np.e"]))
         assert masking.mask(out, engine, masking.mask_all) == \
             ["<add>", "x0", "<constant>", "</add>"]
+
+    def test_keep_structure_keeps_structural_rational_exponents(self, engine: SimpliPyEngine) -> None:
+        # pow(x, 3/2): the canonical spells the exponent structurally. Before the typed
+        # subtree rule the two literals were coefficient-roled, masked, and the collect
+        # stage folded them into ONE free exponent -- a real the refiner cannot fit.
+        tokens = ["<mul>", "2.5", "pow", "x0", "<mul>", "3", "<div>", "2", "</mul>", "</mul>"]
+        masked = masking.mask(tokens, engine, masking.mask_fittable)
+        assert masked == ["<mul>", "<constant>", "pow", "x0", "<mul>", "3", "<div>", "2", "</mul>", "</mul>"]
 
     def test_keep_structure_keeps_special_exponents(self, engine: SimpliPyEngine) -> None:
         # In a STRUCTURAL position the keep-structure policy keeps the special exactly
