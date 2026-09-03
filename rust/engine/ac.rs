@@ -1180,6 +1180,40 @@ impl Engine {
                 Cx::folds_for(mode),
             );
         }
+        // THE PERMISSIVE LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03):
+        // an exact literal the chain's endpoint carries is replaced by its f64 nearest
+        // when mu' prices that spelling strictly cheaper, and the chain re-runs on the
+        // moved state -- a moved literal can re-fold with its neighbours, and the
+        // endpoint must stay the chain's own fixpoint (the per-state `stable()`
+        // contract). Each round lowers mu by at least a milli-bit, so the loop is finite;
+        // the cap is a backstop, never reached on the corpus (a moved literal has no
+        // second move: it already is a shortest f64 spelling). Permissive only: the
+        // strict tiers never move a value, and their literals keep the exact fraction.
+        let mut owned: Vec<String> = tokens.to_vec();
+        for _ in 0..4 {
+            let picked = self.ac_simplify_ex_permissive_once(&owned, max_passes, explore_budget);
+            let Some(e) = picked.1.as_ref() else {
+                return picked;
+            };
+            let Some(snapped) = crate::ac::expr::snap_lossy_literals(e) else {
+                return picked;
+            };
+            let view = self.view(&picked.0);
+            let bare = Cx::bare(&view);
+            let toks = to_prefix(&snapped, &bare);
+            owned = self.resolve_seq(&toks, &picked.0);
+        }
+        self.ac_simplify_ex_permissive_once(&owned, max_passes, explore_budget)
+    }
+    /// One permissive selection: both fold disciplines and the default arm, the cheapest
+    /// endpoint wins (see `ac_simplify_ex_explore` for the literal-fold loop around it).
+    fn ac_simplify_ex_permissive_once(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        explore_budget: usize,
+    ) -> (SimplifyCtx, Option<Ex>) {
+        let mode = RuleMode::Permissive;
         let unfolded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, false);
         let folded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, true);
         // THE THIRD CANDIDATE (owner ruling 2026-08-24): the DEFAULT-mode result at

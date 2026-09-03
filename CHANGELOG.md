@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.14.6 (2026-09-03)
+
+- **The permissive tier folds an expensive exact literal to its float.** The core keeps every
+  literal as an exact rational and prints the cheaper of its two exact codewords, so a value
+  with no finite decimal expansion -- the quotient of two 16-digit decimals, a coefficient
+  cleared into `p/q`, a 30-digit integer -- came out as a fraction of two long integers:
+  `4 / (2.7167019109484434 * 3.1415926535897)` printed `200000000000000000000000000000 /
+  426738538271436458205631863649`, 196.8 bits and three tokens for one degree of freedom, on
+  1-5% of training skeletons. The strict tiers must do that: a spelling denotes the state's
+  exact value. The permissive tier is licensed to move values, so there such a literal now
+  folds to the f64 nearest to it (printed as that float's exact decimal) WHEN mu' prices that spelling strictly
+  cheaper (`0.46867105279529636`, 57.1 bits). The gate is the same self-limiting mu comparison
+  the f64 transcendental fold uses: `1/2`, `15/37` and `4366/8875` keep their fractions, a
+  drawn constant is already its own shortest spelling and never moves, and a moved literal
+  re-simplifies with its neighbours so the endpoint stays the chain's fixpoint. `Mode.f64`
+  and `Mode.real` are unchanged.
+
 ## 0.14.5 (2026-09-02)
 
 - **`literal_sites` types every literal inside an exponent or root-index subtree.** The
