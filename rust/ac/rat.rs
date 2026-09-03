@@ -277,6 +277,74 @@ impl Rat {
         self.p as f64 / self.q as f64
     }
 
+    /// The f64 NEAREST to this value. `to_f64` rounds each component to f64 before the
+    /// division, which is off by an ulp or two once either leaves 53 bits (the permissive
+    /// literal fold's inputs routinely do: `2e29 / 426738538271436458205631863649`); here
+    /// that candidate is walked to the correctly rounded neighbour by EXACT midpoint tests
+    /// (`cmp_exact`), so the fold really lands on the nearest float -- the value
+    /// `float(Fraction(p, q))` produces. Where a midpoint leaves `Rat` (the extremes of the
+    /// f64 range only) the candidate stands.
+    pub fn to_f64_nearest(self) -> f64 {
+        let mut y = self.to_f64();
+        if !y.is_finite() {
+            return y;
+        }
+        for _ in 0..8 {
+            let up = next_up(y);
+            match Rat::midpoint(y, up) {
+                Some(mid) if self.cmp_exact(&mid) == Ordering::Greater => {
+                    y = up;
+                    continue;
+                }
+                Some(_) => {}
+                None => return y,
+            }
+            let down = next_down(y);
+            match Rat::midpoint(down, y) {
+                Some(mid) if self.cmp_exact(&mid) == Ordering::Less => y = down,
+                _ => return y,
+            }
+        }
+        y
+    }
+
+    /// The exact midpoint of two finite f64s as a `Rat`, `None` when it leaves `i128`.
+    fn midpoint(a: f64, b: f64) -> Option<Rat> {
+        let (ra, rb) = (Rat::from_f64_exact(a)?, Rat::from_f64_exact(b)?);
+        ra.checked_add(&rb)?.checked_mul(&Rat::new(1, 2)?)
+    }
+
+    /// The EXACT rational value of a finite f64 (`m * 2^e`), `None` when it leaves `i128`
+    /// (|e| beyond the 126-bit denominators / 74-bit shifts `i128` holds).
+    pub fn from_f64_exact(x: f64) -> Option<Rat> {
+        if !x.is_finite() {
+            return None;
+        }
+        if x == 0.0 {
+            return Some(Rat::int(0));
+        }
+        let bits = x.to_bits();
+        let sign: i128 = if bits >> 63 == 1 { -1 } else { 1 };
+        let exp = ((bits >> 52) & 0x7ff) as i32;
+        let frac = (bits & ((1u64 << 52) - 1)) as i128;
+        let (m, e) = if exp == 0 {
+            (frac, -1074)
+        } else {
+            (frac | (1i128 << 52), exp - 1075)
+        };
+        if e >= 0 {
+            if e > 74 {
+                return None;
+            }
+            Rat::new(sign * (m << e), 1)
+        } else {
+            if -e > 126 {
+                return None;
+            }
+            Rat::new(sign * m, 1i128 << (-e))
+        }
+    }
+
     /// The shortest exact decimal string, if one exists (`q == 2^a * 5^b`): `1/2 -> "0.5"`,
     /// `-7/4 -> "-1.75"`, `3 -> "3"`. `None` for e.g. `1/3` (the serializer then spells the
     /// division structurally). Exactness is by construction: multiply p by 2s and 5s until the
@@ -400,6 +468,30 @@ impl Rat {
 }
 
 /// Integer k-th root, exact or nothing: the r >= 0 with `r^k == n` (n >= 0), else `None`.
+/// The next f64 toward +inf (`f64::next_up`, which is stable only from Rust 1.86; the MSRV is 1.83).
+fn next_up(x: f64) -> f64 {
+    if x.is_nan() || x == f64::INFINITY {
+        return x;
+    }
+    if x == 0.0 {
+        return f64::from_bits(1);
+    }
+    let bits = x.to_bits();
+    f64::from_bits(if x > 0.0 { bits + 1 } else { bits - 1 })
+}
+
+/// The next f64 toward -inf (`f64::next_down`, likewise).
+fn next_down(x: f64) -> f64 {
+    if x.is_nan() || x == f64::NEG_INFINITY {
+        return x;
+    }
+    if x == 0.0 {
+        return -f64::from_bits(1);
+    }
+    let bits = x.to_bits();
+    f64::from_bits(if x > 0.0 { bits - 1 } else { bits + 1 })
+}
+
 fn int_root(n: i128, k: i128) -> Option<i128> {
     if n == 0 || n == 1 {
         return Some(n);

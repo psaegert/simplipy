@@ -150,7 +150,10 @@ between modes raises `TypeError`.
 
 - **`Mode.permissive`** is the permissive superset, for training-corpus canonicalisation ("beautification").
   Every rule placeholder binds any subtree (the `!`-certificate is skipped), cancellation drops
-  its group-axiom gate, and the constant-fold drops its finiteness gate. It is *not*
+  its group-axiom gate, the constant-fold drops its finiteness gate, and an exact literal whose
+  fraction prices above the shortest float spelling of its value folds to that float (the
+  quotient of two 16-digit decimals becomes `0.46867105279529636` instead of a 60-digit
+  fraction; `1/2` and `15/37` stay, being cheaper as fractions). It is *not*
   equivalence-preserving. Do not use it on an inference or scoring path: the training data is
   generated *from* the simplified form, so the target equals the data and there is no external
   function to violate.
