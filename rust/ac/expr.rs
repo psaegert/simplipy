@@ -4488,10 +4488,57 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
     (mu_rat(&snapped) < mu_rat(r)).then_some(snapped)
 }
 
-/// `Some(e')` with every literal `lossy_literal` folds replaced, `None` when none moves.
-/// A pure tree map: the caller re-canonicalizes (a moved literal can re-fold with its
-/// neighbours -- an i128-overflow PARTITION bag (F73) whose members now fit).
+/// `Some(e')` with every literal `lossy_literal` folds replaced and every GROUND arithmetic
+/// subtree the exact fold refused evaluated in f64, `None` when nothing moves. A pure tree
+/// map: the caller re-canonicalizes (a moved literal can re-fold with its neighbours -- an
+/// i128-overflow PARTITION bag (F73) whose members now fit).
+///
+/// The ground fold is the second half of the same licence. An all-literal `Add` / `Mul` /
+/// `Pow` survives the exact chain only because its exact value left `i128`
+/// (`74.22 - 92.13 * pow(9.44, 4)`: the power alone is 64 digits), so the strict tiers keep
+/// the whole subtree, four operators whose value is one number. Permissive evaluates it in
+/// f64 (children first, so a partition folds member by member) and keeps the literal when
+/// mu prices it below the literals it replaces -- the operator's own symbol cost is not even
+/// counted, so the gate is conservative. Non-finite values refuse; function applications
+/// stay with `f64_fold`'s own gate.
 pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
+    fn ground_fold(e: Ex, moved: &mut bool) -> Ex {
+        let lits: Option<Vec<Rat>> = match &e {
+            Ex::Add(v) | Ex::Mul(v) => v
+                .iter()
+                .map(|x| if let Ex::Num(r) = x { Some(*r) } else { None })
+                .collect(),
+            Ex::Pow(b, x) => match (&**b, &**x) {
+                (Ex::Num(rb), Ex::Num(rx)) => Some(vec![*rb, *rx]),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(lits) = lits else { return e };
+        if lits.len() < 2 {
+            return e;
+        }
+        let vals: Vec<f64> = lits.iter().map(|r| r.to_f64_nearest()).collect();
+        let y = match &e {
+            Ex::Add(_) => vals.iter().sum::<f64>(),
+            Ex::Mul(_) => vals.iter().product::<f64>(),
+            Ex::Pow(..) => vals[0].powf(vals[1]),
+            _ => return e,
+        };
+        if !y.is_finite() {
+            return e;
+        }
+        let Some(folded) = Rat::parse_decimal(&format!("{y:?}")) else {
+            return e;
+        };
+        let before: u64 = lits.iter().map(mu_rat).sum();
+        if mu_rat(&folded) < before {
+            *moved = true;
+            Ex::Num(folded)
+        } else {
+            e
+        }
+    }
     fn walk(e: &Ex, moved: &mut bool) -> Ex {
         match e {
             Ex::Num(r) => match lossy_literal(r) {
@@ -4501,9 +4548,12 @@ pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
                 }
                 None => Ex::Num(*r),
             },
-            Ex::Add(v) => Ex::Add(v.iter().map(|x| walk(x, moved)).collect()),
-            Ex::Mul(v) => Ex::Mul(v.iter().map(|x| walk(x, moved)).collect()),
-            Ex::Pow(b, x) => Ex::Pow(Box::new(walk(b, moved)), Box::new(walk(x, moved))),
+            Ex::Add(v) => ground_fold(Ex::Add(v.iter().map(|x| walk(x, moved)).collect()), moved),
+            Ex::Mul(v) => ground_fold(Ex::Mul(v.iter().map(|x| walk(x, moved)).collect()), moved),
+            Ex::Pow(b, x) => ground_fold(
+                Ex::Pow(Box::new(walk(b, moved)), Box::new(walk(x, moved))),
+                moved,
+            ),
             Ex::Fun(f, v) => Ex::Fun(*f, v.iter().map(|x| walk(x, moved)).collect()),
             leaf => leaf.clone(),
         }

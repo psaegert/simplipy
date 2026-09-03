@@ -14,8 +14,10 @@
   cheaper (`0.46867105279529636`, 57.1 bits). The gate is the same self-limiting mu comparison
   the f64 transcendental fold uses: `1/2`, `15/37` and `4366/8875` keep their fractions, a
   drawn constant is already its own shortest spelling and never moves, and a moved literal
-  re-simplifies with its neighbours so the endpoint stays the chain's fixpoint. `Mode.f64`
-  and `Mode.real` are unchanged.
+  re-simplifies with its neighbours so the endpoint stays the chain's fixpoint. The same
+  licence folds an all-literal arithmetic subtree the exact fold refused because its value left
+  `i128` (`74.22 - 92.13 * pow(9.44, 4)`, four operators whose value is one number) by evaluating
+  it in f64, children first. `Mode.f64` and `Mode.real` are unchanged.
 
 ## 0.14.5 (2026-09-02)
 

@@ -38,7 +38,7 @@ def prefix(engine, expr, mode):
 def exact_value(expr):
     """The expression's exact rational value, from its literals as Fractions."""
     src = re.sub(r"(\d+\.\d+(?:e-?\d+)?|\d+(?:e-?\d+)?)", lambda m: f"Fraction('{m.group(1)}')", expr)
-    return eval(src, {"Fraction": Fraction})
+    return eval(src, {"Fraction": Fraction, "pow": pow})
 
 
 def test_permissive_folds_the_monster_to_its_float(engine):
@@ -100,6 +100,8 @@ def test_huge_integer_folds_to_its_float_value(engine):
     "1e-7 / 3.0000000000000004",
     "123456789.123456789 / 987654321.987654321",                          # reduces to a CHEAP fraction: stays
     "0.3333333333333333 * 0.3333333333333333",
+    "74.22110491129965 - 92.12760331603121 * pow(9.440764872280846, 4)",  # exact fold overflows i128: the strict tier keeps all four operators
+    "2.7167019109484434 * 3.1415926535897 * 1.4142135623730951 * 1.7320508075688772",
 ])
 def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
     """The permissive endpoint is the cheaper of the strict tier's exact spelling and the single
@@ -115,9 +117,27 @@ def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
         assert len(out) == 1 and "/" not in out[0], out
         if len(strict) == 3 and strict[0] == "/":
             assert float(out[0]) == float(exact), (out, as_float)
+        elif len(strict) == 1:
+            assert float(out[0]) == float(exact), (out, as_float)
         else:
             # an i128-overflow PARTITION (the exact value never fit one rational): the members
             # fold piecewise, so the endpoint is correctly rounded per fold, within an ulp or two
             assert math.isclose(float(out[0]), float(exact), rel_tol=4e-16), (out, as_float)
     else:
         assert out == strict, (out, strict, engine.complexity(as_float), engine.complexity(strict))
+
+
+# A constant-only draw from the v25.0-T7 training stream (2026-09-03): the argument of the cosine
+# is a product of ten 16-digit constants whose exact value leaves i128, so the strict tier keeps
+# the whole subtree, and the first fold cut left a 20-digit exact decimal behind (the emitter
+# folded two literals at print time that the constructor had kept apart). The permissive endpoint
+# must be ONE float literal and its own fixpoint.
+STREAM_DRAW = ['-', '14.811588267158381', 'cos', '-', '5.442771642222319', '-', '0.04900091656348083', '-', '9.162716173529507', '*', '/', '*', '*', '*', '*', '-6.845112239925015', '-5.594387656783201', '/', '1.580838523296102', '-4.8070930465509525', '-9.834539098616455', '77.18352008764161', '4.611109313508952', '/', '*', '-1.1927945911146152', '-0.7126036273393542', '/', '-4.282923090520727', '-22.20645482072392']
+
+
+def test_stream_constant_draw_folds_to_one_literal_and_is_idempotent(engine):
+    once = list(engine.simplify(STREAM_DRAW, mode=Mode.permissive))
+    assert len(once) == 1 and "/" not in once[0] and len(once[0].replace("-", "").replace(".", "").lstrip("0")) <= 17, once
+    assert list(engine.simplify(once, mode=Mode.permissive)) == once
+    strict = list(engine.simplify(STREAM_DRAW, mode=Mode.f64))
+    assert len(strict) > 1   # the strict tier cannot fold it: the exact value leaves i128
