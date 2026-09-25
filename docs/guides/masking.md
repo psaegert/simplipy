@@ -40,7 +40,9 @@ kinds ship in the module rather than being re-invented by every consumer:
   special constants. For structural comparison.
 - **`mask_fittable`** — every number a constant optimizer can actually fit,
   *keeping* the ones it cannot (`pow` exponents, `rootn` indices). For
-  training data.
+  training data. The special constants are masked too wherever they are
+  fittable: `x1 * pi` becomes `<constant> * x1`, while `pow(x1, np.pi)` keeps
+  its exponent.
 
 A custom `(value, role) -> str | None` policy remains the primitive
 (`masking.Role` is the role enum, `masking.literal_sites` enumerates the
