@@ -67,6 +67,9 @@ sp.list_assets("engine")
 #                         refuse to load on >= 0.12)
 ```
 
+`base` loads with a warning: an engine without rules parses, evaluates and
+returns canonical forms, but no simplification rule ever fires.
+
 Every published artifact is identity-pinned (a manifest revision plus
 per-file sha256 digests, enforced at install and at cache resolution) — see
 [Artifacts and assets](guides/artifacts.md).
