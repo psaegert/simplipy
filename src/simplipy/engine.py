@@ -6,6 +6,7 @@ operators and rewrite rules. The engine dispatches all simplification, conversio
 validation, and mining work to the compiled Rust extension (``simplipy._core``);
 the compiled core is REQUIRED; there is no pure-Python fallback.
 """
+import builtins
 import hashlib
 import importlib
 import os
@@ -1112,7 +1113,12 @@ class SimpliPyEngine:
             or if the rest of its dotted path reaches a module outside that set.
             See :mod:`simplipy.trust` for why the opt-in cannot live in the config.
         """
-        namespace: dict[str, Any] = {'np': np}
+        # `__builtins__` is bound explicitly. Inline arithmetic (`x1 + x2`) runs in the expression's own frame, so a
+        # numpy floating-point warning (`inf - inf`, an overflow in `*`) is raised there, and Python's warning
+        # machinery reads that frame's globals for `__builtins__`: without it the evaluation raised
+        # KeyError('__builtins__') instead of returning nan with a RuntimeWarning. Bare names resolved through the
+        # interpreter's builtins before and still do, so what an expression can reach is unchanged.
+        namespace: dict[str, Any] = {'__builtins__': builtins, 'np': np}
         for root, operators in sorted(self._realization_roots.items()):
             check_root(root, operators, self._trusted_modules)
             module = importlib.import_module(package_for(root))

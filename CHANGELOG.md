@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.7 (2026-10-01)
+
+- **A floating-point warning inside an expression is a warning again.** An expression's inline
+  arithmetic (`x1 + x2`, `x1 * x2`) runs in its own frame, so numpy raises its floating-point
+  warnings there (`inf - inf`, an overflow in a product), and Python's warning machinery looks
+  for `__builtins__` in that frame's globals. The evaluation namespace did not carry it, so such
+  an evaluation raised `KeyError('__builtins__')` instead of returning `nan` with a
+  `RuntimeWarning` whenever numpy's error policy was `warn` (its default). The namespace now
+  binds `__builtins__` explicitly. Bare names resolved through the interpreter's builtins before
+  and still do, so what an expression can reach is unchanged.
+
 ## 0.14.6 (2026-09-03)
 
 - **The permissive tier folds an expensive exact literal to its float.** The core keeps every

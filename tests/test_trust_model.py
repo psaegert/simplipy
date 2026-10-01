@@ -26,7 +26,9 @@ import json
 import os
 import pickle
 import sys
+import warnings
 
+import numpy as np
 import pytest
 import yaml
 
@@ -185,6 +187,17 @@ class TestPerEngineNamespace:
         engine = SimpliPyEngine(operators={'+': {"realization": "+", **BINARY}}, rules=[])
         assert engine.modules == ['numpy']
         assert engine.code_to_lambda(codify('np.pi + np.e', []))() == pytest.approx(5.859874482048838)
+
+    def test_a_floating_point_warning_inside_an_expression_stays_a_warning(self):
+        # Inline arithmetic runs in the expression's own frame, so numpy warns there, and the warning machinery reads
+        # that frame's globals for `__builtins__`: inf - inf is nan with a RuntimeWarning, not KeyError('__builtins__').
+        engine = SimpliPyEngine(operators={'+': {"realization": "+", **BINARY}}, rules=[])
+        f = engine.code_to_lambda(codify('x1 + x2', ['x1', 'x2']))
+        with np.errstate(all='warn'), warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            out = f(np.array([np.inf, 1.0]), np.array([-np.inf, 2.0]))
+        assert np.isnan(out[0]) and out[1] == 3.0
+        assert any(issubclass(w.category, RuntimeWarning) for w in caught)
 
 
 class TestDeployedEvaluationPath:
