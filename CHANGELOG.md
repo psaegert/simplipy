@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **A fraction with no finite decimal prints as an integer over a decimal.** Every literal is its
+  exact rational value, so `1/(2*3.141592653589793)` folds to 500000000000000 / 3141592653589793
+  and printed as exactly that: correct, but nothing a reader recognises. A decimal is as exact as
+  an integer, so the emitters now move the numerator's factors 2 and 5 into the denominator,
+  which then always terminates, and print `1/6.283185307179586` (Feynman's `3/(20*pi)`:
+  `3/62.83185307179586`). The spelling is used where it is strictly shorter than the two
+  integers; `1/2`, `2/3`, `5/8` and `1/3` keep their fractions, and the first value that moves
+  is 100/101 (`1/1.01`). Emission only, like the divisor-side rule: the state, `complexity()`, the
+  measure and every mint/skip decision are unchanged, and the output re-parses to the same state.
+  The explicit prefix and infix forms change; the tagged form (integer vocabulary) does not.
+  Artifacts: no shipped rule set contains a literal fraction this spelling touches (every
+  `/ int int` pair in them has components of at most 1), so they re-serialize byte-identically.
+  A consumer that reads spelled forms sees new digits but, in almost every case, the same
+  shape: `/ p q` becomes `/ n d`, two numbers either way.
+
 ## 0.14.7 (2026-10-01)
 
 - **A floating-point warning inside an expression is a warning again.** An expression's inline

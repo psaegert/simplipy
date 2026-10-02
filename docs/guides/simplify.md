@@ -158,6 +158,24 @@ between modes raises `TypeError`.
   generated *from* the simplified form, so the target equals the data and there is no external
   function to violate.
 
+### How numbers are printed
+
+Every literal is its exact rational value: `3.141592653589793` is 3141592653589793 / 10^15,
+and folding is exact arithmetic. A value whose denominator has a prime factor other than 2
+and 5 has no finite decimal, so `1/(2*3.141592653589793)` is the fraction
+500000000000000 / 3141592653589793. A decimal is just as exact as an integer, though, so
+such a value prints with its numerator's factors 2 and 5 moved into the denominator, which
+then terminates. That spelling is used where it is shorter than the two integers; short
+fractions keep theirs. It is the same value either way, so the state, `complexity()` and
+every rewrite are unaffected:
+
+```python
+engine.simplify('1/(2*3.141592653589793)')               # -> '1/6.283185307179586'
+engine.simplify('3*x0/(20*3.141592653589793)')           # -> '3*x0/62.83185307179586'
+engine.simplify('x0*rootn(1/(2*3.141592653589793), 2)')  # -> 'x0*rootn(1/6.283185307179586, 2)'
+engine.simplify('5/8')                                   # -> '5/8'
+```
+
 Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /
 `rules_permissive.json` (artifacts published before the rename, acj-4 among them, call the f64
 file `rules.json`) — so selecting a mode selects a file, and what is loaded is what is served.

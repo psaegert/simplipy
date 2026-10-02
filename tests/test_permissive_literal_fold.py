@@ -53,7 +53,12 @@ def test_strict_tier_keeps_the_exact_fraction(engine):
     # (Mode.real needs a mined real ruleset, which a rules-less engine cannot serve; the fold
     # is gated on the permissive mode alone, so the f64 tier stands for both strict tiers.)
     out = prefix(engine, MONSTER, Mode.f64)
-    assert out == ["/", "200000000000000000000000000000", "426738538271436458205631863649"], out
+    # The strict tier keeps the EXACT value, 2e29/426738538271436458205631863649. Since the
+    # integer-over-decimal spelling (owner 2026-10-02, test_ratio_spelling.py) it is printed as
+    # that same value with the numerator's 2s and 5s moved into the denominator: 33 characters
+    # instead of 60, still exact -- not the permissive tier's float.
+    assert out == ["/", "1", "2.133692691357182291028159318245"], out
+    assert Fraction(out[1]) / Fraction(out[2]) == exact_value(MONSTER)
 
 
 @pytest.mark.parametrize("expr,expected", [

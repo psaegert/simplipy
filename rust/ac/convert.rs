@@ -355,6 +355,46 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
     }
 }
 
+/// The INTEGER-OVER-DECIMAL spelling of a fraction (owner 2026-10-02), EMISSION ONLY like
+/// `divisor_side`: `Some((n, d))` with `r == n / d`, `n` an integer and `d` a non-integer
+/// whose argmin spelling is ONE exact decimal token, when the pair spells strictly shorter
+/// than `p` and `q`.
+///
+/// Every literal is its exact rational value, so `1/(2*3.141592653589793)` folds to
+/// `500000000000000/3141592653589793`, which has no finite decimal. A decimal is just as
+/// exact as an integer, though: taking the factors 2 and 5 out of the numerator moves them
+/// into the denominator, which then always terminates -- `1 / 6.283185307179586`, and for
+/// `3/(20*pi)` `3 / 62.83185307179586`. Same state, same value: the choice never enters the
+/// measure or any mint/skip decision. Ties and short fractions keep `p/q` (`1/2`, `2/3`,
+/// `5/8`; `1/3` has no 2 or 5 to move), and `d` must spell as a decimal so the den join
+/// stays one atom (a fraction there re-associates in the infix chain).
+fn ratio_spelling(r: &Rat) -> Option<(Rat, Rat)> {
+    if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
+        return None;
+    }
+    let (p, q) = (r.num(), r.den());
+    let mut n = p;
+    while n % 2 == 0 {
+        n /= 2;
+    }
+    while n % 5 == 0 {
+        n /= 5;
+    }
+    if n == p {
+        return None; // no 2 or 5 to move: the denominator would stay an integer
+    }
+    // p = n * g with g = 2^a 5^b > 1, coprime to q (p/q is reduced): d = q/g terminates and
+    // is never an integer.
+    let g = p / n;
+    let d = Rat::new(q, g)?;
+    if !crate::ac::expr::decimal_spelling_wins(&d) {
+        return None;
+    }
+    let ds = d.exact_decimal()?;
+    let shorter = n.to_string().len() + ds.len() < p.to_string().len() + q.to_string().len();
+    shorter.then(|| (Rat::int(n), d))
+}
+
 /// Divisor-side needs a PLAIN numerator factor to remain: a factor that is neither the
 /// rational coefficient nor a negative-rational-exponent power (those move behind the
 /// divide themselves). A bag of only coefficient + inverse factors keeps its coefficient
@@ -435,6 +475,14 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                         num.push(Ex::Num(Rat::NEG_ONE));
                     }
                     den.push(Ex::Num(inv));
+                } else if let Some((n, d)) = ratio_spelling(r) {
+                    // Integer over decimal (`ratio_spelling`): n joins the numerator (skipped
+                    // when it is the multiplicative identity), the decimal d the denominator.
+                    // d is positive (the sign rides n), so H-020 holds as for the split below.
+                    if !n.is_one() {
+                        num.push(Ex::Num(n));
+                    }
+                    den.push(Ex::Num(d));
                 } else {
                     // p/q with no exact decimal: p joins the numerator (skipped when it is the
                     // multiplicative identity), q the denominator.
@@ -679,8 +727,17 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let slash = view.intern("/");
     if view.arity(slash).is_some() {
         out.push(slash);
-        out.push(view.intern(&r.num().to_string()));
-        out.push(view.intern(&r.den().to_string()));
+        // `ratio_spelling` only returns a `d` whose argmin spelling is an exact decimal.
+        match ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
+            Some((n, ds)) => {
+                out.push(view.intern(&n.num().to_string()));
+                out.push(view.intern(&ds));
+            }
+            None => {
+                out.push(view.intern(&r.num().to_string()));
+                out.push(view.intern(&r.den().to_string()));
+            }
+        }
     } else {
         out.push(view.intern(&num_token(r)));
     }
@@ -1035,6 +1092,16 @@ pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
     render(e, cx, 0)
 }
 
+/// A rational in the infix text. The text is re-read operator by operator, so the
+/// integer-over-decimal spelling (`ratio_spelling`) is safe here as `n/d`; the one-TOKEN
+/// `num_token` keeps `p/q`, the only fraction the leaf parser reads as one literal.
+fn infix_num(r: &Rat) -> String {
+    match ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
+        Some((n, ds)) => format!("{}/{}", n.num(), ds),
+        None => num_token(r),
+    }
+}
+
 /// Precedence levels: 1 = additive, 2 = multiplicative, 3 = power, 4 = atom.
 /// `ctx_prec` is the surrounding level; a lower-precedence rendering gets parenthesized.
 fn render(e: &Ex, cx: &Cx, ctx_prec: u8) -> String {
@@ -1050,7 +1117,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
     let view = cx.view;
     match e {
         Ex::Num(r) => {
-            let s = num_token(r);
+            let s = infix_num(r);
             // A fraction or negative literal is not an atom (1/3, -2): parenthesize in
             // tighter contexts via precedence 2 / 1.
             //
@@ -1163,7 +1230,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                             neg = !neg;
                             r = r.checked_neg().unwrap();
                         }
-                        let s = num_token(&r);
+                        let s = infix_num(&r);
                         num_parts.push(if s.contains('/') { format!("({s})") } else { s });
                     }
                     Ex::Num(r) => {
@@ -1186,12 +1253,24 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                             // route, matching the explicit dialect.
                             match divisor_side(&r).filter(|_| has_plain_mul_factor(v)) {
                                 Some(inv) => den_parts.insert(0, num_token(&inv)),
-                                None => {
-                                    if r.num() != 1 {
-                                        num_parts.insert(0, r.num().to_string());
+                                None => match ratio_spelling(&r)
+                                    .and_then(|(n, d)| Some((n, d.exact_decimal()?)))
+                                {
+                                    // Integer over decimal: the decimal is one atom in the
+                                    // denominator join, like a divisor-side reciprocal.
+                                    Some((n, ds)) => {
+                                        if !n.is_one() {
+                                            num_parts.insert(0, n.num().to_string());
+                                        }
+                                        den_parts.insert(0, ds);
                                     }
-                                    den_parts.insert(0, r.den().to_string());
-                                }
+                                    None => {
+                                        if r.num() != 1 {
+                                            num_parts.insert(0, r.num().to_string());
+                                        }
+                                        den_parts.insert(0, r.den().to_string());
+                                    }
+                                },
                             }
                         } else if !r.is_one() {
                             num_parts.insert(0, num_token(&r));
@@ -1324,6 +1403,63 @@ pub fn canonical_tokens(tokens: &[Tok], cx: &Cx) -> Option<Vec<Tok>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Integer over decimal (`ratio_spelling`): the 2s and 5s of the numerator move into the
+    /// denominator, which then terminates; only a strictly shorter spelling fires.
+    #[test]
+    fn ratio_spelling_moves_the_numerators_twos_and_fives_into_a_decimal_denominator() {
+        let pi = Rat::parse_decimal("3.141592653589793").unwrap();
+        let spelled =
+            |r: Rat| ratio_spelling(&r).map(|(n, d)| (n.num(), d.exact_decimal().unwrap()));
+        // 1/(2 pi) = 500000000000000/3141592653589793 -> 1 / 6.283185307179586
+        let two_pi = pi.checked_mul(&Rat::int(2)).unwrap();
+        assert_eq!(
+            spelled(two_pi.checked_inv().unwrap()),
+            Some((1, "6.283185307179586".to_string()))
+        );
+        // 3/(20 pi): an odd numerator stays, the factors 2 and 5 leave it -> 3 / 62.83185307179586
+        let twenty_pi = pi.checked_mul(&Rat::int(20)).unwrap();
+        let three_over = Rat::int(3)
+            .checked_mul(&twenty_pi.checked_inv().unwrap())
+            .unwrap();
+        assert_eq!(
+            spelled(three_over),
+            Some((3, "62.83185307179586".to_string()))
+        );
+        // the sign rides the integer, the decimal stays positive
+        assert_eq!(
+            spelled(two_pi.checked_inv().unwrap().checked_neg().unwrap()),
+            Some((-1, "6.283185307179586".to_string()))
+        );
+        // 1/3.142 = 500/1571 -> 1 / 3.142 (6 characters against 7)
+        let r = Rat::int(1)
+            .checked_mul(&Rat::parse_decimal("3.142").unwrap().checked_inv().unwrap())
+            .unwrap();
+        assert_eq!(spelled(r), Some((1, "3.142".to_string())));
+        // never for a short fraction, a value with no 2 or 5 in its numerator, or a decimal
+        for (p, q) in [
+            (1, 2),
+            (2, 3),
+            (5, 8),
+            (1, 3),
+            (22, 7),
+            (1, 5),
+            (6, 5),
+            (1024, 3),
+        ] {
+            assert_eq!(spelled(Rat::new(p, q).unwrap()), None, "{p}/{q}");
+        }
+        // and the pair always denotes the value exactly
+        for (p, q) in [
+            (500000000000000i128, 3141592653589793i128),
+            (150000000000000, 3141592653589793),
+            (500, 1571),
+        ] {
+            let r = Rat::new(p, q).unwrap();
+            let (n, d) = ratio_spelling(&r).unwrap();
+            assert_eq!(n.checked_mul(&d.checked_inv().unwrap()).unwrap(), r);
+        }
+    }
     use crate::operators::Operators;
     use crate::tokens::{TokenOverlay, TokenTable, TokenView};
     use std::cell::RefCell;
