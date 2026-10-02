@@ -164,16 +164,41 @@ Every literal is its exact rational value: `3.141592653589793` is 31415926535897
 and folding is exact arithmetic. A value whose denominator has a prime factor other than 2
 and 5 has no finite decimal, so `1/(2*3.141592653589793)` is the fraction
 500000000000000 / 3141592653589793. A decimal is just as exact as an integer, though, so
-such a value prints with its numerator's factors 2 and 5 moved into the denominator, which
-then terminates. That spelling is used where it is shorter than the two integers; short
-fractions keep theirs. It is the same value either way, so the state, `complexity()` and
-every rewrite are unaffected:
+the infix answer writes such a value with its numerator's factors 2 and 5 moved into the
+denominator, which then terminates. That spelling is used where it is shorter than the two
+integers; short fractions keep theirs. It is the same value either way, so the state,
+`complexity()` and every rewrite are unaffected:
 
 ```python
 engine.simplify('1/(2*3.141592653589793)')               # -> '1/6.283185307179586'
 engine.simplify('3*x0/(20*3.141592653589793)')           # -> '3*x0/62.83185307179586'
-engine.simplify('x0*rootn(1/(2*3.141592653589793), 2)')  # -> 'x0*rootn(1/6.283185307179586, 2)'
+engine.simplify('x0*rootn(1/(2*3.141592653589793), 2)')  # -> 'x0/rootn(6.283185307179586, 2)'
 engine.simplify('5/8')                                   # -> '5/8'
+```
+
+### How roots are printed
+
+In the infix answer an even root is written as `rootn` wherever it stands, the way odd roots
+always were. Inside, the engine keeps `x^(1/2)` as `rootn(x, 2)` but its inverse as the power
+`x^(-1/2)`, and a number under an inverse root takes the reciprocal inside (`(1/c)^(1/2)`); the
+infix text writes both as a root below the fraction bar instead. The value, the state and
+`complexity()` are the same:
+
+```python
+engine.simplify('x0^(-1/2)')                                     # -> '1/rootn(x0, 2)'
+engine.simplify('x0/rootn(1 - x1^2, 2)')                         # -> 'x0/rootn(1 - x1^2, 2)'
+engine.simplify('exp(-x0^2/2)/rootn(2*3.141592653589793, 2)')    # -> 'exp(-x0^2/2)/rootn(6.283185307179586, 2)'
+engine.simplify('exp(-x0^2/2)/rootn(2*pi, 2)')                   # -> 'exp(-x0^2/2)/rootn(2*pi, 2)'
+```
+
+Both spellings are for reading, so only the infix answer uses them. A token answer keeps the
+engine's own spelling (`['inv', 'pow', 'x0', '/', '1', '2']`,
+`['/', '500000000000000', '3141592653589793']`): tokens are what the engine reads back when it
+certifies, serves and mines rules, and what callers mask and compare, and none of that may
+depend on how an answer is written for a person. To read a token answer, convert it:
+
+```python
+engine.simplify(engine.to_infix(['inv', 'pow', 'x0', '/', '1', '2']))  # -> '1/rootn(x0, 2)'
 ```
 
 Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /

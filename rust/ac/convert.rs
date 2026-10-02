@@ -355,8 +355,8 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
     }
 }
 
-/// The INTEGER-OVER-DECIMAL spelling of a fraction (owner 2026-10-02), EMISSION ONLY like
-/// `divisor_side`: `Some((n, d))` with `r == n / d`, `n` an integer and `d` a non-integer
+/// The INTEGER-OVER-DECIMAL spelling of a fraction (owner 2026-10-02), for the INFIX text only
+/// (see [`to_infix_pretty`]): `Some((n, d))` with `r == n / d`, `n` an integer and `d` a non-integer
 /// whose argmin spelling is ONE exact decimal token, when the pair spells strictly shorter
 /// than `p` and `q`.
 ///
@@ -393,6 +393,41 @@ fn ratio_spelling(r: &Rat) -> Option<(Rat, Rat)> {
     let ds = d.exact_decimal()?;
     let shorter = n.to_string().len() + ds.len() < p.to_string().len() + q.to_string().len();
     shorter.then(|| (Rat::int(n), d))
+}
+
+/// EVEN ROOTS READ AS `rootn` WHEREVER THEY STAND (owner 2026-10-02), in the INFIX text only
+/// (see [`to_infix_pretty`]).
+///
+/// The core stores `x^(1/n)` for even `n` as `rootn(x, n)` (owner 2026-08-06: it prices below
+/// `pow(x, 1/n)`), but only for a UNIT fraction, so the inverse `x^(-1/n)` stays a power, and
+/// the printers, which move a negative power below the fraction bar, wrote `1/x^(1/2)` beside
+/// `rootn(x, 2)`: one root, two spellings. `even_root_index` names the exponents that print as
+/// a root instead (R1). The core reads an even `rootn` back as exactly this power, so the
+/// output re-parses to the state it came from.
+fn even_root_index(r: &Rat) -> Option<i128> {
+    (r.num() == 1 && r.den() >= 2 && r.den() % 2 == 0).then(|| r.den())
+}
+
+/// R2 of the even-root spelling: a literal base absorbs the exponent's sign in the core
+/// (`c^(-t) -> (1/c)^t`), so the inverse root of a number is stored as `rootn(1/c, n)` -- the
+/// reciprocal INSIDE the root. When that literal's reciprocal spells as one shorter number
+/// (exactly the `divisor_side` test, behind the same gate a coefficient has: a value that
+/// prints as a decimal never moves), the root prints as `1/rootn(reciprocal, n)` instead:
+/// `rootn(1/6.283185307179586, 2)` -> `1/rootn(6.283185307179586, 2)`. EVEN roots only: an
+/// odd `rootn(1/c, n)` and `1/rootn(c, n)` are different states (the core does not read an odd
+/// root as a power), so moving one would change what the output re-parses to.
+fn reciprocal_root(f: Tok, args: &[Ex], cx: &Cx) -> Option<(Rat, i128)> {
+    if args.len() != 2 || !cx.view.tok_is(f, "rootn") {
+        return None;
+    }
+    let (Ex::Num(r), Ex::Num(idx)) = (&args[0], &args[1]) else {
+        return None;
+    };
+    let n = idx.as_integer()?;
+    if n < 2 || n % 2 != 0 || r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
+        return None;
+    }
+    divisor_side(r).map(|inv| (inv, n))
 }
 
 /// Divisor-side needs a PLAIN numerator factor to remain: a factor that is neither the
@@ -475,14 +510,6 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                         num.push(Ex::Num(Rat::NEG_ONE));
                     }
                     den.push(Ex::Num(inv));
-                } else if let Some((n, d)) = ratio_spelling(r) {
-                    // Integer over decimal (`ratio_spelling`): n joins the numerator (skipped
-                    // when it is the multiplicative identity), the decimal d the denominator.
-                    // d is positive (the sign rides n), so H-020 holds as for the split below.
-                    if !n.is_one() {
-                        num.push(Ex::Num(n));
-                    }
-                    den.push(Ex::Num(d));
                 } else {
                     // p/q with no exact decimal: p joins the numerator (skipped when it is the
                     // multiplicative identity), q the denominator.
@@ -727,17 +754,8 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let slash = view.intern("/");
     if view.arity(slash).is_some() {
         out.push(slash);
-        // `ratio_spelling` only returns a `d` whose argmin spelling is an exact decimal.
-        match ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
-            Some((n, ds)) => {
-                out.push(view.intern(&n.num().to_string()));
-                out.push(view.intern(&ds));
-            }
-            None => {
-                out.push(view.intern(&r.num().to_string()));
-                out.push(view.intern(&r.den().to_string()));
-            }
-        }
+        out.push(view.intern(&r.num().to_string()));
+        out.push(view.intern(&r.den().to_string()));
     } else {
         out.push(view.intern(&num_token(r)));
     }
@@ -1088,6 +1106,16 @@ fn fraction_spells_structurally(r: &Rat) -> bool {
 /// the infix parser (`convert::infix_to_prefix` + `convert_expression`): the core symbols
 /// carry built-in precedences under any config, and the bare constant names `pi`/`e`/
 /// `inf`/`nan` are reserved spellings the parser reads back as the constants.
+///
+/// THE READER'S SPELLING LIVES HERE AND ONLY HERE (owner 2026-10-02). The infix text is the
+/// one form written for a person, so it alone writes a value with no finite decimal as an
+/// integer over a decimal (`ratio_spelling`) and an even root below the fraction bar as
+/// `rootn` (`even_root_index`, `reciprocal_root`). The explicit prefix form ([`to_prefix`]) is
+/// the engine's own dialect: the interval certificates, the folds, the served rules and the
+/// mining judge print a state in it and read the tokens back, so a spelling chosen for a
+/// reader there moved a certification verdict (the even-root spelling let the zero-set
+/// certificate prove more and moved the corpus pin). It keeps one fixed spelling, and so do
+/// the token answers built on it. Nothing in the engine reads this text.
 pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
     render(e, cx, 0)
 }
@@ -1144,6 +1172,13 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
         Ex::Const => ("<constant>".to_string(), 4),
         Ex::Leaf(t) => (view.resolve_owned(*t), 4),
         Ex::Fun(f, args) => {
+            // R2 (`reciprocal_root`): `rootn(1/c, n)` reads `1/rootn(c, n)`, a quotient.
+            if let Some((inv, n)) = reciprocal_root(*f, args, cx) {
+                return (
+                    format!("1/{}({}, {})", view.resolve_owned(*f), num_token(&inv), n),
+                    2,
+                );
+            }
             let inner: Vec<String> = args.iter().map(|a| render(a, cx, 0)).collect();
             (
                 format!("{}({})", view.resolve_owned(*f), inner.join(", ")),
@@ -1157,6 +1192,8 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                     let flipped = r.checked_neg().unwrap();
                     let denom = if flipped.is_one() {
                         render(b, cx, 3)
+                    } else if let Some(n) = even_root_index(&flipped) {
+                        format!("rootn({}, {})", render(b, cx, 0), n)
                     } else {
                         format!("{}^{}", render(b, cx, 4), render_exponent(&flipped))
                     };
@@ -1283,6 +1320,8 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                             let flipped = r.checked_neg().unwrap();
                             if flipped.is_one() {
                                 den_parts.push(render(b, cx, 3));
+                            } else if let Some(n) = even_root_index(&flipped) {
+                                den_parts.push(format!("rootn({}, {})", render(b, cx, 0), n));
                             } else {
                                 den_parts.push(format!(
                                     "{}^{}",
@@ -1293,6 +1332,10 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                         }
                         _ => num_parts.push(render(f, cx, 2)),
                     },
+                    Ex::Fun(op, args) if reciprocal_root(*op, args, cx).is_some() => {
+                        let (inv, n) = reciprocal_root(*op, args, cx).unwrap();
+                        den_parts.push(format!("rootn({}, {})", num_token(&inv), n));
+                    }
                     _ => num_parts.push(render(f, cx, 2)),
                 }
             }
@@ -1515,6 +1558,70 @@ mod tests {
         let cx = Cx::bare(view);
         let out = canonical_tokens(&toks(view, input), &cx).expect("parse");
         strs(view, &out)
+    }
+
+    fn infix(view: &TokenView, input: &[&str]) -> String {
+        let cx = Cx::bare(view);
+        let e = canon(from_prefix(&toks(view, input), &cx).expect("parse"), &cx);
+        to_infix_pretty(&e, &cx)
+    }
+
+    /// The reader's spelling (owner 2026-10-02) is the infix text's alone: even roots read as
+    /// `rootn` wherever they stand, a value with no finite decimal as an integer over a
+    /// decimal. The explicit prefix form, which the certificates, folds, served rules and the
+    /// mining judge read back, keeps the 0.14.7 spelling.
+    #[test]
+    fn the_readers_spelling_is_the_infix_texts_alone() {
+        with_view(|view| {
+            let pi = "3.141592653589793";
+            let cases: &[(&[&str], &[&str], &str)] = &[
+                // (input, explicit prefix, infix)
+                // a symbolic base below the fraction bar
+                (
+                    &["inv", "rootn", "x0", "2"],
+                    &["inv", "pow", "x0", "/", "1", "2"],
+                    "1/rootn(x0, 2)",
+                ),
+                (
+                    &["inv", "rootn", "x0", "4"],
+                    &["inv", "pow", "x0", "/", "1", "4"],
+                    "1/rootn(x0, 4)",
+                ),
+                (
+                    &["/", "x1", "rootn", "x0", "2"],
+                    &["/", "x1", "pow", "x0", "/", "1", "2"],
+                    "x1/rootn(x0, 2)",
+                ),
+                // the core stores rootn(1/3, 2) with the reciprocal inside
+                (
+                    &["rootn", "/", "1", "3", "2"],
+                    &["rootn", "/", "1", "3", "2"],
+                    "1/rootn(3, 2)",
+                ),
+                // integer over decimal
+                (
+                    &["/", "1", "*", "2", pi],
+                    &["/", "500000000000000", "3141592653589793"],
+                    "1/6.283185307179586",
+                ),
+                // unchanged in both: the root in the numerator, an odd root, a decimal
+                (&["rootn", "x0", "2"], &["rootn", "x0", "2"], "rootn(x0, 2)"),
+                (
+                    &["inv", "rootn", "x0", "3"],
+                    &["inv", "rootn", "x0", "3"],
+                    "1/rootn(x0, 3)",
+                ),
+                (
+                    &["rootn", "0.2", "2"],
+                    &["rootn", "0.2", "2"],
+                    "rootn(0.2, 2)",
+                ),
+            ];
+            for (input, prefix, text) in cases {
+                assert_eq!(roundtrip(view, input), *prefix, "prefix of {input:?}");
+                assert_eq!(infix(view, input), *text, "infix of {input:?}");
+            }
+        });
     }
 
     #[test]
