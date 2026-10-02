@@ -239,9 +239,7 @@ def refund(rules, operators, promote_set, progress=None):
                     if j != i and (l, r) not in pruned_set]
             e2 = SimpliPyEngine(operators=OPS, rules=rest)
             try:
-                # Kernel spelling: `got` is compared with the rule file's own spelling below,
-                # exactly as the batched path's `ac_simplify_suppressed` ('explicit') does.
-                got = list(e2._simplify(fresh(lhs)))
+                got = list(e2.simplify(fresh(lhs)))
             except Exception:
                 keep.append((lhs, rhs))
                 continue

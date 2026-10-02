@@ -86,9 +86,8 @@ fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
     match name {
         "tagged" => Ok(engine::AcForm::Tagged),
         "explicit" => Ok(engine::AcForm::Explicit),
-        "display" => Ok(engine::AcForm::Display),
         other => Err(PyValueError::new_err(format!(
-            "unknown form {other:?}: expected 'tagged', 'explicit' or 'display'"
+            "unknown form {other:?}: expected 'tagged' or 'explicit'"
         ))),
     }
 }

@@ -1,5 +1,5 @@
-"""An even root is written as `rootn` wherever it stands (owner 2026-10-02) -- EMISSION ONLY, like the
-divisor-side rule and the integer-over-decimal spelling.
+"""An even root reads as `rootn` wherever it stands (owner 2026-10-02) -- in the INFIX text only,
+like the integer-over-decimal spelling.
 
 The core stores x^(1/n) for even n as `rootn(x, n)` (owner 2026-08-06: it prices below `pow(x, 1/n)`),
 but only for a unit fraction. Its inverse x^(-1/n) stays a power, so the printers, which move
@@ -7,12 +7,14 @@ negative powers below the fraction bar, wrote `1/x^(1/2)` beside `rootn(x, 2)`: 
 spellings. And a literal base absorbs the exponent's sign (`c^(-t) -> (1/c)^t`), so the inverse
 root of a number came out as `rootn(1/c, 2)` -- the reciprocal inside the root.
 
-The printers now follow one rule, the way odd roots already print (`1/rootn(x0, 3)`):
+The infix text now follows one rule, the way odd roots already print (`1/rootn(x0, 3)`):
 * R1: a power with exponent 1/n (n even) below the fraction bar prints as `rootn(b, n)`;
 * R2: the even root of a literal whose reciprocal is one shorter number (the divisor-side test)
   prints as `1/rootn(reciprocal, n)`.
 Same state either way: the output re-parses to it, `complexity()` is unchanged, and simplify is
-idempotent on it. The tagged form is untouched.
+idempotent on it. The token answers keep the power (test_spelling_invariance.py): tokens are
+what the engine and its callers read back, and the `rootn` spelling let the zero-set certificate
+prove more than the equal power -- a spelling chosen for a reader moved a verdict.
 """
 import pytest
 
@@ -37,7 +39,7 @@ def infix(eng, text):
 
 
 def prefix(eng, text):
-    out = list(eng.simplify(eng.to_prefix(eng.infix_to_prefix(text))))
+    out = list(eng.simplify(list(eng._core.parse(text, True, False))))
     assert list(eng.simplify(list(out))) == out, f'not idempotent: {out}'
     return out
 
@@ -77,13 +79,14 @@ def test_feynman_i_6_2a_reads_the_same_with_a_decimal_or_a_symbolic_pi(eng):
 
 
 @pytest.mark.parametrize('text, expected', [
-    ('1/rootn(x0, 2)', ['inv', 'rootn', 'x0', '2']),
-    ('x1/rootn(x0, 2)', ['/', 'x1', 'rootn', 'x0', '2']),
-    (f'1/rootn(2*{PI}, 2)', ['inv', 'rootn', '6.283185307179586', '2']),
-    (f'x0/rootn(2*{PI}, 2)', ['/', 'x0', 'rootn', '6.283185307179586', '2']),
+    ('1/rootn(x0, 2)', ['inv', 'pow', 'x0', '/', '1', '2']),
+    ('x1/rootn(x0, 2)', ['/', 'x1', 'pow', 'x0', '/', '1', '2']),
+    (f'1/rootn(2*{PI}, 2)', ['rootn', '/', '500000000000000', '3141592653589793', '2']),
+    (f'x0/rootn(2*{PI}, 2)', ['*', 'x0', 'rootn', '/', '500000000000000', '3141592653589793', '2']),
 ])
-def test_prefix_spelling(eng, text, expected):
+def test_the_token_answer_keeps_the_power(eng, text, expected):
     assert prefix(eng, text) == expected
+    assert eng.simplify(eng.to_infix(expected)) == eng.simplify(text)
 
 
 @pytest.mark.parametrize('text, _', R1 + R2 + UNCHANGED)

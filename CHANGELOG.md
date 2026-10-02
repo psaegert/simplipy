@@ -2,41 +2,32 @@
 
 ## Unreleased
 
-- **An even root is written as `rootn` wherever it stands.** The core keeps `x^(1/2)` as
-  `rootn(x, 2)` (it prices below the power) but its inverse as the power `x^(-1/2)`, and the
-  emitters, which move a negative power below the fraction bar, wrote `1/x0^(1/2)` beside
-  `rootn(x0, 2)`. A literal base also absorbs the exponent's sign, so `1/sqrt(2*pi)` with a
-  decimal pi came out as `rootn(1/6.283185307179586, 2)` while the same formula with a symbolic
-  `pi` printed `1/(2*pi)^(1/2)`. The prefix and infix emitters now write a power with exponent
-  `1/n` (n even) below the bar as `rootn(b, n)`, and the even root of a literal whose reciprocal
-  is one shorter number (the divisor-side test) as `1/rootn(reciprocal, n)`:
-  `exp(-x0^2/2)/rootn(6.283185307179586, 2)` and `exp(-x0^2/2)/rootn(2*pi, 2)`. Odd roots already
-  printed this way. Emission only: state, `complexity()`, measure and every mint/skip decision are
-  unchanged, the output re-parses to the same state, and the tagged form is untouched.
+- **The infix answer is written for a reader.** Every literal is its exact rational value, so
+  `1/(2*3.141592653589793)` folds to 500000000000000 / 3141592653589793 and printed as exactly
+  that: correct, but nothing a reader recognises. A decimal is as exact as an integer, so the
+  infix text now moves the numerator's factors 2 and 5 into the denominator, which then always
+  terminates, and writes `1/6.283185307179586` (Feynman's `3/(20*pi)`: `3/62.83185307179586`),
+  wherever that is strictly shorter than the two integers; `1/2`, `2/3`, `5/8` and `1/3` keep
+  their fractions. Even roots now read as roots wherever they stand: the engine keeps `x^(1/2)` as
+  `rootn(x, 2)` but its inverse as the power `x^(-1/2)`, and a number under an inverse root takes
+  the reciprocal inside, so the infix text wrote `1/x0^(1/2)` beside `rootn(x0, 2)`, and
+  `1/sqrt(2*pi)` as `rootn(1/6.283185307179586, 2)` with a decimal pi but `1/(2*pi)^(1/2)` with a
+  symbolic one. It now writes `1/rootn(x0, 2)`, `exp(-x0^2/2)/rootn(6.283185307179586, 2)` and
+  `exp(-x0^2/2)/rootn(2*pi, 2)`, the way odd roots always printed. The text re-reads to the same
+  state, and `complexity()` does not change.
 
-- **Rule files do not change; their served spellings follow the emitters.** A rule file is written
-  verbatim from the mined pairs, not by the emitters. The spellings an engine serves at load
-  (`ac_served_rules`, which the mine's symbolic gate reads) are printed by the emitters, so the two
-  entries above respell some of them: compared with 0.14.7, 2,338 of 138,987 `acj-5-4-llm` served
-  rules and 20 of 5,558 `acj-4-3` served rules read differently (`inv pow _0 / 1 2` becomes
-  `inv rootn _0 2`, `* 0 rootn / 1 2 10` becomes `/ 0 rootn 2 10`). The rules, their order and
-  their states are unchanged.
-
-- **A fraction with no finite decimal prints as an integer over a decimal.** Every literal is its
-  exact rational value, so `1/(2*3.141592653589793)` folds to 500000000000000 / 3141592653589793
-  and printed as exactly that: correct, but nothing a reader recognises. A decimal is as exact as
-  an integer, so the emitters now move the numerator's factors 2 and 5 into the denominator,
-  which then always terminates, and print `1/6.283185307179586` (Feynman's `3/(20*pi)`:
-  `3/62.83185307179586`). The spelling is used where it is strictly shorter than the two
-  integers; `1/2`, `2/3`, `5/8` and `1/3` keep their fractions, and the first value that moves
-  is 100/101 (`1/1.01`). Emission only, like the divisor-side rule: the state, `complexity()`, the
-  measure and every mint/skip decision are unchanged, and the output re-parses to the same state.
-  The explicit prefix and infix forms change; the tagged form (integer vocabulary) does not.
-  A consumer that reads spelled forms sees new digits and, rarely, a different shape. Measured on
-  srbf's 2,161,912 judged result rows, re-judged with this build: no verdict changed (success,
-  numeric and symbolic recovery and FVU are identical in every row), and 200 rows (0.009 %)
-  changed a descriptive metric of the printed prediction -- MDL, edit distance, length, number
-  of constants -- by a few bits or tokens, in both directions.
+- **Token answers are spelled exactly as in 0.14.7.** The reader's spelling applies to the infix
+  text only. The explicit and tagged token forms keep their spelling (`/ 500000000000000
+  3141592653589793`, `inv pow x0 / 1 2`), because tokens are read back: the engine prints a state
+  in the explicit form to certify, fold, serve and mine rules, and callers mask and compare token
+  answers. Written into the token printer, the new spellings changed results. The zero-set
+  certificate accepts `1/rootn(x, 4)` but not the equal `1/x^(1/4)`, so the root spelling let the
+  engine reach cheaper states on two corpus rows. And masking every number of `x^(1/4)` gives
+  `x^C` from one spelling and `rootn(x, C)` from the other. With the spelling confined to the
+  infix printer, the token printer is the 0.14.7 code. The corpus total is unchanged at
+  56,310,982, the served rules of `acj-5-4-llm` and `acj-4-3` are identical to 0.14.7, and
+  reference re-mines are byte-identical to 0.14.7. To read a token answer, convert it:
+  `simplify(to_infix(tokens))`.
 
 ## 0.14.7 (2026-10-01)
 
