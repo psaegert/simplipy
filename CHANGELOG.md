@@ -14,8 +14,11 @@
   The explicit prefix and infix forms change; the tagged form (integer vocabulary) does not.
   Artifacts: no shipped rule set contains a literal fraction this spelling touches (every
   `/ int int` pair in them has components of at most 1), so they re-serialize byte-identically.
-  A consumer that reads spelled forms sees new digits but, in almost every case, the same
-  shape: `/ p q` becomes `/ n d`, two numbers either way.
+  A consumer that reads spelled forms sees new digits and, rarely, a different shape. Measured on
+  srbf's 2,161,912 judged result rows, re-judged with this build: no verdict changed (success,
+  numeric and symbolic recovery and FVU are identical in every row), and 200 rows (0.009 %)
+  changed a descriptive metric of the printed prediction -- MDL, edit distance, length, number
+  of constants -- by a few bits or tokens, in both directions.
 
 ## 0.14.7 (2026-10-01)
 
