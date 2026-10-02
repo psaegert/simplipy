@@ -176,6 +176,20 @@ engine.simplify('x0*rootn(1/(2*3.141592653589793), 2)')  # -> 'x0*rootn(1/6.2831
 engine.simplify('5/8')                                   # -> '5/8'
 ```
 
+### How roots are printed
+
+An even root is written as `rootn` wherever it stands, the way odd roots always were. Inside, the
+engine keeps `x^(1/2)` as `rootn(x, 2)` but its inverse as the power `x^(-1/2)`, and a number
+under an inverse root takes the reciprocal inside (`(1/c)^(1/2)`); the printers write both as a
+root below the fraction bar instead. The value, the state and `complexity()` are the same:
+
+```python
+engine.simplify('x0^(-1/2)')                                     # -> '1/rootn(x0, 2)'
+engine.simplify('x0/rootn(1 - x1^2, 2)')                         # -> 'x0/rootn(1 - x1^2, 2)'
+engine.simplify('exp(-x0^2/2)/rootn(2*3.141592653589793, 2)')    # -> 'exp(-x0^2/2)/rootn(6.283185307179586, 2)'
+engine.simplify('exp(-x0^2/2)/rootn(2*pi, 2)')                   # -> 'exp(-x0^2/2)/rootn(2*pi, 2)'
+```
+
 Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /
 `rules_permissive.json` (artifacts published before the rename, acj-4 among them, call the f64
 file `rules.json`) — so selecting a mode selects a file, and what is loaded is what is served.

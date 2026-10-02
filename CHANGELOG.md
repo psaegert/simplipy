@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **An even root is written as `rootn` wherever it stands.** The core keeps `x^(1/2)` as
+  `rootn(x, 2)` (it prices below the power) but its inverse as the power `x^(-1/2)`, and the
+  emitters, which move a negative power below the fraction bar, wrote `1/x0^(1/2)` beside
+  `rootn(x0, 2)`. A literal base also absorbs the exponent's sign, so `1/sqrt(2*pi)` with a
+  decimal pi came out as `rootn(1/6.283185307179586, 2)` while the same formula with a symbolic
+  `pi` printed `1/(2*pi)^(1/2)`. The prefix and infix emitters now write a power with exponent
+  `1/n` (n even) below the bar as `rootn(b, n)`, and the even root of a literal whose reciprocal
+  is one shorter number (the divisor-side test) as `1/rootn(reciprocal, n)`:
+  `exp(-x0^2/2)/rootn(6.283185307179586, 2)` and `exp(-x0^2/2)/rootn(2*pi, 2)`. Odd roots already
+  printed this way. Emission only: state, `complexity()`, measure and every mint/skip decision are
+  unchanged, the output re-parses to the same state, and the tagged form is untouched.
+
+- **Rule files do not change; their served spellings follow the emitters.** A rule file is written
+  verbatim from the mined pairs, not by the emitters. The spellings an engine serves at load
+  (`ac_served_rules`, which the mine's symbolic gate reads) are printed by the emitters, so the two
+  entries above respell some of them: compared with 0.14.7, 2,338 of 138,987 `acj-5-4-llm` served
+  rules and 20 of 5,558 `acj-4-3` served rules read differently (`inv pow _0 / 1 2` becomes
+  `inv rootn _0 2`, `* 0 rootn / 1 2 10` becomes `/ 0 rootn 2 10`). The rules, their order and
+  their states are unchanged.
+
 - **A fraction with no finite decimal prints as an integer over a decimal.** Every literal is its
   exact rational value, so `1/(2*3.141592653589793)` folds to 500000000000000 / 3141592653589793
   and printed as exactly that: correct, but nothing a reader recognises. A decimal is as exact as
@@ -12,8 +32,6 @@
   is 100/101 (`1/1.01`). Emission only, like the divisor-side rule: the state, `complexity()`, the
   measure and every mint/skip decision are unchanged, and the output re-parses to the same state.
   The explicit prefix and infix forms change; the tagged form (integer vocabulary) does not.
-  Artifacts: no shipped rule set contains a literal fraction this spelling touches (every
-  `/ int int` pair in them has components of at most 1), so they re-serialize byte-identically.
   A consumer that reads spelled forms sees new digits and, rarely, a different shape. Measured on
   srbf's 2,161,912 judged result rows, re-judged with this build: no verdict changed (success,
   numeric and symbolic recovery and FVU are identical in every row), and 200 rows (0.009 %)

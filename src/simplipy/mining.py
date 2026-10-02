@@ -272,7 +272,9 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
         bare._core.set_mode_rules('real', [])
         engine._ruleless_twin = bare
     try:
-        return tuple(bare.simplify(list(lhs), mode=mode)) == tuple(bare.simplify(list(rhs), mode=mode))
+        # Kernel spelling: an internal comparison of two states (owner 2026-10-02).
+        return (tuple(bare._simplify(list(lhs), mode=mode))
+                == tuple(bare._simplify(list(rhs), mode=mode)))
     except Exception:
         return False
 
@@ -2044,7 +2046,7 @@ def assert_permissive_dominates(engine: Any, expressions: Any) -> list:
     bad = []
     for expr in expressions:
         try:
-            mu = {m: engine._core.ac_complexity(engine.simplify(list(expr), mode=m))
+            mu = {m: engine._core.ac_complexity(engine._simplify(list(expr), mode=m))
                   for m in (Mode.f64, Mode.real, Mode.permissive)}
         except Exception:
             continue

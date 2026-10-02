@@ -1053,6 +1053,26 @@ pub struct Cx<'a> {
     /// the fixpoint with this flag set -- `pow`'s determined fold fires again -- and
     /// keeps descending. Only meaningful with `lossy`; sound mode always folds.
     pub sentinels_expired: bool,
+    /// WHICH SPELLING the explicit printers write (owner 2026-10-02: "fix this properly"). The
+    /// printed form is not only an answer: the interval certificates, the folds, the served
+    /// rules and the mining judge all print a state and read the tokens back, so a spelling
+    /// choice made for a reader moved their verdicts (the even-root spelling moved the corpus
+    /// pin). Every context therefore prints in [`Spelling::Kernel`], the one fixed internal
+    /// spelling; [`Spelling::Display`] exists only at the user boundary
+    /// (`convert::to_prefix_display`, `convert::to_infix_pretty`).
+    pub spelling: Spelling,
+}
+
+/// The two spellings of one state (see [`Cx::spelling`]). Both re-parse to the state they were
+/// printed from; they differ only in how a value or an even root is written.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Spelling {
+    /// The engine's own spelling, read by every internal consumer. Fixed: a reader-facing
+    /// spelling rule never enters it.
+    Kernel,
+    /// The reader's spelling: integer over decimal (`1/6.283185307179586`) and even roots as
+    /// `rootn` below the fraction bar. Printed for the caller, never read back by the engine.
+    Display,
 }
 
 impl<'a> Cx<'a> {
@@ -1092,6 +1112,7 @@ impl<'a> Cx<'a> {
             mode: RuleMode::Default,
             fold_f64: false,
             sentinels_expired: false,
+            spelling: Spelling::Kernel,
         }
     }
 
@@ -5087,6 +5108,7 @@ mod tests {
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 sentinels_expired: false,
+                spelling: Spelling::Kernel,
             };
             assert_eq!(add(vec![lg.clone(), neg_lg], &cx2), Ex::int(0));
             // Same-sign merging never needs the licence: log(x) + log(x) -> 2 log(x).

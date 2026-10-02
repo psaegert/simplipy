@@ -34,8 +34,10 @@ use std::cell::{Cell, RefCell};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ac::convert::{from_prefix, to_infix_pretty, to_prefix, to_prefix_tagged};
-use crate::ac::expr::{canon, complexity, rejoin_projection, Cx, Ex};
+use crate::ac::convert::{
+    from_prefix, to_infix_pretty, to_prefix, to_prefix_display, to_prefix_tagged,
+};
+use crate::ac::expr::{canon, complexity, rejoin_projection, Cx, Ex, Spelling};
 use crate::ac::matcher::MCx;
 use crate::ac::rules::{rewrite_pass_opt, AcRules, PassCtx};
 use crate::rules::CompiledRules;
@@ -719,6 +721,7 @@ impl Engine {
         let bare = Cx::bare(&view);
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &bare),
+            AcForm::Display => to_prefix_display(&best, &bare),
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
         };
         Some(self.resolve_seq(&toks, &ctx))
@@ -743,6 +746,7 @@ impl Engine {
         let bare = Cx::bare(&view);
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &bare),
+            AcForm::Display => to_prefix_display(&best, &bare),
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
         };
         Some(self.resolve_seq(&toks, &ctx))
@@ -1015,6 +1019,7 @@ impl Engine {
             mode: canon_mode,
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
+            spelling: Spelling::Kernel,
         };
         // Parse with the CHAIN'S context for the requested mode (F2 route fix,
         // 2026-08-24) -- see ac_complexity; this is the theorem-bearing
@@ -1068,6 +1073,7 @@ impl Engine {
             mode: RuleMode::Default,
             fold_f64: Cx::folds_for(RuleMode::Default),
             sentinels_expired: false,
+            spelling: Spelling::Kernel,
         };
         let bare = Cx::bare(&view);
         let mut out = Vec::new();
@@ -1306,6 +1312,7 @@ impl Engine {
             mode,
             fold_f64: fold_tr,
             sentinels_expired: false,
+            spelling: Spelling::Kernel,
         };
         // Parse with the CALL's MODE: a bare (sound) parse let sound-only
         // constructor arms destroy structure lossy passes need -- `inv
@@ -1460,6 +1467,7 @@ impl Engine {
                 mode: RuleMode::Permissive,
                 fold_f64: fold_tr,
                 sentinels_expired: true,
+                spelling: Spelling::Kernel,
             };
             let mut pbare2 = Cx::bare(&view);
             pbare2.mode = RuleMode::Permissive;
@@ -1588,11 +1596,14 @@ impl RuleMode {
 /// Output projections of the AC canonical state (see `ac::convert`): `Tagged` is the native
 /// strict prefix form; `Explicit` is the sugared old-token diagnostic form (the internal
 /// canonical form's sugared spelling, parseable by the binary engine -- the
-/// differential-testing oracle);
+/// differential-testing oracle), in the KERNEL spelling every internal consumer reads;
+/// `Display` is the same explicit form in the reader's spelling (`Spelling::Display`), the
+/// projection public `simplify` answers with and nothing in the engine reads back.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum AcForm {
     Tagged,
     Explicit,
+    Display,
 }
 
 #[cfg(test)]

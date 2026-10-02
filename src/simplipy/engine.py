@@ -2001,11 +2001,42 @@ class SimpliPyEngine:
               (binary ``-``), and ``neg`` spells only the pure sign (``neg x0``,
               ``neg * np.pi x0``).
 
+            The explicit and infix answers are SPELLED FOR A READER: a value with no
+            finite decimal is written as an integer over a decimal
+            (``1/6.283185307179586``, not ``500000000000000/3141592653589793``) and an
+            even root stays a root below the fraction bar (``1/rootn(x0, 2)``, not
+            ``1/x0^(1/2)``). The state is the same either way -- the answer re-reads to it,
+            and :meth:`complexity` does not change -- and the engine never reads this
+            spelling back: its own consumers (certificates, served rules, mining,
+            :func:`~simplipy.masking.mask_expression`, normalization) use one fixed kernel
+            spelling, so a spelling choice cannot move a result.
+
         Returns
         -------
         str | list[str] | tuple[str, ...] | np.ndarray
             The simplified expression, in the same format as the input.
         """
+        return self._simplify(expression, max_passes=max_passes, mode=mode, effort=effort, display=True)
+
+    def _simplify(
+            self,
+            expression: str | list[str] | tuple[str, ...] | np.ndarray,
+            *,
+            max_passes: int | None = None,
+            mode: Mode | str = Mode.f64,
+            effort: int | None = None,
+            display: bool = False) -> str | list[str] | tuple[str, ...] | np.ndarray:
+        """:meth:`simplify` with the explicit form's spelling chosen (owner 2026-10-02).
+
+        ``display=True`` is the reader's spelling, the public answer. ``display=False`` is the
+        KERNEL spelling: the one every library-internal caller must use when it reads the
+        tokens back, compares them with stored spellings (rule files, served rules) or keys
+        on them, so that no reader-facing spelling rule can move what the engine decides.
+        Tagged output has one spelling. An infix string is a presentation format with no
+        kernel reading, so the kernel spelling takes token input only.
+        """
+        if not display and isinstance(expression, str):
+            raise TypeError("the kernel spelling is a token form: pass a prefix token sequence")
         if max_passes is None:
             max_passes = 48
         if max_passes < 0:
@@ -2103,7 +2134,8 @@ class SimpliPyEngine:
         if form == 'infix':
             return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort)
 
-        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort)
+        out = self._core.ac_simplify_in_mode(
+            tokens, max_passes, rule_mode, 'display' if display and form == 'explicit' else form, effort)
 
         if isinstance(expression, str):
             # The old infix converter cannot render the tagged form; a str input asking for
