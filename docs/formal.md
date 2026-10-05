@@ -52,8 +52,11 @@ $$ t ::= q \mid \pi \mid e \mid +\infty \mid -\infty \mid \mathrm{NaN} \mid \dia
    \mid x \mid \mathrm{Add}\,M \mid \mathrm{Mul}\,M \mid \mathrm{Pow}(t, t)
    \mid f(t_1, \dots, t_n) $$
 
-where $q$ ranges over exact rationals (`Rat`: $p/q$ over `i128`, normalized $q > 0$,
-$\gcd(|p|, q) = 1$, $p \neq$ `i128::MIN`), $\diamond$ is the abstract fitted constant
+where $q$ ranges over exact rationals (`Rat`: $p/q$ with $|p|$ and $q$ of at most 1,100 bits
+each, `CAP_BITS`; normalized $q > 0$, $\gcd(|p|, q) = 1$; held as `i128` whenever it fits, never
+`i128::MIN`; in f64 mode only the numbers the float64 evaluator reads back as themselves --
+zero or normal, $|p| \leq$ DBL_MAX, $q \leq 2^{1022}$ -- and in real mode every number within
+the cap; any other literal stays a token leaf as written), $\diamond$ is the abstract fitted constant
 (`Const`), $x$ over vocabulary leaves, $f$ over operator tokens, and $M$ over multisets of
 terms with $|M| \geq 2$.
 
@@ -68,16 +71,21 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   exponent-stripped base (rational coefficient first). Stripping makes the order invariant
   under sign and exponent edits, which is what makes the sign orientation of sums
   well-defined (`rust/ac/expr.rs`, "STRIPPED comparators").
-- **I3 (coefficient normal form):** a $\mathrm{Mul}$ carries at most one rational factor; an
-  $\mathrm{Add}$ carries at most one rational term; rational arithmetic inside bags is
-  folded in a deterministic (sorted) merge order, exactly (`Rat` checked ops; overflow
-  refuses the merge and keeps the operands symbolic). *Known residual at the overflow
-  boundary* [EMPIRICAL, tracked]: when a merge is refused, the bag holds two-plus literal
-  members whose relative order can depend on construction history — measured as 2
-  idempotence violations in 50,000 adversarial fuzz calls (i128-scale literal pairs only;
-  0 on the mined corpus). This
-  is the accepted i128-boundedness design boundary; the cure (bignum content plus a
-  widened token boundary) is deliberately out of scope for this engine line.
+- **I3 (coefficient normal form):** a $\mathrm{Mul}$ carries one rational factor and an
+  $\mathrm{Add}$ one rational term, unless a fold is refused; the literals of a bag (and the
+  coefficients of one like-term bucket) fold to their CANONICAL PARTITION
+  (`Rat::partition_product`/`partition_sum`): sorted ascending, the lowest pair that folds is
+  replaced by its exact result until no two members fold. A fold refuses beyond the cap, and
+  in f64 mode where the result is not admissible. No two members of a partition fold, so it is
+  the partition of each of its subsets and re-reads to itself in any printed order. A
+  refused integer power of a negative literal keeps its sign outside, by the exponent's
+  parity. *Known residuals at the cap* [EMPIRICAL, tracked]: on 20,000 adversarial fuzz
+  calls per mode with literals at the 128-bit, float64-range and cap boundaries, 0
+  idempotence violations in f64 mode and 1 in real mode (main had 2 and 2 on the same
+  inputs); the real-mode case is a coefficient whose products with the members of a sum are
+  refused at the cap. And at a refusal the grouping of the input can decide which inner
+  products fold: `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different
+  canonical forms (canonicity across spellings, not idempotence; both pinned in tests).
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
@@ -309,8 +317,8 @@ with no terminating decimal pays the rational codeword alone — still plus the
 selector, so every priced numeric leaf pays exactly one selector bit and the codebook
 is a genuine prefix code. A magnitude-$1$
 coefficient or rational-exponent slot is a bare sign and costs $0$, every other such
-slot pays its literal cost; a numeric literal whose
-exact rational exceeds `i128` lives as a token string and pays the same two-codeword
+slot pays its literal cost; a numeric literal that is no number to the engine (beyond the
+cap, or in f64 mode not admissible) lives as a token string and pays the same two-codeword
 rule parsed from its canonical print (`mu_numeric_str`, monotone in significand and
 scale within each codeword, with the astronomic knee at scale $2^{32}$ keeping the
 codomain inside `u64`); and the
@@ -362,10 +370,13 @@ canonical terms $t$ have $\mu(t) = \mu_0$. *Proof.* $\mu$ bounds the node count
 slot per bag and one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \leq \mu_0$
 in bits — the carrier being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
-vocabulary are finite; $\mu_0$ bounds every in-range literal in whichever codeword
-achieves its minimum, and each codeword admits finitely many values under any bound
-($L$ is monotone and unbounded in each component, and a codeword determines its
-value); and a beyond-`i128` numeric-string leaf pays a cost that grows with its
+vocabulary are finite; $\mu_0$ bounds every number in whichever codeword achieves its
+minimum, and each codeword admits finitely many values under any bound ($L$ is monotone
+and unbounded in each component, and a codeword determines its value). $\mu$ does NOT bound
+a number's bit length -- the decimal codeword prices `1e-300` from its mantissa and
+exponent, though its denominator has 997 bits -- but finiteness needs only the bounded
+components of an injective codeword, and the cap bounds the rest. A numeric-string leaf
+(beyond the cap, or not admissible in f64 mode) pays a cost that grows with its
 canonical print (`mu_numeric_str` is strictly monotone in significand digits and in
 the scale within each codeword), so $\mu_0$ bounds the print's significand length
 and scale magnitude too, leaving finitely many leaf choices per slot.
@@ -384,10 +395,10 @@ as before.
 
 **Why numeric-string leaves are priced.** The numeric fold interns its result as a
 token; a term can therefore carry literals that exist only as opaque numeric *strings*
-(values whose exact rational exceeds `i128`). Pricing them at one vocabulary symbol
-would break L5 (unboundedly many strings at one level), invert the ordering at the
-`i128` boundary, and license deep-magnitude roundings; `mu_numeric_str` closes all
-three.
+(values beyond the 1,100-bit cap, or in f64 mode not admissible). Pricing them at one
+vocabulary symbol would break L5 (unboundedly many strings at one level), invert the
+ordering at the number/leaf boundary, and license deep-magnitude roundings;
+`mu_numeric_str` closes all three.
 
 **The property that fails, and why it matters.** $<_o$ is **not** closed under
 substitution or context: $\mu$ is *not additive* (coefficients and exponents carry
@@ -482,8 +493,8 @@ assertion), `to_prefix` has a left inverse and is therefore injective — two st
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
 debug, so every state reached by the tests and the mini-mines satisfies it); its one known exception class is the documented I3
-i128-boundary residual (2/50k fuzz, corpus-unreachable), which therefore also scopes
-the cache guarantee — the same boundary, the same bignum cure if ever needed.
+cap residual (1 in 20,000 adversarial real-mode calls, corpus-unreachable), which therefore
+also scopes the cache guarantee.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass
 fixpoint within budget ($\mathrm{pass}(t_k) = t_k$ — by T6 the fixpoint *exists* and is
@@ -503,8 +514,7 @@ truncate.
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
 permutation gate (0 violations / 400 canonical corpus expressions at head). One
-registered residual class at the 10^6 fuzz scale: the I3 i128-boundary bag-order class
-above. (The scale gates hold 0 idempotence and 0 permutation failures at head.)
+registered residual class: the I3 cap residuals above. (The scale gates hold 0 idempotence and 0 permutation failures at head.)
 
 **Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
 (training-corpus canonicalization). It relaxes *soundness* licences, never the ordering:

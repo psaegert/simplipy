@@ -33,6 +33,9 @@ use num_traits::{One, Zero};
 /// (arity underflow / trailing tokens) -- callers pass the input through unchanged, exactly as
 /// the shipped engine treats malformed expressions.
 pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
+    // Literals parse in the context's number domain: in the f64 domain a literal that is not
+    // admissible (subnormal, beyond float64's range) stays a leaf as written (design 2c).
+    let _domain = super::rat::number_domain(cx.f64_numbers());
     let (e, next) = parse_one(tokens, 0, cx)?;
     if next != tokens.len() {
         return None;
@@ -144,13 +147,10 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
         return Ex::Num(r);
     }
     // The tagged form's exact-fraction leaves: "1/3", "-7/4" (the numeral grammar's
-    // fraction arm, `utils::split_fraction`; `1/-3` used to parse here as -1/3).
-    if let Some((p, q)) = crate::utils::split_fraction(s) {
-        if let (Ok(p), Ok(q)) = (p.parse::<i128>(), q.parse::<i128>()) {
-            if let Some(r) = Rat::new(p, q) {
-                return Ex::Num(r);
-            }
-        }
+    // fraction arm, `utils::split_fraction`; `1/-3` used to parse here as -1/3), at any size
+    // within the number domain (phase 2c: the printers write a big fraction as one token).
+    if let Some(r) = fraction_literal(s) {
+        return Ex::Num(r);
     }
     // Parenthesized literal forms: "(-1)", "(-0.5)", "(-1/3)" -- the wrapping composes
     // with BOTH numeric grammars (hardening H-012, 2026-08-03: this branch knew only
@@ -160,12 +160,8 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
         if let Some(r) = Rat::parse_decimal(inner) {
             return Ex::Num(r);
         }
-        if let Some((p, q)) = crate::utils::split_fraction(inner) {
-            if let (Ok(p), Ok(q)) = (p.parse::<i128>(), q.parse::<i128>()) {
-                if let Some(r) = Rat::new(p, q) {
-                    return Ex::Num(r);
-                }
-            }
+        if let Some(r) = fraction_literal(inner) {
+            return Ex::Num(r);
         }
     }
     // H-048 (2026-08-05): a SIGNED numeric spelling never becomes a leaf -- the sign
@@ -186,6 +182,18 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
         }
     }
     Ex::Leaf(t)
+}
+
+/// A one-token exact fraction `p/q` as a number: the 128-bit fast path, then the exact reader
+/// for bigger components, admitted by the current number domain (`None` beyond it: the token
+/// stays a leaf as written).
+fn fraction_literal(s: &str) -> Option<Rat> {
+    let (p, q) = crate::utils::split_fraction(s)?;
+    if let (Ok(p), Ok(q)) = (p.parse::<i128>(), q.parse::<i128>()) {
+        return Rat::new(p, q);
+    }
+    let (p, q) = crate::ac::rat::token_rational(s)?;
+    Rat::from_big(p, q)
 }
 
 /// Desugar one LEGACY operator application into the core (input-side compatibility only --
@@ -261,6 +269,10 @@ fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
 /// Serialize a canonical AC expression back to prefix tokens in the old token language --
 /// the EXPLICIT form (literal coefficients, no hyper-operators).
 pub fn to_prefix(e: &Ex, cx: &Cx) -> Vec<Tok> {
+    // Spelling choices (reciprocals, splits) compute in the number domain the state was
+    // built in: exact when the context OR the enclosing run is exact, since a
+    // certificate-free `Cx::bare` inside a real-mode run spells that run's numbers.
+    let _domain = super::rat::number_domain(cx.f64_numbers() && super::rat::f64_numbers());
     let mut out = Vec::new();
     emit(e, cx, &mut out);
     out
@@ -753,6 +765,10 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
 /// and every serialization -- this one included -- is a bijective-on-classes projection of it,
 /// verified per chain state by a debug assertion in the simplify loop.
 pub fn to_prefix_tagged(e: &Ex, cx: &Cx) -> Vec<Tok> {
+    // Spelling choices (reciprocals, splits) compute in the number domain the state was
+    // built in: exact when the context OR the enclosing run is exact, since a
+    // certificate-free `Cx::bare` inside a real-mode run spells that run's numbers.
+    let _domain = super::rat::number_domain(cx.f64_numbers() && super::rat::f64_numbers());
     let mut out = Vec::new();
     emit_tagged(e, cx, &mut out);
     out
@@ -1094,6 +1110,10 @@ fn fraction_spells_structurally(r: &Rat) -> bool {
 /// token answers, so it keeps one fixed spelling, and so do the token answers built on it.
 /// Nothing in the engine reads this text.
 pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
+    // Spelling choices (reciprocals, splits) compute in the number domain the state was
+    // built in: exact when the context OR the enclosing run is exact, since a
+    // certificate-free `Cx::bare` inside a real-mode run spells that run's numbers.
+    let _domain = super::rat::number_domain(cx.f64_numbers() && super::rat::f64_numbers());
     render(e, cx, 0)
 }
 
@@ -1698,24 +1718,26 @@ mod tests {
         });
     }
 
-    /// F73: an i128-overflow PARTITION's atoms survive every dialect's round-trip.
+    /// F73: a PARTITION's atoms survive every dialect's round-trip.
     /// The gathering emitters pooled the atoms into shared num/den chains, and the
     /// re-parse re-CUT them (`* a/3 a/3` -> `/ (a*a) (3*3)` -> `{a, a, 1/9}` -- one
     /// value, a different partition per dialect; 884 of the extreme lane's 900
     /// post-F72 hard rows). Partition members now render self-contained.
+    ///
+    /// Phase 2c: partitions no longer come from i128 overflow but from a product the f64
+    /// domain refuses (`10^400/9` is beyond DBL_MAX), so the probe pair is `10^200/3`.
     #[test]
     fn f73_partition_atoms_survive_every_dialect() {
         with_view(|view| {
             let cx = Cx::bare(view);
-            let a3 = "170141183460469231731687303715884105727/3";
+            let a = format!("1{}", "0".repeat(200));
+            let a3 = format!("{a}/3");
+            let atom = |sign: i32| {
+                let p: num_bigint::BigInt = a.parse().unwrap();
+                Ex::Num(Rat::from_big(if sign < 0 { -p } else { p }, 3.into()).unwrap())
+            };
             // the canonical partition state, built directly
-            let state = crate::ac::expr::mul(
-                vec![
-                    Ex::Num(Rat::new(170141183460469231731687303715884105727, 3).unwrap()),
-                    Ex::Num(Rat::new(170141183460469231731687303715884105727, 3).unwrap()),
-                ],
-                &cx,
-            );
+            let state = crate::ac::expr::mul(vec![atom(1), atom(1)], &cx);
             assert!(
                 matches!(&state, Ex::Mul(v) if is_partition_bag(v)),
                 "the probe pair must stay partitioned: {state:?}"
@@ -1740,15 +1762,7 @@ mod tests {
             let spelled: Vec<String> = strs(view, &explicit);
             assert_eq!(
                 spelled,
-                vec![
-                    "*",
-                    "/",
-                    "170141183460469231731687303715884105727",
-                    "3",
-                    "/",
-                    "170141183460469231731687303715884105727",
-                    "3"
-                ],
+                vec!["*", "/", a.as_str(), "3", "/", a.as_str(), "3"],
                 "explicit gathering resurfaced"
             );
 
@@ -1758,13 +1772,7 @@ mod tests {
 
             // The SIGNED partition keeps the sign in an atom (tagged/explicit) or
             // hoisted (infix) -- and still round-trips member-exact.
-            let signed = crate::ac::expr::mul(
-                vec![
-                    Ex::Num(Rat::new(-170141183460469231731687303715884105727, 3).unwrap()),
-                    Ex::Num(Rat::new(170141183460469231731687303715884105727, 3).unwrap()),
-                ],
-                &cx,
-            );
+            let signed = crate::ac::expr::mul(vec![atom(-1), atom(1)], &cx);
             let tagged = to_prefix_tagged(&signed, &cx);
             assert_eq!(from_prefix(&tagged, &cx).expect("tagged parses"), signed);
         });

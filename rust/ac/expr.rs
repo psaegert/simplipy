@@ -1171,6 +1171,13 @@ impl<'a> Cx<'a> {
         matches!(self.mode, RuleMode::Default)
     }
 
+    /// The number domain this construction runs in (`rat::number_domain`): exact in `real`
+    /// mode, f64 in every other mode -- `permissive` is evaluated in float64 too.
+    #[inline]
+    pub fn f64_numbers(&self) -> bool {
+        !matches!(self.mode, RuleMode::Real)
+    }
+
     /// A certificate-free context (conversions, pattern handling, tests).
     pub fn bare(view: &'a TokenView<'a>) -> Self {
         Cx {
@@ -1216,7 +1223,16 @@ impl<'a> Cx<'a> {
     fn certainly_finite(&self, e: &Ex) -> bool {
         match e {
             Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const => true,
-            Ex::Leaf(t) => self.view.sigil(*t) == 0,
+            // A numeral leaf beyond float64's range denotes a finite real (H-052), but in f64
+            // mode the deployed evaluator reads it as inf (design 2c, review M4): there it
+            // is not certainly finite (`0 * 1e400` is NaN to the evaluator).
+            Ex::Leaf(t) => {
+                self.view.sigil(*t) == 0
+                    && !(self.f64_numbers()
+                        && self.view.with_str(*t, |s| {
+                            crate::numeric::leaf_value(s).is_some_and(|v| v.is_infinite())
+                        }))
+            }
             Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| self.certainly_finite(x)),
             Ex::Pow(b, ex) => {
                 self.certainly_finite(b)
@@ -2275,6 +2291,7 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 ///   terms, which all collapse into ONE `Const` absorbing the rational accumulator
 ///   (`c1 + c2 + 5 = c3`, the contract's forall-exists direction).
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
+    let _domain = super::rat::number_domain(cx.f64_numbers());
     // Flatten (Flat) + literal scan.
     let mut lits: Vec<Rat> = Vec::new();
     let mut acc_overflow: Vec<Ex> = Vec::new(); // Num partials an overflowed accumulator emitted
@@ -2331,19 +2348,15 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         return Ex::NaN;
     }
 
-    // DETERMINISTIC literal accumulation: same rationale (and same shape) as the mul()
-    // coefficient fold above -- sorted-order summation makes the overflow partition a
-    // function of the multiset, not of the input spelling.
+    // CANONICAL literal partition (design 2c, `Rat::partition_sum`): the literals summed as
+    // far as the sums stay representable, as a fixed point a re-read reproduces.
     lits.sort_unstable_by(|a, b| a.cmp_exact(b));
     let mut acc = Rat::ZERO;
-    for r in lits {
-        match acc.checked_add(&r) {
-            Some(t) => acc = t,
-            None => {
-                acc_overflow.push(Ex::Num(acc));
-                acc = r;
-            }
-        }
+    let mut lits = Rat::partition_sum(lits);
+    if lits.len() == 1 {
+        acc = lits.pop().unwrap();
+    } else {
+        acc_overflow.extend(lits.into_iter().map(Ex::Num));
     }
 
     // Like-term collection: (key, positive-coefficient sum, negative-coefficient sum), in
@@ -2393,12 +2406,6 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     // an `Add`: when merged coefficients sum to exactly 1 on an Add-valued key
     // (`(1/4)A + (3/4)A -> A`), `term_join` returns the bare key -- SPLICE it, or the outer bag
     // would nest a same-kind bag and break the Flat invariant.
-    struct RebuiltBucket {
-        key: Ex,
-        pos: Rat,
-        neg: Rat,
-        unmerged: Vec<(Rat, Ex)>,
-    }
     let mut out: Vec<Ex> = Vec::new();
     let mut spliced = false;
     let push_term = |out: &mut Vec<Ex>, spliced: &mut bool, t: Ex| match t {
@@ -2419,51 +2426,29 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
         t => out.push(t),
     };
     for b in buckets {
-        // DETERMINISTIC per-key fold: sort the collected coefficients, then sum each
-        // sign pool in that order; an overflow emits the partial and restarts. The
-        // partition is now a function of the coefficient MULTISET (B3b).
-        let Bucket { key, mut coeffs } = b;
-        coeffs.sort_unstable_by(|x, y| x.cmp_exact(y));
-        let (mut bpos, mut bneg) = (Rat::ZERO, Rat::ZERO);
-        let mut unmerged: Vec<(Rat, Ex)> = Vec::new();
-        for c in coeffs {
-            let slot = if c.is_negative() {
-                &mut bneg
-            } else {
-                &mut bpos
-            };
-            match slot.checked_add(&c) {
-                Some(t) => *slot = t,
-                None => unmerged.push((c, key.clone())),
-            }
-        }
-        let b = RebuiltBucket {
-            key,
-            pos: bpos,
-            neg: bneg,
-            unmerged,
-        };
-        let cancels = !b.pos.is_zero() && !b.neg.is_zero();
-        if cancels && cx.fin_licensed(&b.key) {
-            match b.pos.checked_add(&b.neg) {
-                Some(c) if c.is_zero() => {} // fully cancelled; 0 * (finite-a.e. t) -> 0 licensed
-                Some(c) => push_term(&mut out, &mut spliced, term_join(c, b.key, cx)),
-                None => {
-                    push_term(&mut out, &mut spliced, term_join(b.pos, b.key.clone(), cx));
-                    push_term(&mut out, &mut spliced, term_join(b.neg, b.key, cx));
-                }
-            }
+        // DETERMINISTIC per-key fold (design 2c, `Rat::partition_sum`). A bucket that mixes
+        // signs on a key that is finite a.e. may cancel across them (`x - x = 0` needs the
+        // licence), so its coefficients fold as ONE signed partition; otherwise each sign pool
+        // folds on its own (a same-sign sum is total). Either way no two members left in a
+        // pool fold, so the bucket re-reads to itself in any printed order. Folding the pools
+        // first and cancelling only two folded totals did not: a printed bag
+        // `x1 - C*x1 - D*x1` whose negative pool refused re-read `x1 - C*x1` first and
+        // cancelled it.
+        let Bucket { key, coeffs } = b;
+        let mixed =
+            coeffs.iter().any(|c| c.is_negative()) && coeffs.iter().any(|c| !c.is_negative());
+        let pools: Vec<Vec<Rat>> = if mixed && cx.fin_licensed(&key) {
+            vec![coeffs]
         } else {
-            // Same-sign only (TOTAL), or the licence is absent: emit each sign separately.
-            if !b.pos.is_zero() {
-                push_term(&mut out, &mut spliced, term_join(b.pos, b.key.clone(), cx));
+            let (negs, poss): (Vec<Rat>, Vec<Rat>) =
+                coeffs.into_iter().partition(|c| c.is_negative());
+            vec![poss, negs]
+        };
+        for pool in pools {
+            for c in Rat::partition_sum(pool) {
+                // a fully cancelled bucket leaves nothing: 0 * (finite-a.e. t) -> 0 licensed
+                push_term(&mut out, &mut spliced, term_join(c, key.clone(), cx));
             }
-            if !b.neg.is_zero() {
-                push_term(&mut out, &mut spliced, term_join(b.neg, b.key, cx));
-            }
-        }
-        for (c, key) in b.unmerged {
-            push_term(&mut out, &mut spliced, term_join(c, key, cx));
         }
     }
     out.extend(acc_overflow);
@@ -2915,6 +2900,7 @@ fn orientation_coeff(t: &Ex, view: &TokenView) -> Rat {
 /// * `Const` independence as in `add`; bare `Const` factors collapse into ONE `Const`, absorbing
 ///   a NONZERO rational coefficient (`c * r = c'`, forall-exists; 0 stays outside).
 pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
+    let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut nums: Vec<Rat> = Vec::new();
     let mut coeff_overflow: Vec<Ex> = Vec::new();
     let mut inf_sign: Option<bool> = None; // Some(true) = +inf so far, Some(false) = -inf
@@ -3013,15 +2999,15 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
         }
     }
     nums.sort_unstable_by(|a, b| a.cmp_exact(b));
+    // CANONICAL coefficient partition (design 2c, `Rat::partition_product`): the magnitudes
+    // multiplied as far as the products stay representable, as a fixed point a re-read
+    // reproduces; the sign stays on the coefficient slot below (F72).
     let mut coeff = Rat::ONE;
-    for r in nums {
-        match coeff.checked_mul(&r) {
-            Some(p) => coeff = p,
-            None => {
-                coeff_overflow.push(Ex::Num(coeff));
-                coeff = r;
-            }
-        }
+    let mut nums = Rat::partition_product(nums);
+    if nums.len() == 1 {
+        coeff = nums.pop().unwrap();
+    } else {
+        coeff_overflow.extend(nums.into_iter().map(Ex::Num));
     }
     if net_neg {
         match coeff.checked_neg() {
@@ -3037,6 +3023,9 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
         }
         let sign = if coeff.is_negative() { !sign } else { sign };
         coeff = Rat::ONE;
+        // The members a refused coefficient partition kept are positive finite magnitudes
+        // (the sign is on `coeff`): each is absorbed like the coefficient (design 2c).
+        coeff_overflow.clear();
         inf_sign = Some(sign);
         if has_const {
             // inf * c: c = 0 is reachable (0 * inf = nan), so the constant does NOT absorb the
@@ -3980,6 +3969,7 @@ fn rebuild_factor(base: Ex, sym: Option<Ex>, r: Rat, cx: &Cx) -> Ex {
 /// * `(a*b)^n` for INTEGER n distributes over the factors (TOTAL as extended-real evaluations;
 ///   for non-integer exponents `(ab)^(1/2) != a^(1/2) b^(1/2)` on `a, b < 0`).
 pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
+    let _domain = super::rat::number_domain(cx.f64_numbers());
     if let Ex::Num(e) = &exp {
         if e.is_zero() {
             return Ex::Num(Rat::ONE);
@@ -4016,6 +4006,18 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 if let Some(r) = root.checked_pow_integer(&e.numer()) {
                     return Ex::Num(r);
                 }
+            }
+        }
+        // A REFUSED RECIPROCAL of a negative literal keeps its sign outside (design 2c):
+        // `(-b)^-1` is `-(b^-1)` exactly. In f64 mode a reciprocal can refuse -- `1/DBL_MAX` is
+        // subnormal, so `pow(-DBL_MAX, -1)` stays a power -- and a sign left in the base made
+        // `x / -DBL_MAX` and its own re-read `x / (-1*DBL_MAX)` two states. The reciprocal of
+        // an i128 literal always folded, so main never kept one; every other refused power of
+        // a negative literal keeps main's spelling (general sign normalisation is phase 4).
+        if b.is_negative() && *e == Rat::NEG_ONE {
+            if let Some(a) = b.checked_neg() {
+                let p = pow(Ex::Num(a), exp.clone(), cx);
+                return mul(vec![Ex::Num(Rat::NEG_ONE), p], cx);
             }
         }
     }
@@ -4139,7 +4141,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 // (every negative coefficient) is the same condition without it.
                 let neg_coeff_stuck = !cx.lossy()
                     && e.is_negative()
-                    && e.is_odd_integer()
+                    && !e.is_even_integer() // possibly odd: the f64 domain may not know
                     && bag
                         .iter()
                         .any(|f| matches!(f, Ex::Num(r) if r.is_negative() && *r != Rat::NEG_ONE))
@@ -4644,6 +4646,7 @@ pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
 }
 
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
+    let _domain = super::rat::number_domain(cx.f64_numbers());
     if let Some(folded) = f64_fold(op, &args, cx) {
         return folded;
     }
@@ -5970,7 +5973,7 @@ mod tests {
     }
 
     /// F72: with the rational content PARTITIONED across several `Num` members (the
-    /// product overflows i128), the sign has exactly ONE canonical host, a function
+    /// product is not representable), the sign has exactly ONE canonical host, a function
     /// of the value -- not of which member carried it on arrival. Before the
     /// sign-factored accumulation, `-N * P` kept the sign on the `-N` partial while
     /// the negation of `N * P` hosted it on the coefficient slot: two stable states
@@ -5979,10 +5982,15 @@ mod tests {
     fn f72_partition_sign_host_is_route_invariant() {
         with_view(|view| {
             let cx = Cx::bare(view);
-            // 0.9999999999999999 and 1/(2^127 - 1): the pair's product overflows the
-            // i128 denominator, so the bag keeps BOTH as members.
+            // 0.9999999999999999 and 1e-300: the product's denominator 10^316 exceeds the
+            // f64 domain's 2^1022 (phase 2c; it used to be an i128 overflow), so the bag keeps
+            // BOTH as members.
             let n = Rat::new(9999999999999999, 10000000000000000).unwrap();
-            let p = Rat::new(1, 170141183460469231731687303715884105727).unwrap();
+            let p = Rat::from_big(
+                num_bigint::BigInt::from(1),
+                num_traits::pow(num_bigint::BigInt::from(10), 300),
+            )
+            .unwrap();
             let route_signed_member = mul(
                 vec![Ex::Num(n.checked_neg().unwrap()), Ex::Num(p.clone())],
                 &cx,
@@ -6004,17 +6012,30 @@ mod tests {
 
     /// Integers beyond 128 bits are integers (number plan phase 2). The map of the 128-bit
     /// boundary found four sites that read "does not fit i128" as "is not an integer", each
-    /// unsound once such an integer reaches it. A big literal cannot be parsed yet (phase 2c
-    /// lifts that), so these build one directly.
+    /// unsound once such an integer reaches it. Real mode has the exact parity; the f64 domain
+    /// knows no parity beyond 2^53 (phase 2c), and every site must then refuse as well.
     #[test]
     fn big_integers_keep_their_integer_reading() {
-        with_view(|view| {
-            let cx = Cx::bare(view);
+        for mode in [RuleMode::Real, RuleMode::Default] {
+            with_view(|view| big_integer_sites(view, mode));
+        }
+    }
+
+    fn big_integer_sites(view: &TokenView, mode: RuleMode) {
+        {
+            let mut cx = Cx::bare(view);
+            cx.mode = mode;
+            let _domain = super::super::rat::number_domain(cx.f64_numbers());
             let big =
                 |p: num_bigint::BigInt| Rat::from_big(p, num_bigint::BigInt::from(1)).unwrap();
             let ten40 = big(num_traits::pow(num_bigint::BigInt::from(10), 40));
             let odd = ten40.checked_add(&Rat::ONE).unwrap(); // 10^40 + 1
-            assert!(ten40.small_int().is_none() && ten40.is_even_integer() && odd.is_odd_integer());
+            assert!(ten40.small_int().is_none() && ten40.is_integer());
+            if mode == RuleMode::Real {
+                assert!(ten40.is_even_integer() && odd.is_odd_integer());
+            } else {
+                assert!(ten40.parity().is_none() && odd.parity().is_none());
+            }
             let rootn = view.intern("rootn");
 
             // 1. rootn(x, 10^40) is a root with an integer index, not the invalid operation.
@@ -6057,6 +6078,6 @@ mod tests {
                 &cx,
             );
             assert_ne!(kept, distributed);
-        });
+        }
     }
 }

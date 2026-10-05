@@ -15,14 +15,17 @@
 //! `None` and the caller keeps the symbolic form instead of folding -- refusing to compute is
 //! always sound here, computing wrongly never is.
 //!
-//! Phase 2a: `WIDE_RESULTS` is off, so an operation on small numbers whose result leaves the
-//! small form refuses exactly as before the big form existed, and the engine never builds a big
-//! number. The big form and its arithmetic are in place (and tested) for phase 2c, which turns
-//! `WIDE_RESULTS` on.
+//! `WIDE_RESULTS` is on (phase 2c): an operation whose result leaves the small form computes it
+//! in the big form, and the result stands if it is REPRESENTABLE in the current number domain
+//! (`number_domain`): within the cap in the exact domain (`real` mode), and in the f64 domain
+//! (every other mode) only when the deployed float64 evaluator reads it within one rounding and
+//! every printed spelling of it reads back as itself. Every refusal keeps the symbolic form, as
+//! a 128-bit overflow always did.
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use num_bigint::{BigInt, BigUint, Sign};
 use num_integer::Integer;
@@ -35,7 +38,60 @@ pub const CAP_BITS: u64 = 1100;
 
 /// Whether a result of small operands that leaves the small form is computed in the big form
 /// (phase 2c) or refused, as before phase 2 (phase 2a).
-pub(crate) const WIDE_RESULTS: bool = false;
+pub(crate) const WIDE_RESULTS: bool = true;
+
+thread_local! {
+    /// The current thread's number domain: f64 (`true`, the default and every mode but `real`)
+    /// or exact (`false`, `real`). The constructors enter it from their context's mode.
+    static F64_NUMBERS: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Restores the previous number domain when dropped (see [`number_domain`]).
+pub struct DomainGuard(bool);
+
+impl Drop for DomainGuard {
+    fn drop(&mut self) {
+        F64_NUMBERS.with(|c| c.set(self.0));
+    }
+}
+
+/// Enter a number domain on this thread until the returned guard drops.
+///
+/// In the f64 domain (`true`) a number is ADMISSIBLE when it is zero or its numerator is at most
+/// DBL_MAX and its denominator at most 2^1022. That is exactly the normal numbers whose every
+/// printed spelling -- one token, `/ p q`, a divisor-side reciprocal -- reads back as the same
+/// number (design 2c; review H1, H2): the deployed evaluator reads such a number within one
+/// rounding, where a subnormal reads far from its exact value (`5e-324` is 4.94e-324) and a
+/// number beyond DBL_MAX reads as inf. Every 128-bit value is admissible, so only `from_big`
+/// checks. In the f64 domain an integer beyond 2^53 also has no known parity
+/// ([`Rat::parity`]). The exact domain (`false`) admits every number within the cap.
+pub fn number_domain(f64_numbers: bool) -> DomainGuard {
+    DomainGuard(F64_NUMBERS.with(|c| c.replace(f64_numbers)))
+}
+
+/// Whether this thread is in the f64 number domain.
+pub(crate) fn f64_numbers() -> bool {
+    F64_NUMBERS.with(|c| c.get())
+}
+
+/// DBL_MAX as an exact integer: (2^53 - 1) * 2^971.
+fn dbl_max() -> &'static BigInt {
+    static M: OnceLock<BigInt> = OnceLock::new();
+    M.get_or_init(|| BigInt::from((1u64 << 53) - 1) << 971u32)
+}
+
+/// 2^1022, the largest admissible denominator (its reciprocal is the smallest normal double).
+fn two_1022() -> &'static BigInt {
+    static M: OnceLock<BigInt> = OnceLock::new();
+    M.get_or_init(|| BigInt::one() << 1022u32)
+}
+
+/// The f64 domain's admissibility of a reduced nonzero `p/q` (see [`number_domain`]). With
+/// `|p| <= DBL_MAX` and `1 <= q <= 2^1022` the magnitude lies in [2^-1022, DBL_MAX], the normal
+/// range, so the two component bounds are the whole test.
+fn f64_admissible(p: &BigInt, q: &BigInt) -> bool {
+    p.magnitude() <= dbl_max().magnitude() && q <= two_1022()
+}
 
 /// An exact rational `p/q`, normalized (`q > 0`, `gcd(|p|, q) == 1`).
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -123,7 +179,8 @@ impl Rat {
     }
 
     /// Build `p/q` from big integers, normalized and in the small form whenever it fits.
-    /// `None` if `q == 0` or a reduced component exceeds `CAP_BITS`.
+    /// `None` if `q == 0`, a reduced component exceeds `CAP_BITS`, or -- in the f64 domain -- the
+    /// number is not admissible (see [`number_domain`]).
     pub fn from_big(p: BigInt, q: BigInt) -> Option<Rat> {
         if q.is_zero() {
             return None;
@@ -139,6 +196,9 @@ impl Rat {
             return Some(Rat::small(ps, qs));
         }
         if p.bits() > CAP_BITS || q.bits() > CAP_BITS {
+            return None;
+        }
+        if f64_numbers() && !f64_admissible(&p, &q) {
             return None;
         }
         Some(Rat(Repr::Big(Arc::new(BigParts { p, q }))))
@@ -166,21 +226,31 @@ impl Rat {
         }
     }
 
-    /// The numerator as an integer.
+    /// The numerator as an integer. A component of an existing number: within the cap and
+    /// independent of the current number domain.
     pub fn numer(&self) -> Rat {
         match &self.0 {
             Repr::Small { p, .. } => Rat::small(*p, 1),
-            Repr::Big(b) => Rat::from_big(b.p.clone(), BigInt::one())
-                .expect("a reduced component of a capped number is within the cap"),
+            Repr::Big(b) => Rat::integer(b.p.clone()),
         }
     }
 
-    /// The denominator as a (positive) integer.
+    /// The denominator as a (positive) integer (see [`Rat::numer`]).
     pub fn denom(&self) -> Rat {
         match &self.0 {
             Repr::Small { q, .. } => Rat::small(*q, 1),
-            Repr::Big(b) => Rat::from_big(b.q.clone(), BigInt::one())
-                .expect("a reduced component of a capped number is within the cap"),
+            Repr::Big(b) => Rat::integer(b.q.clone()),
+        }
+    }
+
+    /// An integer known to be within the cap, small whenever it fits, without the domain check.
+    fn integer(n: BigInt) -> Rat {
+        match small_of(&n) {
+            Some(v) => Rat::small(v, 1),
+            None => Rat(Repr::Big(Arc::new(BigParts {
+                p: n,
+                q: BigInt::one(),
+            }))),
         }
     }
 
@@ -247,20 +317,30 @@ impl Rat {
         }
     }
 
-    /// An odd integer (of any size).
-    pub fn is_odd_integer(&self) -> bool {
+    /// The parity of an integer: `Some(true)` odd, `Some(false)` even. `None` for a non-integer
+    /// and, in the f64 domain, for an integer beyond 2^53: the float64 evaluator reads such an
+    /// integer as an even float, so its parity is not known there (design 2c, review H3) and
+    /// every parity-dependent rewrite refuses. The exact domain has the exact parity.
+    pub fn parity(&self) -> Option<bool> {
         match &self.0 {
-            Repr::Small { p, q } => *q == 1 && p % 2 != 0,
-            Repr::Big(b) => b.q.is_one() && b.p.is_odd(),
+            Repr::Small { p, q } => {
+                if *q != 1 || (f64_numbers() && p.unsigned_abs() > 1u128 << 53) {
+                    return None;
+                }
+                Some(p % 2 != 0)
+            }
+            Repr::Big(b) => (b.q.is_one() && !f64_numbers()).then(|| b.p.is_odd()),
         }
     }
 
-    /// An even integer (of any size); zero is even.
+    /// CERTAINLY an odd integer (see [`Rat::parity`]).
+    pub fn is_odd_integer(&self) -> bool {
+        self.parity() == Some(true)
+    }
+
+    /// CERTAINLY an even integer (see [`Rat::parity`]); zero is even.
     pub fn is_even_integer(&self) -> bool {
-        match &self.0 {
-            Repr::Small { p, q } => *q == 1 && p % 2 == 0,
-            Repr::Big(b) => b.q.is_one() && b.p.is_even(),
-        }
+        self.parity() == Some(false)
     }
 
     /// The integer value if this is an integer in the small form. For counts, indices and
@@ -302,6 +382,61 @@ impl Rat {
         }
     }
 
+    /// The canonical members of a product bag: the bag folded as far as its products stay
+    /// representable (units dropped; `[]` is the product 1). Sorted ascending, the lowest
+    /// pair of members that folds is replaced by its product, until no two members fold. A
+    /// fold that is refused keeps its members.
+    ///
+    /// Why no two members may fold: a printed bag re-reads as a left-nested product in its
+    /// printed order, which need not be the sorted order (a sum prints its positive terms
+    /// first), so every subset of the members is canonicalised on its own on the way. A bag
+    /// in which no two members fold is the partition of each of its subsets, so it re-reads
+    /// to itself in any order and `simplify` is idempotent on it. Weaker rules failed: the
+    /// greedy fold of main stopped after one pass (three rows of the phase-1 review),
+    /// all-or-nothing folding broke on a prefix that folds where the whole bag does not
+    /// (`x1*1e300*1e10*1e-100`), and folding sorted neighbours only left two members apart
+    /// that the printed order brought together (`x1 + 912.../295... - 4e28 - 1e-325`, real
+    /// mode). Each fold is one exact product admitted by the number domain (in the f64
+    /// domain: the result is admissible, see [`number_domain`]).
+    pub fn partition_product(mut members: Vec<Rat>) -> Vec<Rat> {
+        members.retain(|m| !m.is_one());
+        if members.iter().any(Rat::is_zero) {
+            return vec![Rat::ZERO];
+        }
+        Self::partition(members, Rat::checked_mul, Rat::is_one)
+    }
+
+    /// The canonical members of a sum bag (zeros dropped; `[]` is the sum 0), by the same
+    /// rule as [`Rat::partition_product`].
+    pub fn partition_sum(mut members: Vec<Rat>) -> Vec<Rat> {
+        members.retain(|m| !m.is_zero());
+        Self::partition(members, Rat::checked_add, Rat::is_zero)
+    }
+
+    fn partition(
+        mut members: Vec<Rat>,
+        fold: fn(&Rat, &Rat) -> Option<Rat>,
+        neutral: fn(&Rat) -> bool,
+    ) -> Vec<Rat> {
+        'fold: loop {
+            members.sort_unstable_by(|a, b| a.cmp_exact(b));
+            for i in 0..members.len() {
+                for j in i + 1..members.len() {
+                    if let Some(x) = fold(&members[i], &members[j]) {
+                        members.remove(j);
+                        if neutral(&x) {
+                            members.remove(i);
+                        } else {
+                            members[i] = x;
+                        }
+                        continue 'fold;
+                    }
+                }
+            }
+            return members;
+        }
+    }
+
     pub fn checked_add(&self, o: &Rat) -> Option<Rat> {
         if let (Some((p1, q1)), Some((p2, q2))) = (self.small_parts(), o.small_parts()) {
             // p1/q1 + p2/q2 = (p1*q2 + p2*q1) / (q1*q2), then normalize.
@@ -339,7 +474,13 @@ impl Rat {
     pub fn checked_neg(&self) -> Option<Rat> {
         match &self.0 {
             Repr::Small { p, q } => Some(Rat::small(p.checked_neg()?, *q)),
-            Repr::Big(b) => Rat::from_big(-b.p.clone(), b.q.clone()),
+            // A sign flip keeps both magnitudes: within the cap, and admissible in every
+            // domain the number already is, so no domain check. It stays big: a big
+            // magnitude is at least 2^127 and `i128::MIN` is not small.
+            Repr::Big(b) => Some(Rat(Repr::Big(Arc::new(BigParts {
+                p: -b.p.clone(),
+                q: b.q.clone(),
+            })))),
         }
     }
 
@@ -370,13 +511,16 @@ impl Rat {
         } else {
             (self.clone(), n)
         };
-        // (+-1)^n: exact for ANY exponent magnitude.
-        if base == Rat::ONE || base == Rat::NEG_ONE {
-            return Some(if base == Rat::ONE || n % 2 == 0 {
-                Rat::ONE
-            } else {
-                Rat::NEG_ONE
-            });
+        // (+-1)^n: exact for ANY exponent magnitude -- but (-1)^n needs n's parity, which the
+        // f64 domain does not know beyond 2^53.
+        if base == Rat::ONE {
+            return Some(Rat::ONE);
+        }
+        if base == Rat::NEG_ONE {
+            if f64_numbers() && n.unsigned_abs() > 1u128 << 53 {
+                return None;
+            }
+            return Some(if n % 2 == 0 { Rat::ONE } else { Rat::NEG_ONE });
         }
         if base.small_parts().is_some() {
             // Exponentiation by squaring, checked throughout. Cap the exponent so a
@@ -445,11 +589,9 @@ impl Rat {
             return Some(Rat::ONE);
         }
         if *self == Rat::NEG_ONE {
-            return Some(if n.is_even_integer() {
-                Rat::ONE
-            } else {
-                Rat::NEG_ONE
-            });
+            return n
+                .parity()
+                .map(|odd| if odd { Rat::NEG_ONE } else { Rat::ONE });
         }
         None
     }
@@ -1397,18 +1539,21 @@ mod tests {
         // a different question than int_root's equality search, so no shared bug), and
         // require the round-trip. Before the fix this failed for every k with
         // r_k > 2^floor(127/k) -- most k, since 127 is prime.
+        // (Representability is i128's here, by the test's construction: the largest r whose
+        // k-th power fits i128, found with plain integer arithmetic.)
         for k in 2i128..127 {
+            let fits = |r: i128| r.checked_pow(k as u32).is_some();
             let (mut lo, mut hi) = (1i128, 1i128 << (127 / k as u32 + 1));
             while lo < hi {
                 let mid = lo + (hi - lo + 1) / 2;
-                if Rat::int(mid).checked_pow_int(k).is_some() {
+                if fits(mid) {
                     lo = mid;
                 } else {
                     hi = mid - 1;
                 }
             }
-            let n = Rat::int(lo).checked_pow_int(k).unwrap();
-            assert!(Rat::int(lo + 1).checked_pow_int(k).is_none());
+            let n = Rat::int(lo.pow(k as u32));
+            assert!(!fits(lo + 1));
             assert_eq!(n.checked_root(k), Some(Rat::int(lo)), "k = {k}, r_k = {lo}");
         }
     }
@@ -1477,6 +1622,7 @@ mod tests {
     /// derived `Eq`/`Hash` are value equality.
     #[test]
     fn from_big_demotes_every_value_that_fits() {
+        let _domain = number_domain(false); // the exact domain: every number within the cap
         let r = big(
             "340282366920938463463374607431768211456",
             "680564733841876926926749214863536422912",
@@ -1493,6 +1639,7 @@ mod tests {
 
     #[test]
     fn the_cap_bounds_both_components() {
+        let _domain = number_domain(false); // the exact domain: every number within the cap
         let two = BigInt::from(2);
         let at_cap = num_traits::pow(two, CAP_BITS as usize - 1); // CAP_BITS bits
         assert!(Rat::from_big(at_cap.clone(), BigInt::from(3)).is_some());
@@ -1505,6 +1652,7 @@ mod tests {
     /// Arithmetic with a big operand, against Python's `fractions.Fraction`.
     #[test]
     fn big_arithmetic_is_exact() {
+        let _domain = number_domain(false); // the exact domain: every number within the cap
         let a = big("1000000000000000000000000000000000000000", "3"); // 10^39/3
         let b = big("1", "1000000000000000000000000000000000000000"); // 10^-39
         assert_eq!(a.checked_mul(&b), Rat::new(1, 3));
@@ -1598,6 +1746,7 @@ mod tests {
 
     #[test]
     fn big_decimals_print_and_parse_exactly() {
+        let _domain = number_domain(false); // the exact domain: every number within the cap
         let r = big("1", "100000000000000000000000000000000000000000"); // 1e-41
         let s = r.exact_decimal().unwrap();
         assert_eq!(s, format!("0.{}1", "0".repeat(40)));

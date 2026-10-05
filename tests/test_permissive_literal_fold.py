@@ -144,4 +144,6 @@ def test_stream_constant_draw_folds_to_one_literal_and_is_idempotent(engine):
     assert len(once) == 1 and "/" not in once[0] and len(once[0].replace("-", "").replace(".", "").lstrip("0")) <= 17, once
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     strict = list(engine.simplify(STREAM_DRAW, mode=Mode.f64))
-    assert len(strict) > 1   # the strict tier cannot fold it: the exact value leaves i128
+    # Phase 2c: the exact product fits the 1,100-bit cap, so the strict tier folds the subtree
+    # too -- to the exact decimal of its last step, not one float -- and agrees in value.
+    assert len(strict) == 1 and math.isclose(float(strict[0]), float(once[0]), rel_tol=4e-16), strict

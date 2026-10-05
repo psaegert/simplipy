@@ -14,6 +14,8 @@ These are the PRODUCT gates for the AC core:
   was a permanent xfail until both left the tree together) holds BY CONSTRUCTION here.
 """
 
+from fractions import Fraction
+
 import pytest
 
 from simplipy import Mode, SimpliPyEngine
@@ -462,8 +464,15 @@ class TestContracts:
         # literal), and the shape is again unmoved. 94969 -> 93724 at the ONE-BIT LITERAL
         # FLOOR (owner 2026-08-22): the small exponents stop being clamped together. The
         # endpoint shape is unmoved a third time.
-        assert engine.complexity(out_a) == 93724
-        assert "pow" in out_a and any("6449537531992260" in t for t in out_a), out_a
+        # 93724 -> 142374 at PHASE 2c (exact numbers to 1,100 bits): the factored `pow c 2`
+        # existed only because the square's denominator 10^68 overflowed 128 bits. The exact
+        # square now fits, the constructor folds it as it always folded within 128 bits, and
+        # `pow` distributes the square over the product, so 2*c^2 materialises as one
+        # 34-digit coefficient -- dearer under mu than the factored power was.
+        assert engine.complexity(out_a) == 142374
+        coeff = 2 * Fraction('6.4495375319922606e-18') ** 2
+        assert out_a[0] == '*' and Fraction(out_a[1]) == coeff, out_a
+        assert out_a[2:] == ['pow', 'sinh', 'x2', '2'], out_a
         assert engine.simplify(out_a) == out_a  # and the healed form is a fixpoint
 
     def test_infinity_sum_sign_families_converge_flat(self, engine: SimpliPyEngine) -> None:

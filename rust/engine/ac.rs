@@ -459,7 +459,8 @@ impl Engine {
                 if !r.is_integer() {
                     return None;
                 }
-                (r.is_negative(), r.is_odd_integer())
+                // the parity, or fall through where the f64 domain does not know it
+                (r.is_negative(), r.parity()?)
             }
             Ex::Leaf(t) => view.with_str(*t, crate::numeric::integer_literal_parity)?,
             Ex::Mul(v) if v.len() == 2 => match (&v[0], &v[1]) {
@@ -690,7 +691,7 @@ impl Engine {
         // folding entirely. Only the mine's entry below bypasses the dispatcher, and it
         // does so on purpose.
         let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, mode)
     }
 
     /// [`Engine::ac_simplify_proj`] with the fold discipline stated rather than derived.
@@ -705,7 +706,7 @@ impl Engine {
         fold_tr: bool,
     ) -> Option<Vec<String>> {
         let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, mode, 0, fold_tr);
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, mode)
     }
 
     /// The shared tail of both projections: malformed input is `None` -- the AC parser is
@@ -713,14 +714,24 @@ impl Engine {
     /// ValueError). The old contract returned the input unchanged, which silently passed
     /// garbage through the one entry point whose inputs skip `is_valid` (audit Tier-2,
     /// 2026-08-03).
-    fn project(&self, ctx: SimplifyCtx, best: Option<Ex>, form: AcForm) -> Option<Vec<String>> {
+    fn project(
+        &self,
+        ctx: SimplifyCtx,
+        best: Option<Ex>,
+        form: AcForm,
+        mode: RuleMode,
+    ) -> Option<Vec<String>> {
         // Malformed input is `None` -- the AC parser is the arbiter, and the FAILURE
         // SIGNAL propagates to the caller (the FFI raises ValueError). The old contract
         // returned the input unchanged, which silently passed garbage through the one
         // entry point whose inputs skip `is_valid` (audit Tier-2, 2026-08-03).
         let best = best?;
         let view = self.view(&ctx);
+        // Spelled in the run's number domain (design 2c): `mode` built these numbers. Only
+        // the domain follows the run; the spelling context stays `bare` (a lossy mode's
+        // licences would change the spelling).
         let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &bare),
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
@@ -744,7 +755,11 @@ impl Engine {
         let (ctx, best) = self.ac_simplify_ex_explore(tokens, max_passes, mode, explore_budget);
         let best = best?;
         let view = self.view(&ctx);
+        // Spelled in the run's number domain (design 2c): `mode` built these numbers. Only
+        // the domain follows the run; the spelling context stays `bare` (a lossy mode's
+        // licences would change the spelling).
         let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &bare),
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
@@ -773,7 +788,7 @@ impl Engine {
             Cx::folds_for(RuleMode::Default),
             Some(suppressed),
         );
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, RuleMode::Default)
     }
 
     /// The PRETTY INFIX rendering of the simplified expression: `x8 + 1.2*x3`, `-x0/3`,
@@ -790,6 +805,7 @@ impl Engine {
         let best = best?;
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         Some(to_infix_pretty(&best, &bare))
     }
 
@@ -806,6 +822,7 @@ impl Engine {
         let best = best?;
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         Some(to_infix_pretty(&best, &bare))
     }
 
@@ -1020,6 +1037,9 @@ impl Engine {
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
         };
+        // The whole call runs in the mode's number domain (design 2c): the
+        // certificates and folds below build numbers too.
+        let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         // Parse with the CHAIN'S context for the requested mode (F2 route fix,
         // 2026-08-24) -- see ac_complexity; this is the theorem-bearing
         // instrument, and its parse route must be the one the descent actually
@@ -1073,6 +1093,9 @@ impl Engine {
             fold_f64: Cx::folds_for(RuleMode::Default),
             sentinels_expired: false,
         };
+        // The whole call runs in the mode's number domain (design 2c): the
+        // certificates and folds below build numbers too.
+        let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         let bare = Cx::bare(&view);
         let mut out = Vec::new();
         let mut stack: Vec<&Ex> = vec![&best];
@@ -1311,6 +1334,9 @@ impl Engine {
             fold_f64: fold_tr,
             sentinels_expired: false,
         };
+        // The whole call runs in the mode's number domain (design 2c): the
+        // certificates and folds below build numbers too.
+        let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         // Parse with the CALL's MODE: a bare (sound) parse let sound-only
         // constructor arms destroy structure lossy passes need -- `inv
         // float("inf")` folded to 0 AT PARSE, so the mul bag never saw the
@@ -2018,7 +2044,7 @@ mod tests {
     fn h051_num_exponents_classify_exactly() {
         let Some(e) = engine() else { return };
         let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
                 .unwrap()
         };
         let odd = "10000000000000000001"; // 10^19 + 1: Num, not f64-representable
@@ -2057,7 +2083,7 @@ mod tests {
             odd,
             "-0.9999999999999999",
         ];
-        let kept = e.ac_simplify(&t(&chain), 48, RuleMode::Default).unwrap();
+        let kept = e.ac_simplify(&t(&chain), 48, RuleMode::Real).unwrap();
         assert_eq!(
             kept,
             // H-059 (2026-08-07): the coefficient now takes the DIVISOR side, per the
@@ -2076,7 +2102,7 @@ mod tests {
                 "</mul>"
             ])
         );
-        assert_eq!(e.ac_simplify(&kept, 48, RuleMode::Default).unwrap(), kept);
+        assert_eq!(e.ac_simplify(&kept, 48, RuleMode::Real).unwrap(), kept);
     }
 
     /// H-045-R (owner Option B, 2026-08-05): `pow` with a negative ground base and a
@@ -2091,7 +2117,7 @@ mod tests {
     fn h045_beyond_i128_integer_exponents_classify_exactly() {
         let Some(e) = engine() else { return };
         let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
                 .unwrap()
         };
         let odd_huge = "10000000000000000000000000000000000000001"; // 10^40 + 1
@@ -2108,17 +2134,16 @@ mod tests {
         // H-048: the SIGNED leaf spelling "-1e40" splits into structure at parse
         // (the sign is never inside an opaque leaf), so the kept form is the
         // structural negation -- identical to the `neg`-spelled twin below.
-        assert_eq!(
-            s(&["pow", "float(\"-inf\")", "-1e40"]),
-            t(&["pow", "float(\"-inf\")", "neg", "1e40"])
-        );
-        assert_eq!(
-            s(&["pow", "float(\"-inf\")", "neg", "1e40"]),
-            t(&["pow", "float(\"-inf\")", "neg", "1e40"])
-        );
+        // Phase 2c: 1e40 is an exact number (no longer an opaque leaf), so the negative
+        // exponent decomposes as H-051's Num exponents do: inv((-inf)^(10^40)) = 0 exactly.
+        assert_eq!(s(&["pow", "float(\"-inf\")", "-1e40"]), t(&["0"]));
+        assert_eq!(s(&["pow", "float(\"-inf\")", "neg", "1e40"]), t(&["0"]));
         // Finite negative bases: finite class, REFUSE (the old path shipped nan).
-        assert_eq!(s(&["pow", "(-2)", "1e40"]), t(&["pow", "-2", "1e40"]));
-        assert_eq!(s(&["pow", "(-1)", "1e40"]), t(&["pow", "-1", "1e40"]));
+        // Phase 2c: 1e40 is the exact integer 10^40 and prints as its digits; 2^(10^40) is far
+        // over the cap and stays, while (-1)^(10^40) is exactly 1 in real mode.
+        let ten40 = "10000000000000000000000000000000000000000";
+        assert_eq!(s(&["pow", "(-2)", "1e40"]), t(&["pow", "-2", ten40]));
+        assert_eq!(s(&["pow", "(-1)", "1e40"]), t(&["1"]));
         // A ground COMPOSITE base classifying -inf takes the same arm.
         assert_eq!(s(&["pow", "log", "0", "1e40"]), t(&["float(\"inf\")"]));
         // Untouched paths: +inf base; non-integer spelling keeps the correct Nan;
@@ -2132,6 +2157,33 @@ mod tests {
             s(&["pow", "float(\"-inf\")", "1e19"]),
             t(&["float(\"inf\")"])
         );
+    }
+
+    /// Phase 2c (design review H3): in f64 mode an integer beyond 2^53 has no known parity --
+    /// the deployed evaluator reads it as an even float -- so a parity fold refuses. Main folded
+    /// `(-1)^9007199254740993` to -1 where the evaluator computes 1.0. Real mode keeps the exact
+    /// parity (`h045_...`, `h051_...`, run in real mode).
+    #[test]
+    fn f64_parity_beyond_2_53_is_unknown() {
+        let Some(e) = engine() else { return };
+        let s = |toks: &[&str]| {
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
+                .unwrap()
+        };
+        let odd = "9007199254740993"; // 2^53 + 1
+        assert_eq!(s(&["pow", "(-1)", odd]), t(&["pow", "-1", odd]));
+        assert_eq!(s(&["pow", "(-1)", "9007199254740992"]), t(&["1"])); // 2^53: exact
+        assert_eq!(s(&["pow", "(-1)", "9007199254740991"]), t(&["-1"]));
+        let big_odd = "10000000000000000001";
+        assert_eq!(
+            s(&["pow", "float(\"-inf\")", big_odd]),
+            t(&["pow", "float(\"-inf\")", big_odd])
+        );
+        let r = |toks: &[&str]| {
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
+                .unwrap()
+        };
+        assert_eq!(r(&["pow", "(-1)", odd]), t(&["-1"]));
     }
 
     /// REGRESSION (64k/1M-gate idempotence rows 29663/37873/59042 + 274133/514869): a
