@@ -837,7 +837,7 @@ pub const READER_DIGITS: usize = 4300;
 /// so a token reads as its exact value however it was printed.
 pub fn token_rational(t: &str) -> Option<(BigInt, BigInt)> {
     if let Some((p, q)) = crate::utils::split_fraction(t) {
-        if p.len() > READER_DIGITS + 1 || q.len() > READER_DIGITS {
+        if p.trim_start_matches(['+', '-']).len() > READER_DIGITS || q.len() > READER_DIGITS {
             return None;
         }
         let p: BigInt = p.strip_prefix('+').unwrap_or(p).parse().ok()?;
@@ -1655,7 +1655,8 @@ mod tests {
         assert_eq!(token_nearest_f64("1/0"), None);
         assert_eq!(token_nearest_f64(&"7".repeat(5000)), None); // beyond the digit limit
         assert_eq!(token_nearest_f64("1e99999"), None); // beyond the exponent limit
-                                                        // integers: 2^200 written out is exactly the f64 2^200; 1e40's nearest f64 is not 10^40
+
+        // integers: 2^200 written out is exactly the f64 2^200; 1e40's nearest f64 is not 10^40
         let two200 = num_traits::pow(BigInt::from(2), 200).to_string();
         assert!(token_denotes_integer(&two200, 2f64.powi(200)));
         assert!(!token_denotes_integer("1e40", 1e40));

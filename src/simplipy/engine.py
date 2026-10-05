@@ -2447,7 +2447,9 @@ class SimpliPyEngine:
 
         Every literal is read as its nearest float64 (:func:`simplipy.utils.evaluator_literal`):
         an integer beyond 2^53 is written as a float, and one beyond float64's range as
-        ``inf``, so Python never computes with an exact ``int`` that no float64 holds.
+        ``inf``. Integers up to 2^53 stay Python ``int``s, so arithmetic between two of them
+        is exact integer arithmetic: ``sin(4294967296*4294967297)`` raises numpy's TypeError
+        as before (the simplified form folds the product to one literal).
 
         .. warning::
            Compiling runs the expression's realizations through :func:`compile`, so the

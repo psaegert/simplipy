@@ -711,12 +711,14 @@ def evaluator_literal(token: str) -> str:
     """
     bare = token[1:-1] if token.startswith('(') and token.endswith(')') else token
     if _INTEGER_NUMERAL.fullmatch(bare):
-        try:
-            value = int(bare)
-        except ValueError:  # beyond Python's integer-string limit: leave it to Python
-            return token
+        negative = bare.startswith('-')
+        digits = bare.lstrip('+-').lstrip('0') or '0'
+        if len(digits) > 309:  # beyond float64's range, at any length
+            return 'float("-inf")' if negative else 'float("inf")'
+        value = -int(digits) if negative else int(digits)
         if abs(value) <= _EXACT_FLOAT_INTEGERS:
-            return token
+            # a `+`, leading zeros and `-0` are numerals but not Python (`007` is a SyntaxError)
+            return token if bare == str(value) else str(value)
         try:
             return repr(float(value))
         except OverflowError:
@@ -729,6 +731,8 @@ def evaluator_literal(token: str) -> str:
             return 'float("-inf")' if p.startswith('-') else 'float("inf")'
         except ValueError:  # beyond Python's integer-string limit
             return token
+        canonical = f'{int(p)}/{int(q)}'  # `01/3` is not Python either
+        return token if bare == canonical else canonical
     return token
 
 
@@ -742,7 +746,9 @@ def literal_float(token: str) -> float | None:
     the compiled expression does (:func:`evaluator_literal`).
     """
     if _DECIMAL_NUMERAL.fullmatch(token):
-        return float(token)
+        value = float(token)
+        # an integer spelling is an `int` to the compiled evaluator, so `-0` is +0.0
+        return 0.0 if value == 0 and _INTEGER_NUMERAL.fullmatch(token) else value
     if _FRACTION_NUMERAL.fullmatch(token):
         p, q = token.split('/')
         try:

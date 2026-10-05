@@ -2349,8 +2349,8 @@ fn denotation_at_range_boundary(t: &str, v: f64) -> Option<Boundary> {
         if q.chars().all(|c| c == '0') {
             return None;
         }
-        if p.chars().all(|c| c == '0' || c == '-') {
-            return None; // an exact zero, spelled as a fraction
+        if p.trim_start_matches(['+', '-']).chars().all(|c| c == '0') {
+            return None; // an exact zero, spelled as a fraction (`-0/5`, `+0/5`, `+00/7`)
         }
         // Read exactly, `v` is the correctly rounded value: an infinite image is an overflow
         // and a zero image an underflow, exactly as for a decimal.
@@ -5035,8 +5035,16 @@ mod tests {
         // A near-miss literal (denoted 10^19 + 100, NOT the f64 1e19 it rounds to) must
         // NOT certify: bracket kept, class refuses to a Nan-a.e. claim it cannot better.
         assert!(!exact_integer_literal("1.00000000000000001e19", 1e19));
+        // An integer literal certifies at any size when its nearest f64 IS that integer:
+        // 2^200 written out is a point, and `(-inf)^(2^200)` is +inf.
+        let two200 = num_traits::pow(num_bigint::BigInt::from(2), 200).to_string();
+        assert_eq!(
+            value_class(&s(&["pow", "float(\"-inf\")", &two200]), ops),
+            Some(Class::PosInf)
+        );
         // INTERVAL-LAYER CONVENTION, documented (H-045-R CLOSED 2026-08-05, owner
-        // Option B): a beyond-i128 integer literal cannot certify here, keeps the
+        // Option B): an integer literal whose nearest f64 is NOT that integer (`1e40`:
+        // 10^40 is no double) cannot certify here, keeps the
         // bracket, and THIS layer's continuum convention still reads Nan for
         // `(-inf)^1e40` -- but the ENGINE's ground fold now classifies the shape
         // exactly from the spelling's sign and parity BEFORE consulting this class

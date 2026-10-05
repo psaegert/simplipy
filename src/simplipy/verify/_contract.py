@@ -109,6 +109,8 @@ _PAREN_NEG_RE = re.compile(r'^\(-((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\)$')
 _FLOAT_CALL_RE = re.compile(r'^float\((["\'])([^"\']*)\1\)$')
 _SPECIALS = {'inf': math.inf, '+inf': math.inf, '-inf': -math.inf, 'nan': math.nan}
 _NAMED = {'np.pi': math.pi, 'np.e': math.e}
+#: the longest literal read: a fraction of two 4,300-digit components, signs and parentheses
+_MAX_LITERAL_CHARS = 2 * 4300 + 8
 
 
 def _exact(t):
@@ -134,13 +136,16 @@ def _exact(t):
     """
     t = t.strip()
     mantissa, _, exponent = t.lower().partition('e')
-    if sum(c.isdigit() for c in mantissa) > 4300 or (exponent and abs(int(exponent)) > 4000):
+    if (sum(c.isdigit() for c in mantissa) > 4300
+            or len(exponent.lstrip('+-')) > 5 or (exponent and abs(int(exponent)) > 4000)):
         raise UnsupportedToken(f'literal too large to read exactly: {t[:40]!r}...')
     return Fraction(t)
 
 
 def literal_value(t):
     """The accepted numeric grammar, evaluated without `eval`. Total: value or refusal."""
+    if len(t) > _MAX_LITERAL_CHARS:  # before any regex: they backtrack on long digit runs
+        raise UnsupportedToken(f'literal too long to read: {t[:40]!r}...')
     if t in _NAMED:
         return _NAMED[t]
     m = _FLOAT_CALL_RE.match(t)
@@ -654,8 +659,8 @@ def d_eval(tree, env):
         # reading, never this lane's. Beyond float64's range the double is +-inf.
         try:
             return F(float(tree[1]))
-        except OverflowError:
-            return F(math.copysign(math.inf, tree[1]))
+        except OverflowError:  # `tree[1]` is a Fraction: compare, never convert
+            return F(math.inf if tree[1] > 0 else -math.inf)
     args = [d_eval(c, env) for c in tree[1:]]
     # C35: the ignore-everything float semantics this judge needs are SCOPED to the
     # operator application, never set process-wide at import.

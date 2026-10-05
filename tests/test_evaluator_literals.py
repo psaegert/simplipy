@@ -35,6 +35,12 @@ class TestEvaluatorLiteral:
         ('1' + '0' * 400 + '/3', 'float("inf")'),
         ('0.5', '0.5'),
         ('1e400', '1e400'),
+        ('007', '7'),
+        ('+5', '5'),
+        ('-0', '0'),
+        ('01/3', '1/3'),
+        ('9' * 5000, 'float("inf")'),              # beyond Python's integer-string limit
+        ('0' * 5000 + '5', '5'),
         ('x0', 'x0'),
         ('np.pi', 'np.pi'),
         ('*', '*'),
@@ -72,6 +78,12 @@ class TestOracleLiterals:
         from simplipy.utils import literal_float
         assert literal_float(token) == value
 
+    def test_an_integer_zero_is_positive(self) -> None:
+        import math
+        from simplipy.utils import literal_float
+        assert math.copysign(1.0, literal_float('-0')) == 1.0      # `-0` is the int 0
+        assert math.copysign(1.0, literal_float('-0.0')) == -1.0   # `-0.0` is a float
+
     def test_non_numerals_are_not_literals(self) -> None:
         from simplipy.utils import literal_float
         assert literal_float('x0') is None
@@ -90,5 +102,21 @@ class TestOracleLiterals:
             literal_value('1e999999999')
         with pytest.raises(UnsupportedToken):
             literal_value('7' * 5000)
+        with pytest.raises(UnsupportedToken):
+            literal_value('1e' + '9' * 5000)
+        with pytest.raises(UnsupportedToken):
+            literal_value('1' * 9000 + '/x')
         assert time.time() - t0 < 1.0
         assert literal_value('1e40') == 10 ** 40
+
+    def test_the_deployed_lane_reads_a_literal_beyond_range_as_inf(self) -> None:
+        from simplipy.verify._contract import judge_rule
+        assert judge_rule(['*', 'x0', '1e400'], ['*', '1e400', 'x0'])['realised'] is True
+
+
+class TestKernelLiterals:
+    @pytest.mark.parametrize('zero', ['+0/5', '(+0/5)', '+00/7', '-0/5'])
+    def test_every_spelling_of_a_zero_fraction_is_zero(self, engine: SimpliPyEngine, zero: str) -> None:
+        core = engine._core
+        assert core.interval_class(['log', zero]) == core.interval_class(['log', '0'])
+        assert core.interval_class(['-', 'log', zero, 'log', zero]) == core.interval_class(['-', 'log', '0', 'log', '0'])

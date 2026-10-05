@@ -8,7 +8,10 @@
   spelling for `sin(1e20)`) and float arithmetic rejects one above float64's range
   (OverflowError). `as_code`/`as_callable` now spell an integer beyond 2^53 as its nearest
   float64 and one beyond the range as `inf`, and a fraction beyond the range as `inf`
-  (`utils.evaluator_literal`). Integers up to 2^53 and fractions inside the range are unchanged.
+  (`utils.evaluator_literal`). Integers up to 2^53 and fractions inside the range keep their
+  values; a `+`, leading zeros and `-0` are respelled the way Python reads them (`007` was a
+  SyntaxError). Arithmetic between two integer literals up to 2^53 is still Python's exact
+  integer arithmetic.
 - **Literal readers are exact at any size.** The offline evaluator reads a fraction token whose
   components exceed 128 bits as its correctly rounded float64 (`10^400/10^399` is 10, not NaN),
   and the interval kernel certifies such a fraction like a decimal and certifies an integer
@@ -16,7 +19,11 @@
   closes the beyond-i128 residual of H-045). The mining oracles read a fraction token instead
   of failing on it (`utils.literal_float`), and the contract judge refuses an oversized spelling
   (`1e999999999`, more than 4,300 digits) before building it and reads a value beyond float64's
-  range as `inf` in its deployed lane.
+  range as `inf` in its deployed lane (it skipped the deployed check for such a rule).
+  Canonical forms move only where a literal is beyond 128 bits, because the kernel now
+  certifies such literals; the contract judge rejects none of the moved forms in a
+  20,000-expression fuzz. One move corrects a fold: `pow(-2, (2*10^400+1)/10^400)` folded to
+  NaN, because the fraction was read as inf/inf, where the deployed evaluator gives 4.
 - **Exact numbers get a big-integer form (no behaviour change yet).** A literal is an exact
   rational whose numerator and denominator were limited to 128 bits; beyond that it stayed an
   opaque symbol. The number type now also holds big integers, up to a cap of 1,100 bits per
