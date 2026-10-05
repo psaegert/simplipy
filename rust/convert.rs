@@ -324,7 +324,9 @@ fn join_operands(operands_data: &[Item]) -> String {
 /// dropped between them. Implicit multiplication (`insert_implicit_products`) applies only to
 /// touching tokens, so a dropped char never turns two operands into a product.
 fn tokenize_infix(s: &str) -> Vec<(String, bool)> {
-    let chars: Vec<char> = s.chars().filter(|&c| c != ' ').collect(); // `.replace(' ', '')`
+    // Every whitespace char is stripped like a space (a tab used to be a DROPPED char, so
+    // `2\tx0` stayed malformed where `2 x0` read `2*x0`).
+    let chars: Vec<char> = s.chars().filter(|c| !c.is_whitespace()).collect();
     let n = chars.len();
     let mut tokens = Vec::new();
     let mut touching = true;
@@ -381,10 +383,14 @@ fn tokenize_infix(s: &str) -> Vec<(String, bool)> {
 /// A NAME never starts a product, even before `(`: `read_infix` passes an unknown function
 /// through as a bare leaf (`sqrt(x0)` -> `sqrt x0`, which downstream converters rely on), so
 /// `f(x)` stays a call for every name. Names cannot touch a following name or number anyway:
-/// spaces are stripped before tokenizing, so `x1 x2` is ONE name, as before. Two touching
-/// numbers are left alone (`1.5.3` tokenizes as `1.5`, `.3` and stays malformed).
+/// whitespace is stripped before tokenizing, so `x1 x2` is ONE name, as before. Two touching
+/// numbers are left alone (`1.5.3` tokenizes as `1.5`, `.3` and stays malformed), and so is a
+/// number touching a name that starts with `_`: that is Python's digit grouping (`1_000`,
+/// `3.14_15`), which must not become a product with a rule-placeholder name (`1*_000`).
 fn insert_implicit_products(tokens: Vec<(String, bool)>) -> Vec<String> {
-    let is_leaf = |t: &str| t == "<constant>" || t.starts_with("float(\"") || is_ident_start(t);
+    let is_leaf = |t: &str| {
+        t == "<constant>" || t.starts_with("float(\"") || (is_ident_start(t) && !t.starts_with('_'))
+    };
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     for (tok, touching) in tokens {
         if let Some(prev) = out.last() {
@@ -909,10 +915,13 @@ pub fn convert_expression(prefix_expr: &[String], ops: &Operators) -> Result<Vec
                 Some(s) if is_numeric_string(s) => {
                     let s = s.to_string();
                     let mut top = stack.pop().ok_or("neg: empty stack")?;
-                    // Toggle ONE leading '-' (strip if already negative, else prepend).
-                    let new = match s.strip_prefix('-') {
-                        Some(rest) => rest.to_string(),
-                        None => format!("-{s}"),
+                    // Toggle the sign: strip a leading '-', turn a leading '+' into '-' (a
+                    // numeral may carry either; prepending to `+5` made `-+5`, which the
+                    // grammar refuses), else prepend '-'.
+                    let new = match (s.strip_prefix('-'), s.strip_prefix('+')) {
+                        (Some(rest), _) => rest.to_string(),
+                        (None, Some(rest)) => format!("-{rest}"),
+                        (None, None) => format!("-{s}"),
                     };
                     set_first(&mut top, new);
                     stack.push(top);
@@ -1099,9 +1108,10 @@ pub fn parse(
         .find(|t| crate::utils::reserved_numeric_spelling(t))
     {
         return Err(format!(
-            "invalid token {t:?}: reserved numeric spelling -- numeric to Python but not a \
-             simplipy numeric literal (H-007); use the canonical spelling ('5', '0.5', \
-             '1e-05', '1/3', float(\"inf\"), float(\"-inf\"), float(\"nan\"))"
+            "invalid token {t:?}: reserved numeric spelling -- a value to Python or a \
+             malformed numeral, but not a simplipy numeric literal (H-007); use the canonical \
+             spelling ('5', '0.5', '1e-05', '1/3', float(\"inf\"), float(\"-inf\"), \
+             float(\"nan\"))"
         ));
     }
     let parsed = if convert {
@@ -1283,8 +1293,11 @@ mod tests {
         assert_eq!(i2p(&e, "sin(x1)"), v(&["sin", "x1"]));
         assert_eq!(i2p(&e, "sqrt(x1)"), v(&["sqrt", "x1"]));
         assert_eq!(i2p(&e, "x1(x2)"), v(&["x1", "x2"]));
-        // Touching numbers stay malformed.
+        // Touching numbers stay malformed, and so does Python's digit grouping.
         assert_eq!(i2p(&e, "1.5.3"), v(&["1.5", ".3"]));
+        assert_eq!(i2p(&e, "1_000"), v(&["1", "_000"]));
+        // Every whitespace char is stripped like a space.
+        assert_eq!(i2p(&e, "2\tx1"), v(&["*", "2", "x1"]));
         // scientific notation single token.
         assert_eq!(i2p(&e, "1.5e-2 * x1"), v(&["*", "1.5e-2", "x1"]));
         // 2-ary CALL SYNTAX (H-011): the comma is a real argument separator -- it

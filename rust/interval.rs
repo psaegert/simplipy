@@ -2288,17 +2288,28 @@ fn leaf_vs(t: &str, doms: &[Vs], params: &[f64], k: &mut usize) -> Option<Vs> {
                 None => {}
             }
         }
+        // A POINT only where the literal DENOTES an integer: an integer-valued f64 below 2^53
+        // can be the rounding of a non-integer (`2311319199101329.25` reads ...329.0, and since
+        // fractions read as their nearest f64, `10182333997706870151/10000` reads ...687.0), and
+        // a point there misses the denoted value. A plain integer spelling below 2^53 is exact
+        // and keeps the cheap test; everything else is certified on its spelling.
+        let integer_spelling = {
+            let d = t.strip_prefix('-').unwrap_or(t);
+            !d.is_empty() && d.bytes().all(|c| c.is_ascii_digit())
+        };
         if !v.is_finite()
             || v == 0.0
-            || (v.fract() == 0.0 && (v.abs() < 9.007199254740992e15 || exact_integer_literal(t, v)))
+            || (v.fract() == 0.0
+                && ((integer_spelling && v.abs() < 9.007199254740992e15)
+                    || exact_integer_literal(t, v)))
         {
             Vs::constant(v)
         } else if crate::numeric::leaf_value_is_nearest(t) {
             Vs::interval(next_down(v), next_up(v), false, false)
         } else {
-            // An exact fraction whose correctly rounded f64 could not be certified (components
-            // beyond `i128`, or a value outside the range `Rat`'s midpoint tests reach): `v` is
-            // `float(p) / float(q)`, within three ulps of the fraction, so bracket four.
+            // An exact fraction whose correctly rounded f64 could not be certified (a component
+            // beyond `i128`): `v` is `float(p) / float(q)`, within three ulps of the fraction,
+            // so bracket four.
             let (mut lo, mut hi) = (v, v);
             for _ in 0..4 {
                 lo = next_down(lo);

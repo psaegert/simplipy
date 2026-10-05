@@ -64,8 +64,8 @@ LEGAL_NUMERIC = [
 # (`<mul> --5 x1 </mul>` became `<mul> -1 -5 x1 </mul>`) -- while the realized infix reads
 # most of them as values or raises.
 MALFORMED = [
-    "1/0", "0/0", "1/6.28", "0.5/3", "1e2/3", "1/3e2", "--5", "-+5", "1e5.5", "1e-5e", "5e",
-    "1/-3", "2x", "(1/0)",
+    "1/0", "0/0", "1/6.28", "0.5/3", "1e2/3", "1/3e2", "--5", "-+5", "+-5", "1e5.5", "1e-5e",
+    "5e", "1/-3", "2x", "0x", ".", "1.2.3", "(1/0)", "(--5)",
 ]
 
 # Free symbols: no numeric reader interprets these; symbol algebra applies.
@@ -145,6 +145,15 @@ class TestMalformedNumeralsRefused:
     def test_every_numeral_the_readers_accept_is_masked(self, engine: SimpliPyEngine, tok: str) -> None:
         # `1E6` and `+5` were read as numbers, but the old predicate never masked them.
         assert [site[1] for site in literal_sites(["*", tok, "x0"], engine)] == [tok]
+
+    @pytest.mark.parametrize("tok, folded", [
+        ("+5", "-5"), ("-5", "5"), ("5", "-5"), ("+1/3", "-1/3"), ("+2.5E-4", "-2.5E-4"),
+    ])
+    def test_a_folded_sign_is_a_numeral(self, engine: SimpliPyEngine, tok: str, folded: str) -> None:
+        # `convert_expression` folds `neg` into a literal; prepending to `+5` made `-+5`,
+        # which the engine then refused as its own output.
+        assert engine.convert_expression(["neg", tok]) == [folded]
+        engine.simplify(engine.convert_expression(["neg", tok]))
 
 
 class TestCanonicalGrammarUnaffected:

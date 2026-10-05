@@ -150,8 +150,9 @@ def literal_sites(tokens: list[str], engine: "SimpliPyEngine") -> list[tuple[int
     for t in tokens:
         if reserved_numeric_spelling(t):
             raise ValueError(
-                f"invalid token {t!r}: reserved numeric spelling -- numeric to Python but "
-                f"not a simplipy numeric literal (H-007); use the canonical spelling "
+                f"invalid token {t!r}: reserved numeric spelling -- a value to Python or a "
+                f"malformed numeral, but not a simplipy numeric literal (H-007); use the "
+                f"canonical spelling "
                 f"('5', '0.5', '1e-05', '1/3', float(\"inf\"), float(\"-inf\"), float(\"nan\"))")
     arity = dict(engine.operator_arity)
     sites: list[tuple[int, str, Role]] = []

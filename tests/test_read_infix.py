@@ -85,8 +85,11 @@ class TestImplicitMultiplication:
         ("2sin(x1)", "2*sin(x1)"),
         ("1/2x1", "(1/2)*x1"),
         ("2^3x1", "(2^3)*x1"),
+        ("2\tx1", "2*x1"),
     ])
     def test_implicit_equals_explicit(self, engine: SimpliPyEngine, implicit: str, explicit: str) -> None:
+        # the structure, not only the simplified value (`0*x1` and `0` simplify alike)
+        assert engine.read_infix(implicit) == engine.read_infix(explicit)
         assert engine.simplify(implicit) == engine.simplify(explicit)
 
     def test_a_name_before_a_paren_is_a_call(self, engine: SimpliPyEngine) -> None:
@@ -94,6 +97,14 @@ class TestImplicitMultiplication:
         # starts an implicit product, known or not.
         assert engine.read_infix('sqrt(x0)') == ['sqrt', 'x0']
         assert engine.read_infix('sin(x0)') == ['sin', 'x0']
+
+    @pytest.mark.parametrize("text", ["1_000", "2_0", "3.14_15"])
+    def test_digit_grouping_is_no_product(self, engine: SimpliPyEngine, text: str) -> None:
+        # Python reads `1_000` as 1000; a product with the placeholder name `_000` would be
+        # a second, silent reading, so the input stays malformed as before.
+        assert '*' not in engine.read_infix(text)
+        with pytest.raises(ValueError):
+            engine.simplify(text)
 
     def test_token_lists_stay_strict(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError, match="reserved numeric spelling"):

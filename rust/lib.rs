@@ -215,12 +215,12 @@ fn ensure_tokens_are_tokens(tokens: &[String]) -> PyResult<()> {
         }
         if crate::utils::reserved_numeric_spelling(t) {
             return Err(PyValueError::new_err(format!(
-                "invalid token {t:?}: reserved numeric spelling -- numeric to Python \
-                 (float()/literal syntax) but not a simplipy numeric literal, so the engine \
-                 would apply symbol algebra to a value-bearing token (H-007). Use the \
-                 canonical spelling instead: decimal/exponent literals ('5', '0.5', '1e-05'), \
-                 exact fractions ('1/3'), or the non-finite tokens 'float(\"inf\")', \
-                 'float(\"-inf\")', 'float(\"nan\")'."
+                "invalid token {t:?}: reserved numeric spelling -- a value to Python \
+                 (float()/literal syntax) or a malformed numeral, but not a simplipy numeric \
+                 literal, so the engine would apply symbol algebra to a value-bearing token \
+                 (H-007). Use the canonical spelling instead: decimal/exponent literals ('5', \
+                 '0.5', '1e-05'), exact fractions of integers ('1/3'), or the non-finite tokens \
+                 'float(\"inf\")', 'float(\"-inf\")', 'float(\"nan\")'."
             )));
         }
     }

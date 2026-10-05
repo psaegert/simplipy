@@ -281,17 +281,17 @@ impl Rat {
     /// division, which is off by an ulp or two once either leaves 53 bits (the permissive
     /// literal fold's inputs routinely do: `2e29 / 426738538271436458205631863649`); here
     /// that candidate is walked to the correctly rounded neighbour by EXACT midpoint tests
-    /// (`cmp_exact`), so the fold really lands on the nearest float -- the value
-    /// `float(Fraction(p, q))` produces. Where a midpoint leaves `Rat` (the extremes of the
-    /// f64 range only) the candidate stands.
+    /// (`cmp_dyadic`), so the fold really lands on the nearest float -- the value
+    /// `float(Fraction(p, q))` produces -- at every magnitude a `Rat` can have.
     pub fn to_f64_nearest(self) -> f64 {
         self.nearest_walk().0
     }
 
-    /// `to_f64_nearest`, but `None` unless every midpoint test was EXACT, i.e. the result
-    /// is certified to be the correctly rounded f64. Callers that build an enclosure
-    /// around the value (the interval kernel's one-ulp leaf bracket) need the certificate:
-    /// an uncertified candidate can sit a few ulps away.
+    /// `to_f64_nearest`, but `None` unless the walk settled, i.e. the result is certified to
+    /// be the correctly rounded f64. Callers that build an enclosure around the value (the
+    /// interval kernel's one-ulp leaf bracket) need the certificate. Every midpoint test is
+    /// exact, so this fails only if the walk does not settle within its step budget, which
+    /// `to_f64`'s candidate (within a few ulps) never needs.
     pub fn to_f64_nearest_certified(self) -> Option<f64> {
         match self.nearest_walk() {
             (y, true) => Some(y),
@@ -307,58 +307,48 @@ impl Rat {
         }
         for _ in 0..8 {
             let up = next_up(y);
-            match Rat::midpoint(y, up) {
-                Some(mid) if self.cmp_exact(&mid) == Ordering::Greater => {
-                    y = up;
-                    continue;
-                }
-                Some(_) => {}
-                None => return (y, false),
+            if self.cmp_dyadic(dyadic_midpoint(y, up)) == Ordering::Greater {
+                y = up;
+                continue;
             }
             let down = next_down(y);
-            match Rat::midpoint(down, y) {
-                Some(mid) if self.cmp_exact(&mid) == Ordering::Less => y = down,
-                Some(_) => return (y, true),
-                None => return (y, false),
+            if self.cmp_dyadic(dyadic_midpoint(down, y)) == Ordering::Less {
+                y = down;
+                continue;
             }
+            return (y, true);
         }
         (y, false)
     }
 
-    /// The exact midpoint of two finite f64s as a `Rat`, `None` when it leaves `i128`.
-    fn midpoint(a: f64, b: f64) -> Option<Rat> {
-        let (ra, rb) = (Rat::from_f64_exact(a)?, Rat::from_f64_exact(b)?);
-        ra.checked_add(&rb)?.checked_mul(&Rat::new(1, 2)?)
-    }
-
-    /// The EXACT rational value of a finite f64 (`m * 2^e`), `None` when it leaves `i128`
-    /// (|e| beyond the 126-bit denominators / 74-bit shifts `i128` holds).
-    pub fn from_f64_exact(x: f64) -> Option<Rat> {
-        if !x.is_finite() {
-            return None;
+    /// Compare exactly against the dyadic `s * 2^k`. A midpoint between two doubles near
+    /// this value can need a denominator far beyond `i128` (2^1075 at the subnormal floor),
+    /// so it is never built as a `Rat` -- that overflowed below about 2^-11 and left the walk
+    /// uncertified. Instead `p` vs `s * q * 2^k` is decided in 256 bits: `s * q` is below
+    /// 2^182 and `p` below 2^127, and a shift that leaves 256 bits makes its side the larger
+    /// one outright.
+    fn cmp_dyadic(&self, (s, k): (i128, i32)) -> Ordering {
+        let (sp, ss) = (self.p.signum(), s.signum());
+        if sp != ss {
+            return sp.cmp(&ss);
         }
-        if x == 0.0 {
-            return Some(Rat::int(0));
+        if sp == 0 {
+            return Ordering::Equal;
         }
-        let bits = x.to_bits();
-        let sign: i128 = if bits >> 63 == 1 { -1 } else { 1 };
-        let exp = ((bits >> 52) & 0x7ff) as i32;
-        let frac = (bits & ((1u64 << 52) - 1)) as i128;
-        let (m, e) = if exp == 0 {
-            (frac, -1074)
-        } else {
-            (frac | (1i128 << 52), exp - 1075)
+        let left = shl_256((0, self.p.unsigned_abs()), (-k).max(0) as u32);
+        let right = shl_256(
+            widening_mul_u128(s.unsigned_abs(), self.q as u128),
+            k.max(0) as u32,
+        );
+        let mag = match (left, right) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (None, _) => Ordering::Greater, // only one side is ever shifted
+            (_, None) => Ordering::Less,
         };
-        if e >= 0 {
-            if e > 74 {
-                return None;
-            }
-            Rat::new(sign * (m << e), 1)
+        if sp < 0 {
+            mag.reverse()
         } else {
-            if -e > 126 {
-                return None;
-            }
-            Rat::new(sign * m, 1i128 << (-e))
+            mag
         }
     }
 
@@ -488,6 +478,47 @@ impl Rat {
     }
 }
 
+/// A finite f64 as `(signed mantissa, exponent)` with `x == m * 2^e` exactly (`m` below 2^53).
+fn f64_parts(x: f64) -> (i128, i32) {
+    let bits = x.to_bits();
+    let exp = ((bits >> 52) & 0x7ff) as i32;
+    let frac = (bits & ((1u64 << 52) - 1)) as i128;
+    let (m, e) = if exp == 0 {
+        (frac, -1074)
+    } else {
+        (frac | (1i128 << 52), exp - 1075)
+    };
+    (if bits >> 63 == 1 { -m } else { m }, e)
+}
+
+/// The exact midpoint of two finite f64s as the dyadic `(s, k)`, `s * 2^k` (`s` below 2^55):
+/// both on their smaller exponent, summed, halved by the exponent.
+fn dyadic_midpoint(a: f64, b: f64) -> (i128, i32) {
+    let ((ma, ea), (mb, eb)) = (f64_parts(a), f64_parts(b));
+    let e = ea.min(eb);
+    // Adjacent doubles differ in exponent by at most one, and a zero's exponent is the
+    // subnormal floor, so the shifts stay small.
+    ((ma << (ea - e)) + (mb << (eb - e)), e - 1)
+}
+
+/// `x * 2^k` for a 256-bit `(hi, lo)`, `None` when the result leaves 256 bits.
+fn shl_256((hi, lo): (u128, u128), k: u32) -> Option<(u128, u128)> {
+    if k == 0 {
+        return Some((hi, lo));
+    }
+    if k >= 256 {
+        return ((hi, lo) == (0, 0)).then_some((0, 0));
+    }
+    if k >= 128 {
+        let s = k - 128;
+        return (hi == 0 && (s == 0 || lo >> (128 - s) == 0)).then(|| (lo << s, 0));
+    }
+    if hi >> (128 - k) != 0 {
+        return None;
+    }
+    Some(((hi << k) | (lo >> (128 - k)), lo << k))
+}
+
 /// Integer k-th root, exact or nothing: the r >= 0 with `r^k == n` (n >= 0), else `None`.
 /// The next f64 toward +inf (`f64::next_up`, which is stable only from Rust 1.86; the MSRV is 1.83).
 fn next_up(x: f64) -> f64 {
@@ -553,6 +584,45 @@ fn int_root(n: i128, k: i128) -> Option<i128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nearest f64 is certified at every magnitude a `Rat` can have (references:
+    /// Python's correctly rounded `float(Fraction(p, q))`). Building the midpoints as `Rat`s
+    /// overflowed below about 2^-11 and left these on `float(p) / float(q)`.
+    #[test]
+    fn nearest_f64_is_certified_at_every_magnitude() {
+        let cases: [(i128, i128, f64); 5] = [
+            (8159658314, 59197280150402860313, 1.3783839888029838e-10),
+            (
+                1,
+                30000000000000000000000000000000000007,
+                3.3333333333333336e-38,
+            ),
+            (-7, 100000000000000000000000000000000000003, -7e-38),
+            (
+                673107593011939307760027002528,
+                810572757194796821120128085049,
+                0.8304098392615706,
+            ),
+            (i128::MAX, 3, 5.671372782015641e+37),
+        ];
+        for (p, q, want) in cases {
+            let r = Rat::new(p, q).unwrap();
+            assert_eq!(r.to_f64_nearest_certified(), Some(want), "{p}/{q}");
+        }
+    }
+
+    #[test]
+    fn shl_256_shifts_and_detects_overflow() {
+        assert_eq!(shl_256((0, 1), 0), Some((0, 1)));
+        assert_eq!(shl_256((0, 1), 127), Some((0, 1 << 127)));
+        assert_eq!(shl_256((0, 1), 128), Some((1, 0)));
+        assert_eq!(shl_256((0, 3), 200), Some((3 << 72, 0)));
+        assert_eq!(shl_256((0, 1), 255), Some((1 << 127, 0)));
+        assert_eq!(shl_256((0, 2), 255), None);
+        assert_eq!(shl_256((1, 0), 128), None);
+        assert_eq!(shl_256((0, 1), 256), None);
+        assert_eq!(shl_256((0, 0), 300), Some((0, 0)));
+    }
 
     /// Continued-fraction (Euclidean-descent) comparison: an INDEPENDENT exact oracle for
     /// cmp_exact's wide path -- a different algorithm cannot share a bug with the
