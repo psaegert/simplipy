@@ -358,8 +358,9 @@ fn tokenize_infix(s: &str) -> Vec<Token> {
             spaced = true;
             continue;
         }
-        // `1 e-5`: an exponent part after whitespace joins the number before it.
-        if spaced {
+        // `1 e-5`: an exponent part after whitespace joins the number before it -- only across
+        // whitespace alone: a dropped char between them never fuses (`1 $ e5` stays malformed).
+        if spaced && touching {
             if let Some(last) = tokens.last_mut() {
                 let number_without_exponent =
                     is_number_fullmatch(&last.text) && !last.text.contains(['e', 'E']);
@@ -440,8 +441,8 @@ struct Token {
     spaced: bool,
 }
 
-/// `[eE][+-]?\d+` at `i`, not running on into a name (`1 e5x` keeps `e5x` a name); the end
-/// index, or `None`.
+/// `[eE][+-]?\d+` at `i`, the exponent part `match_number` reads (`1 e5x` is `1e5*x`, as
+/// `1e5x` is); the end index, or `None`.
 fn match_exponent(s: &[char], i: usize) -> Option<usize> {
     let n = s.len();
     if !(i < n && (s[i] == 'e' || s[i] == 'E')) {
@@ -455,8 +456,7 @@ fn match_exponent(s: &[char], i: usize) -> Option<usize> {
     while j < n && s[j].is_ascii_digit() {
         j += 1;
     }
-    let runs_on = j < n && (s[j].is_ascii_alphanumeric() || s[j] == '_' || s[j] == '.');
-    (j > start && !runs_on).then_some(j)
+    (j > start).then_some(j)
 }
 
 /// IMPLICIT MULTIPLICATION (owner ruling 2026-10-05, infix only -- token lists are expected
@@ -501,6 +501,11 @@ fn insert_implicit_products(
         ops.arity_of(name) == Some(1)
     };
     let mut out: Vec<(String, bool)> = Vec::with_capacity(tokens.len());
+    // The paren depth, and the depth at which the argument of a function without parentheses is
+    // open: an implicit product inside it is ambiguous (`sin 2x0` is sin(2x0) in a textbook and
+    // sin(2)*x0 by the precedence of `*`), so it is refused.
+    let mut depth: i64 = 0;
+    let mut open_argument: Option<i64> = None;
     for Token {
         text: tok,
         touching,
@@ -513,16 +518,43 @@ fn insert_implicit_products(
             let starts_operand =
                 tok == "(" || is_leaf(&tok) || (after_paren && is_number_fullmatch(&tok));
             if touching && (after_number || after_paren) && starts_operand {
+                if open_argument == Some(depth) {
+                    return Err(format!(
+                        "{prev:?} and {tok:?} would multiply inside the argument of a function \
+                         without parentheses, which is ambiguous (`sin 2x0` could be sin(2*x0) or \
+                         sin(2)*x0): write the parentheses"
+                    ));
+                }
                 out.push(("*".to_string(), false));
             } else if touching && is_function(prev) && ((spaced && is_operand(&tok)) || tok == "-")
             {
                 out.last_mut().unwrap().1 = true;
+                open_argument = Some(depth);
             } else if touching && spaced && is_operand(prev) && is_operand(&tok) {
                 return Err(format!(
                     "{prev:?} and {tok:?} are separated only by whitespace: write the operator \
-                     between them (for example {prev}*{tok}), or remove the space"
+                     between them (for example {prev}*{tok}), a call ({prev}({tok})) if {prev:?} \
+                     is a function, or remove the space"
                 ));
             }
+            // A binary operator at the argument's depth closes it (`sin x0 * x1` is
+            // sin(x0)*x1); a power or a sign stays inside (`sin -x0^2`).
+            let binary = matches!(tok.as_str(), "+" | "*" | "/" | ",")
+                || (tok == "-"
+                    && matches!(out.last(), Some((p, false)) if is_operand(p) || p == ")"));
+            if binary && open_argument == Some(depth) {
+                open_argument = None;
+            }
+        }
+        match tok.as_str() {
+            "(" => depth += 1,
+            ")" => {
+                depth -= 1;
+                if open_argument.is_some_and(|d| d > depth) {
+                    open_argument = None;
+                }
+            }
+            _ => {}
         }
         out.push((tok, false));
     }
@@ -1463,6 +1495,11 @@ mod tests {
         assert_eq!(i2p(&e, "x1 * * 2"), v(&["**", "x1", "2"]));
         assert_eq!(i2p(&e, "1 e-5 * x1"), v(&["*", "1e-5", "x1"]));
         assert_eq!(i2p(&e, "1e -5"), v(&["-", "*", "1", "np.e", "5"]));
+        // the joined exponent reads like the touching one, also before a name
+        assert_eq!(i2p(&e, "1 e-5x1"), v(&["*", "1e-5", "x1"]));
+        assert_eq!(i2p(&e, "1 e5x1"), v(&["*", "1e5", "x1"]));
+        // a dropped char never fuses, whitespace or not
+        assert_eq!(i2p(&e, "1 $ e5"), v(&["1", "e5"]));
         // A function without parentheses: below powers, above signs, products and sums.
         assert_eq!(i2p(&e, "sin x1"), v(&["sin", "x1"]));
         assert_eq!(i2p(&e, "sin x1^2"), v(&["sin", "**", "x1", "2"]));
@@ -1477,6 +1514,21 @@ mod tests {
         assert_eq!(i2p(&e, "x1^sin x2"), v(&["**", "x1", "sin", "x2"]));
         assert_eq!(i2p(&e, "x1^-sin x2"), v(&["**", "x1", "neg", "sin", "x2"]));
         assert_eq!(i2p(&e, "2 sin x1"), v(&["*", "2", "sin", "x1"]));
+        assert_eq!(
+            i2p(&e, "sin x1 + 2x2"),
+            v(&["+", "sin", "x1", "*", "2", "x2"])
+        );
+        assert_eq!(i2p(&e, "sin(2x1)"), v(&["sin", "*", "2", "x1"]));
+        // an implicit product inside a bracketless argument is ambiguous and refused
+        for text in [
+            "sin 2x1",
+            "sin 2 x1",
+            "sin 2(x1 + 1)",
+            "sin x1^2 cos x1",
+            "sin -(x1) 2",
+        ] {
+            assert!(e.infix_to_prefix(text).is_err(), "{text}");
+        }
         assert_eq!(i2p(&e, "sin (x1)^2"), v(&["**", "sin", "x1", "2"]));
         // Two operands separated by whitespace alone are refused, not guessed; a dropped
         // char between them keeps the old malformed reading.

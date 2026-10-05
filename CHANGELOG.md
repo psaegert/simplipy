@@ -52,12 +52,18 @@
   - Two joins remain, because the text can mean only one thing: `x0 * * 2` is `x0**2`, and
     an exponent part after a number joins it (`1 e-5` is `1e-5`). `1e` is no numeral, so
     `1e -5` is `1*e - 5`.
-  - Any other two operands with only whitespace between them raise `ValueError` in
-    `read_infix`, `infix_to_prefix` and `simplify`: `x0 x1`, `x 1`, `2 3`, `1 000`,
-    `sin x0 x1`, and an unknown function such as `sqrt x0`.
+  - Any other two operands with only whitespace between them raise `ValueError`: `x0 x1`,
+    `x 1`, `2 3`, `1 000`, `sin x0 x1`, and an undeclared function such as `sqrt x0`. So does
+    an implicit product inside the argument of a function without parentheses, which is
+    ambiguous: `sin 2x0` could be `sin(2*x0)` or `sin(2)*x0`. Every entry point that reads
+    infix text raises (`read_infix`, `infix_to_prefix`, `simplify`, `to_prefix`, `to_infix`,
+    `to_tagged`, `complexity`, `mask`), and `is_valid` returns `False`. On main,
+    `to_prefix('x0 x1')` returned the name `x0x1`.
 
-  None of srbf's 148,762 prediction and ground-truth strings or symbolic-data's 20,948 catalog
-  strings reads differently.
+  No real string has whitespace in a position these rules change: none of 12.9 million
+  strings (srbf's ground truths, every method's predictions and candidates, symbolic-data's
+  catalogs and upstream formulas) reads differently. That shows ordinary spacing around
+  operators is unaffected; the new rules are covered by the tests.
 - **An interrupted mine is not final.** On SIGINT the miner stops after the running length and
   writes what it has, with the proposal channel, the symbolic gate and sort promotion skipped,
   and its sidecar said `"final": true`. It now says `"final": false` and `"interrupted": true`,

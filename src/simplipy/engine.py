@@ -1569,10 +1569,20 @@ class SimpliPyEngine:
         infix_expression : str
             The mathematical expression in infix notation.
 
+        Whitespace separates tokens; see :meth:`read_infix` for how a function without
+        parentheses and implicit products are read.
+
         Returns
         -------
         list[str]
             A list of tokens representing the expression in prefix notation.
+
+        Raises
+        ------
+        ValueError
+            When two operands are separated only by whitespace (``x0 x1``, ``2 3``,
+            ``sqrt x0`` for an undeclared ``sqrt``), or when an implicit product falls inside
+            the argument of a function without parentheses (``sin 2x0``).
         """
         # Regex to tokenize expression properly (handles floating-point numbers and scientific notation)
         return self._core.infix_to_prefix(infix_expression)
@@ -1638,12 +1648,14 @@ class SimpliPyEngine:
         parenthesis is always a call, so ``sqrt(x0)`` stays ``['sqrt', 'x0']``. Token
         lists are expected well formed and get no such reading.
 
-        Whitespace separates tokens. A declared one-argument function without
+        Whitespace separates tokens, and an implicit product forms across it as across
+        touching tokens (``2 x0`` is ``2*x0``). A declared one-argument function without
         parentheses applies to the operand after it, taking powers and signs but not
         products, quotients or sums: ``sin x0^2`` is ``sin(x0^2)`` and ``log x0 / 2`` is
-        ``log(x0)/2``. ``x0 * * 2`` is ``x0**2`` and ``1 e-5`` is ``1e-5``. Any other two
-        operands with only whitespace between them (``x0 x1``, ``2 3``, ``sqrt x0`` for
-        an undeclared ``sqrt``) raise ``ValueError``.
+        ``log(x0)/2``. ``x0 * * 2`` is ``x0**2`` and ``1 e-5`` is ``1e-5``. ``ValueError``
+        is raised for two operands with only whitespace between them and no product
+        (``x0 x1``, ``2 3``, ``sqrt x0`` for an undeclared ``sqrt``) and for an implicit
+        product inside such an argument (``sin 2x0``: ``sin(2*x0)`` or ``sin(2)*x0``?).
 
         Mechanically it is :meth:`infix_to_prefix` plus optional
         ``convert_expression`` normalization, with a ``remove_pow1`` cleanup that
@@ -2029,6 +2041,13 @@ class SimpliPyEngine:
         -------
         str | list[str] | tuple[str, ...] | np.ndarray
             The simplified expression, in the same format as the input.
+
+        Raises
+        ------
+        ValueError
+            On a malformed expression, including infix text that :meth:`read_infix` refuses
+            (two operands separated only by whitespace, an ambiguous product inside the
+            argument of a function without parentheses).
         """
         if max_passes is None:
             max_passes = 48
