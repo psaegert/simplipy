@@ -94,6 +94,11 @@ class TestOracleLiterals:
         assert _num('1/3') == 1 / 3
         assert _num('(-1/3)') == -1 / 3
 
+    def test_the_high_precision_oracle_reads_a_fraction(self) -> None:
+        from simplipy.promotion._hp_equiv import evaluate
+        assert float(evaluate(['/', '1/3', '2'], {}, [])) == 1 / 6
+        assert float(evaluate(['(-1/3)'], {}, [])) == -1 / 3   # the literal reads as its nearest double
+
     def test_the_contract_refuses_an_oversized_spelling_at_once(self) -> None:
         import time
         from simplipy.verify._contract import UnsupportedToken, literal_value
@@ -114,7 +119,26 @@ class TestOracleLiterals:
         assert judge_rule(['*', 'x0', '1e400'], ['*', '1e400', 'x0'])['realised'] is True
 
 
+Q = '1' + '0' * 400
+
+
 class TestKernelLiterals:
+    """Literals beyond 128 bits that the interval kernel now reads exactly: the canonical
+    forms that move because of it, each checked against the exact value."""
+
+    @pytest.mark.parametrize('prefix, out', [
+        (['rootn', '-1', str(2 ** 128)], ['float("nan")']),       # an even root of -1
+        (['rootn', 'rootn', 'x1', '0', str(2 ** 127)], ['float("nan")']),
+        (['log', '-1/' + Q], ['float("nan")']),                   # log of a negative number
+        (['pow', '-2', f'{2 ** 256}/{2 ** 128}'], None),          # (-2)^(2^128) is finite
+        (['pow', '-2', f'{3 * 2 ** 200}/3'], None),               # main folded it to nan
+        (['log', f'{Q}/{Q[:-1]}'], None),                         # log(10), no nan
+    ])
+    def test_beyond_i128_literals_fold_only_when_certain(self, engine: SimpliPyEngine,
+                                                         prefix: list[str], out: list[str] | None) -> None:
+        for mode in ('f64', 'real'):
+            assert list(engine.simplify(prefix, mode=mode)) == (prefix if out is None else out)
+
     @pytest.mark.parametrize('zero', ['+0/5', '(+0/5)', '+00/7', '-0/5'])
     def test_every_spelling_of_a_zero_fraction_is_zero(self, engine: SimpliPyEngine, zero: str) -> None:
         core = engine._core

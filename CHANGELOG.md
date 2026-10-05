@@ -11,12 +11,15 @@
   (`utils.evaluator_literal`). Integers up to 2^53 and fractions inside the range keep their
   values; a `+`, leading zeros and `-0` are respelled the way Python reads them (`007` was a
   SyntaxError). Arithmetic between two integer literals up to 2^53 is still Python's exact
-  integer arithmetic.
+  integer arithmetic, and arithmetic between literals beyond it is float64 arithmetic, as in
+  the offline evaluator: `10^400 / 10^399` written as a division is NaN (inf/inf) and
+  `9007199254740993 - 9007199254740992` is 0. A single fraction token `10^400/10^399` is 10.
 - **Literal readers are exact at any size.** The offline evaluator reads a fraction token whose
   components exceed 128 bits as its correctly rounded float64 (`10^400/10^399` is 10, not NaN),
   and the interval kernel certifies such a fraction like a decimal and certifies an integer
   literal beyond 2^127 as a point when its float64 is exactly that integer (`2^200` written out;
-  closes the beyond-i128 residual of H-045). The mining oracles read a fraction token instead
+  this closes H-045's beyond-i128 residual for the integers float64 holds; `1e40` still
+  brackets, as its nearest float64 is not 10^40). The mining oracles read a fraction token instead
   of failing on it (`utils.literal_float`), and the contract judge refuses an oversized spelling
   (`1e999999999`, more than 4,300 digits) before building it and reads a value beyond float64's
   range as `inf` in its deployed lane (it skipped the deployed check for such a rule).
