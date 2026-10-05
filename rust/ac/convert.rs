@@ -356,10 +356,12 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
     }
 }
 
-/// The INTEGER-OVER-DECIMAL spelling of a fraction (owner 2026-10-02), EMISSION ONLY like
-/// `divisor_side`: `Some((n, d))` with `r == n / d`, `n` an integer and `d` a non-integer
-/// whose argmin spelling is ONE exact decimal token, when the pair spells strictly shorter
-/// than `p` and `q`.
+/// The INTEGER-OVER-DECIMAL spelling of a fraction (owner 2026-10-02), for the INFIX text only
+/// (see [`to_infix_pretty`]): `Some((n, d))` with `r == n / d`, `n` an integer and `d` a
+/// non-integer whose argmin spelling is ONE exact decimal token, when the pair spells strictly
+/// shorter than `p` and `q`. The token printers keep `p/q` (owner 2026-10-05, plan v2 phase 1):
+/// the engine and its callers read tokens back, so a spelling chosen for a reader stays out of
+/// them.
 ///
 /// Every literal is its exact rational value, so `1/(2*3.141592653589793)` folds to
 /// `500000000000000/3141592653589793`, which has no finite decimal. A decimal is just as
@@ -476,14 +478,6 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                         num.push(Ex::Num(Rat::NEG_ONE));
                     }
                     den.push(Ex::Num(inv));
-                } else if let Some((n, d)) = ratio_spelling(r) {
-                    // Integer over decimal (`ratio_spelling`): n joins the numerator (skipped
-                    // when it is the multiplicative identity), the decimal d the denominator.
-                    // d is positive (the sign rides n), so H-020 holds as for the split below.
-                    if !n.is_one() {
-                        num.push(Ex::Num(n));
-                    }
-                    den.push(Ex::Num(d));
                 } else {
                     // p/q with no exact decimal: p joins the numerator (skipped when it is the
                     // multiplicative identity), q the denominator.
@@ -728,17 +722,8 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let slash = view.intern("/");
     if view.arity(slash).is_some() {
         out.push(slash);
-        // `ratio_spelling` only returns a `d` whose argmin spelling is an exact decimal.
-        match ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
-            Some((n, ds)) => {
-                out.push(view.intern(&n.num().to_string()));
-                out.push(view.intern(&ds));
-            }
-            None => {
-                out.push(view.intern(&r.num().to_string()));
-                out.push(view.intern(&r.den().to_string()));
-            }
-        }
+        out.push(view.intern(&r.num().to_string()));
+        out.push(view.intern(&r.den().to_string()));
     } else {
         out.push(view.intern(&num_token(r)));
     }
@@ -1089,6 +1074,14 @@ fn fraction_spells_structurally(r: &Rat) -> bool {
 /// the infix parser (`convert::infix_to_prefix` + `convert_expression`): the core symbols
 /// carry built-in precedences under any config, and the bare constant names `pi`/`e`/
 /// `inf`/`nan` are reserved spellings the parser reads back as the constants.
+///
+/// THE READER'S SPELLING LIVES HERE AND ONLY HERE (owner 2026-10-02, kept in plan v2). The
+/// infix text is written for a person, so it alone writes a value with no finite decimal as
+/// an integer over a decimal (`ratio_spelling`). The explicit prefix form ([`to_prefix`]) is
+/// the engine's own dialect: the interval certificates, the folds, the served rules and the
+/// mining judge print a state in it and read the tokens back, and callers mask and compare
+/// token answers, so it keeps one fixed spelling, and so do the token answers built on it.
+/// Nothing in the engine reads this text.
 pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
     render(e, cx, 0)
 }

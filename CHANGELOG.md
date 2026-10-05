@@ -45,23 +45,24 @@
   writes what it has, with the proposal channel, the symbolic gate and sort promotion skipped,
   and its sidecar said `"final": true`. It now says `"final": false` and `"interrupted": true`,
   and keeps the last completed source length.
-- **A fraction with no finite decimal prints as an integer over a decimal.** Every literal is its
-  exact rational value, so `1/(2*3.141592653589793)` folds to 500000000000000 / 3141592653589793
-  and printed as exactly that: correct, but nothing a reader recognises. A decimal is as exact as
-  an integer, so the emitters now move the numerator's factors 2 and 5 into the denominator,
-  which then always terminates, and print `1/6.283185307179586` (Feynman's `3/(20*pi)`:
-  `3/62.83185307179586`). The spelling is used where it is strictly shorter than the two
-  integers; `1/2`, `2/3`, `5/8` and `1/3` keep their fractions, and the first value that moves
-  is 100/101 (`1/1.01`). Emission only, like the divisor-side rule: the state, `complexity()`, the
-  measure and every mint/skip decision are unchanged, and the output re-parses to the same state.
-  The explicit prefix and infix forms change; the tagged form (integer vocabulary) does not.
-  Artifacts: no shipped rule set contains a literal fraction this spelling touches (every
-  `/ int int` pair in them has components of at most 1), so they re-serialize byte-identically.
-  A consumer that reads spelled forms sees new digits and, rarely, a different shape. Measured on
-  srbf's 2,161,912 judged result rows, re-judged with this build: no verdict changed (success,
-  numeric and symbolic recovery and FVU are identical in every row), and 200 rows (0.009 %)
-  changed a descriptive metric of the printed prediction -- MDL, edit distance, length, number
-  of constants -- by a few bits or tokens, in both directions.
+- **In the infix answer, a fraction with no finite decimal can print as an integer over a
+  decimal.** Every literal is its exact rational value, so `1/(2*3.141592653589793)` folds to
+  500000000000000 / 3141592653589793 and printed as exactly that: correct, but nothing a reader
+  recognises. A decimal is as exact as an integer, so the infix text now moves the numerator's
+  factors 2 and 5 into the denominator, which then terminates, and prints
+  `1/6.283185307179586` (Feynman's `3/(20*pi)`: `3/62.83185307179586`). The spelling needs a
+  numerator with a factor 2 or 5 and is used where it is strictly shorter than the two
+  integers, outside exponents: `1/2`, `2/3`, `5/8` and `1/3` keep their fractions, an exponent
+  keeps the fraction (`x0^(500000000000000/3141592653589793)`), and the first value that moves
+  is 100/101 (`1/1.01`). The state, `complexity()`,
+  the measure and every rewrite are unchanged, and the text re-parses to the same state. The
+  token answers (explicit prefix and tagged) keep the 0.14.7 spelling byte for byte: the engine
+  prints states in the explicit form and reads them back (certificates, folds, served rules,
+  the mining judge), and callers mask and compare token answers, so a spelling chosen for a
+  reader stays out of them. Measured: the explicit and tagged answers for srbf's 6,531 ground
+  truths and the 400-row corpus are identical to 0.14.7's in the f64 and real modes; 57 infix
+  answers change. In permissive mode one srbf answer differs, from the nearest-float fold above
+  (`6.0e-7*pi` folds to `0.0000018849555921538758`, where 0.14.7 was one ulp off).
 
 ## 0.14.7 (2026-10-01)
 
