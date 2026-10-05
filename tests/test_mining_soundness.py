@@ -621,6 +621,34 @@ class TestProvenance:
             json.load(open(out.replace(".json", "_permissive.json"))))
         assert side["simplipy_version"]
 
+    def test_an_interrupted_mine_is_not_final(self, tmp_path, monkeypatch) -> None:
+        """A SIGINT stops the climb after the running length. What is written then is a
+        PARTIAL mine -- later lengths unmined, the proposal channel, symbolic gate and sort
+        promotion skipped -- so the sidecar must not claim `final` (it used to)."""
+        import signal
+        from simplipy.mining import RuleMiner
+        (tmp_path / "rules.json").write_text(json.dumps([]))
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
+        eng = SimpliPyEngine.from_config(str(cfg))
+        out = str(tmp_path / "mined.json")
+        original = RuleMiner._mine_tier_with_progress
+
+        def interrupt_after_length_1(self, length, *args, **kwargs):
+            found = original(self, length, *args, **kwargs)
+            if length == 1:
+                signal.raise_signal(signal.SIGINT)  # the miner's own handler takes it
+            return found
+
+        monkeypatch.setattr(RuleMiner, "_mine_tier_with_progress", interrupt_after_length_1)
+        eng.find_rules(max_source_pattern_length=3, dummy_variables=1,
+                       extra_internal_terms=["0", "1", "<constant>"], X=256, seed=7,
+                       verbose=False, output_file=out, promote_sorts=False)
+        side = json.load(open(out + ".provenance.json"))
+        assert side["progress"]["final"] is False
+        assert side["progress"]["interrupted"] is True
+        assert side["progress"]["last_completed_source_length"] == 1
+
     def test_sidecar_records_soundness_state(self, tmp_path) -> None:
         """The mine's SOUNDNESS PROVENANCE (audit Tier-1 #4): the four default-ON
         kill-switches ship recorded (a mine run with a soundness layer disabled must

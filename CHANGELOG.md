@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- **Exact literals are read as their nearest float.** The deployed evaluator reads a literal
+  correctly rounded (Python's `float()` of a decimal, `int / int` for a fraction), but two
+  engine paths computed `float(p) / float(q)`, which is an ulp or two off once `p` or `q` leaves
+  53 bits. The f64 fold of a ground function evaluated there, and the function amplified the
+  slip: `sin(91618929858.17857)` folded to `-0.9807961394411915` instead of the evaluator's
+  `-0.9807991153359534`. The fold now reads the nearest float, through the same system libm
+  kernels as the evaluator (Rust's own `atanh` drifts from libm near the domain edges). The
+  numeric leaf reader did the same for a one-token fraction, and the interval kernel bracketed
+  that value by one ulp, so its enclosure could miss the fraction it encloses
+  (`673107593011939307760027002528/810572757194796821120128085049` sat 1.5 ulps away). The leaf
+  now reads the certified nearest float; a fraction with a component beyond 128 bits keeps the
+  old value and a four-ulp bracket. The nearest float is certified by exact midpoint tests at
+  every magnitude, tiny values included. And the interval kernel takes a point enclosure only
+  for a literal that denotes an integer: a non-integer whose nearest float is an integer
+  (`10182333997706870151/10000`, `2311319199101329.25`) used to become that point, missing its
+  own value.
+- **One numeral grammar, refused when malformed.** A numeral is a decimal
+  `[+-]? digits [. digits] [e|E [+-] digits]` or an exact fraction `[+-]? digits / digits` with a
+  nonzero denominator, and every boundary checks tokens against that one definition, so only
+  numerals reach the number readers. The masking predicate
+  `is_numeric_string` used to disagree with the readers both ways: `1E6`, `+5` and `2.5E-4` were
+  read as numbers but never masked, while `e5`, `1e-5e` and `1/0` were masked as numbers no reader
+  evaluates. Folding `neg` into a literal turns a leading `+` into `-` (`neg +5` is `-5`; it was
+  `-+5`). A token that starts like a number but is not a numeral (`1/0`, `1/6.28`, `0.5/3`,
+  `--5`, `-+5`, `1e5.5`, `1/-3`, `2x`) is now refused at every boundary, like the reserved
+  spellings of H-007. Before, it became a free symbol (`1/0 - 1/0` simplified to `0`), or was
+  read as something else (`-+5` as -5, `1/-3` as -1/3), and the tagged form, which skips the
+  arity check, split `--5` into `-1 -5`. These refusals are for token lists, which are expected
+  well formed; infix text is read as written (`1/6.28` is a division there).
+- **Infix reads implicit multiplication.** After a number or a closing parenthesis, a name, an
+  opening parenthesis or (after a parenthesis) a number multiplies: `2x0` is `2*x0`, `0x10` is
+  `0*x10`, `2(x0 + 1)` is `2*(x0 + 1)`, `(a)(b)` is `(a)*(b)`, `2pi` is `2*pi`. The product has
+  the precedence of `*`, so `1/2x0` is `(1/2)*x0` and `2^3x0` is `(2^3)*x0`. Before, these
+  inputs were malformed. A name before a parenthesis stays a call, known or not (`sqrt(x0)` still
+  reads `sqrt x0`); a number before a name that starts with `_` is Python's digit grouping, not a
+  product (`1_000` stays malformed); and a character the tokenizer drops never becomes a product
+  (`x1 $ x2` stays malformed). Tabs, newlines and other whitespace are now dropped like spaces:
+  `2\tx0` is `2*x0`, and `sin\tx0` reads as the name `sinx0`, as `sin x0` already did (a tab
+  used to keep `sin` and `x0` apart).
+- **An interrupted mine is not final.** On SIGINT the miner stops after the running length and
+  writes what it has, with the proposal channel, the symbolic gate and sort promotion skipped,
+  and its sidecar said `"final": true`. It now says `"final": false` and `"interrupted": true`,
+  and keeps the last completed source length.
 - **A fraction with no finite decimal prints as an integer over a decimal.** Every literal is its
   exact rational value, so `1/(2*3.141592653589793)` folds to 500000000000000 / 3141592653589793
   and printed as exactly that: correct, but nothing a reader recognises. A decimal is as exact as

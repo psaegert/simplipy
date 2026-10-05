@@ -2288,13 +2288,34 @@ fn leaf_vs(t: &str, doms: &[Vs], params: &[f64], k: &mut usize) -> Option<Vs> {
                 None => {}
             }
         }
+        // A POINT only where the literal DENOTES an integer: an integer-valued f64 below 2^53
+        // can be the rounding of a non-integer (`2311319199101329.25` reads ...329.0, and since
+        // fractions read as their nearest f64, `10182333997706870151/10000` reads ...687.0), and
+        // a point there misses the denoted value. A plain integer spelling below 2^53 is exact
+        // and keeps the cheap test; everything else is certified on its spelling.
+        let integer_spelling = {
+            let d = t.strip_prefix('-').unwrap_or(t);
+            !d.is_empty() && d.bytes().all(|c| c.is_ascii_digit())
+        };
         if !v.is_finite()
             || v == 0.0
-            || (v.fract() == 0.0 && (v.abs() < 9.007199254740992e15 || exact_integer_literal(t, v)))
+            || (v.fract() == 0.0
+                && ((integer_spelling && v.abs() < 9.007199254740992e15)
+                    || exact_integer_literal(t, v)))
         {
             Vs::constant(v)
-        } else {
+        } else if crate::numeric::leaf_value_is_nearest(t) {
             Vs::interval(next_down(v), next_up(v), false, false)
+        } else {
+            // An exact fraction whose correctly rounded f64 could not be certified (a component
+            // beyond `i128`): `v` is `float(p) / float(q)`, within three ulps of the fraction,
+            // so bracket four.
+            let (mut lo, mut hi) = (v, v);
+            for _ in 0..4 {
+                lo = next_down(lo);
+                hi = next_up(hi);
+            }
+            Vs::interval(lo, hi, false, false)
         }
     })
 }
@@ -2366,15 +2387,8 @@ fn exact_integer_literal(t: &str, v: f64) -> bool {
         .and_then(|s| s.strip_suffix(')'))
         .unwrap_or(t);
     let denoted = crate::ac::rat::Rat::parse_decimal(t).or_else(|| {
-        let (p, q) = t.split_once('/')?;
-        if p.chars().all(|c| c.is_ascii_digit() || c == '-')
-            && !q.is_empty()
-            && q.chars().all(|c| c.is_ascii_digit())
-        {
-            crate::ac::rat::Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
-        } else {
-            None
-        }
+        let (p, q) = crate::utils::split_fraction(t)?;
+        crate::ac::rat::Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
     });
     // `v as i128` is exact: v is an integer-valued f64 with |v| < 2^127.
     denoted.is_some_and(|r| r.is_integer() && r.num() == v as i128)
@@ -3307,7 +3321,7 @@ fn rat_of_token(tok: &str) -> Option<crate::ac::rat::Rat> {
         if let Some(r) = Rat::parse_decimal(s) {
             return Some(r);
         }
-        let (p, q) = s.split_once('/')?;
+        let (p, q) = crate::utils::split_fraction(s)?;
         Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
     };
     if let Some(inner) = tok.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {

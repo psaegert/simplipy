@@ -959,7 +959,13 @@ class RuleMiner:
                 # "the provenance sidecar covers the triple, the manifest entry lists
                 # three files as ONE artifact"), so its totals describe everything the
                 # mine serves. The per-mode split lives in `prov['triple']['counts']`.
-                self._write_provenance(out_path, prov, _triple['permissive'], final=True)
+                # An interrupted mine still writes what it has, but it is NOT final: the
+                # lengths after the interrupt were never mined and the proposal channel,
+                # the symbolic gate and sort promotion above were skipped. The sidecar must
+                # say so (it used to say `final: True` for exactly this partial triple).
+                _complete = not interrupted()
+                self._write_provenance(out_path, prov, _triple['permissive'], final=_complete,
+                                       interrupted=not _complete)
             return [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
 
         snapshot_at = dict(snapshot_at or {})
@@ -1120,14 +1126,16 @@ class RuleMiner:
 
     @staticmethod
     def _write_provenance(output_file: str, provenance: dict | None, rules: list,
-                          completed_length: int | None = None, final: bool = False) -> None:
+                          completed_length: int | None = None, final: bool = False,
+                          interrupted: bool = False) -> None:
         """Write/refresh the mined artifact's PROVENANCE sidecar (`<output>.provenance.json`).
 
         The rules.json format is a bare list (the engine loads it directly), so provenance
         lives beside it: parameters, seeds, X spec, universe coverage (filled by
         :meth:`find_rules`) plus rolling progress and the final rule census. A mine is
         reproducible from the sidecar alone unless X was passed as an explicit array
-        (recorded by content hash in that case).
+        (recorded by content hash in that case). An interrupted mine's sidecar carries
+        ``final: False`` and ``interrupted: True``.
         """
         if provenance is None:
             return
@@ -1137,12 +1145,15 @@ class RuleMiner:
             by_len[str(len(lhs))] = by_len.get(str(len(lhs)), 0) + 1
         provenance['progress'] = {
             'updated': _time.strftime('%Y-%m-%d %H:%M:%S %z'),
-            'last_completed_source_length': completed_length if not final
+            # A finalize write passes no length and keeps the one the climb recorded.
+            'last_completed_source_length': completed_length if completed_length is not None
             else provenance.get('progress', {}).get('last_completed_source_length'),
             'final': final,
             'rules_total': len(rules),
             'rules_by_lhs_length': dict(sorted(by_len.items(), key=lambda x: int(x[0]))),
         }
+        if interrupted:
+            provenance['progress']['interrupted'] = True
         with open(output_file + '.provenance.json', 'w') as file:
             json.dump(provenance, file, indent=2)
 
