@@ -47,9 +47,32 @@
   inputs were malformed. A name before a parenthesis stays a call, known or not (`sqrt(x0)` still
   reads `sqrt x0`); a number before a name that starts with `_` is Python's digit grouping, not a
   product (`1_000` stays malformed); and a character the tokenizer drops never becomes a product
-  (`x1 $ x2` stays malformed). Tabs, newlines and other whitespace are now dropped like spaces:
-  `2\tx0` is `2*x0`, and `sin\tx0` reads as the name `sinx0`, as `sin x0` already did (a tab
-  used to keep `sin` and `x0` apart).
+  (`x1 $ x2` stays malformed).
+- **Infix: whitespace separates tokens.** Spaces used to be removed before reading, so
+  `sin x0` became the name `sinx0`, `x0 x1` the name `x0x1` and `2 3` the number 23; a tab
+  instead kept tokens apart. Now every whitespace character separates tokens, and a product
+  forms across it as across touching tokens (`2 x0` is `2*x0`, `2\tx0` too).
+  - A declared one-argument function without parentheses applies to the operand after it.
+    Its argument takes powers and signs; products, quotients and sums apply to its result:
+    `sin x0^2` is `sin(x0^2)`, `log x0 / 2` is `log(x0)/2`, `sin -x0` is `sin(-x0)`, and
+    `sin cos x0` is `sin(cos(x0))`. A minus sign right after a function also starts its
+    argument, so `sin-x0` is `sin(-x0)`; it used to read `-sin(x0)`. A name before a
+    parenthesis stays a call (`sin (x0)^2` is `sin(x0)^2`).
+  - Two joins remain, because the text can mean only one thing: `x0 * * 2` is `x0**2`, and
+    an exponent part after a number joins it (`1 e-5` is `1e-5`). `1e` is no numeral, so
+    `1e -5` is `1*e - 5`.
+  - Any other two operands with only whitespace between them raise `ValueError`: `x0 x1`,
+    `x 1`, `2 3`, `1 000`, `sin x0 x1`, and an undeclared function such as `sqrt x0`. So does
+    an implicit product inside the argument of a function without parentheses, which is
+    ambiguous: `sin 2x0` could be `sin(2*x0)` or `sin(2)*x0`. Every entry point that reads
+    infix text raises (`read_infix`, `infix_to_prefix`, `simplify`, `to_prefix`, `to_infix`,
+    `to_tagged`, `complexity`, `mask`), and `is_valid` returns `False`. Before,
+    `to_prefix('x0 x1')` returned the name `x0x1`.
+
+  No real string has whitespace in a position these rules change: none of 12.9 million
+  strings (srbf's ground truths, every method's predictions and candidates, symbolic-data's
+  catalogs and upstream formulas) reads differently. That shows ordinary spacing around
+  operators is unaffected; the new rules are covered by the tests.
 - **An interrupted mine is not final.** On SIGINT the miner stops after the running length and
   writes what it has, with the proposal channel, the symbolic gate and sort promotion skipped,
   and its sidecar said `"final": true`. It now says `"final": false` and `"interrupted": true`,

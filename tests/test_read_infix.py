@@ -109,3 +109,83 @@ class TestImplicitMultiplication:
     def test_token_lists_stay_strict(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError, match="reserved numeric spelling"):
             engine.simplify(['*', '2x1', 'x2'])
+
+
+class TestWhitespace:
+    """Whitespace separates tokens (owner ruling 2026-10-05). A declared one-argument function
+    without parentheses applies to the operand after it, taking powers and signs but not
+    products, quotients or sums; `* *` and a spaced exponent part still join; any other two
+    operands with only whitespace between them are a user error."""
+
+    @pytest.mark.parametrize("spaced, explicit", [
+        ("sin x0^2", "sin(x0^2)"),
+        ("log x0 / 2", "log(x0)/2"),
+        ("x0 * * 2", "x0**2"),
+        ("1 e-5", "1e-5"),
+        ("1e -5", "1*e - 5"),
+        ("1 e-5x0", "1e-5*x0"),
+        ("1 e5x0", "1e5*x0"),
+        ("2 e+1x0", "2e+1*x0"),
+        ("sin x0", "sin(x0)"),
+        ("sin x0 + 1", "sin(x0) + 1"),
+        ("sin x0 * x1", "sin(x0)*x1"),
+        ("exp -x0^2 / 2", "exp(-x0^2)/2"),
+        ("-sin x0", "-sin(x0)"),
+        ("sin -x0", "sin(-x0)"),
+        ("sin - x0", "sin(-x0)"),
+        ("sin-x0", "sin(-x0)"),
+        ("sin cos x0", "sin(cos(x0))"),
+        ("x0^sin x1", "x0^sin(x1)"),
+        ("2 sin x0", "2*sin(x0)"),
+        ("sin\tx0^2", "sin(x0^2)"),
+        # unchanged: a name before a parenthesis is a call; products as before
+        ("sin (x0)^2", "sin(x0)^2"),
+        ("sqrt (x0)", "sqrt(x0)"),
+        ("2 x0", "2*x0"),
+        ("2 (x0 + 1)", "2*(x0 + 1)"),
+        ("(x0) (x1)", "(x0)*(x1)"),
+        ("(x0) 2", "(x0)*2"),
+        ("x0 + x1", "x0+x1"),
+    ])
+    def test_spaced_equals_explicit(self, engine: SimpliPyEngine, spaced: str, explicit: str) -> None:
+        assert engine.read_infix(spaced) == engine.read_infix(explicit)
+
+    @pytest.mark.parametrize("text", [
+        "sin 2x0", "sin 2 x0", "sin 2(x0 + 1)", "sin x0^2 cos x0", "cos 2 pi",
+        # a function without parentheses inside another one's argument keeps the outer one open
+        "sin -(cos x0) 2", "exp abs((exp x2)) pi", "sin x0^(cos x1) 2",
+    ])
+    def test_a_product_inside_an_argument_without_parentheses_is_refused(
+            self, engine: SimpliPyEngine, text: str) -> None:
+        # sin 2x0 is sin(2x0) in a textbook and sin(2)*x0 by the precedence of `*`: ambiguous
+        with pytest.raises(ValueError, match="ambiguous"):
+            engine.read_infix(text)
+
+    def test_a_product_outside_the_argument_stands(self, engine: SimpliPyEngine) -> None:
+        assert engine.read_infix('2 sin x0') == engine.read_infix('2*sin(x0)')
+        assert engine.read_infix('sin x0 + 2x1') == engine.read_infix('sin(x0) + 2*x1')
+        assert engine.read_infix('sin(2x0)') == engine.read_infix('sin(2*x0)')
+
+    def test_every_entry_point_that_reads_infix_refuses(self, engine: SimpliPyEngine) -> None:
+        for read in (engine.to_prefix, engine.to_infix, engine.to_tagged, engine.complexity, engine.mask):
+            with pytest.raises(ValueError, match="separated only by whitespace"):
+                read('x0 x1')
+        assert engine.is_valid('x0 x1') is False
+
+    def test_euler_after_a_trailing_e(self, engine: SimpliPyEngine) -> None:
+        # `1e` is no numeral: it is 1*e, so `1e -5` is e - 5
+        assert engine.simplify('1e -5') == engine.simplify('e - 5')
+
+    @pytest.mark.parametrize("text", ["1 $ e5", "1 $ e-5", "3 \u00d7 e-2", "2 \u00b7 e+1"])
+    def test_a_dropped_character_never_fuses_a_number(self, engine: SimpliPyEngine, text: str) -> None:
+        # the exponent join is for whitespace alone; a character the tokenizer drops keeps the
+        # input malformed, as on main
+        with pytest.raises(ValueError):
+            engine.simplify(text)
+
+    @pytest.mark.parametrize("text", ["x0 x1", "x 1", "2 3", "1 000", "sin x0 x1", "sqrt x0", "pi x0"])
+    def test_two_operands_with_only_whitespace_between_are_refused(
+            self, engine: SimpliPyEngine, text: str) -> None:
+        for read in (engine.read_infix, engine.infix_to_prefix, engine.simplify):
+            with pytest.raises(ValueError, match="separated only by whitespace"):
+                read(text)
