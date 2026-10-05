@@ -18,7 +18,7 @@ Wildcards `_k` are treated as variables x{k}. `<constant>` leaves bind to fitted
 import numpy as np
 from mpmath import mp, mpf, isnan, isinf, nan, inf
 
-from simplipy.utils import reserved_numeric_spelling
+from simplipy.utils import literal_float, reserved_numeric_spelling
 
 
 def _num(x):
@@ -238,7 +238,10 @@ def _ev(tokens, i, env, consts, ci):
     core = t.strip('()')
     if reserved_numeric_spelling(core):
         raise ValueError(f"reserved numeric spelling {t!r} reached the hp oracle (H-007)")
-    return _num(float(core)), i, ci
+    value = literal_float(core)  # fractions too, read as the compiled expression reads them
+    if value is None:
+        raise ValueError(f"not a literal: {t!r}")
+    return _num(value), i, ci
 
 
 def evaluate(tokens, env, consts):

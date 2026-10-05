@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from simplipy.utils import reserved_numeric_spelling
+from simplipy.utils import literal_float, reserved_numeric_spelling
 
 if TYPE_CHECKING:
     from ..engine import SimpliPyEngine
@@ -140,10 +140,8 @@ def _num(tok):
     core = tok.strip('()')
     if reserved_numeric_spelling(core):
         raise ValueError(f"reserved numeric spelling {tok!r} reached the f64 oracle (H-007)")
-    try:
-        return float(core)
-    except ValueError:
-        return None
+    # fractions and huge integers read as the compiled expression reads them
+    return literal_float(core)
 
 
 def evaluate(tokens, env):

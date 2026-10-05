@@ -127,8 +127,16 @@ def _exact(t):
 
     The DEPLOYED lane must keep seeing the double, because that is what deployment
     computes -- `d_eval` converts back with `F()`, so its semantics are unchanged.
+
+    The spelling is bounded BEFORE the rational is built: a rule file is untrusted input, and
+    `Fraction('1e999999999')` would build a billion-digit integer. More than 4,300 digits
+    (CPython's integer-string limit) or a decimal exponent beyond 4,000 is refused.
     """
-    return Fraction(t.strip())
+    t = t.strip()
+    mantissa, _, exponent = t.lower().partition('e')
+    if sum(c.isdigit() for c in mantissa) > 4300 or (exponent and abs(int(exponent)) > 4000):
+        raise UnsupportedToken(f'literal too large to read exactly: {t[:40]!r}...')
+    return Fraction(t)
 
 
 def literal_value(t):
@@ -643,8 +651,11 @@ def d_eval(tree, env):
         return env[tree[1]]
     if op == 'lit':
         # deployment parses the token as a double; the exact rational is the CONTRACT's
-        # reading, never this lane's.
-        return F(float(tree[1]))
+        # reading, never this lane's. Beyond float64's range the double is +-inf.
+        try:
+            return F(float(tree[1]))
+        except OverflowError:
+            return F(math.copysign(math.inf, tree[1]))
     args = [d_eval(c, env) for c in tree[1:]]
     # C35: the ignore-everything float semantics this judge needs are SCOPED to the
     # operator application, never set process-wide at import.

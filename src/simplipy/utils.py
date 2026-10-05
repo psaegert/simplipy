@@ -682,6 +682,78 @@ def is_numeric_string(s: str) -> bool:
     return bool(_DECIMAL_NUMERAL.fullmatch(s) or _FRACTION_NUMERAL.fullmatch(s))
 
 
+_INTEGER_NUMERAL = re.compile(r'[+-]?[0-9]+')
+_EXACT_FLOAT_INTEGERS = 2 ** 53
+
+
+def evaluator_literal(token: str) -> str:
+    """The spelling the compiled evaluator reads for a token: every literal as its nearest
+    float64.
+
+    The compiled expression is Python source, and Python reads an integer literal as an exact
+    ``int``. Up to 2^53 that is the same number as its float64. Beyond 2^53 the evaluator would
+    compute with a number no float64 holds, numpy's ufuncs reject an ``int`` above int64
+    (``np.sin(10**20)`` raises TypeError), and float arithmetic rejects one above float64's
+    range (OverflowError). Such an integer is therefore spelled as its nearest float64 (its
+    ``repr``), or ``float("inf")``/``float("-inf")`` beyond the range. A fraction ``p/q`` is
+    correctly rounded by Python's ``int / int`` and is kept, unless its value leaves float64's
+    range, where Python raises and the evaluator reads ``float("inf")``. Every other token is
+    returned unchanged.
+
+    Examples
+    --------
+    >>> evaluator_literal('5')
+    '5'
+    >>> evaluator_literal('100000000000000000000')
+    '1e+20'
+    >>> evaluator_literal('-' + '9' * 400)
+    'float("-inf")'
+    """
+    bare = token[1:-1] if token.startswith('(') and token.endswith(')') else token
+    if _INTEGER_NUMERAL.fullmatch(bare):
+        try:
+            value = int(bare)
+        except ValueError:  # beyond Python's integer-string limit: leave it to Python
+            return token
+        if abs(value) <= _EXACT_FLOAT_INTEGERS:
+            return token
+        try:
+            return repr(float(value))
+        except OverflowError:
+            return 'float("-inf")' if value < 0 else 'float("inf")'
+    if _FRACTION_NUMERAL.fullmatch(bare):
+        p, q = bare.split('/')
+        try:
+            float(int(p) / int(q))
+        except OverflowError:
+            return 'float("-inf")' if p.startswith('-') else 'float("inf")'
+        except ValueError:  # beyond Python's integer-string limit
+            return token
+    return token
+
+
+def literal_float(token: str) -> float | None:
+    """The float64 the deployed evaluator reads for a numeral token, or ``None`` if ``token`` is
+    not one: a decimal as Python's ``float()`` reads it (``1e400`` is ``inf``), a fraction
+    ``p/q`` correctly rounded (Python's ``int / int``), ``+-inf`` beyond float64's range where
+    Python would raise. A component beyond Python's integer-string limit gives ``None``.
+
+    The mining oracles read literals here, so a fraction token or a huge integer reads the way
+    the compiled expression does (:func:`evaluator_literal`).
+    """
+    if _DECIMAL_NUMERAL.fullmatch(token):
+        return float(token)
+    if _FRACTION_NUMERAL.fullmatch(token):
+        p, q = token.split('/')
+        try:
+            return int(p) / int(q)
+        except OverflowError:
+            return -math.inf if p.startswith('-') else math.inf
+        except ValueError:  # beyond Python's integer-string limit
+            return None
+    return None
+
+
 def _looks_numeric(t: str) -> bool:
     """A token that starts like a number: after one optional pair of parentheses and any
     run of signs, a digit or ``.`` (mirror of the Rust ``looks_numeric``)."""
