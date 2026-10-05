@@ -27,6 +27,8 @@ use std::cmp::Ordering;
 use crate::tokens::{Tok, TokenView};
 
 use super::rat::Rat;
+use num_bigint::BigUint;
+use num_traits::{One, ToPrimitive, Zero};
 
 /// An AC-core expression. Leaves carry interned [`Tok`] ids (variables `x0..`, wildcards
 /// `_0`/`?0`/`!0`/`$0`); everything numeric is EXACT ([`Rat`], or the symbolic
@@ -374,14 +376,37 @@ pub fn l_millibits(n: u128) -> u64 {
         return 0; // log2(1) = 0, i.e. n = 0
     }
     let b = 128 - m.leading_zeros() as u64; // m has b bits: 2^(b-1) <= m < 2^b
-    let int_part = b - 1;
-    const FRAC: u32 = 48;
-    // x = m / 2^(b-1), in [1, 2), as a FRAC-bit fixed-point value.
-    let mut x: u128 = if (b - 1) as u32 >= FRAC {
-        m >> ((b - 1) as u32 - FRAC)
+                                            // x = m / 2^(b-1), in [1, 2), as a FRAC-bit fixed-point value.
+    let x: u128 = if (b - 1) as u32 >= L_FRAC {
+        m >> ((b - 1) as u32 - L_FRAC)
     } else {
-        m << (FRAC - (b - 1) as u32)
+        m << (L_FRAC - (b - 1) as u32)
     };
+    l_millibits_fixed(b - 1, x)
+}
+
+/// `l_millibits` for an integer of any size: the same extraction on its top bits, so it is
+/// bit-identical to `l_millibits` wherever both apply (the measure digest must not move for
+/// numbers that fit 128 bits).
+pub fn l_millibits_big(n: &BigUint) -> u64 {
+    if let Some(small) = n.to_u128().filter(|&v| v < u128::MAX) {
+        return l_millibits(small);
+    }
+    let m = n + 1u32;
+    let b = m.bits(); // well beyond L_FRAC bits here
+    let x = (&m >> (b - 1 - u64::from(L_FRAC)))
+        .to_u128()
+        .expect("the top L_FRAC + 1 bits fit");
+    l_millibits_fixed(b - 1, x)
+}
+
+/// The fixed-point precision of `l_millibits`.
+const L_FRAC: u32 = 48;
+
+/// `1000 * (int_part + log2(x / 2^L_FRAC))`, rounded to the milli-bit, for `x` in
+/// [2^L_FRAC, 2^(L_FRAC + 1)).
+fn l_millibits_fixed(int_part: u64, mut x: u128) -> u64 {
+    const FRAC: u32 = L_FRAC;
     let one: u128 = 1u128 << FRAC;
     let two: u128 = one << 1;
     // Extract the fraction one bit at a time, accumulating in the same fixed point.
@@ -422,11 +447,25 @@ pub fn l_millibits(n: u128) -> u64 {
 /// ratified i128-boundedness boundary; the beyond-`Rat` STRING pricer carries the same
 /// refusal, so the boundary cannot become an ordering cliff).
 fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
-    if r.den() == 1 {
+    match r.small_parts() {
+        Some((p, q)) => match decimal_code_small(p, q) {
+            Ok(code) => code,
+            Err(()) if super::rat::WIDE_RESULTS => decimal_code_big(r),
+            Err(()) => None,
+        },
+        None => decimal_code_big(r),
+    }
+}
+
+/// `decimal_code` in 128 bits: `Err` when the scaled mantissa leaves `i128` (the boundary
+/// phase 2c lifts), `Ok(None)` when there is no decimal codeword.
+#[allow(clippy::result_unit_err)]
+fn decimal_code_small(p: i128, q: i128) -> Result<Option<(u64, u64)>, ()> {
+    if q == 1 {
         // Integer arm (D38): k = trailing base-ten zeros, m = the remaining digits.
-        let mut m = r.num().checked_abs()?;
+        let mut m = p.checked_abs().ok_or(())?;
         if m == 0 {
-            return None;
+            return Ok(None);
         }
         let mut k = 0u32;
         while m % 10 == 0 {
@@ -434,12 +473,15 @@ fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
             k += 1;
         }
         if k == 0 {
-            return None;
+            return Ok(None);
         }
-        return Some((l_millibits(m.unsigned_abs()), l_millibits(u128::from(k))));
+        return Ok(Some((
+            l_millibits(m.unsigned_abs()),
+            l_millibits(u128::from(k)),
+        )));
     }
     let (mut a, mut b) = (0u32, 0u32);
-    let mut rest = r.den();
+    let mut rest = q;
     while rest % 2 == 0 {
         rest /= 2;
         a += 1;
@@ -449,17 +491,56 @@ fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
         b += 1;
     }
     if rest != 1 {
+        return Ok(None);
+    }
+    let k = a.max(b);
+    let mut m = p.checked_abs().ok_or(())?;
+    for _ in 0..(k - a) {
+        m = m.checked_mul(2).ok_or(())?;
+    }
+    for _ in 0..(k - b) {
+        m = m.checked_mul(5).ok_or(())?;
+    }
+    Ok(Some((
+        l_millibits(m.unsigned_abs()),
+        l_millibits(u128::from(k)),
+    )))
+}
+
+/// `decimal_code` in big integers.
+fn decimal_code_big(r: &Rat) -> Option<(u64, u64)> {
+    let (p, q) = r.big_parts();
+    let (ten, five) = (BigUint::from(10u32), BigUint::from(5u32));
+    let mut m = p.magnitude().clone();
+    if m.is_zero() {
+        return None;
+    }
+    if q.is_one() {
+        let mut k = 0u64;
+        while (&m % &ten).is_zero() {
+            m /= &ten;
+            k += 1;
+        }
+        if k == 0 {
+            return None;
+        }
+        return Some((l_millibits_big(&m), l_millibits(u128::from(k))));
+    }
+    let q = q.magnitude().clone();
+    let a = q.trailing_zeros().unwrap_or(0);
+    let mut rest = &q >> a;
+    let mut b = 0u64;
+    while (&rest % &five).is_zero() {
+        rest /= &five;
+        b += 1;
+    }
+    if !rest.is_one() {
         return None;
     }
     let k = a.max(b);
-    let mut m = r.num().checked_abs()?;
-    for _ in 0..(k - a) {
-        m = m.checked_mul(2)?;
-    }
-    for _ in 0..(k - b) {
-        m = m.checked_mul(5)?;
-    }
-    Some((l_millibits(m.unsigned_abs()), l_millibits(u128::from(k))))
+    m <<= k - a;
+    m *= num_traits::pow(five, (k - b) as usize);
+    Some((l_millibits_big(&m), l_millibits(u128::from(k))))
 }
 
 /// Description length of the exact VALUE p/q (lowest terms), in MILLI-BITS and
@@ -542,10 +623,18 @@ pub fn mu_rat(r: &Rat) -> u64 {
 const MU_RAT_FLOOR: u64 = 1 * MU_MILLI;
 
 fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
-    let sign = if r.num() < 0 { MU_MILLI } else { 0 };
-    let pb = l_millibits(r.num().unsigned_abs());
-    let qb = l_millibits(r.den() as u128);
-    let fraction_raw = if r.den() == 1 { pb } else { pb + qb };
+    let sign = if r.is_negative() { MU_MILLI } else { 0 };
+    let (pb, qb) = match r.small_parts() {
+        Some((p, q)) => (l_millibits(p.unsigned_abs()), l_millibits(q as u128)),
+        None => {
+            let (p, q) = r.big_parts();
+            (
+                l_millibits_big(p.magnitude()),
+                l_millibits_big(q.magnitude()),
+            )
+        }
+    };
+    let fraction_raw = if r.is_integer() { pb } else { pb + qb };
     let floor = MU_RAT_FLOOR;
     let fraction = (fraction_raw + sign).max(floor);
     let decimal = decimal_code(r).map(|(m, k)| m.max(floor) + k + sign);
@@ -1130,7 +1219,7 @@ impl<'a> Cx<'a> {
             Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| self.certainly_finite(x)),
             Ex::Pow(b, ex) => {
                 self.certainly_finite(b)
-                    && matches!(&**ex, Ex::Num(r) if r.as_integer().map(|n| n >= 0).unwrap_or(false))
+                    && matches!(&**ex, Ex::Num(r) if r.is_integer() && !r.is_negative())
             }
             Ex::Fun(f, v) => {
                 let s = self.view.resolve_owned(*f);
@@ -1264,10 +1353,8 @@ impl<'a> Cx<'a> {
             Ex::Pi | Ex::E => true,
             Ex::Mul(v) => v.iter().all(|f| self.certainly_nonvanishing(f)),
             Ex::Pow(b, q) => match &**q {
-                Ex::Num(r) if r.as_integer().is_some_and(|n| n > 0) => {
-                    self.certainly_nonvanishing(b)
-                }
-                Ex::Num(r) if r.as_integer().is_some_and(|n| n < 0) => {
+                Ex::Num(r) if r.is_integer() && r.signum() > 0 => self.certainly_nonvanishing(b),
+                Ex::Num(r) if r.is_integer() && r.is_negative() => {
                     // b^-n = 0 exactly where b = +-inf: demand finiteness too.
                     self.certainly_nonvanishing(b) && self.certainly_finite(b)
                 }
@@ -1299,8 +1386,7 @@ impl<'a> Cx<'a> {
             // base stays non-negative under EVERY real exponent (0^negative = +inf under the
             // one-zero contract -- still non-negative).
             Ex::Pow(b, ex) => {
-                matches!(&**ex, Ex::Num(r) if r.as_integer().map(|n| n % 2 == 0).unwrap_or(false))
-                    || self.certainly_nonneg(b)
+                matches!(&**ex, Ex::Num(r) if r.is_even_integer()) || self.certainly_nonneg(b)
             }
             Ex::Fun(f, v) => {
                 let s = self.view.resolve_owned(*f);
@@ -1317,20 +1403,17 @@ impl<'a> Cx<'a> {
                     "rootn" => {
                         v.len() == 2
                             && match &v[1] {
-                                Ex::Num(r) => match r.as_integer() {
-                                    // EVEN index: defined only on [0, inf) and its
-                                    // principal value is non-negative there -- a range
-                                    // fact, exactly like `acos`. Off-domain it is NaN,
-                                    // which no licence reads as a sign. (A negative even
-                                    // index is the reciprocal of one, still non-negative;
-                                    // index 0 is excluded, it is not a root.)
-                                    Some(n) if n != 0 && n % 2 == 0 => true,
-                                    // ODD index: an increasing odd bijection on the whole
-                                    // line, so it maps [0, inf) into [0, inf) -- the same
-                                    // clause as `sinh`/`asinh` below.
-                                    Some(_) => self.certainly_nonneg(&v[0]),
-                                    None => false,
-                                },
+                                // EVEN index: defined only on [0, inf) and its
+                                // principal value is non-negative there -- a range
+                                // fact, exactly like `acos`. Off-domain it is NaN,
+                                // which no licence reads as a sign. (A negative even
+                                // index is the reciprocal of one, still non-negative;
+                                // index 0 is excluded, it is not a root.)
+                                Ex::Num(r) if r.is_even_integer() && !r.is_zero() => true,
+                                // ODD index: an increasing odd bijection on the whole
+                                // line, so it maps [0, inf) into [0, inf) -- the same
+                                // clause as `sinh`/`asinh` below.
+                                Ex::Num(r) if r.is_integer() => self.certainly_nonneg(&v[0]),
                                 _ => false,
                             }
                     }
@@ -1438,7 +1521,7 @@ impl<'a> Cx<'a> {
             }
             Ex::Pow(b, ex) => {
                 let ok = matches!(&**ex, Ex::Num(r)
-                    if r.as_integer().is_some_and(|n| n % 2 == 0 || n > 0));
+                    if r.is_even_integer() || (r.is_integer() && r.signum() > 0));
                 if !ok {
                     return None;
                 }
@@ -1507,7 +1590,7 @@ impl<'a> Cx<'a> {
     /// unknown abstains, so refusal stays the safe direction.
     fn magnitude_floor(&self, e: &Ex) -> Option<i128> {
         match e {
-            Ex::Num(r) => Some((r.num().unsigned_abs() / (r.den() as u128)) as i128),
+            Ex::Num(r) => Some(r.floor_abs_saturating()),
             Ex::Pi => Some(3),
             Ex::E => Some(2),
             Ex::Fun(f, a) => {
@@ -1772,7 +1855,7 @@ fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
     let (c, key) = match e {
         Ex::Mul(v) => match v.first() {
             Some(Ex::Num(r)) if !r.is_zero() => {
-                let r = *r;
+                let r = r.clone();
                 let mut rest = v;
                 rest.remove(0);
                 let key = if rest.len() == 1 {
@@ -2055,9 +2138,9 @@ fn factor_split(e: Ex, cx: &Cx) -> (Ex, FactorExp) {
     if let Ex::Fun(op, args) = &e {
         if args.len() == 2 && cx.view.tok_is(*op, "rootn") {
             if let Ex::Num(idx) = &args[1] {
-                if let Some(n) = idx.as_integer() {
-                    if n >= 2 && n % 2 == 0 {
-                        if let Some(r) = Rat::new(1, n) {
+                if idx.is_even_integer() && idx.cmp_int(2) != Ordering::Less {
+                    {
+                        if let Some(r) = idx.checked_inv() {
                             let Ex::Fun(_, args) = e else { unreachable!() };
                             let mut it = args.into_iter();
                             return (it.next().unwrap(), FactorExp::Rat(r));
@@ -2082,16 +2165,15 @@ fn factor_split(e: Ex, cx: &Cx) -> (Ex, FactorExp) {
 fn as_rational_power<'a>(e: &'a Ex, cx: &Cx) -> Option<(&'a Ex, Rat)> {
     match e {
         Ex::Pow(b, ex) => match &**ex {
-            Ex::Num(r) => Some((&**b, *r)),
+            Ex::Num(r) => Some((&**b, r.clone())),
             _ => None,
         },
         Ex::Fun(op, args) if args.len() == 2 && cx.view.tok_is(*op, "rootn") => {
             let Ex::Num(idx) = &args[1] else {
                 return None;
             };
-            let n = idx.as_integer()?;
-            if n >= 2 && n % 2 == 0 {
-                Rat::new(1, n).map(|r| (&args[0], r))
+            if idx.is_even_integer() && idx.cmp_int(2) != Ordering::Less {
+                idx.checked_inv().map(|r| (&args[0], r))
             } else {
                 None
             }
@@ -2217,7 +2299,7 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
                 if v.len() == 2 && matches!(&v[0], Ex::Num(_)) && matches!(&v[1], Ex::Add(_)) =>
             {
                 let (r, inner) = match (&v[0], &v[1]) {
-                    (Ex::Num(r), Ex::Add(inner)) => (*r, inner.clone()),
+                    (Ex::Num(r), Ex::Add(inner)) => (r.clone(), inner.clone()),
                     _ => unreachable!(),
                 };
                 let mut scaled: Vec<Ex> = Vec::with_capacity(inner.len());
@@ -2563,7 +2645,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     for t in &terms {
         let c = match t {
             Ex::Const => Rat::ONE,
-            Ex::Num(r) => *r,
+            Ex::Num(r) => r.clone(),
             _ => term_split(t.clone(), cx.view).0,
         };
         magnitudes.push(if c.is_negative() {
@@ -2583,7 +2665,11 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // wrapping one here would re-mint what that arm just unwrapped). Magnitude-only
     // content extraction stays: a positive u moves no signs, so the absorbing member's
     // canonical spelling is untouched.
-    let g = if unanimous { magnitudes[0] } else { Rat::ONE };
+    let g = if unanimous {
+        magnitudes[0].clone()
+    } else {
+        Rat::ONE
+    };
     // (b), owner ruling 2026-08-08: the filed orientation is the mu-CHEAPER one ("the
     // mirrors score equal; the bigger expression scores bigger"); the historical
     // first-in-sort-positive lex rule survives only as the exact-tie breaker. For a
@@ -2805,7 +2891,7 @@ fn orientation_coeff(t: &Ex, view: &TokenView) -> Rat {
         Ex::Const => Rat::ONE,
         Ex::PosInf => Rat::ONE,
         Ex::NegInf => Rat::NEG_ONE,
-        Ex::Num(r) => *r,
+        Ex::Num(r) => r.clone(),
         // Sign-normalized split (B19): an odd-literal term's sign is SEMANTIC and the
         // orientation comparison must see it -- sin(-2) contributes -1, not +1.
         _ => term_split(t.clone(), view).0,
@@ -2863,17 +2949,15 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
         // joins one group per round and re-scans, so the fixpoint -- every group
         // reduced to one factor -- is reached regardless of group order (products
         // are AC, so the per-group result is order-independent).
-        let mut by_index: Vec<(i128, Vec<usize>)> = Vec::new();
+        let mut by_index: Vec<(Rat, Vec<usize>)> = Vec::new();
         for (i, f) in factors.iter().enumerate() {
             if let Ex::Fun(op, fargs) = f {
                 if fargs.len() == 2 && cx.view.tok_is(*op, "rootn") {
                     if let Ex::Num(r) = &fargs[1] {
-                        if let Some(n) = r.as_integer() {
-                            if n >= 3 && n % 2 == 1 {
-                                match by_index.iter_mut().find(|(gn, _)| *gn == n) {
-                                    Some((_, idxs)) => idxs.push(i),
-                                    None => by_index.push((n, vec![i])),
-                                }
+                        if r.is_odd_integer() && r.cmp_int(3) != Ordering::Less {
+                            match by_index.iter_mut().find(|(gn, _)| gn == r) {
+                                Some((_, idxs)) => idxs.push(i),
+                                None => by_index.push((r.clone(), vec![i])),
                             }
                         }
                     }
@@ -2891,7 +2975,7 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
                     op_tok = Some(op);
                     args.push(fargs.swap_remove(0));
                 }
-                stack.push(fun(op_tok.unwrap(), vec![mul(args, cx), Ex::int(n)], cx));
+                stack.push(fun(op_tok.unwrap(), vec![mul(args, cx), Ex::Num(n)], cx));
             }
             _ => break,
         }
@@ -3313,7 +3397,7 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
     let assemble = |factors: Vec<Ex>, c: &Rat| -> Ex {
         let mut v = factors;
         if !c.is_one() {
-            v.push(Ex::Num(*c));
+            v.push(Ex::Num(c.clone()));
         }
         match v.len() {
             0 => Ex::Num(Rat::ONE),
@@ -3424,9 +3508,9 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                     let c = match carrier {
                         Carrier::Coeff => {
                             if toggled {
-                                nc
+                                nc.clone()
                             } else {
-                                coeff
+                                coeff.clone()
                             }
                         }
                         Carrier::Inf(i) => {
@@ -3437,7 +3521,7 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                                     _ => unreachable!(),
                                 };
                             }
-                            coeff
+                            coeff.clone()
                         }
                         // The refit eats the toggle: every mask is value-equal as a
                         // fitted family. Normalize the WHOLE sign dimension into the
@@ -3449,9 +3533,9 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                                 }
                             }
                             if coeff.is_negative() {
-                                nc
+                                nc.clone()
                             } else {
-                                coeff
+                                coeff.clone()
                             }
                         }
                         Carrier::Absorb(i) => {
@@ -3474,7 +3558,7 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                                     }
                                 }
                             }
-                            coeff
+                            coeff.clone()
                         }
                     };
                     let cand = assemble(factors, &c);
@@ -3555,7 +3639,7 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
         Some(out)
     };
     let odd_int_ge3 = |e: &Ex| -> bool {
-        matches!(e, Ex::Num(r) if r.as_integer().is_some_and(|n| n >= 3 && n % 2 == 1))
+        matches!(e, Ex::Num(r) if r.is_odd_integer() && r.cmp_int(3) != Ordering::Less)
     };
     match f {
         Ex::Add(ts) => flip_sum(ts).map(Ex::Add),
@@ -3680,10 +3764,7 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
                 return None;
             }
             let Ex::Num(r) = &**e else { return None };
-            match r.as_integer() {
-                Some(n) if n < 0 && n.checked_neg().is_some() => Some(i),
-                _ => None,
-            }
+            (r.is_integer() && r.is_negative()).then_some(i)
         })
         .collect();
     if eligible.len() < 2 {
@@ -3696,11 +3777,10 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
                 unreachable!()
             };
             let Ex::Num(r) = &**e else { unreachable!() };
-            let n = r.as_integer().unwrap();
-            if n == -1 {
+            if *r == Rat::NEG_ONE {
                 (**b).clone()
             } else {
-                pow((**b).clone(), Ex::int(-n), cx)
+                pow((**b).clone(), Ex::Num(r.checked_neg().unwrap()), cx)
             }
         })
         .collect();
@@ -3762,7 +3842,7 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
             unreachable!()
         };
         if let Some(cinv) = c.checked_inv() {
-            let inner2 = mul(vec![Ex::Num(cinv), inner.clone()], cx);
+            let inner2 = mul(vec![Ex::Num(cinv.clone()), inner.clone()], cx);
             let survives = matches!(&inner2, Ex::Mul(v)
                 if v.iter().any(|f| matches!(f, Ex::Num(n) if *n == cinv)));
             // F63 amendment to the H-027 gate: a NEGATIVE reciprocated coefficient
@@ -3925,14 +4005,14 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         if b.is_zero() && e.is_negative() {
             return Ex::PosInf;
         }
-        if let Some(n) = e.as_integer() {
-            if let Some(r) = b.checked_pow_int(n) {
+        if e.is_integer() {
+            if let Some(r) = b.checked_pow_integer(e) {
                 return Ex::Num(r);
             }
         } else if !b.is_negative() {
             // b^(p/q): exact iff the q-th root of b is rational.
-            if let Some(root) = b.checked_root(e.den()) {
-                if let Some(r) = root.checked_pow_int(e.num()) {
+            if let Some(root) = b.checked_root_integer(&e.denom()) {
+                if let Some(r) = root.checked_pow_integer(&e.numer()) {
                     return Ex::Num(r);
                 }
             }
@@ -3986,7 +4066,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if let (Ex::Mul(v), Ex::Num(e)) = (&base, &exp) {
         if e.is_integer() {
             let licensed = !e.is_negative()
-                || e.as_integer().is_some_and(|n| n % 2 == 0)
+                || e.is_even_integer()
                 || v.iter().all(|f| cx.nz_ae_licensed(f))
                 || v.iter().all(|f| cx.certainly_nonneg(f));
             if licensed {
@@ -4002,7 +4082,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 // post-distribute there is no legal trade, so entry-independence
                 // requires one fixed pre-state.
                 let vv: Vec<Ex>;
-                let bag: &[Ex] = if e.is_negative() && e.as_integer().is_some_and(|n| n % 2 != 0) {
+                let bag: &[Ex] = if e.is_negative() && e.is_odd_integer() {
                     let ci = v
                         .iter()
                         .position(|f| matches!(f, Ex::Num(r) if r.is_negative()));
@@ -4058,7 +4138,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 // (every negative coefficient) is the same condition without it.
                 let neg_coeff_stuck = !cx.lossy()
                     && e.is_negative()
-                    && e.as_integer().is_some_and(|n| n % 2 != 0)
+                    && e.is_odd_integer()
                     && bag
                         .iter()
                         .any(|f| matches!(f, Ex::Num(r) if r.is_negative() && *r != Rat::NEG_ONE))
@@ -4069,7 +4149,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     let parts: Vec<Ex> = bag
                         .iter()
                         .cloned()
-                        .map(|f| pow(f, Ex::Num(*e), cx))
+                        .map(|f| pow(f, Ex::Num(e.clone()), cx))
                         .collect();
                     return mul(parts, cx);
                 }
@@ -4084,12 +4164,14 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             // TOTAL for odd n < 0: x^n == (x^|n|)^-1 pointwise (at 0 both +inf, at
             // +-inf both 0, finite exact) and the inner |n| is a NON-NEGATIVE integer
             // distribution (total, licensed above).
-            if let Some(n) = e.as_integer() {
-                if n < -1 {
-                    let parts: Vec<Ex> =
-                        v.iter().cloned().map(|f| pow(f, Ex::int(-n), cx)).collect();
-                    return pow(mul(parts, cx), Ex::int(-1), cx);
-                }
+            if e.is_integer() && e.cmp_int(-1) == Ordering::Less {
+                let m = e.checked_neg().expect("a negative integer negates");
+                let parts: Vec<Ex> = v
+                    .iter()
+                    .cloned()
+                    .map(|f| pow(f, Ex::Num(m.clone()), cx))
+                    .collect();
+                return pow(mul(parts, cx), Ex::int(-1), cx);
             }
         }
     }
@@ -4128,10 +4210,10 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             let r = &r;
             let licence = if cx.lossy() {
                 true
-            } else if let Some(ri) = r.as_integer() {
+            } else if r.is_integer() {
                 s.is_integer()
-                    || (ri % 2 != 0
-                        && (ri > 0 || cx.never_infinite(inner_base))
+                    || (r.is_odd_integer()
+                        && (r.signum() > 0 || cx.never_infinite(inner_base))
                         && r.checked_mul(s).is_some_and(|p| !p.is_integer()))
                     || cx.certainly_nonneg(inner_base)
             } else {
@@ -4172,13 +4254,13 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // was not a fixpoint of the parser (F1/F2, AUDIT 2026-08-06).
     if let (Ex::Fun(rop, rargs), Ex::Num(e)) = (&base, &exp) {
         if rargs.len() == 2 && cx.view.tok_is(*rop, "rootn") {
-            if let (Ex::Num(idx), Some(k)) = (&rargs[1], e.as_integer()) {
-                let n = k.abs();
-                if n >= 2
-                    && idx.as_integer() == Some(n)
-                    && (n % 2 == 1 || cx.certainly_nonneg(&rargs[0]))
+            if let (Ex::Num(idx), true) = (&rargs[1], e.is_integer()) {
+                let n = e.abs();
+                if n.cmp_int(2) != Ordering::Less
+                    && *idx == n
+                    && (n.is_odd_integer() || cx.certainly_nonneg(&rargs[0]))
                 {
-                    if k >= 2 {
+                    if !e.is_negative() {
                         return rargs[0].clone();
                     }
                     return pow(rargs[0].clone(), Ex::int(-1), cx);
@@ -4204,11 +4286,9 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if let (Ex::Fun(rop, rargs), Ex::Num(s)) = (&base, &exp) {
         if rargs.len() == 2 && cx.view.tok_is(*rop, "rootn") && !s.is_integer() {
             if let Ex::Num(idx) = &rargs[1] {
-                if let Some(m) = idx.as_integer() {
-                    if m >= 3 && m % 2 == 1 {
-                        if let Some(t) = Rat::new(1, m).and_then(|inv| s.checked_mul(&inv)) {
-                            return pow(rargs[0].clone(), Ex::Num(t), cx);
-                        }
+                if idx.is_odd_integer() && idx.cmp_int(3) != Ordering::Less {
+                    if let Some(t) = idx.checked_inv().and_then(|inv| s.checked_mul(&inv)) {
+                        return pow(rargs[0].clone(), Ex::Num(t), cx);
                     }
                 }
             }
@@ -4234,7 +4314,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if !bv.is_zero() {
                 // |b| against 1, exactly: `Rat` is normalized with a positive denominator,
                 // so comparing |num| with den decides it without any division.
-                let mag = bv.num().unsigned_abs().cmp(&bv.den().unsigned_abs());
+                let mag = bv.abs().cmp_int(1);
                 let to_zero = matches!(
                     (&exp, mag),
                     (Ex::PosInf, std::cmp::Ordering::Less)
@@ -4338,9 +4418,9 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // Runs LAST, so every exact fold, pole, infinity and composition arm above has already
     // had its chance -- `pow(4, 1/2)` still folds to `2` and never reaches here.
     if let Ex::Num(e) = &exp {
-        let n = e.den();
-        if e.num() == 1 && n >= 2 && n % 2 == 0 {
-            return fun(cx.view.intern("rootn"), vec![base, Ex::int(n)], cx);
+        let n = e.denom();
+        if e.numer().is_one() && n.is_even_integer() && n.cmp_int(2) != Ordering::Less {
+            return fun(cx.view.intern("rootn"), vec![base, Ex::Num(n)], cx);
         }
     }
     // F63 even-carrier orientation (owner-ruled 2026-08-08, full family): an EVEN
@@ -4354,7 +4434,8 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // final form, and the flip re-enters `pow` exactly once (fow on the flipped
     // orientation answers keep -- class-antisymmetry).
     if let (Ex::Add(ts), Ex::Num(r)) = (&base, &exp) {
-        if r.as_integer().is_some_and(|n| n != 0 && n % 2 == 0)
+        if r.is_even_integer()
+            && !r.is_zero()
             && !ts.iter().any(Ex::contains_const)
             && !ts.iter().any(term_absorbs_negation)
             && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
@@ -4441,7 +4522,7 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
     // the spelling whose f64 reading is this value again.
     let folded = Rat::parse_decimal(&format!("{y:?}"))?;
     let before = complexity(&Ex::Fun(op, args.to_vec()), cx.view);
-    let after = complexity(&Ex::Num(folded), cx.view);
+    let after = complexity(&Ex::Num(folded.clone()), cx.view);
     if after < before {
         Some(Ex::Num(folded))
     } else {
@@ -4498,10 +4579,16 @@ pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
         let lits: Option<Vec<Rat>> = match &e {
             Ex::Add(v) | Ex::Mul(v) => v
                 .iter()
-                .map(|x| if let Ex::Num(r) = x { Some(*r) } else { None })
+                .map(|x| {
+                    if let Ex::Num(r) = x {
+                        Some(r.clone())
+                    } else {
+                        None
+                    }
+                })
                 .collect(),
             Ex::Pow(b, x) => match (&**b, &**x) {
-                (Ex::Num(rb), Ex::Num(rx)) => Some(vec![*rb, *rx]),
+                (Ex::Num(rb), Ex::Num(rx)) => Some(vec![rb.clone(), rx.clone()]),
                 _ => None,
             },
             _ => None,
@@ -4538,7 +4625,7 @@ pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
                     *moved = true;
                     Ex::Num(s)
                 }
-                None => Ex::Num(*r),
+                None => Ex::Num(r.clone()),
             },
             Ex::Add(v) => ground_fold(Ex::Add(v.iter().map(|x| walk(x, moved)).collect()), moved),
             Ex::Mul(v) => ground_fold(Ex::Mul(v.iter().map(|x| walk(x, moved)).collect()), moved),
@@ -4593,7 +4680,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     return Ex::Num(a);
                 }
             } else {
-                return Ex::Num(*r);
+                return Ex::Num(r.clone());
             }
         }
     }
@@ -4758,11 +4845,12 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
         let index = &args[1];
         match index {
             Ex::Num(r) => {
-                if let Some(n) = r.as_integer() {
-                    if n == 0 {
+                if r.is_integer() {
+                    let n = r.clone();
+                    if n.is_zero() {
                         return Ex::NaN;
                     }
-                    if n == 1 {
+                    if n.is_one() {
                         return args.into_iter().next().unwrap();
                     }
                     // A ROOT of `exp` is an `exp`: `rootn(exp a, n) -> exp(a/n)`, which is
@@ -4780,8 +4868,9 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     // its sibling still blind on the very next base: `pow(exp(-1), 1/2)` was
                     // shipping as `rootn(exp(-1), 2)` at mu 20,000 where `exp(-1/2)` is
                     // 11,585. One base is a patch; the family is the principle.
-                    if let Some(composed) =
-                        Rat::new(1, n).and_then(|inv| compose_e_power(&args[0], &Ex::Num(inv), cx))
+                    if let Some(composed) = n
+                        .checked_inv()
+                        .and_then(|inv| compose_e_power(&args[0], &Ex::Num(inv), cx))
                     {
                         return composed;
                     }
@@ -4789,14 +4878,14 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     // to live here; it now runs the OTHER way (see `pow`), because mu
                     // prefers the root spelling once a genuine fraction pays for its
                     // denominator -- `rootn x 2` prices 18 against `pow x 1/2` at 19.
-                    if n <= -1 {
+                    if n.is_negative() {
                         // checked_neg, not `-n`: a MIN index cannot be negated (release
                         // wraps silently -> the still-negative index would recurse here
                         // forever). Unreachable while the no-MIN Rat invariant holds;
                         // refusing to fold (stay symbolic) is sound either way.
                         if let Some(pos) = n.checked_neg() {
                             let base = args.into_iter().next().unwrap();
-                            let inner = fun(op, vec![base, Ex::int(pos)], cx);
+                            let inner = fun(op, vec![base, Ex::Num(pos)], cx);
                             return pow(inner, Ex::int(-1), cx);
                         }
                     }
@@ -4812,11 +4901,11 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     if let Ex::Fun(inner_op, inner_args) = &args[0] {
                         if inner_args.len() == 2 && cx.view.tok_is(*inner_op, "rootn") {
                             if let Ex::Num(m) = &inner_args[1] {
-                                if let Some(mi) = m.as_integer() {
-                                    if mi >= 2 {
-                                        if let Some(prod) = mi.checked_mul(n) {
+                                if m.is_integer() && m.cmp_int(2) != Ordering::Less {
+                                    {
+                                        if let Some(prod) = m.checked_mul(&n) {
                                             let inner_base = inner_args[0].clone();
-                                            return fun(op, vec![inner_base, Ex::int(prod)], cx);
+                                            return fun(op, vec![inner_base, Ex::Num(prod)], cx);
                                         }
                                     }
                                 }
@@ -4838,20 +4927,19 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     // defined -> undefined, which §9.1's R2 forbids at zero measure tolerance.
                     // `cosh` clears it on the certainly-non-negative disjunct, a bare variable
                     // does not. `s = 1/n` is never an integer here, so that disjunct is vacuous.
-                    if n % 2 == 0 {
+                    if n.is_even_integer() {
                         let composed = if let Ex::Pow(inner, ex) = &args[0] {
                             match &**ex {
                                 Ex::Num(k) => {
-                                    Rat::new(1, n).and_then(|s| k.checked_mul(&s)).filter(|p| {
+                                    n.checked_inv().and_then(|s| k.checked_mul(&s)).filter(|p| {
                                         cx.lossy()
                                             || cx.certainly_nonneg(inner)
-                                            || match k.as_integer() {
-                                                Some(ki) => {
-                                                    ki % 2 != 0
-                                                        && (ki > 0 || cx.never_infinite(inner))
-                                                        && !p.is_integer()
-                                                }
-                                                None => !p.is_integer(),
+                                            || if k.is_integer() {
+                                                k.is_odd_integer()
+                                                    && (k.signum() > 0 || cx.never_infinite(inner))
+                                                    && !p.is_integer()
+                                            } else {
+                                                !p.is_integer()
                                             }
                                     })
                                 }
@@ -4876,11 +4964,11 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     // identity is false -- rootn(t^2, 2) is |t|, not t. It was previously
                     // unreachable at even n only because even indices converted to `pow`
                     // above; with them surviving, the parity has to be tested here.
-                    if n % 2 != 0 {
+                    if n.is_odd_integer() {
                         if let Ex::Pow(b, ex) = &args[0] {
                             let _ = b;
                             if let Ex::Num(rr) = &**ex {
-                                if rr.as_integer() == Some(n) {
+                                if *rr == n {
                                     let Ex::Pow(inner, _) = args.into_iter().next().unwrap() else {
                                         unreachable!()
                                     };
@@ -4898,7 +4986,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     // same story as abs; the mine cannot cover it -- index/base
                     // literals beyond the alphabet). Inexact bases keep the Fun.
                     if let Ex::Num(r) = &args[0] {
-                        if let Some(root) = r.checked_root(n) {
+                        if let Some(root) = r.checked_root_integer(&n) {
                             return Ex::Num(root);
                         }
                     }
@@ -5894,10 +5982,13 @@ mod tests {
             // i128 denominator, so the bag keeps BOTH as members.
             let n = Rat::new(9999999999999999, 10000000000000000).unwrap();
             let p = Rat::new(1, 170141183460469231731687303715884105727).unwrap();
-            let route_signed_member = mul(vec![Ex::Num(n.checked_neg().unwrap()), Ex::Num(p)], &cx);
+            let route_signed_member = mul(
+                vec![Ex::Num(n.checked_neg().unwrap()), Ex::Num(p.clone())],
+                &cx,
+            );
             let route_negated_bag =
-                negate_term(&mul(vec![Ex::Num(n), Ex::Num(p)], &cx), &cx).unwrap();
-            let route_other_host = term_join(p.checked_neg().unwrap(), Ex::Num(n), &cx);
+                negate_term(&mul(vec![Ex::Num(n.clone()), Ex::Num(p.clone())], &cx), &cx).unwrap();
+            let route_other_host = term_join(p.checked_neg().unwrap(), Ex::Num(n.clone()), &cx);
             let route_swapped = mul(vec![Ex::Num(p), Ex::Num(n.checked_neg().unwrap())], &cx);
             assert_eq!(route_signed_member, route_negated_bag);
             assert_eq!(route_signed_member, route_other_host);
@@ -5907,6 +5998,64 @@ mod tests {
                 panic!("partition bag expected, got {route_signed_member:?}");
             };
             assert_eq!(mul(v, &cx), route_signed_member);
+        });
+    }
+
+    /// Integers beyond 128 bits are integers (number plan phase 2). The map of the 128-bit
+    /// boundary found four sites that read "does not fit i128" as "is not an integer", each
+    /// unsound once such an integer reaches it. A big literal cannot be parsed yet (phase 2c
+    /// lifts that), so these build one directly.
+    #[test]
+    fn big_integers_keep_their_integer_reading() {
+        with_view(|view| {
+            let cx = Cx::bare(view);
+            let big =
+                |p: num_bigint::BigInt| Rat::from_big(p, num_bigint::BigInt::from(1)).unwrap();
+            let ten40 = big(num_traits::pow(num_bigint::BigInt::from(10), 40));
+            let odd = ten40.checked_add(&Rat::ONE).unwrap(); // 10^40 + 1
+            assert!(ten40.small_int().is_none() && ten40.is_even_integer() && odd.is_odd_integer());
+            let rootn = view.intern("rootn");
+
+            // 1. rootn(x, 10^40) is a root with an integer index, not the invalid operation.
+            let r = fun(rootn, vec![x(view), Ex::Num(ten40.clone())], &cx);
+            assert!(matches!(&r, Ex::Fun(..)), "{r:?}");
+
+            // 2. Pow-of-pow: (x^(10^40))^(1/3) must not become x^(10^40/3). The inner power is
+            //    an even power, defined and non-negative at x < 0, where x^(10^40/3) is NaN.
+            let third = Rat::new(1, 3).unwrap();
+            let inner = pow(x(view), Ex::Num(ten40.clone()), &cx);
+            let composed = pow(inner, Ex::Num(third.clone()), &cx);
+            let wrong = pow(x(view), Ex::Num(ten40.checked_mul(&third).unwrap()), &cx);
+            assert_ne!(composed, wrong);
+
+            // 3. Power through an even root: rootn(x^(2(10^40+1)), 4) must not become
+            //    x^((10^40+1)/2), for the same reason.
+            let k = odd.checked_mul(&Rat::int(2)).unwrap();
+            let through = fun(
+                rootn,
+                vec![pow(x(view), Ex::Num(k.clone()), &cx), Ex::int(4)],
+                &cx,
+            );
+            let wrong = pow(
+                x(view),
+                Ex::Num(k.checked_mul(&Rat::new(1, 4).unwrap()).unwrap()),
+                &cx,
+            );
+            assert_ne!(through, wrong);
+
+            // 4. F83: (-2*x)^-(10^40+1) keeps the guard against distributing a negative
+            //    magnitude coefficient over a factor that may vanish.
+            let n = odd.checked_neg().unwrap();
+            let bag = mul(vec![Ex::int(-2), x(view)], &cx);
+            let kept = pow(bag, Ex::Num(n.clone()), &cx);
+            let distributed = mul(
+                vec![
+                    pow(Ex::int(-2), Ex::Num(n.clone()), &cx),
+                    pow(x(view), Ex::Num(n), &cx),
+                ],
+                &cx,
+            );
+            assert_ne!(kept, distributed);
         });
     }
 }

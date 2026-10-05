@@ -152,7 +152,15 @@ pub fn atom_sig(e: &Ex, view: &TokenView) -> u64 {
             }
         }
         Ex::Num(r) => {
-            let h = (r.num().wrapping_mul(31)).wrapping_add(r.den()) as u64;
+            let h = match r.small_parts() {
+                Some((p, q)) => (p.wrapping_mul(31)).wrapping_add(q) as u64,
+                None => {
+                    use std::hash::{Hash, Hasher};
+                    let mut s = std::collections::hash_map::DefaultHasher::new();
+                    r.hash(&mut s);
+                    s.finish()
+                }
+            };
             1u64 << (h & 63)
         }
         Ex::Pi => 1u64 << 57,

@@ -26,6 +26,8 @@ use crate::tokens::{Tok, TokenView};
 
 use super::expr::{add, canon, fun, mul, pow, Cx, Ex};
 use super::rat::Rat;
+use num_bigint::BigInt;
+use num_traits::{One, Zero};
 
 /// Parse a prefix token sequence into a canonical AC expression. `None` on malformed input
 /// (arity underflow / trailing tokens) -- callers pass the input through unchanged, exactly as
@@ -375,27 +377,31 @@ fn ratio_spelling(r: &Rat) -> Option<(Rat, Rat)> {
     if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
         return None;
     }
-    let (p, q) = (r.num(), r.den());
-    let mut n = p;
-    while n % 2 == 0 {
-        n /= 2;
+    let (p, q) = r.big_parts();
+    let (two, five) = (BigInt::from(2), BigInt::from(5));
+    let mut n = p.clone();
+    while (&n % &two).is_zero() {
+        n /= &two;
     }
-    while n % 5 == 0 {
-        n /= 5;
+    while (&n % &five).is_zero() {
+        n /= &five;
     }
     if n == p {
         return None; // no 2 or 5 to move: the denominator would stay an integer
     }
     // p = n * g with g = 2^a 5^b > 1, coprime to q (p/q is reduced): d = q/g terminates and
     // is never an integer.
-    let g = p / n;
-    let d = Rat::new(q, g)?;
+    let g = &p / &n;
+    let d = Rat::from_big(q.clone(), g)?;
     if !crate::ac::expr::decimal_spelling_wins(&d) {
         return None;
     }
     let ds = d.exact_decimal()?;
     let shorter = n.to_string().len() + ds.len() < p.to_string().len() + q.to_string().len();
-    shorter.then(|| (Rat::int(n), d))
+    if !shorter {
+        return None;
+    }
+    Some((Rat::from_big(n, BigInt::one())?, d))
 }
 
 /// Divisor-side needs a PLAIN numerator factor to remain: a factor that is neither the
@@ -445,7 +451,7 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
             // F73: partition atoms stay whole members -- `emit_num` prints each as one
             // token or a LOCAL `/ p q`, either of which re-folds to exactly this atom
             // before the bag pools.
-            Ex::Num(r) if partition => num.push(Ex::Num(*r)),
+            Ex::Num(r) if partition => num.push(Ex::Num(r.clone())),
             Ex::Num(r) => {
                 // H-020 amendment: the SIGN never enters the den group (a signed den
                 // literal re-parses the sign into the divisor bag, where the sign-fold
@@ -457,7 +463,7 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                 let mag = if r.is_negative() {
                     r.checked_neg()
                 } else {
-                    Some(*r)
+                    Some(r.clone())
                 };
                 // Split only when the FRACTION is the argmin. A value whose DECIMAL code
                 // wins spells as one atomic token, and splitting it produces the fraction
@@ -466,7 +472,7 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                 // setup of the long-literal respell guard, so its assertion stopped
                 // executing -- a silently unreached safety check.
                 if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
-                    num.push(Ex::Num(*r));
+                    num.push(Ex::Num(r.clone()));
                 } else if let Some(inv) = mag
                     .and_then(|m| divisor_side(&m))
                     .filter(|_| has_plain_mul_factor(v))
@@ -481,10 +487,10 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                 } else {
                     // p/q with no exact decimal: p joins the numerator (skipped when it is the
                     // multiplicative identity), q the denominator.
-                    if r.num() != 1 {
-                        num.push(Ex::Num(Rat::int(r.num())));
+                    if !r.numer().is_one() {
+                        num.push(Ex::Num(r.numer()));
                     }
-                    den.push(Ex::Num(Rat::int(r.den())));
+                    den.push(Ex::Num(r.denom()));
                 }
             }
             Ex::Pow(b, e) => match &**e {
@@ -703,7 +709,7 @@ fn emit_bin_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let view = cx.view;
     if r.is_integer() {
-        out.push(view.intern(&r.num().to_string()));
+        out.push(view.intern(&r.numer_string()));
         return;
     }
     if crate::ac::expr::decimal_spelling_wins(r) {
@@ -722,8 +728,8 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let slash = view.intern("/");
     if view.arity(slash).is_some() {
         out.push(slash);
-        out.push(view.intern(&r.num().to_string()));
-        out.push(view.intern(&r.den().to_string()));
+        out.push(view.intern(&r.numer_string()));
+        out.push(view.intern(&r.denom_string()));
     } else {
         out.push(view.intern(&num_token(r)));
     }
@@ -776,9 +782,9 @@ fn emit_rational_tagged(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     // the `<div>` member stays positive -- the H-020 invariant that a signed literal never
     // enters a divisor group.
     out.push(view.intern("<mul>"));
-    out.push(view.intern(&r.num().to_string()));
+    out.push(view.intern(&r.numer_string()));
     out.push(view.intern("<div>"));
-    out.push(view.intern(&r.den().to_string()));
+    out.push(view.intern(&r.denom_string()));
     out.push(view.intern("</mul>"));
 }
 
@@ -886,7 +892,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                         let mag = if r.is_negative() {
                             r.checked_neg()
                         } else {
-                            Some(*r)
+                            Some(r.clone())
                         };
                         // A non-integer coefficient p/q SPLITS: the numerator stays in the
                         // bag, the denominator joins `<div>`. This replaces the old
@@ -902,19 +908,21 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                         // a mul bag: the same-type nesting the census measured at 8,918
                         // events/1M. The grammar's >=1-numerator-member floor is kept by
                         // the post-loop `1` (below); partition bags stay verbatim (F73).
-                        match mag.filter(|m| fraction_spells_structurally(m)) {
+                        match mag.clone().filter(fraction_spells_structurally) {
                             Some(m) => {
-                                if let Some(d) = Rat::new(m.den(), 1) {
-                                    den.push(Ex::Num(d));
-                                }
-                                if m.num() == 1 {
+                                den.push(Ex::Num(m.denom()));
+                                if m.numer().is_one() {
                                     // Bare sign: no numerator token to carry it.
                                     neg_one = r.is_negative();
                                     unit_coeff_split = true;
                                 } else {
                                     // The sign rides the numerator (`-2` beats `-1 2`).
-                                    let signed = if r.is_negative() { -m.num() } else { m.num() };
-                                    coeff_num = Rat::new(signed, 1).map(Ex::Num);
+                                    let signed = if r.is_negative() {
+                                        m.numer().checked_neg()
+                                    } else {
+                                        Some(m.numer())
+                                    };
+                                    coeff_num = signed.map(Ex::Num);
                                 }
                             }
                             None => {
@@ -1032,15 +1040,15 @@ fn emit_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 /// every power of ten take the decimal. The previous rule -- "exact decimal whenever one
 /// exists" -- printed `0.5` and `0.625`, i.e. the spelling mu prices HIGHER.
 fn num_token(r: &Rat) -> String {
-    if r.den() == 1 {
-        return r.num().to_string();
+    if r.is_integer() {
+        return r.numer_string();
     }
     if crate::ac::expr::decimal_spelling_wins(r) {
         if let Some(s) = r.exact_decimal() {
             return s;
         }
     }
-    format!("{}/{}", r.num(), r.den())
+    format!("{}/{}", r.numer_string(), r.denom_string())
 }
 
 /// Largest |numerator| and denominator the TAGGED form spells structurally.
@@ -1064,7 +1072,10 @@ fn tagged_fraction_bound() -> i128 {
 /// Does `r` spell structurally in the tagged form (both components inside the bound)?
 fn fraction_spells_structurally(r: &Rat) -> bool {
     let bound = tagged_fraction_bound();
-    !r.is_integer() && r.num().unsigned_abs() <= bound.unsigned_abs() && r.den() <= bound
+    // A component beyond i128 is beyond every bound.
+    !r.is_integer()
+        && r.small_parts()
+            .is_some_and(|(p, q)| p.unsigned_abs() <= bound.unsigned_abs() && q <= bound)
 }
 
 /// The PRETTY INFIX form -- a human-readable rendering of the canonical expression:
@@ -1091,7 +1102,7 @@ pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
 /// `num_token` keeps `p/q`, the only fraction the leaf parser reads as one literal.
 fn infix_num(r: &Rat) -> String {
     match ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
-        Some((n, ds)) => format!("{}/{}", n.num(), ds),
+        Some((n, ds)) => format!("{}/{}", n.numer_string(), ds),
         None => num_token(r),
     }
 }
@@ -1219,7 +1230,7 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                     // hosting is value-determined since F72, so the re-parse re-hosts it
                     // identically.
                     Ex::Num(r) if partition => {
-                        let mut r = *r;
+                        let mut r = r.clone();
                         if r.is_negative() {
                             neg = !neg;
                             r = r.checked_neg().unwrap();
@@ -1228,12 +1239,12 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                         num_parts.push(if s.contains('/') { format!("({s})") } else { s });
                     }
                     Ex::Num(r) => {
-                        let mut r = *r;
+                        let mut r = r.clone();
                         if r.is_negative() {
                             neg = !neg;
                             r = r.checked_neg().unwrap();
                         }
-                        if r.den() != 1 && !crate::ac::expr::decimal_spelling_wins(&r) {
+                        if !r.is_integer() && !crate::ac::expr::decimal_spelling_wins(&r) {
                             // Divisor-side spelling (see `divisor_side`): the firing
                             // reciprocal is an integer or exact decimal -- an atom, safe
                             // unparenthesized in the denominator join.
@@ -1254,15 +1265,15 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                                     // denominator join, like a divisor-side reciprocal.
                                     Some((n, ds)) => {
                                         if !n.is_one() {
-                                            num_parts.insert(0, n.num().to_string());
+                                            num_parts.insert(0, n.numer_string());
                                         }
                                         den_parts.insert(0, ds);
                                     }
                                     None => {
-                                        if r.num() != 1 {
-                                            num_parts.insert(0, r.num().to_string());
+                                        if !r.numer().is_one() {
+                                            num_parts.insert(0, r.numer_string());
                                         }
-                                        den_parts.insert(0, r.den().to_string());
+                                        den_parts.insert(0, r.denom_string());
                                     }
                                 },
                             }
@@ -1403,8 +1414,9 @@ mod tests {
     #[test]
     fn ratio_spelling_moves_the_numerators_twos_and_fives_into_a_decimal_denominator() {
         let pi = Rat::parse_decimal("3.141592653589793").unwrap();
-        let spelled =
-            |r: Rat| ratio_spelling(&r).map(|(n, d)| (n.num(), d.exact_decimal().unwrap()));
+        let spelled = |r: Rat| {
+            ratio_spelling(&r).map(|(n, d)| (n.small_int().unwrap(), d.exact_decimal().unwrap()))
+        };
         // 1/(2 pi) = 500000000000000/3141592653589793 -> 1 / 6.283185307179586
         let two_pi = pi.checked_mul(&Rat::int(2)).unwrap();
         assert_eq!(

@@ -2391,7 +2391,7 @@ fn exact_integer_literal(t: &str, v: f64) -> bool {
         crate::ac::rat::Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
     });
     // `v as i128` is exact: v is an integer-valued f64 with |v| < 2^127.
-    denoted.is_some_and(|r| r.is_integer() && r.num() == v as i128)
+    denoted.is_some_and(|r| r.small_int() == Some(v as i128))
 }
 
 /// Value-set of a prefix expression over `dom` = the domain assigned to every VARIABLE leaf
@@ -3335,10 +3335,10 @@ fn rat_of_token(tok: &str) -> Option<crate::ac::rat::Rat> {
 /// argmin aesthetics apply. Negatives spell parenthesized (the readers'
 /// composed grammar, H-012/H-048).
 fn rat_to_token(r: &crate::ac::rat::Rat) -> String {
-    let s = if r.den() == 1 {
-        r.num().to_string()
+    let s = if r.is_integer() {
+        r.numer_string()
     } else {
-        format!("{}/{}", r.num(), r.den())
+        format!("{}/{}", r.numer_string(), r.denom_string())
     };
     if r.is_negative() {
         format!("({s})")
