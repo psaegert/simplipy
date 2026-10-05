@@ -1638,6 +1638,13 @@ class SimpliPyEngine:
         parenthesis is always a call, so ``sqrt(x0)`` stays ``['sqrt', 'x0']``. Token
         lists are expected well formed and get no such reading.
 
+        Whitespace separates tokens. A declared one-argument function without
+        parentheses applies to the operand after it, taking powers and signs but not
+        products, quotients or sums: ``sin x0^2`` is ``sin(x0^2)`` and ``log x0 / 2`` is
+        ``log(x0)/2``. ``x0 * * 2`` is ``x0**2`` and ``1 e-5`` is ``1e-5``. Any other two
+        operands with only whitespace between them (``x0 x1``, ``2 3``, ``sqrt x0`` for
+        an undeclared ``sqrt``) raise ``ValueError``.
+
         Mechanically it is :meth:`infix_to_prefix` plus optional
         ``convert_expression`` normalization, with a ``remove_pow1`` cleanup that
         drops redundant ``pow1_1`` occurrences.

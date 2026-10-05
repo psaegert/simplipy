@@ -320,42 +320,97 @@ fn join_operands(operands_data: &[Item]) -> String {
 /// verbatim source substrings. (`\w` is treated as ASCII `[A-Za-z0-9_]`; the deployment corpus is
 /// ASCII -- a non-ASCII identifier is the documented out-of-domain boundary.)
 ///
-/// Each token carries whether it TOUCHES the previous one: `false` when an unmatched char was
-/// dropped between them. Implicit multiplication (`insert_implicit_products`) applies only to
-/// touching tokens, so a dropped char never turns two operands into a product.
-fn tokenize_infix(s: &str) -> Vec<(String, bool)> {
-    // Every whitespace char is stripped like a space (a tab used to be a DROPPED char, so
-    // `2\tx0` stayed malformed where `2 x0` read `2*x0`).
-    let chars: Vec<char> = s.chars().filter(|c| !c.is_whitespace()).collect();
+/// Each token carries whether it TOUCHES the previous one (`false` when an unmatched char was
+/// dropped between them) and whether WHITESPACE separates them. Implicit multiplication
+/// (`insert_implicit_products`) applies only to touching tokens, so a dropped char never turns
+/// two operands into a product; whitespace still counts as touching.
+///
+/// WHITESPACE SEPARATES TOKENS (owner ruling 2026-10-05): `sin x0` is two tokens, never the
+/// name `sinx0`, and `2 3` is two numbers, never `23`. Two joins survive it, because the text
+/// can only mean one thing: `* *` is the power operator (`x0 * * 2` is `x0**2`), and an
+/// exponent part after a number joins it (`1 e-5` is `1e-5`; but `1e -5` is `1*e - 5`, since
+/// `1e` is no numeral).
+fn tokenize_infix(s: &str) -> Vec<Token> {
+    let chars: Vec<char> = s.chars().collect();
     let n = chars.len();
-    let mut tokens = Vec::new();
+    let skip_space = |mut j: usize| {
+        while j < n && chars[j].is_whitespace() {
+            j += 1;
+        }
+        j
+    };
+    let mut tokens: Vec<Token> = Vec::new();
     let mut touching = true;
+    let mut spaced = false;
     let mut i = 0;
-    let push = |tokens: &mut Vec<(String, bool)>, tok: String, touching: &mut bool| {
-        tokens.push((tok, *touching));
+    let push = |tokens: &mut Vec<Token>, text: String, touching: &mut bool, spaced: &mut bool| {
+        tokens.push(Token {
+            text,
+            touching: *touching,
+            spaced: *spaced,
+        });
         *touching = true;
+        *spaced = false;
     };
     while i < n {
+        if chars[i].is_whitespace() {
+            i = skip_space(i);
+            spaced = true;
+            continue;
+        }
+        // `1 e-5`: an exponent part after whitespace joins the number before it.
+        if spaced {
+            if let Some(last) = tokens.last_mut() {
+                let number_without_exponent =
+                    is_number_fullmatch(&last.text) && !last.text.contains(['e', 'E']);
+                if let Some(j) = match_exponent(&chars, i).filter(|_| number_without_exponent) {
+                    last.text.extend(&chars[i..j]);
+                    spaced = false;
+                    i = j;
+                    continue;
+                }
+            }
+        }
         // The numeric folder's inf/nan tokens stay ATOMIC -- mirrors the Python `float_special`
         // alternation -- else they split on the '(' / '"'. Leads the scan; the token is then
         // classified as a leaf by `is_ident_start` in `infix_to_prefix`.
         if let Some(j) = match_float_special(&chars, i) {
-            push(&mut tokens, chars[i..j].iter().collect(), &mut touching);
+            push(
+                &mut tokens,
+                chars[i..j].iter().collect(),
+                &mut touching,
+                &mut spaced,
+            );
             i = j;
             continue;
         }
         if let Some(j) = match_constant(&chars, i) {
-            push(&mut tokens, chars[i..j].iter().collect(), &mut touching);
+            push(
+                &mut tokens,
+                chars[i..j].iter().collect(),
+                &mut touching,
+                &mut spaced,
+            );
             i = j;
         } else if let Some(j) = match_number(&chars, i) {
-            push(&mut tokens, chars[i..j].iter().collect(), &mut touching);
+            push(
+                &mut tokens,
+                chars[i..j].iter().collect(),
+                &mut touching,
+                &mut spaced,
+            );
             i = j;
         } else if let Some(j) = match_ident(&chars, i) {
-            push(&mut tokens, chars[i..j].iter().collect(), &mut touching);
+            push(
+                &mut tokens,
+                chars[i..j].iter().collect(),
+                &mut touching,
+                &mut spaced,
+            );
             i = j;
-        } else if i + 1 < n && chars[i] == '*' && chars[i + 1] == '*' {
-            push(&mut tokens, "**".to_string(), &mut touching);
-            i += 2;
+        } else if chars[i] == '*' && skip_space(i + 1) < n && chars[skip_space(i + 1)] == '*' {
+            push(&mut tokens, "**".to_string(), &mut touching, &mut spaced);
+            i = skip_space(i + 1) + 1;
         } else if matches!(chars[i], '-' | '+' | '*' | '/' | '^' | '(' | ')' | ',') {
             // ',' is the 2-ary call-syntax argument separator the pretty renderer
             // emits (`rootn(x0, 3)`, `pow(a, b)`). It used to fall into the silent
@@ -363,7 +418,12 @@ fn tokenize_infix(s: &str) -> Vec<(String, bool)> {
             // the boundary: `rootn(x0, x1 - 1)` parsed as rootn(x0 - x1, 1)
             // (hardening H-011, 2026-08-03 -- a round-trip break of the parser's own
             // output language; 97/2000 fuzz rows).
-            push(&mut tokens, chars[i].to_string(), &mut touching);
+            push(
+                &mut tokens,
+                chars[i].to_string(),
+                &mut touching,
+                &mut spaced,
+            );
             i += 1;
         } else {
             i += 1; // unmatched -> drop (no token, no error; pinned legacy parity)
@@ -371,6 +431,32 @@ fn tokenize_infix(s: &str) -> Vec<(String, bool)> {
         }
     }
     tokens
+}
+
+/// One infix token with its relation to the token before it (see `tokenize_infix`).
+struct Token {
+    text: String,
+    touching: bool,
+    spaced: bool,
+}
+
+/// `[eE][+-]?\d+` at `i`, not running on into a name (`1 e5x` keeps `e5x` a name); the end
+/// index, or `None`.
+fn match_exponent(s: &[char], i: usize) -> Option<usize> {
+    let n = s.len();
+    if !(i < n && (s[i] == 'e' || s[i] == 'E')) {
+        return None;
+    }
+    let mut j = i + 1;
+    if j < n && (s[j] == '+' || s[j] == '-') {
+        j += 1;
+    }
+    let start = j;
+    while j < n && s[j].is_ascii_digit() {
+        j += 1;
+    }
+    let runs_on = j < n && (s[j].is_ascii_alphanumeric() || s[j] == '_' || s[j] == '.');
+    (j > start && !runs_on).then_some(j)
 }
 
 /// IMPLICIT MULTIPLICATION (owner ruling 2026-10-05, infix only -- token lists are expected
@@ -382,29 +468,65 @@ fn tokenize_infix(s: &str) -> Vec<(String, bool)> {
 ///
 /// A NAME never starts a product, even before `(`: `read_infix` passes an unknown function
 /// through as a bare leaf (`sqrt(x0)` -> `sqrt x0`, which downstream converters rely on), so
-/// `f(x)` stays a call for every name. Names cannot touch a following name or number anyway:
-/// whitespace is stripped before tokenizing, so `x1 x2` is ONE name, as before. Two touching
-/// numbers are left alone (`1.5.3` tokenizes as `1.5`, `.3` and stays malformed), and so is a
-/// number touching a name that starts with `_`: that is Python's digit grouping (`1_000`,
-/// `3.14_15`), which must not become a product with a rule-placeholder name (`1*_000`).
-fn insert_implicit_products(tokens: Vec<(String, bool)>) -> Vec<String> {
+/// `f(x)` stays a call for every name. Two touching numbers are left alone (`1.5.3` tokenizes
+/// as `1.5`, `.3` and stays malformed), and so is a number touching a name that starts with
+/// `_`: that is Python's digit grouping (`1_000`, `3.14_15`), which must not become a product
+/// with a rule-placeholder name (`1*_000`).
+///
+/// A FUNCTION WITHOUT PARENTHESES (owner ruling 2026-10-05): a declared one-argument operator
+/// separated by whitespace from the operand after it, or followed by a minus sign, applies to
+/// that operand: `sin x0` is `sin(x0)`, `sin -x0` and `sin-x0` are `sin(-x0)` (the latter used to
+/// read `-(sin x0)`), and `sin cos x0` is `sin(cos(x0))`. Its argument takes powers and signs, but
+/// products, quotients and sums apply to its result: `sin x0^2` is `sin(x0^2)` and
+/// `log x0 / 2` is `log(x0)/2`. Such a token comes back marked (`true`); `infix_to_prefix`
+/// parses it as a prefix operator.
+///
+/// Any other two operands separated only by whitespace are a user error, refused rather than
+/// guessed: `x0 x1`, `x 1`, `2 3`, `1 000`, `sin x0 x1`.
+fn insert_implicit_products(
+    tokens: Vec<Token>,
+    ops: &Operators,
+) -> Result<Vec<(String, bool)>, String> {
     let is_leaf = |t: &str| {
         t == "<constant>" || t.starts_with("float(\"") || (is_ident_start(t) && !t.starts_with('_'))
     };
-    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
-    for (tok, touching) in tokens {
-        if let Some(prev) = out.last() {
+    let is_operand = |t: &str| {
+        is_number_fullmatch(t)
+            || t == "<constant>"
+            || t.starts_with("float(\"")
+            || is_ident_start(t)
+    };
+    let is_function = |t: &str| {
+        let name = ops.operator_aliases.get(t).map(String::as_str).unwrap_or(t);
+        ops.arity_of(name) == Some(1)
+    };
+    let mut out: Vec<(String, bool)> = Vec::with_capacity(tokens.len());
+    for Token {
+        text: tok,
+        touching,
+        spaced,
+    } in tokens
+    {
+        if let Some((prev, _)) = out.last() {
             let after_number = is_number_fullmatch(prev);
             let after_paren = prev == ")";
             let starts_operand =
                 tok == "(" || is_leaf(&tok) || (after_paren && is_number_fullmatch(&tok));
             if touching && (after_number || after_paren) && starts_operand {
-                out.push("*".to_string());
+                out.push(("*".to_string(), false));
+            } else if touching && is_function(prev) && ((spaced && is_operand(&tok)) || tok == "-")
+            {
+                out.last_mut().unwrap().1 = true;
+            } else if touching && spaced && is_operand(prev) && is_operand(&tok) {
+                return Err(format!(
+                    "{prev:?} and {tok:?} are separated only by whitespace: write the operator \
+                     between them (for example {prev}*{tok}), or remove the space"
+                ));
             }
         }
-        out.push(tok);
+        out.push((tok, false));
     }
-    out
+    Ok(out)
 }
 
 fn match_constant(s: &[char], i: usize) -> Option<usize> {
@@ -501,11 +623,29 @@ fn is_ident_start(token: &str) -> bool {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
 }
 
-/// `infix_to_prefix`: a RIGHT-to-LEFT shunting-yard. Never
-/// raises (degenerate/malformed inputs produce structurally-degenerate prefix lists, matching Python).
-pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
-    let mut tokens = insert_implicit_products(tokenize_infix(infix_expression));
+/// A function without parentheses (`sin x0`) waiting on the stack is marked with this prefix.
+const APP_MARK: char = '\u{1}';
+/// It binds looser than powers (`sin x0^2` is `sin(x0^2)`) and tighter than unary minus,
+/// products, quotients and sums (`log x0 / 2` is `log(x0)/2`).
+const APP_PRECEDENCE: f64 = 2.75;
+
+fn unmark(s: String) -> String {
+    match s.strip_prefix(APP_MARK) {
+        Some(name) => name.to_string(),
+        None => s,
+    }
+}
+
+/// `infix_to_prefix`: a RIGHT-to-LEFT shunting-yard. Malformed inputs produce
+/// structurally-degenerate prefix lists, matching Python; the one error is two operands that
+/// only whitespace separates (`x0 x1`, `2 3`; see `insert_implicit_products`).
+pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Result<Vec<String>, String> {
+    let (mut tokens, mut apps): (Vec<String>, Vec<bool>) =
+        insert_implicit_products(tokenize_infix(infix_expression), ops)?
+            .into_iter()
+            .unzip();
     tokens.reverse(); // right-to-left parse
+    apps.reverse();
 
     let mut stack: Vec<String> = Vec::new();
     let mut prefix_expr: Vec<String> = Vec::new();
@@ -519,7 +659,19 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
             token = "**".to_string();
         }
 
-        if is_number_fullmatch(&token) {
+        if apps[i] {
+            // A function without parentheses: its argument, already parsed on its right, takes
+            // the pending powers and prefix operators (`sin -x0^2` is sin(-(x0^2))).
+            while let Some(top) = stack.last() {
+                let prefix = top == "neg" || top.starts_with(APP_MARK);
+                if top != ")" && (prefix || prec(top) > APP_PRECEDENCE) {
+                    prefix_expr.push(unmark(stack.pop().unwrap()));
+                } else {
+                    break;
+                }
+            }
+            stack.push(format!("{APP_MARK}{token}"));
+        } else if is_number_fullmatch(&token) {
             prefix_expr.push(token);
         } else if is_ident_start(&token) || token == "<constant>" {
             // RESERVED CONSTANT NAMES of the infix language: the pretty renderer spells
@@ -538,7 +690,7 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
             stack.push(token);
         } else if token == "(" {
             while stack.last().is_some_and(|t| t != ")") {
-                prefix_expr.push(stack.pop().unwrap());
+                prefix_expr.push(unmark(stack.pop().unwrap()));
             }
             if stack.last().is_some_and(|t| t == ")") {
                 stack.pop();
@@ -548,12 +700,19 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
             // down to the enclosing ')' (the paren boundary WITHOUT consuming it), so
             // each argument of a 2-ary call parses independently (H-011).
             while stack.last().is_some_and(|t| t != ")") {
-                prefix_expr.push(stack.pop().unwrap());
+                prefix_expr.push(unmark(stack.pop().unwrap()));
             }
         } else {
+            // A function without parentheses on the right of this operator is complete: the
+            // operator takes its result (`x0^sin x1` is x0^(sin(x1))).
+            while stack.last().is_some_and(|t| t.starts_with(APP_MARK)) {
+                prefix_expr.push(unmark(stack.pop().unwrap()));
+            }
             // operator. Unary-minus detection: on the REVERSED stream, tokens[i+1] is the
-            // original LEFT neighbor; membership is the FULL precedence_compat keyset.
+            // original LEFT neighbor; membership is the FULL precedence_compat keyset, plus a
+            // function without parentheses (`sin -x0` is sin(-x0)).
             let next_raw = tokens.get(i + 1).map(|s| s.as_str());
+            let after_function = apps.get(i + 1) == Some(&true);
             // '^' is normalized to '**' for the lookahead too, so `x ^ -y` parses the '-' as
             // unary exactly like `x ** -y`.
             let next_norm = match next_raw {
@@ -562,6 +721,7 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
             };
             if token == "-"
                 && (next_raw.is_none()
+                    || after_function
                     || next_norm == Some("(")
                     || next_norm == Some(",")  // `pow(x0, -2)`: unary after a separator (H-011)
                     || next_norm
@@ -596,7 +756,7 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
                     // directly and parens flush at '(' -- and anything below a
                     // lower-precedence top (`x ^ -2 + 1`) is outside the exponent.
                     while stack.last().is_some_and(|t| t == "**" || t == "pow") {
-                        prefix_expr.push(stack.pop().unwrap());
+                        prefix_expr.push(unmark(stack.pop().unwrap()));
                     }
                     prefix_expr.push(token);
                     i += 1;
@@ -618,7 +778,7 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
                     let tp = prec(top);
                     let pop = tp > cur || (tp == cur && right_assoc);
                     if pop {
-                        prefix_expr.push(stack.pop().unwrap());
+                        prefix_expr.push(unmark(stack.pop().unwrap()));
                     } else {
                         break;
                     }
@@ -632,10 +792,10 @@ pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
     }
 
     while let Some(op) = stack.pop() {
-        prefix_expr.push(op);
+        prefix_expr.push(unmark(op));
     }
     prefix_expr.reverse(); // `[::-1]`
-    prefix_expr
+    Ok(prefix_expr)
 }
 
 // ---- convert_expression -------------------------------------------------------------------------
@@ -1086,7 +1246,7 @@ pub fn parse(
     convert: bool,
     mask_numbers: bool,
 ) -> Result<Vec<String>, String> {
-    let parsed = infix_to_prefix(infix_expression, ops);
+    let parsed = infix_to_prefix(infix_expression, ops)?;
     // H-043/D4: the tokenize + shunting stages above are iterative, but
     // `convert_expression` below recurses (its IR flatten) -- cap the TOKENIZED length
     // exactly like the token-list boundary caps its input, or a deep infix string
@@ -1218,7 +1378,7 @@ mod tests {
     }
 
     fn i2p(e: &Engine, s: &str) -> Vec<String> {
-        e.infix_to_prefix(s)
+        e.infix_to_prefix(s).unwrap()
     }
 
     /// infix_to_prefix traps pinning the parse contract in CI.
@@ -1257,8 +1417,10 @@ mod tests {
             v(&["**", "a", "neg", "**", "b", "c"])
         );
         assert_eq!(i2p(&e, "x0 ^ (-2)"), v(&["**", "x0", "neg", "2"]));
-        // function-name left neighbor -> unary; neg float precedence both ways.
-        assert_eq!(i2p(&e, "sin - x1"), v(&["neg", "sin", "x1"]));
+        // function-name left neighbor -> unary, and the function applies to it (owner
+        // 2026-10-05; it used to read -(sin x1)); neg float precedence both ways.
+        assert_eq!(i2p(&e, "sin - x1"), v(&["sin", "neg", "x1"]));
+        assert_eq!(i2p(&e, "sin-x1"), v(&["sin", "neg", "x1"]));
         assert_eq!(i2p(&e, "-x1 ** 2"), v(&["neg", "**", "x1", "2"]));
         assert_eq!(i2p(&e, "-x1 * x2"), v(&["*", "neg", "x1", "x2"]));
         // associativity-respecting pop: left-assoc chains parse left-assoc; '**' right-assoc.
@@ -1296,8 +1458,31 @@ mod tests {
         // Touching numbers stay malformed, and so does Python's digit grouping.
         assert_eq!(i2p(&e, "1.5.3"), v(&["1.5", ".3"]));
         assert_eq!(i2p(&e, "1_000"), v(&["1", "_000"]));
-        // Every whitespace char is stripped like a space.
+        // Whitespace separates tokens; every whitespace char like a space (owner 2026-10-05).
         assert_eq!(i2p(&e, "2\tx1"), v(&["*", "2", "x1"]));
+        assert_eq!(i2p(&e, "x1 * * 2"), v(&["**", "x1", "2"]));
+        assert_eq!(i2p(&e, "1 e-5 * x1"), v(&["*", "1e-5", "x1"]));
+        assert_eq!(i2p(&e, "1e -5"), v(&["-", "*", "1", "np.e", "5"]));
+        // A function without parentheses: below powers, above signs, products and sums.
+        assert_eq!(i2p(&e, "sin x1"), v(&["sin", "x1"]));
+        assert_eq!(i2p(&e, "sin x1^2"), v(&["sin", "**", "x1", "2"]));
+        assert_eq!(i2p(&e, "sin x1 / 2"), v(&["/", "sin", "x1", "2"]));
+        assert_eq!(
+            i2p(&e, "sin x1 * x2 + 1"),
+            v(&["+", "*", "sin", "x1", "x2", "1"])
+        );
+        assert_eq!(i2p(&e, "sin -x1^2"), v(&["sin", "neg", "**", "x1", "2"]));
+        assert_eq!(i2p(&e, "-sin x1"), v(&["neg", "sin", "x1"]));
+        assert_eq!(i2p(&e, "sin cos x1"), v(&["sin", "cos", "x1"]));
+        assert_eq!(i2p(&e, "x1^sin x2"), v(&["**", "x1", "sin", "x2"]));
+        assert_eq!(i2p(&e, "x1^-sin x2"), v(&["**", "x1", "neg", "sin", "x2"]));
+        assert_eq!(i2p(&e, "2 sin x1"), v(&["*", "2", "sin", "x1"]));
+        assert_eq!(i2p(&e, "sin (x1)^2"), v(&["**", "sin", "x1", "2"]));
+        // Two operands separated by whitespace alone are refused, not guessed; a dropped
+        // char between them keeps the old malformed reading.
+        for text in ["x1 x2", "x 1", "2 3", "1 000", "sin x1 x2"] {
+            assert!(e.infix_to_prefix(text).is_err(), "{text}");
+        }
         // scientific notation single token.
         assert_eq!(i2p(&e, "1.5e-2 * x1"), v(&["*", "1.5e-2", "x1"]));
         // 2-ary CALL SYNTAX (H-011): the comma is a real argument separator -- it

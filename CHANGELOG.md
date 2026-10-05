@@ -38,9 +38,26 @@
   inputs were malformed. A name before a parenthesis stays a call, known or not (`sqrt(x0)` still
   reads `sqrt x0`); a number before a name that starts with `_` is Python's digit grouping, not a
   product (`1_000` stays malformed); and a character the tokenizer drops never becomes a product
-  (`x1 $ x2` stays malformed). Tabs, newlines and other whitespace are now dropped like spaces:
-  `2\tx0` is `2*x0`, and `sin\tx0` reads as the name `sinx0`, as `sin x0` already did (a tab
-  used to keep `sin` and `x0` apart).
+  (`x1 $ x2` stays malformed).
+- **Infix: whitespace separates tokens.** Spaces used to be removed before reading, so
+  `sin x0` became the name `sinx0`, `x0 x1` the name `x0x1` and `2 3` the number 23; a tab
+  instead kept tokens apart. Now every whitespace character separates tokens, and a product
+  forms across it as across touching tokens (`2 x0` is `2*x0`, `2\tx0` too).
+  - A declared one-argument function without parentheses applies to the operand after it.
+    Its argument takes powers and signs; products, quotients and sums apply to its result:
+    `sin x0^2` is `sin(x0^2)`, `log x0 / 2` is `log(x0)/2`, `sin -x0` is `sin(-x0)`, and
+    `sin cos x0` is `sin(cos(x0))`. A minus sign right after a function also starts its
+    argument, so `sin-x0` is `sin(-x0)`; it used to read `-sin(x0)`. A name before a
+    parenthesis stays a call (`sin (x0)^2` is `sin(x0)^2`).
+  - Two joins remain, because the text can mean only one thing: `x0 * * 2` is `x0**2`, and
+    an exponent part after a number joins it (`1 e-5` is `1e-5`). `1e` is no numeral, so
+    `1e -5` is `1*e - 5`.
+  - Any other two operands with only whitespace between them raise `ValueError` in
+    `read_infix`, `infix_to_prefix` and `simplify`: `x0 x1`, `x 1`, `2 3`, `1 000`,
+    `sin x0 x1`, and an unknown function such as `sqrt x0`.
+
+  None of srbf's 148,762 prediction and ground-truth strings or symbolic-data's 20,948 catalog
+  strings reads differently.
 - **An interrupted mine is not final.** On SIGINT the miner stops after the running length and
   writes what it has, with the proposal channel, the symbolic gate and sort promotion skipped,
   and its sidecar said `"final": true`. It now says `"final": false` and `"interrupted": true`,

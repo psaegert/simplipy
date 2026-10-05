@@ -303,9 +303,10 @@ impl Engine {
         crate::convert::prefix_to_infix(tokens, &self.operators, power, realization)
     }
 
-    /// `infix_to_prefix`: infix string -> prefix token list via a
-    /// right-to-left shunting-yard. Never raises (matches Python on degenerate inputs).
-    pub fn infix_to_prefix(&self, infix_expression: &str) -> Vec<String> {
+    /// `infix_to_prefix`: infix string -> prefix token list via a right-to-left
+    /// shunting-yard. Degenerate inputs give degenerate lists (matching Python); `Err` only
+    /// for two operands separated by whitespace alone (`x0 x1`).
+    pub fn infix_to_prefix(&self, infix_expression: &str) -> Result<Vec<String>, String> {
         crate::convert::infix_to_prefix(infix_expression, &self.operators)
     }
 

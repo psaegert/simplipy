@@ -894,7 +894,9 @@ impl PyEngine {
 
     /// `infix_to_prefix`. Part of the drop-in-engine surface.
     fn infix_to_prefix(&self, py: Python<'_>, infix_expression: &str) -> PyResult<Py<PyList>> {
-        let out = py.detach(|| self.inner.infix_to_prefix(infix_expression));
+        let out = py
+            .detach(|| self.inner.infix_to_prefix(infix_expression))
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
 
