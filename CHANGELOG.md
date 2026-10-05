@@ -57,7 +57,7 @@
     an implicit product inside the argument of a function without parentheses, which is
     ambiguous: `sin 2x0` could be `sin(2*x0)` or `sin(2)*x0`. Every entry point that reads
     infix text raises (`read_infix`, `infix_to_prefix`, `simplify`, `to_prefix`, `to_infix`,
-    `to_tagged`, `complexity`, `mask`), and `is_valid` returns `False`. On main,
+    `to_tagged`, `complexity`, `mask`), and `is_valid` returns `False`. Before,
     `to_prefix('x0 x1')` returned the name `x0x1`.
 
   No real string has whitespace in a position these rules change: none of 12.9 million

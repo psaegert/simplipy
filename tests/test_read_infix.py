@@ -167,7 +167,7 @@ class TestWhitespace:
         assert engine.read_infix('sin(2x0)') == engine.read_infix('sin(2*x0)')
 
     def test_every_entry_point_that_reads_infix_refuses(self, engine: SimpliPyEngine) -> None:
-        for read in (engine.to_prefix, engine.to_infix, engine.to_tagged, engine.complexity):
+        for read in (engine.to_prefix, engine.to_infix, engine.to_tagged, engine.complexity, engine.mask):
             with pytest.raises(ValueError, match="separated only by whitespace"):
                 read('x0 x1')
         assert engine.is_valid('x0 x1') is False

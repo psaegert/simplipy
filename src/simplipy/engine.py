@@ -1563,14 +1563,13 @@ class SimpliPyEngine:
 
         This method uses a standard algorithm (related to Shunting-yard) to
         parse the infix string, respecting operator precedence and parentheses.
+        Whitespace separates tokens; see :meth:`read_infix` for how a function without
+        parentheses and implicit products are read.
 
         Parameters
         ----------
         infix_expression : str
             The mathematical expression in infix notation.
-
-        Whitespace separates tokens; see :meth:`read_infix` for how a function without
-        parentheses and implicit products are read.
 
         Returns
         -------

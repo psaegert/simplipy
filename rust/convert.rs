@@ -534,10 +534,14 @@ fn insert_implicit_products(
                     open_arguments.push(depth);
                 }
             } else if touching && spaced && is_operand(prev) && is_operand(&tok) {
+                let call = if is_ident_start(prev) {
+                    format!(", a call ({prev}({tok})) if {prev:?} is a function")
+                } else {
+                    String::new()
+                };
                 return Err(format!(
                     "{prev:?} and {tok:?} are separated only by whitespace: write the operator \
-                     between them (for example {prev}*{tok}), a call ({prev}({tok})) if {prev:?} \
-                     is a function, or remove the space"
+                     between them (for example {prev}*{tok}){call}, or remove the space"
                 ));
             }
             // A binary operator at the argument's depth closes it (`sin x0 * x1` is
