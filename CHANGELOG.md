@@ -23,10 +23,11 @@
   of failing on it (`utils.literal_float`), and the contract judge refuses an oversized spelling
   (`1e999999999`, more than 4,300 digits) before building it and reads a value beyond float64's
   range as `inf` in its deployed lane (it skipped the deployed check for such a rule).
-  Canonical forms move only where a literal is beyond 128 bits, because the kernel now
-  certifies such literals; the contract judge rejects none of the moved forms in a
-  20,000-expression fuzz. One move corrects a fold: `pow(-2, (2*10^400+1)/10^400)` folded to
-  NaN, because the fraction was read as inf/inf, where the deployed evaluator gives 4.
+  Canonical forms move only where a literal is beyond i128, because the kernel now
+  certifies such literals: a fraction token behaves like its decimal spelling. The contract
+  judge kills none of the moved forms; the underflow folds among them (`log(-1/10^400)` is
+  NaN) get the verdict main already gives the decimal `log(-1e-400)`. Some moves undo a wrong
+  fold: `pow(-2, (3*2^200)/3)` is (-2)^(2^200), which is finite, and main folded it to NaN.
 - **Exact numbers get a big-integer form (no behaviour change yet).** A literal is an exact
   rational whose numerator and denominator were limited to 128 bits; beyond that it stayed an
   opaque symbol. The number type now also holds big integers, up to a cap of 1,100 bits per

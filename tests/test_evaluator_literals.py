@@ -113,6 +113,7 @@ class TestOracleLiterals:
             literal_value('1' * 9000 + '/x')
         assert time.time() - t0 < 1.0
         assert literal_value('1e40') == 10 ** 40
+        assert literal_value('1e000001') == 10
 
     def test_the_deployed_lane_reads_a_literal_beyond_range_as_inf(self) -> None:
         from simplipy.verify._contract import judge_rule
