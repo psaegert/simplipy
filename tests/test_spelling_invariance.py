@@ -48,6 +48,21 @@ class TestOneStateTwoSpellings:
             assert eng.complexity(text) == eng.complexity(answer), (i, text, answer)
         assert len(rows) == 400
 
+    def test_the_reader_spelling_reads_back_to_the_token_answer_at_the_same_price(self, eng):
+        # the corpus has no value the reader's spelling touches; these do (25 of 44)
+        sources = [f'{c}*x1/({k}*{PI})' for c in (1, 3, 7) for k in range(1, 13)]
+        sources += [f'x1*rootn(1/({k}*{PI}), 2)' for k in range(1, 7)]
+        sources += ['100/101*x1', f'sin(x1/(2*{PI}))']
+        long_integer = re.compile(r'(?<![\d.])\d{10,}(?![\d.])')
+        respelled = 0
+        for src in sources:
+            answer = tokens(eng, src)
+            text = eng.simplify(src)
+            assert tokens(eng, text) == answer, (src, text, answer)
+            assert eng.complexity(text) == eng.complexity(answer), (src, text, answer)
+            respelled += any(t.isdigit() and len(t) >= 10 for t in answer) and not long_integer.search(text)
+        assert respelled == 25, respelled
+
 
 class TestTheTokenSpellingDoesNotMove:
     # (input, token answer = the 0.14.7 answer, infix answer)
@@ -88,16 +103,18 @@ class TestReaderRuleStaysInTheInfixPrinter:
             pytest.skip('source tree not present')
         return open(full).read().split('\n')
 
-    def test_the_rule_is_called_only_inside_the_infix_printer(self):
+    def test_the_rule_is_named_only_inside_the_infix_printer(self):
+        # any mention counts (a call, the function passed as a value, a wrapper, the infix
+        # helper reused); only the rule's own definition may sit outside the infix printer
         lines = self.source('rust/ac/convert.rs')
         start = next(i for i, ln in enumerate(lines) if ln.startswith('pub fn to_infix_pretty('))
         end = next(i for i, ln in enumerate(lines) if ln.startswith('pub fn canonical_tokens('))
         tests = next(i for i, ln in enumerate(lines) if ln.startswith('mod tests'))
-        calls = [i for i, ln in enumerate(lines)
-                 if re.search(r'\bratio_spelling\(', ln)
-                 and not ln.lstrip().startswith(('//', 'fn ')) and i < tests]
-        assert calls and all(start < i < end for i in calls), \
-            [(i + 1, lines[i].strip()) for i in calls if not start < i < end]
+        names = re.compile(r'\b(ratio_spelling|infix_num)\b')
+        uses = [i for i, ln in enumerate(lines[:tests])
+                if names.search(ln.split('//')[0]) and not ln.startswith('fn ratio_spelling(')]
+        assert uses and all(start < i < end for i in uses), \
+            [(i + 1, lines[i].strip()) for i in uses if not start < i < end]
 
     def test_the_engine_prints_infix_only_for_the_infix_answers(self):
         calls = [ln for ln in self.source('rust/engine/ac.rs') if 'to_infix_pretty(&' in ln]

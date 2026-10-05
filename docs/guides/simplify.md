@@ -165,8 +165,10 @@ and folding is exact arithmetic. A value whose denominator has a prime factor ot
 and 5 has no finite decimal, so `1/(2*3.141592653589793)` is the fraction
 500000000000000 / 3141592653589793. A decimal is just as exact as an integer, though, so
 the infix answer prints such a value with its numerator's factors 2 and 5 moved into the
-denominator, which then terminates. That spelling is used where it is shorter than the two
-integers; short fractions keep theirs. It is the same value either way, so the state,
+denominator, which then terminates. That spelling needs a factor 2 or 5 in the numerator and
+is used where it is shorter than the two integers, outside exponents: short fractions such as
+`1/3` keep theirs, and an exponent keeps the fraction
+(`x0^(500000000000000/3141592653589793)`). It is the same value either way, so the state,
 `complexity()` and every rewrite are unaffected:
 
 ```python
@@ -176,8 +178,9 @@ engine.simplify('x0*rootn(1/(2*3.141592653589793), 2)')  # -> 'x0*rootn(1/6.2831
 engine.simplify('5/8')                                   # -> '5/8'
 ```
 
-The token answers keep the fraction (`['/', '500000000000000', '3141592653589793']`): the
-engine prints states as tokens and reads them back, and callers mask and compare token
+The token answers keep the fraction (explicit `['/', '500000000000000', '3141592653589793']`,
+tagged `['500000000000000/3141592653589793']`): the engine prints states as tokens and reads
+them back, and callers mask and compare token
 answers, so one fixed spelling serves them.
 
 Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /

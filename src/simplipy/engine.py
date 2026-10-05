@@ -2007,10 +2007,12 @@ class SimpliPyEngine:
               (binary ``-``), and ``neg`` spells only the pure sign (``neg x0``,
               ``neg * np.pi x0``).
 
-            Only the infix answer is SPELLED FOR A READER: a value with no finite decimal
-            is written as an integer over a decimal (``1/6.283185307179586``, not
-            ``500000000000000/3141592653589793``). It re-reads to the same state, and
-            :meth:`complexity` does not change. The token answers keep the engine's own
+            Only the infix answer is SPELLED FOR A READER: outside exponents, a value with
+            no finite decimal whose numerator has a factor 2 or 5 is written as an integer
+            over a decimal where that is shorter (``1/6.283185307179586``, not
+            ``500000000000000/3141592653589793``); ``1/3`` stays ``1/3``. It re-reads to
+            the same state, and :meth:`complexity` does not change. The token answers keep
+            the engine's own
             spelling, because tokens are what gets read back -- by the engine's
             certificates, served rules and miner, and by callers that mask or key on them
             -- and a spelling chosen for a reader must not move any of those. To read a
