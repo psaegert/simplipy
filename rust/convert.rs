@@ -501,11 +501,12 @@ fn insert_implicit_products(
         ops.arity_of(name) == Some(1)
     };
     let mut out: Vec<(String, bool)> = Vec::with_capacity(tokens.len());
-    // The paren depth, and the depth at which the argument of a function without parentheses is
-    // open: an implicit product inside it is ambiguous (`sin 2x0` is sin(2x0) in a textbook and
-    // sin(2)*x0 by the precedence of `*`), so it is refused.
+    // The paren depth, and the depths at which arguments of functions without parentheses are
+    // open (a stack: `sin -(cos x0) 2` opens one at depth 0 and one at depth 1): an implicit
+    // product inside one is ambiguous (`sin 2x0` is sin(2x0) in a textbook and sin(2)*x0 by the
+    // precedence of `*`), so it is refused.
     let mut depth: i64 = 0;
-    let mut open_argument: Option<i64> = None;
+    let mut open_arguments: Vec<i64> = Vec::new();
     for Token {
         text: tok,
         touching,
@@ -518,7 +519,7 @@ fn insert_implicit_products(
             let starts_operand =
                 tok == "(" || is_leaf(&tok) || (after_paren && is_number_fullmatch(&tok));
             if touching && (after_number || after_paren) && starts_operand {
-                if open_argument == Some(depth) {
+                if open_arguments.last() == Some(&depth) {
                     return Err(format!(
                         "{prev:?} and {tok:?} would multiply inside the argument of a function \
                          without parentheses, which is ambiguous (`sin 2x0` could be sin(2*x0) or \
@@ -529,7 +530,9 @@ fn insert_implicit_products(
             } else if touching && is_function(prev) && ((spaced && is_operand(&tok)) || tok == "-")
             {
                 out.last_mut().unwrap().1 = true;
-                open_argument = Some(depth);
+                if open_arguments.last() != Some(&depth) {
+                    open_arguments.push(depth);
+                }
             } else if touching && spaced && is_operand(prev) && is_operand(&tok) {
                 return Err(format!(
                     "{prev:?} and {tok:?} are separated only by whitespace: write the operator \
@@ -538,20 +541,23 @@ fn insert_implicit_products(
                 ));
             }
             // A binary operator at the argument's depth closes it (`sin x0 * x1` is
-            // sin(x0)*x1); a power or a sign stays inside (`sin -x0^2`).
+            // sin(x0)*x1); a power or a sign stays inside (`sin -x0^2`). A minus is binary
+            // exactly where the parser reads it so: after `)` or after an operand that is not
+            // an operator name.
             let binary = matches!(tok.as_str(), "+" | "*" | "/" | ",")
                 || (tok == "-"
-                    && matches!(out.last(), Some((p, false)) if is_operand(p) || p == ")"));
-            if binary && open_argument == Some(depth) {
-                open_argument = None;
+                    && matches!(out.last(), Some((p, false))
+                        if p == ")" || (is_operand(p) && ops.precedence_get(p).is_none())));
+            if binary && open_arguments.last() == Some(&depth) {
+                open_arguments.pop();
             }
         }
         match tok.as_str() {
             "(" => depth += 1,
             ")" => {
                 depth -= 1;
-                if open_argument.is_some_and(|d| d > depth) {
-                    open_argument = None;
+                while open_arguments.last().is_some_and(|&d| d > depth) {
+                    open_arguments.pop();
                 }
             }
             _ => {}
@@ -1526,6 +1532,9 @@ mod tests {
             "sin 2(x1 + 1)",
             "sin x1^2 cos x1",
             "sin -(x1) 2",
+            "sin -(cos x1) 2",
+            "exp abs((exp x2)) pi",
+            "sin x1^(cos x2) 2",
         ] {
             assert!(e.infix_to_prefix(text).is_err(), "{text}");
         }

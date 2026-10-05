@@ -150,7 +150,11 @@ class TestWhitespace:
     def test_spaced_equals_explicit(self, engine: SimpliPyEngine, spaced: str, explicit: str) -> None:
         assert engine.read_infix(spaced) == engine.read_infix(explicit)
 
-    @pytest.mark.parametrize("text", ["sin 2x0", "sin 2 x0", "sin 2(x0 + 1)", "sin x0^2 cos x0", "cos 2 pi"])
+    @pytest.mark.parametrize("text", [
+        "sin 2x0", "sin 2 x0", "sin 2(x0 + 1)", "sin x0^2 cos x0", "cos 2 pi",
+        # a function without parentheses inside another one's argument keeps the outer one open
+        "sin -(cos x0) 2", "exp abs((exp x2)) pi", "sin x0^(cos x1) 2",
+    ])
     def test_a_product_inside_an_argument_without_parentheses_is_refused(
             self, engine: SimpliPyEngine, text: str) -> None:
         # sin 2x0 is sin(2x0) in a textbook and sin(2)*x0 by the precedence of `*`: ambiguous
