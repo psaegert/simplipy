@@ -4418,7 +4418,11 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
         return None;
     }
     let [Ex::Num(r)] = args else { return None };
-    let x = r.to_f64();
+    // The argument the deployed evaluator sees is the f64 NEAREST to the literal (Python
+    // reads `p/q` and decimals correctly rounded). `to_f64` rounds p and q separately and
+    // lands an ulp or two off once either leaves 53 bits, which the function then
+    // amplifies: `sin(91618929858.17857)` folded 3e-6 away from the evaluator's value.
+    let x = r.to_f64_nearest();
     // `TokenView` compares by interned id, so the vocabulary is spelled out rather than
     // matched on a &str.
     const UNARY: [&str; 14] = [
@@ -4426,22 +4430,10 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
         "atanh", "exp", "log",
     ];
     let which = UNARY.iter().position(|n| cx.view.tok_is(op, n))?;
-    let y = match which {
-        0 => x.sin(),
-        1 => x.cos(),
-        2 => x.tan(),
-        3 => x.asin(),
-        4 => x.acos(),
-        5 => x.atan(),
-        6 => x.sinh(),
-        7 => x.cosh(),
-        8 => x.tanh(),
-        9 => x.asinh(),
-        10 => x.acosh(),
-        11 => x.atanh(),
-        12 => x.exp(),
-        _ => x.ln(),
-    };
+    // The SAME kernels the deployed evaluator and the offline folder use (the system libm):
+    // Rust's `f64::atanh` is its own composition and drifts from libm by up to 1.5e13 ulps
+    // near the domain edges (`numeric.rs`, `cmath`), so the fold must not use std's methods.
+    let y = crate::numeric::unary_fn(UNARY[which])?(x);
     if !y.is_finite() {
         return None;
     }

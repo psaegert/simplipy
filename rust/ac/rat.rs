@@ -285,9 +285,25 @@ impl Rat {
     /// `float(Fraction(p, q))` produces. Where a midpoint leaves `Rat` (the extremes of the
     /// f64 range only) the candidate stands.
     pub fn to_f64_nearest(self) -> f64 {
+        self.nearest_walk().0
+    }
+
+    /// `to_f64_nearest`, but `None` unless every midpoint test was EXACT, i.e. the result
+    /// is certified to be the correctly rounded f64. Callers that build an enclosure
+    /// around the value (the interval kernel's one-ulp leaf bracket) need the certificate:
+    /// an uncertified candidate can sit a few ulps away.
+    pub fn to_f64_nearest_certified(self) -> Option<f64> {
+        match self.nearest_walk() {
+            (y, true) => Some(y),
+            (_, false) => None,
+        }
+    }
+
+    /// The midpoint walk behind both readers: `(candidate, certified)`.
+    fn nearest_walk(self) -> (f64, bool) {
         let mut y = self.to_f64();
         if !y.is_finite() {
-            return y;
+            return (y, false);
         }
         for _ in 0..8 {
             let up = next_up(y);
@@ -297,15 +313,16 @@ impl Rat {
                     continue;
                 }
                 Some(_) => {}
-                None => return y,
+                None => return (y, false),
             }
             let down = next_down(y);
             match Rat::midpoint(down, y) {
                 Some(mid) if self.cmp_exact(&mid) == Ordering::Less => y = down,
-                _ => return y,
+                Some(_) => return (y, true),
+                None => return (y, false),
             }
         }
-        y
+        (y, false)
     }
 
     /// The exact midpoint of two finite f64s as a `Rat`, `None` when it leaves `i128`.

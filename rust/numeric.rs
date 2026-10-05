@@ -145,19 +145,9 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
         if let Some(v) = parse_pyfloat(t) {
             return Some(v);
         }
-        // The AC core's exact-fraction literal `p/q` (`1/3`): evaluate as f64
-        // division, matching what Python's `float(p)/float(q)` would produce.
-        if let Some((p, q)) = t.split_once('/') {
-            if let (Ok(pv), Ok(qv)) = (p.parse::<f64>(), q.parse::<f64>()) {
-                if p.chars().all(|c| c.is_ascii_digit() || c == '-')
-                    && q.chars().all(|c| c.is_ascii_digit())
-                    && !q.is_empty()
-                {
-                    return Some(pv / qv);
-                }
-            }
-        }
-        None
+        // The AC core's exact-fraction literal `p/q` (`1/3`): the realized infix reads it as
+        // Python `int / int` true division, which rounds ONCE to the nearest f64.
+        fraction_value(t).map(|(v, _)| v)
     }
     if let Some(v) = bare_value(tok) {
         return Some(v);
@@ -166,6 +156,48 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
         return bare_value(inner);
     }
     None
+}
+
+/// The value of an exact-fraction leaf `p/q` as `(f64, certified)`, `None` if `t` is not one.
+/// `certified`: the f64 is the correctly rounded value of the fraction -- what Python's
+/// `int / int` gives -- established by exact midpoint tests via `Rat` when p and q fit
+/// `i128`. Otherwise the f64 is `float(p) / float(q)`, which three roundings can leave up to
+/// three ulps from the fraction (the old reader, B6: `673107593011939307760027002528 /
+/// 810572757194796821120128085049` read 1.5 ulps low, outside the interval kernel's
+/// one-ulp leaf bracket).
+pub(crate) fn fraction_value(t: &str) -> Option<(f64, bool)> {
+    let (p, q) = t.split_once('/')?;
+    if p.is_empty()
+        || q.is_empty()
+        || !p.chars().all(|c| c.is_ascii_digit() || c == '-')
+        || !q.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let (pv, qv) = (p.parse::<f64>().ok()?, q.parse::<f64>().ok()?);
+    let nearest = match (p.parse::<i128>(), q.parse::<i128>()) {
+        (Ok(pi), Ok(qi)) => {
+            crate::ac::rat::Rat::new(pi, qi).and_then(|r| r.to_f64_nearest_certified())
+        }
+        _ => None,
+    };
+    Some(match nearest {
+        Some(v) => (v, true),
+        None => (pv / qv, false),
+    })
+}
+
+/// Whether `leaf_value(tok)` is certified to be the f64 NEAREST to what the token denotes:
+/// true for every leaf except an exact fraction `fraction_value` could not certify. (Decimal
+/// literals are read by Rust's correctly rounding float parser; the special tokens have their
+/// own enclosures.) The interval kernel's one-ulp leaf bracket is sound only around the
+/// nearest f64.
+pub(crate) fn leaf_value_is_nearest(tok: &str) -> bool {
+    let t = tok
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(tok);
+    parse_pyfloat(t).is_some() || fraction_value(t).is_none_or(|(_, certified)| certified)
 }
 
 /// H-045-R (owner Option B, 2026-08-05): sign and parity of an INTEGER-denoting decimal
