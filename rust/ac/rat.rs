@@ -417,7 +417,7 @@ impl Rat {
         let n_u = u64::try_from(n).ok()?;
         for x in [&p, &q] {
             let b = x.bits();
-            if b > 1 && n_u.checked_mul(b - 1).is_none_or(|lo| lo + 1 > CAP_BITS) {
+            if b > 1 && n_u.checked_mul(b - 1).is_none_or(|lo| lo >= CAP_BITS) {
                 return None;
             }
         }
@@ -824,6 +824,81 @@ fn big_exact_decimal(p: &BigInt, q: &BigInt) -> Option<String> {
         * num_traits::pow(BigInt::from(2), (k - a) as usize)
         * num_traits::pow(five, (k - b) as usize);
     Some(place_point(p.is_negative(), scaled.to_string(), k as usize))
+}
+
+/// The digit limit of the exact token readers, CPython's integer-string limit: a longer
+/// component keeps the old floating reading rather than spend time building it.
+pub const READER_DIGITS: usize = 4300;
+
+/// The exact rational a numeral token spells -- a decimal or a `p/q` fraction, the grammar of
+/// `utils::is_numeric_string` -- as unreduced `(p, q)` with `q > 0`, at any size up to
+/// `READER_DIGITS` digits and a decimal exponent of at most 4,000 in magnitude; `None` for
+/// anything else. The readers outside the AC core (offline evaluator, interval kernel) use it,
+/// so a token reads as its exact value however it was printed.
+pub fn token_rational(t: &str) -> Option<(BigInt, BigInt)> {
+    if let Some((p, q)) = crate::utils::split_fraction(t) {
+        if p.trim_start_matches(['+', '-']).len() > READER_DIGITS || q.len() > READER_DIGITS {
+            return None;
+        }
+        let p: BigInt = p.strip_prefix('+').unwrap_or(p).parse().ok()?;
+        let q: BigInt = q.parse().ok()?;
+        return (!q.is_zero()).then_some((p, q));
+    }
+    if !crate::utils::is_decimal_numeral(t) {
+        return None;
+    }
+    let (mant, exp) = match t.find(['e', 'E']) {
+        Some(i) => (&t[..i], t[i + 1..].parse::<i64>().ok()?),
+        None => (t, 0),
+    };
+    let (negative, mant) = match mant.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, mant.strip_prefix('+').unwrap_or(mant)),
+    };
+    let (int_part, frac_part) = mant.split_once('.').unwrap_or((mant, ""));
+    let digits: String = int_part.chars().chain(frac_part.chars()).collect();
+    if digits.is_empty() || digits.len() > READER_DIGITS {
+        return None;
+    }
+    let shift = exp.checked_sub(frac_part.len() as i64)?;
+    if shift.abs() > 4000 {
+        return None;
+    }
+    let m: BigInt = digits.parse().ok()?;
+    let m = if negative { -m } else { m };
+    let ten = BigInt::from(10);
+    Some(if shift >= 0 {
+        (m * num_traits::pow(ten, shift as usize), BigInt::one())
+    } else {
+        (m, num_traits::pow(ten, (-shift) as usize))
+    })
+}
+
+/// The f64 nearest to the numeral token `t`, correctly rounded at any size (`+-inf` beyond
+/// float64's range, signed zero below it), or `None` where `token_rational` refuses.
+pub fn token_nearest_f64(t: &str) -> Option<f64> {
+    let (p, q) = token_rational(t)?;
+    Some(big_ratio_to_f64(&p, &q))
+}
+
+/// Whether the numeral token `t` denotes exactly the integer value of the finite,
+/// integer-valued f64 `v`, at any size.
+pub fn token_denotes_integer(t: &str, v: f64) -> bool {
+    if !v.is_finite() || v.fract() != 0.0 {
+        return false;
+    }
+    let Some((p, q)) = token_rational(t) else {
+        return false;
+    };
+    let (m, e) = f64_parts(v);
+    let mut vi = BigInt::from(m);
+    // exact: an integer-valued f64 has no set bit below 2^0
+    if e >= 0 {
+        vi <<= e as u64;
+    } else {
+        vi >>= (-e) as u64;
+    }
+    p == vi * q
 }
 
 /// `p/q` (`q > 0`) correctly rounded to f64 (ties to even), with subnormals and overflow to
@@ -1557,5 +1632,68 @@ mod tests {
         assert!(parse_decimal_big(false, "2", "2250738585072014", -324).is_some());
         assert!(parse_decimal_big(false, "1", "7976931348623157", 292).is_some());
         assert!(parse_decimal_big(false, "4", "9406564584124654", -340).is_none());
+    }
+
+    /// The token readers outside the AC core read a numeral exactly at any size (phase 2b).
+    #[test]
+    fn token_readers_are_exact_at_any_size() {
+        assert_eq!(
+            token_nearest_f64("673107593011939307760027002528/810572757194796821120128085049"),
+            Some(0.8304098392615706)
+        );
+        let p10 = |k: usize| format!("1{}", "0".repeat(k));
+        assert_eq!(
+            token_nearest_f64(&format!("{}/{}", p10(400), p10(399))),
+            Some(10.0)
+        );
+        assert_eq!(token_nearest_f64(&p10(400)), Some(f64::INFINITY));
+        assert_eq!(token_nearest_f64("1e-400"), Some(0.0));
+        assert!(token_nearest_f64("-1e-400").unwrap().is_sign_negative());
+        assert_eq!(token_nearest_f64("2.5e-1"), Some(0.25));
+        assert_eq!(token_nearest_f64("-.5"), Some(-0.5));
+        assert_eq!(token_nearest_f64("x0"), None);
+        assert_eq!(token_nearest_f64("1/0"), None);
+        assert_eq!(token_nearest_f64(&"7".repeat(5000)), None); // beyond the digit limit
+        assert_eq!(token_nearest_f64("1e99999"), None); // beyond the exponent limit
+
+        // integers: 2^200 written out is exactly the f64 2^200; 1e40's nearest f64 is not 10^40
+        let two200 = num_traits::pow(BigInt::from(2), 200).to_string();
+        assert!(token_denotes_integer(&two200, 2f64.powi(200)));
+        assert!(!token_denotes_integer("1e40", 1e40));
+        assert!(token_denotes_integer("1e22", 1e22)); // 10^22 is exact in f64
+        assert!(token_denotes_integer("6/3", 2.0));
+        assert!(token_denotes_integer("-4.0", -4.0));
+        assert!(!token_denotes_integer("7/3", 2.0));
+        assert!(!token_denotes_integer("2.5", 2.0));
+    }
+
+    /// The 2a switch: a result of small operands that leaves the small form refuses while
+    /// `WIDE_RESULTS` is off (byte identity with the 128-bit engine) and is computed exactly once
+    /// it is on (phase 2c).
+    #[test]
+    fn a_small_overflow_follows_the_switch() {
+        let big = Rat::int(i128::MAX / 2 + 1); // doubled: 2^127, one beyond i128
+        let sum = big.checked_add(&big);
+        let product = big.checked_mul(&Rat::int(4));
+        let tiny = Rat::new(1, i128::MAX / 3).unwrap();
+        let tiny_sq = tiny.checked_mul(&tiny);
+        if WIDE_RESULTS {
+            assert_eq!(sum.unwrap().small_parts(), None);
+            assert_eq!(product.unwrap().small_parts(), None);
+            assert_eq!(tiny_sq.unwrap().small_parts(), None);
+        } else {
+            assert_eq!(sum, None);
+            assert_eq!(product, None);
+            assert_eq!(tiny_sq, None);
+        }
+    }
+
+    /// The power size bound never overflows: with `b - 1 = 255` and `n = (2^64 - 1) / 255`,
+    /// `n * (b - 1)` is exactly `u64::MAX`, where `lo + 1` used to overflow (review of 2a).
+    #[test]
+    fn the_power_size_bound_does_not_overflow() {
+        let base = Rat::from_big(num_traits::pow(BigInt::from(2), 255), BigInt::one()).unwrap();
+        let n = (u64::MAX / 255) as i128;
+        assert_eq!(base.checked_pow_int(n), None);
     }
 }

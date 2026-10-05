@@ -2278,12 +2278,12 @@ fn leaf_vs(t: &str, doms: &[Vs], params: &[f64], k: &mut usize) -> Option<Vs> {
                 Some(Boundary::Underflow) => {
                     return Vs::interval(0.0, f64::from_bits(1), true, false)
                 }
-                // A `p/q` whose COMPONENTS exceed f64 -- `10^400/10^300` images as +inf but
-                // denotes 10^100, well inside the range, so neither the point nor a boundary
-                // bracket is sound. Its denotation is a finite real and nothing more is
-                // known: fail closed to every finite real, which licenses no fold at all.
-                // (Beyond-i128 components; `Rat` refuses them, so these survive only as
-                // opaque leaves. Registered on H-045 as the beyond-i128 residual.)
+                // A `p/q` beyond the exact reader's digit limit, read as
+                // `float(p) / float(q)`: `10^5000/10^4900` images as NaN but denotes a finite
+                // real, so neither the point nor a boundary bracket is sound. Its denotation
+                // is a finite real and nothing more is known: fail closed to every finite
+                // real, which licenses no fold at all. (Within the limit a fraction reads as
+                // its correctly rounded f64 and classifies like a decimal above.)
                 Some(Boundary::UnknownFinite) => return Vs::reals(),
                 None => {}
             }
@@ -2349,8 +2349,17 @@ fn denotation_at_range_boundary(t: &str, v: f64) -> Option<Boundary> {
         if q.chars().all(|c| c == '0') {
             return None;
         }
-        if p.chars().all(|c| c == '0' || c == '-') {
-            return None; // an exact zero, spelled as a fraction
+        if p.trim_start_matches(['+', '-']).chars().all(|c| c == '0') {
+            return None; // an exact zero, spelled as a fraction (`-0/5`, `+0/5`, `+00/7`)
+        }
+        // Read exactly, `v` is the correctly rounded value: an infinite image is an overflow
+        // and a zero image an underflow, exactly as for a decimal.
+        if crate::ac::rat::token_rational(t).is_some() {
+            return Some(if v.is_infinite() {
+                Boundary::Overflow
+            } else {
+                Boundary::Underflow
+            });
         }
         return Some(Boundary::UnknownFinite);
     }
@@ -2375,23 +2384,16 @@ fn denotation_at_range_boundary(t: &str, v: f64) -> Option<Boundary> {
 }
 
 /// H-045: certify that an integer-valued f64 leaf `v` is EXACTLY the literal's denoted
-/// rational, via the same grammar `leaf_value` reads (paren-stripped decimal, `p/q`).
-/// Beyond-i128 denotations cannot be certified and keep the bracket (their `(-inf)^k`
-/// class residual is registered open on H-045).
+/// rational, via the same grammar `leaf_value` reads (paren-stripped decimal, `p/q`), at any
+/// size: the exact reader compares the denoted rational with `v` (this closes the beyond-i128
+/// residual registered on H-045; `2^200` written out is a point, `1e40` is not -- its nearest
+/// f64 is not 10^40).
 fn exact_integer_literal(t: &str, v: f64) -> bool {
-    if v.abs() >= 1.7014118346046923e38 {
-        return false; // 2^127: the denoted integer cannot fit i128, no certificate
-    }
     let t = t
         .strip_prefix('(')
         .and_then(|s| s.strip_suffix(')'))
         .unwrap_or(t);
-    let denoted = crate::ac::rat::Rat::parse_decimal(t).or_else(|| {
-        let (p, q) = crate::utils::split_fraction(t)?;
-        crate::ac::rat::Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
-    });
-    // `v as i128` is exact: v is an integer-valued f64 with |v| < 2^127.
-    denoted.is_some_and(|r| r.small_int() == Some(v as i128))
+    crate::ac::rat::token_denotes_integer(t, v)
 }
 
 /// Value-set of a prefix expression over `dom` = the domain assigned to every VARIABLE leaf
@@ -3321,8 +3323,14 @@ fn rat_of_token(tok: &str) -> Option<crate::ac::rat::Rat> {
         if let Some(r) = Rat::parse_decimal(s) {
             return Some(r);
         }
-        let (p, q) = crate::utils::split_fraction(s)?;
-        Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
+        if let Some((p, q)) = crate::utils::split_fraction(s) {
+            if let (Ok(p), Ok(q)) = (p.parse::<i128>(), q.parse::<i128>()) {
+                return Rat::new(p, q);
+            }
+        }
+        // beyond i128: the exact reader, within the number type's cap
+        let (p, q) = crate::ac::rat::token_rational(s)?;
+        Rat::from_big(p, q)
     };
     if let Some(inner) = tok.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
         return bare(inner);
@@ -5027,8 +5035,16 @@ mod tests {
         // A near-miss literal (denoted 10^19 + 100, NOT the f64 1e19 it rounds to) must
         // NOT certify: bracket kept, class refuses to a Nan-a.e. claim it cannot better.
         assert!(!exact_integer_literal("1.00000000000000001e19", 1e19));
+        // An integer literal certifies at any size when its nearest f64 IS that integer:
+        // 2^200 written out is a point, and `(-inf)^(2^200)` is +inf.
+        let two200 = num_traits::pow(num_bigint::BigInt::from(2), 200).to_string();
+        assert_eq!(
+            value_class(&s(&["pow", "float(\"-inf\")", &two200]), ops),
+            Some(Class::PosInf)
+        );
         // INTERVAL-LAYER CONVENTION, documented (H-045-R CLOSED 2026-08-05, owner
-        // Option B): a beyond-i128 integer literal cannot certify here, keeps the
+        // Option B): an integer literal whose nearest f64 is NOT that integer (`1e40`:
+        // 10^40 is no double) cannot certify here, keeps the
         // bracket, and THIS layer's continuum convention still reads Nan for
         // `(-inf)^1e40` -- but the ENGINE's ground fold now classifies the shape
         // exactly from the spelling's sign and parity BEFORE consulting this class

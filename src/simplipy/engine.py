@@ -2445,15 +2445,25 @@ class SimpliPyEngine:
         that converts back, and a code object has no syntax to recover -- naming it
         ``to_compiled`` would advertise a round-trip that cannot exist.
 
+        Every literal is read as its nearest float64 (:func:`simplipy.utils.evaluator_literal`):
+        an integer beyond 2^53 is written as a float, and one beyond float64's range as
+        ``inf``. Integers up to 2^53 stay Python ``int``s, so arithmetic between two of them
+        is exact integer arithmetic: ``sin(4294967296*4294967297)`` raises numpy's TypeError
+        as before (the simplified form folds the product to one literal).
+
         .. warning::
            Compiling runs the expression's realizations through :func:`compile`, so the
            usual trust rules apply -- the evaluation namespace is scoping, not a sandbox
            (:mod:`simplipy.trust`).
         """
-        from .utils import codify
+        from .utils import codify, evaluator_literal
         prefix = self.to_prefix(expression)
         if variables is None:
             variables = self.expression_variables(prefix)
+        # Every literal is read as its nearest float64 (`evaluator_literal`): an integer
+        # beyond 2^53 would otherwise reach Python as an exact int, which numpy's ufuncs and
+        # float arithmetic reject above int64 and float64's range.
+        prefix = [evaluator_literal(t) for t in prefix]
         return codify(self.prefix_to_infix(prefix, realization=True), variables)
 
     def as_callable(

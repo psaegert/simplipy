@@ -161,8 +161,10 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
 /// The value of an exact-fraction leaf `p/q` as `(f64, certified)`, `None` if `t` is not one.
 /// `certified`: the f64 is the correctly rounded value of the fraction -- what Python's
 /// `int / int` gives -- established by exact midpoint tests via `Rat` when p and q fit
-/// `i128`. Otherwise the f64 is `float(p) / float(q)`, which three roundings can leave up to
-/// three ulps from the fraction (the old reader, B6: `673107593011939307760027002528 /
+/// `i128`, and from the exact big-integer components beyond that (up to
+/// `rat::READER_DIGITS` digits; `10^400/10^399` is 10.0, not inf/inf). Only beyond that limit
+/// is the f64 `float(p) / float(q)`, which three roundings can leave up to three ulps from the
+/// fraction (the old reader, B6: `673107593011939307760027002528 /
 /// 810572757194796821120128085049` read 1.5 ulps low, outside the interval kernel's
 /// one-ulp leaf bracket).
 pub(crate) fn fraction_value(t: &str) -> Option<(f64, bool)> {
@@ -172,7 +174,7 @@ pub(crate) fn fraction_value(t: &str) -> Option<(f64, bool)> {
         (Ok(pi), Ok(qi)) => {
             crate::ac::rat::Rat::new(pi, qi).and_then(|r| r.to_f64_nearest_certified())
         }
-        _ => None,
+        _ => crate::ac::rat::token_nearest_f64(t),
     };
     Some(match nearest {
         Some(v) => (v, true),

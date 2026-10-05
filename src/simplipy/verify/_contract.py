@@ -109,6 +109,8 @@ _PAREN_NEG_RE = re.compile(r'^\(-((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\)$')
 _FLOAT_CALL_RE = re.compile(r'^float\((["\'])([^"\']*)\1\)$')
 _SPECIALS = {'inf': math.inf, '+inf': math.inf, '-inf': -math.inf, 'nan': math.nan}
 _NAMED = {'np.pi': math.pi, 'np.e': math.e}
+#: the longest literal read: a fraction of two 4,300-digit components, signs and parentheses
+_MAX_LITERAL_CHARS = 2 * 4300 + 8
 
 
 def _exact(t):
@@ -127,12 +129,23 @@ def _exact(t):
 
     The DEPLOYED lane must keep seeing the double, because that is what deployment
     computes -- `d_eval` converts back with `F()`, so its semantics are unchanged.
+
+    The spelling is bounded BEFORE the rational is built: a rule file is untrusted input, and
+    `Fraction('1e999999999')` would build a billion-digit integer. More than 4,300 digits
+    (CPython's integer-string limit) or a decimal exponent beyond 4,000 is refused.
     """
-    return Fraction(t.strip())
+    t = t.strip()
+    mantissa, _, exponent = t.lower().partition('e')
+    if (sum(c.isdigit() for c in mantissa) > 4300
+            or len(exponent.lstrip('+-').lstrip('0')) > 5 or (exponent and abs(int(exponent)) > 4000)):
+        raise UnsupportedToken(f'literal too large to read exactly: {t[:40]!r}...')
+    return Fraction(t)
 
 
 def literal_value(t):
     """The accepted numeric grammar, evaluated without `eval`. Total: value or refusal."""
+    if len(t) > _MAX_LITERAL_CHARS:  # before any regex: they backtrack on long digit runs
+        raise UnsupportedToken(f'literal too long to read: {t[:40]!r}...')
     if t in _NAMED:
         return _NAMED[t]
     m = _FLOAT_CALL_RE.match(t)
@@ -643,8 +656,11 @@ def d_eval(tree, env):
         return env[tree[1]]
     if op == 'lit':
         # deployment parses the token as a double; the exact rational is the CONTRACT's
-        # reading, never this lane's.
-        return F(float(tree[1]))
+        # reading, never this lane's. Beyond float64's range the double is +-inf.
+        try:
+            return F(float(tree[1]))
+        except OverflowError:  # `tree[1]` is a Fraction: compare, never convert
+            return F(math.inf if tree[1] > 0 else -math.inf)
     args = [d_eval(c, env) for c in tree[1:]]
     # C35: the ignore-everything float semantics this judge needs are SCOPED to the
     # operator application, never set process-wide at import.

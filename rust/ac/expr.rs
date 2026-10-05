@@ -376,7 +376,8 @@ pub fn l_millibits(n: u128) -> u64 {
         return 0; // log2(1) = 0, i.e. n = 0
     }
     let b = 128 - m.leading_zeros() as u64; // m has b bits: 2^(b-1) <= m < 2^b
-                                            // x = m / 2^(b-1), in [1, 2), as a FRAC-bit fixed-point value.
+
+    // x = m / 2^(b-1), in [1, 2), as an L_FRAC-bit fixed-point value.
     let x: u128 = if (b - 1) as u32 >= L_FRAC {
         m >> ((b - 1) as u32 - L_FRAC)
     } else {
