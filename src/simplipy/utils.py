@@ -642,14 +642,17 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
     return list(deduplicated_rules.values())
 
 
+_DECIMAL_NUMERAL = re.compile(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?')
+_FRACTION_NUMERAL = re.compile(r'[+-]?[0-9]+/[0-9]*[1-9][0-9]*')
+
+
 def is_numeric_string(s: str) -> bool:
-    """Check if a string represents a number (integer or float).
+    """Check if a string is a numeral of the engine's grammar.
 
-    This function determines if the given string can be interpreted as a
-    numeric value. It handles integers, floats, and scientific notation.
-
-    Original author: Cecil Curry
-    Source: https://stackoverflow.com/questions/354038/how-do-i-check-if-a-string-represents-a-number-float-or-int
+    THE NUMERAL GRAMMAR, shared with the Rust core (``utils::is_numeric_string``): a
+    decimal ``[+-]? (D+ (. D*)? | . D+) ([eE] [+-]? D+)?`` or an exact fraction
+    ``[+-]? D+ / D+`` with a nonzero denominator, D an ASCII digit. Value-free:
+    ``1e400`` is a numeral although no float holds it.
 
     Parameters
     ----------
@@ -659,30 +662,33 @@ def is_numeric_string(s: str) -> bool:
     Returns
     -------
     bool
-        True if the string represents a number, False otherwise.
+        True if the string is a numeral, False otherwise.
 
     Examples
     --------
     >>> is_numeric_string("123")
     True
-    >>> is_numeric_string("-1.5e-2")
+    >>> is_numeric_string("-1.5E-2")
     True
+    >>> is_numeric_string("1/3")
+    True
+    >>> is_numeric_string("1/0")
+    False
     >>> is_numeric_string("abc")
     False
     """
     if not isinstance(s, str):
         return False
-    # The ``e+`` arm closes the predicate under the engine's own emissions:
-    # ``py_float_repr`` spells big magnitudes ``1e+16`` exactly as Python ``repr``
-    # does (H-007). Kept in sync with the Rust ``is_numeric_string``.
-    if s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e+', '', 1).replace('e', '', 1).isdigit():
-        return True
-    # The AC core's exact-fraction literal ``p/q`` (``1/3``, ``-7/4``): integer '/'
-    # integer, one slash -- kept in sync with the Rust ``is_numeric_string``.
-    if s.count('/') == 1:
-        p, q = s.split('/')
-        return p.lstrip('-').isdigit() and q.isdigit()
-    return False
+    return bool(_DECIMAL_NUMERAL.fullmatch(s) or _FRACTION_NUMERAL.fullmatch(s))
+
+
+def _looks_numeric(t: str) -> bool:
+    """A token that starts like a number: after one optional pair of parentheses and any
+    run of signs, a digit or ``.`` (mirror of the Rust ``looks_numeric``)."""
+    if t.startswith('(') and t.endswith(')'):
+        t = t[1:-1]
+    t = t.lstrip('+-')
+    return bool(t) and (t[0] in '0123456789.')
 
 
 _RADIX_DIGITS = {'0x': '0123456789abcdef', '0o': '01234567', '0b': '01'}
@@ -695,12 +701,13 @@ def reserved_numeric_spelling(t: str) -> bool:
 
     Such a token has two contradictory readings: the AC canon would treat it as a free
     symbol and apply symbol algebra (``inf - inf -> 0``) while Python ``float()`` reads a
-    value (``inf - inf = nan``). Three families: textual non-finites (``inf``/
+    value (``inf - inf = nan``). Four families: textual non-finites (``inf``/
     ``infinity``/``nan``, any case, optional sign), underscore digit groupings
-    (``1_000``), and base-prefixed integer literals (``0x10``/``0o17``/``0b101``).
-    Canonical numeric literals (``5``, ``+5``, ``1e-05``, ``1/3``, ``np.pi``,
-    ``float("inf")``) and genuine free symbols (``x0``, ``_0``, ``x_0``) are NOT
-    reserved.
+    (``1_000``), base-prefixed integer literals (``0x10``/``0o17``/``0b101``), and
+    malformed numerals -- tokens that start like a number but are not numerals of the
+    grammar (``1/0``, ``1/6.28``, ``--5``, ``1e5.5``; B2). Canonical numeric literals
+    (``5``, ``+5``, ``1e-05``, ``1/3``, ``np.pi``, ``float("inf")``) and genuine free
+    symbols (``x0``, ``_0``, ``x_0``) are NOT reserved.
     """
     core = t[1:] if t[:1] in '+-' else t
     # Family 1: textual non-finites.
@@ -727,6 +734,11 @@ def reserved_numeric_spelling(t: str) -> bool:
                 return True
             except ValueError:
                 pass
+    # Family 4: malformed numerals.
+    if _looks_numeric(t):
+        inner = t[1:-1] if t.startswith('(') and t.endswith(')') else t
+        if not is_numeric_string(inner):
+            return True
     return False
 
 

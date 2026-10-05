@@ -166,14 +166,7 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
 /// 810572757194796821120128085049` read 1.5 ulps low, outside the interval kernel's
 /// one-ulp leaf bracket).
 pub(crate) fn fraction_value(t: &str) -> Option<(f64, bool)> {
-    let (p, q) = t.split_once('/')?;
-    if p.is_empty()
-        || q.is_empty()
-        || !p.chars().all(|c| c.is_ascii_digit() || c == '-')
-        || !q.chars().all(|c| c.is_ascii_digit())
-    {
-        return None;
-    }
+    let (p, q) = crate::utils::split_fraction(t)?;
     let (pv, qv) = (p.parse::<f64>().ok()?, q.parse::<f64>().ok()?);
     let nearest = match (p.parse::<i128>(), q.parse::<i128>()) {
         (Ok(pi), Ok(qi)) => {

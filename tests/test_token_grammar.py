@@ -58,8 +58,18 @@ LEGAL_NUMERIC = [
     ("1e+16", ["10000000000000000"]),
 ]
 
+# Malformed numerals (B2): tokens that start like a number (a digit or `.`, after optional
+# parentheses and signs) but are not numerals of the grammar. They used to pass as free
+# symbols (`1/0 - 1/0 -> 0`), or, in the tagged form, which skips `is_valid`, to be split
+# (`<mul> --5 x1 </mul>` became `<mul> -1 -5 x1 </mul>`) -- while the realized infix reads
+# most of them as values or raises.
+MALFORMED = [
+    "1/0", "0/0", "1/6.28", "0.5/3", "1e2/3", "1/3e2", "--5", "-+5", "1e5.5", "1e-5e", "5e",
+    "1/-3", "2x", "(1/0)",
+]
+
 # Free symbols: no numeric reader interprets these; symbol algebra applies.
-LEGAL_SYMBOLS = ["x0", "foo", "x_0", "inf2", "nanx", "in"]
+LEGAL_SYMBOLS = ["x0", "foo", "x_0", "inf2", "nanx", "in", "e5"]
 
 # Sigil-prefixed tokens are the PATTERN language (rule placeholders): legal input,
 # but the certificate layer refuses to cancel them (no finite-a.e. certificate for a
@@ -119,6 +129,24 @@ class TestReservedSpellingsRefused:
             literal_sites(["-", "inf", "inf"], engine)
 
 
+class TestMalformedNumeralsRefused:
+    @pytest.mark.parametrize("tok", MALFORMED)
+    def test_every_form_refuses(self, engine: SimpliPyEngine, tok: str) -> None:
+        for expr in ([tok], ["*", tok, "x0"], ["<mul>", tok, "x0", "</mul>"]):
+            with pytest.raises(ValueError, match="reserved numeric spelling"):
+                engine.simplify(expr)
+
+    @pytest.mark.parametrize("tok", MALFORMED)
+    def test_masking_refuses(self, engine: SimpliPyEngine, tok: str) -> None:
+        with pytest.raises(ValueError, match="reserved numeric spelling"):
+            literal_sites(["*", tok, "x0"], engine)
+
+    @pytest.mark.parametrize("tok", ["1E6", "+5", "2.5E-4", "+1/3"])
+    def test_every_numeral_the_readers_accept_is_masked(self, engine: SimpliPyEngine, tok: str) -> None:
+        # `1E6` and `+5` were read as numbers, but the old predicate never masked them.
+        assert [site[1] for site in literal_sites(["*", tok, "x0"], engine)] == [tok]
+
+
 class TestCanonicalGrammarUnaffected:
     @pytest.mark.parametrize("tok,expected", LEGAL_NUMERIC)
     def test_numeric_literals(self, engine: SimpliPyEngine, tok: str, expected: list[str]) -> None:
@@ -144,8 +172,9 @@ class TestCanonicalGrammarUnaffected:
 
 class TestGrammarPredicates:
     def test_reserved_predicate(self) -> None:
-        for tok in RESERVED:
+        for tok in RESERVED + MALFORMED:
             assert reserved_numeric_spelling(tok), tok
+            assert not is_numeric_string(tok), tok
         for tok in (LEGAL_SYMBOLS + LEGAL_SIGILS + [t for t, _ in LEGAL_NUMERIC]
                     + ["1/3", "np.pi", 'float("inf")', "(-1)"]):
             assert not reserved_numeric_spelling(tok), tok

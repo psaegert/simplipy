@@ -2376,15 +2376,8 @@ fn exact_integer_literal(t: &str, v: f64) -> bool {
         .and_then(|s| s.strip_suffix(')'))
         .unwrap_or(t);
     let denoted = crate::ac::rat::Rat::parse_decimal(t).or_else(|| {
-        let (p, q) = t.split_once('/')?;
-        if p.chars().all(|c| c.is_ascii_digit() || c == '-')
-            && !q.is_empty()
-            && q.chars().all(|c| c.is_ascii_digit())
-        {
-            crate::ac::rat::Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
-        } else {
-            None
-        }
+        let (p, q) = crate::utils::split_fraction(t)?;
+        crate::ac::rat::Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
     });
     // `v as i128` is exact: v is an integer-valued f64 with |v| < 2^127.
     denoted.is_some_and(|r| r.is_integer() && r.num() == v as i128)
@@ -3317,7 +3310,7 @@ fn rat_of_token(tok: &str) -> Option<crate::ac::rat::Rat> {
         if let Some(r) = Rat::parse_decimal(s) {
             return Some(r);
         }
-        let (p, q) = s.split_once('/')?;
+        let (p, q) = crate::utils::split_fraction(s)?;
         Rat::new(p.parse::<i128>().ok()?, q.parse::<i128>().ok()?)
     };
     if let Some(inner) = tok.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {

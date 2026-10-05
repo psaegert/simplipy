@@ -171,11 +171,11 @@ fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<
 /// THE NORMATIVE TOKEN GRAMMAR (H-004 + H-007), enforced at every semantic boundary.
 /// A well-formed token (non-empty, whitespace-free -- an empty or whitespace-bearing
 /// "token" corrupts every space-joined serialization; H-004, 2026-08-03) is one of:
-///   1. a NUMERIC LITERAL -- the canonical spellings every layer reads identically:
-///      `Rat::parse_decimal` forms (optional single sign, decimal digits, one optional
-///      `.`, optional `e`/`E` exponent with optional sign), the exact fraction `p/q`,
-///      the special spellings `np.pi`/`np.e`/`float("inf")`/`float("-inf")`/
-///      `float("nan")`, and their parenthesized forms;
+///   1. a NUMERIC LITERAL -- the canonical spellings every layer reads identically: a
+///      numeral of the one grammar (`utils::is_numeric_string`: a decimal with optional
+///      single sign, one optional `.` and an optional `e`/`E` exponent, or an exact
+///      fraction `p/q` with q nonzero), the special spellings `np.pi`/`np.e`/
+///      `float("inf")`/`float("-inf")`/`float("nan")`, and their parenthesized forms;
 ///   2. an OPERATOR of the loaded config (or a tagged-form structural token);
 ///   3. a FREE SYMBOL -- anything else that NO standard numeric reader interprets
 ///      (`x0`, `foo`, `_0`); symbol algebra applies, under the contract that a free
@@ -186,11 +186,13 @@ fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<
 ///      `utils::reserved_numeric_spelling`). Before this guard the SAME input had two
 ///      contradictory public answers: `simplify(["-","inf","inf"]) == ["0"]` (symbol
 ///      algebra) while `evaluate_constant_subtree` said `float("nan")` (value reading).
+///      Since B2 (2026-10-05) this includes every token that starts like a number but is
+///      not a numeral (`1/0`, `1/6.28`, `--5`, `1e5.5`), in every form, tagged included.
 ///
-/// `is_numeric_string` remains a deliberately over-approximating MASKING heuristic
-/// (its excess, e.g. `--5`, is refused by `is_valid`), and `is_valid` remains the pure
-/// arity oracle (its 240k-differential pin is untouched); alphabet well-formedness and
-/// spelling reservation are the boundary's job, enforced here.
+/// `is_numeric_string` is the numeral grammar itself (the masking predicate and the
+/// readers agree), and `is_valid` remains the pure arity oracle (its 240k-differential
+/// pin is untouched); alphabet well-formedness and spelling reservation are the
+/// boundary's job, enforced here.
 fn ensure_tokens_are_tokens(tokens: &[String]) -> PyResult<()> {
     // RECURSION CAP AT THE CHOKE POINT (H-043, D4): the recursive walkers behind the
     // instrument surfaces (tape compile, constant-subtree eval, interval descent, rule

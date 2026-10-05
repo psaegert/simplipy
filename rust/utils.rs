@@ -1,47 +1,72 @@
 //! Pure string/number helpers mirroring `simplipy/utils.py`: is_numeric_string,
 //! numbers_to_constant, remove_pow1, factorize_to_at_most.
 
-/// Port of `is_numeric_string`, the predicate `mask_elementary_literals`
-/// uses. It is a string-munging check, NOT `float()`:
-/// `s.lstrip('-').replace('.', '', 1).replace('e-', '', 1).replace('e+', '', 1)
-/// .replace('e', '', 1).isdigit()`.
-/// Order matters (`.` then `e-` then `e+` then `e`); each `replace(..., 1)` is
-/// first-occurrence-only; `lstrip('-')` strips ALL leading `-`; `isdigit()` is false on the
-/// empty string. The `e+` arm closes the predicate under the engine's own emissions:
-/// `py_float_repr` spells big magnitudes `1e+16` exactly as Python `repr` does (H-007).
-/// The munge OVER-approximates (`--5`, `1e-5.5` pass); the exact readers
-/// (`Rat::parse_decimal`, `leaf_value`) decide evaluability, and the excess is refused by
-/// `is_valid`. (Distinct from `operand_key`'s `float()`-based numeric test in `sort.rs`.)
+/// THE NUMERAL GRAMMAR (B2, 2026-10-05), the one definition every reader shares (Python
+/// mirror: `simplipy.utils.is_numeric_string`). A numeral is
+///   - a decimal `[+-]? (D+ (. D*)? | . D+) ([eE] [+-]? D+)?`, or
+///   - an exact fraction `[+-]? D+ / D+` with a nonzero denominator,
+///
+/// with D an ASCII digit. It used to be a string munge that both over- and
+/// under-approximated what the readers accept: `1E6`, `+5` and `2.5E-4` were read as
+/// numbers but never masked, while `e5`, `1e-5e`, `--5` and `1/0` were masked as numbers
+/// that no reader evaluates. (Distinct from `operand_key`'s `float()`-based test in
+/// `sort.rs`.)
 pub fn is_numeric_string(s: &str) -> bool {
-    let t = s.trim_start_matches('-');
-    let t = replace_first(t, ".");
-    let t = replace_first(&t, "e-");
-    let t = replace_first(&t, "e+");
-    let t = replace_first(&t, "e");
-    // `str.isdigit()`: non-empty and every char a digit. The grammar's tokens are ASCII, so
-    // `is_ascii_digit` matches Python `isdigit()` for every token that can occur.
-    if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
-        return true;
-    }
-    // The AC core's exact-fraction literal `p/q` (`1/3`, `-7/4`): integer '/' integer,
-    // one slash. Without this arm, `mask` left the fraction unmasked and the evaluators
-    // refused it.
-    if let Some((p, q)) = s.split_once('/') {
-        let p = p.strip_prefix('-').unwrap_or(p);
-        return !p.is_empty()
-            && !q.is_empty()
-            && p.chars().all(|c| c.is_ascii_digit())
-            && q.chars().all(|c| c.is_ascii_digit());
-    }
-    false
+    is_decimal_numeral(s) || split_fraction(s).is_some()
 }
 
-/// `s.replace(pat, '', 1)`: remove the FIRST occurrence of `pat`, else return `s` unchanged.
-fn replace_first(s: &str, pat: &str) -> String {
-    match s.find(pat) {
-        Some(idx) => format!("{}{}", &s[..idx], &s[idx + pat.len()..]),
-        None => s.to_string(),
+/// The decimal arm of the numeral grammar (`is_numeric_string`). Value-free: `1e400` is a
+/// numeral even though no f64 or `Rat` holds it.
+pub fn is_decimal_numeral(s: &str) -> bool {
+    let b = s.as_bytes();
+    let digits_from = |mut i: usize| {
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        i
+    };
+    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+    let int_end = digits_from(i);
+    let mut mantissa_digits = int_end - i;
+    i = int_end;
+    if b.get(i) == Some(&b'.') {
+        let frac_end = digits_from(i + 1);
+        mantissa_digits += frac_end - (i + 1);
+        i = frac_end;
     }
+    if mantissa_digits == 0 {
+        return false;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        i += usize::from(matches!(b.get(i), Some(b'+' | b'-')));
+        let exp_end = digits_from(i);
+        if exp_end == i {
+            return false;
+        }
+        i = exp_end;
+    }
+    i == b.len()
+}
+
+/// `(p, q)` of an exact-fraction numeral `[+-]? D+ / D+` with q nonzero, else `None`.
+pub fn split_fraction(s: &str) -> Option<(&str, &str)> {
+    let (p, q) = s.split_once('/')?;
+    let p_digits = p.strip_prefix(['+', '-']).unwrap_or(p);
+    let all_digits = |t: &str| !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit());
+    (all_digits(p_digits) && all_digits(q) && q.bytes().any(|c| c != b'0')).then_some((p, q))
+}
+
+/// A token that starts like a number: after one optional pair of parentheses and any run
+/// of signs, a digit or `.`. Such a token must be a numeral (`reserved_numeric_spelling`,
+/// family 4); `x.1`, `np.pi`, `_0`, `-x0` and the operator `-` do not start like one.
+fn looks_numeric(t: &str) -> bool {
+    let t = t
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(t);
+    t.trim_start_matches(['+', '-'])
+        .starts_with(|c: char| c.is_ascii_digit() || c == '.')
 }
 
 /// H-007: a spelling that a STANDARD numeric reader interprets but the engine's symbolic
@@ -58,7 +83,13 @@ fn replace_first(s: &str, pat: &str) -> String {
 ///      Python's placement rule -- `_0` (rule placeholders) and `x_0` stay free symbols;
 ///   3. base-prefixed integer literals: `0x10`/`0o17`/`0b101` any case, optional sign,
 ///      optional underscore grouping (Python source syntax: a realized-infix `eval` would
-///      read 16 where the engine sees a symbol).
+///      read 16 where the engine sees a symbol);
+///   4. malformed numerals (B2, 2026-10-05): a token that starts like a number
+///      (`looks_numeric`) but is not a numeral of the grammar (`is_numeric_string`) --
+///      `1/0`, `1/6.28`, `0.5/3`, `--5`, `-+5`, `1e5.5`, `1/-3`, `2x`. The realized infix
+///      reads most of them as values (`--5` is 5, `1/6.28` a quotient) or raises (`1/0`);
+///      the canon took them as symbols (`1/0 - 1/0 -> 0`) or, in the tagged form, which
+///      skips `is_valid`, split them (`--5` became `-1 -5`).
 ///
 /// Everything else is either a canonical numeric literal (`Rat::parse_decimal` forms, the
 /// exact fraction `p/q`, the special spellings `np.pi`/`np.e`/`float("...")` and their
@@ -107,6 +138,16 @@ pub fn reserved_numeric_spelling(t: &str) -> bool {
             if cleaned.parse::<f64>().is_ok() {
                 return true;
             }
+        }
+    }
+    // Family 4: malformed numerals.
+    if looks_numeric(t) {
+        let inner = t
+            .strip_prefix('(')
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(t);
+        if !is_numeric_string(inner) {
+            return true;
         }
     }
     false
@@ -252,6 +293,13 @@ mod tests {
         for t in ["0x10", "0X10", "0o17", "0b101", "+0x10", "-0x10", "0x_10"] {
             assert!(reserved_numeric_spelling(t), "{t}");
         }
+        // Family 4 (B2): tokens that start like a number but are not numerals.
+        for t in [
+            "1/0", "0/0", "1/6.28", "0.5/3", "1e2/3", "1/3e2", "--5", "-+5", "+-5", "1e5.5",
+            "1e-5e", "5e", "1/-3", "2x", "0x", ".", "1.2.3", "(1/0)", "(--5)",
+        ] {
+            assert!(reserved_numeric_spelling(t), "{t}");
+        }
         // Canonical literals and genuine symbols are NOT reserved.
         for t in [
             "5",
@@ -274,22 +322,34 @@ mod tests {
             "nanx",
             "in",
             "_",
-            "0x",
+            "e5",
+            "x.1",
+            "-x0",
+            "-",
+            "1e400",
+            "+1/3",
+            "(-1/3)",
         ] {
             assert!(!reserved_numeric_spelling(t), "{t}");
         }
     }
 
     #[test]
-    fn numeric_string_covers_engine_emitter() {
-        // The 'e+' munge arm (H-007): py_float_repr spells 1e16 as "1e+16" (Python repr
-        // parity); the masking predicate must recognize the engine's own emissions.
-        assert!(is_numeric_string("1e+16"));
-        assert!(is_numeric_string("1e-05"));
-        assert!(is_numeric_string("1e5"));
-        assert!(!is_numeric_string("1_000"));
-        assert!(!is_numeric_string("inf"));
-        assert!(!is_numeric_string("+5")); // the munge does not strip '+'; parse_decimal reads it
+    fn numeric_string_is_the_numeral_grammar() {
+        // py_float_repr spells 1e16 as "1e+16" (Python repr parity); the masking predicate
+        // recognizes the engine's own emissions, and every spelling the readers accept.
+        for t in [
+            "1e+16", "1e-05", "1e5", "1E5", "2.5E-4", "+5", "-5", ".5", "5.", "1.e5", "0", "007",
+            "1e400", "1/3", "-7/4", "+1/3", "0/5",
+        ] {
+            assert!(is_numeric_string(t), "{t}");
+        }
+        for t in [
+            "1_000", "inf", "e5", "5e", "1e", "1e5.5", "1e-5e", "--5", "-+5", "1/0", "1/-3",
+            "1/6.28", ".", "", "+", "-", "x0", "np.pi", "(-1)", "1/3/4",
+        ] {
+            assert!(!is_numeric_string(t), "{t}");
+        }
     }
 
     #[test]

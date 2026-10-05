@@ -412,6 +412,10 @@ impl Rat {
     /// `"1e-3" -> 1/1000`, `"1." -> 1`. This is a DECIMAL parse, not a float parse -- `"0.2"`
     /// means one fifth, exactly, even though the f64 nearest to it does not.
     pub fn parse_decimal(s: &str) -> Option<Rat> {
+        // Only the numeral grammar (B2): the parse below used to accept `-+5` as -5.
+        if !crate::utils::is_decimal_numeral(s) {
+            return None;
+        }
         // Split off an exponent part (`e`/`E`).
         let (mant, exp) = match s.find(['e', 'E']) {
             Some(i) => (&s[..i], s[i + 1..].parse::<i32>().ok()?),

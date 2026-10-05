@@ -141,8 +141,9 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
     if let Some(r) = Rat::parse_decimal(s) {
         return Ex::Num(r);
     }
-    // The tagged form's exact-fraction leaves: "1/3", "-7/4" (integer '/' integer, one slash).
-    if let Some((p, q)) = s.split_once('/') {
+    // The tagged form's exact-fraction leaves: "1/3", "-7/4" (the numeral grammar's
+    // fraction arm, `utils::split_fraction`; `1/-3` used to parse here as -1/3).
+    if let Some((p, q)) = crate::utils::split_fraction(s) {
         if let (Ok(p), Ok(q)) = (p.parse::<i128>(), q.parse::<i128>()) {
             if let Some(r) = Rat::new(p, q) {
                 return Ex::Num(r);
@@ -157,7 +158,7 @@ pub(crate) fn parse_leaf_token(t: Tok, s: &str, view: &TokenView) -> Ex {
         if let Some(r) = Rat::parse_decimal(inner) {
             return Ex::Num(r);
         }
-        if let Some((p, q)) = inner.split_once('/') {
+        if let Some((p, q)) = crate::utils::split_fraction(inner) {
             if let (Ok(p), Ok(q)) = (p.parse::<i128>(), q.parse::<i128>()) {
                 if let Some(r) = Rat::new(p, q) {
                     return Ex::Num(r);
