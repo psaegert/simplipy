@@ -20,7 +20,8 @@
   own value.
 - **One numeral grammar, refused when malformed.** A numeral is a decimal
   `[+-]? digits [. digits] [e|E [+-] digits]` or an exact fraction `[+-]? digits / digits` with a
-  nonzero denominator, and every reader now uses that one definition. The masking predicate
+  nonzero denominator, and every boundary checks tokens against that one definition, so only
+  numerals reach the number readers. The masking predicate
   `is_numeric_string` used to disagree with the readers both ways: `1E6`, `+5` and `2.5E-4` were
   read as numbers but never masked, while `e5`, `1e-5e` and `1/0` were masked as numbers no reader
   evaluates. Folding `neg` into a literal turns a leading `+` into `-` (`neg +5` is `-5`; it was
@@ -33,12 +34,13 @@
 - **Infix reads implicit multiplication.** After a number or a closing parenthesis, a name, an
   opening parenthesis or (after a parenthesis) a number multiplies: `2x0` is `2*x0`, `0x10` is
   `0*x10`, `2(x0 + 1)` is `2*(x0 + 1)`, `(a)(b)` is `(a)*(b)`, `2pi` is `2*pi`. The product has
-  the precedence of `*`, so `1/2x0` is `(1/2)*x0` and `2^3x0` is `(2^3)*x0`. A name before a
-  parenthesis stays a call, known or not (`sqrt(x0)` still reads `sqrt x0`); a number before a
-  name that starts with `_` is Python's digit grouping, not a product (`1_000` stays
-  malformed); and a character the tokenizer drops never becomes a product (`x1 $ x2` stays
-  malformed). Every whitespace character is stripped like a space (`2\tx0` is `2*x0`). Before,
-  these inputs were malformed.
+  the precedence of `*`, so `1/2x0` is `(1/2)*x0` and `2^3x0` is `(2^3)*x0`. Before, these
+  inputs were malformed. A name before a parenthesis stays a call, known or not (`sqrt(x0)` still
+  reads `sqrt x0`); a number before a name that starts with `_` is Python's digit grouping, not a
+  product (`1_000` stays malformed); and a character the tokenizer drops never becomes a product
+  (`x1 $ x2` stays malformed). Tabs, newlines and other whitespace are now dropped like spaces:
+  `2\tx0` is `2*x0`, and `sin\tx0` reads as the name `sinx0`, as `sin x0` already did (a tab
+  used to keep `sin` and `x0` apart).
 - **An interrupted mine is not final.** On SIGINT the miner stops after the running length and
   writes what it has, with the proposal channel, the symbolic gate and sort promotion skipped,
   and its sidecar said `"final": true`. It now says `"final": false` and `"interrupted": true`,
