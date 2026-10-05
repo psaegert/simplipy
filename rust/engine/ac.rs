@@ -57,7 +57,11 @@ fn contains_bracket_poisoned_pow(e: &Ex, view: &TokenView) -> bool {
     // (or reads as an f64 image away from the denoted integer).
     fn poisoned_literal(e: &Ex, view: &TokenView) -> bool {
         match e {
-            Ex::Num(r) => r.is_integer() && r.num().unsigned_abs() > (1u128 << 53),
+            Ex::Num(r) => {
+                r.is_integer()
+                    && r.small_parts()
+                        .is_none_or(|(p, _)| p.unsigned_abs() > (1u128 << 53))
+            }
             Ex::Leaf(t) => view
                 .with_str(*t, crate::numeric::integer_literal_parity)
                 .is_some(),
@@ -455,7 +459,7 @@ impl Engine {
                 if !r.is_integer() {
                     return None;
                 }
-                (r.is_negative(), r.num() % 2 != 0)
+                (r.is_negative(), r.is_odd_integer())
             }
             Ex::Leaf(t) => view.with_str(*t, crate::numeric::integer_literal_parity)?,
             Ex::Mul(v) if v.len() == 2 => match (&v[0], &v[1]) {
@@ -1078,7 +1082,7 @@ impl Engine {
                 Ex::Pow(b, ex) => {
                     if let (Ex::Mul(v), Ex::Num(r)) = (&**b, &**ex) {
                         if r.is_negative() {
-                            let odd_neg_int = r.as_integer().is_some_and(|n| n % 2 != 0);
+                            let odd_neg_int = r.is_odd_integer();
                             let has_div = v.iter().any(|f| {
                                 matches!(f, Ex::Pow(_, e2)
                                     if matches!(&**e2, Ex::Num(rr) if rr.is_negative()))

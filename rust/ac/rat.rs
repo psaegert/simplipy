@@ -4,19 +4,62 @@
 //! type is an exact rational, not an f64. Coefficient and exponent arithmetic thereby becomes
 //! COMPUTATION that cannot be wrong (replacing the mined-and-sampled coefficient rule family).
 //!
-//! Representation: `p/q` over `i128` with `q > 0` and `gcd(|p|, q) == 1`. Every operation is
-//! CHECKED: on overflow it returns `None` and the caller keeps the symbolic form instead of
-//! folding -- refusing to compute is always sound here, computing wrongly never is. No big-int
-//! dependency: the corpus' coefficients are tiny, and anything that overflows i128 is better
-//! left symbolic anyway.
+//! Representation: `p/q` with `q > 0` and `gcd(|p|, q) == 1`, in one of two forms. The SMALL
+//! form holds both components in `i128` (never `i128::MIN`) and is the fast path every common
+//! number takes. The BIG form holds them as big integers, up to a size cap of `CAP_BITS` bits
+//! each (number plan phase 2: exact numbers without a fixed width). A value that fits the small
+//! form is ALWAYS small, so the derived `Eq` and `Hash` are value equality (the ground-rule
+//! index, the normal-form memo, bucket keys and the matcher rely on that).
+//!
+//! Every operation is CHECKED: when the result would leave the representable set it returns
+//! `None` and the caller keeps the symbolic form instead of folding -- refusing to compute is
+//! always sound here, computing wrongly never is.
+//!
+//! Phase 2a: `WIDE_RESULTS` is off, so an operation on small numbers whose result leaves the
+//! small form refuses exactly as before the big form existed, and the engine never builds a big
+//! number. The big form and its arithmetic are in place (and tested) for phase 2c, which turns
+//! `WIDE_RESULTS` on.
 
 use std::cmp::Ordering;
+use std::fmt;
+use std::sync::Arc;
+
+use num_bigint::{BigInt, BigUint, Sign};
+use num_integer::Integer;
+use num_traits::{One, Signed, ToPrimitive, Zero};
+
+/// The size cap of the big form: numerator and denominator have at most this many bits. Every
+/// float64 is an exact fraction within it (the largest double is below 2^1024, the smallest
+/// subnormal is 2^-1074), and srbf's largest number needs 375 bits (plan §2).
+pub const CAP_BITS: u64 = 1100;
+
+/// Whether a result of small operands that leaves the small form is computed in the big form
+/// (phase 2c) or refused, as before phase 2 (phase 2a).
+pub(crate) const WIDE_RESULTS: bool = false;
 
 /// An exact rational `p/q`, normalized (`q > 0`, `gcd(|p|, q) == 1`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Rat {
-    p: i128,
-    q: i128,
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Rat(Repr);
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Repr {
+    Small { p: i128, q: i128 },
+    Big(Arc<BigParts>),
+}
+
+/// The big form's components: reduced, `q > 0`, at least one of them outside the small form,
+/// both within `CAP_BITS`.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BigParts {
+    p: BigInt,
+    q: BigInt,
+}
+
+impl fmt::Debug for Rat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (p, q) = self.big_parts();
+        write!(f, "Rat {{ p: {p}, q: {q} }}")
+    }
 }
 
 fn gcd(mut a: i128, mut b: i128) -> i128 {
@@ -24,6 +67,11 @@ fn gcd(mut a: i128, mut b: i128) -> i128 {
         (a, b) = (b, a % b);
     }
     a.abs()
+}
+
+/// `x` as a small-form component (`i128`, never `i128::MIN`).
+fn small_of(x: &BigInt) -> Option<i128> {
+    x.to_i128().filter(|&v| v != i128::MIN)
 }
 
 /// Exact 128x128 -> 256-bit unsigned multiplication by the schoolbook double-word method:
@@ -48,9 +96,15 @@ fn widening_mul_u128(a: u128, b: u128) -> (u128, u128) {
 }
 
 impl Rat {
-    pub const ZERO: Rat = Rat { p: 0, q: 1 };
-    pub const ONE: Rat = Rat { p: 1, q: 1 };
-    pub const NEG_ONE: Rat = Rat { p: -1, q: 1 };
+    pub const ZERO: Rat = Rat(Repr::Small { p: 0, q: 1 });
+    pub const ONE: Rat = Rat(Repr::Small { p: 1, q: 1 });
+    pub const NEG_ONE: Rat = Rat(Repr::Small { p: -1, q: 1 });
+
+    /// The small form, trusted: `q > 0`, reduced, neither component `i128::MIN`.
+    #[inline]
+    const fn small(p: i128, q: i128) -> Rat {
+        Rat(Repr::Small { p, q })
+    }
 
     /// Build `p/q` normalized. `None` if `q == 0` (not a rational) or normalization overflows
     /// (`p == i128::MIN` cannot be negated).
@@ -65,103 +119,240 @@ impl Rat {
         };
         let g = gcd(p, q);
         // g == 0 only when p == 0 and q == 0; q != 0 here, so g >= 1.
-        Some(Rat { p: p / g, q: q / g })
+        Some(Rat::small(p / g, q / g))
+    }
+
+    /// Build `p/q` from big integers, normalized and in the small form whenever it fits.
+    /// `None` if `q == 0` or a reduced component exceeds `CAP_BITS`.
+    pub fn from_big(p: BigInt, q: BigInt) -> Option<Rat> {
+        if q.is_zero() {
+            return None;
+        }
+        let (p, q) = if q.is_negative() { (-p, -q) } else { (p, q) };
+        let g = p.gcd(&q);
+        let (p, q) = if g.is_one() || g.is_zero() {
+            (p, q)
+        } else {
+            (p / &g, q / &g)
+        };
+        if let (Some(ps), Some(qs)) = (small_of(&p), small_of(&q)) {
+            return Some(Rat::small(ps, qs));
+        }
+        if p.bits() > CAP_BITS || q.bits() > CAP_BITS {
+            return None;
+        }
+        Some(Rat(Repr::Big(Arc::new(BigParts { p, q }))))
     }
 
     pub fn int(n: i128) -> Rat {
-        // "No Rat ever holds i128::MIN" is a LOAD-BEARING invariant (MIN cannot be negated
-        // or abs'd; release builds have no overflow checks, so a violation would WRAP
+        // "No small Rat ever holds i128::MIN" is a LOAD-BEARING invariant (MIN cannot be
+        // negated or abs'd; release builds have no overflow checks, so a violation would WRAP
         // silently downstream). `Rat::new` refuses MIN; this bypass constructor must too,
         // loudly. Every real caller passes bounded values.
         assert!(
             n != i128::MIN,
             "Rat cannot represent i128::MIN (unnegatable)"
         );
-        Rat { p: n, q: 1 }
+        Rat::small(n, 1)
     }
 
+    /// The components in the small form, or `None` for a big number. For code with a 128-bit
+    /// fast path; a caller must not read `None` as "not an integer" or "not a number".
     #[inline]
-    pub fn num(&self) -> i128 {
-        self.p
+    pub fn small_parts(&self) -> Option<(i128, i128)> {
+        match &self.0 {
+            Repr::Small { p, q } => Some((*p, *q)),
+            Repr::Big(_) => None,
+        }
     }
 
-    #[inline]
-    pub fn den(&self) -> i128 {
-        self.q
+    /// The numerator as an integer.
+    pub fn numer(&self) -> Rat {
+        match &self.0 {
+            Repr::Small { p, .. } => Rat::small(*p, 1),
+            Repr::Big(b) => Rat::from_big(b.p.clone(), BigInt::one())
+                .expect("a reduced component of a capped number is within the cap"),
+        }
+    }
+
+    /// The denominator as a (positive) integer.
+    pub fn denom(&self) -> Rat {
+        match &self.0 {
+            Repr::Small { q, .. } => Rat::small(*q, 1),
+            Repr::Big(b) => Rat::from_big(b.q.clone(), BigInt::one())
+                .expect("a reduced component of a capped number is within the cap"),
+        }
+    }
+
+    /// The numerator's decimal digits (with a leading `-` when negative).
+    pub fn numer_string(&self) -> String {
+        match &self.0 {
+            Repr::Small { p, .. } => p.to_string(),
+            Repr::Big(b) => b.p.to_string(),
+        }
+    }
+
+    /// The denominator's decimal digits.
+    pub fn denom_string(&self) -> String {
+        match &self.0 {
+            Repr::Small { q, .. } => q.to_string(),
+            Repr::Big(b) => b.q.to_string(),
+        }
+    }
+
+    /// The components as big integers (allocates for the small form).
+    pub fn big_parts(&self) -> (BigInt, BigInt) {
+        match &self.0 {
+            Repr::Small { p, q } => (BigInt::from(*p), BigInt::from(*q)),
+            Repr::Big(b) => (b.p.clone(), b.q.clone()),
+        }
     }
 
     #[inline]
     pub fn is_zero(&self) -> bool {
-        self.p == 0
+        matches!(self.0, Repr::Small { p: 0, .. })
     }
 
     #[inline]
     pub fn is_one(&self) -> bool {
-        self.p == 1 && self.q == 1
+        matches!(self.0, Repr::Small { p: 1, q: 1 })
     }
 
     #[inline]
     pub fn is_integer(&self) -> bool {
-        self.q == 1
+        match &self.0 {
+            Repr::Small { q, .. } => *q == 1,
+            Repr::Big(b) => b.q.is_one(),
+        }
     }
 
-    /// The integer value, if this is an integer.
     #[inline]
+    pub fn is_negative(&self) -> bool {
+        match &self.0 {
+            Repr::Small { p, .. } => *p < 0,
+            Repr::Big(b) => b.p.is_negative(),
+        }
+    }
+
+    /// -1, 0 or 1.
+    #[inline]
+    pub fn signum(&self) -> i32 {
+        match &self.0 {
+            Repr::Small { p, .. } => p.signum() as i32,
+            Repr::Big(b) => match b.p.sign() {
+                Sign::Minus => -1,
+                Sign::NoSign => 0,
+                Sign::Plus => 1,
+            },
+        }
+    }
+
+    /// An odd integer (of any size).
+    pub fn is_odd_integer(&self) -> bool {
+        match &self.0 {
+            Repr::Small { p, q } => *q == 1 && p % 2 != 0,
+            Repr::Big(b) => b.q.is_one() && b.p.is_odd(),
+        }
+    }
+
+    /// An even integer (of any size); zero is even.
+    pub fn is_even_integer(&self) -> bool {
+        match &self.0 {
+            Repr::Small { p, q } => *q == 1 && p % 2 == 0,
+            Repr::Big(b) => b.q.is_one() && b.p.is_even(),
+        }
+    }
+
+    /// The integer value if this is an integer in the small form. For counts, indices and
+    /// loop bounds only: a big integer gives `None`, so a caller asking "is this an integer?",
+    /// "is it odd?" or "is it negative?" must use `is_integer`, `is_odd_integer`,
+    /// `is_even_integer` or `signum` instead (map §2.4: reading `None` as "not an integer"
+    /// is unsound at four sites once integers exceed 128 bits).
+    #[inline]
+    pub fn small_int(&self) -> Option<i128> {
+        match &self.0 {
+            Repr::Small { p, q: 1 } => Some(*p),
+            _ => None,
+        }
+    }
+
+    /// `self` compared with the integer `n`, exactly.
+    pub fn cmp_int(&self, n: i128) -> Ordering {
+        self.cmp_exact(&Rat::int(n))
+    }
+
     /// `ceil(|p/q|)` exactly, in integers -- `None` on overflow. Used by the inverse-pair
     /// band guard, which needs a magnitude comparison and must not acquire an f64 reading
     /// (f64 has authority nowhere in the engine; see `to_f64`).
     pub(crate) fn ceil_abs(&self) -> Option<i128> {
-        let p = self.p.checked_abs()?;
-        let q = self.q.abs();
+        let (p, q) = self.small_parts()?;
+        let p = p.checked_abs()?;
+        let q = q.abs();
         if q == 0 {
             return None;
         }
         p.checked_add(q - 1).map(|n| n / q)
     }
 
-    pub fn as_integer(&self) -> Option<i128> {
-        if self.q == 1 {
-            Some(self.p)
-        } else {
-            None
+    /// `floor(|p/q|)`, saturated at `i128::MAX` (still a valid lower bound on `|self|`).
+    pub(crate) fn floor_abs_saturating(&self) -> i128 {
+        match &self.0 {
+            Repr::Small { p, q } => (p.unsigned_abs() / (*q as u128)) as i128,
+            Repr::Big(b) => (b.p.abs() / &b.q).to_i128().unwrap_or(i128::MAX),
         }
     }
 
-    #[inline]
-    pub fn is_negative(&self) -> bool {
-        self.p < 0
-    }
-
     pub fn checked_add(&self, o: &Rat) -> Option<Rat> {
-        // p1/q1 + p2/q2 = (p1*q2 + p2*q1) / (q1*q2), then normalize.
-        let a = self.p.checked_mul(o.q)?;
-        let b = o.p.checked_mul(self.q)?;
-        Rat::new(a.checked_add(b)?, self.q.checked_mul(o.q)?)
+        if let (Some((p1, q1)), Some((p2, q2))) = (self.small_parts(), o.small_parts()) {
+            // p1/q1 + p2/q2 = (p1*q2 + p2*q1) / (q1*q2), then normalize.
+            let small = (|| {
+                let a = p1.checked_mul(q2)?;
+                let b = p2.checked_mul(q1)?;
+                Rat::new(a.checked_add(b)?, q1.checked_mul(q2)?)
+            })();
+            if small.is_some() || !WIDE_RESULTS {
+                return small;
+            }
+        }
+        let ((p1, q1), (p2, q2)) = (self.big_parts(), o.big_parts());
+        Rat::from_big(&p1 * &q2 + &p2 * &q1, q1 * q2)
     }
 
     pub fn checked_mul(&self, o: &Rat) -> Option<Rat> {
-        // Cross-reduce first so intermediates stay small: (p1/q2')·(p2/q1').
-        let g1 = gcd(self.p, o.q).max(1);
-        let g2 = gcd(o.p, self.q).max(1);
-        let p = (self.p / g1).checked_mul(o.p / g2)?;
-        let q = (self.q / g2).checked_mul(o.q / g1)?;
-        Rat::new(p, q)
+        if let (Some((p1, q1)), Some((p2, q2))) = (self.small_parts(), o.small_parts()) {
+            // Cross-reduce first so intermediates stay small: (p1/q2')·(p2/q1').
+            let small = (|| {
+                let g1 = gcd(p1, q2).max(1);
+                let g2 = gcd(p2, q1).max(1);
+                let p = (p1 / g1).checked_mul(p2 / g2)?;
+                let q = (q1 / g2).checked_mul(q2 / g1)?;
+                Rat::new(p, q)
+            })();
+            if small.is_some() || !WIDE_RESULTS {
+                return small;
+            }
+        }
+        let ((p1, q1), (p2, q2)) = (self.big_parts(), o.big_parts());
+        Rat::from_big(p1 * p2, q1 * q2)
     }
 
     pub fn checked_neg(&self) -> Option<Rat> {
-        Some(Rat {
-            p: self.p.checked_neg()?,
-            q: self.q,
-        })
+        match &self.0 {
+            Repr::Small { p, q } => Some(Rat::small(p.checked_neg()?, *q)),
+            Repr::Big(b) => Rat::from_big(-b.p.clone(), b.q.clone()),
+        }
     }
 
     /// Multiplicative inverse. `None` for zero (1/0 is not a rational -- the caller keeps the
     /// symbolic `Pow(0, -1)` for the rules/value-set machinery to judge).
     pub fn checked_inv(&self) -> Option<Rat> {
-        if self.p == 0 {
+        if self.is_zero() {
             return None;
         }
-        Rat::new(self.q, self.p)
+        match &self.0 {
+            Repr::Small { p, q } => Rat::new(*q, *p),
+            Repr::Big(b) => Rat::from_big(b.q.clone(), b.p.clone()),
+        }
     }
 
     /// `self^n` for an integer exponent. `None` on overflow or `0^negative`.
@@ -171,41 +362,124 @@ impl Rat {
         if n == 0 {
             return Some(Rat::ONE);
         }
-        if self.p == 0 {
+        if self.is_zero() {
             return if n > 0 { Some(Rat::ZERO) } else { None };
         }
         let (base, n) = if n < 0 {
             (self.checked_inv()?, n.checked_neg()?)
         } else {
-            (*self, n)
+            (self.clone(), n)
         };
-        // Exponentiation by squaring, checked throughout. Cap the exponent so a pathological
-        // `pow(x, 10^30)` never spins here -- i128 overflow would refuse it anyway for any
-        // |base| != 1, and |base| == 1 is handled exactly.
-        if base.p.abs() == 1 && base.q == 1 {
-            // (+-1)^n: exact for ANY exponent magnitude.
-            return Some(if base.p == 1 || n % 2 == 0 {
+        // (+-1)^n: exact for ANY exponent magnitude.
+        if base == Rat::ONE || base == Rat::NEG_ONE {
+            return Some(if base == Rat::ONE || n % 2 == 0 {
                 Rat::ONE
             } else {
                 Rat::NEG_ONE
             });
         }
-        if n > 512 {
+        if base.small_parts().is_some() {
+            // Exponentiation by squaring, checked throughout. Cap the exponent so a
+            // pathological `pow(x, 10^30)` never spins here -- i128 overflow would refuse it
+            // anyway for any |base| != 1, and |base| == 1 is handled exactly.
+            let small = (|| {
+                if n > 512 {
+                    return None;
+                }
+                let mut acc = Rat::ONE;
+                let mut b = base.clone();
+                let mut e = n;
+                while e > 0 {
+                    if e & 1 == 1 {
+                        acc = acc
+                            .checked_mul(&b)?
+                            .small_parts()
+                            .map(|(p, q)| Rat::small(p, q))?;
+                    }
+                    e >>= 1;
+                    if e > 0 {
+                        b = b
+                            .checked_mul(&b)?
+                            .small_parts()
+                            .map(|(p, q)| Rat::small(p, q))?;
+                    }
+                }
+                Some(acc)
+            })();
+            if small.is_some() || !WIDE_RESULTS {
+                return small;
+            }
+        }
+        // The big form: the result is exactly p^n / q^n (a reduced fraction stays reduced), so
+        // its size is known before computing. With b bits, p^n has between n(b-1)+1 and nb bits;
+        // refuse once the lower bound leaves the cap.
+        let (p, q) = base.big_parts();
+        let n_u = u64::try_from(n).ok()?;
+        for x in [&p, &q] {
+            let b = x.bits();
+            if b > 1 && n_u.checked_mul(b - 1).is_none_or(|lo| lo + 1 > CAP_BITS) {
+                return None;
+            }
+        }
+        let n32 = u32::try_from(n_u).ok()?;
+        Rat::from_big(
+            num_traits::pow(p, n32 as usize),
+            num_traits::pow(q, n32 as usize),
+        )
+    }
+
+    /// `self^n` for an integer `n` of any size; `None` unless `n` is an integer or when the
+    /// result is not representable. Beyond `i128` only 0, 1 and -1 have a power within the
+    /// cap.
+    pub fn checked_pow_integer(&self, n: &Rat) -> Option<Rat> {
+        if !n.is_integer() {
             return None;
         }
-        let mut acc = Rat::ONE;
-        let mut b = base;
-        let mut e = n;
-        while e > 0 {
-            if e & 1 == 1 {
-                acc = acc.checked_mul(&b)?;
-            }
-            e >>= 1;
-            if e > 0 {
-                b = b.checked_mul(&b)?;
-            }
+        if let Some(k) = n.small_int() {
+            return self.checked_pow_int(k);
         }
-        Some(acc)
+        if self.is_zero() {
+            return (!n.is_negative()).then_some(Rat::ZERO);
+        }
+        if *self == Rat::ONE {
+            return Some(Rat::ONE);
+        }
+        if *self == Rat::NEG_ONE {
+            return Some(if n.is_even_integer() {
+                Rat::ONE
+            } else {
+                Rat::NEG_ONE
+            });
+        }
+        None
+    }
+
+    /// The exact `k`-th root for a positive integer `k` of any size (see `checked_root`).
+    /// Beyond `i128` only 0, 1 and (at an odd index) -1 have a rational root: every other
+    /// root would need a component beyond the cap.
+    pub fn checked_root_integer(&self, k: &Rat) -> Option<Rat> {
+        if !k.is_integer() {
+            return None;
+        }
+        if let Some(k) = k.small_int() {
+            return self.checked_root(k);
+        }
+        if k.is_negative() {
+            return None;
+        }
+        if *self == Rat::NEG_ONE {
+            return k.is_odd_integer().then_some(Rat::NEG_ONE);
+        }
+        (self.is_zero() || self.is_one()).then(|| self.clone())
+    }
+
+    /// `|self|`.
+    pub fn abs(&self) -> Rat {
+        if self.is_negative() {
+            self.checked_neg().expect("a negation stays representable")
+        } else {
+            self.clone()
+        }
     }
 
     /// Exact k-th root, if it exists as a rational: `self == r^k` with matching sign rules
@@ -215,15 +489,28 @@ impl Rat {
             return None;
         }
         if k == 1 {
-            return Some(*self);
+            return Some(self.clone());
         }
-        if self.p < 0 && k % 2 == 0 {
+        if self.is_negative() && k % 2 == 0 {
             return None;
         }
-        let sign: i128 = if self.p < 0 { -1 } else { 1 };
-        let rp = int_root(self.p.checked_abs()?, k)?;
-        let rq = int_root(self.q, k)?;
-        Rat::new(sign * rp, rq)
+        if let Some((p, q)) = self.small_parts() {
+            let sign: i128 = if p < 0 { -1 } else { 1 };
+            let rp = int_root(p.checked_abs()?, k)?;
+            let rq = int_root(q, k)?;
+            return Rat::new(sign * rp, rq);
+        }
+        // A root of a big number: every root index beyond the cap has no integer root but 0/1.
+        let k32 = u32::try_from(k)
+            .ok()
+            .filter(|&k| u64::from(k) <= CAP_BITS)?;
+        let (p, q) = self.big_parts();
+        let root = |x: &BigInt| -> Option<BigInt> {
+            let r = x.abs().nth_root(k32);
+            (num_traits::pow(r.clone(), k32 as usize) == x.abs()).then_some(r)
+        };
+        let (rp, rq) = (root(&p)?, root(&q)?);
+        Rat::from_big(if p.is_negative() { -rp } else { rp }, rq)
     }
 
     /// Compare exactly (no float detour): `p1/q1 <=> p2/q2` == `p1*q2 <=> p2*q1` with q > 0.
@@ -232,11 +519,15 @@ impl Rat {
     /// broke totality -- Equal on 6.6% and inverted 0.35% of adjacent sub-1e-18 literal
     /// pairs -- and the canonical sort's totality is load-bearing even though ordering is
     /// a CANONICALIZATION concern, not a soundness one; see `expr.rs` on why order never
-    /// changes denotation).
+    /// changes denotation). A big operand compares by big cross-products.
     pub fn cmp_exact(&self, o: &Rat) -> Ordering {
+        let (Some((p1, q1)), Some((p2, q2))) = (self.small_parts(), o.small_parts()) else {
+            let ((p1, q1), (p2, q2)) = (self.big_parts(), o.big_parts());
+            return (p1 * q2).cmp(&(p2 * q1));
+        };
         // Fast path: both cross-products fit in i128 (every common magnitude). This is
         // byte-identical to the historical exact path, so the hot path costs nothing new.
-        if let (Some(a), Some(b)) = (self.p.checked_mul(o.q), o.p.checked_mul(self.q)) {
+        if let (Some(a), Some(b)) = (p1.checked_mul(q2), p2.checked_mul(q1)) {
             return a.cmp(&b);
         }
         // EXACT wide path: an f64 estimate is not monotone in the true rational order at
@@ -244,12 +535,12 @@ impl Rat {
         // the sort's totality check panics on any cycle -- so the cross-products are
         // computed exactly in 256 bits. Signs first: q > 0 is a Rat invariant, so
         // sign(p1*q2) = sign(p1).
-        let (s1, s2) = (self.p.signum(), o.p.signum());
+        let (s1, s2) = (p1.signum(), p2.signum());
         if s1 != s2 {
             return s1.cmp(&s2);
         }
-        let a = widening_mul_u128(self.p.unsigned_abs(), self.q_u128_of(o));
-        let b = widening_mul_u128(o.p.unsigned_abs(), o.q_u128_of(self));
+        let a = widening_mul_u128(p1.unsigned_abs(), q2 as u128);
+        let b = widening_mul_u128(p2.unsigned_abs(), q1 as u128);
         let mag = a.cmp(&b); // (hi, lo) tuples compare lexicographically -- exact
         if s1 < 0 {
             mag.reverse()
@@ -258,23 +549,18 @@ impl Rat {
         }
     }
 
-    /// The OTHER operand's denominator as u128 (q > 0 by invariant). A helper so the two
-    /// cross-products in `cmp_exact` read symmetrically.
-    #[inline]
-    fn q_u128_of(&self, o: &Rat) -> u128 {
-        debug_assert!(o.q > 0);
-        o.q as u128
-    }
-
     /// The f64 reading of this rational.
     ///
     /// This used to be `#[cfg(test)]`, carrying the note "f64 has authority nowhere in
     /// the engine". That was true of a single-mode engine and is exactly the sentence the
     /// mode split overturns: in `Mode.f64` the deployed f64 evaluator IS the authority,
     /// so the constructor must be able to ask it. `Mode.real` still never calls this --
-    /// there, f64 has authority nowhere, as before.
-    pub fn to_f64(self) -> f64 {
-        self.p as f64 / self.q as f64
+    /// there, f64 has authority nowhere, as before. A big number reads as its nearest f64.
+    pub fn to_f64(&self) -> f64 {
+        match &self.0 {
+            Repr::Small { p, q } => *p as f64 / *q as f64,
+            Repr::Big(b) => big_ratio_to_f64(&b.p, &b.q),
+        }
     }
 
     /// The f64 NEAREST to this value. `to_f64` rounds each component to f64 before the
@@ -282,8 +568,9 @@ impl Rat {
     /// literal fold's inputs routinely do: `2e29 / 426738538271436458205631863649`); here
     /// that candidate is walked to the correctly rounded neighbour by EXACT midpoint tests
     /// (`cmp_dyadic`), so the fold really lands on the nearest float -- the value
-    /// `float(Fraction(p, q))` produces -- at every magnitude a `Rat` can have.
-    pub fn to_f64_nearest(self) -> f64 {
+    /// `float(Fraction(p, q))` produces -- at every magnitude. A big number is rounded
+    /// directly from its components.
+    pub fn to_f64_nearest(&self) -> f64 {
         self.nearest_walk().0
     }
 
@@ -292,7 +579,7 @@ impl Rat {
     /// interval kernel's one-ulp leaf bracket) need the certificate. Every midpoint test is
     /// exact, so this fails only if the walk does not settle within its step budget, which
     /// `to_f64`'s candidate (within a few ulps) never needs.
-    pub fn to_f64_nearest_certified(self) -> Option<f64> {
+    pub fn to_f64_nearest_certified(&self) -> Option<f64> {
         match self.nearest_walk() {
             (y, true) => Some(y),
             (_, false) => None,
@@ -300,19 +587,24 @@ impl Rat {
     }
 
     /// The midpoint walk behind both readers: `(candidate, certified)`.
-    fn nearest_walk(self) -> (f64, bool) {
+    fn nearest_walk(&self) -> (f64, bool) {
+        let Some((p, q)) = self.small_parts() else {
+            let (p, q) = self.big_parts();
+            let y = big_ratio_to_f64(&p, &q);
+            return (y, y.is_finite());
+        };
         let mut y = self.to_f64();
         if !y.is_finite() {
             return (y, false);
         }
         for _ in 0..8 {
             let up = next_up(y);
-            if self.cmp_dyadic(dyadic_midpoint(y, up)) == Ordering::Greater {
+            if cmp_dyadic(p, q, dyadic_midpoint(y, up)) == Ordering::Greater {
                 y = up;
                 continue;
             }
             let down = next_down(y);
-            if self.cmp_dyadic(dyadic_midpoint(down, y)) == Ordering::Less {
+            if cmp_dyadic(p, q, dyadic_midpoint(down, y)) == Ordering::Less {
                 y = down;
                 continue;
             }
@@ -321,47 +613,20 @@ impl Rat {
         (y, false)
     }
 
-    /// Compare exactly against the dyadic `s * 2^k`. A midpoint between two doubles near
-    /// this value can need a denominator far beyond `i128` (2^1075 at the subnormal floor),
-    /// so it is never built as a `Rat` -- that overflowed below about 2^-11 and left the walk
-    /// uncertified. Instead `p` vs `s * q * 2^k` is decided in 256 bits: `s * q` is below
-    /// 2^182 and `p` below 2^127, and a shift that leaves 256 bits makes its side the larger
-    /// one outright.
-    fn cmp_dyadic(&self, (s, k): (i128, i32)) -> Ordering {
-        let (sp, ss) = (self.p.signum(), s.signum());
-        if sp != ss {
-            return sp.cmp(&ss);
-        }
-        if sp == 0 {
-            return Ordering::Equal;
-        }
-        let left = shl_256((0, self.p.unsigned_abs()), (-k).max(0) as u32);
-        let right = shl_256(
-            widening_mul_u128(s.unsigned_abs(), self.q as u128),
-            k.max(0) as u32,
-        );
-        let mag = match (left, right) {
-            (Some(a), Some(b)) => a.cmp(&b),
-            (None, _) => Ordering::Greater, // only one side is ever shifted
-            (_, None) => Ordering::Less,
-        };
-        if sp < 0 {
-            mag.reverse()
-        } else {
-            mag
-        }
-    }
-
     /// The shortest exact decimal string, if one exists (`q == 2^a * 5^b`): `1/2 -> "0.5"`,
     /// `-7/4 -> "-1.75"`, `3 -> "3"`. `None` for e.g. `1/3` (the serializer then spells the
     /// division structurally). Exactness is by construction: multiply p by 2s and 5s until the
     /// denominator is a power of ten, then place the decimal point.
     pub fn exact_decimal(&self) -> Option<String> {
-        if self.q == 1 {
-            return Some(self.p.to_string());
+        let Some((p, q)) = self.small_parts() else {
+            let (p, q) = self.big_parts();
+            return big_exact_decimal(&p, &q);
+        };
+        if q == 1 {
+            return Some(p.to_string());
         }
         let (mut a, mut b) = (0u32, 0u32);
-        let mut rest = self.q;
+        let mut rest = q;
         while rest % 2 == 0 {
             rest /= 2;
             a += 1;
@@ -375,27 +640,24 @@ impl Rat {
         }
         // Scale numerator so denominator becomes 10^k with k = max(a, b).
         let k = a.max(b);
-        let mut scaled = self.p.checked_abs()?;
-        for _ in 0..(k - a) {
-            scaled = scaled.checked_mul(2)?;
-        }
-        for _ in 0..(k - b) {
-            scaled = scaled.checked_mul(5)?;
-        }
-        let digits = scaled.to_string();
-        let k = k as usize;
-        let (int_part, frac_part) = if digits.len() > k {
-            (
-                digits[..digits.len() - k].to_string(),
-                digits[digits.len() - k..].to_string(),
-            )
-        } else {
-            ("0".to_string(), format!("{:0>width$}", digits, width = k))
+        let scaled = (|| {
+            let mut scaled = p.checked_abs()?;
+            for _ in 0..(k - a) {
+                scaled = scaled.checked_mul(2)?;
+            }
+            for _ in 0..(k - b) {
+                scaled = scaled.checked_mul(5)?;
+            }
+            Some(scaled)
+        })();
+        let Some(scaled) = scaled else {
+            return if WIDE_RESULTS {
+                big_exact_decimal(&BigInt::from(p), &BigInt::from(q))
+            } else {
+                None
+            };
         };
-        // q != 1 guarantees a nonzero fractional part (p/q is normalized), no trailing-zero trim
-        // needed: 10^k is the MINIMAL power (k = max(a,b)), so the last digit is nonzero.
-        let sign = if self.p < 0 { "-" } else { "" };
-        Some(format!("{sign}{int_part}.{frac_part}"))
+        Some(place_point(p < 0, scaled.to_string(), k as usize))
     }
 
     /// Parse a decimal token EXACTLY: `"7" -> 7`, `"-1.75" -> -7/4`, `"0.2" -> 1/5`,
@@ -428,53 +690,235 @@ impl Rat {
         {
             return None;
         }
-        let mut p: i128 = 0;
-        for c in int_part.chars().chain(frac_part.chars()) {
-            p = p.checked_mul(10)?.checked_add((c as u8 - b'0') as i128)?;
-        }
-        p = p.checked_mul(sign)?;
-        // Zero mantissa: bail BEFORE the scaling loops. The positive-exponent loop relies
-        // on checked_mul OVERFLOW to bound absurd exponents, and 0 * 10 never overflows,
-        // so "0e2147483647" would otherwise spin the full exponent count.
-        if p == 0 {
-            return Some(Rat::ZERO);
-        }
         let shift = exp as i64 - frac_part.len() as i64;
-        let mut q: i128 = 1;
-        if shift >= 0 {
-            for _ in 0..shift {
-                p = p.checked_mul(10)?;
-            }
-        } else {
-            // p / 10^k with q = 10^k materialized NAIVELY overflows i128 at k = 39 even
-            // when the REDUCED fraction fits: the engine's own exact-decimal emitter
-            // writes e.g. (1/4)^25 = 1/2^50 as a 50-digit decimal (p = 5^50, 35 digits,
-            // fits), and refusing to read it back demoted the exact rational to an opaque
-            // overlay leaf -- which sorts by mint order, so bag order changed across
-            // calls (the 1M-gate idempotence pair 274133/514869). Cancel the common 2s
-            // and 5s from p against the exponent FIRST; only a fraction whose reduced
-            // denominator genuinely exceeds i128 still falls back.
-            let k = -shift;
-            let mut a = k; // remaining factor-2 exponent of the denominator
-            let mut b = k; // remaining factor-5 exponent of the denominator
-            while a > 0 && p != 0 && p % 2 == 0 {
-                p /= 2;
-                a -= 1;
-            }
-            while b > 0 && p != 0 && p % 5 == 0 {
-                p /= 5;
-                b -= 1;
-            }
-            // p != 0 here: the zero mantissa bailed before the branch, and exact division
-            // of a nonzero p by 2 or 5 cannot reach zero.
-            for _ in 0..a {
-                q = q.checked_mul(2)?;
-            }
-            for _ in 0..b {
-                q = q.checked_mul(5)?;
-            }
+        let small = parse_decimal_small(sign, int_part, frac_part, shift);
+        if small.is_some() || !WIDE_RESULTS {
+            return small;
         }
-        Rat::new(p, q)
+        parse_decimal_big(sign < 0, int_part, frac_part, shift)
+    }
+}
+
+/// `parse_decimal` in the small form: `None` once a component leaves `i128`.
+fn parse_decimal_small(sign: i128, int_part: &str, frac_part: &str, shift: i64) -> Option<Rat> {
+    let mut p: i128 = 0;
+    for c in int_part.chars().chain(frac_part.chars()) {
+        p = p.checked_mul(10)?.checked_add((c as u8 - b'0') as i128)?;
+    }
+    p = p.checked_mul(sign)?;
+    // Zero mantissa: bail BEFORE the scaling loops. The positive-exponent loop relies
+    // on checked_mul OVERFLOW to bound absurd exponents, and 0 * 10 never overflows,
+    // so "0e2147483647" would otherwise spin the full exponent count.
+    if p == 0 {
+        return Some(Rat::ZERO);
+    }
+    let mut q: i128 = 1;
+    if shift >= 0 {
+        for _ in 0..shift {
+            p = p.checked_mul(10)?;
+        }
+    } else {
+        // p / 10^k with q = 10^k materialized NAIVELY overflows i128 at k = 39 even
+        // when the REDUCED fraction fits: the engine's own exact-decimal emitter
+        // writes e.g. (1/4)^25 = 1/2^50 as a 50-digit decimal (p = 5^50, 35 digits,
+        // fits), and refusing to read it back demoted the exact rational to an opaque
+        // overlay leaf, which sorts as a key factor among the variables instead of as
+        // the stripped coefficient, so bag order changed across calls (the 1M-gate
+        // idempotence pair 274133/514869). Cancel the common 2s and 5s from p against
+        // the exponent FIRST; only a fraction whose reduced denominator genuinely
+        // exceeds i128 still falls back.
+        let k = -shift;
+        let mut a = k; // remaining factor-2 exponent of the denominator
+        let mut b = k; // remaining factor-5 exponent of the denominator
+        while a > 0 && p != 0 && p % 2 == 0 {
+            p /= 2;
+            a -= 1;
+        }
+        while b > 0 && p != 0 && p % 5 == 0 {
+            p /= 5;
+            b -= 1;
+        }
+        // p != 0 here: the zero mantissa bailed before the branch, and exact division
+        // of a nonzero p by 2 or 5 cannot reach zero.
+        for _ in 0..a {
+            q = q.checked_mul(2)?;
+        }
+        for _ in 0..b {
+            q = q.checked_mul(5)?;
+        }
+    }
+    Rat::new(p, q)
+}
+
+/// `parse_decimal` in the big form. The size is bounded from the digit count and the exponent
+/// BEFORE anything is built, so `1e2147483647` and a million-digit mantissa refuse at once.
+///
+/// Bounds (after stripping leading and trailing zeros, so the mantissa `m` has no factor 10):
+/// - a value within the cap has at most 1,101 significant digits (`m = N * 2^(K-x) * 5^(K-y)`
+///   with `N` and the denominator `2^x * 5^y` within 1,100 bits), so more digits refuse;
+/// - `m * 10^s` for `s >= 0` has more than `3 * (digits - 1 + s)` bits;
+/// - `m / 10^s` keeps a denominator of at least `2^s` (only 2s or only 5s can cancel).
+fn parse_decimal_big(negative: bool, int_part: &str, frac_part: &str, shift: i64) -> Option<Rat> {
+    let digits: String = int_part.chars().chain(frac_part.chars()).collect();
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some(Rat::ZERO);
+    }
+    let trimmed = digits.trim_end_matches('0');
+    let shift = shift.checked_add((digits.len() - trimmed.len()) as i64)?;
+    let n = trimmed.len() as i64;
+    if n > 1_200
+        || (shift >= 0 && 3 * (n - 1 + shift) > CAP_BITS as i64)
+        || (shift < 0 && -shift > CAP_BITS as i64)
+    {
+        return None;
+    }
+    let m: BigInt = trimmed.parse().ok()?;
+    let m = if negative { -m } else { m };
+    let ten = BigInt::from(10);
+    if shift >= 0 {
+        Rat::from_big(m * num_traits::pow(ten, shift as usize), BigInt::one())
+    } else {
+        Rat::from_big(m, num_traits::pow(ten, (-shift) as usize))
+    }
+}
+
+/// `digits` (an unsigned integer string) divided by 10^k, as a positional decimal.
+fn place_point(negative: bool, digits: String, k: usize) -> String {
+    let (int_part, frac_part) = if digits.len() > k {
+        (
+            digits[..digits.len() - k].to_string(),
+            digits[digits.len() - k..].to_string(),
+        )
+    } else {
+        ("0".to_string(), format!("{:0>width$}", digits, width = k))
+    };
+    // A normalized fraction with q != 1 has a nonzero fractional part, and 10^k is the
+    // MINIMAL power (k = max(a,b)), so the last digit is nonzero: no trailing-zero trim.
+    let sign = if negative { "-" } else { "" };
+    if k == 0 {
+        format!("{sign}{int_part}")
+    } else {
+        format!("{sign}{int_part}.{frac_part}")
+    }
+}
+
+/// `exact_decimal` for big components.
+fn big_exact_decimal(p: &BigInt, q: &BigInt) -> Option<String> {
+    if q.is_one() {
+        return Some(p.to_string());
+    }
+    let a = q.trailing_zeros().unwrap_or(0);
+    let mut rest: BigInt = q >> a;
+    let five = BigInt::from(5);
+    let mut b = 0u64;
+    while (&rest % &five).is_zero() {
+        rest /= &five;
+        b += 1;
+    }
+    if !rest.is_one() {
+        return None;
+    }
+    let k = a.max(b);
+    let scaled = p.abs()
+        * num_traits::pow(BigInt::from(2), (k - a) as usize)
+        * num_traits::pow(five, (k - b) as usize);
+    Some(place_point(p.is_negative(), scaled.to_string(), k as usize))
+}
+
+/// `p/q` (`q > 0`) correctly rounded to f64 (ties to even), with subnormals and overflow to
+/// +-inf: the value `float(Fraction(p, q))` gives, except that Python raises OverflowError
+/// where this returns +-inf.
+fn big_ratio_to_f64(p: &BigInt, q: &BigInt) -> f64 {
+    if p.is_zero() {
+        return 0.0;
+    }
+    let negative = p.is_negative();
+    let (a, b): (BigUint, BigUint) = (p.magnitude().clone(), q.magnitude().clone());
+    // a/b lies in (2^(e-1), 2^(e+1)) for e = bits(a) - bits(b). Scale so that the integer
+    // quotient has 55 or 56 bits: two guard bits beyond the 53-bit significand.
+    let e = a.bits() as i64 - b.bits() as i64;
+    let k = e - 55;
+    let (num, den) = if k >= 0 {
+        (a, b << k as u64)
+    } else {
+        (a << (-k) as u64, b)
+    };
+    let (quot, rem) = num.div_rem(&den);
+    let sticky = !rem.is_zero();
+    let nb = quot.bits() as i64;
+    // Keep 53 bits for a normal result; fewer when the least significant bit would fall
+    // below 2^-1074, the subnormal floor.
+    let drop = (nb - 53).max(-1074 - k).max(0);
+    let mut m = (&quot >> drop as u64).to_u64().unwrap_or(u64::MAX);
+    if drop > 0 {
+        let half = BigUint::one() << (drop - 1) as u64;
+        let low = &quot & ((BigUint::one() << drop as u64) - 1u32);
+        let up = match low.cmp(&half) {
+            Ordering::Greater => true,
+            Ordering::Equal => sticky || m & 1 == 1,
+            Ordering::Less => false,
+        };
+        if up {
+            m += 1;
+        }
+    }
+    let mut exp = k + drop; // value = m * 2^exp
+    if m == 1 << 53 {
+        m >>= 1;
+        exp += 1;
+    }
+    let bits = if m == 0 {
+        0
+    } else if m >= 1 << 52 {
+        let biased = exp + 52 + 1023;
+        if biased >= 2047 {
+            return if negative {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+        }
+        ((biased as u64) << 52) | (m - (1 << 52))
+    } else {
+        m // subnormal: exp == -1074 by construction
+    };
+    let y = f64::from_bits(bits);
+    if negative {
+        -y
+    } else {
+        y
+    }
+}
+
+/// Compare `p/q` exactly against the dyadic `s * 2^k`. A midpoint between two doubles near
+/// this value can need a denominator far beyond `i128` (2^1075 at the subnormal floor),
+/// so it is never built as a `Rat` -- that overflowed below about 2^-11 and left the walk
+/// uncertified. Instead `p` vs `s * q * 2^k` is decided in 256 bits: `s * q` is below
+/// 2^182 and `p` below 2^127, and a shift that leaves 256 bits makes its side the larger
+/// one outright.
+fn cmp_dyadic(p: i128, q: i128, (s, k): (i128, i32)) -> Ordering {
+    let (sp, ss) = (p.signum(), s.signum());
+    if sp != ss {
+        return sp.cmp(&ss);
+    }
+    if sp == 0 {
+        return Ordering::Equal;
+    }
+    let left = shl_256((0, p.unsigned_abs()), (-k).max(0) as u32);
+    let right = shl_256(
+        widening_mul_u128(s.unsigned_abs(), q as u128),
+        k.max(0) as u32,
+    );
+    let mag = match (left, right) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (None, _) => Ordering::Greater, // only one side is ever shifted
+        (_, None) => Ordering::Less,
+    };
+    if sp < 0 {
+        mag.reverse()
+    } else {
+        mag
     }
 }
 
@@ -569,8 +1013,11 @@ fn int_root(n: i128, k: i128) -> Option<i128> {
     }
     while lo <= hi {
         let mid = lo + (hi - lo) / 2;
-        match Rat::int(mid).checked_pow_int(k) {
-            Some(v) => match v.num().cmp(&n) {
+        match Rat::int(mid)
+            .checked_pow_int(k)
+            .and_then(|v| v.small_parts())
+        {
+            Some((v, _)) => match v.cmp(&n) {
                 Ordering::Equal => return Some(mid),
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid - 1,
@@ -661,19 +1108,15 @@ mod tests {
     }
 
     fn euclid_cmp(a: &Rat, b: &Rat) -> Ordering {
-        let (s1, s2) = (a.p.signum(), b.p.signum());
+        let ((ap, aq), (bp, bq)) = (a.small_parts().unwrap(), b.small_parts().unwrap());
+        let (s1, s2) = (ap.signum(), bp.signum());
         if s1 != s2 {
             return s1.cmp(&s2);
         }
         if s1 == 0 {
             return Ordering::Equal;
         }
-        let o = euclid_pos(
-            a.p.unsigned_abs(),
-            a.q as u128,
-            b.p.unsigned_abs(),
-            b.q as u128,
-        );
+        let o = euclid_pos(ap.unsigned_abs(), aq as u128, bp.unsigned_abs(), bq as u128);
         if s1 < 0 {
             o.reverse()
         } else {
@@ -819,8 +1262,8 @@ mod tests {
 
     #[test]
     fn normalization_and_arith() {
-        assert_eq!(Rat::new(2, 4), Some(Rat { p: 1, q: 2 }));
-        assert_eq!(Rat::new(1, -2), Some(Rat { p: -1, q: 2 }));
+        assert_eq!(Rat::new(2, 4).and_then(|r| r.small_parts()), Some((1, 2)));
+        assert_eq!(Rat::new(1, -2).and_then(|r| r.small_parts()), Some((-1, 2)));
         assert_eq!(Rat::new(1, 0), None);
         let half = Rat::new(1, 2).unwrap();
         let third = Rat::new(1, 3).unwrap();
@@ -949,5 +1392,170 @@ mod tests {
         let b = Rat::new(333333333333, 1000000000000).unwrap();
         assert_eq!(a.cmp_exact(&b), Ordering::Greater); // 1/3 > 0.333333333333 exactly
         assert_eq!(a.cmp_exact(&a), Ordering::Equal);
+    }
+
+    fn big(p: &str, q: &str) -> Rat {
+        Rat::from_big(p.parse().unwrap(), q.parse().unwrap()).unwrap()
+    }
+
+    /// The small form is canonical: a value that fits is small however it was built, so
+    /// derived `Eq`/`Hash` are value equality.
+    #[test]
+    fn from_big_demotes_every_value_that_fits() {
+        let r = big(
+            "340282366920938463463374607431768211456",
+            "680564733841876926926749214863536422912",
+        );
+        assert_eq!(r.small_parts(), Some((1, 2)));
+        assert_eq!(r, Rat::new(1, 2).unwrap());
+        assert_eq!(big("-6", "-4"), Rat::new(3, 2).unwrap());
+        // i128::MIN stays out of the small form
+        let min = big("-170141183460469231731687303715884105728", "1");
+        assert_eq!(min.small_parts(), None);
+        assert_eq!(min.checked_neg().unwrap().small_parts(), None);
+        assert_eq!(Rat::from_big(BigInt::from(1), BigInt::zero()), None);
+    }
+
+    #[test]
+    fn the_cap_bounds_both_components() {
+        let two = BigInt::from(2);
+        let at_cap = num_traits::pow(two, CAP_BITS as usize - 1); // CAP_BITS bits
+        assert!(Rat::from_big(at_cap.clone(), BigInt::from(3)).is_some());
+        assert!(Rat::from_big(BigInt::from(3), at_cap.clone()).is_some());
+        let over = at_cap * 2u32; // CAP_BITS + 1 bits
+        assert_eq!(Rat::from_big(over.clone(), BigInt::from(3)), None);
+        assert_eq!(Rat::from_big(BigInt::from(3), over), None);
+    }
+
+    /// Arithmetic with a big operand, against Python's `fractions.Fraction`.
+    #[test]
+    fn big_arithmetic_is_exact() {
+        let a = big("1000000000000000000000000000000000000000", "3"); // 10^39/3
+        let b = big("1", "1000000000000000000000000000000000000000"); // 10^-39
+        assert_eq!(a.checked_mul(&b), Rat::new(1, 3));
+        assert_eq!(
+            a.checked_add(&b).unwrap(),
+            big(
+                "1000000000000000000000000000000000000000000000000000000000000000000000000000003",
+                "3000000000000000000000000000000000000000"
+            )
+        );
+        assert_eq!(
+            a.checked_inv().unwrap(),
+            big("3", "1000000000000000000000000000000000000000")
+        );
+        assert_eq!(a.checked_neg().unwrap().signum(), -1);
+        assert_eq!(a.cmp_exact(&b), Ordering::Greater);
+        assert_eq!(b.cmp_exact(&Rat::ZERO), Ordering::Greater);
+        assert_eq!(a.cmp_exact(&a.clone()), Ordering::Equal);
+        // powers: (10^39/3)^2, and a power whose lower size bound leaves the cap
+        assert_eq!(
+            a.checked_pow_int(2).unwrap(),
+            big(
+                "1000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "9"
+            )
+        );
+        assert_eq!(a.checked_pow_int(9), None);
+        assert_eq!(a.checked_pow_int(-1), a.checked_inv());
+        // exact roots of big numbers, and inexact ones refuse
+        let sq = a.checked_pow_int(2).unwrap();
+        assert_eq!(sq.checked_root(2), Some(a.clone()));
+        assert_eq!(a.checked_root(2), None);
+        let neg = a.checked_neg().unwrap();
+        assert_eq!(neg.checked_pow_int(3).unwrap().checked_root(3), Some(neg));
+        // integer queries at any size
+        let odd = big("1000000000000000000000000000000000000001", "1");
+        assert!(odd.is_integer() && odd.is_odd_integer() && !odd.is_even_integer());
+        assert_eq!(odd.small_int(), None);
+        assert_eq!(odd.cmp_int(5), Ordering::Greater);
+        assert!(!a.is_integer() && !a.is_odd_integer() && !a.is_even_integer());
+    }
+
+    /// The big form's nearest float agrees with the small form's certified walk wherever both
+    /// apply, and handles what the walk cannot: components beyond f64, subnormals, overflow.
+    #[test]
+    fn big_nearest_float_is_correctly_rounded() {
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..20_000 {
+            let bits = 1 + next() % 126;
+            let p = ((next() as u128 | ((next() as u128) << 64)) >> (128 - bits)) as i128;
+            let qbits = 1 + next() % 126;
+            let q = (((next() as u128 | ((next() as u128) << 64)) >> (128 - qbits)) as i128).max(1);
+            let p = if next() % 2 == 0 { -p } else { p };
+            let r = Rat::new(p, q).unwrap();
+            let (bp, bq) = r.big_parts();
+            assert_eq!(
+                big_ratio_to_f64(&bp, &bq),
+                r.to_f64_nearest_certified().unwrap(),
+                "{p}/{q}"
+            );
+        }
+        let p10 = |k: usize| num_traits::pow(BigInt::from(10), k);
+        let p2 = |k: usize| num_traits::pow(BigInt::from(2), k);
+        assert_eq!(big_ratio_to_f64(&p10(400), &p10(399)), 10.0);
+        assert_eq!(big_ratio_to_f64(&BigInt::one(), &p2(1074)), 5e-324);
+        assert_eq!(big_ratio_to_f64(&BigInt::one(), &p2(1075)), 0.0); // a tie, to even
+        assert_eq!(big_ratio_to_f64(&BigInt::from(3), &p2(1076)), 5e-324);
+        assert_eq!(
+            big_ratio_to_f64(&BigInt::one(), &p2(1022)),
+            f64::MIN_POSITIVE
+        );
+        assert_eq!(big_ratio_to_f64(&p2(1023), &BigInt::one()), 2f64.powi(1023));
+        assert_eq!(big_ratio_to_f64(&p2(1024), &BigInt::one()), f64::INFINITY);
+        // halfway between f64::MAX and 2^1024 rounds to even, i.e. up to infinity
+        let max_half = p2(1024) - p2(970);
+        assert_eq!(big_ratio_to_f64(&max_half, &BigInt::one()), f64::INFINITY);
+        assert_eq!(big_ratio_to_f64(&(max_half - 1), &BigInt::one()), f64::MAX);
+        assert_eq!(
+            big_ratio_to_f64(&-p10(400), &BigInt::one()),
+            f64::NEG_INFINITY
+        );
+        // 10^-320 is subnormal
+        assert_eq!(big_ratio_to_f64(&BigInt::one(), &p10(320)), 1e-320);
+    }
+
+    #[test]
+    fn big_decimals_print_and_parse_exactly() {
+        let r = big("1", "100000000000000000000000000000000000000000"); // 1e-41
+        let s = r.exact_decimal().unwrap();
+        assert_eq!(s, format!("0.{}1", "0".repeat(40)));
+        assert_eq!(parse_decimal_big(false, "0", &s[2..], -41), Some(r.clone()));
+        assert_eq!(parse_decimal_big(false, "1", "", -41), Some(r.clone()));
+        assert_eq!(big("-7", "1").exact_decimal().as_deref(), Some("-7"));
+        assert_eq!(
+            big("1", "3000000000000000000000000000000000000000").exact_decimal(),
+            None
+        );
+        let e40 = parse_decimal_big(false, "1", "", 40).unwrap();
+        assert_eq!(e40.exact_decimal().unwrap(), format!("1{}", "0".repeat(40)));
+        assert_eq!(parse_decimal_big(true, "25", "", -41).unwrap().signum(), -1);
+        // size bounds: refused before building, at once
+        let t0 = std::time::Instant::now();
+        assert_eq!(parse_decimal_big(false, "1", "", 2_147_483_647), None);
+        assert_eq!(parse_decimal_big(false, "1", "", -2_000_000_000), None);
+        assert_eq!(
+            parse_decimal_big(false, &"7".repeat(1_000_000), "", 0),
+            None
+        );
+        assert!(t0.elapsed().as_millis() < 1000);
+        // trailing zeros of the mantissa do not count as digits
+        assert_eq!(
+            parse_decimal_big(false, &format!("1{}", "0".repeat(5000)), "", -5000),
+            Some(Rat::ONE)
+        );
+        // the shortest spellings of float64s parse (the smallest subnormal, the smallest normal,
+        // the largest double); a longer decimal spelling of a subnormal can leave the cap
+        // (4.9406564584124654e-324 needs a 1,129-bit denominator)
+        assert!(parse_decimal_big(false, "5", "", -324).is_some());
+        assert!(parse_decimal_big(false, "2", "2250738585072014", -324).is_some());
+        assert!(parse_decimal_big(false, "1", "7976931348623157", 292).is_some());
+        assert!(parse_decimal_big(false, "4", "9406564584124654", -340).is_none());
     }
 }

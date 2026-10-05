@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Exact numbers get a big-integer form (no behaviour change yet).** A literal is an exact
+  rational whose numerator and denominator were limited to 128 bits; beyond that it stayed an
+  opaque symbol. The number type now also holds big integers, up to a cap of 1,100 bits per
+  component (every float64's shortest spelling fits), on num-bigint (MIT OR Apache-2.0). This
+  release keeps the 128-bit arithmetic verbatim and never builds a big number, so every answer is
+  byte-identical to before; the next steps of the number work switch the wider range on. Integer
+  questions ("is this an integer, odd, negative?") no longer go through a 128-bit value, which
+  would have read an integer beyond 128 bits as "not an integer" at four sites (a `rootn` index,
+  the pow-of-pow and power-through-root licences, the F83 guard).
 - **Exact literals are read as their nearest float.** The deployed evaluator reads a literal
   correctly rounded (Python's `float()` of a decimal, `int / int` for a fraction), but two
   engine paths computed `float(p) / float(q)`, which is an ulp or two off once `p` or `q` leaves

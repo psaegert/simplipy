@@ -73,6 +73,13 @@ rayon = "1"
 # a full control mine byte-identical to the unbumped artifact.
 astro-float = "0.9.6"
 
+# Exact numbers without a fixed width (number plan phase 2): a literal is an exact rational
+# whose numerator and denominator may exceed 128 bits, up to a size cap. Pure Rust, MIT OR
+# Apache-2.0 (passes deny.toml); the copyleft GMP crates are out for the same reason as above.
+num-bigint = { version = "0.4", default-features = false, features = ["std"] }
+num-integer = { version = "0.1", default-features = false, features = ["std"] }
+num-traits = { version = "0.2", default-features = false, features = ["std"] }
+
 # mimalloc cannot build on the manylinux aarch64 CROSS toolchain (its gcc rejects
 # libmimalloc-sys's -Wdate-time probe: "cc1: error: -Werror=date-time: no option
 # -Wdate-time", publish run 2026-08-31), so the dependency is scoped away from that

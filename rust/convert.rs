@@ -785,7 +785,10 @@ fn handle_pow(base: Ir, exponent: Ir, ops: &Operators) -> Result<Ir, String> {
             if r.is_zero() {
                 return Ok(Ir::L(vec![Ir::S("1".into())])); // x**0.0 -> 1 (exact zero)
             }
-            let (num, den) = (r.num().unsigned_abs(), r.den().unsigned_abs());
+            // A component beyond i128 fails the `<= 5` gate below.
+            let (num, den) = r.small_parts().map_or((u128::MAX, u128::MAX), |(p, q)| {
+                (p.unsigned_abs(), q.unsigned_abs())
+            });
             if num <= 5 && den <= 5 {
                 let (num, den) = (num as i128, den as i128);
                 // VOCABULARY GATE (the p/q branch below has the same one): the

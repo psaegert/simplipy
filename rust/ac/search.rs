@@ -166,7 +166,7 @@ fn local_moves(e: &Ex, cx: &Cx, out: &mut Vec<Ex>) {
         // product builder (the factor list is n copies of the base).
         Ex::Pow(b, x) => {
             if let (Ex::Add(_), Ex::Num(r)) = (&**b, &**x) {
-                if let Some(n) = r.as_integer() {
+                if let Some(n) = r.small_int() {
                     if (2..=POW_EXPAND_CAP).contains(&n) {
                         let factors: Vec<Ex> = std::iter::repeat_with(|| (**b).clone())
                             .take(n as usize)
