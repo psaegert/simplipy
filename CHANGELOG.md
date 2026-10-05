@@ -23,7 +23,15 @@
   `--5`, `-+5`, `1e5.5`, `1/-3`, `2x`) is now refused at every boundary, like the reserved
   spellings of H-007. Before, it became a free symbol (`1/0 - 1/0` simplified to `0`), or was
   read as something else (`-+5` as -5, `1/-3` as -1/3), and the tagged form, which skips the
-  arity check, split `--5` into `-1 -5`.
+  arity check, split `--5` into `-1 -5`. These refusals are for token lists, which are expected
+  well formed; infix text is read as written (`1/6.28` is a division there).
+- **Infix reads implicit multiplication.** After a number or a closing parenthesis, a name, an
+  opening parenthesis or (after a parenthesis) a number multiplies: `2x0` is `2*x0`, `0x10` is
+  `0*x10`, `2(x0 + 1)` is `2*(x0 + 1)`, `(a)(b)` is `(a)*(b)`, `2pi` is `2*pi`. The product has
+  the precedence of `*`, so `1/2x0` is `(1/2)*x0` and `2^3x0` is `(2^3)*x0`. A name before a
+  parenthesis stays a call, known or not (`sqrt(x0)` still reads `sqrt x0`), and a character the
+  tokenizer drops never becomes a product (`x1 $ x2` stays malformed). Before, these inputs were
+  malformed.
 - **An interrupted mine is not final.** On SIGINT the miner stops after the running length and
   writes what it has, with the proposal channel, the symbolic gate and sort promotion skipped,
   and its sidecar said `"final": true`. It now says `"final": false` and `"interrupted": true`,

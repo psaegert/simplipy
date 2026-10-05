@@ -1632,6 +1632,12 @@ class SimpliPyEngine:
           ``read_infix``'s exclusive capability is the vocabulary TOLERANCE above;
           :meth:`to_prefix` refuses what this reader accepts.
 
+        Implicit multiplication is read after a number or a closing parenthesis, with
+        the precedence of ``*``: ``2x0`` is ``2*x0``, ``2(x0 + 1)`` is ``2*(x0 + 1)``,
+        ``(a)(b)`` is ``(a)*(b)`` and ``1/2x0`` is ``(1/2)*x0``. A name before a
+        parenthesis is always a call, so ``sqrt(x0)`` stays ``['sqrt', 'x0']``. Token
+        lists are expected well formed and get no such reading.
+
         Mechanically it is :meth:`infix_to_prefix` plus optional
         ``convert_expression`` normalization, with a ``remove_pow1`` cleanup that
         drops redundant ``pow1_1`` occurrences.

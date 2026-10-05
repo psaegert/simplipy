@@ -319,31 +319,40 @@ fn join_operands(operands_data: &[Item]) -> String {
 /// and SILENTLY DROP any char that matches no alternative. Numbers/identifiers are emitted as
 /// verbatim source substrings. (`\w` is treated as ASCII `[A-Za-z0-9_]`; the deployment corpus is
 /// ASCII -- a non-ASCII identifier is the documented out-of-domain boundary.)
-fn tokenize_infix(s: &str) -> Vec<String> {
+///
+/// Each token carries whether it TOUCHES the previous one: `false` when an unmatched char was
+/// dropped between them. Implicit multiplication (`insert_implicit_products`) applies only to
+/// touching tokens, so a dropped char never turns two operands into a product.
+fn tokenize_infix(s: &str) -> Vec<(String, bool)> {
     let chars: Vec<char> = s.chars().filter(|&c| c != ' ').collect(); // `.replace(' ', '')`
     let n = chars.len();
     let mut tokens = Vec::new();
+    let mut touching = true;
     let mut i = 0;
+    let push = |tokens: &mut Vec<(String, bool)>, tok: String, touching: &mut bool| {
+        tokens.push((tok, *touching));
+        *touching = true;
+    };
     while i < n {
         // The numeric folder's inf/nan tokens stay ATOMIC -- mirrors the Python `float_special`
         // alternation -- else they split on the '(' / '"'. Leads the scan; the token is then
         // classified as a leaf by `is_ident_start` in `infix_to_prefix`.
         if let Some(j) = match_float_special(&chars, i) {
-            tokens.push(chars[i..j].iter().collect());
+            push(&mut tokens, chars[i..j].iter().collect(), &mut touching);
             i = j;
             continue;
         }
         if let Some(j) = match_constant(&chars, i) {
-            tokens.push(chars[i..j].iter().collect());
+            push(&mut tokens, chars[i..j].iter().collect(), &mut touching);
             i = j;
         } else if let Some(j) = match_number(&chars, i) {
-            tokens.push(chars[i..j].iter().collect());
+            push(&mut tokens, chars[i..j].iter().collect(), &mut touching);
             i = j;
         } else if let Some(j) = match_ident(&chars, i) {
-            tokens.push(chars[i..j].iter().collect());
+            push(&mut tokens, chars[i..j].iter().collect(), &mut touching);
             i = j;
         } else if i + 1 < n && chars[i] == '*' && chars[i + 1] == '*' {
-            tokens.push("**".to_string());
+            push(&mut tokens, "**".to_string(), &mut touching);
             i += 2;
         } else if matches!(chars[i], '-' | '+' | '*' | '/' | '^' | '(' | ')' | ',') {
             // ',' is the 2-ary call-syntax argument separator the pretty renderer
@@ -352,13 +361,44 @@ fn tokenize_infix(s: &str) -> Vec<String> {
             // the boundary: `rootn(x0, x1 - 1)` parsed as rootn(x0 - x1, 1)
             // (hardening H-011, 2026-08-03 -- a round-trip break of the parser's own
             // output language; 97/2000 fuzz rows).
-            tokens.push(chars[i].to_string());
+            push(&mut tokens, chars[i].to_string(), &mut touching);
             i += 1;
         } else {
             i += 1; // unmatched -> drop (no token, no error; pinned legacy parity)
+            touching = false;
         }
     }
     tokens
+}
+
+/// IMPLICIT MULTIPLICATION (owner ruling 2026-10-05, infix only -- token lists are expected
+/// well formed): an explicit `*` is inserted between two touching tokens when the left one
+/// is a number or a `)` and the right one starts an operand (a name, a `(`, or -- after a
+/// `)` -- a number). So `2x` reads `2*x`, `0x` reads `0*x`, `2(x1 + 1)` reads `2*(x1 + 1)`,
+/// `(a)(b)` reads `(a)*(b)`, `2pi` reads `2*pi` and `2sin(x)` reads `2*sin(x)`. The inserted
+/// `*` is an ordinary `*`, with its precedence: `1/2x` is `(1/2)*x` and `2^3x` is `(2^3)*x`.
+///
+/// A NAME never starts a product, even before `(`: `read_infix` passes an unknown function
+/// through as a bare leaf (`sqrt(x0)` -> `sqrt x0`, which downstream converters rely on), so
+/// `f(x)` stays a call for every name. Names cannot touch a following name or number anyway:
+/// spaces are stripped before tokenizing, so `x1 x2` is ONE name, as before. Two touching
+/// numbers are left alone (`1.5.3` tokenizes as `1.5`, `.3` and stays malformed).
+fn insert_implicit_products(tokens: Vec<(String, bool)>) -> Vec<String> {
+    let is_leaf = |t: &str| t == "<constant>" || t.starts_with("float(\"") || is_ident_start(t);
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    for (tok, touching) in tokens {
+        if let Some(prev) = out.last() {
+            let after_number = is_number_fullmatch(prev);
+            let after_paren = prev == ")";
+            let starts_operand =
+                tok == "(" || is_leaf(&tok) || (after_paren && is_number_fullmatch(&tok));
+            if touching && (after_number || after_paren) && starts_operand {
+                out.push("*".to_string());
+            }
+        }
+        out.push(tok);
+    }
+    out
 }
 
 fn match_constant(s: &[char], i: usize) -> Option<usize> {
@@ -458,7 +498,7 @@ fn is_ident_start(token: &str) -> bool {
 /// `infix_to_prefix`: a RIGHT-to-LEFT shunting-yard. Never
 /// raises (degenerate/malformed inputs produce structurally-degenerate prefix lists, matching Python).
 pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Vec<String> {
-    let mut tokens = tokenize_infix(infix_expression);
+    let mut tokens = insert_implicit_products(tokenize_infix(infix_expression));
     tokens.reverse(); // right-to-left parse
 
     let mut stack: Vec<String> = Vec::new();
@@ -1224,9 +1264,27 @@ mod tests {
         assert_eq!(i2p(&e, "1/x1"), v(&["/", "1", "x1"]));
         // tokenizer: '**' before '*', drop unmatched, empty parens.
         assert_eq!(i2p(&e, "x1***x2"), v(&["*", "**", "x1", "x2"]));
+        // A dropped char separates: it never becomes an implicit product.
         assert_eq!(i2p(&e, "x1 $ x2"), v(&["x1", "x2"]));
         assert_eq!(i2p(&e, "()"), Vec::<String>::new());
         assert_eq!(i2p(&e, ""), Vec::<String>::new());
+        // Implicit multiplication (owner 2026-10-05): an ordinary `*`, same precedence.
+        assert_eq!(i2p(&e, "2x"), v(&["*", "2", "x"]));
+        assert_eq!(i2p(&e, "0x10"), v(&["*", "0", "x10"]));
+        assert_eq!(i2p(&e, "2(x1 + 1)"), v(&["*", "2", "+", "x1", "1"]));
+        assert_eq!(i2p(&e, "(x1)(x2)"), v(&["*", "x1", "x2"]));
+        assert_eq!(i2p(&e, "(x1)2"), v(&["*", "x1", "2"]));
+        assert_eq!(i2p(&e, "1/2x1"), v(&["*", "/", "1", "2", "x1"]));
+        assert_eq!(i2p(&e, "2^3x1"), v(&["*", "**", "2", "3", "x1"]));
+        assert_eq!(i2p(&e, "3e2x1"), v(&["*", "3e2", "x1"]));
+        assert_eq!(i2p(&e, "2sin(x1)"), v(&["*", "2", "sin", "x1"]));
+        assert_eq!(i2p(&e, "2(-x1)"), v(&["*", "2", "neg", "x1"]));
+        // A name never starts a product: `f(x)` is a call for every name, known or not.
+        assert_eq!(i2p(&e, "sin(x1)"), v(&["sin", "x1"]));
+        assert_eq!(i2p(&e, "sqrt(x1)"), v(&["sqrt", "x1"]));
+        assert_eq!(i2p(&e, "x1(x2)"), v(&["x1", "x2"]));
+        // Touching numbers stay malformed.
+        assert_eq!(i2p(&e, "1.5.3"), v(&["1.5", ".3"]));
         // scientific notation single token.
         assert_eq!(i2p(&e, "1.5e-2 * x1"), v(&["*", "1.5e-2", "x1"]));
         // 2-ary CALL SYNTAX (H-011): the comma is a real argument separator -- it
