@@ -127,16 +127,13 @@ copies of one prediction take 16 s (0.5 s at cap 4, for an answer 28% costlier) 
 the verification monitor, the promotion refund) follows the default.
 
 `permissive` keeps the cheapest of three searches (its two fold disciplines and the `f64`
-search). Each ends in a valley of its own search, but the `f64` search, started from the
-winner, can still improve on it; so `permissive` runs it from its winner and, while it finds
-something cheaper, selects again (at any nonzero budget; a cap applies to each search). That
-leaves 14 second-call changes of the former 127 on srbf's predictions, all of them also with
-the search off. The winner is not necessarily a valley of permissive's own two searches, which
-can still improve on it on a second call (1 of a review's 52,500 boundary inputs); re-running
-the whole selection from the winner would settle that but costs about half again the time of
-the mode flash-ansr's training data canonicalizes in. Different search lengths can lead the
-selection to different winners: 182 answers are cheaper than at cap 4 and 4 costlier on srbf's
-predictions, 233 and 46 on boundary inputs.
+search). Its winner is a valley of its own search only, so a second call can still improve on
+it through another: 41 answers change on a second call on srbf's predictions (127 at cap 4),
+37 of them also with the search off. Running the `f64` search from the winner until it finds
+nothing settled the other 4, but cost 13-18% of the time of flash-ansr's training-data
+canonicalization, which runs in `permissive`, so it is not done. Different search lengths can
+lead the selection to different winners: on srbf's predictions 169 answers are cheaper than at
+cap 4 and 4 costlier.
 
 The sweep below (65,536 rows, measured with the cap at 4, the default then) shows what
 the search buys on the SR prior: effort 0 to 4 moves the mean ratio from 0.9685
@@ -150,7 +147,9 @@ what little there is sitting on the effort-64 side).
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
 below it (the result is never worse than the fixpoint, hence never costlier than the
-input), the frontier only grows on strict descent of a well-founded ordering
+input; in `permissive` this holds for each of its three searches, not for its selection, whose
+answer is costlier than its search-off answer on 78 of srbf's predictions, 76 at cap 4), the
+frontier only grows on strict descent of a well-founded ordering
 (termination, independent of the budget), and the walk order is deterministic
 (reproducibility). Idempotence needs the search to run until a round finds nothing,
 the default: a cap can stop it between two improvements, which a second call then
@@ -387,7 +386,7 @@ cap and end the wall-clock ECDFs below 1.
 | | simplipy permissive | 0.992 | 9.8% | **0.0%** |
 | | sympy simplify | 1.006 | 26.3% | 15.0% |
 
-The shipped default arm (f64, effort 4) made no expression bigger: 0 of
+The f64 arm at effort 4 (the default when this was measured) made no expression bigger: 0 of
 131,072 SR rows and 0 of 600 external rows. The real and permissive arms
 minimize their own mode's reduction ordering, which is not the default
 pricing: under the table's measure they returned a form pricing above

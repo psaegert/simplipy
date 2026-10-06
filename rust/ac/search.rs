@@ -34,9 +34,8 @@
 //!   continues from the first one's answer. On srbf's 125,127 model predictions (f64) the
 //!   old default cap of 4 left 73 answers that changed on a second call; uncapped, only the
 //!   24 that also change with the search off remain. It also needs the answer to re-read to
-//!   itself (L6a, docs/formal.md) and the step cap not to bind; `permissive`, which selects
-//!   among three searches, adds a settling loop over the f64 search
-//!   (`Engine::ac_simplify_ex_explore`), whose winner its own two searches can still improve.
+//!   itself (L6a, docs/formal.md) and the step cap not to bind. `permissive` selects among
+//!   three searches, and its winner is a valley of its own search only (formal.md L6).
 //!
 //! MOVE SET (B1): `distribute` (a Mul bag's Add children, fully distributed -- the
 //! row-156 move) and its Pow sibling `pow-expand` (integer power of a sum, expanded

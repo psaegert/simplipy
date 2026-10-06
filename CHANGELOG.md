@@ -8,22 +8,22 @@
   counts every candidate tried over the whole expression, refused ones included, so the cap a
   search needs grows with the expression (4k² + 1 candidates for a sum of k copies of one srbf
   prediction). With exact arithmetic on long constants this showed: at cap 4, 73 of srbf's
-  125,127 model predictions changed on a second call in `f64` and `real` (50 to a cheaper form)
-  and 127 in `permissive`. Now 24, 24 and 14 do, all of them also with the search off; on
-  boundary inputs the search can still reach a state of those classes that the chain alone
-  never visits. In `f64` and `real` no answer is costlier than at cap 4. `permissive` keeps the
-  cheapest of three searches, and the `f64` search could still improve on the winner; it now
-  runs that search from its winner and selects again while it finds something cheaper (at any
-  nonzero budget). The winner can still be improved by permissive's own two searches on a
-  second call (1 of a review's 52,500 boundary inputs). Permissive answers can move either way:
-  on srbf's predictions 182 are cheaper and 4 costlier than at cap 4 (3 to 49 bits), on boundary
-  inputs 233 and 46. Every internal caller that passes no `effort` (normalization, masking,
-  mining, the verification monitor, the promotion refund) follows the default; the reference
-  mine is byte-identical. Total time grows by 1-2% in each mode on srbf's predictions (local
-  measurement); a large sum of terms that each need several expansions costs time roughly cubic
-  in its size (16 copies of one prediction: 16 s, against 0.5 s at cap 4 for an answer 28%
-  costlier; 32 copies: 170 s and 2.6 s). `effort=k` caps each search at `k` candidates (a cap
-  beyond 2^63 - 1 is none) and `effort=0` skips the search, byte-identical in every mode.
+  125,127 model predictions changed on a second call in `f64` and `real` (50 to a cheaper form).
+  Now 24 do, all of them also with the search off, and no answer is costlier than at cap 4 (59
+  are cheaper). `permissive` keeps the cheapest of three searches, and its winner is a valley of
+  its own search only: 41 answers still change on a second call (127 at cap 4), 37 of them also
+  with the search off; 169 are cheaper than at cap 4 and 4 costlier (3 to 49 bits). A loop
+  that runs the `f64` search from the winner settled the other 4 but cost 13-18% of the time of
+  flash-ansr's training-data canonicalization, which runs in `permissive`, so there is none.
+  Total time grows by 1-2% in each mode on srbf's predictions and not measurably on
+  flash-ansr's training path (local measurements). A large sum of terms that each need several
+  expansions costs time roughly cubic in its size (16 copies of one prediction: 16 s, against
+  0.5 s at cap 4 for an answer 28% costlier; 32 copies: 170 s and 2.6 s). Every internal caller
+  that passes no `effort` (normalization, masking, mining, the verification monitor, the
+  promotion refund) follows the default; the reference mine is byte-identical. `effort=k` caps
+  each search at `k` candidates (`permissive` runs three per call; a cap beyond 2^63 - 1 is
+  none), and `effort=k` and `effort=0` answers are byte-identical to the previous version.
+  Code that compares `DEFAULT_EFFORT` with an int now sees `None`.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
   number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds

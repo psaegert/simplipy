@@ -9,7 +9,7 @@ same prior under the engine mask policy 'all' (n = 65,536), and an external
 neutral problem set (SOOSE fc/nc/wc, n = 600; every row compiles in the engine
 language). The engine is the pinned acj-5-4-llm artifact: ``f64`` is the
 shipped default, ``real`` is ``Mode.real``, ``permissive`` is
-``Mode.permissive``, every arm at the default ``effort=4``; the unmasked leg
+``Mode.permissive``, every arm at ``effort=4`` (the default before 0.15.0); the unmasked leg
 adds the explore-budget sweep arms ``effort=0`` and ``effort=64``.
 
 Scoring runs in the deployment space: ratio = complexity(output) /
@@ -777,7 +777,7 @@ def make_sweep(plt, A, S, figdir):
     ci = S['boot_ci_mean_ratio']
     rows = []
     for a, lbl in (('f64_e0', 'effort 0 (plain chain)'),
-                   ('f64', 'effort 4 (the default)'),
+                   ('f64', 'effort 4 (the default until 0.15.0)'),
                    ('f64_e64', 'effort 64')):
         s = S['sweep'][a]
         lo, hi = ci[f'unmasked/{a}']

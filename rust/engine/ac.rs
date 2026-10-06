@@ -1216,58 +1216,6 @@ impl Engine {
                 Cx::folds_for(mode),
             );
         }
-        let mut picked = self.ac_simplify_ex_permissive_snapped(tokens, max_passes, explore_budget);
-        if explore_budget == 0 {
-            return picked;
-        }
-        // THE PERMISSIVE SETTLING LOOP (owner 2026-10-06, the uncapped search): each of the
-        // three arms' searches ends in a valley of its OWN descent, but the winner need not
-        // be a valley of the others' -- the default arm, run from the permissive winner,
-        // can find one more step, which a second call then took (4 of srbf's 125,127 model
-        // predictions). So the whole selection re-runs from its own answer while that is
-        // strictly cheaper; mu is a non-negative integer, so the loop is finite. Search-on
-        // only: `effort=0` stays byte-identical to the plain chain.
-        loop {
-            let Some(e) = picked.1.as_ref() else {
-                return picked;
-            };
-            let view = self.view(&picked.0);
-            let cur = complexity(e, &view);
-            let toks = to_prefix(e, &Cx::bare(&view));
-            let owned = self.resolve_seq(&toks, &picked.0);
-            // The probe is the default arm alone, about a twentieth of a permissive pass:
-            // the full selection re-runs only when that arm improves on the winner.
-            let probe = self.ac_simplify_ex_fold(
-                &owned,
-                max_passes,
-                RuleMode::Default,
-                explore_budget,
-                Cx::folds_for(RuleMode::Default),
-            );
-            match probe
-                .1
-                .as_ref()
-                .map(|n| complexity(n, &self.view(&probe.0)))
-            {
-                Some(c) if c < cur => {}
-                _ => return picked,
-            }
-            let next = self.ac_simplify_ex_permissive_snapped(&owned, max_passes, explore_budget);
-            match next.1.as_ref().map(|n| complexity(n, &self.view(&next.0))) {
-                Some(c) if c < cur => picked = next,
-                _ => return picked,
-            }
-        }
-    }
-
-    /// The permissive selection with its literal-fold loop: [`Engine::ac_simplify_ex_explore`]
-    /// for `permissive`, one pass of its settling loop.
-    fn ac_simplify_ex_permissive_snapped(
-        &self,
-        tokens: &[String],
-        max_passes: usize,
-        explore_budget: usize,
-    ) -> (SimplifyCtx, Option<Ex>) {
         // THE PERMISSIVE LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03):
         // an exact literal the chain's endpoint carries is replaced by its f64 nearest
         // when mu' prices that spelling strictly cheaper, and the chain re-runs on the

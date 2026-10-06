@@ -151,21 +151,6 @@ class TestTheSearchRunsUntilItSettles:
         assert shipped.complexity(twice) < shipped.complexity(once)
         assert shipped.complexity(shipped.simplify(PARTIAL)) <= shipped.complexity(twice)
 
-    @pytest.mark.parametrize('pre', [
-        # srbf model predictions: permissive's winner was a valley of its own arm, and the
-        # f64 search, run from it, found one more expansion on a second call. The settling
-        # loop probes the f64 search only (docs/formal.md L6).
-        '* rootn inv v1 2 + v1 exp - v1 / * v1 * 0.0016226622388582068 pow v1 2 - v1 + '
-        '-723208974.5267093 / / v1 + v1 pow v1 3 neg pow v1 2',
-        '/ - v1 * pow v1 2 sin - / v1 + -0.9550500628350815 / inv - pow v1 5 * 0.5109200808956914 '
-        'abs v1 v1 pow v1 2 / v1 * 5.426292262663532e-05 * v1 - abs v1 v1',
-    ])
-    def test_permissive_settles_for_the_f64_search(self, shipped, pre) -> None:
-        once = shipped.simplify(pre.split(), mode=Mode.permissive)
-        assert shipped.simplify(once, mode=Mode.permissive) == once
-        # ... and its answer is a valley of the f64 search too.
-        assert shipped.complexity(shipped.simplify(once)) == shipped.complexity(once)
-
     @pytest.mark.parametrize('k', [2, 3])
     def test_larger_expressions_need_more_than_any_small_cap(self, shipped, k) -> None:
         t = _copies(k)
