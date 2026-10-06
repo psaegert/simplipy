@@ -112,12 +112,22 @@ descents, and `effort=0` never enters the phase — byte-identical to the chain 
 A cap counts every candidate tried, refused ones included, over the whole expression, so
 the cap a search needs grows with the expression. Exact arithmetic on long constants
 made this visible: with the old default cap of 4, 73 of srbf's 125,127 model predictions
-changed on a second call (50 to a cheaper form), because the first call stopped between
-two improvements. Uncapped, only the 24 that also change with the search off remain
+changed on a second call in `f64` (50 to a cheaper form), because the first call stopped
+between two improvements. Uncapped, only the 24 that also change with the search off remain
 (long products whose factors re-read in another order), no answer is costlier than at
-cap 4 and 59 are cheaper, for 1.6% more total time. A cap of 8 happens to give the same
-answers on those predictions, but a sum of two of them needs 32 and of three 64, so no
-fixed cap is enough.
+cap 4 and 59 are cheaper, for about 2% more total time; `real` behaves the same. A cap of 8
+happens to give the same answers on those predictions, but a sum of two of them needs 32 and
+of three 64, so no fixed cap is enough. What the uncapped search costs is time on large
+sums of terms that each need several expansions: it improves one term per round and then
+scans the whole expression again, so 16 copies of one prediction take 16 s (0.5 s at cap 4,
+for an answer 22% costlier).
+
+`permissive` keeps the cheapest of three searches (its two fold disciplines and the `f64`
+search). Each ends in a valley of its own search, but the `f64` search, started from the
+winner, can still improve on it; so `permissive` runs it from its winner and, while it finds
+something cheaper, selects again. That leaves 14 second-call changes of the former 127, all
+of them also with the search off. Different search lengths can lead the selection to
+different winners: 182 answers are cheaper than at cap 4 and 4 are costlier.
 
 The sweep below (65,536 rows, measured with the cap at 4, the default then) shows what
 the search buys on the SR prior: effort 0 to 4 moves the mean ratio from 0.9685

@@ -31,10 +31,11 @@
 //!   expansions all settle at or above it. That holds for the answer only when the
 //!   search ran until its frontier emptied (the public default, `effort=None`; owner
 //!   2026-10-06): a cap can stop it between two accepted valleys, and a second call then
-//!   continues from the first one's answer. On srbf's 125,127 model predictions the old
-//!   default cap of 4 left 73 answers that changed on a second call; uncapped, only the 24
-//!   that also change with the search off remain. It also needs the answer to re-read to
-//!   itself (L6a, docs/formal.md) and the step cap not to bind.
+//!   continues from the first one's answer. On srbf's 125,127 model predictions (f64) the
+//!   old default cap of 4 left 73 answers that changed on a second call; uncapped, only the
+//!   24 that also change with the search off remain. It also needs the answer to re-read to
+//!   itself (L6a, docs/formal.md) and the step cap not to bind; `permissive`, which selects
+//!   among three searches, adds a settling loop (`Engine::ac_simplify_ex_explore`).
 //!
 //! MOVE SET (B1): `distribute` (a Mul bag's Add children, fully distributed -- the
 //! row-156 move) and its Pow sibling `pow-expand` (integer power of a sum, expanded

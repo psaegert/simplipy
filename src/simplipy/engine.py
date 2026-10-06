@@ -245,8 +245,8 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: (D39 B7). ``None``: the search runs until a round finds nothing, so a second call
 #: returns the answer unchanged (owner, 2026-10-06). The previous default, 4, stopped
 #: searches between two improvements: on srbf's 125,127 model predictions 73 answers
-#: changed on a second call (24 uncapped, all of them also with the search off), for
-#: 1.6% less total time. Callers on throughput-critical paths pin ``effort=0``
+#: changed on a second call in f64 (24 uncapped, all of them also with the search off),
+#: for about 2% less total time. Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
 

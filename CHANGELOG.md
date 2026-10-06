@@ -7,10 +7,17 @@
   of expansions finds nothing cheaper, so a second call returns the answer unchanged. A cap
   counts every candidate tried over the whole expression, refused ones included, so the cap a
   search needs grows with the expression. With exact arithmetic on long constants this showed:
-  at cap 4, 73 of srbf's 125,127 model predictions changed on a second call (50 to a cheaper
-  form). Uncapped, only the 24 that also change with the search off remain, no answer is
-  costlier and 59 are cheaper, for 1.6% more total time (local measurement). `effort=k` still
-  caps the search at `k` candidate descents and `effort=0` still skips it.
+  at cap 4, 73 of srbf's 125,127 model predictions changed on a second call in `f64` and `real`
+  (50 to a cheaper form) and 127 in `permissive`. Now 24, 24 and 14 do, all of them also with
+  the search off. In `f64` and `real` no answer is costlier than at cap 4 and 59 are cheaper.
+  `permissive` keeps the cheapest of three searches, and the winner of one could still be
+  improved by the `f64` search; it now runs that search from its winner and, while it finds
+  something cheaper, selects again. 182 permissive answers are cheaper and 4 are costlier (3 to
+  49 bits; a different search length leads its selection elsewhere). Total time grows by 1-2% in
+  each mode (local measurement). A large sum of terms that each need several expansions costs
+  time roughly cubic in its size (16 copies of one prediction: 16 s, against 0.5 s at cap 4 for
+  an answer 22% costlier). `effort=k` still caps the search at `k` candidate descents and
+  `effort=0` still skips it, byte-identical in every mode.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
   number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds

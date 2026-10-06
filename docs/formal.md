@@ -535,9 +535,14 @@ and are refused again. Two further premises: the step cap does not bind (a cappe
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
 valleys, and the re-run then continues it [EMPIRICAL: srbf's 125,127 model predictions
-change on a second call 73 times at the former default cap of 4, 50 of them to a cheaper
-form; uncapped, 24 times, exactly the effort-0 class of I3]. Where the round-trip premise
-fails (L6a) the re-run starts from a different state.
+change on a second call 73 times in `f64` at the former default cap of 4, 50 of them to a
+cheaper form; uncapped, 24 times, exactly the effort-0 class of I3; `real` the same]. Where
+the round-trip premise fails (L6a) the re-run starts from a different state. `permissive`
+selects among three searches, and its winner is a valley of its own search only; the re-run's
+`f64` search, started from the winner, could descend further. So the call runs that search
+from its winner and selects again while it finds something strictly cheaper (finite: $\mu$ is
+a non-negative integer); the answer is then a valley of the `f64` search too [EMPIRICAL:
+127 second-call changes at cap 4, 14 uncapped, all 14 also with the search off].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:
