@@ -15,8 +15,8 @@
   with the search off; 169 are cheaper than at cap 4 and 4 costlier (3 to 49 bits). A loop
   that runs the `f64` search from the winner cut the 41 to 14 but cost 13-18% of the time of
   flash-ansr's training-data canonicalization, which runs in `permissive`, so there is none.
-  Total time grows by 1-2% in each mode on srbf's predictions and not measurably on
-  flash-ansr's training path (local measurements). A large sum of terms that each need several
+  Total time grows by 1-2% in each mode on srbf's predictions and by about 1% on flash-ansr's
+  training-data generation calls (local measurements). A large sum of terms that each need several
   expansions costs time roughly cubic in its size (16 copies of one prediction: 16 s, against
   0.5 s at cap 4 for an answer 28% costlier; 32 copies: 170 s and 2.6 s). Every internal caller
   that passes no `effort` (normalization, masking, mining, the verification monitor, the

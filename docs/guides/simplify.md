@@ -105,7 +105,7 @@ tolerance enters.
 
 The budget is the `effort` parameter. The default, `effort=None`
 (`simplipy.DEFAULT_EFFORT`), searches until a round finds nothing, so a second call
-returns the answer unchanged. `simplify(expr, effort=64)` caps each search at 64 candidate
+has nothing left to continue (the residual classes follow below). `simplify(expr, effort=64)` caps each search at 64 candidate
 descents (`permissive` runs several per call), and `effort=0` never enters the phase — byte-identical to the chain alone. Pass
 `effort=0` on throughput-critical paths.
 
@@ -129,7 +129,7 @@ the verification monitor, the promotion refund) follows the default.
 `permissive` keeps the cheapest of three searches (its two fold disciplines and the `f64`
 search). Its winner is a valley of its own search only, so a second call can still improve on
 it through another: 41 answers change on a second call on srbf's predictions (127 at cap 4),
-37 of them also with the search off. Running the `f64` search from the winner until it finds
+37 of them also with the search off; 21 of the 41 get cheaper, by up to 80 bits. Running the `f64` search from the winner until it finds
 nothing cut those 41 to 14, but cost 13-18% of the time of flash-ansr's training-data
 canonicalization, which runs in `permissive`, so it is not done. Different search lengths can
 lead the selection to different winners: on srbf's predictions 169 answers are cheaper than at

@@ -960,7 +960,9 @@ class SimpliPyEngine:
             many candidate descents (``permissive`` runs several per call), after which
             a second call can continue it; ``0`` never enters the phase and is
             byte-identical to the plain chain. Every guarantee survives any budget: soundness (same
-            certificates), never-worse (strictly-below acceptance), termination
+            certificates), never-worse (strictly-below acceptance, per search:
+            ``permissive``'s selection among its searches can end costlier than its
+            search-off answer), termination
             (well-founded ordering, independent of the budget) and deterministic
             output.
 
