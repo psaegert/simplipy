@@ -25,7 +25,7 @@
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::fmt;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use num_bigint::{BigInt, BigUint, Sign};
 use num_integer::Integer;
@@ -57,14 +57,15 @@ impl Drop for DomainGuard {
 
 /// Enter a number domain on this thread until the returned guard drops.
 ///
-/// In the f64 domain (`true`) a number is ADMISSIBLE when it is zero or its numerator is at most
-/// DBL_MAX and its denominator at most 2^1022. That is exactly the normal numbers whose every
-/// printed spelling -- one token, `/ p q`, a divisor-side reciprocal -- reads back as the same
-/// number (design 2c; review H1, H2): the deployed evaluator reads such a number within one
-/// rounding, where a subnormal reads far from its exact value (`5e-324` is 4.94e-324) and a
-/// number beyond DBL_MAX reads as inf. Every 128-bit value is admissible, so only `from_big`
-/// checks. In the f64 domain an integer beyond 2^53 also has no known parity
-/// ([`Rat::parity`]). The exact domain (`false`) admits every number within the cap.
+/// In the f64 domain (`true`) a number is ADMISSIBLE when it is zero or its numerator and its
+/// denominator are both at most 2^1022 in magnitude (design 2c; reviews H1, H2 and #65's M1).
+/// Such a number is normal and so is its reciprocal, so every printed spelling -- one token,
+/// `/ p q`, a divisor-side reciprocal -- reads back within one rounding as the same number,
+/// where a subnormal reads far from its exact value (`5e-324` is 4.94e-324) and a number beyond
+/// DBL_MAX reads as inf. Literals outside the set (`5e307`, `1e400`, `5e-324`) stay leaves as
+/// written, as in main. Every 128-bit value is admissible, so only `from_big` checks. In the
+/// f64 domain an integer beyond 2^53 also has no known parity ([`Rat::parity`]). The exact
+/// domain (`false`) admits every number within the cap.
 pub fn number_domain(f64_numbers: bool) -> DomainGuard {
     DomainGuard(F64_NUMBERS.with(|c| c.replace(f64_numbers)))
 }
@@ -74,23 +75,30 @@ pub(crate) fn f64_numbers() -> bool {
     F64_NUMBERS.with(|c| c.get())
 }
 
-/// DBL_MAX as an exact integer: (2^53 - 1) * 2^971.
-fn dbl_max() -> &'static BigInt {
-    static M: OnceLock<BigInt> = OnceLock::new();
-    M.get_or_init(|| BigInt::from((1u64 << 53) - 1) << 971u32)
+/// `n <= 2^1022`, from the bit length (a second test only at exactly 1,023 bits).
+fn le_two_1022(n: &BigUint) -> bool {
+    let bits = n.bits();
+    bits <= 1022 || (bits == 1023 && n.trailing_zeros() == Some(1022))
 }
 
-/// 2^1022, the largest admissible denominator (its reciprocal is the smallest normal double).
-fn two_1022() -> &'static BigInt {
-    static M: OnceLock<BigInt> = OnceLock::new();
-    M.get_or_init(|| BigInt::one() << 1022u32)
-}
-
-/// The f64 domain's admissibility of a reduced nonzero `p/q` (see [`number_domain`]). With
-/// `|p| <= DBL_MAX` and `1 <= q <= 2^1022` the magnitude lies in [2^-1022, DBL_MAX], the normal
-/// range, so the two component bounds are the whole test.
+/// The f64 domain's admissibility of a reduced nonzero `p/q` (see [`number_domain`]): both
+/// components at most 2^1022. The magnitude then lies in [2^-1022, 2^1022], inside the normal
+/// range, and the set is closed under negation and reciprocals, so every spelling the printer
+/// can choose (one token, `/ p q`, a divisor-side reciprocal) re-reads as the same number.
+/// (With `|p| <= DBL_MAX` alone, `5e307` had no admissible reciprocal: `5e307/5e307` could not
+/// cancel, and a coefficient beside it re-read differently.)
 fn f64_admissible(p: &BigInt, q: &BigInt) -> bool {
-    p.magnitude() <= dbl_max().magnitude() && q <= two_1022()
+    le_two_1022(p.magnitude()) && le_two_1022(q.magnitude())
+}
+
+/// The largest |log2| a number of the current domain can have: 1,022 in the f64 domain, the
+/// cap in the exact one (a reduced component of more bits is refused either way).
+fn log2_limit() -> i64 {
+    if f64_numbers() {
+        1022
+    } else {
+        CAP_BITS as i64
+    }
 }
 
 /// An exact rational `p/q`, normalized (`q > 0`, `gcd(|p|, q) == 1`).
@@ -382,59 +390,67 @@ impl Rat {
         }
     }
 
-    /// The canonical members of a product bag: the bag folded as far as its products stay
-    /// representable (units dropped; `[]` is the product 1). Sorted ascending, the lowest
-    /// pair of members that folds is replaced by its product, until no two members fold. A
-    /// fold that is refused keeps its members.
-    ///
-    /// Why no two members may fold: a printed bag re-reads as a left-nested product in its
-    /// printed order, which need not be the sorted order (a sum prints its positive terms
-    /// first), so every subset of the members is canonicalised on its own on the way. A bag
-    /// in which no two members fold is the partition of each of its subsets, so it re-reads
-    /// to itself in any order and `simplify` is idempotent on it. Weaker rules failed: the
-    /// greedy fold of main stopped after one pass (three rows of the phase-1 review),
-    /// all-or-nothing folding broke on a prefix that folds where the whole bag does not
-    /// (`x1*1e300*1e10*1e-100`), and folding sorted neighbours only left two members apart
-    /// that the printed order brought together (`x1 + 912.../295... - 4e28 - 1e-325`, real
-    /// mode). Each fold is one exact product admitted by the number domain (in the f64
+    /// The canonical members of a product bag (units dropped; `[]` is the product 1), by
+    /// [`Rat::partition_with`] with exact products admitted by the number domain (in the f64
     /// domain: the result is admissible, see [`number_domain`]).
     pub fn partition_product(mut members: Vec<Rat>) -> Vec<Rat> {
         members.retain(|m| !m.is_one());
         if members.iter().any(Rat::is_zero) {
             return vec![Rat::ZERO];
         }
-        Self::partition(members, Rat::checked_mul, Rat::is_one)
+        Self::partition_with(members, Rat::checked_mul, Rat::is_one)
     }
 
     /// The canonical members of a sum bag (zeros dropped; `[]` is the sum 0), by the same
     /// rule as [`Rat::partition_product`].
     pub fn partition_sum(mut members: Vec<Rat>) -> Vec<Rat> {
         members.retain(|m| !m.is_zero());
-        Self::partition(members, Rat::checked_add, Rat::is_zero)
+        Self::partition_with(members, Rat::checked_add, Rat::is_zero)
     }
 
-    fn partition(
+    /// A bag folded as far as `fold` allows, to members of which NO TWO fold: sorted
+    /// ascending, each member is folded into the lowest kept member it folds with (the result
+    /// re-enters the queue; a `neutral` result vanishes), otherwise it is kept. The result is
+    /// sorted and a function of the multiset.
+    ///
+    /// Why no two members may fold: a printed bag re-reads as a left-nested product (sum) in
+    /// its printed order, which need not be the sorted order (a sum prints its positive terms
+    /// first), so every subset of the members is canonicalised on its own on the way. A bag
+    /// in which no two members fold is the partition of each of its subsets, so it re-reads
+    /// to itself in any order. Weaker rules failed: the greedy fold of main stopped after one
+    /// pass (three rows of the phase-1 review), all-or-nothing folding broke on a prefix that
+    /// folds where the whole bag does not (`x1*1e300*1e10*1e-100`), and folding sorted
+    /// neighbours only left two members apart that the printed order brought together
+    /// (`x1 + 912.../295... - 4e28 - 1e-325`, real mode). Each member is tried against at most
+    /// the kept members and every fold removes one, so the cost is quadratic in the bag, and
+    /// a refusal that the magnitudes decide costs no big-integer arithmetic (`log2_window`).
+    pub fn partition_with(
         mut members: Vec<Rat>,
-        fold: fn(&Rat, &Rat) -> Option<Rat>,
-        neutral: fn(&Rat) -> bool,
+        fold: impl Fn(&Rat, &Rat) -> Option<Rat>,
+        neutral: impl Fn(&Rat) -> bool,
     ) -> Vec<Rat> {
-        'fold: loop {
-            members.sort_unstable_by(|a, b| a.cmp_exact(b));
-            for i in 0..members.len() {
-                for j in i + 1..members.len() {
-                    if let Some(x) = fold(&members[i], &members[j]) {
-                        members.remove(j);
-                        if neutral(&x) {
-                            members.remove(i);
-                        } else {
-                            members[i] = x;
-                        }
-                        continue 'fold;
+        members.sort_unstable_by(|a, b| a.cmp_exact(b));
+        let mut queue: std::collections::VecDeque<Rat> = members.into();
+        let mut kept: Vec<Rat> = Vec::new();
+        while let Some(m) = queue.pop_front() {
+            match kept
+                .iter()
+                .enumerate()
+                .find_map(|(i, k)| fold(k, &m).map(|x| (i, x)))
+            {
+                Some((i, x)) => {
+                    kept.remove(i);
+                    if !neutral(&x) {
+                        queue.push_front(x);
                     }
                 }
+                None => {
+                    let at = kept.partition_point(|k| k.cmp_exact(&m) == Ordering::Less);
+                    kept.insert(at, m);
+                }
             }
-            return members;
         }
+        kept
     }
 
     pub fn checked_add(&self, o: &Rat) -> Option<Rat> {
@@ -449,8 +465,30 @@ impl Rat {
                 return small;
             }
         }
+        // A same-sign sum is at least its larger member: beyond the domain's magnitude it
+        // refuses without computing (bounds from bit lengths only, see `log2_window`).
+        if self.is_negative() == o.is_negative()
+            && self.log2_window().0.max(o.log2_window().0) >= log2_limit()
+        {
+            return None;
+        }
         let ((p1, q1), (p2, q2)) = (self.big_parts(), o.big_parts());
         Rat::from_big(&p1 * &q2 + &p2 * &q1, q1 * q2)
+    }
+
+    /// Exclusive bounds `(lo, hi)` with `2^lo < |self| < 2^hi`, from the bit lengths of the
+    /// components alone (`self != 0`). Lets a fold that surely leaves the domain refuse before
+    /// any big-integer arithmetic: a bag of many refused big members costs comparisons, not
+    /// products and gcds.
+    fn log2_window(&self) -> (i64, i64) {
+        let (bp, bq) = match &self.0 {
+            Repr::Small { p, q } => (
+                128 - i64::from(p.unsigned_abs().leading_zeros()),
+                128 - i64::from(q.unsigned_abs().leading_zeros()),
+            ),
+            Repr::Big(b) => (b.p.bits() as i64, b.q.bits() as i64),
+        };
+        (bp - bq - 1, bp - bq + 1)
     }
 
     pub fn checked_mul(&self, o: &Rat) -> Option<Rat> {
@@ -466,6 +504,14 @@ impl Rat {
             if small.is_some() || !WIDE_RESULTS {
                 return small;
             }
+        }
+        if self.is_zero() || o.is_zero() {
+            return Some(Rat::ZERO);
+        }
+        let ((l1, h1), (l2, h2)) = (self.log2_window(), o.log2_window());
+        let limit = log2_limit();
+        if l1 + l2 >= limit || h1 + h2 <= -limit {
+            return None; // surely beyond the domain's magnitude: no product computed
         }
         let ((p1, q1), (p2, q2)) = (self.big_parts(), o.big_parts());
         Rat::from_big(p1 * p2, q1 * q2)

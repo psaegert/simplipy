@@ -270,9 +270,8 @@ fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
 /// the EXPLICIT form (literal coefficients, no hyper-operators).
 pub fn to_prefix(e: &Ex, cx: &Cx) -> Vec<Tok> {
     // Spelling choices (reciprocals, splits) compute in the number domain the state was
-    // built in: exact when the context OR the enclosing run is exact, since a
-    // certificate-free `Cx::bare` inside a real-mode run spells that run's numbers.
-    let _domain = super::rat::number_domain(cx.f64_numbers() && super::rat::f64_numbers());
+    // built in (`Cx::f64_numbers` is exact when the context or the enclosing run is).
+    let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut out = Vec::new();
     emit(e, cx, &mut out);
     out
@@ -496,6 +495,12 @@ fn mul_div_split(v: &[Ex], cx: &Cx) -> (Vec<Ex>, Vec<Ex>) {
                         num.push(Ex::Num(Rat::NEG_ONE));
                     }
                     den.push(Ex::Num(inv));
+                } else if r.small_parts().is_none() {
+                    // A fraction beyond 128 bits (design 2c) stays ONE member, printed as a
+                    // local `/ p q` that re-folds to it: split across the product, the
+                    // evaluator multiplied a 300-digit numerator in before dividing and
+                    // overflowed to inf.
+                    num.push(Ex::Num(r.clone()));
                 } else {
                     // p/q with no exact decimal: p joins the numerator (skipped when it is the
                     // multiplicative identity), q the denominator.
@@ -766,9 +771,8 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
 /// verified per chain state by a debug assertion in the simplify loop.
 pub fn to_prefix_tagged(e: &Ex, cx: &Cx) -> Vec<Tok> {
     // Spelling choices (reciprocals, splits) compute in the number domain the state was
-    // built in: exact when the context OR the enclosing run is exact, since a
-    // certificate-free `Cx::bare` inside a real-mode run spells that run's numbers.
-    let _domain = super::rat::number_domain(cx.f64_numbers() && super::rat::f64_numbers());
+    // built in (`Cx::f64_numbers` is exact when the context or the enclosing run is).
+    let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut out = Vec::new();
     emit_tagged(e, cx, &mut out);
     out
@@ -1111,9 +1115,8 @@ fn fraction_spells_structurally(r: &Rat) -> bool {
 /// Nothing in the engine reads this text.
 pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
     // Spelling choices (reciprocals, splits) compute in the number domain the state was
-    // built in: exact when the context OR the enclosing run is exact, since a
-    // certificate-free `Cx::bare` inside a real-mode run spells that run's numbers.
-    let _domain = super::rat::number_domain(cx.f64_numbers() && super::rat::f64_numbers());
+    // built in (`Cx::f64_numbers` is exact when the context or the enclosing run is).
+    let _domain = super::rat::number_domain(cx.f64_numbers());
     render(e, cx, 0)
 }
 
@@ -1278,6 +1281,11 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                             // route, matching the explicit dialect.
                             match divisor_side(&r).filter(|_| has_plain_mul_factor(v)) {
                                 Some(inv) => den_parts.insert(0, num_token(&inv)),
+                                // beyond 128 bits: one numeral, never split across the
+                                // product (see `mul_div_split`)
+                                None if r.small_parts().is_none() => {
+                                    num_parts.insert(0, num_token(&r))
+                                }
                                 None => match ratio_spelling(&r)
                                     .and_then(|(n, d)| Some((n, d.exact_decimal()?)))
                                 {

@@ -1172,10 +1172,23 @@ impl<'a> Cx<'a> {
     }
 
     /// The number domain this construction runs in (`rat::number_domain`): exact in `real`
-    /// mode, f64 in every other mode -- `permissive` is evaluated in float64 too.
+    /// mode, f64 in every other mode -- `permissive` is evaluated in float64 too -- and exact
+    /// whenever the enclosing run is: a certificate-free `Cx::bare` inside a real-mode run
+    /// builds and prints that run's numbers (it is mode Default only for its licences).
     #[inline]
     pub fn f64_numbers(&self) -> bool {
-        !matches!(self.mode, RuleMode::Real)
+        !matches!(self.mode, RuleMode::Real) && super::rat::f64_numbers()
+    }
+
+    /// In f64 mode, a numeral leaf the evaluator reads as +-inf or (underflowing) as 0:
+    /// literals beyond float64's range, which stay leaves there (design 2c, review M4).
+    fn f64_reads_degenerate(&self, t: Tok, zero_too: bool) -> bool {
+        self.f64_numbers()
+            && self.view.with_str(t, |s| {
+                crate::utils::looks_numeric(s)
+                    && crate::numeric::leaf_value(s)
+                        .is_some_and(|v| v.is_infinite() || (zero_too && v == 0.0))
+            })
     }
 
     /// A certificate-free context (conversions, pattern handling, tests).
@@ -1226,13 +1239,7 @@ impl<'a> Cx<'a> {
             // A numeral leaf beyond float64's range denotes a finite real (H-052), but in f64
             // mode the deployed evaluator reads it as inf (design 2c, review M4): there it
             // is not certainly finite (`0 * 1e400` is NaN to the evaluator).
-            Ex::Leaf(t) => {
-                self.view.sigil(*t) == 0
-                    && !(self.f64_numbers()
-                        && self.view.with_str(*t, |s| {
-                            crate::numeric::leaf_value(s).is_some_and(|v| v.is_infinite())
-                        }))
-            }
+            Ex::Leaf(t) => self.view.sigil(*t) == 0 && !self.f64_reads_degenerate(*t, false),
             Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| self.certainly_finite(x)),
             Ex::Pow(b, ex) => {
                 self.certainly_finite(b)
@@ -1284,7 +1291,8 @@ impl<'a> Cx<'a> {
         match e {
             Ex::Pi | Ex::E => true,
             Ex::Num(r) => !r.is_zero(),
-            Ex::Leaf(t) => self.view.sigil(*t) == 0,
+            // f64 mode: `1e400/1e400` and `1e-400/1e-400` are NaN to the evaluator (M4)
+            Ex::Leaf(t) => self.view.sigil(*t) == 0 && !self.f64_reads_degenerate(*t, true),
             _ => {
                 if !e.has_measure_space(self.view) {
                     return false; // ground: no a.e. tolerance (see `has_measure_space`)
@@ -3050,7 +3058,12 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     let mut buckets: Vec<FBucket> = Vec::new();
     let mut opaque: Vec<Ex> = Vec::new(); // Const-containing and merge-refused factors, verbatim
     let branch_ok = |cx: &Cx, base: &Ex, a: &Rat, b: &Rat| -> bool {
-        if cx.lossy() || (a.is_integer() && b.is_integer()) {
+        // Integers merge totally -- in f64 mode only while the evaluator reads them exactly
+        // (parity known, |n| <= 2^53): it reads `x^(2^53+1)` as `x^(2^53)`.
+        let exact_integers = a.parity().is_some()
+            && b.parity().is_some()
+            && a.checked_add(b).is_some_and(|s| s.parity().is_some());
+        if cx.lossy() || exact_integers {
             return true;
         }
         if cx.certainly_nonneg(base) {
@@ -3085,7 +3098,6 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     // constructor at the end, exactly as `add` does -- the spliced factors must collect against
     // the other buckets, and the Flat invariant must hold.
     let mut out: Vec<Ex> = opaque;
-    let mut opaque2: Vec<Ex> = Vec::new(); // licence/overflow refusals from the sorted fold
     let mut spliced = false;
     let push_factor = |out: &mut Vec<Ex>, spliced: &mut bool, f: Ex| match f {
         Ex::Mul(v) => {
@@ -3095,73 +3107,44 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
         f => out.push(f),
     };
     for b in buckets {
-        let FBucket {
-            base,
-            sym,
-            mut exps,
-        } = b;
-        // DETERMINISTIC licence-gated fold (B3b): sort the exponents, then merge each
-        // sign pool in that order, re-checking the branch-cut licence at every step
-        // exactly as the arrival-order code did -- but the merge partition (and thus
-        // WHICH merges the licence sees) is now a function of the exponent MULTISET.
-        exps.sort_unstable_by(|x, y| x.cmp_exact(y));
-        let (mut pos, mut neg) = (Rat::ZERO, Rat::ZERO);
-        for r in exps {
-            let slot = if r.is_negative() { &mut neg } else { &mut pos };
-            let sym_ok = match &sym {
-                None => true,
-                Some(y) => cx.sym_merge_licensed(&base, y),
-            };
-            if slot.is_zero() {
-                *slot = r; // first exponent of this sign: no merge happens yet
-            } else if sym_ok && branch_ok(cx, &base, slot, &r) {
-                match slot.checked_add(&r) {
-                    Some(s) => *slot = s,
-                    None => opaque2.push(rebuild_factor(base.clone(), sym.clone(), r, cx)),
-                }
-            } else {
-                opaque2.push(rebuild_factor(base.clone(), sym.clone(), r, cx));
-            }
-        }
-        let cancels = !pos.is_zero() && !neg.is_zero();
-        let sym_cancel_ok = match &sym {
+        let FBucket { base, sym, exps } = b;
+        // DETERMINISTIC licence-gated fold (design 2c, `Rat::partition_with`): two exponents
+        // merge when the branch-cut licence admits the pair and the sum is a number, until no
+        // two merge -- a function of the exponent MULTISET that re-reads to itself in any
+        // order (a greedy fold left pieces the next pass merged: `x^1e-306*x^1000*x^1001`).
+        // Opposite signs share one pool only on a finite-nonzero base (`x^a * x^-a = 1`
+        // needs the licence); a zero sum drops the factor.
+        let sym_ok = match &sym {
             None => true,
             Some(y) => cx.sym_merge_licensed(&base, y),
         };
-        if cancels
-            && sym_cancel_ok
-            && (cx.lossy() || cx.finnz_licensed(&base))
-            && branch_ok(cx, &base, &pos, &neg)
-        {
-            match pos.checked_add(&neg) {
-                Some(s) if s.is_zero() => {
-                    // base^0 -> 1 on the licensed (finite-nonzero a.e.) base: factor drops.
-                }
-                Some(s) => {
-                    let f = rebuild_factor(base, sym, s, cx);
-                    push_factor(&mut out, &mut spliced, f);
-                }
-                None => {
-                    let f1 = rebuild_factor(base.clone(), sym.clone(), pos, cx);
-                    push_factor(&mut out, &mut spliced, f1);
-                    let f2 = rebuild_factor(base, sym, neg, cx);
-                    push_factor(&mut out, &mut spliced, f2);
-                }
+        let merge = |a: &Rat, b: &Rat| -> Option<Rat> {
+            if sym_ok && branch_ok(cx, &base, a, b) {
+                a.checked_add(b)
+            } else {
+                None
             }
+        };
+        let mixed = exps.iter().any(|r| r.is_negative()) && exps.iter().any(|r| !r.is_negative());
+        let pools: Vec<Vec<Rat>> = if mixed && sym_ok && (cx.lossy() || cx.finnz_licensed(&base)) {
+            vec![exps]
         } else {
-            // Keep the two sign pools separate (each pool is already exactly merged, every
-            // step licensed at accumulation time).
-            if !pos.is_zero() {
-                let f = rebuild_factor(base.clone(), sym.clone(), pos, cx);
-                push_factor(&mut out, &mut spliced, f);
-            }
-            if !neg.is_zero() {
-                let f = rebuild_factor(base, sym, neg, cx);
+            let (negs, poss): (Vec<Rat>, Vec<Rat>) =
+                exps.into_iter().partition(|r| r.is_negative());
+            vec![poss, negs]
+        };
+        for pool in pools {
+            for r in Rat::partition_with(pool, merge, Rat::is_zero) {
+                let f = rebuild_factor(base.clone(), sym.clone(), r, cx);
                 push_factor(&mut out, &mut spliced, f);
             }
         }
     }
-    out.extend(opaque2);
+    if has_const {
+        // Const absorbs every nonzero rational factor (c * r = c'), the members a refused
+        // coefficient partition kept included (design 2c, review M3).
+        coeff_overflow.clear();
+    }
     out.extend(coeff_overflow);
     if spliced {
         if !coeff.is_one() {
@@ -4006,18 +3989,6 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 if let Some(r) = root.checked_pow_integer(&e.numer()) {
                     return Ex::Num(r);
                 }
-            }
-        }
-        // A REFUSED RECIPROCAL of a negative literal keeps its sign outside (design 2c):
-        // `(-b)^-1` is `-(b^-1)` exactly. In f64 mode a reciprocal can refuse -- `1/DBL_MAX` is
-        // subnormal, so `pow(-DBL_MAX, -1)` stays a power -- and a sign left in the base made
-        // `x / -DBL_MAX` and its own re-read `x / (-1*DBL_MAX)` two states. The reciprocal of
-        // an i128 literal always folded, so main never kept one; every other refused power of
-        // a negative literal keeps main's spelling (general sign normalisation is phase 4).
-        if b.is_negative() && *e == Rat::NEG_ONE {
-            if let Some(a) = b.checked_neg() {
-                let p = pow(Ex::Num(a), exp.clone(), cx);
-                return mul(vec![Ex::Num(Rat::NEG_ONE), p], cx);
             }
         }
     }

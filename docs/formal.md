@@ -72,20 +72,22 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   under sign and exponent edits, which is what makes the sign orientation of sums
   well-defined (`rust/ac/expr.rs`, "STRIPPED comparators").
 - **I3 (coefficient normal form):** a $\mathrm{Mul}$ carries one rational factor and an
-  $\mathrm{Add}$ one rational term, unless a fold is refused; the literals of a bag (and the
-  coefficients of one like-term bucket) fold to their CANONICAL PARTITION
-  (`Rat::partition_product`/`partition_sum`): sorted ascending, the lowest pair that folds is
-  replaced by its exact result until no two members fold. A fold refuses beyond the cap, and
-  in f64 mode where the result is not admissible. No two members of a partition fold, so it is
-  the partition of each of its subsets and re-reads to itself in any printed order. A
-  refused integer power of a negative literal keeps its sign outside, by the exponent's
-  parity. *Known residuals at the cap* [EMPIRICAL, tracked]: on 20,000 adversarial fuzz
-  calls per mode with literals at the 128-bit, float64-range and cap boundaries, 0
-  idempotence violations in f64 mode and 1 in real mode (main had 2 and 2 on the same
-  inputs); the real-mode case is a coefficient whose products with the members of a sum are
-  refused at the cap. And at a refusal the grouping of the input can decide which inner
-  products fold: `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different
-  canonical forms (canonicity across spellings, not idempotence; both pinned in tests).
+  $\mathrm{Add}$ one rational term, unless a fold is refused. The literals of a bag, the
+  coefficients of one like-term bucket and the exponents of one like-base pool fold to a
+  CANONICAL PARTITION (`Rat::partition_with`): sorted ascending, each member folds into the
+  lowest kept member it folds with, until no two members fold. A fold refuses beyond the cap,
+  and in f64 mode where the result is not admissible (numerator and denominator at most
+  $2^{1022}$, a set closed under negation and reciprocals); an exponent merge also needs its
+  branch-cut licence. No two members of a partition fold, so it is the partition of each of its
+  subsets and re-reads to itself in any printed order. *Known residuals* [EMPIRICAL, tracked]:
+  a boundary fuzz (60,000 calls per mode over three seeds, literals at the 128-bit,
+  float64-range and cap boundaries) gives 4 canonical-form idempotence failures (3 f64, 1
+  permissive, 0 real; main has 15 on the same inputs), all at literals float64 cannot hold
+  (`1e400`, subnormals), which stay opaque leaves and leave a sum's sign orientation open;
+  and at a refusal the grouping of the input can decide which inner products fold:
+  `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
+  (canonicity across spellings, not idempotence; both pinned in tests). The exploration phase
+  is a separate class: restarted from its own answer it can reach a different form (L6).
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
@@ -355,7 +357,8 @@ mirroring tier 2 of the sign-placement convention (§3); states carry no spellin
 the tie-break must be spelling-free, and either member realizes the same $\mu$. The
 clause is defensive: no exact tie exists in the reachable `i128` lattice [EMPIRICAL —
 exhaustive scan over all 3,563 denominators $2^a 5^b < 2^{127}$ at dense-plus-spread
-numerator samples; the closest observed gap is 3–4 milli-bits].
+numerator samples; the closest observed gap is 3–4 milli-bits; numbers beyond 128 bits
+(phase 2c) were not scanned].
 
 - $\mu$ takes values in $\mathbb{N}$ [THEOREM — trivially].
 - `cmp_ex` is a strict total order on $T_{\mathrm{can}}$ [BY CONSTRUCTION — rank +
@@ -459,7 +462,7 @@ legitimate input; neither has ever been observed to bind [EMPIRICAL], and by T6 
 bound now *proves* an implementation bug. When one binds, rewriting stops and the state
 reached is returned — sound, possibly non-minimal.
 
-**Equal-$\mu$ ties, measured** [EMPIRICAL — instrumented build over 50,800 simplify
+**Equal-$\mu$ ties, measured** [EMPIRICAL, before phase 2c's numbers beyond 128 bits — instrumented build over 50,800 simplify
 calls: the 400-expression mined corpus in strict and permissive modes, plus 50,000 fuzz
 expressions biased toward coefficient/exponent cost shifts and i128-boundary literals].
 Tie **fires**: none occurred (0). Tie **rebuilds**: 169 calls (0.3%), every one on a
@@ -493,8 +496,8 @@ assertion), `to_prefix` has a left inverse and is therefore injective — two st
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
 debug, so every state reached by the tests and the mini-mines satisfies it); its one known exception class is the documented I3
-cap residual (1 in 20,000 adversarial real-mode calls, corpus-unreachable), which therefore
-also scopes the cache guarantee.
+canonical-form residual at literals float64 cannot hold (corpus-unreachable), which
+therefore also scopes the cache guarantee.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass
 fixpoint within budget ($\mathrm{pass}(t_k) = t_k$ — by T6 the fixpoint *exists* and is
@@ -514,7 +517,7 @@ truncate.
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
 permutation gate (0 violations / 400 canonical corpus expressions at head). One
-registered residual class: the I3 cap residuals above. (The scale gates hold 0 idempotence and 0 permutation failures at head.)
+registered residual class: the I3 residuals above. (The scale gates held 0 idempotence and 0 permutation failures when last run, before phase 2c.)
 
 **Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
 (training-corpus canonicalization). It relaxes *soundness* licences, never the ordering:

@@ -4,30 +4,40 @@
 
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
-  number left the exact form at 128 bits and became an opaque symbol. Literal products and sums
-  now fold where they used to stay apart: `x1*1e-40*3` is one coefficient, `3e-40*x1 - x1*1e-40*3`
-  is `0`, and the Larmor denominator `6*3.1415926535897*8.854e-12*(2.99792458e8)^3` is one
-  number. A result beyond the cap keeps its pieces (`2^1100*x1` stays a power). Token answers
-  print such numbers in full, as before; a readable display is the next step.
-- **f64 mode folds only numbers float64 reads back as themselves.** In `mode='f64'` (and
-  `permissive`) a fold must give zero or a normal number with numerator at most DBL_MAX and
-  denominator at most 2^1022, so `x1 + 1e308 + 1e308` keeps both terms and a subnormal such as
-  `5e-324` stays as written; `real` mode folds everything within the cap (`2e308 + x1`). Two
-  more f64 readings follow the evaluator: an integer exponent beyond 2^53 has unknown parity
-  (`(-1)^9007199254740993` stays; it folded to -1 where the evaluator gives 1), and a literal
-  the evaluator reads as inf is not certainly finite (`0*1e400` stays; it folded to 0 where the
-  evaluator gives NaN). `real` keeps exact parity and finiteness.
-- **Literal bags fold to a canonical partition, so `simplify` is idempotent at the cap.** The
-  literals of a bag fold pairwise until no two of them fold; the old one-pass fold left pieces
-  the next call merged (also in 0.14.7: `10/((250000000/1571)/(pi*pi*x3))` with pi written out
-  needed two calls). A like-term bucket on a finite key cancels across signs in the same way.
-  Known limit: where a fold is refused, the grouping of the input can decide which inner
-  products fold (`(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different
-  forms).
-- **What moves.** 23 of srbf's 6,531 ground truths change form, all by folding literal products
-  the old 128-bit limit refused; their values agree to 1e-15. The `real` and `permissive` rule
+  number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds
+  where it used to stay apart: `x1*1e-40*3` is one coefficient, `3e-40*x1 - x1*1e-40*3` is `0`,
+  and the Larmor denominator `6*3.1415926535897*8.854e-12*(2.99792458e8)^3` is one number. A
+  result beyond the cap keeps its pieces (`2^1100*x1` stays a power). Answers carry these numbers
+  exactly and in full, so a product or power of long constants can print as a number of hundreds
+  of digits, and a literal that used to come back as written now comes back as its digits
+  (`x1*1e-300`). Every exact digit still counts in the measure; pricing a literal at the
+  precision the evaluator reads it is the next step.
+- **f64 mode holds a number only where float64 can.** In `mode='f64'` (and `permissive`) a
+  number's numerator and denominator must both be at most 2^1022, so the number and its reciprocal
+  are normal float64 values; any other literal stays as written (`1e308`, `1e400`, the subnormal
+  `5e-324`), as before. `real` mode holds everything within the cap: `x1 + 1e308 + 1e308` is
+  `2e308 + x1` there and `x1 + 2*1e308` in f64 mode. Two more f64 readings follow the evaluator:
+  an integer beyond 2^53 has unknown parity (`(-1)^9007199254740993` stays, and `x1^(2^53)*x1`
+  is not merged: the evaluator reads 2^53 + 1 as 2^53), and a literal the evaluator reads as inf
+  or as 0 is neither certainly finite nor certainly nonzero (`0*1e400` and `1e400/1e400` stay;
+  the evaluator gives NaN). `real` keeps exact parity and finiteness.
+- **Literal bags fold to a canonical partition.** The literals of a product or sum, the
+  coefficients of one like term and the exponents of one like base fold pairwise until no two of
+  them fold, so a form in which a fold is refused re-reads to itself. The old one-pass fold left
+  pieces the next call merged (also in 0.14.7: `10/((250000000/1571)/(pi*pi*x3))` with pi written
+  out needed two calls). `<constant>` and the infinities absorb the pieces a refused fold keeps,
+  and a fraction beyond 128 bits prints as one `p/q` instead of being split across a product (the
+  evaluator multiplied a 300-digit numerator in before dividing and overflowed). Known limits:
+  where a fold is refused, the grouping of the input can decide which inner products fold
+  (`(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different forms); and the
+  search can find a cheaper form when started again from an answer, more often now that folded
+  constants are long.
+- **What moves.** Against 0.15.0.dev1: none of the 400 corpus rows; 23 of srbf's 6,531 ground
+  truths, all by literal arithmetic the 128-bit limit refused (two of them are coefficient sums
+  that then allow a distribution), their values equal to 1e-15. The `real` and `permissive` rule
   sets of acj-5-4-llm serve 42 fewer rules (`(+-0.1)^n -> 1e-n` for n >= 40), because the
-  constructor now computes them; the next re-mine drops them from the files. The verification
+  constructor now computes them; the next re-mine drops them from the files. A mode's rules are
+  read in that mode's number domain, whichever mode asks for them first. The verification
   instruments fold only within the engine's cap and refuse oversized spellings before building
   them. Version 0.15.0.dev2.
 - **The compiled evaluator reads every literal as its nearest float64.** A compiled expression

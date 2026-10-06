@@ -112,7 +112,7 @@ impl Engine {
     /// and [`Engine::translate_rules`] for the load gates every set faces.
     pub(crate) fn ac_rules(&self) -> &AcRules {
         self.ac_rules_cell
-            .get_or_init(|| self.translate_rules(&self.rules.raw))
+            .get_or_init(|| self.translate_rules(&self.rules.raw, RuleMode::Default))
     }
 
     /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE (owner
@@ -141,10 +141,14 @@ impl Engine {
     pub(crate) fn ac_rules_for(&self, mode: RuleMode) -> &AcRules {
         match mode {
             RuleMode::Default => self.ac_rules(),
-            RuleMode::Real => self.ac_mode_rules(&self.real_rules, &self.ac_real_rules_cell),
-            RuleMode::Permissive => {
-                self.ac_mode_rules(&self.permissive_rules, &self.ac_permissive_rules_cell)
+            RuleMode::Real => {
+                self.ac_mode_rules(&self.real_rules, &self.ac_real_rules_cell, RuleMode::Real)
             }
+            RuleMode::Permissive => self.ac_mode_rules(
+                &self.permissive_rules,
+                &self.ac_permissive_rules_cell,
+                RuleMode::Permissive,
+            ),
         }
     }
 
@@ -155,10 +159,11 @@ impl Engine {
         &'a self,
         set: &'a Option<CompiledRules>,
         cell: &'a std::sync::OnceLock<AcRules>,
+        mode: RuleMode,
     ) -> &'a AcRules {
         match set {
             None => self.ac_rules(),
-            Some(compiled) => cell.get_or_init(|| self.translate_rules(&compiled.raw)),
+            Some(compiled) => cell.get_or_init(|| self.translate_rules(&compiled.raw, mode)),
         }
     }
 
@@ -188,7 +193,11 @@ impl Engine {
     fn translate_rules(
         &self,
         raw: &[(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)],
+        mode: RuleMode,
     ) -> AcRules {
+        // A mode's rules are read in that mode's number domain (design 2c), whichever run
+        // first asks for them (translation is lazy and may start inside another mode's run).
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
         let view = TokenView::new(&self.tokens, &overlay);
         let is_wildcard = |s: &str| {

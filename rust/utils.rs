@@ -60,7 +60,7 @@ pub fn split_fraction(s: &str) -> Option<(&str, &str)> {
 /// A token that starts like a number: after one optional pair of parentheses and any run
 /// of signs, a digit or `.`. Such a token must be a numeral (`reserved_numeric_spelling`,
 /// family 4); `x.1`, `np.pi`, `_0`, `-x0` and the operator `-` do not start like one.
-fn looks_numeric(t: &str) -> bool {
+pub(crate) fn looks_numeric(t: &str) -> bool {
     let t = t
         .strip_prefix('(')
         .and_then(|s| s.strip_suffix(')'))

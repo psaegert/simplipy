@@ -99,12 +99,12 @@ def test_huge_integer_folds_to_its_float_value(engine):
 
 @pytest.mark.parametrize("expr", [
     MONSTER,
-    "1 / (2.7167019109484434 * 3.1415926535897 * 1.0000000000000002)",   # an i128-overflow partition
+    "1 / (2.7167019109484434 * 3.1415926535897 * 1.0000000000000002)",   # beyond 128 bits (a partition before 2c)
     "757269634452864785310003246961 / 7",
     "1e-7 / 3.0000000000000004",
     "123456789.123456789 / 987654321.987654321",                          # reduces to a CHEAP fraction: stays
     "0.3333333333333333 * 0.3333333333333333",
-    "74.22110491129965 - 92.12760331603121 * pow(9.440764872280846, 4)",  # exact fold overflows i128: the strict tier keeps all four operators
+    "74.22110491129965 - 92.12760331603121 * pow(9.440764872280846, 4)",  # beyond 128 bits: the strict tier kept all four operators before 2c
     "2.7167019109484434 * 3.1415926535897 * 1.4142135623730951 * 1.7320508075688772",
 ])
 def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
@@ -124,18 +124,18 @@ def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
         elif len(strict) == 1:
             assert float(out[0]) == float(exact), (out, as_float)
         else:
-            # an i128-overflow PARTITION (the exact value never fit one rational): the members
-            # fold piecewise, so the endpoint is correctly rounded per fold, within an ulp or two
+            # the strict tier keeps more than one literal (a refused fold): the members fold
+            # piecewise, so the endpoint is correctly rounded per fold, within an ulp or two
             assert math.isclose(float(out[0]), float(exact), rel_tol=4e-16), (out, as_float)
     else:
         assert out == strict, (out, strict, engine.complexity(as_float), engine.complexity(strict))
 
 
 # A constant-only draw from the v25.0-T7 training stream (2026-09-03): the argument of the cosine
-# is a product of ten 16-digit constants whose exact value leaves i128, so the strict tier keeps
-# the whole subtree, and the first fold cut left a 20-digit exact decimal behind (the emitter
-# folded two literals at print time that the constructor had kept apart). The permissive endpoint
-# must be ONE float literal and its own fixpoint.
+# is a product of ten 16-digit constants whose exact value left i128, so before phase 2c the strict
+# tier kept the whole subtree, and the first fold cut left a 20-digit exact decimal behind (the
+# emitter folded two literals at print time that the constructor had kept apart). The permissive
+# endpoint must be ONE float literal and its own fixpoint.
 STREAM_DRAW = ['-', '14.811588267158381', 'cos', '-', '5.442771642222319', '-', '0.04900091656348083', '-', '9.162716173529507', '*', '/', '*', '*', '*', '*', '-6.845112239925015', '-5.594387656783201', '/', '1.580838523296102', '-4.8070930465509525', '-9.834539098616455', '77.18352008764161', '4.611109313508952', '/', '*', '-1.1927945911146152', '-0.7126036273393542', '/', '-4.282923090520727', '-22.20645482072392']
 
 
@@ -145,5 +145,6 @@ def test_stream_constant_draw_folds_to_one_literal_and_is_idempotent(engine):
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     strict = list(engine.simplify(STREAM_DRAW, mode=Mode.f64))
     # Phase 2c: the exact product fits the 1,100-bit cap, so the strict tier folds the subtree
-    # too -- to the exact decimal of its last step, not one float -- and agrees in value.
+    # too (the cosine in float64, as f64 mode folds functions; the subtraction exactly) and agrees
+    # with the permissive float in value.
     assert len(strict) == 1 and math.isclose(float(strict[0]), float(once[0]), rel_tol=4e-16), strict
