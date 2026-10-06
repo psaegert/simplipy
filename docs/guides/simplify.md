@@ -116,18 +116,27 @@ changed on a second call in `f64` (50 to a cheaper form), because the first call
 between two improvements. Uncapped, only the 24 that also change with the search off remain
 (long products whose factors re-read in another order), no answer is costlier than at
 cap 4 and 59 are cheaper, for about 2% more total time; `real` behaves the same. A cap of 8
-happens to give the same answers on those predictions, but a sum of two of them needs 32 and
-of three 64, so no fixed cap is enough. What the uncapped search costs is time on large
-sums of terms that each need several expansions: it improves one term per round and then
-scans the whole expression again, so 16 copies of one prediction take 16 s (0.5 s at cap 4,
-for an answer 22% costlier).
+happens to give the same answers on those predictions, but a sum of two of them needs 17
+and of three 37 (4k² + 1 for k copies), so no fixed cap is enough. The search can still reach
+a state of the residual classes of `docs/formal.md` (I3) that the chain alone never visits;
+on srbf's predictions every remaining second-call change also happens with the search off.
+What the uncapped search costs is time on large sums of terms that each need several
+expansions: it improves one term per round and then scans the whole expression again, so 16
+copies of one prediction take 16 s (0.5 s at cap 4, for an answer 28% costlier) and 32 copies
+170 s (2.6 s). Every internal caller that passes no `effort` (normalization, masking, mining,
+the verification monitor, the promotion refund) follows the default.
 
 `permissive` keeps the cheapest of three searches (its two fold disciplines and the `f64`
 search). Each ends in a valley of its own search, but the `f64` search, started from the
 winner, can still improve on it; so `permissive` runs it from its winner and, while it finds
-something cheaper, selects again. That leaves 14 second-call changes of the former 127, all
-of them also with the search off. Different search lengths can lead the selection to
-different winners: 182 answers are cheaper than at cap 4 and 4 are costlier.
+something cheaper, selects again (at any nonzero budget; a cap applies to each search). That
+leaves 14 second-call changes of the former 127 on srbf's predictions, all of them also with
+the search off. The winner is not necessarily a valley of permissive's own two searches, which
+can still improve on it on a second call (1 of a review's 52,500 boundary inputs); re-running
+the whole selection from the winner would settle that but costs about half again the time of
+the mode flash-ansr's training data canonicalizes in. Different search lengths can lead the
+selection to different winners: 182 answers are cheaper than at cap 4 and 4 costlier on srbf's
+predictions, 233 and 46 on boundary inputs.
 
 The sweep below (65,536 rows, measured with the cap at 4, the default then) shows what
 the search buys on the SR prior: effort 0 to 4 moves the mean ratio from 0.9685

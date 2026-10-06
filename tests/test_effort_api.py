@@ -99,10 +99,14 @@ class TestEffortValidation:
         with pytest.raises(ValueError, match='effort'):
             engine.simplify(HILL, effort=bad)
 
-    @pytest.mark.parametrize('bad', [True, 2.0, '4'])
+    @pytest.mark.parametrize('bad', [1.5, '8', True, False])
     def test_non_int_budgets_raise(self, engine, bad) -> None:
         with pytest.raises(TypeError, match='effort'):
             engine.simplify(HILL, effort=bad)
+
+    def test_a_cap_beyond_the_index_range_is_no_cap(self, engine) -> None:
+        # pyo3 cannot carry it as a usize; any such cap is the uncapped search.
+        assert engine.simplify(HILL, effort=2 ** 70) == engine.simplify(HILL, effort=None)
 
 
 # An srbf model prediction (f64): exact folds let the search multiply the 17-digit
@@ -149,16 +153,17 @@ class TestTheSearchRunsUntilItSettles:
 
     @pytest.mark.parametrize('pre', [
         # srbf model predictions: permissive's winner was a valley of its own arm, and the
-        # default arm, run from it, found one more expansion on a second call.
+        # f64 search, run from it, found one more expansion on a second call. The settling
+        # loop probes the f64 search only (docs/formal.md L6).
         '* rootn inv v1 2 + v1 exp - v1 / * v1 * 0.0016226622388582068 pow v1 2 - v1 + '
         '-723208974.5267093 / / v1 + v1 pow v1 3 neg pow v1 2',
         '/ - v1 * pow v1 2 sin - / v1 + -0.9550500628350815 / inv - pow v1 5 * 0.5109200808956914 '
         'abs v1 v1 pow v1 2 / v1 * 5.426292262663532e-05 * v1 - abs v1 v1',
     ])
-    def test_permissive_settles_across_its_three_searches(self, shipped, pre) -> None:
+    def test_permissive_settles_for_the_f64_search(self, shipped, pre) -> None:
         once = shipped.simplify(pre.split(), mode=Mode.permissive)
         assert shipped.simplify(once, mode=Mode.permissive) == once
-        # ... and its answer is a valley of the default arm too.
+        # ... and its answer is a valley of the f64 search too.
         assert shipped.complexity(shipped.simplify(once)) == shipped.complexity(once)
 
     @pytest.mark.parametrize('k', [2, 3])
@@ -168,8 +173,3 @@ class TestTheSearchRunsUntilItSettles:
         assert shipped.simplify(once) == once
         capped = shipped.simplify(t, effort=16)
         assert shipped.simplify(capped, effort=16) != capped
-
-    @pytest.mark.parametrize('bad', [1.5, '8', True, False])
-    def test_non_int_budgets_raise(self, engine, bad) -> None:
-        with pytest.raises(TypeError, match='effort'):
-            engine.simplify(HILL, effort=bad)

@@ -955,10 +955,11 @@ class SimpliPyEngine:
             same descent loop, and replaces the result only when the candidate's
             endpoint lands STRICTLY below it in the serve-time reduction ordering.
             ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
-            nothing, so a second call returns the answer unchanged; an int caps the
-            search at that many candidate descents, after which a second call can
-            continue it; ``0`` never enters the phase and is byte-identical to the
-            plain chain. Every guarantee survives any budget: soundness (same
+            nothing, so a second call returns the answer unchanged (up to the residual
+            classes in ``docs/formal.md``, I3 and L6); an int caps each search at that
+            many candidate descents (``permissive`` runs several per call), after which
+            a second call can continue it; ``0`` never enters the phase and is
+            byte-identical to the plain chain. Every guarantee survives any budget: soundness (same
             certificates), never-worse (strictly-below acceptance), termination
             (well-founded ordering, independent of the budget) and deterministic
             output.
@@ -2076,6 +2077,8 @@ class SimpliPyEngine:
                     f"effort must be None or an int >= 0, not {type(effort).__name__} ({effort!r})") from None
             if effort < 0:
                 raise ValueError(f"effort must be non-negative, got {effort}")
+            if effort > 2 ** 63 - 1:
+                effort = None  # beyond the index range no cap binds: the uncapped search
         # A STRING mode must coerce, never silently compare unequal to the enum:
         # `mode='lossy'` used to run the default because `'lossy' == Mode.LOSSY` was False
         # (audit Tier-2, 2026-08-03). Accept the enum, its names (any case), and its

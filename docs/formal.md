@@ -100,9 +100,13 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   of equal length and price (6); none of them round-trips (L6a). And at a
   refusal the grouping of the input can decide which inner products fold:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
-  (canonicity across spellings, not idempotence; both pinned in tests). The exploration phase
-  adds no class of its own when it runs until a round finds nothing (the default; L6); a
-  capped search can stop between two improvements, which a second call continues.
+  (canonicity across spellings, not idempotence; both pinned in tests). Uncapped (the default;
+  L6) the exploration phase leaves every second-call change on srbf's predictions in the
+  classes above (each also changes with the search off), but it can reach states of those
+  classes the chain alone never visits (review fuzz: an unmerged `3e-310` coefficient that
+  re-reads in another order; a `<constant>` absorbed on re-read), and in `permissive` its
+  winner is a valley of the `f64` search only (L6). A capped search can stop between two
+  improvements, which a second call continues.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
@@ -541,8 +545,13 @@ the round-trip premise fails (L6a) the re-run starts from a different state. `pe
 selects among three searches, and its winner is a valley of its own search only; the re-run's
 `f64` search, started from the winner, could descend further. So the call runs that search
 from its winner and selects again while it finds something strictly cheaper (finite: $\mu$ is
-a non-negative integer); the answer is then a valley of the `f64` search too [EMPIRICAL:
-127 second-call changes at cap 4, 14 uncapped, all 14 also with the search off].
+a non-negative integer); the answer is then a valley of the `f64` search too, but not
+necessarily of permissive's own two searches, which can still improve on a winner the `f64`
+search produced [EMPIRICAL: srbf's predictions: 127 second-call changes at cap 4, 14 uncapped,
+all 14 also with the search off; a review's 52,500 boundary inputs: 1 case of the two
+searches]. Re-running the whole selection from the winner would close that class but costs
++49% permissive time on srbf's predictions. A further premise of the argument: each accepted
+candidate's descent reaches its fixpoint within `max_passes`.
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:
