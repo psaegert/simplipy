@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now
+  `None` (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round
+  of expansions finds nothing cheaper, so a second call returns the answer unchanged. A cap
+  counts every candidate tried over the whole expression, refused ones included, so the cap a
+  search needs grows with the expression. With exact arithmetic on long constants this showed:
+  at cap 4, 73 of srbf's 125,127 model predictions changed on a second call (50 to a cheaper
+  form). Uncapped, only the 24 that also change with the search off remain, no answer is
+  costlier and 59 are cheaper, for 1.6% more total time (local measurement). `effort=k` still
+  caps the search at `k` candidate descents and `effort=0` still skips it.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
   number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds

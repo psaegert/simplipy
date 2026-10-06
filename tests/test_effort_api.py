@@ -86,18 +86,74 @@ class TestEffortValidation:
             [str(t) for t in engine.to_tagged(tokens)], 48, False, "explicit")
         assert via_plain == engine._core.ac_simplify_in_mode(
             [str(t) for t in engine.to_tagged(tokens)], 48, "default", "explicit", 0)
-        # The RULED default (owner 2026-08-24, benchmark panel): 4 -- the default
-        # call explores, and explicitly asking for the chain alone differs on a
-        # mu-hill.
+        # The RULED default (owner 2026-10-06; 4 from 2026-08-24): None -- the default
+        # call explores until a round finds nothing, and explicitly asking for the
+        # chain alone differs on a mu-hill.
         from simplipy import DEFAULT_EFFORT
-        assert DEFAULT_EFFORT == 4
-        assert engine.simplify(HILL) == engine.simplify(HILL, effort=4)
+        assert DEFAULT_EFFORT is None
+        assert engine.simplify(HILL) == engine.simplify(HILL, effort=None)
         assert engine.simplify(HILL) != engine.simplify(HILL, effort=0)
 
     @pytest.mark.parametrize('bad', [-1, -64])
     def test_negative_budgets_raise(self, engine, bad) -> None:
         with pytest.raises(ValueError, match='effort'):
             engine.simplify(HILL, effort=bad)
+
+    @pytest.mark.parametrize('bad', [True, 2.0, '4'])
+    def test_non_int_budgets_raise(self, engine, bad) -> None:
+        with pytest.raises(TypeError, match='effort'):
+            engine.simplify(HILL, effort=bad)
+
+
+# An srbf model prediction (f64): exact folds let the search multiply the 17-digit
+# coefficients out, which takes more than 4 candidate descents. Capped at 4, the first call
+# stopped between two improvements and a second call continued (649.3 -> 521.4 bits).
+PARTIAL = ('* - * 1.8426336222334249e-5 x_0 66.651398870432352 - + + * 0.0017852549531278935 x_0 '
+           '* - * -3.7410441585838554e-6 x_0 29.336341980886485 - * 0.003721137246172343 x_0 '
+           '1.4144809534136968 pow + * 0.00020869130391839415 x_0 0.46214648267002759 2 '
+           '41.682127161183045').split()
+
+
+def _copies(k):
+    # PARTIAL over k distinct variables, summed: every copy needs its own descents, so no
+    # fixed cap fits every size.
+    out = list(PARTIAL)
+    for j in range(1, k):
+        out = ['+'] + out + [t.replace('x_0', f'x_{j}') for t in PARTIAL]
+    return out
+
+
+@pytest.fixture(scope='module')
+def shipped():
+    try:
+        return SimpliPyEngine.load('acj-5-4-llm')
+    except Exception:
+        import os
+        if os.environ.get('SIMPLIPY_TEST_REQUIRE_ASSETS'):
+            raise
+        pytest.skip('acj-5-4-llm not resolvable here')
+
+
+class TestTheSearchRunsUntilItSettles:
+    def test_the_default_answer_is_its_own_answer(self, shipped) -> None:
+        once = shipped.simplify(PARTIAL)
+        assert shipped.simplify(once) == once
+
+    def test_a_cap_can_stop_between_two_improvements(self, shipped) -> None:
+        # What the old default did: the cap is still available, and still a cap.
+        once = shipped.simplify(PARTIAL, effort=4)
+        twice = shipped.simplify(once, effort=4)
+        assert twice != once
+        assert shipped.complexity(twice) < shipped.complexity(once)
+        assert shipped.complexity(shipped.simplify(PARTIAL)) <= shipped.complexity(twice)
+
+    @pytest.mark.parametrize('k', [2, 3])
+    def test_larger_expressions_need_more_than_any_small_cap(self, shipped, k) -> None:
+        t = _copies(k)
+        once = shipped.simplify(t)
+        assert shipped.simplify(once) == once
+        capped = shipped.simplify(t, effort=16)
+        assert shipped.simplify(capped, effort=16) != capped
 
     @pytest.mark.parametrize('bad', [1.5, '8', True, False])
     def test_non_int_budgets_raise(self, engine, bad) -> None:

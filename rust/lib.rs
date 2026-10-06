@@ -92,6 +92,14 @@ fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
     }
 }
 
+/// The public `effort=` wire. `None` explores until a round finds nothing (owner,
+/// 2026-10-06): the search stops when its frontier is empty, which the well-founded
+/// ordering bounds, so its answer re-explores to nothing on a second call. `Some(k)` caps
+/// it at `k` candidate descents; `Some(0)` never enters it.
+fn explore_budget_of(effort: Option<usize>) -> usize {
+    effort.unwrap_or(usize::MAX)
+}
+
 /// THE ONE simplify implementation behind the FFI. `ac_simplify` (the `wildcard_all`
 /// spelling that shipped) and `ac_simplify_in_mode` (the mode spelling) both land here,
 /// so the bool is a SPELLING of a mode and never a second mechanism beside it.
@@ -462,9 +470,10 @@ impl PyEngine {
     ///
     /// Contracts (empty input, malformed input, forms) are the SAME code as `ac_simplify`
     /// -- both entries are one call into `ac_simplify_impl`.
-    /// `explore_budget` is the D39 B7 wire: the public `effort=` rides this parameter.
-    /// 0 (the default) routes to the chain's own entry, byte-identical behaviour.
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged", explore_budget=0))]
+    /// `explore_budget` is the D39 B7 wire: the public `effort=` rides this parameter
+    /// (see [`explore_budget_of`]: `None` explores until a round finds nothing). 0 (the
+    /// default here) routes to the chain's own entry, byte-identical behaviour.
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged", explore_budget=Some(0)))]
     fn ac_simplify_in_mode(
         &self,
         py: Python<'_>,
@@ -472,7 +481,7 @@ impl PyEngine {
         max_passes: usize,
         rule_mode: &str,
         form: &str,
-        explore_budget: usize,
+        explore_budget: Option<usize>,
     ) -> PyResult<Py<PyList>> {
         ac_simplify_impl(
             &self.inner,
@@ -481,7 +490,7 @@ impl PyEngine {
             max_passes,
             parse_rule_mode(rule_mode)?,
             parse_ac_form(form)?,
-            explore_budget,
+            explore_budget_of(explore_budget),
         )
     }
 
@@ -496,16 +505,18 @@ impl PyEngine {
     /// Contracts (empty input, malformed input, forms) are the SAME as `ac_simplify`;
     /// an empty `suppressed_rows` is byte-identical to `ac_simplify_in_mode` at
     /// `rule_mode="default"`.
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=0, suppressed_rows=vec![]))]
+    /// `explore_budget` reads as in `ac_simplify_in_mode` ([`explore_budget_of`]).
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), suppressed_rows=vec![]))]
     fn ac_simplify_suppressed(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
         form: &str,
-        explore_budget: usize,
+        explore_budget: Option<usize>,
         suppressed_rows: Vec<usize>,
     ) -> PyResult<Py<PyList>> {
+        let explore_budget = explore_budget_of(explore_budget);
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
@@ -587,15 +598,16 @@ impl PyEngine {
         )
     }
 
-    /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`).
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", explore_budget=0))]
+    /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`,
+    /// whose `explore_budget` this reads the same way).
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", explore_budget=Some(0)))]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
         rule_mode: &str,
-        explore_budget: usize,
+        explore_budget: Option<usize>,
     ) -> PyResult<String> {
         ac_simplify_infix_impl(
             &self.inner,
@@ -603,7 +615,7 @@ impl PyEngine {
             tokens,
             max_passes,
             parse_rule_mode(rule_mode)?,
-            explore_budget,
+            explore_budget_of(explore_budget),
         )
     }
 

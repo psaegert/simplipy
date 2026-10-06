@@ -101,7 +101,8 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   refusal the grouping of the input can decide which inner products fold:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
   (canonicity across spellings, not idempotence; both pinned in tests). The exploration phase
-  is a separate class: restarted from its own answer it can reach a different form (L6).
+  adds no class of its own when it runs until a round finds nothing (the default; L6); a
+  capped search can stop between two improvements, which a second call continues.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
@@ -526,10 +527,17 @@ order, and the certificate analyses are all deterministic; the pass memo is fres
 call). $\square$ Whether the premises hold on real data is what the gates measure [EMPIRICAL —
 §7]. The run returns its *final* state — which by L3 carries the chain's minimum
 complexity — so L6's fixpoint premise is structural whenever the budget does not
-truncate. L6 is about the plain chain (effort 0). With the exploration phase on, a second call
-can find a cheaper form (50 of srbf's 125,127 model predictions at the default effort, main 4;
-49 of them pass at effort 0),
-and where the round-trip premise fails (L6a) the re-run starts from a different state.
+truncate. **The exploration phase** (`effort`) keeps L6 when it runs until a round finds
+nothing, the default since 0.15.0: its answer is a valley whose own expansions were all
+refused against it, the re-run's chain returns that valley (the premises above), and its
+search proposes the same candidates in the same order, which descend to the same endpoints
+and are refused again. Two further premises: the step cap does not bind (a capped walk
+skips fire sites), and the descent of a candidate does not depend on the memo's contents
+(the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
+valleys, and the re-run then continues it [EMPIRICAL: srbf's 125,127 model predictions
+change on a second call 73 times at the former default cap of 4, 50 of them to a cheaper
+form; uncapped, 24 times, exactly the effort-0 class of I3]. Where the round-trip premise
+fails (L6a) the re-run starts from a different state.
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:

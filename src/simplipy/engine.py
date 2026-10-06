@@ -242,11 +242,13 @@ DEFAULT_ENGINE = 'acj-5-4-llm'
 DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given
-#: (D39 B7). RULED from the acceptance benchmark's explore-budget arms (owner,
-#: 2026-08-24, 65,536-row panel): budget 4 strictly improves 2,084 rows (3.18%)
-#: with ZERO regressions and captures every win budget 64 finds, at +18% median
-#: per-row cost. Callers on throughput-critical paths pin ``effort=0`` explicitly.
-DEFAULT_EFFORT: int = 4
+#: (D39 B7). ``None``: the search runs until a round finds nothing, so a second call
+#: returns the answer unchanged (owner, 2026-10-06). The previous default, 4, stopped
+#: searches between two improvements: on srbf's 125,127 model predictions 73 answers
+#: changed on a second call (24 uncapped, all of them also with the search off), for
+#: 1.6% less total time. Callers on throughput-critical paths pin ``effort=0``
+#: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
+DEFAULT_EFFORT: int | None = None
 
 
 class _ModeMeta(EnumMeta):
@@ -945,20 +947,21 @@ class SimpliPyEngine:
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
 
-        effort : int, optional
-            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, a
-            bounded exploration phase proposes expansion moves the strict descent
-            refuses (distributing a product over its sums, expanding an integer power
-            of a sum), runs each candidate through the same certified constructors and
-            the same descent loop, and replaces the result only when the candidate's
+        effort : int or None, optional
+            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, an
+            exploration phase proposes expansion moves the strict descent refuses
+            (distributing a product over its sums, expanding an integer power of a
+            sum), runs each candidate through the same certified constructors and the
+            same descent loop, and replaces the result only when the candidate's
             endpoint lands STRICTLY below it in the serve-time reduction ordering.
-            ``effort`` counts candidate descents; ``0`` never enters the phase and is
-            byte-identical to the plain chain. Every guarantee survives any budget:
-            soundness (same certificates), never-worse (strictly-below acceptance),
-            termination (well-founded ordering, independent of the budget) and
-            deterministic output. Started again from its own answer, the phase can
-            find a cheaper form (rare; see ``docs/formal.md``, L6). Defaults to
-            ``DEFAULT_EFFORT``.
+            ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
+            nothing, so a second call returns the answer unchanged; an int caps the
+            search at that many candidate descents, after which a second call can
+            continue it; ``0`` never enters the phase and is byte-identical to the
+            plain chain. Every guarantee survives any budget: soundness (same
+            certificates), never-worse (strictly-below acceptance), termination
+            (well-founded ordering, independent of the budget) and deterministic
+            output.
 
         Returns
         -------
@@ -2058,19 +2061,21 @@ class SimpliPyEngine:
             raise ValueError(f"max_passes must be non-negative, got {max_passes}")
         if effort is None:
             effort = DEFAULT_EFFORT
-        if isinstance(effort, bool):
-            # bool is an int subclass and would silently mean 0 or 1 candidate
-            # descents -- a type error, not a budget.
-            raise TypeError(f"effort must be an int >= 0, not bool ({effort!r})")
-        try:
-            # __index__: plain and numpy ints alike (max_passes takes numpy ints
-            # through pyo3's __index__ extraction; the two int knobs agree).
-            effort = effort.__index__()
-        except AttributeError:
-            raise TypeError(
-                f"effort must be an int >= 0, not {type(effort).__name__} ({effort!r})") from None
-        if effort < 0:
-            raise ValueError(f"effort must be non-negative, got {effort}")
+        # None stays None: the core then searches until a round finds nothing.
+        if effort is not None:
+            if isinstance(effort, bool):
+                # bool is an int subclass and would silently mean 0 or 1 candidate
+                # descents -- a type error, not a budget.
+                raise TypeError(f"effort must be None or an int >= 0, not bool ({effort!r})")
+            try:
+                # __index__: plain and numpy ints alike (max_passes takes numpy ints
+                # through pyo3's __index__ extraction; the two int knobs agree).
+                effort = effort.__index__()
+            except AttributeError:
+                raise TypeError(
+                    f"effort must be None or an int >= 0, not {type(effort).__name__} ({effort!r})") from None
+            if effort < 0:
+                raise ValueError(f"effort must be non-negative, got {effort}")
         # A STRING mode must coerce, never silently compare unequal to the enum:
         # `mode='lossy'` used to run the default because `'lossy' == Mode.LOSSY` was False
         # (audit Tier-2, 2026-08-03). Accept the enum, its names (any case), and its

@@ -95,7 +95,7 @@ cheaper `1 + x1 + x2**2` only by distributing first — which prices *higher* at
 node — and recollecting after, so the chain above, which only ever takes descending
 steps, never finds that valley. The search budget exists for exactly this class.
 
-With a budget, the chain first runs unchanged to its fixpoint. A bounded exploration
+With a budget, the chain first runs unchanged to its fixpoint. An exploration
 phase then proposes expansion moves the descent refuses — distributing a product over
 its sums, expanding an integer power of a sum — runs every candidate through the same
 certified constructors and the same descent loop, and replaces the incumbent only when
@@ -103,14 +103,24 @@ the candidate's endpoint lands strictly below it in the engine's one reduction
 ordering. Acceptance is that ordering test and nothing else; no new measure or
 tolerance enters.
 
-The budget is the `effort` parameter: `simplify(expr, effort=64)` explores with 64
-candidate descents, and `effort=0` never enters the phase — byte-identical to the
-chain alone. The default is `simplipy.DEFAULT_EFFORT` = 4, set from the release
-benchmark's explore-budget sweep below: budget 4 captures every win a 16x larger
-budget finds, with zero regressions. Pass `effort=0` on throughput-critical paths.
+The budget is the `effort` parameter. The default, `effort=None`
+(`simplipy.DEFAULT_EFFORT`), searches until a round finds nothing, so a second call
+returns the answer unchanged. `simplify(expr, effort=64)` caps the search at 64 candidate
+descents, and `effort=0` never enters the phase — byte-identical to the chain alone. Pass
+`effort=0` on throughput-critical paths.
 
-The sweep, re-measured on the release build over the same 65,536 rows, is the whole
-argument for the default in one panel: effort 0 to 4 moves the mean ratio from 0.9685
+A cap counts every candidate tried, refused ones included, over the whole expression, so
+the cap a search needs grows with the expression. Exact arithmetic on long constants
+made this visible: with the old default cap of 4, 73 of srbf's 125,127 model predictions
+changed on a second call (50 to a cheaper form), because the first call stopped between
+two improvements. Uncapped, only the 24 that also change with the search off remain
+(long products whose factors re-read in another order), no answer is costlier than at
+cap 4 and 59 are cheaper, for 1.6% more total time. A cap of 8 happens to give the same
+answers on those predictions, but a sum of two of them needs 32 and of three 64, so no
+fixed cap is enough.
+
+The sweep below (65,536 rows, measured with the cap at 4, the default then) shows what
+the search buys on the SR prior: effort 0 to 4 moves the mean ratio from 0.9685
 to 0.9658 and lifts strictly-simplified rows from 10.2% to 13.2% for ~70 µs of median
 cost, and effort 64 is display-identical to effort 4 — budget 4 captures every
 budget-64 win, and the two mean ratios differ only in the fifth decimal (2.8e-5,
@@ -123,7 +133,9 @@ certificates (soundness), the incumbent is only ever replaced by something stric
 below it (the result is never worse than the fixpoint, hence never costlier than the
 input), the frontier only grows on strict descent of a well-founded ordering
 (termination, independent of the budget), and the walk order is deterministic
-(idempotence and reproducibility).
+(reproducibility). Idempotence needs the search to run until a round finds nothing,
+the default: a cap can stop it between two improvements, which a second call then
+continues.
 
 ## Soundness modes
 
@@ -329,8 +341,8 @@ n = 65,536), the same prior under the engine mask policy 'all'
 (n = 65,536), and an external neutral problem set (SOOSE fc/nc/wc,
 n = 600; every row compiles in the engine language). The engine is the
 pinned acj-5-4-llm artifact: `f64` is the shipped default, `real` is
-`Mode.real`, `permissive` is `Mode.permissive`, every arm at the default
-`effort=4`. Scoring runs in the deployment space:
+`Mode.real`, `permissive` is `Mode.permissive`, every arm at `effort=4`, the
+default before 0.15.0. Scoring runs in the deployment space:
 ratio = `complexity(output)` / `complexity(input)`, priced by the engine's
 shipped `complexity()` instrument in the default (f64) canonicalization;
 lower is better, means carry bootstrap 95% CIs, and "made bigger" is the
