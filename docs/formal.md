@@ -80,11 +80,16 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   $2^{1022}$, a set closed under negation and reciprocals); an exponent merge also needs its
   branch-cut licence. No two members of a partition fold, so it is the partition of each of its
   subsets and re-reads to itself in any printed order. *Known residuals* [EMPIRICAL, tracked]:
-  a boundary fuzz (60,000 calls per mode over three seeds, literals at the 128-bit,
-  float64-range and cap boundaries) gives 4 canonical-form idempotence failures (3 f64, 1
-  permissive, 0 real; main has 15 on the same inputs), all at literals float64 cannot hold
-  (`1e400`, subnormals), which stay opaque leaves and leave a sum's sign orientation open;
-  and at a refusal the grouping of the input can decide which inner products fold:
+  the partition makes each group re-read to itself, not every form around it. Two boundary
+  fuzzes with literals at the 128-bit, float64-range and cap boundaries give canonical-form
+  idempotence failures (at effort 0) below main's on the same inputs in every mode: 3 f64, 0
+  real, 1 permissive over 60,000 calls per mode (main 6, 6, 3), and 12, 7, 5 over a review's
+  52,000 (main 16, 16, 19; measured before the parity-free root arm removed two f64 rows). The
+  classes: sums holding literals float64 cannot hold (`1e400`, subnormals stay opaque leaves,
+  and the sum's sign orientation stays open); a like term whose coefficient is itself a
+  refused two-member partition, whose coefficient and key can split differently on re-read
+  (also on main at 128 bits); and odd-function sign extraction. And at a refusal the grouping
+  of the input can decide which inner products fold:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
   (canonicity across spellings, not idempotence; both pinned in tests). The exploration phase
   is a separate class: restarted from its own answer it can reach a different form (L6).

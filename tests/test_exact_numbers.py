@@ -239,6 +239,16 @@ class TestReviewFindings:
         value = engine.as_callable(out, ['x1'])(np.array([10.0]))[0]
         assert np.isfinite(value) and value == pytest.approx(10 * p / q, rel=1e-15)
 
+    @pytest.mark.parametrize('prefix', [
+        'pow rootn x1 9007199254740993 -1/2',
+        'pow rootn x1 9007199254740993 -1/4',
+        '* x2 pow rootn x1 9007199254740993 -1/2',
+    ])
+    def test_a_root_of_unknown_parity_settles_in_one_call(self, engine: SimpliPyEngine, prefix: str) -> None:
+        for mode in MODES:
+            once = simplify(engine, prefix, mode)
+            assert list(engine.simplify(once, mode=mode)) == once, (mode, once)
+
     def test_a_bag_of_refused_literals_is_quadratic(self, engine: SimpliPyEngine) -> None:
         import time
         toks = ['x1']

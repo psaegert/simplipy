@@ -23,15 +23,17 @@
   the evaluator gives NaN). `real` keeps exact parity and finiteness.
 - **Literal bags fold to a canonical partition.** The literals of a product or sum, the
   coefficients of one like term and the exponents of one like base fold pairwise until no two of
-  them fold, so a form in which a fold is refused re-reads to itself. The old one-pass fold left
+  them fold, so each such group re-reads to itself where a fold is refused. The old one-pass fold left
   pieces the next call merged (also in 0.14.7: `10/((250000000/1571)/(pi*pi*x3))` with pi written
   out needed two calls). `<constant>` and the infinities absorb the pieces a refused fold keeps,
-  and a fraction beyond 128 bits prints as one `p/q` instead of being split across a product (the
-  evaluator multiplied a 300-digit numerator in before dividing and overflowed). Known limits:
-  where a fold is refused, the grouping of the input can decide which inner products fold
-  (`(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different forms); and the
-  search can find a cheaper form when started again from an answer, more often now that folded
-  constants are long.
+  and a fraction beyond 128 bits stays together (one numeral in the text answer, its own
+  `/ p q` in the list answer) instead of being split across a product (the evaluator multiplied a
+  300-digit numerator in before dividing and overflowed). Known limits: where a fold is refused,
+  the grouping of the input can decide which inner products fold (`(1e200*1e100)*(1e100*x1)` and
+  `1e200*(1e100*(1e100*x1))` keep different forms); a like term whose coefficient is itself a
+  refused two-number product can split coefficient and term differently on a second call (also
+  in earlier versions, at 128 bits); and the search can find a cheaper form when started again
+  from an answer, more often now that folded constants are long.
 - **What moves.** Against 0.15.0.dev1: none of the 400 corpus rows; 23 of srbf's 6,531 ground
   truths, all by literal arithmetic the 128-bit limit refused (two of them are coefficient sums
   that then allow a distribution), their values equal to 1e-15. The `real` and `permissive` rule

@@ -4268,6 +4268,29 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             }
         }
     }
+    // A NEGATIVE EVEN UNIT FRACTION over a `rootn` whose index has no known parity (f64 mode,
+    // beyond 2^53; review M of #65): `rootn(b, m)^(-1/n) -> 1/rootn(rootn(b, m), n)` for even
+    // n. The odd-root composition above needs the parity and refuses, while the printed
+    // `inv pow rootn b m 1/n` re-reads through the parity-free even-unit-fraction and
+    // root-composition arms; construction takes that route directly. Sound: on R = rootn(b, m)
+    // >= 0 both sides are 1/R^(1/n), on R < 0 both are NaN, at R = 0 both are +inf.
+    if let (Ex::Fun(rop, rargs), Ex::Num(s)) = (&base, &exp) {
+        if rargs.len() == 2 && cx.view.tok_is(*rop, "rootn") && s.is_negative() && !s.is_integer() {
+            if let Ex::Num(idx) = &rargs[1] {
+                let n = s.denom();
+                if idx.is_integer()
+                    && idx.parity().is_none()
+                    && s.numer() == Rat::NEG_ONE
+                    && n.is_even_integer()
+                {
+                    if let Some(unit) = s.checked_neg() {
+                        let root = pow(base.clone(), Ex::Num(unit), cx);
+                        return pow(root, Ex::int(-1), cx);
+                    }
+                }
+            }
+        }
+    }
     // A LITERAL BASE AT AN INFINITE EXPONENT IS DETERMINED: `b^(+-inf)` is a STEP in |b|,
     // and with `b` a literal the step is decided, so this is exact arithmetic and not a
     // limit notion (the spike-flattener refusal is about a SYMBOLIC base, where the step can
