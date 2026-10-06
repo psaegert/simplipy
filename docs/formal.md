@@ -85,10 +85,11 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   idempotence failures (at effort 0) below main's on the same inputs in every mode: 3 f64, 0
   real, 1 permissive over 60,000 calls per mode (main 6, 6, 3), and 10, 7, 5 over a review's
   52,000 (main 16, 16, 19; exact McNemar p = 0.26, 0.064, 0.001, so only permissive's gap is
-  significant). The classes: sums holding literals that stay opaque leaves, which
-  leave the sum's sign orientation open (beyond the cap, or in f64 mode outside the admissible
-  set: `1e400`, subnormals, `1.7976931348623157e308`, and the decimal
-  `2.2250738585072014e-308`, whose exact denominator is $10^{324}$); in permissive mode,
+  significant). The classes: sums whose sign orientation stays open because they hold literals
+  that stay opaque leaves (beyond the cap, or in f64 mode outside the admissible set: `1e400`,
+  subnormals, `1.7976931348623157e308`, and the decimal `2.2250738585072014e-308`, whose exact
+  denominator is $10^{324}$) or stand beside a $\pm\infty$ factor (`-inf*(x2 - x1)` re-reads as
+  `inf*(x1 - x2)`, in real mode too); in permissive mode,
   an infinity that absorbs a term only on re-read (`x1*(inf - c/(1e400*x1*x2))` becomes
   `inf*x1`); a like term whose coefficient is itself a refused two-member partition, whose
   coefficient and key can split differently on re-read (also on main at 128 bits); and
@@ -526,7 +527,8 @@ call). $\square$ Whether the premises hold on real data is what the gates measur
 §7]. The run returns its *final* state — which by L3 carries the chain's minimum
 complexity — so L6's fixpoint premise is structural whenever the budget does not
 truncate. L6 is about the plain chain (effort 0). With the exploration phase on, a second call
-can find a cheaper form (50 of srbf's 125,127 model predictions at the default effort, main 4),
+can find a cheaper form (50 of srbf's 125,127 model predictions at the default effort, main 4;
+49 of them pass at effort 0),
 and where the round-trip premise fails (L6a) the re-run starts from a different state.
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
