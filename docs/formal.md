@@ -84,8 +84,11 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   fuzzes with literals at the 128-bit, float64-range and cap boundaries give canonical-form
   idempotence failures (at effort 0) below main's on the same inputs in every mode: 3 f64, 0
   real, 1 permissive over 60,000 calls per mode (main 6, 6, 3), and 10, 7, 5 over a review's
-  52,000 (main 16, 16, 19). The classes: sums holding literals float64 cannot hold (`1e400`,
-  subnormals stay opaque leaves, and the sum's sign orientation stays open); in permissive mode,
+  52,000 (main 16, 16, 19; exact McNemar p = 0.26, 0.064, 0.001, so only permissive's gap is
+  significant). The classes: sums holding literals that stay opaque leaves, which
+  leave the sum's sign orientation open (beyond the cap, or in f64 mode outside the admissible
+  set: `1e400`, subnormals, `1.7976931348623157e308`, and the decimal
+  `2.2250738585072014e-308`, whose exact denominator is $10^{324}$); in permissive mode,
   an infinity that absorbs a term only on re-read (`x1*(inf - c/(1e400*x1*x2))` becomes
   `inf*x1`); a like term whose coefficient is itself a refused two-member partition, whose
   coefficient and key can split differently on re-read (also on main at 128 bits); and
@@ -506,7 +509,7 @@ assertion), `to_prefix` has a left inverse and is therefore injective — two st
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
 debug, so every state reached by the tests and the mini-mines satisfies it). It fails on the
-documented I3 residuals: at literals float64 cannot hold, and on 24 of srbf's 125,127 model
+documented I3 residuals: at literals that stay leaves, and on 24 of srbf's 125,127 model
 predictions (main 28), long products that re-read differently. These residuals scope the
 cache guarantee too.
 
