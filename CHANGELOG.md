@@ -13,7 +13,7 @@
   are cheaper). `permissive` keeps the cheapest of three searches, and its winner is a valley of
   its own search only: 41 answers still change on a second call (127 at cap 4), 37 of them also
   with the search off; 169 are cheaper than at cap 4 and 4 costlier (3 to 49 bits). A loop
-  that runs the `f64` search from the winner settled the other 4 but cost 13-18% of the time of
+  that runs the `f64` search from the winner cut the 41 to 14 but cost 13-18% of the time of
   flash-ansr's training-data canonicalization, which runs in `permissive`, so there is none.
   Total time grows by 1-2% in each mode on srbf's predictions and not measurably on
   flash-ansr's training path (local measurements). A large sum of terms that each need several
@@ -21,7 +21,7 @@
   0.5 s at cap 4 for an answer 28% costlier; 32 copies: 170 s and 2.6 s). Every internal caller
   that passes no `effort` (normalization, masking, mining, the verification monitor, the
   promotion refund) follows the default; the reference mine is byte-identical. `effort=k` caps
-  each search at `k` candidates (`permissive` runs three per call; a cap beyond 2^63 - 1 is
+  each search at `k` candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is
   none), and `effort=k` and `effort=0` answers are byte-identical to the previous version.
   Code that compares `DEFAULT_EFFORT` with an int now sees `None`.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and

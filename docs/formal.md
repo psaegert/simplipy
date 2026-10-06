@@ -547,7 +547,7 @@ premise: each accepted candidate's descent reaches its fixpoint within `max_pass
 search only: the re-run's other searches, started from the winner, can descend further, so L6
 does not cover its selection [EMPIRICAL: srbf's predictions: 127 second-call changes at cap 4,
 41 uncapped, 37 of them also with the search off]. A loop that ran the `f64` search from the
-winner and selected again while it found something strictly cheaper settled the other 4 but
+winner and selected again while it found something strictly cheaper cut the 41 to 14 but
 cost 13-18% of the time of flash-ansr's training-data canonicalization (which runs in
 `permissive`) and is not part of the engine.
 
