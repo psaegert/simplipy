@@ -83,13 +83,18 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   the partition makes each group re-read to itself, not every form around it. Two boundary
   fuzzes with literals at the 128-bit, float64-range and cap boundaries give canonical-form
   idempotence failures (at effort 0) below main's on the same inputs in every mode: 3 f64, 0
-  real, 1 permissive over 60,000 calls per mode (main 6, 6, 3), and 12, 7, 5 over a review's
-  52,000 (main 16, 16, 19; measured before the parity-free root arm removed two f64 rows). The
-  classes: sums holding literals float64 cannot hold (`1e400`, subnormals stay opaque leaves,
-  and the sum's sign orientation stays open); a like term whose coefficient is itself a
-  refused two-member partition, whose coefficient and key can split differently on re-read
-  (also on main at 128 bits); and odd-function sign extraction. And at a refusal the grouping
-  of the input can decide which inner products fold:
+  real, 1 permissive over 60,000 calls per mode (main 6, 6, 3), and 10, 7, 5 over a review's
+  52,000 (main 16, 16, 19). The classes: sums holding literals float64 cannot hold (`1e400`,
+  subnormals stay opaque leaves, and the sum's sign orientation stays open); in permissive mode,
+  an infinity that absorbs a term only on re-read (`x1*(inf - c/(1e400*x1*x2))` becomes
+  `inf*x1`); a like term whose coefficient is itself a refused two-member partition, whose
+  coefficient and key can split differently on re-read (also on main at 128 bits); and
+  odd-function sign extraction. A class independent of literal size: of srbf's 125,127 model
+  predictions that simplify without error (f64), 24 effort-0 answers change on re-read (main 28), none with
+  a literal beyond $10^{\pm 300}$. Each is a long product (41 to 84 items in the list answer)
+  that re-reads to the same items in another order (18, one of them cheaper) or to another form
+  of equal length and price (6); none of them round-trips (L6a). And at a
+  refusal the grouping of the input can decide which inner products fold:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
   (canonicity across spellings, not idempotence; both pinned in tests). The exploration phase
   is a separate class: restarted from its own answer it can reach a different form (L6).
@@ -500,9 +505,10 @@ holds ($\mathrm{canon}(\mathrm{parse}(\mathrm{serialize}(t))) = t$, the `stable(
 assertion), `to_prefix` has a left inverse and is therefore injective — two states
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
-debug, so every state reached by the tests and the mini-mines satisfies it); its one known exception class is the documented I3
-canonical-form residual at literals float64 cannot hold (corpus-unreachable), which
-therefore also scopes the cache guarantee.
+debug, so every state reached by the tests and the mini-mines satisfies it). It fails on the
+documented I3 residuals: at literals float64 cannot hold, and on 24 of srbf's 125,127 model
+predictions (main 28), long products that re-read differently. These residuals scope the
+cache guarantee too.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass
 fixpoint within budget ($\mathrm{pass}(t_k) = t_k$ — by T6 the fixpoint *exists* and is
@@ -516,7 +522,9 @@ order, and the certificate analyses are all deterministic; the pass memo is fres
 call). $\square$ Whether the premises hold on real data is what the gates measure [EMPIRICAL —
 §7]. The run returns its *final* state — which by L3 carries the chain's minimum
 complexity — so L6's fixpoint premise is structural whenever the budget does not
-truncate.
+truncate. L6 is about the plain chain (effort 0). With the exploration phase on, a second call
+can find a cheaper form (50 of srbf's 125,127 model predictions at the default effort, main 4),
+and where the round-trip premise fails (L6a) the re-run starts from a different state.
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:

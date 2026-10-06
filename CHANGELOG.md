@@ -26,17 +26,21 @@
   them fold, so each such group re-reads to itself where a fold is refused. The old one-pass fold left
   pieces the next call merged (also in 0.14.7: `10/((250000000/1571)/(pi*pi*x3))` with pi written
   out needed two calls). `<constant>` and the infinities absorb the pieces a refused fold keeps,
-  and a fraction beyond 128 bits stays together (one numeral in the text answer, its own
-  `/ p q` in the list answer) instead of being split across a product (the evaluator multiplied a
-  300-digit numerator in before dividing and overflowed). Known limits: where a fold is refused,
-  the grouping of the input can decide which inner products fold (`(1e200*1e100)*(1e100*x1)` and
-  `1e200*(1e100*(1e100*x1))` keep different forms); a like term whose coefficient is itself a
-  refused two-number product can split coefficient and term differently on a second call (also
-  in earlier versions, at 128 bits); and the search can find a cheaper form when started again
-  from an answer, more often now that folded constants are long.
+  and a fraction beyond 128 bits stays together (one `p/q` numeral in the text answer and the
+  tagged list answer, its own `/ p q` in the explicit list answer) instead of being split across a
+  product (the evaluator multiplied a 300-digit numerator in before dividing and overflowed).
+  Known limits: where a fold is refused, the grouping of the input can decide which inner
+  products fold (`(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different forms);
+  a like term whose coefficient is itself a refused two-number product can split coefficient and
+  term differently on a second call (also in earlier versions, at 128 bits); and the search can
+  find a cheaper form when started again from an answer, more often now that folded constants
+  are long.
 - **What moves.** Against 0.15.0.dev1: none of the 400 corpus rows; 23 of srbf's 6,531 ground
   truths, all by literal arithmetic the 128-bit limit refused (two of them are coefficient sums
-  that then allow a distribution), their values equal to 1e-15. The `real` and `permissive` rule
+  that then allow a distribution), their values equal to 1e-15. srbf's judge sees a few more
+  recoveries and loses none: in a sample of 6,000 result rows whose answers move, 6 verdicts go
+  from not recovered to recovered, where a truth's or a prediction's coefficients now fold to the
+  same form (`3.097*x2 + 0.966*14.68*x2` becomes one coefficient). The `real` and `permissive` rule
   sets of acj-5-4-llm serve 42 fewer rules (`(+-0.1)^n -> 1e-n` for n >= 40), because the
   constructor now computes them; the next re-mine drops them from the files. A mode's rules are
   read in that mode's number domain, whichever mode asks for them first. The verification

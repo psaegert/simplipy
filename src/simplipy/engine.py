@@ -956,7 +956,9 @@ class SimpliPyEngine:
             byte-identical to the plain chain. Every guarantee survives any budget:
             soundness (same certificates), never-worse (strictly-below acceptance),
             termination (well-founded ordering, independent of the budget) and
-            deterministic, idempotent output. Defaults to ``DEFAULT_EFFORT``.
+            deterministic output. Started again from its own answer, the phase can
+            find a cheaper form (rare; see ``docs/formal.md``, L6). Defaults to
+            ``DEFAULT_EFFORT``.
 
         Returns
         -------
