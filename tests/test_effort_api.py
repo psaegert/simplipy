@@ -161,3 +161,12 @@ class TestTheSearchRunsUntilItSettles:
         capped = shipped.simplify(t, effort=16)
         assert shipped.complexity(once) < shipped.complexity(capped)
         assert shipped.simplify(capped, effort=16) != capped
+
+    def test_the_finish_does_not_retry_what_the_prefix_refused(self, shipped) -> None:
+        # Eight products whose expansion does not pay, then one that does: the breadth-first
+        # prefix refuses the first eight, and the finish's first round starts at the ninth.
+        terms = [f'(x{4 * i + 1} + x{4 * i + 2})*(x{4 * i + 3} + x{4 * i + 4})' for i in range(8)]
+        t = shipped.infix_to_prefix(' + '.join(terms + ['(y + 1)*(y - 1)']))
+        once = shipped.simplify(t)
+        assert shipped.simplify(t, effort=8) != once
+        assert shipped.simplify(t, effort=9) == once

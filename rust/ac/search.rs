@@ -95,7 +95,9 @@ const BFS_PREFIX: usize = 8;
 ///    round per improvement plus one closing round (about 0.4 s there).
 ///
 /// A candidate is the move applied at one place with its ancestors rebuilt through the
-/// canonical constructors ([`rebuild`]), built only when it is tried, then descended by
+/// canonical constructors ([`rebuild`]): a state's moves are computed when the state is
+/// walked ([`site_list`]), and a candidate's whole state is rebuilt only when it is tried,
+/// then descended by
 /// [`rewrite_pass`] to its fixpoint (or the same `max_passes` truncation the chain itself
 /// accepts, which is sound).
 pub fn explore(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
@@ -122,15 +124,23 @@ pub fn explore(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex 
     let mut frontier: VecDeque<Ex> = VecDeque::new();
     frontier.push_back(best.clone());
     let mut settled = true;
+    // When the prefix runs out while walking the best state itself, the candidates of it
+    // already tried were refused against that same best: the finish's first round skips them.
+    let mut refused_of_best = 0usize;
     'bfs: while let Some(state) = frontier.pop_front() {
         let mut sites: Vec<(Vec<usize>, Ex)> = Vec::new();
         site_list(&state, pass.cx, &mut Vec::new(), &mut sites);
-        for (path, moved) in sites {
+        for (i, (path, moved)) in sites.into_iter().enumerate() {
             if spent >= budget {
                 return best;
             }
             if spent >= BFS_PREFIX {
                 settled = false;
+                // `best` only ever moves strictly below, so if it equals the state being
+                // walked, it was this state for the whole walk.
+                if state == best {
+                    refused_of_best = i;
+                }
                 break 'bfs;
             }
             spent += 1;
@@ -144,15 +154,25 @@ pub fn explore(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex 
     if settled {
         return best;
     }
-    // Phase 2: first improvement from the best until a full round finds nothing.
+    // Phase 2: first improvement from the best until a full round finds nothing. A round
+    // walks the best's candidates cyclically from where the last improvement happened; the
+    // first round starts after the candidates phase 1 already refused against this best (the
+    // same list: `site_list` is deterministic), so together they still make a full round.
     let mut resume: Vec<usize> = Vec::new();
+    let mut skip = refused_of_best;
     loop {
         let mut sites: Vec<(Vec<usize>, Ex)> = Vec::new();
         site_list(&best, pass.cx, &mut Vec::new(), &mut sites);
         let n = sites.len();
-        let start = sites.partition_point(|(p, _)| *p < resume);
+        let start = if skip > 0 {
+            skip
+        } else {
+            sites.partition_point(|(p, _)| *p < resume)
+        };
+        let round = n.saturating_sub(skip);
+        skip = 0;
         let mut accepted: Option<(Ex, Vec<usize>)> = None;
-        for off in 0..n {
+        for off in 0..round {
             if spent >= budget {
                 return best;
             }

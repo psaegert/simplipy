@@ -627,7 +627,8 @@ fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
     // A big-form literal's codewords cost big-integer divisions and logarithms, and the same
     // values are priced again and again while candidates are compared (the sign placement in
     // `mul` alone prices whole factors per orientation). The price is a function of the value,
-    // so a per-thread table answers repeats; it is emptied when it reaches 65,536 entries.
+    // so a per-thread table answers repeats; it is emptied when it reaches 65,536 entries
+    // (bounded per thread, also under the miner's thread pool).
     if r.small_parts().is_some() {
         return mu_rat_codeword_totals_uncached(r);
     }
@@ -3468,7 +3469,7 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
         } else {
             Vec::new()
         };
-        if !sites.is_empty() && sites.len() <= 6 {
+        if enumerates {
             // Priority: Free FIRST -- a Const-carrier eats EVERY sign (coefficient
             // and bare-infinity signs alike, by the forall-exists refit), so with one
             // present the whole sign dimension collapses and orientations are chosen

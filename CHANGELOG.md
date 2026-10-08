@@ -20,8 +20,8 @@
   answer until a whole round finds nothing; in `f64` and `real` its answers on srbf's predictions
   equal an uncapped breadth-first search's. A breadth-first search re-tries every candidate after
   each improvement (16 copies of one prediction: 16 s); this one takes about 0.4 s there, and
-  `effort=4` about 0.1 s for an answer 28% costlier. Each candidate is built only when tried and is
-  no longer re-canonicalized in full before its descent (on srbf's predictions that changed no
+  `effort=4` about 0.1 s for an answer 28% costlier. Each candidate's whole state is rebuilt only
+  when it is tried and is no longer re-canonicalized in full before its descent (on srbf's predictions that changed no
   `f64` or `real` answer and 2 `permissive` ones, by a sign placement). On srbf's predictions the
   uncapped search takes 11-16% less time than the previous version's cap of 4 in `f64` and `real`
   and 4% less in `permissive`, about as long as `effort=4` takes in this version (local
