@@ -20,6 +20,7 @@ import yaml
 
 from conftest import acj_config_path
 from simplipy import Mode, SimpliPyEngine
+from test_mu_prime import mu_prime_expected as exact_price
 
 MONSTER = "4 / (2.7167019109484434 * 3.1415926535897)"
 
@@ -86,7 +87,10 @@ def test_fold_is_idempotent_and_descends_mu(engine):
     once = prefix(engine, MONSTER, Mode.permissive)
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     exact = prefix(engine, MONSTER, Mode.f64)
-    assert engine.complexity(once) < engine.complexity(exact)
+    # Under the float cap (phase 2d) the exact quotient already costs its float's shortest
+    # decimal, so the measure is level; the fold descends the EXACT price, which gates it.
+    assert engine.complexity(once) == engine.complexity(exact)
+    assert exact_price(Fraction(once[0])) < exact_price(exact_value(MONSTER))
 
 
 def test_huge_integer_folds_to_its_float_value(engine):
@@ -110,12 +114,13 @@ def test_huge_integer_folds_to_its_float_value(engine):
 def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
     """The permissive endpoint is the cheaper of the strict tier's exact spelling and the single
     literal float(Fraction(...)) -- the correctly rounded float, not the quotient of two rounded
-    components -- priced by the engine's own mu."""
+    components -- priced by the EXACT codewords (under the float cap the measure prices both
+    alike; the fold changes what is printed)."""
     exact = exact_value(expr)
     strict = prefix(engine, expr, Mode.f64)
     as_float = [repr(float(exact))]
     out = prefix(engine, expr, Mode.permissive)
-    if engine.complexity(as_float) < engine.complexity(strict):
+    if exact_price(Fraction(as_float[0])) < exact_price(exact):
         # One literal, the float's value; the emitter spells it as the exact decimal of that
         # float (an integer as its digit string, a small value positionally), so compare values.
         assert len(out) == 1 and "/" not in out[0], out

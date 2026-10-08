@@ -848,6 +848,17 @@ impl Rat {
         Some(place_point(p < 0, scaled.to_string(), k as usize))
     }
 
+    /// The shortest decimal that reads as `y` (Rust's `{:?}` for f64 is the shortest string
+    /// that round-trips), exactly, built in the exact number domain so the value does not depend
+    /// on the calling mode. `None` for a non-finite `y`.
+    pub fn shortest_reading_as(y: f64) -> Option<Rat> {
+        if !y.is_finite() {
+            return None;
+        }
+        let _exact = number_domain(false);
+        Rat::parse_decimal(&format!("{y:?}"))
+    }
+
     /// Parse a decimal token EXACTLY: `"7" -> 7`, `"-1.75" -> -7/4`, `"0.2" -> 1/5`,
     /// `"1e-3" -> 1/1000`, `"1." -> 1`. This is a DECIMAL parse, not a float parse -- `"0.2"`
     /// means one fifth, exactly, even though the f64 nearest to it does not.

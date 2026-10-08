@@ -12,7 +12,7 @@
 //! `-` / `/` / `neg` / `inv`. No hyper-operator is ever emitted.
 //!
 //! Exactness at the boundary: numeric tokens parse as DECIMALS into exact rationals (`"0.2"`
-//! means one fifth, exactly). Serialization picks the ARGMIN of `mu_rat`'s two codes -- the
+//! means one fifth, exactly). Serialization picks the ARGMIN of `mu_rat_exact`'s two codes -- the
 //! decimal token when the decimal code is cheaper (`1/5`, `6/5`, every power of ten), the
 //! fraction otherwise (`1/2`, `5/8`, and everything non-terminating) -- so the print follows
 //! the cost. The TAGGED form additionally spells an in-vocabulary fraction structurally
@@ -718,7 +718,7 @@ fn emit_bin_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
     emit(e, cx, out);
 }
 
-/// Emit a rational literal in the ARGMIN spelling of `mu_rat`'s two codes: integers bare,
+/// Emit a rational literal in the ARGMIN spelling of `mu_rat_exact`'s two codes: integers bare,
 /// a decimal token when the decimal code is cheaper (`1/5 -> 0.2`, `6/5 -> 1.2`, every
 /// power of ten), else the structural division `/ p q` (`1/2`, `5/8`, `11/2`, and every
 /// non-terminating value). The old rule -- decimal whenever one exists -- printed `0.5`
@@ -1054,7 +1054,7 @@ fn emit_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 
 /// One-token spelling of an exact rational: integer, exact decimal, or `p/q` fraction.
 ///
-/// The choice is the ARGMIN of `mu_rat`'s two codes, so the print follows the cost rather
+/// The choice is the ARGMIN of `mu_rat_exact`'s two codes, so the print follows the cost rather
 /// than a separate heuristic: `1/2`, `1/4`, `5/8` keep the fraction (a power-of-two
 /// denominator always spells shorter as a fraction), while `1/5 -> 0.2`, `6/5 -> 1.2` and
 /// every power of ten take the decimal. The previous rule -- "exact decimal whenever one

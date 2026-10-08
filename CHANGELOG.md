@@ -21,8 +21,9 @@
   equal an uncapped breadth-first search's. A breadth-first search re-tries every candidate after
   each improvement (16 copies of one prediction: 16 s); this one takes about 0.4 s there, and
   `effort=4` about 0.1 s for an answer 28% costlier. Each candidate's whole state is rebuilt only
-  when it is tried and is no longer re-canonicalized in full before its descent (on srbf's predictions that changed no
-  `f64` or `real` answer and 2 `permissive` ones, by a sign placement). On srbf's predictions the
+  when it is tried and is no longer re-canonicalized in full before its descent (on srbf's
+  predictions that changed no `f64` or `real` answer and 2 `permissive` ones, by a sign
+  placement). On srbf's predictions the
   uncapped search takes 11-16% less time than the previous version's cap of 4 in `f64` and `real`
   and 4% less in `permissive`, about as long as `effort=4` takes in this version (local
   measurements). Every internal caller that passes no `effort` (normalization, masking, mining,
@@ -39,6 +40,18 @@
   training draws, srbf's ground truths and srbf's model predictions, in every mode. On srbf's
   predictions `simplify` takes 40-45% less time than without this in `f64` and about half the time
   in `permissive`, where the slowest inputs run about 5 times faster (local measurements).
+- **A literal costs at most what its float costs.** The evaluator reads every literal as its
+  nearest float64, so the measure (`complexity`, and the ordering every simplification follows)
+  caps a literal's price at the price of that float's shortest decimal. A number carrying more
+  than float precision -- a product or power of long constants, folded exactly -- now costs what
+  its 17-digit decimal costs, not what its hundreds of exact digits cost; every literal that is
+  its own float's shortest decimal, every drawn or fitted constant among them, keeps its price,
+  and no price rises. The cap is a decimal, never a fraction that reads as the same float:
+  `0.3333333333333333` keeps its price, `1/3` costs less. Answers still carry and print the
+  exact value. Because long exact numbers no longer count against a form, the search accepts
+  more expansions in `f64` and `real`, and their answers can print long exact coefficients. The
+  measure fingerprint gains a probe and moves, so loading a ruleset mined under the previous
+  measure (the published ones included) warns until it is re-mined.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
   number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds
@@ -47,8 +60,7 @@
   result beyond the cap keeps its pieces (`2^1100*x1` stays a power). Answers carry these numbers
   exactly and in full, so a product or power of long constants can print as a number of hundreds
   of digits, and a literal that used to come back as written now comes back as its digits
-  (`x1*1e-300`). Every exact digit still counts in the measure; pricing a literal at the
-  precision the evaluator reads it is the next step.
+  (`x1*1e-300`). The measure prices such a number at most like the float it reads as (below).
 - **f64 mode holds a number only where float64 can.** In `mode='f64'` (and `permissive`) a
   number's numerator and denominator must both be at most 2^1022, so the number and its reciprocal
   are normal float64 values; any other literal stays as written (`1e308`, `1e400`, the subnormal

@@ -469,7 +469,9 @@ class TestContracts:
         # square now fits, the constructor folds it as it always folded within 128 bits, and
         # `pow` distributes the square over the product, so 2*c^2 materialises as one
         # 34-digit coefficient -- dearer under mu than the factored power was.
-        assert engine.complexity(out_a) == 142374
+        # 142374 -> 82142 at PHASE 2d (the float cap): the 34-digit coefficient costs what its
+        # float's shortest decimal costs. The endpoint shape is unmoved.
+        assert engine.complexity(out_a) == 82142
         coeff = 2 * Fraction('6.4495375319922606e-18') ** 2
         assert out_a[0] == '*' and Fraction(out_a[1]) == coeff, out_a
         assert out_a[2:] == ['pow', 'sinh', 'x2', '2'], out_a

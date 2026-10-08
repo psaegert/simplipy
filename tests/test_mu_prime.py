@@ -59,6 +59,10 @@ ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 #: that cannot swallow a genuine mismatch (the last blanket one nearly did).
 ACJ_SHIPPED_DIGEST = '32302640b359a348'
 
+#: The digest the engine computes since phase 2d (the float cap and its probe). The published
+#: rulesets were mined under ACJ_SHIPPED_DIGEST, so loading them warns until the re-mine.
+CURRENT_DIGEST = '9a89036bd9cd33f3'
+
 
 def L(n) -> int:
     """1000 * log2(1 + |n|), computed independently of the Rust bit-extraction
@@ -571,6 +575,9 @@ class TestFingerprintAndArtifactLoad:
             '0.2': 3585,              # (2, 1): selector + L(2) + L(1)
             '1e-40': 7358,            # beyond-i128 leaf: selector + max(floor, L(1)) + L(40)
             '<constant>': MU_FREE_PRIME,
+            # the float cap (phase 2d): 64 digits cost their float's shortest decimal,
+            # 0.07665412684716773 (selector + L(7665412684716773) + L(17))
+            '0.0766541268471677307861497420516056347394916180597539647375669841': mu_prime_expected(Fraction('0.07665412684716773')),
             # the symbol table, one probe per entry (2026-08-21). Add and Mul price the
             # same here and still need separate probes: a change to ONE of them has to
             # move the digest.
@@ -585,23 +592,23 @@ class TestFingerprintAndArtifactLoad:
         }
         assert fp['digest'] != ACJ_MINED_DIGEST
 
-    def test_acj_load_is_fingerprint_clean(self):
-        """D25, on the real asset, after the re-mine: NO fingerprint warning.
+    def test_acj_load_warns_until_the_remine(self):
+        """D25, on the real asset, after phase 2d: EXACTLY ONE fingerprint warning, naming
+        the digest the served cell was mined under and the one the engine computes now.
 
-        The served cell (acj-4, ×3 byte-identical on solomon 2026-08-23) was mined
-        under the symbol-table measure, so its provenance digest EQUALS the engine's
-        computed one -- pinned verbatim below, so a measure change without a re-mine
-        fails here rather than sliding through as a tolerated warning. This is the
-        empty-list state the predecessor test (`test_acj_load_warns_until_the_remine`)
-        was written to force."""
+        Both digests are pinned verbatim, so any other measure change -- or a re-mine that
+        leaves this allowance in place -- fails here instead of sliding through as a
+        tolerated warning. After the re-mine under the float cap this becomes the empty-list
+        state again (`test_acj_load_is_fingerprint_clean`)."""
         import warnings as _w
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter('always')
             engine = SimpliPyEngine.from_config(acj_config_path())
         mismatch = [str(x.message) for x in caught
                     if 'measure fingerprint mismatch' in str(x.message)]
-        assert mismatch == [], mismatch
-        assert engine._measure_fingerprint()['digest'] == ACJ_SHIPPED_DIGEST
+        assert len(mismatch) == 1, mismatch
+        assert ACJ_SHIPPED_DIGEST in mismatch[0] and CURRENT_DIGEST in mismatch[0], mismatch
+        assert engine._measure_fingerprint()['digest'] == CURRENT_DIGEST
         out = engine.simplify(engine.to_prefix(['+', 'x0', 'x0']))
         assert list(out) == ['*', '2', 'x0']
 

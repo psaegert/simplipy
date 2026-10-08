@@ -586,13 +586,57 @@ fn decimal_code_big(r: &Rat) -> Option<(u64, u64)> {
 /// number from its negation, which a description length may not do. `Rat` normalises to
 /// `q > 0` with the sign on the numerator, so the bit is unambiguous and charged once,
 /// inside EACH codeword total (it cancels in the min).
-pub fn mu_rat(r: &Rat) -> u64 {
+pub fn mu_rat_exact(r: &Rat) -> u64 {
     let (fraction, decimal) = mu_rat_codeword_totals(r);
     MU_MILLI
         + match decimal {
             Some(d) => fraction.min(d),
             None => fraction,
         }
+}
+
+/// THE PRICE OF A LITERAL (phase 2d; owner 2026-10-06 and 2026-10-08): the lesser of the
+/// literal's own exact spelling ([`mu_rat_exact`]) and the shortest decimal of the float64 it
+/// reads as, priced by the same codewords. The evaluator reads every literal as its nearest
+/// float64, so digits beyond float precision are not information: a 64-digit product of two
+/// 16-digit constants costs what the 17-digit decimal of its float costs. A literal that is its
+/// own float's shortest decimal (every drawn constant) keeps its price, and no price rises. The
+/// cap is the decimal that `prettify` shows for such a value, never a fraction it would not show:
+/// `0.3333333333333333` keeps its 16-digit price although `1/3` reads as the same float. A literal
+/// beyond float64's range (or below its smallest subnormal) keeps its exact price. The state keeps
+/// the exact value and prints it: only the measure reads the float. The price is a function of the
+/// value alone (the decimal is built in the exact number domain), so each thread remembers the
+/// prices it computed, emptying the table at 65,536 entries.
+pub fn mu_rat(r: &Rat) -> u64 {
+    thread_local! {
+        static FLOAT_PRICES: std::cell::RefCell<rustc_hash::FxHashMap<Rat, u64>> =
+            std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    }
+    if let Some(v) = FLOAT_PRICES.with(|m| m.borrow().get(r).copied()) {
+        return v;
+    }
+    let v = mu_rat_float(r);
+    FLOAT_PRICES.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 1 << 16 {
+            m.clear();
+        }
+        m.insert(r.clone(), v);
+    });
+    v
+}
+
+/// [`mu_rat`] without the table.
+fn mu_rat_float(r: &Rat) -> u64 {
+    let exact = mu_rat_exact(r);
+    let y = r.to_f64_nearest();
+    if !y.is_finite() || y == 0.0 {
+        return exact;
+    }
+    match Rat::shortest_reading_as(y) {
+        Some(d) => exact.min(mu_rat_exact(&d)),
+        None => exact,
+    }
 }
 
 /// The two codewords' TOTAL prices, in milli-bits, each carrying its own floor and the
@@ -4612,15 +4656,15 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
 /// emitter must spell it as that fraction, because a spelling denotes the state's EXACT
 /// value (`decimal_spelling_wins` chooses among exact codewords only). On the permissive
 /// tier the value is allowed to move -- that tier's licence -- so the literal folds to the
-/// f64 nearest to it (printed as that float's exact decimal) WHEN mu' prices that spelling
-/// strictly cheaper:
+/// f64 nearest to it (printed as that float's exact decimal) WHEN the exact codewords
+/// ([`mu_rat_exact`]) price that spelling strictly cheaper -- the float price ([`mu_rat`]) of the
+/// two is equal by construction, the fold changes what is PRINTED:
 /// `2e29/426738538271436458205631863649` (196.8 bits) becomes `0.46867105279529636`
 /// (57.1 bits); `1/2`, `15/37` and `4366/8875` stay, their fractions being cheaper than
 /// any 17-digit float; a literal that already IS a shortest f64 spelling is its own fold
-/// and never moves, so the drawn constants of a training stream are untouched. The gate
-/// is the same self-limiting mu comparison the f64 transcendental fold (`f64_fold`) uses,
-/// and the STRICT inequality is what makes the re-simplification loop at the permissive
-/// entry (`Engine::ac_simplify_ex_explore`) terminate: mu descends by at least one
+/// and never moves, so the drawn constants of a training stream are untouched. The
+/// STRICT inequality is what makes the re-simplification loop at the permissive entry
+/// (`Engine::ac_simplify_ex_explore`) terminate: the exact price descends by at least one
 /// milli-bit per round. Values whose shortest spelling leaves `i128` refuse (fail-closed,
 /// exactly as `f64_fold`); non-finite values never fold.
 pub fn lossy_literal(r: &Rat) -> Option<Rat> {
@@ -4633,7 +4677,7 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
     if snapped == *r {
         return None;
     }
-    (mu_rat(&snapped) < mu_rat(r)).then_some(snapped)
+    (mu_rat_exact(&snapped) < mu_rat_exact(r)).then_some(snapped)
 }
 
 /// `Some(e')` with every literal `lossy_literal` folds replaced and every GROUND arithmetic
@@ -4685,8 +4729,8 @@ pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
         let Some(folded) = Rat::parse_decimal(&format!("{y:?}")) else {
             return e;
         };
-        let before: u64 = lits.iter().map(mu_rat).sum();
-        if mu_rat(&folded) < before {
+        let before: u64 = lits.iter().map(mu_rat_exact).sum();
+        if mu_rat_exact(&folded) < before {
             *moved = true;
             Ex::Num(folded)
         } else {
@@ -6150,6 +6194,90 @@ mod tests {
                 &cx,
             );
             assert_ne!(kept, distributed);
+        }
+    }
+
+    /// Phase 2d: a literal costs at most what its float's shortest decimal costs.
+    #[test]
+    fn phase2d_a_literal_costs_at_most_its_float() {
+        let long = {
+            let _exact = crate::ac::rat::number_domain(false);
+            Rat::parse_decimal("0.0766541268471677307861497420516056347394916180597539647375669841")
+                .unwrap()
+        };
+        let short = Rat::shortest_reading_as(long.to_f64_nearest()).unwrap();
+        assert_eq!(mu_rat(&long), mu_rat_exact(&short));
+        assert!(mu_rat(&long) < mu_rat_exact(&long));
+        // a fraction is never the cap: the 16-digit decimal keeps its price
+        let third = Rat::parse_decimal("0.3333333333333333").unwrap();
+        assert_eq!(mu_rat(&third), mu_rat_exact(&third));
+        assert!(mu_rat(&Rat::new(1, 3).unwrap()) < mu_rat(&third));
+        for t in [
+            "1000",
+            "0.2",
+            "2",
+            "-7.5",
+            "1e-40",
+            "0.5",
+            "3",
+            "0.001",
+            "2.177697277405848",
+        ] {
+            let r = Rat::parse_decimal(t).unwrap();
+            assert_eq!(mu_rat(&r), mu_rat_exact(&r), "{t}");
+        }
+    }
+
+    /// The shortest decimal reads back as the float.
+    #[test]
+    fn phase2d_shortest_decimal_reads_back() {
+        for y in [
+            0.1,
+            1.0 / 3.0,
+            std::f64::consts::PI,
+            1e-300,
+            5e-324,
+            f64::MAX,
+            -0.75,
+            1e22,
+            0.45445993041202365,
+        ] {
+            let d = Rat::shortest_reading_as(y).unwrap();
+            assert_eq!(d.to_f64_nearest(), y, "{y:?}");
+        }
+        assert_eq!(Rat::shortest_reading_as(f64::INFINITY), None);
+    }
+
+    /// The price is a function of the value alone: the same in the f64 and the exact domain,
+    /// and never above the exact price.
+    #[test]
+    fn phase2d_price_is_mode_free_and_never_rises() {
+        let values: Vec<Rat> = {
+            let _exact = crate::ac::rat::number_domain(false);
+            [
+                "0.3333333333333333",
+                "1e-310",
+                "123456789012345678901234567890",
+                "0.1",
+                "2.718281828459045235360287471352662497757",
+                "-4.2e17",
+            ]
+            .iter()
+            .map(|t| Rat::parse_decimal(t).unwrap())
+            .chain([Rat::new(355, 113).unwrap(), Rat::new(-22, 7).unwrap()])
+            .collect()
+        };
+        for r in &values {
+            let in_f64 = {
+                let _d = crate::ac::rat::number_domain(true);
+                mu_rat_float(r)
+            };
+            let in_exact = {
+                let _d = crate::ac::rat::number_domain(false);
+                mu_rat_float(r)
+            };
+            assert_eq!(in_f64, in_exact, "{r:?}");
+            assert!(in_f64 <= mu_rat_exact(r), "{r:?}");
         }
     }
 }

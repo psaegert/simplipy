@@ -359,6 +359,17 @@ with *exact* rational comparison — the 256-bit `cmp_exact`). There is no separ
 literal-size tier: $\mu$'s literal component carries its content, so
 the ordering is a pair, not a triple.
 
+**The float cap** (phase 2d). The evaluator reads every literal as its nearest float64, so
+a literal's price is capped at that float's shortest round-trip decimal $d(v)$, priced by
+the same codebook: $\mu'(v) = \min\big(\mu(v),\, \mu(d(v))\big)$ for a finite nonzero
+nearest float, $\mu(v)$ otherwise. Every literal that is its own float's shortest decimal —
+every drawn or fitted constant — keeps its price, and no price rises; a literal carrying
+more than float precision (a 64-digit product of two 16-digit constants) costs its float's
+17-digit decimal. The cap is a decimal, never a fraction: a fraction that reads as the same
+float is no candidate unless it is the literal itself, so `0.3333333333333333` keeps its
+16-digit price while `1/3` costs 4 bits. Below, $\mu$ denotes the capped price wherever it
+prices a term.
+
 **Two codewords, one value.** The minimum is over *codes for the same exact value*,
 never over values — $\mu$ stays spelling-free, and the symmetry the codebook buys is
 at the codeword level: $\mu(1000) = \mu(0.001) = 4$, both being the codeword
@@ -370,7 +381,10 @@ integers" at $\log_2 10 \approx 3.32$ bits per decimal shift.
 **The emitted spelling is the priced spelling** [BY CONSTRUCTION]. The serializer
 chooses each literal's print by the argmin over the *same* two codeword totals the
 measure minimizes (`decimal_spelling_wins`), so $\mu(t)$ is the description length
-of the representation actually emitted, not of a hypothetical one. An exact codeword
+of the representation actually emitted, not of a hypothetical one — except where the float
+cap applies: the state is exact and prints its exact value, which then costs more than its
+price; the capped price is that of the float's shortest decimal, the spelling `prettify`
+shows. An exact codeword
 tie goes to the fraction — the structurally distinguished caller-dialect member,
 mirroring tier 2 of the sign-placement convention (§3); states carry no spelling, so
 the tie-break must be spelling-free, and either member realizes the same $\mu$. The
@@ -392,12 +406,11 @@ canonical terms $t$ have $\mu(t) = \mu_0$. *Proof.* $\mu$ bounds the node count
 slot per bag and one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \leq \mu_0$
 in bits — the carrier being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
-vocabulary are finite; $\mu_0$ bounds every number in whichever codeword achieves its
-minimum, and each codeword admits finitely many values under any bound ($L$ is monotone
-and unbounded in each component, and a codeword determines its value). $\mu$ does NOT bound
-a number's bit length -- the decimal codeword prices `1e-300` from its mantissa and
-exponent, though its denominator has 997 bits -- but finiteness needs only the bounded
-components of an injective codeword, and the cap bounds the rest. A numeric-string leaf
+vocabulary are finite; and there are finitely many numbers at all: a number's numerator
+and denominator have at most 1,100 bits each (the cap). Under the float cap $\mu_0$ no
+longer bounds a number's codeword components — every literal beyond float precision costs
+about one 17-digit decimal — so the finiteness of the literals comes from the cap alone,
+not from the price. A numeric-string leaf
 (beyond the cap, or not admissible in f64 mode) pays a cost that grows with its
 canonical print (`mu_numeric_str` is strictly monotone in significand digits and in
 the scale within each codeword), so $\mu_0$ bounds the print's significand length
@@ -409,9 +422,14 @@ $<_o$-descending sequence. *Proof.* Along such a sequence $\mu$ is non-increasin
 eventually constant; the tail then lives in one finite level set (L5) and descends the
 strict total order `cmp_ex`, so it is finite. $\square$
 
-Because a literal pays its bits, a dense-literal chain **ascends** outright: the chain $\mathrm{Mul}[3/2^k, x]$ grows strictly
-in $\mu$ with $k$ (such a chain cannot be a reduction sequence;
-pinned in `tests/test_unified_measure.py`). A pure re-sort or re-orientation preserves
+A dense-literal chain ascends while its literals carry no more than float precision: the
+chain $\mathrm{Mul}[3/2^k, x]$ grows strictly in $\mu$ with $k$ up to the point where
+$3/2^k$'s exact spelling is longer than its float's shortest decimal, and from there on its
+price stays near that decimal's (the float cap). It stays finite all the same — $k$ is
+bounded by the 1,100-bit cap, and T-wf holds through L5 — and a rewrite cannot walk it
+anyway: every step preserves the term's value, and changing one literal alone changes it
+(pinned in `tests/test_unified_measure.py`: the chain ascends up to the cap's onset, and
+simplifying the chain's members settles and re-reads to itself). A pure re-sort or re-orientation preserves
 $\mu$ (the leaf multiset and shape are unchanged) and is decided by `cmp_ex`, exactly
 as before.
 
@@ -570,7 +588,7 @@ fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in permissi
 | L1 nf termination | structural recursion; the two audited self-calls (`pow`, `fun`/rootn) | full suites exercise both self-call sites |
 | G1–G7 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; shipped counts pinned by `test_translation_audit_surface` |
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted step |
-| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends |
+| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle |
 | composite acceptance | the exploration branch in `rewrite_pass` (one level, private memo) | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form |
 | T6 defense-in-depth | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | by T6 a binding bound proves an implementation bug; fixpoint break covered by idempotence gates |
 | L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 at head |
