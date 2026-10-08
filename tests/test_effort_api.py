@@ -111,7 +111,7 @@ class TestEffortValidation:
 
 # An srbf model prediction (f64): exact folds let the search multiply the 17-digit
 # coefficients out, which takes more than 4 candidate descents. Capped at 4, the first call
-# stopped between two improvements and a second call continued (649.3 -> 521.4 bits).
+# stopped between two improvements and a second call continued (473.8 -> 275.8 bits).
 PARTIAL = ('* - * 1.8426336222334249e-5 x_0 66.651398870432352 - + + * 0.0017852549531278935 x_0 '
            '* - * -3.7410441585838554e-6 x_0 29.336341980886485 - * 0.003721137246172343 x_0 '
            '1.4144809534136968 pow + * 0.00020869130391839415 x_0 0.46214648267002759 2 '
@@ -154,7 +154,7 @@ class TestTheSearchRunsUntilItSettles:
     @pytest.mark.parametrize('k', [3, 4])
     def test_larger_expressions_need_more_than_any_small_cap(self, shipped, k) -> None:
         # What a search needs grows with the expression: 2 copies reach the uncapped answer
-        # within 14 candidates, 3 need 19 and 4 need 23, so a cap of 16 falls short here.
+        # within 13 candidates, 3 need 19 and 4 need 23, so a cap of 16 falls short here.
         t = _copies(k)
         once = shipped.simplify(t)
         assert shipped.simplify(once) == once

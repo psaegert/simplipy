@@ -110,38 +110,37 @@ descents (`permissive` runs several per call), and `effort=0` never enters the p
 `effort=0` on throughput-critical paths.
 
 A cap counts every candidate tried, refused ones included, over the whole expression, so
-the cap a search needs grows with the expression. Exact arithmetic on long constants
-made this visible: with the old default cap of 4, 73 of srbf's 125,127 model predictions
-changed on a second call in `f64` (50 to a cheaper form), because the first call stopped
-between two improvements. Uncapped, only the 24 that also change with the search off remain
-(long products whose factors re-read in another order), and no answer is costlier than at
-cap 4 and 59 are cheaper; `real` behaves the same. A cap of 8 happens to give the same answers
-on those predictions, but a sum of two of them needs 14 and of three 19, so no fixed cap is
-enough. The search can still reach
-a state of the residual classes of `docs/formal.md` (I3) that the chain alone never visits;
-on srbf's predictions every remaining second-call change also happens with the search off.
+the cap a search needs grows with the expression: one of srbf's model predictions needs 8
+candidates to reach its uncapped answer, a sum of two copies of it 13, of three 19 and of
+eight 39, so no fixed cap is enough. With the old default cap of 4, 2,701 of srbf's 125,127
+model predictions change on a second call in `f64` (2,673 to a cheaper form), because the
+first call stopped between two improvements. Uncapped, 26 do, at equal price but one: 23 also
+change with the search off (long products whose factors re-read in another order), and 3 are
+long products of that kind that only the search reaches — the search can reach a state of the
+residual classes of `docs/formal.md` (I3) that the chain alone never visits. No answer is
+costlier than at cap 4 and 2,888 are cheaper; `real` behaves the same.
 The search runs in two phases. For its first 8 candidates it is the capped default's
 breadth-first search: every candidate of every accepted state, against the best so far; on
-srbf's predictions that already reaches the uncapped answer everywhere in `f64` and `real`. If
-it has not settled by then, it steps from the best answer to the first of its candidates that
-is cheaper, resuming where the last improvement happened, until a whole round of the best
-answer's candidates finds nothing. A breadth-first search re-tries every candidate of every
-accepted state, which on a large sum of terms that each need several expansions grows with the
-square of the number of terms (16 copies of one prediction: 16 s); the two-phase search takes
-about 0.4 s there, and `effort=4` about 0.1 s for an answer 28% costlier. On srbf's predictions it
-takes 11-16% less time than the previous version's cap of 4 in `f64` and `real`, about as long as
-`effort=4` takes in this version. Every internal caller that passes no
+srbf's predictions that alone gives the final answer on 124,572 of the 125,127 in `f64` and
+`real`. If it has not settled by then, it steps from the best answer to the first of its
+candidates that is cheaper, resuming where the last improvement happened, until a whole round
+of the best answer's candidates finds nothing; on the other 555 that saves a median of 58
+bits. A breadth-first search re-tries every candidate of every accepted state, which on a
+large sum of terms that each need several expansions grows with the square of the number of
+terms; the two-phase search takes about 0.13 s on 16 copies of one prediction, and `effort=4`
+about 0.02 s for an answer three times as costly. On srbf's predictions it takes 8% more time
+than `effort=4`. Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
 `permissive` keeps the cheapest of three searches (its two fold disciplines and the `f64`
 search). Its winner is a valley of its own search only, so a second call can still improve on
-it through another: 42 answers change on a second call on srbf's predictions (127 at cap 4),
-37 of them also with the search off; 21 of the 42 get cheaper, by up to 80 bits. Running the `f64` search from the winner until it finds
-nothing cut a breadth-first search's 41 such changes to 14, but cost 13-18% of the time of flash-ansr's training-data
-canonicalization, which runs in `permissive`, so it is not done. Different search lengths can
-lead the selection to different winners: on srbf's predictions 169 answers are cheaper than at
-cap 4 and 5 costlier.
+it through another: 30 answers change on a second call on srbf's predictions (176 at cap 4),
+20 of them also with the search off; 21 of the 30 get cheaper, by up to 47 bits. Running the
+`f64` search again from the winner would add a search to every call of flash-ansr's
+training-data canonicalization, which runs in `permissive`, so it is not done. Different search
+lengths can lead the selection to different winners: on srbf's predictions 1,354 answers are
+cheaper than at cap 4 and 815 costlier (median 3 bits, at most 78).
 
 The sweep below (65,536 rows, measured with the cap at 4, the default then) shows what
 the search buys on the SR prior: effort 0 to 4 moves the mean ratio from 0.9685
@@ -156,7 +155,7 @@ Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
 below it (the result is never worse than the fixpoint, hence never costlier than the
 input; in `permissive` this holds for each of its three searches, not for its selection, whose
-answer is costlier than its search-off answer on 78 of srbf's predictions, 76 at cap 4), both
+answer is costlier than its search-off answer on 67 of srbf's predictions, 65 at cap 4), both
 phases move only on strict descent of a well-founded ordering
 (termination, independent of the budget), and the walk order is deterministic
 (reproducibility). Idempotence needs the search to run until a round finds nothing,

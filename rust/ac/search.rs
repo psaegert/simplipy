@@ -34,9 +34,10 @@
 //!   search ran until a whole round of the answer's candidates found nothing (the public
 //!   default, `effort=None`; owner
 //!   2026-10-06): a cap can stop it between two accepted valleys, and a second call then
-//!   continues from the first one's answer. On srbf's 125,127 model predictions (f64) the
-//!   old default cap of 4 left 73 answers that changed on a second call; uncapped, only the
-//!   24 that also change with the search off remain. It also needs the answer to re-read to
+//!   continues from the first one's answer. On srbf's 125,127 model predictions (f64) a cap
+//!   of 4, the old default, leaves 2,701 answers that change on a second call; uncapped, 26
+//!   remain, at equal price but one: 23 that also change with the search off, and 3 long
+//!   products that re-read with their factors in another order or sign. It also needs the answer to re-read to
 //!   itself (L6a, docs/formal.md) and the step cap not to bind. `permissive` selects among
 //!   three searches, and its winner is a valley of its own search only (formal.md L6).
 //!
@@ -71,8 +72,8 @@ const POW_EXPAND_CAP: i128 = 6;
 
 /// How many candidate descents the breadth-first first phase of [`explore`] runs before
 /// the first-improvement finish takes over. On srbf's 125,127 model predictions (f64) the
-/// breadth-first search already returns its unlimited answer at 8 attempts everywhere, so
-/// the first phase keeps those answers and the finish runs only where 8 did not settle.
+/// first phase alone returns the final answer on 124,572; the finish improves the other 555
+/// (by a median of 58 bits) and runs only where 8 did not settle.
 /// The first phase is the capped default's breadth-first search, so per search an answer
 /// is never worse than the same build's answer at any effort up to the prefix.
 const BFS_PREFIX: usize = 8;
@@ -91,8 +92,9 @@ const BFS_PREFIX: usize = 8;
 ///    the place that last improved, step to the first one strictly below, and stop after
 ///    a full round that finds nothing. Breadth-first search re-tries every candidate of
 ///    every accepted state, so `k` independent improvable places cost it `4k^2 + 1`
-///    descents (16 copies of one partial expression: 16 s); this finish costs about one
-///    round per improvement plus one closing round (about 0.4 s there).
+///    descents; this finish costs about one round per improvement plus one closing round
+///    (16 copies of one srbf prediction: about 0.13 s, and 0.02 s at `effort=4` for an answer
+///    three times as costly).
 ///
 /// A candidate is the move applied at one place with its ancestors rebuilt through the
 /// canonical constructors ([`rebuild`]): a state's moves are computed when the state is

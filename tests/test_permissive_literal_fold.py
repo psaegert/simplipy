@@ -83,7 +83,7 @@ def test_monster_coefficient_folds_into_one_literal(engine):
     assert math.isclose(float(literals[0]), 1 / (2.7167019109484434 * 3.1415926535897), rel_tol=1e-15)
 
 
-def test_fold_is_idempotent_and_descends_mu(engine):
+def test_fold_is_idempotent_and_descends_the_exact_price(engine):
     once = prefix(engine, MONSTER, Mode.permissive)
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     exact = prefix(engine, MONSTER, Mode.f64)
@@ -114,7 +114,7 @@ def test_huge_integer_folds_to_its_float_value(engine):
 def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
     """The permissive endpoint is the cheaper of the strict tier's exact spelling and the single
     literal float(Fraction(...)) -- the correctly rounded float, not the quotient of two rounded
-    components -- priced by the EXACT codewords (under the float cap the measure prices both
+    components -- priced by the EXACT codewords (where the fold fires, the float cap prices both
     alike; the fold changes what is printed)."""
     exact = exact_value(expr)
     strict = prefix(engine, expr, Mode.f64)

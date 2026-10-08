@@ -534,7 +534,8 @@ pub struct PassCtx<'a> {
 /// finitely often, and at a FIXED mu value only finitely many terms exist -- mu
 /// bounds the node count (every structural node and leaf costs >= 8 except zero-cost
 /// magnitude-1 coefficient/exponent slots, of which each bag and pow carries at most
-/// one), bounds every literal's bit length (a literal pays its bits), and the
+/// one), literals are finitely many under the 1,100-bit cap (a literal's price is
+/// capped at its float's shortest decimal, so mu no longer bounds its bit length), and the
 /// vocabulary of `Leaf`/`Fun` tokens is finite -- so the total cmp_ex admits no
 /// infinite descent within a level. Hence EVERY descending chain is finite:
 /// termination of the pass and of the outer loop are theorems (T6, docs/formal.md),

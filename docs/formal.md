@@ -101,10 +101,11 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   refusal the grouping of the input can decide which inner products fold:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
   (canonicity across spellings, not idempotence; both pinned in tests). Uncapped (the default;
-  L6) the exploration phase leaves every second-call change on srbf's predictions in the
-  classes above (each also changes with the search off), but it can reach states of those
-  classes the chain alone never visits (review fuzz: an unmerged `3e-310` coefficient that
-  re-reads in another order; a `<constant>` absorbed on re-read). In `permissive` the
+  L6) the exploration phase can reach states of those classes the chain alone never visits: on
+  srbf's predictions 26 answers change on a second call, 23 of the 24 above and 3 long
+  products (57 to 70 items) that re-read with their factors in another order or sign at equal
+  price, as that class does, and that only the search reaches (review fuzz: an unmerged
+  `3e-310` coefficient that re-reads in another order; a `<constant>` absorbed on re-read). In `permissive` the
   selection among three searches adds a class of its own (L6). A capped search can stop
   between two improvements, which a second call continues.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
@@ -359,13 +360,14 @@ with *exact* rational comparison — the 256-bit `cmp_exact`). There is no separ
 literal-size tier: $\mu$'s literal component carries its content, so
 the ordering is a pair, not a triple.
 
-**The float cap** (phase 2d). The evaluator reads every literal as its nearest float64, so
-a literal's price is capped at that float's shortest round-trip decimal $d(v)$, priced by
-the same codebook: $\mu'(v) = \min\big(\mu(v),\, \mu(d(v))\big)$ for a finite nonzero
-nearest float, $\mu(v)$ otherwise. Every literal that is its own float's shortest decimal —
-every drawn or fitted constant — keeps its price, and no price rises; a literal carrying
-more than float precision (a 64-digit product of two 16-digit constants) costs its float's
-17-digit decimal. The cap is a decimal, never a fraction: a fraction that reads as the same
+**The float cap.** The evaluator reads every literal as its nearest float64, so a literal's
+price is capped at that float's shortest round-trip decimal $d(v)$ (at most 17 significant
+digits), priced by the same codebook: $\mu'(v) = \min\big(\mu(v),\, \mu(d(v))\big)$ for a
+finite nonzero nearest float, $\mu(v)$ otherwise. Every literal that is its own float's
+shortest decimal keeps its price (every constant drawn for flash-ansr's training data among
+them), and no price rises; a literal carrying more digits than its float needs (the 64-digit
+fourth power of a 16-digit constant, or a fitted constant printed with 17 digits where 16
+suffice) costs its float's shortest decimal. The cap is a decimal, never a fraction: a fraction that reads as the same
 float is no candidate unless it is the literal itself, so `0.3333333333333333` keeps its
 16-digit price while `1/3` costs 4 bits. Below, $\mu$ denotes the capped price wherever it
 prices a term.
@@ -383,8 +385,8 @@ chooses each literal's print by the argmin over the *same* two codeword totals t
 measure minimizes (`decimal_spelling_wins`), so $\mu(t)$ is the description length
 of the representation actually emitted, not of a hypothetical one — except where the float
 cap applies: the state is exact and prints its exact value, which then costs more than its
-price; the capped price is that of the float's shortest decimal, the spelling `prettify`
-shows. An exact codeword
+price; the capped price is that of the float's shortest decimal (what Python's `repr`
+prints for it). An exact codeword
 tie goes to the fraction — the structurally distinguished caller-dialect member,
 mirroring tier 2 of the sign-placement convention (§3); states carry no spelling, so
 the tie-break must be spelling-free, and either member realizes the same $\mu$. The
@@ -408,9 +410,9 @@ in bits — the carrier being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
 vocabulary are finite; and there are finitely many numbers at all: a number's numerator
 and denominator have at most 1,100 bits each (the cap). Under the float cap $\mu_0$ no
-longer bounds a number's codeword components — every literal beyond float precision costs
-about one 17-digit decimal — so the finiteness of the literals comes from the cap alone,
-not from the price. A numeric-string leaf
+longer bounds a number's codeword components — every literal costs at most its float's
+shortest decimal — so the finiteness of the literals comes from the cap alone, not from the
+price. A numeric-string leaf
 (beyond the cap, or not admissible in f64 mode) pays a cost that grows with its
 canonical print (`mu_numeric_str` is strictly monotone in significand digits and in
 the scale within each codeword), so $\mu_0$ bounds the print's significand length
@@ -424,11 +426,12 @@ strict total order `cmp_ex`, so it is finite. $\square$
 
 A dense-literal chain ascends while its literals carry no more than float precision: the
 chain $\mathrm{Mul}[3/2^k, x]$ grows strictly in $\mu$ with $k$ up to the point where
-$3/2^k$'s exact spelling is longer than its float's shortest decimal, and from there on its
-price stays near that decimal's (the float cap). It stays finite all the same — $k$ is
+$3/2^k$'s exact spelling is longer than its float's shortest decimal ($k = 56$), and from
+there on it costs that decimal's price (66–70 bits up to $k = 200$), which no longer ascends
+strictly. It stays finite all the same — $k$ is
 bounded by the 1,100-bit cap, and T-wf holds through L5 — and a rewrite cannot walk it
 anyway: every step preserves the term's value, and changing one literal alone changes it
-(pinned in `tests/test_unified_measure.py`: the chain ascends up to the cap's onset, and
+(pinned in `tests/test_unified_measure.py`: the chain ascends up to the float cap's onset, and
 simplifying the chain's members settles and re-reads to itself). A pure re-sort or re-orientation preserves
 $\mu$ (the leaf multiset and shape are unchanged) and is decided by `cmp_ex`, exactly
 as before.
@@ -557,18 +560,17 @@ and are refused again. Two further premises: the step cap does not bind (a cappe
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
 valleys, and the re-run then continues it [EMPIRICAL: srbf's 125,127 model predictions
-change on a second call 73 times in `f64` at the former default cap of 4, 50 of them to a
-cheaper form; uncapped, 24 times, exactly the effort-0 class of I3; `real` the same]. Where
+change on a second call 2,701 times in `f64` at cap 4, the former default, 2,673 of them to a
+cheaper form; uncapped, 26 times, at equal price but one: 23 of the effort-0 class of I3 and 3
+search-reached members of it; `real` 2,703 and the same 26]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
 `permissive` selects the cheapest of three searches, and its winner is a valley of its own
 search only: the re-run's other searches, started from the winner, can descend further, so L6
-does not cover its selection [EMPIRICAL: srbf's predictions: 127 second-call changes at cap 4,
-42 uncapped, 37 of them also with the search off]. A loop that ran the `f64` search from the
-winner and selected again while it found something strictly cheaper cut a breadth-first
-search's 41 to 14 but
-cost 13-18% of the time of flash-ansr's training-data canonicalization (which runs in
-`permissive`) and is not part of the engine.
+does not cover its selection [EMPIRICAL: srbf's predictions: 176 second-call changes at cap 4,
+30 uncapped, 20 of them also with the search off]. Running the `f64` search again from the
+winner would add a search to every call of flash-ansr's training-data canonicalization (which
+runs in `permissive`) and is not part of the engine.
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:

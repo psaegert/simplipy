@@ -243,9 +243,9 @@ DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given
 #: (D39 B7). ``None``: the search runs until a round finds nothing, so a second call
-#: returns the answer unchanged (owner, 2026-10-06). The previous default, 4, stopped
-#: searches between two improvements: on srbf's 125,127 model predictions 73 answers
-#: changed on a second call in f64 (24 uncapped, all of them also with the search off).
+#: returns the answer unchanged (owner, 2026-10-06). The previous default, 4, stops
+#: searches between two improvements: on srbf's 125,127 model predictions 2,701 answers
+#: change on a second call in f64 at cap 4 (26 uncapped, 23 of them also with the search off).
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None

@@ -1221,7 +1221,9 @@ impl Engine {
         // when mu' prices that spelling strictly cheaper, and the chain re-runs on the
         // moved state -- a moved literal can re-fold with its neighbours, and the
         // endpoint must stay the chain's own fixpoint (the per-state `stable()`
-        // contract). Each round lowers mu by at least a milli-bit, so the loop is finite;
+        // contract). Each round lowers the literal's EXACT price (`mu_rat_exact`) by at
+        // least a milli-bit -- the measure itself stays level, its float cap already prices
+        // the moved literal as that float -- so the loop is finite;
         // the cap is a backstop, never reached on the corpus (a moved literal has no
         // second move: it already is a shortest f64 spelling). Permissive only: the
         // strict tiers never move a value, and their literals keep the exact fraction.

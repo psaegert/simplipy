@@ -595,15 +595,18 @@ pub fn mu_rat_exact(r: &Rat) -> u64 {
         }
 }
 
-/// THE PRICE OF A LITERAL (phase 2d; owner 2026-10-06 and 2026-10-08): the lesser of the
-/// literal's own exact spelling ([`mu_rat_exact`]) and the shortest decimal of the float64 it
-/// reads as, priced by the same codewords. The evaluator reads every literal as its nearest
-/// float64, so digits beyond float precision are not information: a 64-digit product of two
-/// 16-digit constants costs what the 17-digit decimal of its float costs. A literal that is its
-/// own float's shortest decimal (every drawn constant) keeps its price, and no price rises. The
-/// cap is the decimal that `prettify` shows for such a value, never a fraction it would not show:
-/// `0.3333333333333333` keeps its 16-digit price although `1/3` reads as the same float. A literal
-/// beyond float64's range (or below its smallest subnormal) keeps its exact price. The state keeps
+/// THE PRICE OF A LITERAL: the lesser of the literal's own exact spelling ([`mu_rat_exact`])
+/// and the shortest decimal of the float64 it reads as, priced by the same codewords. The
+/// evaluator reads every literal as its nearest float64, so digits beyond float precision are
+/// not information: the 64-digit fourth power of a 16-digit constant costs what its float's
+/// shortest decimal (at most 17 significant digits) costs. A literal that is its own float's
+/// shortest decimal keeps its price, and no price rises. The cap is that decimal (Rust's `{:?}`
+/// spelling; on rare exact ties it can differ from Python's `repr` in the last digit), never a
+/// fraction that reads as the same float: `0.3333333333333333` keeps its 16-digit price although
+/// `1/3` reads as the same float. A literal beyond float64's range (or below its smallest
+/// subnormal) keeps its exact price, and a numeric-string leaf (beyond the 1,100-bit cap, or not
+/// admissible in f64 mode) keeps its print's price (`mu_numeric_str`); a leaf never becomes a
+/// `Rat`, so no ordering cliff opens between the two. The state keeps
 /// the exact value and prints it: only the measure reads the float. The price is a function of the
 /// value alone (the decimal is built in the exact number domain), so each thread remembers the
 /// prices it computed, emptying the table at 65,536 entries.
@@ -714,8 +717,8 @@ fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
 }
 
 /// Whether the DECIMAL spelling is the canonical PRINT for this value: the serializer
-/// argmin over the SAME two codeword totals `mu_rat` mins over, so **mu'(state) is the
-/// cost of the representation actually emitted** (the D38 state/serializer factoring:
+/// argmin over the SAME two codeword totals `mu_rat_exact` mins over, so the print costs
+/// the exact price; the measure (`mu_rat`) can be lower, by the float cap (the D38 state/serializer factoring:
 /// states carry one exact rational per value and no spelling; the emitter realizes the
 /// best codeword at print time, locally and closed-form).
 ///
@@ -771,7 +774,7 @@ const MU_SCALE_KNEE: u64 = 1 << 32;
 const MU_SCALE_KNEE_COST: u64 = MU_SCALE_KNEE * L10_MILLI;
 
 /// Description length of a BEYOND-`Rat` numeric literal, from its canonical print, under
-/// exactly the mu' rule `mu_rat` applies in range (D38): one selector bit, then the
+/// exactly the mu' rule `mu_rat_exact` applies in range (D38): one selector bit, then the
 /// cheaper of the RATIONAL codeword (every integer the spelling writes down costs
 /// `L(n)`, a fraction pays both components) and the DECIMAL-SCIENTIFIC codeword
 /// (`max(floor, L(m)) + L(|scale|)` for the shortest spelling `m * 10^scale`, the
@@ -3417,7 +3420,8 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     // cheaper, and what the user typed survives whenever prices tie); residual
     // equal-mu same-sign ties fall to a fixed structural order. n > 6 refuses to
     // trade (2^n materializations; n is orbit-invariant, so the cap is a legal
-    // class function -- and unreachable on real corpora). A negate_term overflow
+    // class function; under the float cap the search reaches it on 3 of srbf's 125,127
+    // model predictions, which then change on a second call). A negate_term overflow
     // refusal keeps the entry spelling, whose display is injective. This arm
     // SUBSUMES the former lone `-1 x Add` distribution arm (its case is n=1 with
     // out.len() == 1; the mu comparison and the A-tie give the identical decision).
