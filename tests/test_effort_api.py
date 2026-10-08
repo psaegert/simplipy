@@ -153,8 +153,8 @@ class TestTheSearchRunsUntilItSettles:
 
     @pytest.mark.parametrize('k', [3, 4])
     def test_larger_expressions_need_more_than_any_small_cap(self, shipped, k) -> None:
-        # The search reaches the uncapped answer of 2 copies within 16 candidates, not of 3 or
-        # 4: what a search needs grows with the expression.
+        # What a search needs grows with the expression: 2 copies reach the uncapped answer
+        # within 14 candidates, 3 need 19 and 4 need 23, so a cap of 16 falls short here.
         t = _copies(k)
         once = shipped.simplify(t)
         assert shipped.simplify(once) == once

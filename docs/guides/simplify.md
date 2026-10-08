@@ -114,10 +114,10 @@ the cap a search needs grows with the expression. Exact arithmetic on long const
 made this visible: with the old default cap of 4, 73 of srbf's 125,127 model predictions
 changed on a second call in `f64` (50 to a cheaper form), because the first call stopped
 between two improvements. Uncapped, only the 24 that also change with the search off remain
-(long products whose factors re-read in another order), no answer is costlier than at
-cap 4 and 59 are cheaper, for about 2% more total time; `real` behaves the same. A cap of 8
-happens to give the same answers on those predictions, but a sum of two of them needs 17
-and of three 37 (4k² + 1 for k copies), so no fixed cap is enough. The search can still reach
+(long products whose factors re-read in another order), and no answer is costlier than at
+cap 4 and 59 are cheaper; `real` behaves the same. A cap of 8 happens to give the same answers
+on those predictions, but a sum of two of them needs 14 and of three 19, so no fixed cap is
+enough. The search can still reach
 a state of the residual classes of `docs/formal.md` (I3) that the chain alone never visits;
 on srbf's predictions every remaining second-call change also happens with the search off.
 The search runs in two phases. For its first 8 candidates it is the capped default's
@@ -128,8 +128,9 @@ is cheaper, resuming where the last improvement happened, until a whole round of
 answer's candidates finds nothing. A breadth-first search re-tries every candidate of every
 accepted state, which on a large sum of terms that each need several expansions grows with the
 square of the number of terms (16 copies of one prediction: 16 s); the two-phase search takes
-0.6 s there (0.5 s at cap 4, for an answer 28% costlier). On srbf's predictions it takes about a
-fifth less time than the old cap of 4 in `f64` and `real`. Every internal caller that passes no
+about 0.4 s there, and `effort=4` about 0.1 s for an answer 28% costlier. On srbf's predictions it
+takes 11-16% less time than the previous version's cap of 4 in `f64` and `real`, about as long as
+`effort=4` takes in this version. Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
@@ -137,7 +138,7 @@ follows the default.
 search). Its winner is a valley of its own search only, so a second call can still improve on
 it through another: 42 answers change on a second call on srbf's predictions (127 at cap 4),
 37 of them also with the search off; 21 of the 42 get cheaper, by up to 80 bits. Running the `f64` search from the winner until it finds
-nothing cut those 41 to 14, but cost 13-18% of the time of flash-ansr's training-data
+nothing cut a breadth-first search's 41 such changes to 14, but cost 13-18% of the time of flash-ansr's training-data
 canonicalization, which runs in `permissive`, so it is not done. Different search lengths can
 lead the selection to different winners: on srbf's predictions 169 answers are cheaper than at
 cap 4 and 5 costlier.

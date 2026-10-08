@@ -31,7 +31,8 @@
 //!   frontier, single thread), and a reached valley re-explores to nothing: its own
 //!   expansions all settle at or above it (an uncapped search ends on a full round of
 //!   the answer's own candidates that found nothing). That holds for the answer only when the
-//!   search ran until its frontier emptied (the public default, `effort=None`; owner
+//!   search ran until a whole round of the answer's candidates found nothing (the public
+//!   default, `effort=None`; owner
 //!   2026-10-06): a cap can stop it between two accepted valleys, and a second call then
 //!   continues from the first one's answer. On srbf's 125,127 model predictions (f64) the
 //!   old default cap of 4 left 73 answers that changed on a second call; uncapped, only the
@@ -91,7 +92,7 @@ const BFS_PREFIX: usize = 8;
 ///    a full round that finds nothing. Breadth-first search re-tries every candidate of
 ///    every accepted state, so `k` independent improvable places cost it `4k^2 + 1`
 ///    descents (16 copies of one partial expression: 16 s); this finish costs about one
-///    round per improvement plus one closing round (0.6 s there).
+///    round per improvement plus one closing round (about 0.4 s there).
 ///
 /// A candidate is the move applied at one place with its ancestors rebuilt through the
 /// canonical constructors ([`rebuild`]), built only when it is tried, then descended by

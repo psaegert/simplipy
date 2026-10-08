@@ -245,8 +245,8 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: (D39 B7). ``None``: the search runs until a round finds nothing, so a second call
 #: returns the answer unchanged (owner, 2026-10-06). The previous default, 4, stopped
 #: searches between two improvements: on srbf's 125,127 model predictions 73 answers
-#: changed on a second call in f64 (24 uncapped, all of them also with the search off),
-#: for about 2% less total time. Callers on throughput-critical paths pin ``effort=0``
+#: changed on a second call in f64 (24 uncapped, all of them also with the search off).
+#: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
 
@@ -946,25 +946,6 @@ class SimpliPyEngine:
         ----------
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
-
-        effort : int or None, optional
-            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, an
-            exploration phase proposes expansion moves the strict descent refuses
-            (distributing a product over its sums, expanding an integer power of a
-            sum), runs each candidate through the same certified constructors and the
-            same descent loop, and replaces the result only when the candidate's
-            endpoint lands STRICTLY below it in the serve-time reduction ordering.
-            ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
-            nothing, so a second call returns the answer unchanged (up to the residual
-            classes in ``docs/formal.md``, I3 and L6); an int caps each search at that
-            many candidate descents (``permissive`` runs several per call), after which
-            a second call can continue it; ``0`` never enters the phase and is
-            byte-identical to the plain chain. Every guarantee survives any budget: soundness (same
-            certificates), never-worse (strictly-below acceptance, per search:
-            ``permissive``'s selection among its searches can end costlier than its
-            search-off answer), termination
-            (well-founded ordering, independent of the budget) and deterministic
-            output.
 
         Returns
         -------
@@ -2043,6 +2024,25 @@ class SimpliPyEngine:
             certificates, served rules and miner, and by callers that mask or key on them
             -- and a spelling chosen for a reader must not move any of those. To read a
             token answer, convert it: ``simplify(to_infix(tokens))``.
+
+        effort : int or None, optional
+            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, an
+            exploration phase proposes expansion moves the strict descent refuses
+            (distributing a product over its sums, expanding an integer power of a
+            sum), runs each candidate through the same certified constructors and the
+            same descent loop, and replaces the result only when the candidate's
+            endpoint lands STRICTLY below it in the serve-time reduction ordering.
+            ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
+            nothing, so a second call returns the answer unchanged (up to the residual
+            classes in ``docs/formal.md``, I3 and L6); an int caps each search at that
+            many candidate descents (``permissive`` runs several per call), after which
+            a second call can continue it; ``0`` never enters the phase and is
+            byte-identical to the plain chain. Every guarantee survives any budget: soundness (same
+            certificates), never-worse (strictly-below acceptance, per search:
+            ``permissive``'s selection among its searches can end costlier than its
+            search-off answer), termination
+            (well-founded ordering, independent of the budget) and deterministic
+            output.
 
         Returns
         -------

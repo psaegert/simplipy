@@ -93,7 +93,8 @@ fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
 }
 
 /// The public `effort=` wire. `None` explores until a round finds nothing (owner,
-/// 2026-10-06): the search stops when its frontier is empty, which the well-founded
+/// 2026-10-06): the search stops when a whole round of the answer's candidates finds
+/// nothing, which the well-founded
 /// ordering bounds, so its answer re-explores to nothing on a second call. `Some(k)` caps
 /// it at `k` candidate descents; `Some(0)` never enters it.
 fn explore_budget_of(effort: Option<usize>) -> usize {
