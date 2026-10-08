@@ -796,6 +796,7 @@ impl Engine {
             explore_budget,
             Cx::folds_for(RuleMode::Default),
             Some(suppressed),
+            None,
         );
         self.project(ctx, best, form, RuleMode::Default)
     }
@@ -890,11 +891,10 @@ impl Engine {
     /// form -- the same functional the simplify search minimizes (`ac::expr::complexity`).
     /// `None` on malformed input.
     ///
-    /// `canon` is the mode the CANON itself runs in. `RuleMode::Default` is the public
-    /// measure (owner ruling, SHIP BOTH: `complexity()` stays Default-pinned); any other
-    /// value is the engine-internal diagnostic that re-prices under that mode's own canon
-    /// licences, making the per-mode serve guarantee checkable. The canon context stays
-    /// certificate-free and fold-free either way: that is this instrument's contract.
+    /// `canon` is the mode the CANON itself runs in: `complexity()` passes the requested
+    /// mode (each mode's own reading); `RuleMode::Default` prices in f64's reading (the
+    /// deprecated `canon='default'`). The canon context stays certificate-free and
+    /// fold-free either way: that is this instrument's contract.
     pub fn ac_complexity(
         &self,
         tokens: &[String],
@@ -1016,13 +1016,12 @@ impl Engine {
     /// found live as 0.48% of 64k corpus rows measuring above ratio 1, in quanta of
     /// one symbol unit (2026-08-02).
     ///
-    /// `canon_mode` is the mode the certified CANON itself runs in. `RuleMode::Default`
-    /// pins the canon to the sound default -- THE public measure (owner ruling, SHIP
-    /// BOTH), and the theorem above is a theorem of THAT pricing for the default-mode
-    /// chain. Any other value is the engine-internal diagnostic that re-prices under
-    /// the requested mode's own canon (its fold discipline and licences) -- the measure
-    /// that mode's chain actually descends, which makes the per-mode serve guarantee
-    /// `mu_mode(simplify(e, mode)) <= mu_mode(e)` checkable from the outside.
+    /// `canon_mode` is the mode the certified CANON itself runs in: `complexity()` passes
+    /// the requested mode, pricing in that mode's own canon (its fold discipline and
+    /// licences) -- the measure that mode's simplify descends, under which
+    /// `mu_mode(simplify(e, mode)) <= mu_mode(e)` holds in every mode (for `permissive` by
+    /// its selection: `Engine::ac_simplify_ex_permissive`). `RuleMode::Default` prices in
+    /// f64's reading whatever the mode (the deprecated `canon='default'`).
     pub fn ac_complexity_certified(
         &self,
         tokens: &[String],
@@ -1030,12 +1029,24 @@ impl Engine {
         canon_mode: RuleMode,
     ) -> Option<u64> {
         let ctx = SimplifyCtx::new(self.tokens.len());
-        let toks = self.intern_seq(tokens, &ctx);
-        let view = self.view(&ctx);
-        let cf = |e: &Ex| self.ac_cert(e, &ctx, false);
-        let cfz = |e: &Ex| self.ac_cert(e, &ctx, true);
-        let czn = |e: &Ex| self.ac_zsn(e, &ctx);
-        let cnc = |e: &Ex| self.ac_nce(e, &ctx);
+        self.certified_reading(tokens, mode, canon_mode, &ctx)
+            .map(|(_, mu)| mu)
+    }
+
+    /// The state [`Engine::ac_complexity_certified`] prices, built in `ctx`, with its price.
+    fn certified_reading(
+        &self,
+        tokens: &[String],
+        mode: RuleMode,
+        canon_mode: RuleMode,
+        ctx: &SimplifyCtx,
+    ) -> Option<(Ex, u64)> {
+        let toks = self.intern_seq(tokens, ctx);
+        let view = self.view(ctx);
+        let cf = |e: &Ex| self.ac_cert(e, ctx, false);
+        let cfz = |e: &Ex| self.ac_cert(e, ctx, true);
+        let czn = |e: &Ex| self.ac_zsn(e, ctx);
+        let cnc = |e: &Ex| self.ac_nce(e, ctx);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1056,8 +1067,9 @@ impl Engine {
         let mut pbare = Cx::bare(&view);
         pbare.mode = mode;
         pbare.fold_f64 = Cx::folds_for(mode);
-        let e = from_prefix(&toks, &pbare)?;
-        Some(complexity(&canon(e, &cx), &view))
+        let e = canon(from_prefix(&toks, &pbare)?, &cx);
+        let mu = complexity(&e, &view);
+        Some((e, mu))
     }
 
     /// OFFLINE instrument (F80 E3 read, 2026-08-11): the kept negative-exponent bag
@@ -1216,77 +1228,171 @@ impl Engine {
                 Cx::folds_for(mode),
             );
         }
-        // THE PERMISSIVE LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03):
-        // an exact literal the chain's endpoint carries is replaced by its f64 nearest
-        // when mu' prices that spelling strictly cheaper, and the chain re-runs on the
-        // moved state -- a moved literal can re-fold with its neighbours, and the
-        // endpoint must stay the chain's own fixpoint (the per-state `stable()`
-        // contract). A moved literal has no second move (it already is a shortest f64
-        // spelling), but a round's re-run can mint new long exact literals, so the loop
-        // is finite by its bound of 4 rounds, not by a price: of 5,106 permissive answers
-        // on srbf's predictions none still carries a literal the fold would move, so the
-        // bound did not bind there. A winner without such literals is not folded and not selected
-        // again, so a shorter search can end lower than a longer one. Permissive only: the
-        // strict tiers never move a value, and their literals keep the exact fraction.
-        let mut owned: Vec<String> = tokens.to_vec();
-        for _ in 0..4 {
-            let picked = self.ac_simplify_ex_permissive_once(&owned, max_passes, explore_budget);
-            let Some(e) = picked.1.as_ref() else {
-                return picked;
-            };
-            let Some(snapped) = crate::ac::expr::snap_lossy_literals(e) else {
-                return picked;
-            };
-            let view = self.view(&picked.0);
-            let bare = Cx::bare(&view);
-            let toks = to_prefix(&snapped, &bare);
-            owned = self.resolve_seq(&toks, &picked.0);
-        }
-        self.ac_simplify_ex_permissive_once(&owned, max_passes, explore_budget)
+        self.ac_simplify_ex_permissive(tokens, max_passes, explore_budget)
     }
-    /// One permissive selection: both fold disciplines and the default arm, the cheapest
-    /// endpoint wins (see `ac_simplify_ex_explore` for the literal-fold loop around it).
-    fn ac_simplify_ex_permissive_once(
+    /// PERMISSIVE: THE CHEAPEST CANDIDATE, PRICED AS RETURNED. Permissive runs three arms
+    /// -- its two fold disciplines and the default-mode chain at the same budget (THE THIRD
+    /// CANDIDATE, owner ruling 2026-08-24: the certified descent can steer past a structure
+    /// the relaxed descent freezes, so f64 can out-simplify permissive on individual rows) --
+    /// and returns the cheapest of every candidate the run produces:
+    ///
+    /// * each arm's answer, and every state its search passed through: a run under a smaller
+    ///   budget is the same walk cut short (`ac::search::explore`), so whatever a
+    ///   capped run can end on is among them;
+    /// * THE PERMISSIVE LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03): a
+    ///   candidate carrying an exact literal whose f64 nearest prices cheaper is moved to
+    ///   that float and run through the three arms again at the same budget, up to
+    ///   [`LITERAL_FOLD_ROUNDS`] rounds; every state those runs pass through is a candidate
+    ///   too, so a smaller budget's continuation (the same walks cut short) is covered;
+    /// * the input as read.
+    ///
+    /// Every candidate is priced by re-reading what it prints in permissive's own measure
+    /// (`complexity(.., mode='permissive')`), the measure a caller sees. Hence, by
+    /// construction: the answer never prices above the input, never above the answer with
+    /// the search off, and never above the answer under any smaller budget (its candidates
+    /// are a subset). A TIE GOES TO THE FOLDED FORM -- policy, not arithmetic: permissive
+    /// exists for the flash-ansr training path, where one literal token beats four. So at
+    /// equal price the candidate with more literal-fold rounds wins (the float cap prices a
+    /// long exact literal and its float alike), and among those the earlier one: the folded
+    /// arm, the unfolded one, the default arm, the states passed through, the input.
+    fn ac_simplify_ex_permissive(
         &self,
         tokens: &[String],
         max_passes: usize,
         explore_budget: usize,
     ) -> (SimplifyCtx, Option<Ex>) {
-        let mode = RuleMode::Permissive;
-        let unfolded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, false);
-        let folded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, true);
-        // THE THIRD CANDIDATE (owner ruling 2026-08-24): the DEFAULT-mode result at
-        // the same budget. Corpus is the permissive superset by doctrine, yet
-        // exploration is mode-dependent -- the certified descent can steer a
-        // candidate past a structure the relaxed descent freezes, so at nonzero
-        // budgets f64 can out-simplify permissive on individual rows (first observed on
-        // the shipped triple's dominance gate the day DEFAULT_EFFORT became 4).
-        // Arbitrating over the default-mode result too makes permissive dominance a
-        // THEOREM rather than an empirical gate property: permissive picks the best of
-        // its own two constructions and the sound chain's. Strictly-better wins
-        // only -- ties keep the permissive-own winner, so outputs churn exactly where
-        // the default candidate genuinely improves.
-        let default_arm = self.ac_simplify_ex_fold(
+        let mut ctxs: Vec<SimplifyCtx> = Vec::new();
+        let mut answers: Vec<(usize, Ex)> = Vec::new();
+        let mut passed: Vec<(usize, Ex)> = Vec::new();
+        self.permissive_arms(
             tokens,
             max_passes,
-            RuleMode::Default,
             explore_budget,
-            Cx::folds_for(RuleMode::Default),
+            &mut ctxs,
+            &mut answers,
+            &mut passed,
         );
-        let cost = |p: &(SimplifyCtx, Option<Ex>)| -> Option<u64> {
-            p.1.as_ref().map(|e| complexity(e, &self.view(&p.0)))
-        };
-        let own = match (cost(&unfolded), cost(&folded)) {
-            (Some(cu), Some(cf)) if cu < cf => unfolded,
-            (Some(_), Some(_)) => folded,
-            (Some(_), None) => unfolded,
-            _ => folded,
-        };
-        match (cost(&own), cost(&default_arm)) {
-            (Some(co), Some(cd)) if cd < co => default_arm,
-            (None, Some(_)) => default_arm,
-            _ => own,
+        if answers.is_empty() {
+            return (SimplifyCtx::new(self.tokens.len()), None);
         }
+        let mut folded: Vec<(usize, Ex, usize)> = Vec::new();
+        let mut moved: FxHashSet<Vec<String>> = FxHashSet::default();
+        let mut round: Vec<(usize, Ex)> = answers.iter().chain(passed.iter()).cloned().collect();
+        for depth in 1..=LITERAL_FOLD_ROUNDS {
+            let mut ends: Vec<(usize, Ex)> = Vec::new();
+            let mut through: Vec<(usize, Ex)> = Vec::new();
+            for (i, e) in &round {
+                let Some(snapped) = crate::ac::expr::snap_lossy_literals(e) else {
+                    continue;
+                };
+                let toks = self.print_prefix(&snapped, &ctxs[*i]);
+                if !moved.insert(toks.clone()) {
+                    continue;
+                }
+                self.permissive_arms(
+                    &toks,
+                    max_passes,
+                    explore_budget,
+                    &mut ctxs,
+                    &mut ends,
+                    &mut through,
+                );
+            }
+            if ends.is_empty() {
+                break;
+            }
+            folded.extend(
+                ends.iter()
+                    .chain(through.iter())
+                    .map(|(i, e)| (*i, e.clone(), depth)),
+            );
+            round = ends.into_iter().chain(through).collect();
+        }
+        let pctx = SimplifyCtx::new(self.tokens.len());
+        // (price, literal-fold rounds, context index -- None for the input as read, state)
+        let mut best: Option<(u64, usize, Option<usize>, Ex)> = None;
+        let better = |mu: u64, depth: usize, best: &Option<(u64, usize, Option<usize>, Ex)>| {
+            best.as_ref()
+                .is_none_or(|(m, d, _, _)| mu < *m || (mu == *m && depth > *d))
+        };
+        let mut priced: FxHashSet<Vec<String>> = FxHashSet::default();
+        let unfolded = answers.iter().chain(passed.iter()).map(|(i, e)| (*i, e, 0));
+        for (i, e, depth) in unfolded.chain(folded.iter().map(|(i, e, d)| (*i, e, *d))) {
+            let toks = self.print_prefix(e, &ctxs[i]);
+            if !priced.insert(toks.clone()) {
+                continue;
+            }
+            let Some((_, mu)) =
+                self.certified_reading(&toks, RuleMode::Permissive, RuleMode::Permissive, &pctx)
+            else {
+                continue;
+            };
+            if better(mu, depth, &best) {
+                best = Some((mu, depth, Some(i), e.clone()));
+            }
+        }
+        if let Some((read, mu)) =
+            self.certified_reading(tokens, RuleMode::Permissive, RuleMode::Permissive, &pctx)
+        {
+            if better(mu, 0, &best) {
+                best = Some((mu, 0, None, read));
+            }
+        }
+        match best {
+            Some((_, _, Some(i), e)) => (ctxs.swap_remove(i), Some(e)),
+            Some((_, _, None, read)) => (pctx, Some(read)),
+            None => {
+                let (i, e) = answers.swap_remove(0);
+                (ctxs.swap_remove(i), Some(e))
+            }
+        }
+    }
+
+    /// The three permissive arms on `tokens` at `budget`, in tie order (folded, unfolded,
+    /// default): each arm's context is pushed onto `ctxs`, its answer onto `answers` and
+    /// the states it can end on under a smaller budget onto `passed`.
+    fn permissive_arms(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        budget: usize,
+        ctxs: &mut Vec<SimplifyCtx>,
+        answers: &mut Vec<(usize, Ex)>,
+        passed: &mut Vec<(usize, Ex)>,
+    ) {
+        for (mode, fold) in [
+            (RuleMode::Permissive, true),
+            (RuleMode::Permissive, false),
+            (RuleMode::Default, Cx::folds_for(RuleMode::Default)),
+        ] {
+            let mut trace = Vec::new();
+            let (ctx, best) = self.ac_simplify_ex_fold_sup(
+                tokens,
+                max_passes,
+                mode,
+                budget,
+                fold,
+                None,
+                Some(&mut trace),
+            );
+            let Some(best) = best else {
+                continue;
+            };
+            let i = ctxs.len();
+            ctxs.push(ctx);
+            answers.push((i, best));
+            passed.extend(trace.into_iter().map(|s| (i, s)));
+        }
+    }
+
+    /// `e` (a state of `ctx`) in the explicit prefix projection, spelled in the f64 number
+    /// domain the permissive and default arms build their numbers in.
+    fn print_prefix(&self, e: &Ex, ctx: &SimplifyCtx) -> Vec<String> {
+        let view = self.view(ctx);
+        let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(true);
+        let toks = to_prefix(e, &bare);
+        self.resolve_seq(&toks, ctx)
     }
 
     fn ac_simplify_ex_fold(
@@ -1297,7 +1403,15 @@ impl Engine {
         explore_budget: usize,
         fold_tr: bool,
     ) -> (SimplifyCtx, Option<Ex>) {
-        self.ac_simplify_ex_fold_sup(tokens, max_passes, mode, explore_budget, fold_tr, None)
+        self.ac_simplify_ex_fold_sup(
+            tokens,
+            max_passes,
+            mode,
+            explore_budget,
+            fold_tr,
+            None,
+            None,
+        )
     }
 
     /// [`Engine::ac_simplify_ex_fold`] with an optional SUPPRESSION SET of artifact rule
@@ -1314,6 +1428,12 @@ impl Engine {
     /// probes each `?`-rule under the engine WITHOUT that rule: per-candidate engine
     /// rebuilds cost seconds each (lazy rule translation) and the refund needs tens of
     /// thousands of them, while a per-probe suppression set costs microseconds.
+    ///
+    /// `trace`, when given, receives the states this run can END on under any smaller
+    /// budget: the fixpoint the search starts from, then every state the search accepts,
+    /// in order -- each finished exactly as the answer is (the lossy output projection).
+    /// The last one is the answer itself.
+    #[allow(clippy::too_many_arguments)]
     fn ac_simplify_ex_fold_sup(
         &self,
         tokens: &[String],
@@ -1322,6 +1442,7 @@ impl Engine {
         explore_budget: usize,
         fold_tr: bool,
         suppressed: Option<&FxHashSet<usize>>,
+        mut trace: Option<&mut Vec<Ex>>,
     ) -> (SimplifyCtx, Option<Ex>) {
         // The RECALL switch is DERIVED from the mode, once, here -- every layer below
         // this line already speaks `wildcard_all` and is untouched. Deriving it (rather
@@ -1471,8 +1592,19 @@ impl Engine {
         // its OWN final fixpoint after sentinel expiry instead (phase 2 below):
         // exploration is post-FIXPOINT by definition, and phase-1 lossy states are a
         // search licence, not an answer (H-015).
+        if !wildcard_all {
+            if let Some(t) = trace.as_deref_mut() {
+                t.push(current.clone());
+            }
+        }
         if explore_budget > 0 && !wildcard_all {
-            current = crate::ac::search::explore(current, &pass, max_passes, explore_budget);
+            current = crate::ac::search::explore(
+                current,
+                &pass,
+                max_passes,
+                explore_budget,
+                trace.as_deref_mut(),
+            );
             debug_assert!(
                 stable(&current),
                 "explored endpoint is not serialization-stable: {current:?}"
@@ -1544,8 +1676,17 @@ impl Engine {
             // D39 EXPLORATION, lossy mode: same phase, run on the sentinel-expired
             // final fixpoint under the phase-2 pass (blanket licences -- the shipped
             // wildcard_all semantics apply to the moves exactly as to the chain).
+            if let Some(t) = trace.as_deref_mut() {
+                t.push(current.clone());
+            }
             if explore_budget > 0 {
-                current = crate::ac::search::explore(current, &pass2, max_passes, explore_budget);
+                current = crate::ac::search::explore(
+                    current,
+                    &pass2,
+                    max_passes,
+                    explore_budget,
+                    trace.as_deref_mut(),
+                );
                 debug_assert!(
                     stable2(&current),
                     "explored phase-2 endpoint is not serialization-stable: {current:?}"
@@ -1561,6 +1702,10 @@ impl Engine {
         // working endpoint, whose projection reproduces the output (idempotence as a
         // funnel property; see `ac::expr::rejoin_reciprocals`).
         let current = if wildcard_all {
+            if let Some(t) = trace {
+                let finished: Vec<Ex> = t.drain(..).map(|s| rejoin_projection(s, &cx)).collect();
+                t.extend(finished);
+            }
             rejoin_projection(current, &cx)
         } else {
             current
@@ -1568,6 +1713,11 @@ impl Engine {
         (ctx, Some(current))
     }
 }
+
+/// How many times permissive's literal fold moves a candidate's long exact literals to their
+/// floats and re-runs the chains (a re-run can mint new long exact literals, so the rounds
+/// are bounded, not priced).
+const LITERAL_FOLD_ROUNDS: usize = 4;
 
 /// THE ENGINE'S RULE MODE -- three inhabitants, one distinct COMPLETE rule set each
 /// (`rules.json`, `rules_real.json`, `rules_permissive.json`). This is the internal

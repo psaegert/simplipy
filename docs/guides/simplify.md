@@ -28,16 +28,15 @@ function simplify(expr, max_passes=48, mode=f64, effort=DEFAULT_EFFORT):
 Every step preserves the function almost everywhere: like-term collection inside the
 canonical constructors, rule application, and the exact fold. The result is therefore
 sound, never costlier than the input in the measure the chain itself descends — each
-mode's own canonical pricing — and idempotent at any fixpoint run. The public
-instrument `complexity()` prices under the **Default canon**, one yardstick for every
-mode's output (`mode` routes only the parse, never the canon), so `μ(simplify(e)) ≤
-μ(e)` as `complexity()` states it is exact for the default `f64` mode, whose chain
-descends exactly this pricing. A `real`- or `permissive`-mode chain descends its *own*
-mode's canon measure — an internal descent — and a fixpoint it licenses may price above
-its input on the public Default yardstick; the engine-internal diagnostic
-`complexity(..., canon='mode')` prices in the requested mode's own measure and makes
-that per-mode guarantee checkable. Two *different spellings* of the same value may
-still settle at different fixpoints; each obeys its own bound.
+mode's own canonical pricing — and idempotent at any fixpoint run. `complexity(e,
+mode=m)` is that measure: each mode reads an expression into its own canonical form,
+because the modes accept different simplifications as true (`f64` follows the float
+evaluator, so `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not;
+`permissive` also moves constants to their floats), and prices that form. So
+`complexity(simplify(e, mode=m), mode=m) ≤ complexity(e, mode=m)` in every mode, and
+prices of different modes are prices of different readings, not comparable across
+modes. Two *different spellings* of the same value may still settle at different
+fixpoints; each obeys its own bound.
 
 The chain itself does not search: **cancellation IS canonicalization** — like-term
 collection in flat bags, computed by one deterministic function, so inside a pass there

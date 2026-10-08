@@ -2170,32 +2170,23 @@ class SimpliPyEngine:
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             certified: bool = True,
             mode: Mode | str = Mode.f64,
-            canon: str = 'default') -> int:
-        """The SEMANTIC COMPLEXITY of an expression, measured on its canonical form.
+            canon: str = 'mode') -> int:
+        """The SEMANTIC COMPLEXITY of an expression in a mode: its price as that mode reads it.
 
-        This is the functional :meth:`simplify` minimizes (the unified measure mu),
-        measured by default on the CERTIFIED canonical state -- the same
-        certificate-carrying canonicalization the simplify chain runs on. The CANON is
-        pinned to the sound DEFAULT mode (owner ruling, SHIP BOTH): ``complexity()`` is
-        THE public measure, one Default-canon yardstick for every mode's output.
-        ``mode`` routes only the PARSE (the F2 route fix: the instrument prices the
-        state the requested mode's chain starts from), never the canon.
+        Each mode reads an expression into its own canonical form, because the modes accept
+        different simplifications as true: ``f64`` follows the deployed float evaluator
+        (``1/exp(5132.3)`` is ``0``), ``real`` exact real arithmetic (it is not), and
+        ``permissive`` also moves constants to their floats. This prices that form, on the
+        CERTIFIED canonical state (the same certificate-carrying canonicalization the
+        simplify chain runs on), with the one codebook (the unified measure mu). It is the
+        measure :meth:`simplify` descends in that mode, so for every mode
+        ``complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)``. Prices in
+        different modes price different readings and are not comparable across modes.
 
-        The theorem this instrument carries is therefore DEFAULT-scoped:
-        ``complexity(simplify(e)) <= complexity(e)`` is a THEOREM (chain descent,
-        docs/formal.md L3) for the default ``f64`` mode, whose chain descends this very
-        pricing. A ``real``- or ``permissive``-mode chain descends ITS OWN mode's canon
-        measure -- an INTERNAL descent -- and a fixpoint it licenses may price ABOVE
-        its input under the public Default-canon yardstick.
-
-        ``canon='mode'`` is the engine-internal DIAGNOSTIC that routes the CANON
-        through the requested ``mode`` as well, pricing in the measure that mode's
-        chain actually descends -- exactly what makes the per-mode serve guarantee
-        ``complexity(simplify(e, mode=m), mode=m, canon='mode') <=
-        complexity(e, mode=m, canon='mode')`` checkable from the outside. Each mode's
-        diagnostic is its own yardstick: not comparable across modes and NOT the public
-        measure. Quote Default-canon numbers (``canon='default'``, byte-identical to
-        the pre-0.14.1 behaviour) everywhere a complexity is reported.
+        ``canon='default'`` (deprecated) prices an expression in ``f64``'s reading whatever
+        the mode, as ``complexity()`` did before 0.15.0: identical for ``mode='f64'``, and
+        a ``FutureWarning`` for ``real`` and ``permissive``, whose own answers it can price
+        above their inputs.
 
         With ``certified=False`` the expression is priced on the bare
         (certificate-less, fail-closed) canonicalization instead: still invariant
@@ -2224,8 +2215,14 @@ class SimpliPyEngine:
         canon = str(canon).strip().lower()
         if canon not in ('default', 'mode'):
             raise ValueError(
-                f"unknown canon {canon!r}: expected 'default' (the public Default-pinned "
-                f"measure) or 'mode' (diagnostic: the canon routed through the requested mode)")
+                f"unknown canon {canon!r}: expected 'mode' (the mode's own reading, the default) "
+                f"or 'default' (deprecated: f64's reading for every mode)")
+        if canon == 'default' and rule_mode != _RULE_MODE[Mode.f64]:
+            warnings.warn(
+                "complexity(..., canon='default') prices a real or permissive expression in "
+                "f64's reading; complexity() now prices each mode in its own reading (the "
+                "default, canon='mode'), and canon='default' will be removed.",
+                FutureWarning, stacklevel=2)
         if certified:
             return self._core.ac_complexity_certified(tokens, rule_mode, canon)
         return self._core.ac_complexity(tokens, rule_mode, canon)

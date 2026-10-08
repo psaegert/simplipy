@@ -64,18 +64,18 @@ fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
     })
 }
 
-/// The complexity instruments' canon selector: `"default"` keeps the canon pinned to
-/// the sound default (THE public measure, owner ruling: SHIP BOTH), `"mode"` routes the
-/// canon through the requested rule mode itself -- the engine-internal diagnostic that
-/// makes the per-mode serve guarantee checkable. Two spellings only, so the knob cannot
-/// silently become a third pricing.
+/// The complexity instruments' canon selector: `"mode"` routes the canon through the
+/// requested rule mode itself -- that mode's own reading, the measure its simplify descends
+/// (what `complexity()` prices); `"default"` pins the canon to the sound default, f64's
+/// reading whatever the mode (the deprecated `canon='default'`). Two spellings only, so
+/// the knob cannot silently become a third pricing.
 fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine::RuleMode> {
     match canon {
         "default" => Ok(engine::RuleMode::Default),
         "mode" => Ok(rule_mode),
         other => Err(PyValueError::new_err(format!(
-            "unknown canon {other:?}: expected 'default' (the public Default-pinned \
-             measure) or 'mode' (diagnostic: canon routed through rule_mode)"
+            "unknown canon {other:?}: expected 'mode' (the mode's own reading) or \
+             'default' (deprecated: f64's reading for every mode)"
         ))),
     }
 }
@@ -696,9 +696,9 @@ impl PyEngine {
 
     /// Certified-canon complexity (the serve ordering's own pricing; see
     /// `engine::ac::ac_complexity_certified`): `mu(simplify(e)) <= mu(e)` is a
-    /// theorem under this pricing, unlike the bare `ac_complexity`. `canon="default"`
-    /// keeps the canon Default-pinned (THE public measure); `canon="mode"` is the
-    /// engine-internal diagnostic that routes the canon through `rule_mode` itself.
+    /// theorem under this pricing, unlike the bare `ac_complexity`. `canon="mode"` routes
+    /// the canon through `rule_mode` itself (each mode's own measure, what `complexity()`
+    /// prices); `canon="default"` pins it to f64's reading whatever the mode.
     #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
     fn ac_complexity_certified(
         &self,
