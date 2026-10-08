@@ -524,10 +524,10 @@ pub struct PassCtx<'a> {
 ///
 /// Stage 2 (design/UNIFIED_SIMPLICITY_MEASURE.md): the first component is the unified
 /// simplicity measure mu (`ac::expr::complexity`), which ABSORBS the old lit_size
-/// middle tier -- mu's literal component IS the bit-length content lit_size carried,
-/// so the ordering loses a layer and the dense-literal hazard its own tier existed
-/// for (T7: `Mul[3/2^k, x]` now strictly ASCENDS in k instead of sitting at one
-/// complexity level).
+/// middle tier -- mu's literal component carries a literal's content up to float
+/// precision (the float cap), so the ordering loses a layer. The dense-literal chain its
+/// own tier existed for (T7: `Mul[3/2^k, x]`) ascends in k up to k = 55 and then sits at
+/// 64-72 bits; it stays finite through the 1,100-bit cap (below).
 ///
 /// The pair is a strict total order (mu is a u64; cmp_ex is total by construction
 /// with EXACT literal comparison) that is WELL-FOUNDED: mu can strictly drop only

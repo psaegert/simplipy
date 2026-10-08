@@ -93,8 +93,8 @@ const BFS_PREFIX: usize = 8;
 ///    a full round that finds nothing. Breadth-first search re-tries every candidate of
 ///    every accepted state, so `k` independent improvable places cost it `4k^2 + 1`
 ///    descents; this finish costs about one round per improvement plus one closing round
-///    (16 copies of one srbf prediction: about 0.13 s, and 0.02 s at `effort=4` for an answer
-///    three times as costly).
+///    (16 copies of one srbf prediction: about six times the time of `effort=4`, for an answer
+///    a third of the price).
 ///
 /// A candidate is the move applied at one place with its ancestors rebuilt through the
 /// canonical constructors ([`rebuild`]): a state's moves are computed when the state is

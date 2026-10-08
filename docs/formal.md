@@ -95,16 +95,19 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   coefficient and key can split differently on re-read (also on main at 128 bits); and
   odd-function sign extraction. A class independent of literal size: of srbf's 125,127 model
   predictions that simplify without error (f64), 24 effort-0 answers change on re-read (main 28), none with
-  a literal beyond $10^{\pm 300}$. Each is a long product (41 to 84 items in the list answer)
+  a literal beyond $10^{\pm 300}$. Each but one is a long product (one is a difference of them;
+  41 to 84 items in the list answer)
   that re-reads to the same items in another order (18, one of them cheaper) or to another form
-  of equal length and price (6); none of them round-trips (L6a). And at a
+  of equal length and price (6); none of them round-trips (L6a). Each holds a product with
+  more than six sign-trade sites, whose placement the engine keeps as it enters (§3), so the
+  re-read, entering with the printed placement, can end elsewhere. And at a
   refusal the grouping of the input can decide which inner products fold:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
   (canonicity across spellings, not idempotence; both pinned in tests). Uncapped (the default;
-  L6) the exploration phase can reach states of those classes the chain alone never visits: on
-  srbf's predictions 26 answers change on a second call, 23 of the 24 above and 3 long
-  products (57 to 70 items) that re-read with their factors in another order or sign at equal
-  price, as that class does, and that only the search reaches (review fuzz: an unmerged
+  L6), the exploration phase can reach states of those classes that the chain alone never
+  visits. On srbf's predictions (f64 and real) 26 answers change on a second call: 23 of the 24
+  above, and 3 long products (57 to 70 items) that only the search reaches and that re-read at
+  equal price with their factors in another order or sign (review fuzz: an unmerged
   `3e-310` coefficient that re-reads in another order; a `<constant>` absorbed on re-read). In `permissive` the
   selection among three searches adds a class of its own (L6). A capped search can stop
   between two improvements, which a second call continues.
@@ -200,7 +203,8 @@ $m \ge 3$, and the eight odd functions — because $f(-S) = -f(S)$ is total on t
 carriers (negative odd exponents are NOT carriers: the pole trilemma). The
 sign-placement owner (`ac::expr::sign_place`, shared by `mul()`'s final assembly and
 `term_join`'s negative joins so the priced spelling is always the built spelling)
-materializes every reachable placement and keeps the $\mu$-argmin. The decision is
+materializes every reachable placement and keeps the $\mu$-argmin; beyond six sign-trade
+sites it materializes none and keeps the placement the product entered with. The decision is
 three-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
@@ -357,13 +361,16 @@ guarantees (a beyond-f64 literal can price below it — $\mu(10^{-400}) = 10.647
 via its scientific codeword — and nothing rests on outpricing those). Final ties are broken
 by the canonical total order `cmp_ex` (rank, then structural lexicographic comparison,
 with *exact* rational comparison — the 256-bit `cmp_exact`). There is no separate
-literal-size tier: $\mu$'s literal component carries its content, so
-the ordering is a pair, not a triple.
+literal-size tier: $\mu$'s literal component carries its content up to float precision
+(the float cap below), and the 1,100-bit cap keeps the literals finite (L5), so the ordering
+is a pair, not a triple.
 
 **The float cap.** The evaluator reads every literal as its nearest float64, so a literal's
 price is capped at that float's shortest round-trip decimal $d(v)$ (at most 17 significant
 digits), priced by the same codebook: $\mu'(v) = \min\big(\mu(v),\, \mu(d(v))\big)$ for a
-finite nonzero nearest float, $\mu(v)$ otherwise. Every literal that is its own float's
+finite nonzero nearest float, $\mu(v)$ otherwise; a literal the engine holds as a numeric
+string (beyond the 1,100-bit cap, or in f64 mode not admissible) keeps its print's price
+(`mu_numeric_str`). Every literal that is its own float's
 shortest decimal keeps its price (every constant drawn for flash-ansr's training data among
 them), and no price rises; a literal carrying more digits than its float needs (the 64-digit
 fourth power of a 16-digit constant, or a fitted constant printed with 17 digits where 16
@@ -380,20 +387,20 @@ asymmetry with no informational content, since fitted constants arrive as
 decimal-printed f64s and a fraction-only code forces them through "two arbitrary
 integers" at $\log_2 10 \approx 3.32$ bits per decimal shift.
 
-**The emitted spelling is the priced spelling** [BY CONSTRUCTION]. The serializer
+**The emitted spelling is the priced spelling, up to the float cap** [BY CONSTRUCTION]. The serializer
 chooses each literal's print by the argmin over the *same* two codeword totals the
 measure minimizes (`decimal_spelling_wins`), so $\mu(t)$ is the description length
 of the representation actually emitted, not of a hypothetical one — except where the float
 cap applies: the state is exact and prints its exact value, which then costs more than its
 price; the capped price is that of the float's shortest decimal (what Python's `repr`
-prints for it). An exact codeword
+prints for it, up to the last digit on an exact tie). An exact codeword
 tie goes to the fraction — the structurally distinguished caller-dialect member,
 mirroring tier 2 of the sign-placement convention (§3); states carry no spelling, so
 the tie-break must be spelling-free, and either member realizes the same $\mu$. The
 clause is defensive: no exact tie exists in the reachable `i128` lattice [EMPIRICAL —
 exhaustive scan over all 3,563 denominators $2^a 5^b < 2^{127}$ at dense-plus-spread
 numerator samples; the closest observed gap is 3–4 milli-bits; numbers beyond 128 bits
-(phase 2c) were not scanned].
+were not scanned].
 
 - $\mu$ takes values in $\mathbb{N}$ [THEOREM — trivially].
 - `cmp_ex` is a strict total order on $T_{\mathrm{can}}$ [BY CONSTRUCTION — rank +
@@ -409,10 +416,9 @@ slot per bag and one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \le
 in bits — the carrier being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
 vocabulary are finite; and there are finitely many numbers at all: a number's numerator
-and denominator have at most 1,100 bits each (the cap). Under the float cap $\mu_0$ no
-longer bounds a number's codeword components — every literal costs at most its float's
-shortest decimal — so the finiteness of the literals comes from the cap alone, not from the
-price. A numeric-string leaf
+and denominator have at most 1,100 bits each. $\mu_0$ does not bound a number's codeword
+components (the float cap prices every literal at most at its float's shortest decimal), so
+the finiteness of the literals comes from the 1,100-bit cap, not from the price. A numeric-string leaf
 (beyond the cap, or not admissible in f64 mode) pays a cost that grows with its
 canonical print (`mu_numeric_str` is strictly monotone in significand digits and in
 the scale within each codeword), so $\mu_0$ bounds the print's significand length
@@ -425,10 +431,10 @@ eventually constant; the tail then lives in one finite level set (L5) and descen
 strict total order `cmp_ex`, so it is finite. $\square$
 
 A dense-literal chain ascends while its literals carry no more than float precision: the
-chain $\mathrm{Mul}[3/2^k, x]$ grows strictly in $\mu$ with $k$ up to the point where
-$3/2^k$'s exact spelling is longer than its float's shortest decimal ($k = 56$), and from
-there on it costs that decimal's price (66–70 bits up to $k = 200$), which no longer ascends
-strictly. It stays finite all the same — $k$ is
+chain $\mathrm{Mul}[3/2^k, x]$ grows strictly in $\mu$ with $k$ up to $k = 55$; at $k = 56$
+and from $k = 58$ on, $3/2^k$'s exact spelling costs more than its float's shortest decimal,
+so the literal costs that decimal's price (the term 64–72 bits up to $k = 200$), which no
+longer ascends strictly. It stays finite all the same — $k$ is
 bounded by the 1,100-bit cap, and T-wf holds through L5 — and a rewrite cannot walk it
 anyway: every step preserves the term's value, and changing one literal alone changes it
 (pinned in `tests/test_unified_measure.py`: the chain ascends up to the float cap's onset, and
@@ -570,7 +576,11 @@ search only: the re-run's other searches, started from the winner, can descend f
 does not cover its selection [EMPIRICAL: srbf's predictions: 176 second-call changes at cap 4,
 30 uncapped, 20 of them also with the search off]. Running the `f64` search again from the
 winner would add a search to every call of flash-ansr's training-data canonicalization (which
-runs in `permissive`) and is not part of the engine.
+runs in `permissive`) and is not part of the engine. Nor is the selection monotone in the
+budget, although each search is: the literal fold rounds a winner's long exact literals and
+selects again, and a winner without them is not selected again, so a longer search can end
+costlier [EMPIRICAL: in `permissive`'s own measure, 807 of srbf's predictions cost more
+uncapped than at cap 4, by at most 77 bits, and 1,361 less].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:

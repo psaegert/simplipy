@@ -304,7 +304,7 @@ class TestB22AstronomicSaturation:
 class TestT7Termination:
     """The dense-literal chain Mul[3/2^k, x] (the audit's O1 hang class). It ascends in mu
     while 3/2^k's exact spelling is no longer than its float's shortest decimal; from there
-    the float cap (phase 2d) holds its price at that decimal's. The chain stays finite (the
+    the float cap holds its price at that decimal's. The chain stays finite (the
     1,100-bit cap bounds k, docs/formal.md L5), and a rewrite cannot walk it: a step keeps
     the term's value, and changing the literal alone changes it."""
 

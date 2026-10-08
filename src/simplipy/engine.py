@@ -2274,7 +2274,7 @@ class SimpliPyEngine:
         # (the numeric-string pricer -- invisible until 2026-08-22: its clamp stayed
         # at two bits after the floor ruling and NO probe moved, S15), and `<constant>`.
         ('1000',), ('1/2',), ('355/113',), ('0.2',), ('1e-40',), ('<constant>',),
-        # the FLOAT CAP (phase 2d): a literal costs at most the shortest decimal of the float64
+        # the FLOAT CAP: a literal costs at most the shortest decimal of the float64
         # it reads as, so a decimal carrying more than float precision costs that decimal. Every
         # probe above is its own float's shortest decimal (or cheaper), so none of them moved.
         ('0.0766541268471677307861497420516056347394916180597539647375669841',),

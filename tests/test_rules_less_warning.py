@@ -107,7 +107,7 @@ class TestTheWarningStaysQuietWhenItShould:
     def test_a_real_ruleset_does_not_warn(self) -> None:
         """The rules-less warning must stay silent for a real ruleset, and so must
         every other warning but one: the measure-fingerprint mismatch the float cap
-        (phase 2d) causes until the served cell is re-mined, pinned by both digests in
+        causes until the served cell is re-mined, pinned by both digests in
         `test_mu_prime.TestFingerprintAndArtifactLoad`. Anything else is a defect.
         """
         require_or_skip(acj_config_path(), 'the acj-4 asset is not staged')

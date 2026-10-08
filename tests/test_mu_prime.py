@@ -59,7 +59,7 @@ ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 #: that cannot swallow a genuine mismatch (the last blanket one nearly did).
 ACJ_SHIPPED_DIGEST = '32302640b359a348'
 
-#: The digest the engine computes since phase 2d (the float cap and its probe). The published
+#: The digest the engine computes under the float cap (with its probe). The published
 #: rulesets were mined under ACJ_SHIPPED_DIGEST, so loading them warns until the re-mine.
 CURRENT_DIGEST = '9a89036bd9cd33f3'
 
@@ -575,7 +575,7 @@ class TestFingerprintAndArtifactLoad:
             '0.2': 3585,              # (2, 1): selector + L(2) + L(1)
             '1e-40': 7358,            # beyond-i128 leaf: selector + max(floor, L(1)) + L(40)
             '<constant>': MU_FREE_PRIME,
-            # the float cap (phase 2d): 64 digits cost their float's shortest decimal,
+            # the float cap: 64 digits cost their float's shortest decimal,
             # 0.07665412684716773 (selector + L(7665412684716773) + L(17))
             '0.0766541268471677307861497420516056347394916180597539647375669841': mu_prime_expected(Fraction('0.07665412684716773')),
             # the symbol table, one probe per entry (2026-08-21). Add and Mul price the
@@ -593,7 +593,7 @@ class TestFingerprintAndArtifactLoad:
         assert fp['digest'] != ACJ_MINED_DIGEST
 
     def test_acj_load_warns_until_the_remine(self):
-        """D25, on the real asset, after phase 2d: EXACTLY ONE fingerprint warning, naming
+        """D25, on the real asset, under the float cap: EXACTLY ONE fingerprint warning, naming
         the digest the served cell was mined under and the one the engine computes now.
 
         Both digests are pinned verbatim, so any other measure change -- or a re-mine that

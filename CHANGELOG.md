@@ -2,31 +2,32 @@
 
 ## Unreleased
 
-- **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now
-  `None` (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round
-  of expansions finds nothing cheaper, so a second call has nothing left to continue. A cap
-  counts every candidate tried over the whole expression, refused ones included, so the cap a
-  search needs grows with the expression (one srbf prediction needs 8 candidates, a sum of 2
-  copies of it 13, of 3 copies 19 and of 8 copies 39). At cap 4, 2,701 of srbf's 125,127 model
-  predictions change on a second call in `f64` (2,673 to a cheaper form; `real` 2,703). Now 26
-  do, at equal price but one: 23 of them also with the search off, and 3 long products that
-  re-read with their factors in another order or sign. No answer is costlier than at cap 4, and
-  2,888 are cheaper. `permissive` keeps the cheapest of three searches, and its winner is a
-  valley of its own search only: 30 answers still change on a second call (176 at cap 4), 20 of
-  them also with the search off; 1,354 are cheaper than at cap 4 and 815 costlier (median 3
-  bits, at most 78). The search tries the capped default's breadth-first order for its first 8
-  candidates (on srbf's predictions that alone gives the final answer on 124,572 of 125,127)
-  and then steps to the first cheaper candidate of the best answer until a whole round finds
-  nothing; on 16 copies of one prediction it takes about 0.13 s, and `effort=4` about 0.02 s
-  for an answer three times as costly. Each candidate's whole state is rebuilt only when it is
-  tried and is no longer re-canonicalized in full before its descent. On srbf's predictions the
-  uncapped search takes 8% more time than `effort=4` in every mode (local measurements). Every
-  internal caller that passes no `effort` (normalization, masking, mining,
-  the verification monitor, the promotion refund) follows the default. `effort=k` caps each search
-  at `k` candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), tried in
-  the previous breadth-first order up to 8; `effort=0` never enters the search, so this change
-  leaves its answers byte-identical. Code that compares `DEFAULT_EFFORT` with an int now sees
-  `None`.
+- **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now `None`
+  (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round of
+  expansions finds nothing cheaper, so a second call has nothing left to continue. A cap counts
+  every candidate tried over the whole expression, refused ones included, so the cap a search
+  needs grows with the expression (one srbf prediction needs 8 candidates, a sum of 2 copies of it
+  13, of 3 copies 19 and of 8 copies 39). At cap 4, 2,701 of srbf's 125,127 model predictions
+  change on a second call in `f64` (2,673 to a cheaper form; `real` 2,703). Now 26 do, at equal
+  price but one: 23 of them also with the search off, and 3 long products that re-read with their
+  factors in another order or sign. No answer is costlier than at cap 4, and 2,888 are cheaper.
+  `permissive` keeps the cheapest of three searches, and its winner is a valley of its own search
+  only: 30 answers still change on a second call (176 at cap 4), 20 of them also with the search
+  off; 1,361 are cheaper than at cap 4 and 807 costlier in its own measure, by a median of 3 bits
+  and at most 77: a winner that carries long exact literals is rounded and selected again, one
+  without them is not. The search tries the capped default's breadth-first order for its first 8
+  candidates (on srbf's predictions in `f64` and `real` that alone gives the final answer on
+  124,572 of 125,127) and then steps to the first cheaper candidate of the best answer until a
+  whole round finds nothing; on 16 copies of one prediction it takes about six times as long as
+  `effort=4`, for an answer a third of the price. Each candidate's whole state is rebuilt only
+  when it is tried and is no longer re-canonicalized in full before its descent. On srbf's
+  predictions the uncapped search takes 8% more time than `effort=4` in every mode. Every internal
+  caller that passes no `effort` (normalization, masking, mining, the verification monitor, the
+  promotion refund) follows the default. `effort=k` caps each search at `k` candidates
+  (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), tried in the previous
+  breadth-first order up to 8; `effort=0` never enters the search, so the search change leaves its
+  answers byte-identical (the float cap below changes some: 269 of srbf's 125,127 predictions in
+  `f64`, 11,175 in `permissive`). Code that compares `DEFAULT_EFFORT` with an int now sees `None`.
 - **Faster products.** Building a product decides where its sign goes by pricing every
   orientation of its sign-carrying factors. It now negates each such factor once instead of once
   per orientation (each negation builds products of its own, so the waste compounded with
@@ -38,19 +39,20 @@
 - **A literal costs at most what its float costs.** The evaluator reads every literal as its
   nearest float64, so the measure (`complexity`, and the ordering every simplification follows)
   caps a literal's price at the price of that float's shortest decimal (at most 17 significant
-  digits). A number carrying more digits than its float needs -- a product or power of long
-  constants folded exactly, or a constant printed with 17 digits where 16 suffice -- now costs
-  that decimal, not its exact digits; every literal that is its own float's shortest decimal
+  digits); a literal kept as written (beyond the 1,100-bit cap, or not admissible in f64 mode)
+  keeps its price. A number carrying more digits than its float needs -- a product or power of
+  long constants folded exactly, or a constant printed with 17 digits where 16 suffice -- now
+  costs that decimal, not its exact digits; every literal that is its own float's shortest decimal
   keeps its price (every constant drawn for flash-ansr's training data among them), and no price
-  rises. The cap is a decimal, never a fraction that reads as the same float:
-  `0.3333333333333333` keeps its price, `1/3` costs less. Answers still carry and print the
-  exact value. Because long exact numbers no longer count against a form, the search accepts
-  more expansions in `f64` and `real`: on srbf's model predictions 21% of the `f64` answers
-  change (26,440 of 125,127), mostly to expanded forms (a product of sums multiplied out, a
-  constant distributed over a sum) with about as many tokens (0.7% fewer) but long exact
-  coefficients, so they print 25% longer (all answers 7%). In `permissive`, whose literal fold
-  keeps such numbers short, 2.6% of the answers on flash-ansr's T8.1 training draws change, and
-  those print 4% shorter. The
+  rises. The cap is a decimal, never a fraction that reads as the same float: `0.3333333333333333`
+  keeps its price, `1/3` costs less. Answers still carry and print the exact value. Because long
+  exact numbers no longer count against a form, the search accepts more expansions in `f64` and
+  `real`: on srbf's model predictions 21% of the `f64` answers change (26,440 of 125,127; 0.2% of
+  flash-ansr's T8.1 training draws), almost all (98%) to expanded forms (a product of sums
+  multiplied out, a constant distributed over a sum) with about as many tokens (0.7% fewer) but
+  long exact coefficients, so they print 25% longer (all answers 7%). In `permissive`, whose
+  literal fold keeps such numbers short, the changed answers print shorter: 34% of srbf's
+  predictions change and print 7% shorter, and 2.6% of the T8.1 training draws, 4% shorter. The
   measure fingerprint gains a probe and moves, so loading a ruleset mined under the previous
   measure (the published ones included) warns until it is re-mined.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and

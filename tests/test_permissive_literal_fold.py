@@ -87,7 +87,7 @@ def test_fold_is_idempotent_and_descends_the_exact_price(engine):
     once = prefix(engine, MONSTER, Mode.permissive)
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     exact = prefix(engine, MONSTER, Mode.f64)
-    # Under the float cap (phase 2d) the exact quotient already costs its float's shortest
+    # Under the float cap the exact quotient already costs its float's shortest
     # decimal, so the measure is level; the fold descends the EXACT price, which gates it.
     assert engine.complexity(once) == engine.complexity(exact)
     assert exact_price(Fraction(once[0])) < exact_price(exact_value(MONSTER))

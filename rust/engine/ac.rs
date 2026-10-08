@@ -1221,11 +1221,12 @@ impl Engine {
         // when mu' prices that spelling strictly cheaper, and the chain re-runs on the
         // moved state -- a moved literal can re-fold with its neighbours, and the
         // endpoint must stay the chain's own fixpoint (the per-state `stable()`
-        // contract). Each round lowers the literal's EXACT price (`mu_rat_exact`) by at
-        // least a milli-bit -- the measure itself stays level, its float cap already prices
-        // the moved literal as that float -- so the loop is finite;
-        // the cap is a backstop, never reached on the corpus (a moved literal has no
-        // second move: it already is a shortest f64 spelling). Permissive only: the
+        // contract). A moved literal has no second move (it already is a shortest f64
+        // spelling), but a round's re-run can mint new long exact literals, so the loop
+        // is finite by its bound of 4 rounds, not by a price: on srbf's predictions no
+        // sampled answer still carries a literal the fold would move, so the bound did
+        // not bind there. A winner without such literals is not folded and not selected
+        // again, so a shorter search can end lower than a longer one. Permissive only: the
         // strict tiers never move a value, and their literals keep the exact fraction.
         let mut owned: Vec<String> = tokens.to_vec();
         for _ in 0..4 {

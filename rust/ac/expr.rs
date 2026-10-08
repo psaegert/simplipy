@@ -3419,9 +3419,11 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     // spelling wins (ruling A -- a leading minus is only ever minted when strictly
     // cheaper, and what the user typed survives whenever prices tie); residual
     // equal-mu same-sign ties fall to a fixed structural order. n > 6 refuses to
-    // trade (2^n materializations; n is orbit-invariant, so the cap is a legal
-    // class function; under the float cap the search reaches it on 3 of srbf's 125,127
-    // model predictions, which then change on a second call). A negate_term overflow
+    // trade (2^n materializations): whether it refuses is a class function (n is
+    // orbit-invariant), but the refusal keeps the entry orientation, which is not. On
+    // srbf's 125,127 model predictions (f64) it binds on 48 with the search off and 51
+    // with the default search, and every answer there that changes on a second call (24
+    // at effort 0, 26 with the search) is among them. A negate_term overflow
     // refusal keeps the entry spelling, whose display is injective. This arm
     // SUBSUMES the former lone `-1 x Add` distribution arm (its case is n=1 with
     // out.len() == 1; the mu comparison and the A-tie give the identical decision).
@@ -6201,9 +6203,9 @@ mod tests {
         }
     }
 
-    /// Phase 2d: a literal costs at most what its float's shortest decimal costs.
+    /// The float cap: a literal costs at most what its float's shortest decimal costs.
     #[test]
-    fn phase2d_a_literal_costs_at_most_its_float() {
+    fn float_cap_a_literal_costs_at_most_its_float() {
         let long = {
             let _exact = crate::ac::rat::number_domain(false);
             Rat::parse_decimal("0.0766541268471677307861497420516056347394916180597539647375669841")
@@ -6234,7 +6236,7 @@ mod tests {
 
     /// The shortest decimal reads back as the float.
     #[test]
-    fn phase2d_shortest_decimal_reads_back() {
+    fn float_cap_shortest_decimal_reads_back() {
         for y in [
             0.1,
             1.0 / 3.0,
@@ -6255,7 +6257,7 @@ mod tests {
     /// The price is a function of the value alone: the same in the f64 and the exact domain,
     /// and never above the exact price.
     #[test]
-    fn phase2d_price_is_mode_free_and_never_rises() {
+    fn float_cap_price_is_mode_free_and_never_rises() {
         let values: Vec<Rat> = {
             let _exact = crate::ac::rat::number_domain(false);
             [
