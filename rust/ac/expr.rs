@@ -624,6 +624,32 @@ pub fn mu_rat(r: &Rat) -> u64 {
 const MU_RAT_FLOOR: u64 = 1 * MU_MILLI;
 
 fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
+    // A big-form literal's codewords cost big-integer divisions and logarithms, and the same
+    // values are priced again and again while candidates are compared (the sign placement in
+    // `mul` alone prices whole factors per orientation). The price is a function of the value,
+    // so a per-thread table answers repeats; it is emptied when it reaches 65,536 entries.
+    if r.small_parts().is_some() {
+        return mu_rat_codeword_totals_uncached(r);
+    }
+    thread_local! {
+        static BIG_PRICES: std::cell::RefCell<rustc_hash::FxHashMap<Rat, (u64, Option<u64>)>> =
+            std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    }
+    if let Some(v) = BIG_PRICES.with(|m| m.borrow().get(r).copied()) {
+        return v;
+    }
+    let v = mu_rat_codeword_totals_uncached(r);
+    BIG_PRICES.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 1 << 16 {
+            m.clear();
+        }
+        m.insert(r.clone(), v);
+    });
+    v
+}
+
+fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
     let sign = if r.is_negative() { MU_MILLI } else { 0 };
     let (pb, qb) = match r.small_parts() {
         Some((p, q)) => (l_millibits(p.unsigned_abs()), l_millibits(q as u128)),
@@ -3407,11 +3433,41 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
         Coeff,
     }
     {
-        let sites: Vec<usize> = out
+        // Each site's flip is materialized ONCE (the site test computes it anyway) and
+        // reused by every orientation mask below: a flip negates a sum term by term, and
+        // each negated term is built through `mul`, which places its own signs the same way,
+        // so re-flipping per mask multiplied the work at every nesting level. Each mask's
+        // price is the sum of per-factor prices (see `complexity`'s Mul arm), each factor and
+        // each flip priced once.
+        let site_flips: Vec<(usize, Ex)> = out
             .iter()
             .enumerate()
-            .filter_map(|(i, f)| is_sign_trade_site(f, cx).then_some(i))
+            .filter_map(|(i, f)| sign_trade_flip(f, cx).map(|nf| (i, nf)))
             .collect();
+        let sites: Vec<usize> = site_flips.iter().map(|(i, _)| *i).collect();
+        let factor_price = |f: &Ex| -> u64 {
+            match f {
+                Ex::Num(r) => {
+                    if r.is_one() || *r == Rat::NEG_ONE {
+                        0
+                    } else {
+                        mu_rat(r)
+                    }
+                }
+                _ => complexity(f, cx.view),
+            }
+        };
+        let enumerates = !sites.is_empty() && sites.len() <= 6;
+        let base_price: Vec<u64> = if enumerates {
+            out.iter().map(&factor_price).collect()
+        } else {
+            Vec::new()
+        };
+        let flip_price: Vec<u64> = if enumerates {
+            site_flips.iter().map(|(_, nf)| factor_price(nf)).collect()
+        } else {
+            Vec::new()
+        };
         if !sites.is_empty() && sites.len() <= 6 {
             // Priority: Free FIRST -- a Const-carrier eats EVERY sign (coefficient
             // and bare-infinity signs alike, by the forall-exists refit), so with one
@@ -3444,15 +3500,11 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                 let mut all_ok = true;
                 'subsets: for mask in 0u32..(1u32 << sites.len()) {
                     let mut factors = out.clone();
-                    for (bit, &pos) in sites.iter().enumerate() {
+                    let mut price = base_price.clone();
+                    for (bit, (pos, nf)) in site_flips.iter().enumerate() {
                         if mask & (1 << bit) != 0 {
-                            match sign_trade_flip(&factors[pos], cx) {
-                                Some(nf) => factors[pos] = nf,
-                                None => {
-                                    all_ok = false;
-                                    break 'subsets;
-                                }
-                            }
+                            factors[*pos] = nf.clone();
+                            price[*pos] = flip_price[bit];
                         }
                     }
                     // A flip may mint a factor whose BASE collides with another's
@@ -3524,6 +3576,7 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                                     Some(mut fl) => {
                                         fl.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                                         factors[i] = Ex::Add(fl);
+                                        price[i] = factor_price(&factors[i]);
                                     }
                                     None => {
                                         all_ok = false;
@@ -3534,8 +3587,32 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                             coeff.clone()
                         }
                     };
+                    // complexity(Mul[v]) = mu_mul + each item's price (a coefficient of
+                    // magnitude 1 is free) whenever the bag has two items and a non-number
+                    // member; the other shapes are priced whole.
+                    let n_items = factors.len() + usize::from(!c.is_one());
+                    let members = factors.iter().filter(|f| !matches!(f, Ex::Num(_))).count();
+                    let additive = n_items >= 2 && members > 0;
+                    let mut total = mu_mul();
+                    if additive {
+                        for p in &price {
+                            total = total.saturating_add(*p);
+                        }
+                        if !(c.is_one() || c == Rat::NEG_ONE) {
+                            total = total.saturating_add(mu_rat(&c));
+                        }
+                    }
                     let cand = assemble(factors, &c);
-                    let mu = complexity(&cand, cx.view) as i128;
+                    let mu = if additive {
+                        debug_assert_eq!(
+                            total,
+                            complexity(&cand, cx.view),
+                            "summed orientation price differs from complexity()"
+                        );
+                        total as i128
+                    } else {
+                        complexity(&cand, cx.view) as i128
+                    };
                     let better = match &best {
                         None => true,
                         Some((bmu, bneg, bex)) => {

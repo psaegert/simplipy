@@ -151,10 +151,13 @@ class TestTheSearchRunsUntilItSettles:
         assert shipped.complexity(twice) < shipped.complexity(once)
         assert shipped.complexity(shipped.simplify(PARTIAL)) <= shipped.complexity(twice)
 
-    @pytest.mark.parametrize('k', [2, 3])
+    @pytest.mark.parametrize('k', [3, 4])
     def test_larger_expressions_need_more_than_any_small_cap(self, shipped, k) -> None:
+        # The search reaches the uncapped answer of 2 copies within 16 candidates, not of 3 or
+        # 4: what a search needs grows with the expression.
         t = _copies(k)
         once = shipped.simplify(t)
         assert shipped.simplify(once) == once
         capped = shipped.simplify(t, effort=16)
+        assert shipped.complexity(once) < shipped.complexity(capped)
         assert shipped.simplify(capped, effort=16) != capped

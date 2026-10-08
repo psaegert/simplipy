@@ -11,19 +11,32 @@
   125,127 model predictions changed on a second call in `f64` and `real` (50 to a cheaper form).
   Now 24 do, all of them also with the search off, and no answer is costlier than at cap 4 (59
   are cheaper). `permissive` keeps the cheapest of three searches, and its winner is a valley of
-  its own search only: 41 answers still change on a second call (127 at cap 4), 37 of them also
-  with the search off; 169 are cheaper than at cap 4 and 4 costlier (3 to 49 bits). A loop
-  that runs the `f64` search from the winner cut the 41 to 14 but cost 13-18% of the time of
-  flash-ansr's training-data canonicalization, which runs in `permissive`, so there is none.
-  Total time grows by 1-2% in each mode on srbf's predictions and by about 1% on flash-ansr's
-  training-data generation calls (local measurements). A large sum of terms that each need several
-  expansions costs time roughly cubic in its size (16 copies of one prediction: 16 s, against
-  0.5 s at cap 4 for an answer 28% costlier; 32 copies: 170 s and 2.6 s). Every internal caller
-  that passes no `effort` (normalization, masking, mining, the verification monitor, the
-  promotion refund) follows the default; the reference mine is byte-identical. `effort=k` caps
-  each search at `k` candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is
-  none), and `effort=k` and `effort=0` answers are byte-identical to the previous version.
-  Code that compares `DEFAULT_EFFORT` with an int now sees `None`.
+  its own search only: 42 answers still change on a second call (127 at cap 4), 37 of them also
+  with the search off; 169 are cheaper than at cap 4 and 5 costlier (1 to 49 bits). A loop
+  that runs the `f64` search from the winner cut those changes to 14 but cost 13-18% of the time
+  of flash-ansr's training-data canonicalization, which runs in `permissive`, so there is none.
+  The search tries the capped default's breadth-first order for its first 8 candidates and then
+  steps to the first cheaper candidate of the best answer until a whole round finds nothing; in
+  `f64` and `real` its answers on srbf's predictions equal an uncapped breadth-first search's. A
+  breadth-first search re-tries every candidate after each improvement (16 copies of one
+  prediction: 16 s); this one takes 0.6 s there (0.5 s at cap 4, for an answer 28% costlier). Each
+  candidate is built only when tried and is no longer re-canonicalized in full before its descent
+  (on srbf's predictions that changed no `f64` or `real` answer and 2 `permissive` ones, by a sign
+  placement). On srbf's predictions the uncapped search takes about a fifth less time than the
+  old cap of 4 in `f64` and `real` and 5% less in `permissive` (local measurements). Every
+  internal caller that passes no `effort` (normalization, masking, mining, the verification
+  monitor, the promotion refund) follows the default. `effort=k` caps each search at `k`
+  candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), tried in the
+  previous breadth-first order up to 8; `effort=0` answers are byte-identical to the previous
+  version. Code that compares `DEFAULT_EFFORT` with an int now sees `None`.
+- **Faster products.** Building a product decides where its sign goes by pricing every
+  orientation of its sign-carrying factors. It now negates each such factor once instead of once
+  per orientation (each negation builds products of its own, so the waste compounded with
+  nesting), sums each orientation's price from per-factor prices, and remembers the prices of
+  numbers beyond 128 bits. Answers are byte-identical on every input of flash-ansr's T8.1
+  training draws, srbf's ground truths and srbf's model predictions, in every mode. On srbf's
+  predictions `simplify` takes about half the time it took without this, in `f64` and in
+  `permissive`, and the slowest `permissive` inputs run about 7 times faster (local measurements).
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
   number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds

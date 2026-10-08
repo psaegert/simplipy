@@ -24,11 +24,13 @@
 //! * NEVER-WORSE -- `best` starts at the chain's fixpoint and is only ever replaced
 //!   by a state strictly below it: fall back to the fixpoint is the identity case.
 //! * TERMINATION -- `budget` bounds candidate descents; independent of the budget,
-//!   the frontier only grows on strict descent of a well-founded ordering, so the
-//!   loop terminates as a theorem even with the budget effectively infinite.
+//!   both phases move only on strict descent of a well-founded ordering (the frontier
+//!   grows only by accepted states, the finish only steps to a strictly lower best), so
+//!   the search terminates as a theorem even with the budget effectively infinite.
 //! * IDEMPOTENCE -- deterministic order (canonical bag order, pre-order walk, FIFO
 //!   frontier, single thread), and a reached valley re-explores to nothing: its own
-//!   expansions all settle at or above it. That holds for the answer only when the
+//!   expansions all settle at or above it (an uncapped search ends on a full round of
+//!   the answer's own candidates that found nothing). That holds for the answer only when the
 //!   search ran until its frontier emptied (the public default, `effort=None`; owner
 //!   2026-10-06): a cap can stop it between two accepted valleys, and a second call then
 //!   continues from the first one's answer. On srbf's 125,127 model predictions (f64) the
@@ -53,7 +55,7 @@
 
 use std::collections::VecDeque;
 
-use super::expr::{add, canon, fun, mul, pow, Cx, Ex};
+use super::expr::{add, fun, mul, pow, Cx, Ex};
 use super::rules::{no_nested_bags, ordered_below, rewrite_pass, PassCtx};
 
 /// Cap on the addend count of a fully-distributed candidate (cartesian width). A
@@ -66,96 +68,170 @@ const EXPAND_TERM_CAP: usize = 64;
 /// bounds the width; this keeps the factor list itself small.
 const POW_EXPAND_CAP: i128 = 6;
 
+/// How many candidate descents the breadth-first first phase of [`explore`] runs before
+/// the first-improvement finish takes over. On srbf's 125,127 model predictions (f64) the
+/// breadth-first search already returns its unlimited answer at 8 attempts everywhere, so
+/// the first phase keeps those answers and the finish runs only where 8 did not settle.
+/// The first phase is the capped default's breadth-first search, so per search an answer
+/// is never worse than the same build's answer at any effort up to the prefix.
+const BFS_PREFIX: usize = 8;
+
 /// The exploration phase (ledger D39). `fix` is the chain's fixpoint for the calling
 /// mode; `pass` is that mode's OWN pass context (sound: the phase-1 pass; lossy: the
 /// sentinel-expired phase-2 pass) -- the same certified machinery, byte for byte.
 /// `budget` counts candidate descents; 0 disables the phase (the caller's guard makes
 /// that the no-call case, so unused exploration is byte-identical behavior).
+///
+/// Two phases, one acceptance (strictly below the incumbent in [`ordered_below`]):
+/// 1. BREADTH-FIRST, for the first [`BFS_PREFIX`] descents: every candidate of every
+///    accepted state, in pre-order, against the best so far (the capped default's search).
+///    If its frontier empties within the prefix, the answer is the breadth-first one.
+/// 2. FIRST IMPROVEMENT, from the best: try the best's candidates in pre-order starting at
+///    the place that last improved, step to the first one strictly below, and stop after
+///    a full round that finds nothing. Breadth-first search re-tries every candidate of
+///    every accepted state, so `k` independent improvable places cost it `4k^2 + 1`
+///    descents (16 copies of one partial expression: 16 s); this finish costs about one
+///    round per improvement plus one closing round (0.6 s there).
+///
+/// A candidate is the move applied at one place with its ancestors rebuilt through the
+/// canonical constructors ([`rebuild`]), built only when it is tried, then descended by
+/// [`rewrite_pass`] to its fixpoint (or the same `max_passes` truncation the chain itself
+/// accepts, which is sound).
 pub fn explore(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
     if budget == 0 {
         return fix;
     }
+    let descend = |mut cur: Ex| -> Ex {
+        for _ in 0..max_passes.max(1) {
+            let next = rewrite_pass(cur.clone(), pass);
+            if next == cur {
+                break;
+            }
+            cur = next;
+        }
+        debug_assert!(
+            no_nested_bags(&cur),
+            "explored endpoint has nested bags: {cur:?}"
+        );
+        cur
+    };
     let mut best = fix;
     let mut spent = 0usize;
+    // Phase 1: breadth-first over accepted states.
     let mut frontier: VecDeque<Ex> = VecDeque::new();
     frontier.push_back(best.clone());
-    while let Some(state) = frontier.pop_front() {
-        for cand in expansion_candidates(&state, pass.cx) {
+    let mut settled = true;
+    'bfs: while let Some(state) = frontier.pop_front() {
+        let mut sites: Vec<(Vec<usize>, Ex)> = Vec::new();
+        site_list(&state, pass.cx, &mut Vec::new(), &mut sites);
+        for (path, moved) in sites {
             if spent >= budget {
                 return best;
             }
-            spent += 1;
-            // The candidate through the chain's own descent: canon under the full
-            // certificate context, then rewrite passes to a fixpoint (or the same
-            // max_passes truncation the chain itself accepts, which is sound).
-            let mut cur = canon(cand, pass.cx);
-            for _ in 0..max_passes.max(1) {
-                let next = rewrite_pass(cur.clone(), pass);
-                if next == cur {
-                    break;
-                }
-                cur = next;
+            if spent >= BFS_PREFIX {
+                settled = false;
+                break 'bfs;
             }
-            debug_assert!(
-                no_nested_bags(&cur),
-                "explored endpoint has nested bags: {cur:?}"
-            );
-            // THE acceptance: strictly below the incumbent in the serve ordering.
+            spent += 1;
+            let cur = descend(rebuild(&state, &path, moved, pass.cx));
             if ordered_below(&cur, &best, pass.cx.view) {
                 best = cur.clone();
                 frontier.push_back(cur);
             }
         }
     }
-    best
-}
-
-/// Every expansion candidate of `e`, as WHOLE STATES (the move applied at one node,
-/// ancestors rebuilt through the canonical constructors under `cx`), in
-/// deterministic pre-order: the local move at a node first, then its children in
-/// canonical bag order.
-fn expansion_candidates(e: &Ex, cx: &Cx) -> Vec<Ex> {
-    let mut out = Vec::new();
-    local_moves(e, cx, &mut out);
-    match e {
-        Ex::Add(v) => {
-            for (i, c) in v.iter().enumerate() {
-                for cand in expansion_candidates(c, cx) {
-                    let mut items = v.clone();
-                    items[i] = cand;
-                    out.push(add(items, cx));
-                }
+    if settled {
+        return best;
+    }
+    // Phase 2: first improvement from the best until a full round finds nothing.
+    let mut resume: Vec<usize> = Vec::new();
+    loop {
+        let mut sites: Vec<(Vec<usize>, Ex)> = Vec::new();
+        site_list(&best, pass.cx, &mut Vec::new(), &mut sites);
+        let n = sites.len();
+        let start = sites.partition_point(|(p, _)| *p < resume);
+        let mut accepted: Option<(Ex, Vec<usize>)> = None;
+        for off in 0..n {
+            if spent >= budget {
+                return best;
+            }
+            spent += 1;
+            let (path, moved) = &sites[(start + off) % n];
+            let cur = descend(rebuild(&best, path, moved.clone(), pass.cx));
+            if ordered_below(&cur, &best, pass.cx.view) {
+                accepted = Some((cur, path.clone()));
+                break;
             }
         }
-        Ex::Mul(v) => {
+        match accepted {
+            Some((cur, path)) => {
+                best = cur;
+                resume = path;
+            }
+            None => return best,
+        }
+    }
+}
+
+/// The places of `e` with a local move, in deterministic pre-order (the move at a node
+/// first, then its children in canonical bag order), each with its moved node.
+fn site_list(e: &Ex, cx: &Cx, path: &mut Vec<usize>, out: &mut Vec<(Vec<usize>, Ex)>) {
+    let mut own = Vec::new();
+    local_moves(e, cx, &mut own);
+    for m in own {
+        out.push((path.clone(), m));
+    }
+    match e {
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
             for (i, c) in v.iter().enumerate() {
-                for cand in expansion_candidates(c, cx) {
-                    let mut items = v.clone();
-                    items[i] = cand;
-                    out.push(mul(items, cx));
-                }
+                path.push(i);
+                site_list(c, cx, path, out);
+                path.pop();
             }
         }
         Ex::Pow(b, x) => {
-            for cand in expansion_candidates(b, cx) {
-                out.push(pow(cand, (**x).clone(), cx));
-            }
-            for cand in expansion_candidates(x, cx) {
-                out.push(pow((**b).clone(), cand, cx));
-            }
-        }
-        Ex::Fun(f, v) => {
-            for (i, c) in v.iter().enumerate() {
-                for cand in expansion_candidates(c, cx) {
-                    let mut items = v.clone();
-                    items[i] = cand;
-                    out.push(fun(*f, items, cx));
-                }
-            }
+            path.push(0);
+            site_list(b, cx, path, out);
+            path.pop();
+            path.push(1);
+            site_list(x, cx, path, out);
+            path.pop();
         }
         _ => {}
     }
-    out
+}
+
+/// `e` with the node at `path` replaced by `moved`: the WHOLE STATE the candidate is, its
+/// ancestors rebuilt through the canonical constructors under `cx`.
+fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
+    let Some((&i, rest)) = path.split_first() else {
+        return moved;
+    };
+    match e {
+        Ex::Add(v) => {
+            let mut items = v.clone();
+            items[i] = rebuild(&v[i], rest, moved, cx);
+            add(items, cx)
+        }
+        Ex::Mul(v) => {
+            let mut items = v.clone();
+            items[i] = rebuild(&v[i], rest, moved, cx);
+            mul(items, cx)
+        }
+        Ex::Fun(f, v) => {
+            let mut items = v.clone();
+            items[i] = rebuild(&v[i], rest, moved, cx);
+            fun(*f, items, cx)
+        }
+        Ex::Pow(b, x) => {
+            if i == 0 {
+                pow(rebuild(b, rest, moved, cx), (**x).clone(), cx)
+            } else {
+                pow((**b).clone(), rebuild(x, rest, moved, cx), cx)
+            }
+        }
+        _ => moved,
+    }
 }
 
 /// The B1 move kinds at one node. THE extension point: a new expansion move is a new
