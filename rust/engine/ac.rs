@@ -1223,9 +1223,9 @@ impl Engine {
         // endpoint must stay the chain's own fixpoint (the per-state `stable()`
         // contract). A moved literal has no second move (it already is a shortest f64
         // spelling), but a round's re-run can mint new long exact literals, so the loop
-        // is finite by its bound of 4 rounds, not by a price: on srbf's predictions no
-        // sampled answer still carries a literal the fold would move, so the bound did
-        // not bind there. A winner without such literals is not folded and not selected
+        // is finite by its bound of 4 rounds, not by a price: of 5,106 permissive answers
+        // on srbf's predictions none still carries a literal the fold would move, so the
+        // bound did not bind there. A winner without such literals is not folded and not selected
         // again, so a shorter search can end lower than a longer one. Permissive only: the
         // strict tiers never move a value, and their literals keep the exact fraction.
         let mut owned: Vec<String> = tokens.to_vec();

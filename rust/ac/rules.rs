@@ -527,7 +527,7 @@ pub struct PassCtx<'a> {
 /// middle tier -- mu's literal component carries a literal's content up to float
 /// precision (the float cap), so the ordering loses a layer. The dense-literal chain its
 /// own tier existed for (T7: `Mul[3/2^k, x]`) ascends in k up to k = 55 and then sits at
-/// 64-72 bits; it stays finite through the 1,100-bit cap (below).
+/// 64-72 bits up to k = 200; it stays finite through the 1,100-bit cap (below).
 ///
 /// The pair is a strict total order (mu is a u64; cmp_ex is total by construction
 /// with EXACT literal comparison) that is WELL-FOUNDED: mu can strictly drop only

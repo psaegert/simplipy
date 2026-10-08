@@ -432,9 +432,9 @@ strict total order `cmp_ex`, so it is finite. $\square$
 
 A dense-literal chain ascends while its literals carry no more than float precision: the
 chain $\mathrm{Mul}[3/2^k, x]$ grows strictly in $\mu$ with $k$ up to $k = 55$; at $k = 56$
-and from $k = 58$ on, $3/2^k$'s exact spelling costs more than its float's shortest decimal,
-so the literal costs that decimal's price (the term 64–72 bits up to $k = 200$), which no
-longer ascends strictly. It stays finite all the same — $k$ is
+and for $58 \le k \le 1022$ in f64 mode ($1076$ in real mode), $3/2^k$'s exact
+spelling costs more than its float's shortest decimal, so the literal costs that decimal's
+price (the term 64–72 bits up to $k = 200$), which no longer ascends strictly. It stays finite all the same — $k$ is
 bounded by the 1,100-bit cap, and T-wf holds through L5 — and a rewrite cannot walk it
 anyway: every step preserves the term's value, and changing one literal alone changes it
 (pinned in `tests/test_unified_measure.py`: the chain ascends up to the float cap's onset, and
@@ -577,7 +577,7 @@ does not cover its selection [EMPIRICAL: srbf's predictions: 176 second-call cha
 30 uncapped, 20 of them also with the search off]. Running the `f64` search again from the
 winner would add a search to every call of flash-ansr's training-data canonicalization (which
 runs in `permissive`) and is not part of the engine. Nor is the selection monotone in the
-budget, although each search is: the literal fold rounds a winner's long exact literals and
+budget, although each search's exploration is: the literal fold rounds a winner's long exact literals and
 selects again, and a winner without them is not selected again, so a longer search can end
 costlier [EMPIRICAL: in `permissive`'s own measure, 807 of srbf's predictions cost more
 uncapped than at cap 4, by at most 77 bits, and 1,361 less].

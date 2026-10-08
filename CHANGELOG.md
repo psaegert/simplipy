@@ -13,21 +13,22 @@
   factors in another order or sign. No answer is costlier than at cap 4, and 2,888 are cheaper.
   `permissive` keeps the cheapest of three searches, and its winner is a valley of its own search
   only: 30 answers still change on a second call (176 at cap 4), 20 of them also with the search
-  off; 1,361 are cheaper than at cap 4 and 807 costlier in its own measure, by a median of 3 bits
-  and at most 77: a winner that carries long exact literals is rounded and selected again, one
-  without them is not. The search tries the capped default's breadth-first order for its first 8
-  candidates (on srbf's predictions in `f64` and `real` that alone gives the final answer on
-  124,572 of 125,127) and then steps to the first cheaper candidate of the best answer until a
-  whole round finds nothing; on 16 copies of one prediction it takes about six times as long as
-  `effort=4`, for an answer a third of the price. Each candidate's whole state is rebuilt only
-  when it is tried and is no longer re-canonicalized in full before its descent. On srbf's
-  predictions the uncapped search takes 8% more time than `effort=4` in every mode. Every internal
-  caller that passes no `effort` (normalization, masking, mining, the verification monitor, the
-  promotion refund) follows the default. `effort=k` caps each search at `k` candidates
-  (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), tried in the previous
-  breadth-first order up to 8; `effort=0` never enters the search, so the search change leaves its
-  answers byte-identical (the float cap below changes some: 269 of srbf's 125,127 predictions in
-  `f64`, 11,175 in `permissive`). Code that compares `DEFAULT_EFFORT` with an int now sees `None`.
+  off; 1,361 are cheaper than at cap 4 and 807 costlier in its own measure (`complexity(expr,
+  mode='permissive', canon='mode')`), by a median of 3 bits and at most 77: a winner that carries
+  long exact literals is rounded and selected again, one without them is not. The search tries the
+  capped default's breadth-first order for its first 8 candidates (on srbf's predictions in `f64`
+  and `real` that alone gives the final answer on 124,572 of 125,127) and then steps to the first
+  cheaper candidate of the best answer until a whole round finds nothing; on 16 copies of one
+  prediction it takes about six times as long as `effort=4`, for an answer a third of the price.
+  Each candidate's whole state is rebuilt only when it is tried and is no longer re-canonicalized
+  in full before its descent. On srbf's predictions the uncapped search takes 8% more time than
+  `effort=4` in every mode. Every internal caller that passes no `effort` (normalization, masking,
+  mining, the verification monitor, the promotion refund) follows the default. `effort=k` caps
+  each search at `k` candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is
+  none), tried in the previous breadth-first order up to 8; `effort=0` never enters the search, so
+  the search change leaves its answers byte-identical (the float cap below changes some: 269 of
+  srbf's 125,127 predictions in `f64`, 11,175 in `permissive`). Code that compares
+  `DEFAULT_EFFORT` with an int now sees `None`.
 - **Faster products.** Building a product decides where its sign goes by pricing every
   orientation of its sign-carrying factors. It now negates each such factor once instead of once
   per orientation (each negation builds products of its own, so the waste compounded with
