@@ -1252,9 +1252,11 @@ impl Engine {
     /// the search off, and never above the answer under any smaller budget (its candidates
     /// are a subset). A TIE GOES TO THE FOLDED FORM -- policy, not arithmetic: permissive
     /// exists for the flash-ansr training path, where one literal token beats four. So at
-    /// equal price the candidate with more literal-fold rounds wins (the float cap prices a
-    /// long exact literal and its float alike), and among those the earlier one: the folded
-    /// arm, the unfolded one, the default arm, the states passed through, the input.
+    /// equal price a candidate without a literal the fold would move wins (the float cap
+    /// prices a long exact literal and its float alike), and among those the earlier one:
+    /// the folded arm, the unfolded one, the default arm, the states passed through, the
+    /// continuations, the input. Both are properties of the candidate, not of how often the
+    /// fold ran, so a second call does not swap one spelling for another of equal price.
     fn ac_simplify_ex_permissive(
         &self,
         tokens: &[String],
@@ -1275,10 +1277,10 @@ impl Engine {
         if answers.is_empty() {
             return (SimplifyCtx::new(self.tokens.len()), None);
         }
-        let mut folded: Vec<(usize, Ex, usize)> = Vec::new();
+        let mut folded: Vec<(usize, Ex)> = Vec::new();
         let mut moved: FxHashSet<Vec<String>> = FxHashSet::default();
         let mut round: Vec<(usize, Ex)> = answers.iter().chain(passed.iter()).cloned().collect();
-        for depth in 1..=LITERAL_FOLD_ROUNDS {
+        for _ in 0..LITERAL_FOLD_ROUNDS {
             let mut ends: Vec<(usize, Ex)> = Vec::new();
             let mut through: Vec<(usize, Ex)> = Vec::new();
             for (i, e) in &round {
@@ -1301,24 +1303,21 @@ impl Engine {
             if ends.is_empty() {
                 break;
             }
-            folded.extend(
-                ends.iter()
-                    .chain(through.iter())
-                    .map(|(i, e)| (*i, e.clone(), depth)),
-            );
+            folded.extend(ends.iter().chain(through.iter()).cloned());
             round = ends.into_iter().chain(through).collect();
         }
         let pctx = SimplifyCtx::new(self.tokens.len());
-        // (price, literal-fold rounds, context index -- None for the input as read, state)
-        let mut best: Option<(u64, usize, Option<usize>, Ex)> = None;
-        let better = |mu: u64, depth: usize, best: &Option<(u64, usize, Option<usize>, Ex)>| {
+        // (price, carries a literal the fold would move, context index -- None for the input
+        // as read, state)
+        let mut best: Option<(u64, bool, Option<usize>, Ex)> = None;
+        let better = |mu: u64, long: bool, best: &Option<(u64, bool, Option<usize>, Ex)>| {
             best.as_ref()
-                .is_none_or(|(m, d, _, _)| mu < *m || (mu == *m && depth > *d))
+                .is_none_or(|(m, l, _, _)| mu < *m || (mu == *m && *l && !long))
         };
+        let long = |e: &Ex| crate::ac::expr::snap_lossy_literals(e).is_some();
         let mut priced: FxHashSet<Vec<String>> = FxHashSet::default();
-        let unfolded = answers.iter().chain(passed.iter()).map(|(i, e)| (*i, e, 0));
-        for (i, e, depth) in unfolded.chain(folded.iter().map(|(i, e, d)| (*i, e, *d))) {
-            let toks = self.print_prefix(e, &ctxs[i]);
+        for (i, e) in answers.iter().chain(passed.iter()).chain(folded.iter()) {
+            let toks = self.print_prefix(e, &ctxs[*i]);
             if !priced.insert(toks.clone()) {
                 continue;
             }
@@ -1327,15 +1326,17 @@ impl Engine {
             else {
                 continue;
             };
-            if better(mu, depth, &best) {
-                best = Some((mu, depth, Some(i), e.clone()));
+            let l = long(e);
+            if better(mu, l, &best) {
+                best = Some((mu, l, Some(*i), e.clone()));
             }
         }
         if let Some((read, mu)) =
             self.certified_reading(tokens, RuleMode::Permissive, RuleMode::Permissive, &pctx)
         {
-            if better(mu, 0, &best) {
-                best = Some((mu, 0, None, read));
+            let l = long(&read);
+            if better(mu, l, &best) {
+                best = Some((mu, l, None, read));
             }
         }
         match best {
