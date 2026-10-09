@@ -4768,23 +4768,33 @@ pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
 }
 
 /// [`snap_lossy_literals`] for the literals that PRINT a number beyond float precision only
-/// (more than 17 significant digits in the decimal, or in the numerator or denominator of the
-/// fraction, that spells the value): each moves to the float nearest to it, as
-/// [`lossy_literal`] moves it. No ground fold, and a literal printed short stays (the quotient
-/// `1/25.06292563505454`, printed as a division by that decimal): either can price above the
-/// state it came from.
+/// (more than 17 significant digits in the decimal, the numerator or the denominator the token
+/// printer writes for it -- for a product's coefficient moved behind the divide, its
+/// reciprocal's): each moves to the float nearest to it, as [`lossy_literal`] moves it. No
+/// ground fold, and a literal printed short stays (the quotient `1/25.06292563505454`, printed
+/// as a division by that decimal): either can price above the state it came from.
 pub fn snap_long_literals(e: &Ex) -> Option<Ex> {
+    fn num(r: &Rat, printed: &Rat, moved: &mut bool) -> Ex {
+        match lossy_literal(r).filter(|_| prints_long(printed)) {
+            Some(s) => {
+                *moved = true;
+                Ex::Num(s)
+            }
+            None => Ex::Num(r.clone()),
+        }
+    }
     fn walk(e: &Ex, moved: &mut bool) -> Ex {
         match e {
-            Ex::Num(r) if prints_long(r) => match lossy_literal(r) {
-                Some(s) => {
-                    *moved = true;
-                    Ex::Num(s)
-                }
-                None => e.clone(),
-            },
+            Ex::Num(r) => num(r, r, moved),
             Ex::Add(v) => Ex::Add(v.iter().map(|x| walk(x, moved)).collect()),
-            Ex::Mul(v) => Ex::Mul(v.iter().map(|x| walk(x, moved)).collect()),
+            Ex::Mul(v) => Ex::Mul(
+                v.iter()
+                    .map(|x| match x {
+                        Ex::Num(r) => num(r, &super::convert::printed_coefficient(r, v), moved),
+                        _ => walk(x, moved),
+                    })
+                    .collect(),
+            ),
             Ex::Pow(b, x) => Ex::Pow(Box::new(walk(b, moved)), Box::new(walk(x, moved))),
             Ex::Fun(f, v) => Ex::Fun(*f, v.iter().map(|x| walk(x, moved)).collect()),
             leaf => leaf.clone(),
@@ -6334,35 +6344,57 @@ mod tests {
     /// quotient printed short, which the full snap moves too.
     #[test]
     fn snap_long_literals_moves_only_long_prints() {
-        let _exact = crate::ac::rat::number_domain(false);
-        let long = Rat::parse_decimal("0.29691830596424839286351539224825775976423047785").unwrap();
-        let monster = Rat::from_big(
-            "200000000000000000000000000000".parse().unwrap(),
-            "426738538271436458205631863649".parse().unwrap(),
-        )
-        .unwrap();
-        let quotient = Rat::parse_decimal("25.06292563505454")
-            .unwrap()
-            .checked_inv()
-            .unwrap();
-        let nearest = |r: &Rat| Rat::shortest_reading_as(r.to_f64_nearest()).unwrap();
-        let e = Ex::Add(vec![
-            Ex::Num(long.clone()),
-            Ex::Num(monster.clone()),
-            Ex::Num(quotient.clone()),
-        ]);
-        assert_eq!(
-            snap_long_literals(&e),
-            Some(Ex::Add(vec![
-                Ex::Num(nearest(&long)),
-                Ex::Num(nearest(&monster)),
-                Ex::Num(quotient.clone()),
-            ]))
-        );
-        assert_eq!(
-            snap_lossy_literals(&Ex::Num(quotient.clone())),
-            Some(Ex::Num(nearest(&quotient)))
-        );
-        assert_eq!(snap_long_literals(&Ex::Num(quotient)), None);
+        with_view(|view| {
+            // the permissive chain's own (f64) number domain, and the exact one
+            for f64_numbers in [true, false] {
+                let _domain = crate::ac::rat::number_domain(f64_numbers);
+                let long = Rat::parse_decimal("0.29691830596424839286351539224825775976423047785")
+                    .unwrap();
+                let monster = Rat::from_big(
+                    "200000000000000000000000000000".parse().unwrap(),
+                    "426738538271436458205631863649".parse().unwrap(),
+                )
+                .unwrap();
+                let quotient = Rat::parse_decimal("25.06292563505454")
+                    .unwrap()
+                    .checked_inv()
+                    .unwrap();
+                let nearest = |r: &Rat| Rat::shortest_reading_as(r.to_f64_nearest()).unwrap();
+                let e = Ex::Add(vec![
+                    Ex::Num(long.clone()),
+                    Ex::Num(monster.clone()),
+                    Ex::Num(quotient.clone()),
+                ]);
+                assert_eq!(
+                    snap_long_literals(&e),
+                    Some(Ex::Add(vec![
+                        Ex::Num(nearest(&long)),
+                        Ex::Num(nearest(&monster)),
+                        Ex::Num(quotient.clone()),
+                    ]))
+                );
+                assert_eq!(
+                    snap_lossy_literals(&Ex::Num(quotient.clone())),
+                    Some(Ex::Num(nearest(&quotient)))
+                );
+                assert_eq!(snap_long_literals(&Ex::Num(quotient)), None);
+                // A coefficient the printer moves behind the divide prints its reciprocal:
+                // 95367431640625/1000000000003 * x0 prints `/ x0 0.01048576000003145728`, and
+                // 298023223876953125/123456791 * x0 prints `/ x0 0.0000000004142522498547712`.
+                let hidden = Rat::new(95367431640625, 1000000000003).unwrap();
+                let shown = Rat::new(298023223876953125, 123456791).unwrap();
+                let product = |r: &Rat| Ex::Mul(vec![Ex::Num(r.clone()), x(view)]);
+                assert_eq!(
+                    snap_long_literals(&product(&hidden)),
+                    Some(product(&nearest(&hidden)))
+                );
+                assert_eq!(snap_long_literals(&Ex::Num(hidden)), None);
+                assert_eq!(snap_long_literals(&product(&shown)), None);
+                assert_eq!(
+                    snap_long_literals(&Ex::Num(shown.clone())),
+                    Some(Ex::Num(nearest(&shown)))
+                );
+            }
+        });
     }
 }

@@ -62,12 +62,26 @@ def test_more_budget_never_ends_costlier(engine) -> None:
     assert prices[-1] == min(prices) < prices[0]
 
 
+# A coefficient the printer writes as a division by its reciprocal, 0.01048576000003145728 (19
+# significant digits), beside the prediction above: with the search off it printed that way.
+DIVISOR_SIDE = '* sin * / 95367431640625 1000000000003 x_2 ' + LONG_LITERALS
+
+
+def longest_numeral(expr: list[str]) -> int:
+    digits = [x.lstrip('-').replace('.', '').strip('0') for x in expr if x.lstrip('-').replace('.', '').isdigit()]
+    return max(map(len, digits))
+
+
 def test_the_answer_prints_no_literal_beyond_float_precision(engine) -> None:
     t = LONG_LITERALS.split()
     answer = engine.simplify(t, mode='permissive')
-    digits = [x.lstrip('-').replace('.', '').strip('0') for x in answer if x.lstrip('-').replace('.', '').isdigit()]
-    assert max(map(len, digits)) <= 17, answer
+    assert longest_numeral(answer) <= 17, answer
     assert price(engine, answer) < price(engine, t)
+    t = DIVISOR_SIDE.split()
+    for effort in (0, None):
+        answer = engine.simplify(t, mode='permissive', effort=effort)
+        assert longest_numeral(answer) <= 17, (effort, answer)
+        assert price(engine, answer) <= price(engine, t)
 
 
 @pytest.mark.parametrize('expr', PRICIER_THAN_INPUT + [CAPPED_WAS_CHEAPER, LONG_LITERALS])

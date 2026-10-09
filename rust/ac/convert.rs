@@ -369,6 +369,22 @@ fn divisor_side(r: &Rat) -> Option<Rat> {
     }
 }
 
+/// The value whose spelling the token printer writes for the coefficient `r` of the product
+/// `bag`: its reciprocal where [`mul_div_split`] moves it behind the divide, else `r` itself.
+pub(crate) fn printed_coefficient(r: &Rat, bag: &[Ex]) -> Rat {
+    if is_partition_bag(bag) || r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
+        return r.clone();
+    }
+    let mag = if r.is_negative() {
+        r.checked_neg()
+    } else {
+        Some(r.clone())
+    };
+    mag.and_then(|m| divisor_side(&m))
+        .filter(|_| has_plain_mul_factor(bag))
+        .unwrap_or_else(|| r.clone())
+}
+
 /// The INTEGER-OVER-DECIMAL spelling of a fraction (owner 2026-10-02), for the INFIX text only
 /// (see [`to_infix_pretty`]): `Some((n, d))` with `r == n / d`, `n` an integer and `d` a
 /// non-integer whose argmin spelling is ONE exact decimal token, when the pair spells strictly
