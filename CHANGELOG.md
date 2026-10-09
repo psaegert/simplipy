@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **Permissive never returns more than it was given.** `simplify(.., mode='permissive')` runs
+  three arms (its two fold disciplines and the `f64` chain) and used to choose between them by the
+  price of internal states it did not return: 0.14.7 returned 94 of flash-ansr's 129,490 T8.1
+  training draws costlier than they came in (median 27 bits, up to 304), and on 807 of srbf's
+  125,127 model predictions the uncapped answer was costlier than the one at `effort=4`. It now
+  returns the cheapest of its candidates, each priced as it is returned (what it prints, re-read
+  in permissive's own measure): every state its arms can end on under some budget, the `f64` arm's
+  states finished in permissive where they read cheaper than permissive's own fixpoints, the
+  literal-fold continuation of every capped run's winner, and the input as read. So its answer
+  never prices above the input, above its answer with the search off, or above its answer at a
+  smaller `effort`; on the T8.1 draws, srbf's ground truths and its predictions, none does. On the
+  T8.1 draws 0.8% of the answers change (172 get cheaper, 35 costlier by at most 7 bits, the rest
+  change spelling at equal price) and 32 change on a second call (86 before); it takes 7% more
+  time there, and 62% more on srbf's predictions (local measurements).
+- **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:
+  the modes accept different simplifications as true (`f64` follows the float evaluator, so
+  `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not; `permissive` also moves
+  constants to their floats), and each mode's `simplify` descends its own reading. So
+  `complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)` in every mode (on the three
+  sets above, no answer of any mode prices above its input), and prices of different modes are not
+  comparable. Before, `complexity()` read every expression the `f64` way, under which a `real` or
+  `permissive` answer could price above its input although its own mode made it cheaper. `f64` is
+  unchanged; `canon='default'` (the `f64` reading for every mode) is deprecated and warns where it
+  differs.
 - **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now `None`
   (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round of
   expansions finds nothing cheaper, so a second call has nothing left to continue. A cap counts
@@ -10,25 +34,22 @@
   13, of 3 copies 19 and of 8 copies 39). At cap 4, 2,701 of srbf's 125,127 model predictions
   change on a second call in `f64` (2,673 to a cheaper form; `real` 2,703). Now 26 do, at equal
   price but one: 23 of them also with the search off, and 3 long products that re-read with their
-  factors in another order or sign. No answer is costlier than at cap 4, and 2,888 are cheaper.
-  `permissive` keeps the cheapest of three searches, and its winner is a valley of its own search
-  only: 30 answers still change on a second call (176 at cap 4), 20 of them also with the search
-  off; 1,361 are cheaper than at cap 4 and 807 costlier in its own measure (`complexity(expr,
-  mode='permissive', canon='mode')`), by a median of 3 bits and at most 77: a winner that carries
-  long exact literals is rounded and selected again, one without them is not. The search tries the
-  capped default's breadth-first order for its first 8 candidates (on srbf's predictions in `f64`
-  and `real` that alone gives the final answer on 124,572 of 125,127) and then steps to the first
-  cheaper candidate of the best answer until a whole round finds nothing; on 16 copies of one
-  prediction it takes about six times as long as `effort=4`, for an answer a third of the price.
-  Each candidate's whole state is rebuilt only when it is tried and is no longer re-canonicalized
-  in full before its descent. On srbf's predictions the uncapped search takes 8% more time than
-  `effort=4` in every mode. Every internal caller that passes no `effort` (normalization, masking,
-  mining, the verification monitor, the promotion refund) follows the default. `effort=k` caps
-  each search at `k` candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is
-  none), tried in the previous breadth-first order up to 8; `effort=0` never enters the search, so
-  the search change leaves its answers byte-identical (the float cap below changes some: 269 of
-  srbf's 125,127 predictions in `f64`, 11,175 in `permissive`). Code that compares
-  `DEFAULT_EFFORT` with an int now sees `None`.
+  factors in another order or sign. No answer is costlier than at cap 4, and 2,888 are cheaper. In
+  `permissive` 33 answers still change on a second call, and none is costlier than at a smaller
+  cap (its selection, above). The search tries the capped default's breadth-first order for its
+  first 8 candidates (on srbf's predictions in `f64` and `real` that alone gives the final answer
+  on 124,572 of 125,127) and then steps to the first cheaper candidate of the best answer until a
+  whole round finds nothing; on 16 copies of one prediction it takes about six times as long as
+  `effort=4`, for an answer a third of the price. Each candidate's whole state is rebuilt only
+  when it is tried and is no longer re-canonicalized in full before its descent. On srbf's
+  predictions the uncapped search takes 8% more time than `effort=4` in `f64` and `real`. Every
+  internal caller that passes no `effort` (normalization, masking, mining, the verification
+  monitor, the promotion refund) follows the default. `effort=k` caps each search at `k`
+  candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), tried in the
+  previous breadth-first order up to 8; `effort=0` never enters the search, so the search change
+  leaves its answers byte-identical (the float cap below changes some: 269 of srbf's 125,127
+  predictions in `f64`, 11,175 in `permissive`; so does permissive's selection). Code that
+  compares `DEFAULT_EFFORT` with an int now sees `None`.
 - **Faster products.** Building a product decides where its sign goes by pricing every
   orientation of its sign-carrying factors. It now negates each such factor once instead of once
   per orientation (each negation builds products of its own, so the waste compounded with

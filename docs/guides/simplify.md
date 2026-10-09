@@ -133,29 +133,27 @@ than `effort=4` in every mode. Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
-`permissive` keeps the cheapest of three searches (its two fold disciplines and the `f64`
-search). Its winner is a valley of its own search only, so a second call can still improve on
-it through another: 30 answers change on a second call on srbf's predictions (176 at cap 4),
-20 of them also with the search off; 13 of the 30 get cheaper in `permissive`'s own measure
-(`complexity(expr, mode='permissive', canon='mode')`), by up to 51 bits. Running the `f64`
-search again from the winner would add a search to every call of flash-ansr's training-data
-canonicalization, which runs in `permissive`, so it is not done. Nor is the selection monotone
-in the search length: a winner that carries long exact literals is rounded by the literal fold
-and selected again, and a winner without them is not. On srbf's predictions 1,361 answers are
-cheaper than at cap 4 in that measure and 807 costlier, by a median of 3 bits and at most 77.
+`permissive` runs three arms (its two fold disciplines and the `f64` chain) and returns the
+cheapest of its candidates, each priced as it is returned — what it prints, re-read in
+`permissive`'s own measure: every state its arms can end on under some budget (a capped run is
+the same walk cut short), the `f64` arm's states finished in `permissive` where they read
+cheaper than `permissive`'s own fixpoints, the literal-fold continuation of every capped run's
+winner, and the input as read. So its answer never prices above the input, above its answer
+with the search off, or above its answer at a smaller `effort`; on flash-ansr's T8.1 draws,
+srbf's ground truths and its predictions none does. A second call can still improve on it
+through another arm: 32 of the 129,490 T8.1 answers and 33 of srbf's 125,127 predictions
+change on a second call.
 
 What the search buys, on the 129,490 simplify inputs of flash-ansr's T8.1 training draws
-(output price over input price, `complexity()`): in `f64` it moves the mean ratio from 0.979
+(output price over input price, `complexity(.., mode=m)`): in `f64` it moves the mean ratio from 0.979
 with the search off to 0.976 and lifts the strictly simplified answers from 6.0% to 9.2%, for
-about 28% more median time per call; in `permissive` from 0.954 to 0.948 and from 29.5% to
-35.2%, for about 53% more.
+about 28% more median time per call; in `permissive` (in its own measure) from 0.960 to 0.954
+and from 21.9% to 28.2%, for about 50% more.
 
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
 below it (the result is never worse than the fixpoint, hence never costlier than the
-input; in `permissive` this holds for each of its three searches, not for its selection, whose
-answer is costlier than its search-off answer on 19 of srbf's predictions in its own measure, 18
-at cap 4), both
+input; in `permissive` for its selection too), both
 phases move only on strict descent of a well-founded ordering
 (termination, independent of the budget), and the walk order is deterministic
 (reproducibility). Idempotence needs the search to run until a round finds nothing,

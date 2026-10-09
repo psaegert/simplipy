@@ -109,7 +109,7 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   above, and 3 long products (57 to 70 items) that only the search reaches and that re-read at
   equal price with their factors in another order or sign (review fuzz: an unmerged
   `3e-310` coefficient that re-reads in another order; a `<constant>` absorbed on re-read). In `permissive` the
-  selection among three searches adds a class of its own (L6). A capped search can stop
+  selection among three arms adds a class of its own (L6). A capped search can stop
   between two improvements, which a second call continues.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
@@ -571,16 +571,20 @@ cheaper form; uncapped, 26 times, at equal price but one: 23 of the effort-0 cla
 search-reached members of it; `real` 2,703 and the same 26]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
-`permissive` selects the cheapest of three searches, and its winner is a valley of its own
-search only: the re-run's other searches, started from the winner, can descend further, so L6
-does not cover its selection [EMPIRICAL: srbf's predictions: 176 second-call changes at cap 4,
-30 uncapped, 20 of them also with the search off]. Running the `f64` search again from the
-winner would add a search to every call of flash-ansr's training-data canonicalization (which
-runs in `permissive`) and is not part of the engine. Nor is the selection monotone in the
-budget, although each search's exploration is: the literal fold rounds a winner's long exact literals and
-selects again, and a winner without them is not selected again, so a longer search can end
-costlier [EMPIRICAL: in `permissive`'s own measure, 807 of srbf's predictions cost more
-uncapped than at cap 4, by at most 77 bits, and 1,361 less].
+`permissive` returns the cheapest of its candidates, each priced by re-reading what it prints in
+`permissive`'s own measure: the states its three arms can end on under some budget (each
+search's trace, with the smallest budget reaching each state), the `f64` arm's states finished
+in `permissive` where they read below a budget-independent threshold (the cheapest of the
+`permissive` fixpoints and the input), the literal-fold continuation of the winner a run capped
+at each such budget would have, and the input as read. **Proposition (permissive selection)**
+[THEOREM, given the trace]: its answer prices at most its input, at most its search-off answer,
+and at most its answer under any smaller budget. *Proof.* The input is a candidate; a run capped
+at $k$ is the same walk cut short, so its candidates, its winner and that winner's continuation
+(the same walk cut short again) are among the uncapped run's; the answer is the cheapest of a
+superset. $\square$ Its winner is a valley of its own arm only: the re-run's other arms,
+started from the winner, can descend further, so L6 does not cover the selection [EMPIRICAL: 32
+second-call changes on flash-ansr's 129,490 T8.1 draws, 33 on srbf's 125,127 predictions; the
+three bounds hold on every input of both sets and srbf's ground truths].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:
