@@ -892,8 +892,8 @@ impl Engine {
     /// `None` on malformed input.
     ///
     /// `canon` is the mode the CANON itself runs in: `complexity()` passes the requested
-    /// mode (each mode's own reading); `RuleMode::Default` prices in f64's reading (the
-    /// deprecated `canon='default'`). The canon context stays certificate-free and
+    /// mode (each mode's own reading); `RuleMode::Default` keeps the mode's parse and prices
+    /// in f64's canon (the deprecated `canon='default'`). The canon context stays certificate-free and
     /// fold-free either way: that is this instrument's contract.
     pub fn ac_complexity(
         &self,
@@ -1020,8 +1020,8 @@ impl Engine {
     /// the requested mode, pricing in that mode's own canon (its fold discipline and
     /// licences) -- the measure that mode's simplify descends, under which
     /// `mu_mode(simplify(e, mode)) <= mu_mode(e)` holds in every mode (for `permissive` by
-    /// its selection: `Engine::ac_simplify_ex_permissive`). `RuleMode::Default` prices in
-    /// f64's reading whatever the mode (the deprecated `canon='default'`).
+    /// its selection: `Engine::ac_simplify_ex_permissive`). `RuleMode::Default` keeps the
+    /// mode's parse and prices in f64's canon (the deprecated `canon='default'`).
     pub fn ac_complexity_certified(
         &self,
         tokens: &[String],
@@ -1252,8 +1252,8 @@ impl Engine {
     /// candidates a run capped there has, and continues it as that run would: THE PERMISSIVE
     /// LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03) moves its long
     /// exact literals to their floats and runs the three arms again at the same budget
-    /// (their states join, each at its own smallest budget), up to [`LITERAL_FOLD_ROUNDS`]
-    /// rounds. The answer is the cheapest of these winners. So every capped run's answer is
+    /// (their states join, each at its own smallest budget, and so does the moved state
+    /// itself, read in permissive), up to [`LITERAL_FOLD_ROUNDS`] rounds. The answer is the cheapest of these winners. So every capped run's answer is
     /// among them, and by construction the answer never prices above the input, never above
     /// the answer with the search off, and never above the answer under any smaller budget.
     ///
@@ -1261,8 +1261,9 @@ impl Engine {
     /// flash-ansr training path, where one literal token beats four. So at equal price a
     /// candidate without a literal the fold would move wins (the float cap prices a long
     /// exact literal and its float alike), then the earlier one: the folded arm's states
-    /// (its answer first), the unfolded arm's, the finished default states, the literal-fold
-    /// continuations, the input; among winners of equal price, the largest budget's.
+    /// (its answer first), the unfolded arm's, the finished default states, the input, the
+    /// literal-fold continuations; among the budgets' winners of equal price, the one taken
+    /// last.
     fn ac_simplify_ex_permissive(
         &self,
         tokens: &[String],
@@ -1299,17 +1300,11 @@ impl Engine {
             &mut prices,
         );
         pool.extend(finished);
-        if let Some((read, mu)) = input {
+        if let Some((read, _)) = input {
             let i = ctxs.len();
             ctxs.push(ictx);
-            let long = crate::ac::expr::snap_lossy_literals(&read).is_some();
-            pool.push(Cand {
-                ctx: i,
-                state: read,
-                birth: 0,
-                long,
-                price: Some(mu),
-            });
+            let cand = self.cand(i, read, 0, &ctxs, &pctx, &mut prices);
+            pool.push(cand);
         }
         // Continuations, by the snapped print they start from: the range of `conts` they fill.
         let mut conts: Vec<Cand> = Vec::new();
@@ -1372,15 +1367,39 @@ impl Engine {
                             &mut prices,
                         );
                         conts.extend(fin);
+                        // The snapped winner itself, read in permissive: the float cap prices it
+                        // like the long state, so the fold applies even where the re-run offers
+                        // nothing as cheap.
+                        let rctx = SimplifyCtx::new(self.tokens.len());
+                        if let Some((read, _)) = self.certified_reading(
+                            &toks,
+                            RuleMode::Permissive,
+                            RuleMode::Permissive,
+                            &rctx,
+                        ) {
+                            let k = ctxs.len();
+                            ctxs.push(rctx);
+                            let cand = self.cand(k, read, 0, &ctxs, &pctx, &mut prices);
+                            conts.push(cand);
+                        }
                         let hi = conts.len();
                         budgets.extend(conts[lo..hi].iter().map(|c| c.birth));
                         runs.insert(toks, (lo, hi));
                         (lo, hi)
                     }
                 };
-                seen.extend((lo..hi).filter(|&k| conts[k].birth <= c).map(|k| (true, k)));
-                match pick(&seen, &pool, &conts) {
-                    Some(w2) if w2 != w => w = w2,
+                let fresh: Vec<(bool, usize)> = (lo..hi)
+                    .filter(|&k| conts[k].birth <= c)
+                    .map(|k| (true, k))
+                    .collect();
+                seen.extend(fresh.iter().copied());
+                // The fold goes on while the continuation is at most as costly: folding a moved
+                // literal with its neighbours can mint a new long exact literal of equal price,
+                // which the next round moves again (the old loop's unconditional rounds).
+                match pick(&fresh, &pool, &conts) {
+                    Some(w2) if w2 != w && get(w2, &pool, &conts).0 <= get(w, &pool, &conts).0 => {
+                        w = w2
+                    }
                     _ => break,
                 }
             }

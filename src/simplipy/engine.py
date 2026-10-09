@@ -2176,17 +2176,18 @@ class SimpliPyEngine:
         Each mode reads an expression into its own canonical form, because the modes accept
         different simplifications as true: ``f64`` follows the deployed float evaluator
         (``1/exp(5132.3)`` is ``0``), ``real`` exact real arithmetic (it is not), and
-        ``permissive`` also moves constants to their floats. This prices that form, on the
+        ``permissive`` also what holds only up to sign or domain (``sqrt(x^2)`` is ``x``).
+        This prices that form, on the
         CERTIFIED canonical state (the same certificate-carrying canonicalization the
         simplify chain runs on), with the one codebook (the unified measure mu). It is the
         measure :meth:`simplify` descends in that mode, so for every mode
         ``complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)``. Prices in
         different modes price different readings and are not comparable across modes.
 
-        ``canon='default'`` (deprecated) prices an expression in ``f64``'s reading whatever
-        the mode, as ``complexity()`` did before 0.15.0: identical for ``mode='f64'``, and
-        a ``FutureWarning`` for ``real`` and ``permissive``, whose own answers it can price
-        above their inputs.
+        ``canon='default'`` (deprecated) keeps the mode's parse but canonicalizes and prices
+        in ``f64``'s canon, as ``complexity()`` did before 0.15.0: identical for
+        ``mode='f64'``, and a ``FutureWarning`` for ``real`` and ``permissive``, whose own
+        answers it can price above their inputs.
 
         With ``certified=False`` the expression is priced on the bare
         (certificate-less, fail-closed) canonicalization instead: still invariant
@@ -2216,11 +2217,11 @@ class SimpliPyEngine:
         if canon not in ('default', 'mode'):
             raise ValueError(
                 f"unknown canon {canon!r}: expected 'mode' (the mode's own reading, the default) "
-                f"or 'default' (deprecated: f64's reading for every mode)")
+                f"or 'default' (deprecated: the mode's parse priced in f64's canon)")
         if canon == 'default' and rule_mode != _RULE_MODE[Mode.f64]:
             warnings.warn(
                 "complexity(..., canon='default') prices a real or permissive expression in "
-                "f64's reading; complexity() now prices each mode in its own reading (the "
+                "f64's canon; complexity() now prices each mode in its own reading (the "
                 "default, canon='mode'), and canon='default' will be removed.",
                 FutureWarning, stacklevel=2)
         if certified:

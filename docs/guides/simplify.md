@@ -32,7 +32,8 @@ mode's own canonical pricing — and idempotent at any fixpoint run. `complexity
 mode=m)` is that measure: each mode reads an expression into its own canonical form,
 because the modes accept different simplifications as true (`f64` follows the float
 evaluator, so `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not;
-`permissive` also moves constants to their floats), and prices that form. So
+`permissive` also what holds only up to sign or domain, so `sqrt(x^2)` is `x`), and prices
+that form. So
 `complexity(simplify(e, mode=m), mode=m) ≤ complexity(e, mode=m)` in every mode, and
 prices of different modes are prices of different readings, not comparable across
 modes. Two *different spellings* of the same value may still settle at different
@@ -129,25 +130,26 @@ bits. A breadth-first search re-tries every candidate of every accepted state, w
 large sum of terms that each need several expansions grows with the square of the number of
 terms; on 16 copies of one prediction the two-phase search takes about six times as long as
 `effort=4`, for an answer a third of the price. On srbf's predictions it takes 8% more time
-than `effort=4` in every mode. Every internal caller that passes no
+than `effort=4` in `f64` and `real`. Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
 `permissive` runs three arms (its two fold disciplines and the `f64` chain) and returns the
 cheapest of its candidates, each priced as it is returned — what it prints, re-read in
-`permissive`'s own measure: every state its arms can end on under some budget (a capped run is
-the same walk cut short), the `f64` arm's states finished in `permissive` where they read
-cheaper than `permissive`'s own fixpoints, the literal-fold continuation of every capped run's
-winner, and the input as read. So its answer never prices above the input, above its answer
-with the search off, or above its answer at a smaller `effort`; on flash-ansr's T8.1 draws,
-srbf's ground truths and its predictions none does. A second call can still improve on it
-through another arm: 32 of the 129,490 T8.1 answers and 33 of srbf's 125,127 predictions
-change on a second call.
+`permissive`'s own measure: every state its two fold disciplines can end on under some budget
+(a capped run is the same walk cut short), the `f64` arm's states finished in `permissive`
+where they read cheaper than `permissive`'s own fixpoints and the input, the literal-fold
+continuation of every capped run's winner that carries long exact literals, and the input as
+read. So its answer never prices above the input, above its answer with the search off, or
+above its answer at a smaller `effort`; on flash-ansr's T8.1 draws, srbf's ground truths and
+its predictions none does (smaller efforts checked: 0, 1 and 4). A second call can still change
+it through another arm: 32 of the 129,490 T8.1 answers and 33 of srbf's 125,127 predictions
+change on a second call (20 and 22 of them to a cheaper form).
 
 What the search buys, on the 129,490 simplify inputs of flash-ansr's T8.1 training draws
 (output price over input price, `complexity(.., mode=m)`): in `f64` it moves the mean ratio from 0.979
 with the search off to 0.976 and lifts the strictly simplified answers from 6.0% to 9.2%, for
-about 28% more median time per call; in `permissive` (in its own measure) from 0.960 to 0.954
+about 28% more median time per call; in `permissive` from 0.960 to 0.954
 and from 21.9% to 28.2%, for about 50% more.
 
 Every guarantee above survives any budget: candidates are built under the same

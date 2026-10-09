@@ -572,11 +572,12 @@ search-reached members of it; `real` 2,703 and the same 26]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
 `permissive` returns the cheapest of its candidates, each priced by re-reading what it prints in
-`permissive`'s own measure: the states its three arms can end on under some budget (each
-search's trace, with the smallest budget reaching each state), the `f64` arm's states finished
+`permissive`'s own measure: the states its two fold-discipline arms can end on under some
+budget (each search's trace, with the smallest budget reaching each state), the `f64` arm's
+states finished
 in `permissive` where they read below a budget-independent threshold (the cheapest of the
 `permissive` fixpoints and the input), the literal-fold continuation of the winner a run capped
-at each such budget would have, and the input as read. **Proposition (permissive selection)**
+at each such budget would have (where it carries long exact literals), and the input as read. **Proposition (permissive selection)**
 [THEOREM, given the trace]: its answer prices at most its input, at most its search-off answer,
 and at most its answer under any smaller budget. *Proof.* The input is a candidate; a run capped
 at $k$ is the same walk cut short, so its candidates, its winner and that winner's continuation
@@ -584,7 +585,8 @@ at $k$ is the same walk cut short, so its candidates, its winner and that winner
 superset. $\square$ Its winner is a valley of its own arm only: the re-run's other arms,
 started from the winner, can descend further, so L6 does not cover the selection [EMPIRICAL: 32
 second-call changes on flash-ansr's 129,490 T8.1 draws, 33 on srbf's 125,127 predictions; the
-three bounds hold on every input of both sets and srbf's ground truths].
+three bounds hold on every input of both sets and srbf's ground truths, smaller budgets checked
+at efforts 0, 1 and 4].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:

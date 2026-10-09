@@ -66,8 +66,8 @@ fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
 
 /// The complexity instruments' canon selector: `"mode"` routes the canon through the
 /// requested rule mode itself -- that mode's own reading, the measure its simplify descends
-/// (what `complexity()` prices); `"default"` pins the canon to the sound default, f64's
-/// reading whatever the mode (the deprecated `canon='default'`). Two spellings only, so
+/// (what `complexity()` prices); `"default"` pins the canon to the sound default -- the
+/// mode's parse, priced in f64's canon (the deprecated `canon='default'`). Two spellings only, so
 /// the knob cannot silently become a third pricing.
 fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine::RuleMode> {
     match canon {
@@ -698,7 +698,7 @@ impl PyEngine {
     /// `engine::ac::ac_complexity_certified`): `mu(simplify(e)) <= mu(e)` is a
     /// theorem under this pricing, unlike the bare `ac_complexity`. `canon="mode"` routes
     /// the canon through `rule_mode` itself (each mode's own measure, what `complexity()`
-    /// prices); `canon="default"` pins it to f64's reading whatever the mode.
+    /// prices); `canon="default"` pins it to f64's canon (the mode's parse is kept).
     #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
     fn ac_complexity_certified(
         &self,

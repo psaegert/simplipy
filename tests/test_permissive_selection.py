@@ -2,7 +2,7 @@
 
 Permissive runs three arms (its two fold disciplines and the f64 chain), and its literal fold moves
 long exact literals to their floats and runs them again. Its answer is the cheapest of every
-candidate those runs produce -- every state a search passed through and the input as read
+candidate those runs produce -- every state a search accepted and the input as read
 included -- priced by re-reading what it prints in permissive's own measure. So, by construction,
 the answer never prices above the input, never above the answer with the search off, and never
 above the answer under a smaller effort. The inputs below broke these before.

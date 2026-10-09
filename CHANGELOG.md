@@ -5,27 +5,30 @@
 - **Permissive never returns more than it was given.** `simplify(.., mode='permissive')` runs
   three arms (its two fold disciplines and the `f64` chain) and used to choose between them by the
   price of internal states it did not return: 0.14.7 returned 94 of flash-ansr's 129,490 T8.1
-  training draws costlier than they came in (median 27 bits, up to 304), and on 807 of srbf's
-  125,127 model predictions the uncapped answer was costlier than the one at `effort=4`. It now
-  returns the cheapest of its candidates, each priced as it is returned (what it prints, re-read
-  in permissive's own measure): every state its arms can end on under some budget, the `f64` arm's
-  states finished in permissive where they read cheaper than permissive's own fixpoints, the
-  literal-fold continuation of every capped run's winner, and the input as read. So its answer
-  never prices above the input, above its answer with the search off, or above its answer at a
-  smaller `effort`; on the T8.1 draws, srbf's ground truths and its predictions, none does. On the
-  T8.1 draws 0.8% of the answers change (172 get cheaper, 35 costlier by at most 7 bits, the rest
-  change spelling at equal price) and 32 change on a second call (86 before); it takes 7% more
-  time there, and 62% more on srbf's predictions (local measurements).
+  training draws costlier than they came in (median 27 bits, up to 304) and 15 costlier than its
+  own answer with the search off (median 5 bits, up to 212). It now returns the cheapest of its
+  candidates, each priced as it is returned (what it prints, re-read in permissive's own measure):
+  every state its two fold disciplines can end on under some budget, the `f64` arm's states
+  finished in permissive where they read cheaper than permissive's own fixpoints and the input,
+  the literal-fold continuation of every capped run's winner that carries long exact literals, and
+  the input as read. So its answer never prices above the input, above its answer with the search
+  off, or above its answer at a smaller `effort`; on the T8.1 draws, srbf's ground truths and its
+  predictions, none does (smaller efforts checked: 0, 1 and 4). On the T8.1 draws 0.8% of the
+  answers change (172 get cheaper, 35 costlier by at most 7 bits, and 845 take another form at
+  equal price) and 32 change on a second call (86 before); on srbf's predictions 3.0% change
+  (2,586 get cheaper, 80 costlier by at most 73 bits). Choosing among these candidates takes 7%
+  more time on the T8.1 draws than choosing by internal prices, and 62% more on srbf's
+  predictions.
 - **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:
   the modes accept different simplifications as true (`f64` follows the float evaluator, so
-  `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not; `permissive` also moves
-  constants to their floats), and each mode's `simplify` descends its own reading. So
+  `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not; `permissive` also what
+  holds only up to sign or domain, so `sqrt(x^2)` is `x`), and each mode's `simplify` descends its own reading. So
   `complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)` in every mode (on the three
   sets above, no answer of any mode prices above its input), and prices of different modes are not
   comparable. Before, `complexity()` read every expression the `f64` way, under which a `real` or
   `permissive` answer could price above its input although its own mode made it cheaper. `f64` is
-  unchanged; `canon='default'` (the `f64` reading for every mode) is deprecated and warns where it
-  differs.
+  unchanged; `canon='default'` (the mode's parse, priced in `f64`'s canon) is deprecated and warns in
+  `real` and `permissive`.
 - **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now `None`
   (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round of
   expansions finds nothing cheaper, so a second call has nothing left to continue. A cap counts
