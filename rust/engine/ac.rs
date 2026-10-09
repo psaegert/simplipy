@@ -1247,10 +1247,10 @@ impl Engine {
     ///   finished here too;
     /// * THE PERMISSIVE LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03): a
     ///   candidate priced at or below the threshold that carries an exact literal whose f64
-    ///   nearest prices cheaper is moved to that float and run through the three arms again
-    ///   at the same budget, up to [`LITERAL_FOLD_ROUNDS`] rounds, every state of those runs
-    ///   included (the answer is always priced at or below the threshold, so this covers
-    ///   continuing the answer);
+    ///   nearest prices cheaper is moved to that float and run through the three arms' chains
+    ///   again, without search, up to [`LITERAL_FOLD_ROUNDS`] rounds (the answer is always
+    ///   priced at or below the threshold, so this covers continuing the answer; without
+    ///   search the continuation does not depend on the budget);
     /// * the input as read.
     ///
     /// Every candidate is priced by re-reading what it prints in permissive's own measure
@@ -1311,7 +1311,7 @@ impl Engine {
                 if !moved.insert(toks.clone()) {
                     continue;
                 }
-                self.permissive_arms(&toks, max_passes, explore_budget, &mut ctxs, &mut next);
+                self.permissive_arms(&toks, max_passes, 0, &mut ctxs, &mut next);
             }
             if next.answers.is_empty() && next.defaults.is_empty() {
                 break;
