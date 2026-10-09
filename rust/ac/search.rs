@@ -103,16 +103,17 @@ const BFS_PREFIX: usize = 8;
 /// [`rewrite_pass`] to its fixpoint (or the same `max_passes` truncation the chain itself
 /// accepts, which is sound).
 ///
-/// `trace`, when given, receives every state the search accepts, in order (the starting
-/// fixpoint is not recorded). A run under a smaller budget is the same walk cut short, so
-/// the state a capped run ends on is the fixpoint or one of these: `permissive` selects
-/// over them so that more budget never ends costlier.
+/// `trace`, when given, receives every state the search accepts, in order, with the number
+/// of descents spent when it was accepted (the starting fixpoint is not recorded). A run
+/// under a smaller budget is the same walk cut short, so a run capped at `k` ends on the
+/// last of these with at most `k` descents (or on the fixpoint): `permissive` uses this to
+/// make more budget never end costlier.
 pub fn explore(
     fix: Ex,
     pass: &PassCtx,
     max_passes: usize,
     budget: usize,
-    mut trace: Option<&mut Vec<Ex>>,
+    mut trace: Option<&mut Vec<(usize, Ex)>>,
 ) -> Ex {
     if budget == 0 {
         return fix;
@@ -161,7 +162,7 @@ pub fn explore(
             if ordered_below(&cur, &best, pass.cx.view) {
                 best = cur.clone();
                 if let Some(t) = trace.as_deref_mut() {
-                    t.push(cur.clone());
+                    t.push((spent, cur.clone()));
                 }
                 frontier.push_back(cur);
             }
@@ -203,7 +204,7 @@ pub fn explore(
         match accepted {
             Some((cur, path)) => {
                 if let Some(t) = trace.as_deref_mut() {
-                    t.push(cur.clone());
+                    t.push((spent, cur.clone()));
                 }
                 best = cur;
                 resume = path;

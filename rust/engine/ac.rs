@@ -1194,7 +1194,8 @@ impl Engine {
     /// `explore_budget > 0` runs the budgeted expansion search under the SAME pass
     /// context and accepts only endpoints strictly below in the reduction ordering.
     /// Dispatcher. Every mode but `permissive` runs once, with the fold discipline its mode
-    /// derives. `permissive` runs TWICE and keeps the cheaper endpoint.
+    /// derives. `permissive` runs both fold disciplines (and the default arm) and keeps the
+    /// cheapest candidate ([`Engine::ac_simplify_ex_permissive`]).
     ///
     /// "Real where possible, f64 as a fallback" cannot be a sequencing rule: folding is
     /// bottom-up, so `tanh 30` becomes `1` before `atanh` ever sees it, and no ordering
@@ -1233,37 +1234,35 @@ impl Engine {
     /// PERMISSIVE: THE CHEAPEST CANDIDATE, PRICED AS RETURNED. Permissive runs three arms
     /// -- its two fold disciplines and the default-mode chain at the same budget (THE THIRD
     /// CANDIDATE, owner ruling 2026-08-24: the certified descent can steer past a structure
-    /// the relaxed descent freezes, so f64 can out-simplify permissive on individual rows) --
-    /// and returns the cheapest of every candidate the run produces:
+    /// the relaxed descent freezes, so f64 can out-simplify permissive on individual rows).
+    /// Its candidates are:
     ///
-    /// * each permissive arm's answer, and every state its search passed through: a run
-    ///   under a smaller budget is the same walk cut short (`ac::search::explore`), so
-    ///   whatever a capped run can end on is among them;
-    /// * the default arm's states (its answer and the states its search passed through) that
-    ///   read strictly cheaper than every permissive arm's fixpoint and than the input, each
-    ///   finished through permissive's two chains (no search): a default-mode spelling that
-    ///   permissive reads further (`x7/(x7*..)`, `x^2/x`) is never returned raw, and the
-    ///   threshold does not depend on the budget, so whatever a smaller budget finishes is
-    ///   finished here too;
-    /// * THE PERMISSIVE LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03): a
-    ///   candidate priced at or below the threshold that carries an exact literal whose f64
-    ///   nearest prices cheaper is moved to that float and run through the three arms' chains
-    ///   again, without search, up to [`LITERAL_FOLD_ROUNDS`] rounds (the answer is always
-    ///   priced at or below the threshold, so this covers continuing the answer; without
-    ///   search the continuation does not depend on the budget);
+    /// * every state a permissive arm can end on under some budget (its fixpoint, the states
+    ///   its search accepts, its answer), with the smallest budget that reaches it
+    ///   (`ac::search::explore`'s trace: a capped run is the same walk cut short);
+    /// * the default arm's states that read strictly cheaper than every permissive fixpoint
+    ///   and than the input, each finished through permissive's two chains: a default-mode
+    ///   spelling that permissive reads further (`x7/(x7*..)`, `x^2/x`) is never returned
+    ///   raw, and the threshold does not depend on the budget;
     /// * the input as read.
     ///
     /// Every candidate is priced by re-reading what it prints in permissive's own measure
-    /// (`complexity(.., mode='permissive')`), the measure a caller sees. Hence, by
-    /// construction: the answer never prices above the input, never above the answer with
-    /// the search off, and never above the answer under any smaller budget (its candidates
-    /// are a subset). A TIE GOES TO THE FOLDED FORM -- policy, not arithmetic: permissive
-    /// exists for the flash-ansr training path, where one literal token beats four. So at
-    /// equal price a candidate without a literal the fold would move wins (the float cap
-    /// prices a long exact literal and its float alike), and among those the earlier one:
-    /// the permissive arms' answers (folded, then unfolded), the finished default states,
-    /// the states passed through, the continuations, the input. Both are properties of the
-    /// candidate, so a second call does not swap one spelling for another of equal price.
+    /// (`complexity(.., mode='permissive')`, the measure a caller sees). For every budget at
+    /// which some candidate first appears, the selection takes the winner among the
+    /// candidates a run capped there has, and continues it as that run would: THE PERMISSIVE
+    /// LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03) moves its long
+    /// exact literals to their floats and runs the three arms again at the same budget
+    /// (their states join, each at its own smallest budget), up to [`LITERAL_FOLD_ROUNDS`]
+    /// rounds. The answer is the cheapest of these winners. So every capped run's answer is
+    /// among them, and by construction the answer never prices above the input, never above
+    /// the answer with the search off, and never above the answer under any smaller budget.
+    ///
+    /// A TIE GOES TO THE FOLDED FORM -- policy, not arithmetic: permissive exists for the
+    /// flash-ansr training path, where one literal token beats four. So at equal price a
+    /// candidate without a literal the fold would move wins (the float cap prices a long
+    /// exact literal and its float alike), then the earlier one: the folded arm's states
+    /// (its answer first), the unfolded arm's, the finished default states, the literal-fold
+    /// continuations, the input; among winners of equal price, the largest budget's.
     fn ac_simplify_ex_permissive(
         &self,
         tokens: &[String],
@@ -1271,70 +1270,186 @@ impl Engine {
         explore_budget: usize,
     ) -> (SimplifyCtx, Option<Ex>) {
         let mut ctxs: Vec<SimplifyCtx> = Vec::new();
-        let mut run = PermissiveRun::default();
-        self.permissive_arms(tokens, max_passes, explore_budget, &mut ctxs, &mut run);
-        if run.answers.is_empty() && run.defaults.is_empty() {
-            return (SimplifyCtx::new(self.tokens.len()), None);
-        }
         let pctx = SimplifyCtx::new(self.tokens.len());
         let mut prices: FxHashMap<Vec<String>, Option<u64>> = FxHashMap::default();
-        let mut price = |e: &Ex, ctx: &SimplifyCtx| -> Option<u64> {
-            let toks = self.print_prefix(e, ctx);
-            *prices.entry(toks).or_insert_with_key(|t| {
-                self.certified_reading(t, RuleMode::Permissive, RuleMode::Permissive, &pctx)
-                    .map(|(_, mu)| mu)
-            })
-        };
-        // THE THRESHOLD: the cheapest of the permissive fixpoints and the input -- the search-
-        // off candidates, so it does not depend on the budget.
+        let (perm, fixes, defaults) =
+            self.permissive_arms(tokens, max_passes, explore_budget, &mut ctxs);
+        if perm.is_empty() && defaults.is_empty() {
+            return (SimplifyCtx::new(self.tokens.len()), None);
+        }
+        let ictx = SimplifyCtx::new(self.tokens.len());
         let input =
-            self.certified_reading(tokens, RuleMode::Permissive, RuleMode::Permissive, &pctx);
+            self.certified_reading(tokens, RuleMode::Permissive, RuleMode::Permissive, &ictx);
         let mut threshold = input.as_ref().map_or(u64::MAX, |(_, mu)| *mu);
-        for (i, e) in &run.fixes {
-            if let Some(mu) = price(e, &ctxs[*i]) {
+        let mut pool: Vec<Cand> = perm
+            .into_iter()
+            .map(|(i, e, b)| self.cand(i, e, b, &ctxs, &pctx, &mut prices))
+            .collect();
+        for &f in &fixes {
+            if let Some(mu) = pool[f].price {
                 threshold = threshold.min(mu);
             }
         }
-        let mut cont = PermissiveRun::default();
-        let mut moved: FxHashSet<Vec<String>> = FxHashSet::default();
-        let mut round: Vec<(usize, Ex)> = run.all().cloned().collect();
-        for _ in 0..LITERAL_FOLD_ROUNDS {
-            let mut next = PermissiveRun::default();
-            for (i, e) in &round {
-                let Some(snapped) = crate::ac::expr::snap_lossy_literals(e) else {
-                    continue;
-                };
-                if price(e, &ctxs[*i]).is_none_or(|mu| mu > threshold) {
-                    continue;
-                }
-                let toks = self.print_prefix(&snapped, &ctxs[*i]);
-                if !moved.insert(toks.clone()) {
-                    continue;
-                }
-                self.permissive_arms(&toks, max_passes, 0, &mut ctxs, &mut next);
-            }
-            if next.answers.is_empty() && next.defaults.is_empty() {
-                break;
-            }
-            round = next.all().cloned().collect();
-            cont.answers.extend(next.answers);
-            cont.passed.extend(next.passed);
-            cont.defaults.extend(next.defaults);
+        let finished = self.finish_defaults(
+            defaults,
+            threshold,
+            max_passes,
+            &mut ctxs,
+            &pctx,
+            &mut prices,
+        );
+        pool.extend(finished);
+        if let Some((read, mu)) = input {
+            let i = ctxs.len();
+            ctxs.push(ictx);
+            let long = crate::ac::expr::snap_lossy_literals(&read).is_some();
+            pool.push(Cand {
+                ctx: i,
+                state: read,
+                birth: 0,
+                long,
+                price: Some(mu),
+            });
         }
-        let mut finished: Vec<(usize, Ex)> = Vec::new();
-        let mut finishing: FxHashSet<Vec<String>> = FxHashSet::default();
-        let defaults: Vec<(usize, Ex)> = run
-            .defaults
-            .iter()
-            .chain(cont.defaults.iter())
-            .cloned()
-            .collect();
-        for (i, d) in &defaults {
-            if price(d, &ctxs[*i]).is_none_or(|mu| mu >= threshold) {
+        // Continuations, by the snapped print they start from: the range of `conts` they fill.
+        let mut conts: Vec<Cand> = Vec::new();
+        let mut runs: FxHashMap<Vec<String>, (usize, usize)> = FxHashMap::default();
+        let mut budgets: std::collections::BTreeSet<usize> = pool.iter().map(|c| c.birth).collect();
+        let mut done: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        // (price, long, which: (in conts?, index))
+        let mut answer: Option<(u64, bool, bool, usize)> = None;
+        while let Some(c) = budgets.iter().copied().find(|b| !done.contains(b)) {
+            done.insert(c);
+            let mut seen: Vec<(bool, usize)> = (0..pool.len())
+                .filter(|&k| pool[k].birth <= c)
+                .map(|k| (false, k))
+                .collect();
+            let get = |w: (bool, usize), pool: &Vec<Cand>, conts: &Vec<Cand>| -> (u64, bool) {
+                let x = if w.0 { &conts[w.1] } else { &pool[w.1] };
+                (x.price.unwrap_or(u64::MAX), x.long)
+            };
+            let pick = |seen: &[(bool, usize)], pool: &Vec<Cand>, conts: &Vec<Cand>| {
+                let mut best: Option<((u64, bool), (bool, usize))> = None;
+                for &w in seen {
+                    let key = get(w, pool, conts);
+                    if key.0 == u64::MAX {
+                        continue;
+                    }
+                    if best.as_ref().is_none_or(|(k, _)| key < *k) {
+                        best = Some((key, w));
+                    }
+                }
+                best.map(|(_, w)| w)
+            };
+            let Some(mut w) = pick(&seen, &pool, &conts) else {
+                continue;
+            };
+            for _ in 0..LITERAL_FOLD_ROUNDS {
+                let x = if w.0 { &conts[w.1] } else { &pool[w.1] };
+                if !x.long {
+                    break;
+                }
+                let Some(snapped) = crate::ac::expr::snap_lossy_literals(&x.state) else {
+                    break;
+                };
+                let toks = self.print_prefix(&snapped, &ctxs[x.ctx]);
+                let (lo, hi) = match runs.get(&toks) {
+                    Some(r) => *r,
+                    None => {
+                        let (perm2, _, defaults2) =
+                            self.permissive_arms(&toks, max_passes, explore_budget, &mut ctxs);
+                        let lo = conts.len();
+                        for (i, e, b) in perm2 {
+                            let cand = self.cand(i, e, b, &ctxs, &pctx, &mut prices);
+                            conts.push(cand);
+                        }
+                        let fin = self.finish_defaults(
+                            defaults2,
+                            threshold,
+                            max_passes,
+                            &mut ctxs,
+                            &pctx,
+                            &mut prices,
+                        );
+                        conts.extend(fin);
+                        let hi = conts.len();
+                        budgets.extend(conts[lo..hi].iter().map(|c| c.birth));
+                        runs.insert(toks, (lo, hi));
+                        (lo, hi)
+                    }
+                };
+                seen.extend((lo..hi).filter(|&k| conts[k].birth <= c).map(|k| (true, k)));
+                match pick(&seen, &pool, &conts) {
+                    Some(w2) if w2 != w => w = w2,
+                    _ => break,
+                }
+            }
+            let (mu, long) = get(w, &pool, &conts);
+            if answer
+                .as_ref()
+                .is_none_or(|(m, l, _, _)| (mu, long) <= (*m, *l))
+            {
+                answer = Some((mu, long, w.0, w.1));
+            }
+        }
+        let Some((_, _, in_conts, k)) = answer else {
+            let first = pool.swap_remove(0);
+            return (ctxs.swap_remove(first.ctx), Some(first.state));
+        };
+        let x = if in_conts {
+            conts.swap_remove(k)
+        } else {
+            pool.swap_remove(k)
+        };
+        (ctxs.swap_remove(x.ctx), Some(x.state))
+    }
+
+    /// One priced candidate: its print re-read in permissive's own measure (cached by print).
+    fn cand(
+        &self,
+        ctx: usize,
+        state: Ex,
+        birth: usize,
+        ctxs: &[SimplifyCtx],
+        pctx: &SimplifyCtx,
+        prices: &mut FxHashMap<Vec<String>, Option<u64>>,
+    ) -> Cand {
+        let toks = self.print_prefix(&state, &ctxs[ctx]);
+        let price = *prices.entry(toks).or_insert_with_key(|t| {
+            self.certified_reading(t, RuleMode::Permissive, RuleMode::Permissive, pctx)
+                .map(|(_, mu)| mu)
+        });
+        let long = crate::ac::expr::snap_lossy_literals(&state).is_some();
+        Cand {
+            ctx,
+            state,
+            birth,
+            long,
+            price,
+        }
+    }
+
+    /// The default arm's states that read strictly cheaper than `threshold`, each finished
+    /// through permissive's two chains (no search) at the budget the state needs.
+    fn finish_defaults(
+        &self,
+        mut defaults: Vec<(usize, Ex, usize)>,
+        threshold: u64,
+        max_passes: usize,
+        ctxs: &mut Vec<SimplifyCtx>,
+        pctx: &SimplifyCtx,
+        prices: &mut FxHashMap<Vec<String>, Option<u64>>,
+    ) -> Vec<Cand> {
+        defaults.sort_by_key(|(_, _, b)| *b);
+        let mut out = Vec::new();
+        let mut seen: FxHashSet<Vec<String>> = FxHashSet::default();
+        for (i, d, birth) in defaults {
+            let raw = self.cand(i, d, birth, ctxs, pctx, prices);
+            if raw.price.is_none_or(|mu| mu >= threshold) {
                 continue;
             }
-            let toks = self.print_prefix(d, &ctxs[*i]);
-            if !finishing.insert(toks.clone()) {
+            let toks = self.print_prefix(&raw.state, &ctxs[i]);
+            if !seen.insert(toks.clone()) {
                 continue;
             }
             for fold in [true, false] {
@@ -1348,64 +1463,29 @@ impl Engine {
                     None,
                 );
                 if let Some(best) = best {
-                    finished.push((ctxs.len(), best));
+                    let k = ctxs.len();
                     ctxs.push(ctx);
+                    out.push(self.cand(k, best, birth, ctxs, pctx, prices));
                 }
             }
         }
-        // (price, carries a literal the fold would move, context index -- None for the input
-        // as read, state)
-        let mut best: Option<(u64, bool, Option<usize>, Ex)> = None;
-        let better = |mu: u64, long: bool, best: &Option<(u64, bool, Option<usize>, Ex)>| {
-            best.as_ref()
-                .is_none_or(|(m, l, _, _)| mu < *m || (mu == *m && *l && !long))
-        };
-        let long = |e: &Ex| crate::ac::expr::snap_lossy_literals(e).is_some();
-        let ordered = run
-            .answers
-            .iter()
-            .chain(finished.iter())
-            .chain(run.passed.iter())
-            .chain(cont.answers.iter())
-            .chain(cont.passed.iter());
-        for (i, e) in ordered {
-            let Some(mu) = price(e, &ctxs[*i]) else {
-                continue;
-            };
-            let l = long(e);
-            if better(mu, l, &best) {
-                best = Some((mu, l, Some(*i), e.clone()));
-            }
-        }
-        if let Some((read, mu)) = input {
-            let l = long(&read);
-            if better(mu, l, &best) {
-                best = Some((mu, l, None, read));
-            }
-        }
-        match best {
-            Some((_, _, Some(i), e)) => (ctxs.swap_remove(i), Some(e)),
-            Some((_, _, None, read)) => (pctx, Some(read)),
-            None => {
-                let (i, e) = run.all().next().cloned().expect("an arm parsed");
-                (ctxs.swap_remove(i), Some(e))
-            }
-        }
+        out
     }
 
-    /// The three permissive arms on `tokens` at `budget`: each arm's context is pushed onto
-    /// `ctxs`; the two fold disciplines (folded first) record their answers, the states
-    /// they can end on under a smaller budget and their fixpoints, the default arm the
-    /// states it can end on (finished only by the selection, see
-    /// [`Engine::ac_simplify_ex_permissive`]).
+    /// The three arms on `tokens` at `budget`, each arm's context pushed onto `ctxs`: the two
+    /// fold disciplines' states (folded first, each arm's answer first) with the smallest
+    /// budget reaching each, the indices of their fixpoints among them, and the default
+    /// arm's states likewise (finished only by the selection).
+    #[allow(clippy::type_complexity)]
     fn permissive_arms(
         &self,
         tokens: &[String],
         max_passes: usize,
         budget: usize,
         ctxs: &mut Vec<SimplifyCtx>,
-        run: &mut PermissiveRun,
-    ) {
+    ) -> (Vec<(usize, Ex, usize)>, Vec<usize>, Vec<(usize, Ex, usize)>) {
+        let mut perm = Vec::new();
+        let mut fixes = Vec::new();
         for fold in [true, false] {
             let mut trace = Vec::new();
             let (ctx, best) = self.ac_simplify_ex_fold_sup(
@@ -1417,16 +1497,17 @@ impl Engine {
                 None,
                 Some(&mut trace),
             );
-            let Some(best) = best else {
+            if best.is_none() {
                 continue;
-            };
+            }
             let i = ctxs.len();
             ctxs.push(ctx);
-            run.answers.push((i, best));
-            if let Some(fix) = trace.first() {
-                run.fixes.push((i, fix.clone()));
+            for (b, s) in trace.into_iter().rev() {
+                if b == 0 {
+                    fixes.push(perm.len());
+                }
+                perm.push((i, s, b));
             }
-            run.passed.extend(trace.into_iter().map(|s| (i, s)));
         }
         let mut trace = Vec::new();
         let (ctx, best) = self.ac_simplify_ex_fold_sup(
@@ -1438,11 +1519,13 @@ impl Engine {
             None,
             Some(&mut trace),
         );
+        let mut defaults = Vec::new();
         if best.is_some() {
             let i = ctxs.len();
             ctxs.push(ctx);
-            run.defaults.extend(trace.into_iter().map(|s| (i, s)));
+            defaults.extend(trace.into_iter().rev().map(|(b, s)| (i, s, b)));
         }
+        (perm, fixes, defaults)
     }
 
     /// `e` (a state of `ctx`) in the explicit prefix projection, spelled in the f64 number
@@ -1490,9 +1573,10 @@ impl Engine {
     /// thousands of them, while a per-probe suppression set costs microseconds.
     ///
     /// `trace`, when given, receives the states this run can END on under any smaller
-    /// budget: the fixpoint the search starts from, then every state the search accepts,
-    /// in order -- each finished exactly as the answer is (the lossy output projection).
-    /// The last one is the answer itself.
+    /// budget, each with the smallest budget that reaches it: the fixpoint the search
+    /// starts from (budget 0), then every state the search accepts, in order -- each
+    /// finished exactly as the answer is (the lossy output projection). The last one is
+    /// the answer itself.
     #[allow(clippy::too_many_arguments)]
     fn ac_simplify_ex_fold_sup(
         &self,
@@ -1502,7 +1586,7 @@ impl Engine {
         explore_budget: usize,
         fold_tr: bool,
         suppressed: Option<&FxHashSet<usize>>,
-        mut trace: Option<&mut Vec<Ex>>,
+        mut trace: Option<&mut Vec<(usize, Ex)>>,
     ) -> (SimplifyCtx, Option<Ex>) {
         // The RECALL switch is DERIVED from the mode, once, here -- every layer below
         // this line already speaks `wildcard_all` and is untouched. Deriving it (rather
@@ -1654,7 +1738,7 @@ impl Engine {
         // search licence, not an answer (H-015).
         if !wildcard_all {
             if let Some(t) = trace.as_deref_mut() {
-                t.push(current.clone());
+                t.push((0, current.clone()));
             }
         }
         if explore_budget > 0 && !wildcard_all {
@@ -1737,7 +1821,7 @@ impl Engine {
             // final fixpoint under the phase-2 pass (blanket licences -- the shipped
             // wildcard_all semantics apply to the moves exactly as to the chain).
             if let Some(t) = trace.as_deref_mut() {
-                t.push(current.clone());
+                t.push((0, current.clone()));
             }
             if explore_budget > 0 {
                 current = crate::ac::search::explore(
@@ -1763,7 +1847,10 @@ impl Engine {
         // funnel property; see `ac::expr::rejoin_reciprocals`).
         let current = if wildcard_all {
             if let Some(t) = trace {
-                let finished: Vec<Ex> = t.drain(..).map(|s| rejoin_projection(s, &cx)).collect();
+                let finished: Vec<(usize, Ex)> = t
+                    .drain(..)
+                    .map(|(b, s)| (b, rejoin_projection(s, &cx)))
+                    .collect();
                 t.extend(finished);
             }
             rejoin_projection(current, &cx)
@@ -1774,24 +1861,14 @@ impl Engine {
     }
 }
 
-/// The states one permissive run (`Engine::permissive_arms`) can end on: the permissive arms'
-/// answers, the states they pass through (fixpoints included) and their fixpoints alone, and
-/// the default arm's states.
-#[derive(Default)]
-struct PermissiveRun {
-    answers: Vec<(usize, Ex)>,
-    passed: Vec<(usize, Ex)>,
-    fixes: Vec<(usize, Ex)>,
-    defaults: Vec<(usize, Ex)>,
-}
-
-impl PermissiveRun {
-    fn all(&self) -> impl Iterator<Item = &(usize, Ex)> {
-        self.answers
-            .iter()
-            .chain(self.passed.iter())
-            .chain(self.defaults.iter())
-    }
+/// One permissive candidate: a state of `ctxs[ctx]`, the smallest budget at which its run
+/// reaches it, whether it carries a literal the fold would move, and its price as returned.
+struct Cand {
+    ctx: usize,
+    state: Ex,
+    birth: usize,
+    long: bool,
+    price: Option<u64>,
 }
 
 /// How many times permissive's literal fold moves a candidate's long exact literals to their
