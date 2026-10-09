@@ -27,6 +27,17 @@ CAPPED_WAS_CHEAPER = (
     'x_0 6.713754626181707 3 5.337106214048569 0.13276475085596478')
 
 
+# An srbf model prediction whose answer printed three long exact literals: the literal fold's snap
+# also moved the quotient 1/25.06292563505454 (printed as a division by that decimal) and priced
+# above the answer, so the long literals stayed.
+LONG_LITERALS = (
+    '* * * + 73.28791873543142 / 25.06292563505454 * + * 1.492977639224719 x_0 2.5256399783052492 - * '
+    '14.011396415112785 pow - 61.63956669282371 * 0.1455719758770501 x_1 2 45.543305224130656 - * '
+    '0.34297154377990881 x_1 32.08204116683307 - * 0.0035161757418101093 x_2 30.051038677525383 + * '
+    '71.56983527183912 pow - -1.0071100795467551 / 85.56674849240724 + * 2.6695843822917458 pow - * '
+    '0.2328169177857142 x_0 7.0954233514485554 3 3.942135750552436 3 61.35246143410111')
+
+
 @pytest.fixture(scope='module')
 def engine() -> SimpliPyEngine:
     return SimpliPyEngine.load('acj-5-4-llm', install=True)
@@ -51,7 +62,15 @@ def test_more_budget_never_ends_costlier(engine) -> None:
     assert prices[-1] == min(prices) < prices[0]
 
 
-@pytest.mark.parametrize('expr', PRICIER_THAN_INPUT + [CAPPED_WAS_CHEAPER])
+def test_the_answer_prints_no_literal_beyond_float_precision(engine) -> None:
+    t = LONG_LITERALS.split()
+    answer = engine.simplify(t, mode='permissive')
+    digits = [x.lstrip('-').replace('.', '').strip('0') for x in answer if x.lstrip('-').replace('.', '').isdigit()]
+    assert max(map(len, digits)) <= 17, answer
+    assert price(engine, answer) < price(engine, t)
+
+
+@pytest.mark.parametrize('expr', PRICIER_THAN_INPUT + [CAPPED_WAS_CHEAPER, LONG_LITERALS])
 def test_the_answer_is_a_fixpoint(engine, expr) -> None:
     once = engine.simplify(expr.split(), mode='permissive')
     assert engine.simplify(once, mode='permissive') == once

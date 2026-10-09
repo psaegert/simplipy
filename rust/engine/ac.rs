@@ -1252,8 +1252,9 @@ impl Engine {
     /// candidates a run capped there has, and continues it as that run would: THE PERMISSIVE
     /// LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03) moves its long
     /// exact literals to their floats and runs the three arms again at the same budget
-    /// (their states join, each at its own smallest budget, and so does the moved state
-    /// itself, read in permissive), up to [`LITERAL_FOLD_ROUNDS`] rounds. The answer is the cheapest of these winners. So every capped run's answer is
+    /// (their states join, each at its own smallest budget, and so do the moved state itself
+    /// and the winner with only its long-printed literals moved, both read in permissive), up
+    /// to [`LITERAL_FOLD_ROUNDS`] rounds. The answer is the cheapest of these winners. So every capped run's answer is
     /// among them, and by construction the answer never prices above the input, never above
     /// the answer with the search off, and never above the answer under any smaller budget.
     ///
@@ -1309,6 +1310,9 @@ impl Engine {
         // Continuations, by the snapped print they start from: the range of `conts` they fill.
         let mut conts: Vec<Cand> = Vec::new();
         let mut runs: FxHashMap<Vec<String>, (usize, usize)> = FxHashMap::default();
+        // A winner with only its long-printed literals moved, read in permissive: by print, its
+        // index in `conts`.
+        let mut reads: FxHashMap<Vec<String>, Option<usize>> = FxHashMap::default();
         let mut budgets: std::collections::BTreeSet<usize> = pool.iter().map(|c| c.birth).collect();
         let mut done: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         // (price, long, which: (in conts?, index))
@@ -1348,6 +1352,12 @@ impl Engine {
                     break;
                 };
                 let toks = self.print_prefix(&snapped, &ctxs[x.ctx]);
+                // Its long-printed literals moved alone, too: the float cap prices each like its
+                // float, where the snap's ground fold and its moved quotients (`1/25.06..`,
+                // printed as a division by that decimal) can price above the winner.
+                let alone = crate::ac::expr::snap_long_literals(&x.state)
+                    .map(|s| self.print_prefix(&s, &ctxs[x.ctx]))
+                    .filter(|t| *t != toks);
                 let (lo, hi) = match runs.get(&toks) {
                     Some(r) => *r,
                     None => {
@@ -1388,7 +1398,30 @@ impl Engine {
                         (lo, hi)
                     }
                 };
+                let alone = alone.and_then(|t| match reads.get(&t) {
+                    Some(k) => *k,
+                    None => {
+                        let rctx = SimplifyCtx::new(self.tokens.len());
+                        let k = self
+                            .certified_reading(
+                                &t,
+                                RuleMode::Permissive,
+                                RuleMode::Permissive,
+                                &rctx,
+                            )
+                            .map(|(read, _)| {
+                                let i = ctxs.len();
+                                ctxs.push(rctx);
+                                let cand = self.cand(i, read, 0, &ctxs, &pctx, &mut prices);
+                                conts.push(cand);
+                                conts.len() - 1
+                            });
+                        reads.insert(t, k);
+                        k
+                    }
+                });
                 let fresh: Vec<(bool, usize)> = (lo..hi)
+                    .chain(alone)
                     .filter(|&k| conts[k].birth <= c)
                     .map(|k| (true, k))
                     .collect();
