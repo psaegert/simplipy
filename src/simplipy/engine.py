@@ -250,6 +250,14 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
 
+#: The WORK BUDGET of each search ``simplify(.., mode='permissive')`` runs when ``work`` is not
+#: given. Its units are deterministic -- one step of the AC matcher or one canonical-constructor
+#: call -- so a budget cuts the same walk at the same place on every machine and under any load. A
+#: search that spends it stops as if its descent cap had bound and returns its best answer so far.
+#: ``work=None`` lifts the bound: the search runs until a round finds nothing, the default of
+#: ``f64`` and ``real``, which stay fast without one.
+DEFAULT_WORK: int | None = 10_000
+
 
 class _ModeMeta(EnumMeta):
     """Serves the retired ``SOUND``/``LOSSY`` spellings with a deprecation notice.
@@ -1944,7 +1952,8 @@ class SimpliPyEngine:
             *,
             max_passes: int | None = None,
             mode: Mode | str = Mode.f64,
-            effort: int | None = None) -> str | list[str] | tuple[str, ...] | np.ndarray:
+            effort: int | None = None,
+            work: int | None | str = 'default') -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
         The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
@@ -2043,6 +2052,14 @@ class SimpliPyEngine:
             search-off answer), termination
             (well-founded ordering, independent of the budget) and deterministic
             output.
+        work : int, None or 'default', optional
+            The WORK BUDGET of each search, in deterministic units (one AC-matcher step or
+            one canonical-constructor call). ``'default'`` is ``DEFAULT_WORK`` in
+            ``permissive`` and no bound in ``f64`` and ``real``; ``None`` lifts the bound (the
+            search runs until a round finds nothing). A search that spends its budget returns
+            its best answer so far, and the guarantees above hold at every budget;
+            ``permissive``'s three bounds hold among calls with the same ``work``. Under a
+            budget, ``permissive`` continues its literal fold without the search.
 
         Returns
         -------
@@ -2081,6 +2098,21 @@ class SimpliPyEngine:
                 raise ValueError(f"effort must be non-negative, got {effort}")
             if effort > 2 ** 63 - 1:
                 effort = None  # beyond the index range no cap binds: the uncapped search
+        if isinstance(work, str):
+            if work != 'default':
+                raise ValueError(f"work must be None, an int >= 0 or 'default', not {work!r}")
+        elif work is not None:
+            if isinstance(work, bool):
+                raise TypeError(f"work must be None or an int >= 0, not bool ({work!r})")
+            try:
+                work = work.__index__()
+            except AttributeError:
+                raise TypeError(
+                    f"work must be None or an int >= 0, not {type(work).__name__} ({work!r})") from None
+            if work < 0:
+                raise ValueError(f"work must be non-negative, got {work}")
+            if work > 2 ** 64 - 1:
+                work = None  # beyond the counter's range no budget binds
         # A STRING mode must coerce, never silently compare unequal to the enum:
         # `mode='lossy'` used to run the default because `'lossy' == Mode.LOSSY` was False
         # (audit Tier-2, 2026-08-03). Accept the enum, its names (any case), and its
@@ -2103,6 +2135,9 @@ class SimpliPyEngine:
             raise TypeError(
                 f"mode must be a simplipy.Mode or one of "
                 f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
+
+        if work == 'default':
+            work = DEFAULT_WORK if mode is Mode.permissive else None
 
         # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds
         # HERE, on the mode's first use -- once, lock-guarded, announced. Under the
@@ -2155,9 +2190,9 @@ class SimpliPyEngine:
         # for it by name, so the two output paths cannot end up serving different sets.
         rule_mode = _RULE_MODE[mode]
         if form == 'infix':
-            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort)
+            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort, work)
 
-        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort)
+        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort, work)
 
         if isinstance(expression, str):
             # The old infix converter cannot render the tagged form; a str input asking for

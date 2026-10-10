@@ -118,6 +118,13 @@ pub fn explore(
     if budget == 0 {
         return fix;
     }
+    // THE WORK BUDGET (`ac::work`): the search may spend `work::search_budget()` units --
+    // matcher steps and constructor calls -- and stops when they are spent, exactly as when the
+    // descent cap binds: it returns the best state so far. A descent the ceiling cut short is
+    // never accepted. The units are a function of the walk alone, so the cut falls at the same
+    // place under every `budget`: a run capped at `k` descents is still the same walk cut short,
+    // and permissive's selection keeps its three bounds (docs/formal.md).
+    let _ceiling = super::work::limit(super::work::search_budget());
     let descend = |mut cur: Ex| -> Ex {
         for _ in 0..max_passes.max(1) {
             let next = rewrite_pass(cur.clone(), pass);
@@ -145,7 +152,7 @@ pub fn explore(
         let mut sites: Vec<(Vec<usize>, Ex)> = Vec::new();
         site_list(&state, pass.cx, &mut Vec::new(), &mut sites);
         for (i, (path, moved)) in sites.into_iter().enumerate() {
-            if spent >= budget {
+            if spent >= budget || super::work::over() {
                 return best;
             }
             if spent >= BFS_PREFIX {
@@ -159,6 +166,9 @@ pub fn explore(
             }
             spent += 1;
             let cur = descend(rebuild(&state, &path, moved, pass.cx));
+            if super::work::over() {
+                return best;
+            }
             if ordered_below(&cur, &best, pass.cx.view) {
                 best = cur.clone();
                 if let Some(t) = trace.as_deref_mut() {
@@ -190,12 +200,15 @@ pub fn explore(
         skip = 0;
         let mut accepted: Option<(Ex, Vec<usize>)> = None;
         for off in 0..round {
-            if spent >= budget {
+            if spent >= budget || super::work::over() {
                 return best;
             }
             spent += 1;
             let (path, moved) = &sites[(start + off) % n];
             let cur = descend(rebuild(&best, path, moved.clone(), pass.cx));
+            if super::work::over() {
+                return best;
+            }
             if ordered_below(&cur, &best, pass.cx.view) {
                 accepted = Some((cur, path.clone()));
                 break;

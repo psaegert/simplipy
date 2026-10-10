@@ -1361,8 +1361,19 @@ impl Engine {
                 let (lo, hi) = match runs.get(&toks) {
                     Some(r) => *r,
                     None => {
+                        // Under a work budget the continuation re-reads the moved winner
+                        // through the three chains with the search OFF: its states are all born
+                        // at budget 0, so every capped run's continuation is still among them,
+                        // and its cost is the chains' (re-searching a state that differs from
+                        // the searched one only in its literals was most of the selection's
+                        // time). `work=None` keeps the searching continuation.
+                        let cont_budget = if crate::ac::work::search_budget() == u64::MAX {
+                            explore_budget
+                        } else {
+                            0
+                        };
                         let (perm2, _, defaults2) =
-                            self.permissive_arms(&toks, max_passes, explore_budget, &mut ctxs);
+                            self.permissive_arms(&toks, max_passes, cont_budget, &mut ctxs);
                         let lo = conts.len();
                         for (i, e, b) in perm2 {
                             let cand = self.cand(i, e, b, &ctxs, &pctx, &mut prices);

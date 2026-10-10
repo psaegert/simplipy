@@ -2394,6 +2394,7 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 ///   terms, which all collapse into ONE `Const` absorbing the rational accumulator
 ///   (`c1 + c2 + 5 = c3`, the contract's forall-exists direction).
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
+    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // Flatten (Flat) + literal scan.
     let mut lits: Vec<Rat> = Vec::new();
@@ -3003,6 +3004,7 @@ fn orientation_coeff(t: &Ex, view: &TokenView) -> Rat {
 /// * `Const` independence as in `add`; bare `Const` factors collapse into ONE `Const`, absorbing
 ///   a NONZERO rational coefficient (`c * r = c'`, forall-exists; 0 stays outside).
 pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
+    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut nums: Vec<Rat> = Vec::new();
     let mut coeff_overflow: Vec<Ex> = Vec::new();
@@ -4575,6 +4577,7 @@ fn rebuild_factor(base: Ex, sym: Option<Ex>, r: Rat, cx: &Cx) -> Ex {
 /// * `(a*b)^n` for INTEGER n distributes over the factors (TOTAL as extended-real evaluations;
 ///   for non-integer exponents `(ab)^(1/2) != a^(1/2) b^(1/2)` on `a, b < 0`).
 pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
+    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
     if let Ex::Num(e) = &exp {
         if e.is_zero() {
@@ -5315,6 +5318,7 @@ fn prints_long(r: &Rat) -> bool {
 }
 
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
+    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
     if let Some(folded) = f64_fold(op, &args, cx) {
         return folded;

@@ -112,6 +112,7 @@ fn ac_simplify_impl(
     mode: engine::RuleMode,
     form: engine::AcForm,
     explore_budget: usize,
+    work_budget: Option<u64>,
 ) -> PyResult<Py<PyList>> {
     // The documented empty-input contract: `simplify([]) == []` (the one valid
     // case `is_valid` rejects). Restored explicitly after the malformed-input
@@ -124,6 +125,7 @@ fn ac_simplify_impl(
     // BY ROUTING, not by trusting the explore path's early return (D39 effort=0).
     let out = py
         .detach(|| {
+            let _work = crate::ac::work::search_budget_scope(work_budget);
             if explore_budget > 0 {
                 inner.ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
             } else {
@@ -143,6 +145,7 @@ fn ac_simplify_infix_impl(
     max_passes: usize,
     mode: engine::RuleMode,
     explore_budget: usize,
+    work_budget: Option<u64>,
 ) -> PyResult<String> {
     // Empty-input contract, as in `ac_simplify` (H-003): the empty rendering.
     if tokens.is_empty() {
@@ -151,6 +154,7 @@ fn ac_simplify_infix_impl(
     ensure_ac_well_formed(inner, &tokens)?;
     // Same routing doctrine as `ac_simplify_impl`: budget 0 is the chain's own entry.
     py.detach(|| {
+        let _work = crate::ac::work::search_budget_scope(work_budget);
         if explore_budget > 0 {
             inner.ac_simplify_infix_explore(&tokens, max_passes, mode, explore_budget)
         } else {
@@ -460,6 +464,7 @@ impl PyEngine {
             engine::RuleMode::from_wildcard_all(wildcard_all),
             parse_ac_form(form)?,
             0,
+            None,
         )
     }
 
@@ -474,7 +479,9 @@ impl PyEngine {
     /// `explore_budget` is the D39 B7 wire: the public `effort=` rides this parameter
     /// (see [`explore_budget_of`]: `None` explores until a round finds nothing). 0 (the
     /// default here) routes to the chain's own entry, byte-identical behaviour.
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged", explore_budget=Some(0)))]
+    /// `work_budget` bounds each search's work in `ac::work` units (`None`: unbounded).
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged", explore_budget=Some(0), work_budget=None))]
+    #[allow(clippy::too_many_arguments)]
     fn ac_simplify_in_mode(
         &self,
         py: Python<'_>,
@@ -483,6 +490,7 @@ impl PyEngine {
         rule_mode: &str,
         form: &str,
         explore_budget: Option<usize>,
+        work_budget: Option<u64>,
     ) -> PyResult<Py<PyList>> {
         ac_simplify_impl(
             &self.inner,
@@ -492,6 +500,7 @@ impl PyEngine {
             parse_rule_mode(rule_mode)?,
             parse_ac_form(form)?,
             explore_budget_of(explore_budget),
+            work_budget,
         )
     }
 
@@ -596,12 +605,13 @@ impl PyEngine {
             max_passes,
             engine::RuleMode::from_wildcard_all(wildcard_all),
             0,
+            None,
         )
     }
 
     /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`,
     /// whose `explore_budget` this reads the same way).
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", explore_budget=Some(0)))]
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", explore_budget=Some(0), work_budget=None))]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,
@@ -609,6 +619,7 @@ impl PyEngine {
         max_passes: usize,
         rule_mode: &str,
         explore_budget: Option<usize>,
+        work_budget: Option<u64>,
     ) -> PyResult<String> {
         ac_simplify_infix_impl(
             &self.inner,
@@ -617,6 +628,7 @@ impl PyEngine {
             max_passes,
             parse_rule_mode(rule_mode)?,
             explore_budget_of(explore_budget),
+            work_budget,
         )
     }
 

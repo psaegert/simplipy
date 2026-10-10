@@ -595,6 +595,11 @@ fn exact_index_enabled() -> bool {
 }
 
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
+    // Past an armed work ceiling no rule is tried: the descent in progress settles quickly
+    // and the search discards it (`ac::search::explore`).
+    if super::work::over() {
+        return None;
+    }
     let node_sig = atom_sig(e, p.cx.view);
     // Lazy per-visit complexity of the subject (first candidate that needs it pays it).
     let node_mu_cell: std::cell::Cell<Option<u64>> = std::cell::Cell::new(None);

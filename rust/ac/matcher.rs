@@ -322,6 +322,12 @@ fn try_assign(
     cx: &MCx,
     k: &mut dyn FnMut(&mut Binds, &[bool]) -> bool,
 ) -> bool {
+    // A matcher step is a unit of the search's work budget (`ac::work`); past an armed
+    // ceiling the enumeration stops (the search discards the descent it was part of).
+    super::work::tick(1);
+    if super::work::over() {
+        return false;
+    }
     if at == order.len() {
         // All pattern elements placed. In nested (full-cover) mode every subject element must
         // be consumed; in root mode leftovers become the remainder.
