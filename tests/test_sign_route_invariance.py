@@ -119,3 +119,19 @@ def test_a_sum_over_its_negation_reads_the_same_either_way(eng, mode):
     b = list(eng.simplify(['/', '-', '3', 'x1', '-', 'x1', '3'], mode=mode, effort=0))
     assert a == b
     assert list(eng.simplify(a, mode=mode, effort=0)) == a
+
+
+# A UNIT coefficient decides a key's orientation too (srbf prediction 117892, variable renamed).
+# A term `k * x1^-1.5 * (-a - b)` keeps the negated sum while |k| != 1 (it ties with `-k` and the
+# positive sum, and the tie goes to the positive coefficient). Joined at coefficient 1, the key was
+# returned as it was, although with a free sign `-(a + b)` is cheaper: the sum printed
+# `-(a + b) / x1^1.5` and re-read with the sign on its coefficient, and a second call changed the
+# answer.
+PRED_117892 = ('exp * rootn x1 2 * 0.9156774815674904 - x1 * x1 / - / x1 + * 415.87771193151247 x1 + '
+               '* -725.5868903908405 x1 - * 1442.938773405699 atan pow x1 3 x1 -33.3888943640316 '
+               'pow x1 3').split()
+
+
+def test_a_unit_coefficient_join_orients_the_key(eng):
+    answer = list(eng.simplify(PRED_117892, mode='permissive'))
+    assert list(eng.simplify(answer, mode='permissive')) == answer

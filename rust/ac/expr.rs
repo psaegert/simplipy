@@ -2098,6 +2098,31 @@ pub(crate) fn odd_fun(view: &TokenView, f: Tok) -> bool {
     ODD.iter().any(|s| view.tok_is(f, s))
 }
 
+/// Does a unit-coefficient join of `key` have to go through `mul()`? Only a plain product
+/// (no literal, infinity or Const member: those carry or eat the sign themselves) or a lone
+/// factor that holds a sign-trade site. The shape screen keeps `sign_trade_flip` off the keys
+/// that cannot hold one.
+fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
+    let may_be_site = |f: &Ex| match f {
+        Ex::Add(_) => true,
+        Ex::Pow(b, _) => matches!(**b, Ex::Add(_)),
+        Ex::Fun(_, args) => matches!(args.first(), Some(Ex::Add(_) | Ex::Num(_))),
+        _ => false,
+    };
+    match key {
+        Ex::Mul(v) => {
+            !v.iter().any(|f| {
+                matches!(f, Ex::Num(_) | Ex::PosInf | Ex::NegInf | Ex::Const) || f.contains_const()
+            }) && v
+                .iter()
+                .any(|f| may_be_site(f) && is_sign_trade_site(f, cx))
+        }
+        // A lone sum is `add()`'s to orient (`primitive_sum`), never a product's.
+        Ex::Add(_) => false,
+        k => may_be_site(k) && !k.contains_const() && is_sign_trade_site(k, cx),
+    }
+}
+
 fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
     // An ODD function of a LITERAL argument owns any adjacent SIGN (owner ruling
     // 2026-08-08; I4): `-1 * sin(2)` joins as `sin(-2)`, and `-5 * sin(2)` as
@@ -2110,6 +2135,27 @@ fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
     // collector-built states disagreed (`-5 * sin(2)` vs `5 * sin(-2)`: two
     // fixpoints for one value, construction-history dependence).
     if c.is_one() {
+        // A UNIT coefficient still decides the orientation of the key's sign-trade sites:
+        // the sign of a coefficient of magnitude 1 is free while any other one costs, so a
+        // key oriented for its old coefficient (`k * (-a - b) * x` keeps the negated sum: at
+        // |k| != 1 it ties with `-k * (a + b) * x`, and the tie goes to the positive
+        // coefficient) is not the cheapest spelling once the coefficient is 1 -- `mul()`
+        // reads `(-a - b) * x` as `-(a + b) * x`. Returned raw, the term printed
+        // `-(a + b)/..` inside the sum and re-read with the sign on its coefficient (srbf
+        // prediction 117892, permissive). Such a key takes the full assembly; a key without
+        // a site cannot trade and is returned as it is.
+        if unit_join_trades(&key, cx) {
+            let items = match key {
+                Ex::Mul(v) => v,
+                k => vec![k],
+            };
+            let placed = mul(items, cx);
+            debug_assert!(
+                !matches!(placed, Ex::Add(_)),
+                "term_join produced a bare Add term: {placed:?}"
+            );
+            return placed;
+        }
         return key;
     }
     // A bare `Const` FACTOR absorbs any rational coefficient (`c * C` refits to `C'`, the
