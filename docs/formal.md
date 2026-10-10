@@ -93,24 +93,22 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   an infinity that absorbs a term only on re-read (`x1*(inf - c/(1e400*x1*x2))` becomes
   `inf*x1`); a like term whose coefficient is itself a refused two-member partition, whose
   coefficient and key can split differently on re-read (also on main at 128 bits); and
-  odd-function sign extraction. A class independent of literal size: of srbf's 125,127 model
-  predictions that simplify without error (f64), 24 effort-0 answers change on re-read (main 28), none with
-  a literal beyond $10^{\pm 300}$. Each but one is a long product (one is a difference of them;
-  41 to 84 items in the list answer)
-  that re-reads to the same items in another order (18, one of them cheaper) or to another form
-  of equal length and price (6); none of them round-trips (L6a). Each holds a product with
-  more than six sign-trade sites, whose placement the engine keeps as it enters (§3), so the
-  re-read, entering with the printed placement, can end elsewhere. And at a
+  odd-function sign extraction. A class independent of literal size is closed: a product with
+  more than six sign-trade sites kept the placement it entered with, two sums that are each
+  other's negation stayed apart, and a join whose coefficient became 1 kept its key's signs, so
+  a state and the parse of its own print could differ (24 of srbf's 125,127 model predictions
+  changed on re-read in f64 at effort 0, 26 uncapped). Each is now decided by the orbit (§3), and
+  no f64 or real answer changes on a second call on flash-ansr's 129,490 T8.1 draws, srbf's
+  ground truths or its predictions at the default effort. The sign placement keeps the entry
+  spelling where an orientation would collide with another factor's base (§3). And at a
   refusal the grouping of the input can decide which inner products fold:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
-  (canonicity across spellings, not idempotence; both pinned in tests). Uncapped (the default;
-  L6), the exploration phase can reach states of those classes that the chain alone never
-  visits. On srbf's predictions (f64 and real) 26 answers change on a second call: 23 of the 24
-  above, and 3 long products (57 to 70 items) that only the search reaches and that re-read at
-  equal price with their factors in another order or sign (review fuzz: an unmerged
-  `3e-310` coefficient that re-reads in another order; a `<constant>` absorbed on re-read). In `permissive` the
-  selection among three arms adds a class of its own (L6). A capped search can stop
-  between two improvements, which a second call continues.
+  (canonicity across spellings, not idempotence; both pinned in tests). Uncapped (the default in
+  f64 and real; L6), the exploration phase can reach states of the literal classes above that the
+  chain alone never visits (review fuzz: an unmerged `3e-310` coefficient that re-reads in another
+  order; a `<constant>` absorbed on re-read). In `permissive` the selection among three arms adds
+  a class of its own (L6). A capped search, or one its work budget stops, can stop between two
+  improvements, which a second call continues.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
@@ -132,7 +130,11 @@ round-trip (serialize → parse → canon) onto the *same state*, debug-asserted
 `simplify` call and exercised by the full suite and the corpus gates. The one measured
 divergence class (the odd-function literal-sign pair: `mul()`-built vs collector-built
 spellings of one value) was removed by the shared sign-trade owner; zero
-specimens remain. A second measured class (2026-08-24) sat not in `canon()` but in the
+specimens remain. The instrument itself printed each state with the mode's certificate
+context, a spelling no caller receives (every caller prints with the bare context), which
+raised false alarms and hid three real classes (the closed I3 class above); it now prints as
+the callers do, and in a debug build it holds on every state of srbf's ground truths and
+predictions in every mode and of 20,000 of flash-ansr's T8.1 draws. A second measured class (2026-08-24) sat not in `canon()` but in the
 *pricing instrument*: `complexity()` parsed fold-free while the `f64`/`permissive` chains
 parse fold-at-parse, so on 10 of 65,536 benchmark rows the instrument priced a
 different state than the chain descended from and $\mu(\mathrm{simplify}(e)) \le
@@ -203,9 +205,15 @@ $m \ge 3$, and the eight odd functions — because $f(-S) = -f(S)$ is total on t
 carriers (negative odd exponents are NOT carriers: the pole trilemma). The
 sign-placement owner (`ac::expr::sign_place`, shared by `mul()`'s final assembly and
 `term_join`'s negative joins so the priced spelling is always the built spelling)
-materializes every reachable placement and keeps the $\mu$-argmin; beyond six sign-trade
-sites it materializes none and keeps the placement the product entered with. The decision is
-three-tier:
+materializes every reachable placement and keeps the $\mu$-argmin. Beyond six sign-trade sites
+it finds the argmin without materializing the orbit: a placement's price is the sum of per-site
+prices, coupled only by the parity of the flips, so the cheapest placement is each site's
+cheaper orientation, with the one site whose switch costs least switched where the parity
+differs; its exact ties resolve by an order that is a function of the orbit, never of the entry
+spelling. It keeps the entry placement only where an orientation would collide with another
+factor's base or a negation overflows. Two sums that are each other's negation flip together and
+collect (`(x - a)*(a - x)` is `-(x - a)^2`), and a join whose coefficient becomes 1 re-places its
+key's signs (`term_join`). The decision is three-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
 2. an exact $\mu$ tie at a SIGN-TRADE site goes to the structurally distinguished
@@ -541,10 +549,10 @@ holds ($\mathrm{canon}(\mathrm{parse}(\mathrm{serialize}(t))) = t$, the `stable(
 assertion), `to_prefix` has a left inverse and is therefore injective — two states
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
-debug, so every state reached by the tests and the mini-mines satisfies it). It fails on the
-documented I3 residuals: at literals that stay leaves, and on 24 of srbf's 125,127 model
-predictions (main 28), long products that re-read differently. These residuals scope the
-cache guarantee too.
+debug, so every state reached by the tests and the mini-mines satisfies it, and so does every
+state of srbf's ground truths and model predictions in every mode and of 20,000 of flash-ansr's
+T8.1 draws). It fails on the documented I3 residuals at literals that stay leaves. These
+residuals scope the cache guarantee too.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass
 fixpoint within budget ($\mathrm{pass}(t_k) = t_k$ — by T6 the fixpoint *exists* and is
@@ -565,10 +573,10 @@ search proposes the same candidates in the same order, which descend to the same
 and are refused again. Two further premises: the step cap does not bind (a capped walk
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
-valleys, and the re-run then continues it [EMPIRICAL: srbf's 125,127 model predictions
-change on a second call 2,701 times in `f64` at cap 4, the former default, 2,673 of them to a
-cheaper form; uncapped, 26 times, at equal price but one: 23 of the effort-0 class of I3 and 3
-search-reached members of it; `real` 2,703 and the same 26]. Where
+valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
+srbf's 125,127 model predictions change on a second call 2,701 times in `f64` at cap 4, the former
+default, 2,673 of them to a cheaper form; uncapped, never, in `f64` and `real`, on these and on
+srbf's ground truths and flash-ansr's T8.1 draws]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
 `permissive` returns the cheapest of its candidates, each priced by re-reading what it prints in
@@ -577,16 +585,20 @@ budget (each search's trace, with the smallest budget reaching each state), the 
 states finished
 in `permissive` where they read below a budget-independent threshold (the cheapest of the
 `permissive` fixpoints and the input), the literal-fold continuation of the winner a run capped
-at each such budget would have (where it carries long exact literals), and the input as read. **Proposition (permissive selection)**
+at each such budget would have (where it carries long exact literals; the winner with only its
+literals that print beyond float precision moved joins it), and the input as read. Under a work
+budget the continuations run without the search, so every continuation state is born at budget
+0. **Proposition (permissive selection)**
 [THEOREM, given the trace]: its answer prices at most its input, at most its search-off answer,
-and at most its answer under any smaller budget. *Proof.* The input is a candidate; a run capped
-at $k$ is the same walk cut short, so its candidates, its winner and that winner's continuation
-(the same walk cut short again) are among the uncapped run's; the answer is the cheapest of a
-superset. $\square$ Its winner is a valley of its own arm only: the re-run's other arms,
-started from the winner, can descend further, so L6 does not cover the selection [EMPIRICAL: 32
-second-call changes on flash-ansr's 129,490 T8.1 draws, 33 on srbf's 125,127 predictions; the
-three bounds hold on every input of both sets and srbf's ground truths, smaller budgets checked
-at efforts 0, 1 and 4].
+and at most its answer under any smaller budget, among calls with the same work budget. *Proof.*
+The input is a candidate; a run capped at $k$ is the same walk cut short (a work budget cuts each
+search at the same place in both runs), so its candidates, its winner and that winner's
+continuation (the same walk cut short again) are among the uncapped run's; the answer is the
+cheapest of a superset. $\square$ Its winner is a valley of its own arm only: the re-run's other
+arms, started from the winner, can descend further, and a search the work budget stopped can
+continue, so L6 does not cover the selection [EMPIRICAL: 67 second-call changes on flash-ansr's
+129,490 T8.1 draws, 1,359 on srbf's 125,127 predictions; the three bounds hold on every input of
+both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:

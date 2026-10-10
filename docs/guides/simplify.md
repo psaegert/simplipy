@@ -105,21 +105,27 @@ tolerance enters.
 
 The budget is the `effort` parameter. The default, `effort=None`
 (`simplipy.DEFAULT_EFFORT`), searches until a round finds nothing, so a second call
-has nothing left to continue (the residual classes follow below). `simplify(expr, effort=64)` caps each search at 64 candidate
+has nothing left to continue. `simplify(expr, effort=64)` caps each search at 64 candidate
 descents (`permissive` runs several per call), and `effort=0` never enters the phase — byte-identical to the chain alone. Pass
 `effort=0` on throughput-critical paths.
+
+The second knob is `work`: the budget of each search in deterministic units, one step of the
+matcher or one canonical-constructor call, so a budget cuts the same walk at the same place on
+every machine and under any load. A search that spends its budget returns its best answer so far.
+`permissive`, whose selection runs many searches per call, defaults to
+`simplipy.DEFAULT_WORK = 10_000` units (about 12 ms per search); `f64` and `real` run without a
+budget by default. `work=None` lifts it. With these defaults no call on flash-ansr's T8.1 draws,
+srbf's ground truths or its model predictions takes more than 1 s in any mode, and under 1% take
+more than 0.1 s (0.14.7: up to 18.1% and 1.49%, `permissive` on the predictions).
 
 A cap counts every candidate tried, refused ones included, over the whole expression, so
 the cap a search needs grows with the expression: one of srbf's model predictions needs 8
 candidates to reach its uncapped answer, a sum of two copies of it 13, of three 19 and of
 eight 39, so no fixed cap is enough. With the old default cap of 4, 2,701 of srbf's 125,127
 model predictions change on a second call in `f64` (2,673 to a cheaper form), because the
-first call stopped between two improvements. Uncapped, 26 do, at equal price but one: 23 also
-change with the search off (long expressions, all but one of them products, whose factors
-re-read in another order or sign), and 3 are long products of that kind that only the search
-reaches — the search can reach a state of the residual classes of `docs/formal.md` (I3) that
-the chain alone never visits. No answer is costlier than at cap 4 and 2,888 are cheaper; in
-`real`, 2,703 change at cap 4 and the same 26 uncapped.
+first call stopped between two improvements. Uncapped, none does in `f64` or `real`, on any of
+the three sets. No answer is costlier than at cap 4 and 2,888 are cheaper; in `real`, 2,703
+change at cap 4.
 The search runs in two phases. For its first 8 candidates it is the capped default's
 breadth-first search: every candidate of every accepted state, against the best so far; on
 srbf's predictions that alone gives the final answer on 124,572 of the 125,127 in `f64` and
@@ -139,18 +145,20 @@ cheapest of its candidates, each priced as it is returned — what it prints, re
 `permissive`'s own measure: every state its two fold disciplines can end on under some budget
 (a capped run is the same walk cut short), the `f64` arm's states finished in `permissive`
 where they read cheaper than `permissive`'s own fixpoints and the input, the literal-fold
-continuation of every capped run's winner that carries long exact literals, and the input as
-read. So its answer never prices above the input, above its answer with the search off, or
-above its answer at a smaller `effort`; on flash-ansr's T8.1 draws, srbf's ground truths and
-its predictions none does (smaller efforts checked: 0, 1 and 4). A second call can still change
-it through another arm: 32 of the 129,490 T8.1 answers and 33 of srbf's 125,127 predictions
-change on a second call (20 and 22 of them to a cheaper form).
+continuation of every capped run's winner that carries long exact literals (and that winner
+with only its literals that print beyond float precision moved to their floats), and the input
+as read. So its answer never prices above the input, above its answer with the search off, or
+above its answer at a smaller `effort`, among calls with the same `work`; on flash-ansr's T8.1
+draws, srbf's ground truths and its predictions none does (efforts checked: 0, 1, 4 and the
+default). Under a work budget the literal-fold continuations run without the search. A second
+call can still change the answer, through another arm or a search the budget stopped: 67 of the
+129,490 T8.1 answers and 1,359 of srbf's 125,127 predictions change on a second call.
 
 What the search buys, on the 129,490 simplify inputs of flash-ansr's T8.1 training draws
 (output price over input price, `complexity(.., mode=m)`): in `f64` it moves the mean ratio from 0.979
 with the search off to 0.976 and lifts the strictly simplified answers from 6.0% to 9.2%, for
-about 28% more median time per call; in `permissive` from 0.960 to 0.954
-and from 21.9% to 28.2%, for about 50% more.
+about 24% more median time per call; in `permissive` from 0.960 to 0.955
+and from 21.9% to 28.0%, for about 42% more.
 
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
@@ -158,9 +166,9 @@ below it (the result is never worse than the fixpoint, hence never costlier than
 input; in `permissive` for its selection too), both
 phases move only on strict descent of a well-founded ordering
 (termination, independent of the budget), and the walk order is deterministic
-(reproducibility). Idempotence needs the search to run until a round finds nothing,
-the default: a cap can stop it between two improvements, which a second call then
-continues.
+(reproducibility; the work budget counts units, not time). Idempotence needs the search to run
+until a round finds nothing, the default of `f64` and `real`: a cap or a work budget can stop it
+between two improvements, which a second call then continues.
 
 ## Soundness modes
 
