@@ -104,6 +104,7 @@ fn explore_budget_of(effort: Option<usize>) -> usize {
 /// THE ONE simplify implementation behind the FFI. `ac_simplify` (the `wildcard_all`
 /// spelling that shipped) and `ac_simplify_in_mode` (the mode spelling) both land here,
 /// so the bool is a SPELLING of a mode and never a second mechanism beside it.
+#[allow(clippy::too_many_arguments)]
 fn ac_simplify_impl(
     inner: &engine::Engine,
     py: Python<'_>,
@@ -556,8 +557,9 @@ impl PyEngine {
     /// phase, so this entry is then byte-identical to `ac_simplify` (the ledger's
     /// effort=0 semantics). The public `effort=` API (D39 B7, wired 2026-08-24) rides
     /// the `_in_mode` entries' `explore_budget` parameter instead -- this bool-mode
-    /// entry stays as the B1 scaffolding surface its falsifier suite drives. Contracts
-    /// (empty input, malformed input, forms) exactly as `ac_simplify`.
+    /// entry stays as the B1 scaffolding surface its falsifier suite drives. It opens no work
+    /// budget, so `permissive` here runs unbounded and continues its literal fold with the
+    /// search. Contracts (empty input, malformed input, forms) exactly as `ac_simplify`.
     #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false, form="tagged", explore_budget=0))]
     fn ac_simplify_explore(
         &self,

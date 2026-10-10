@@ -243,9 +243,10 @@ DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given
 #: (D39 B7). ``None``: the search runs until a round finds nothing, so a second call
-#: returns the answer unchanged (owner, 2026-10-06). The previous default, 4, stops
-#: searches between two improvements: on srbf's 125,127 model predictions 2,701 answers
-#: change on a second call in f64 at cap 4 (26 uncapped, 23 of them also with the search off).
+#: returns the answer unchanged (owner, 2026-10-06; in ``permissive`` its work budget can
+#: stop a search, see ``DEFAULT_WORK``). The previous default, 4, stops searches between
+#: two improvements: on srbf's 125,127 model predictions 2,675 answers change on a second
+#: call in f64 at cap 4 (none uncapped).
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
@@ -1970,7 +1971,9 @@ class SimpliPyEngine:
         (finite-a.e. for sign-cancelling addition, finite-and-nonzero-a.e. for
         exponent-cancelling multiplication), and coefficient arithmetic is exact rational
         computation rather than mined rules. The output is idempotent
-        (``simplify(simplify(x)) == simplify(x)``).
+        (``simplify(simplify(x)) == simplify(x)``) when every search runs until a round finds
+        nothing, the default of ``f64`` and ``real``; in ``permissive`` a search its work budget
+        stops, or another of its arms, can continue on a second call (``effort``, ``work``).
 
         .. note::
             Pair this engine with SORT-PROMOTED rulesets (the ``2-1``/``3-2``/``4-3``
@@ -2046,15 +2049,15 @@ class SimpliPyEngine:
             endpoint lands STRICTLY below it in the serve-time reduction ordering.
             ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
             nothing, so a second call returns the answer unchanged (up to the residual
-            classes in ``docs/formal.md``, I3 and L6); an int caps each search at that
-            many candidate descents (``permissive`` runs several per call), after which
-            a second call can continue it; ``0`` never enters the phase and is
-            byte-identical to the plain chain. Every guarantee survives any budget: soundness (same
-            certificates), never-worse (strictly-below acceptance, per search:
-            ``permissive``'s selection among its searches can end costlier than its
-            search-off answer), termination
-            (well-founded ordering, independent of the budget) and deterministic
-            output.
+            classes in ``docs/formal.md``, I3 and L6, and in ``permissive`` a search its
+            work budget stopped); an int caps each search at that many candidate descents
+            (``permissive`` runs several per call), after which a second call can continue
+            it; ``0`` never enters the phase and is byte-identical to the plain chain.
+            Every guarantee survives any budget: soundness (same certificates), never-worse
+            (strictly-below acceptance; in ``permissive`` its selection too, never above its
+            input, its search-off answer or its answer at a smaller ``effort``, among calls
+            with the same ``work``), termination (well-founded ordering, independent of the
+            budget) and deterministic output.
         work : int, None or 'default', optional
             The WORK BUDGET of each search, in deterministic units (one AC-matcher step or
             one canonical-constructor call). ``'default'`` is ``DEFAULT_WORK`` in
@@ -2214,7 +2217,8 @@ class SimpliPyEngine:
         Each mode reads an expression into its own canonical form, because the modes accept
         different simplifications as true: ``f64`` follows the deployed float evaluator
         (``1/exp(5132.3)`` is ``0``), ``real`` exact real arithmetic (it is not), and
-        ``permissive`` also what holds only up to sign or domain (``sqrt(x^2)`` is ``x``).
+        ``permissive`` also what holds only up to sign or domain (``(x^2)^(1/2)`` is ``x``,
+        where ``f64`` and ``real`` give ``abs(x)``).
         This prices that form, on the
         CERTIFIED canonical state (the same certificate-carrying canonicalization the
         simplify chain runs on), with the one codebook (the unified measure mu). It is the

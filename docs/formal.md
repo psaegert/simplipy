@@ -98,14 +98,16 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   other's negation stayed apart, and a join whose coefficient became 1 kept its key's signs, so
   a state and the parse of its own print could differ (24 of srbf's 125,127 model predictions
   changed on re-read in f64 at effort 0, 26 uncapped). Each is now decided by the orbit (§3), and
-  no f64 or real answer changes on a second call on flash-ansr's 129,490 T8.1 draws, srbf's
+  no f64 or real answer changes on a second call on the 129,490 simplify inputs of flash-ansr's
+  T8.1 draws, srbf's
   ground truths or its predictions at the default effort. The sign placement keeps the entry
-  spelling where an orientation would collide with another factor's base (§3). And at a
+  spelling where an orientation would collide with another factor's base or a negation overflows
+  (§3). And at a
   refusal the grouping of the input can decide which inner products fold:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
   (canonicity across spellings, not idempotence; both pinned in tests). Uncapped (the default in
   f64 and real; L6), the exploration phase can reach states of the literal classes above that the
-  chain alone never visits (review fuzz: an unmerged `3e-310` coefficient that re-reads in another
+  chain alone never visits (for example an unmerged `3e-310` coefficient that re-reads in another
   order; a `<constant>` absorbed on re-read). In `permissive` the selection among three arms adds
   a class of its own (L6). A capped search, or one its work budget stops, can stop between two
   improvements, which a second call continues.
@@ -134,7 +136,7 @@ specimens remain. The instrument itself printed each state with the mode's certi
 context, a spelling no caller receives (every caller prints with the bare context), which
 raised false alarms and hid three real classes (the closed I3 class above); it now prints as
 the callers do, and in a debug build it holds on every state of srbf's ground truths and
-predictions in every mode and of 20,000 of flash-ansr's T8.1 draws. A second measured class (2026-08-24) sat not in `canon()` but in the
+predictions in every mode and of 20,000 T8.1 simplify inputs in permissive. A second measured class (2026-08-24) sat not in `canon()` but in the
 *pricing instrument*: `complexity()` parsed fold-free while the `f64`/`permissive` chains
 parse fold-at-parse, so on 10 of 65,536 benchmark rows the instrument priced a
 different state than the chain descended from and $\mu(\mathrm{simplify}(e)) \le
@@ -550,8 +552,8 @@ assertion), `to_prefix` has a left inverse and is therefore injective — two st
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
 debug, so every state reached by the tests and the mini-mines satisfies it, and so does every
-state of srbf's ground truths and model predictions in every mode and of 20,000 of flash-ansr's
-T8.1 draws). It fails on the documented I3 residuals at literals that stay leaves. These
+state of srbf's ground truths and model predictions in every mode and of 20,000 T8.1 simplify
+inputs in permissive). It fails on the documented I3 residuals at literals that stay leaves. These
 residuals scope the cache guarantee too.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass
@@ -576,7 +578,7 @@ skips fire sites), and the descent of a candidate does not depend on the memo's 
 valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
 srbf's 125,127 model predictions change on a second call 2,701 times in `f64` at cap 4, the former
 default, 2,673 of them to a cheaper form; uncapped, never, in `f64` and `real`, on these and on
-srbf's ground truths and flash-ansr's T8.1 draws]. Where
+srbf's ground truths and the simplify inputs of flash-ansr's T8.1 draws]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
 `permissive` returns the cheapest of its candidates, each priced by re-reading what it prints in
@@ -597,7 +599,7 @@ continuation (the same walk cut short again) are among the uncapped run's; the a
 cheapest of a superset. $\square$ Its winner is a valley of its own arm only: the re-run's other
 arms, started from the winner, can descend further, and a search the work budget stopped can
 continue, so L6 does not cover the selection [EMPIRICAL: 67 second-call changes on flash-ansr's
-129,490 T8.1 draws, 1,359 on srbf's 125,127 predictions; the three bounds hold on every input of
+129,490 T8.1 simplify inputs, 1,359 on srbf's 125,127 predictions; the three bounds hold on every input of
 both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
