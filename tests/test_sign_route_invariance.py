@@ -135,3 +135,44 @@ PRED_117892 = ('exp * rootn x1 2 * 0.9156774815674904 - x1 * x1 / - / x1 + * 415
 def test_a_unit_coefficient_join_orients_the_key(eng):
     answer = list(eng.simplify(PRED_117892, mode='permissive'))
     assert list(eng.simplify(answer, mode='permissive')) == answer
+
+
+# OPPOSITE SUMS ARE DECIDED PER CLASS. The first twin pass walked the factors once in arrival order
+# and could flip a pair onto each other while a member that cannot move (a negative power) wanted
+# the other side, so one flat bag collected differently by the order of its members, and the
+# parse's own grouping lost collections 0.14.7 made.
+_S = ['<add>', '3', '<sub>', 'x1', '</add>']    # 3 - x1
+_N = ['<add>', 'x1', '<sub>', '3', '</add>']    # x1 - 3
+BAGS = {
+    'S, N, 1/S': [_S, _N, ['inv'] + _S],
+    'S, N, S': [_S, _N, _S],
+    'N^2, 1/S, S': [['pow'] + _N + ['2'], ['inv'] + _S, _S],
+    'S^3, N, 1/S': [['pow'] + _S + ['3'], _N, ['inv'] + _S],
+    'N^2, 1/S': [['pow'] + _N + ['2'], ['inv'] + _S],
+    'S, N, 1/S, 1/N': [_S, _N, ['inv'] + _S, ['inv'] + _N],
+}
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('bag', sorted(BAGS))
+def test_one_bag_collects_the_same_in_every_order(eng, mode, bag):
+    import itertools
+    answers = set()
+    for order in itertools.permutations(BAGS[bag]):
+        tokens = ['<mul>'] + [t for m in order for t in m] + ['</mul>']
+        answers.add(' '.join(eng.simplify(tokens, mode=mode, effort=0)))
+    assert len(answers) == 1, answers
+
+
+# The parse builds `(3 - x1)(x1 - 3)` first; the pair must still collect with the `1/(3 - x1)` it
+# meets next (0.14.7: `x1 - 3`, and `(x1 - 3)/x2`).
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('src, parent', [
+    ('* * - 3 x1 - x1 3 inv - 3 x1', '- x1 3'),
+    ('/ * - 3 x1 - x1 3 * x2 - 3 x1', '/ - x1 3 x2'),
+])
+def test_a_collected_pair_still_meets_its_inverse(eng, mode, effort, src, parent):
+    answer = list(eng.simplify(src.split(), mode=mode, effort=effort))
+    assert eng.complexity(answer, mode=mode) <= eng.complexity(parent.split(), mode=mode), answer
+    assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer

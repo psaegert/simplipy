@@ -213,9 +213,13 @@ prices, coupled only by the parity of the flips, so the cheapest placement is ea
 cheaper orientation, with the one site whose switch costs least switched where the parity
 differs; its exact ties resolve by an order that is a function of the orbit, never of the entry
 spelling. It keeps the entry placement only where an orientation would collide with another
-factor's base or a negation overflows. Two sums that are each other's negation flip together and
-collect (`(x - a)*(a - x)` is `-(x - a)^2`), and a join whose coefficient becomes 1 re-places its
-key's signs (`term_join`). The decision is three-tier:
+factor's base or a negation overflows. Opposite sums $S$ and $-S$ collect per class: a member that
+cannot flip (a negative odd power, a fractional power) fixes the class's orientation, the others
+follow it (the bare sum and its odd powers move a sign to the coefficient, its even powers flip
+freely), and a class with no fixed member takes the smaller orientation; the decision reads only
+the class's members, never their order (`(x - a)*(a - x)` is `-(x - a)^2`, and
+`(a - x)*(x - a)/(a - x)` is `x - a`). A join whose coefficient becomes 1 re-places its key's
+signs (`term_join`). The decision is three-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
 2. an exact $\mu$ tie at a SIGN-TRADE site goes to the structurally distinguished

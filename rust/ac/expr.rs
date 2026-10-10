@@ -3186,54 +3186,18 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
         }
     }
 
-    // OPPOSITE TWINS: a sign-trade site whose sum is the negation of another factor's sum --
-    // `(9.6 - x) * (x - 9.6)` -- is that factor up to the sign `sign_place` trades, so it is
-    // flipped (the coefficient takes the sign; f(-S) = -f(S) is total on the odd carriers)
-    // and the pair collects below like any two equal bases: `-(x - 9.6)^2`, and under the
-    // usual exponent licence `(x - 9.6) / (9.6 - x)` to `-1`. Of two carriers the
-    // structurally smaller sum is kept; a sum under a negative power is no carrier and keeps
-    // its orientation, the carrier moves onto it. So the result is a function of the bag.
-    // Without this the pair survived wherever it met in one bag (`sign_place` skips a flip
-    // that collides with another base) but collected wherever the parse built a smaller
-    // product first, in which the site traded alone: a state and the parse of its own print
-    // differed (srbf ground truth 4174, in all three modes). Bags with an infinity, a Const
-    // or a coefficient partition keep their own sign owners.
+    // OPPOSITE SUMS: factors whose sums are each other's negation -- `(9.6 - x) * (x - 9.6)`
+    // -- are one base up to a sign, so they are brought to ONE orientation and collect below
+    // like any equal bases: `-(x - 9.6)^2`, and under the usual exponent licence
+    // `(x - 9.6) / (9.6 - x)` to `-1`. Decided per class {S, -S} from the class's members
+    // alone, so the result is a function of the bag (`collect_opposite_sums`). Without this
+    // the pair survived wherever it met in one bag (`sign_place` skips a flip that collides
+    // with another base) but collected wherever the parse built a smaller product first, in
+    // which the site traded alone: a state and the parse of its own print differed (srbf
+    // ground truth 4174, in all three modes). Bags with an infinity, a Const or a
+    // coefficient partition keep their own sign owners.
     if inf_sign.is_none() && !has_const && !coeff.is_zero() && coeff_overflow.is_empty() {
-        fn sum_of(f: &Ex) -> Option<&[Ex]> {
-            match factor_split_ref(f).0 {
-                Ex::Add(ts) => Some(ts.as_slice()),
-                _ => None,
-            }
-        }
-        for i in 0..factors.len() {
-            let Some(ti) = sum_of(&factors[i]) else {
-                continue;
-            };
-            let twin = (0..factors.len()).find(|&j| {
-                j != i && sum_of(&factors[j]).is_some_and(|tj| opposite_sums(ti, tj, cx.view))
-            });
-            let Some(j) = twin else {
-                continue;
-            };
-            let Some(nf) = sign_trade_flip(&factors[i], cx) else {
-                continue; // not a carrier (a negative power): only its twin can move
-            };
-            // Both carriers: the structurally smaller sum stays. A twin that is no carrier
-            // (the sum under a negative power) cannot move, so this one moves onto it.
-            let twin_moves = sign_trade_flip(&factors[j], cx).is_some()
-                && cmp_ex(
-                    factor_split_ref(&factors[i]).0,
-                    factor_split_ref(&factors[j]).0,
-                    cx.view,
-                ) == Ordering::Less;
-            if twin_moves {
-                continue;
-            }
-            if let Some(nc) = coeff.checked_neg() {
-                factors[i] = nf;
-                coeff = nc;
-            }
-        }
+        collect_opposite_sums(&mut factors, &mut coeff, cx);
     }
 
     // Like-base exponent collection. The BRANCH-CUT licence gates every single merge step,
@@ -3556,6 +3520,133 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     // wrapper-protection band), and the H-020/H-030 absorption arms above never see
     // these bags (their sum classes are excluded from the site set).
     sign_place(coeff, out, cx)
+}
+
+/// OPPOSITE SUMS (see `mul()`): bring every class {S, -S} of factors over a sum to one
+/// orientation, deciding from the class alone. A member is one of
+///
+/// * an ODD carrier -- the bare sum or `S^n` for odd n >= 3, a sign-trade site
+///   (`sign_trade_flip`): flipping it moves a sign to the coefficient, `f(-S) = -f(S)`, total;
+/// * an EVEN carrier -- `S^n` for an even integer n (either sign): `(-S)^n = S^n` is total
+///   (the one-zero convention gives `+inf` on both sides at a zero of an inverse), so it flips
+///   with no sign at all;
+/// * no carrier -- a negative odd power (the pole trilemma: `(-S)^-1` and `-(S^-1)` differ at
+///   the zero), a fractional or symbolic power, a sum the absorption owners keep (Const-bearing,
+///   negation-absorbing, bare infinity), or a flip `sign_trade_flip` refuses.
+///
+/// A class with members of only one orientation is left alone. Otherwise the target is the
+/// orientation of its non-carriers -- they cannot move -- and the class is left alone when they
+/// hold both; with no non-carrier it is the structurally smaller orientation. Every carrier of
+/// the other orientation takes the target's sum. The decision reads only the multiset of
+/// members (the partition into classes, each member's orientation and kind), never their
+/// order, so every arrival order of one bag collects the same way (the first version walked
+/// the factors once in arrival order and could flip a pair onto each other while a later
+/// non-carrier wanted the other side: `(3 - x1) * (x1 - 3) / (3 - x1)` gave `x1 - 3` in half
+/// the orders and `-(x1 - 3)^2 / (3 - x1)` in the rest).
+fn collect_opposite_sums(factors: &mut [Ex], coeff: &mut Rat, cx: &Cx) {
+    fn sum_of(f: &Ex) -> Option<&[Ex]> {
+        match factor_split_ref(f).0 {
+            Ex::Add(ts) => Some(ts.as_slice()),
+            _ => None,
+        }
+    }
+    enum Kind {
+        Odd,
+        Even,
+        Fixed,
+    }
+    let kind = |f: &Ex| -> Kind {
+        let ts = match f {
+            Ex::Add(ts) => ts,
+            Ex::Pow(b, _) => match &**b {
+                Ex::Add(ts) => ts,
+                _ => return Kind::Fixed,
+            },
+            _ => return Kind::Fixed,
+        };
+        if let Ex::Pow(_, e) = f {
+            if matches!(&**e, Ex::Num(r) if r.is_even_integer() && !r.is_zero()) {
+                let tradeable = !ts.iter().any(Ex::contains_const)
+                    && !ts.iter().any(term_absorbs_negation)
+                    && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf));
+                return if tradeable { Kind::Even } else { Kind::Fixed };
+            }
+        }
+        if sign_trade_flip(f, cx).is_some() {
+            Kind::Odd
+        } else {
+            Kind::Fixed
+        }
+    };
+    // The members over a sum, grouped into classes {S, -S}; `side` is false for the class's
+    // first-seen orientation, true for its negation (only a label: the decision below
+    // reads the two orientations themselves).
+    type SumClass = (Vec<Ex>, Vec<(usize, bool)>);
+    let mut classes: Vec<SumClass> = Vec::new();
+    for (i, f) in factors.iter().enumerate() {
+        let Some(ts) = sum_of(f) else {
+            continue;
+        };
+        match classes.iter_mut().find(|(r, _)| {
+            r.len() == ts.len() && (r.as_slice() == ts || opposite_sums(r, ts, cx.view))
+        }) {
+            Some((r, members)) => {
+                let side = r.as_slice() != ts;
+                members.push((i, side));
+            }
+            None => classes.push((ts.to_vec(), vec![(i, false)])),
+        }
+    }
+    for (rep, members) in classes {
+        if !members.iter().any(|m| m.1) || members.iter().all(|m| m.1) {
+            continue; // one orientation only
+        }
+        let kinds: Vec<Kind> = members.iter().map(|&(i, _)| kind(&factors[i])).collect();
+        let fixed_side = |side: bool| {
+            members
+                .iter()
+                .zip(&kinds)
+                .any(|(m, k)| m.1 == side && matches!(k, Kind::Fixed))
+        };
+        let target_side = match (fixed_side(false), fixed_side(true)) {
+            (true, true) => continue, // non-carriers on both sides: nothing may move
+            (true, false) => false,
+            (false, true) => true,
+            (false, false) => {
+                // The structurally smaller orientation. The other side's sum is any member's.
+                let other = members.iter().find(|m| m.1).map(|&(i, _)| i).unwrap();
+                let neg = sum_of(&factors[other]).unwrap();
+                cmp_vec(neg, &rep, cx.view) == Ordering::Less
+            }
+        };
+        let target: Vec<Ex> = match members.iter().find(|m| m.1 == target_side) {
+            Some(&(i, _)) => sum_of(&factors[i]).unwrap().to_vec(),
+            None => continue,
+        };
+        let odd_flips = members
+            .iter()
+            .zip(&kinds)
+            .filter(|(m, k)| m.1 != target_side && matches!(k, Kind::Odd))
+            .count();
+        let new_coeff = if odd_flips % 2 == 1 {
+            match coeff.checked_neg() {
+                Some(nc) => nc,
+                None => continue, // the i128 edge: keep the class as it is
+            }
+        } else {
+            coeff.clone()
+        };
+        for (&(i, side), k) in members.iter().zip(&kinds) {
+            if side == target_side || matches!(k, Kind::Fixed) {
+                continue;
+            }
+            factors[i] = match &factors[i] {
+                Ex::Pow(_, e) => Ex::Pow(Box::new(Ex::Add(target.clone())), e.clone()),
+                _ => Ex::Add(target.clone()),
+            };
+        }
+        *coeff = new_coeff;
+    }
 }
 
 /// Is the sum `b` the negation of the sum `a`, term by term? Both are canonical bags, sorted

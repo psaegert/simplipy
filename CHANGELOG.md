@@ -27,8 +27,8 @@
 - **Answers read back as themselves.** Three canonical forms depended on the route that built
   them, so an answer could change on a second call: a product with more than six factors whose
   sign can move kept the orientation it arrived in (the cheapest orientation is now found exactly
-  for any number of them), two sums that are each other's negation stayed apart (`(x - a)*(a - x)`
-  is now `-(x - a)^2`), and a term whose coefficient became 1 kept its factors' signs. In `f64`
+  for any number of them), two sums that are each other's negation stayed apart (they now collect
+  per class, whatever the order of the factors: `(x - a)*(a - x)` is `-(x - a)^2`), and a term whose coefficient became 1 kept its factors' signs. In `f64`
   and `real` no answer changes on a second call on any of the three sets (0.14.7: 59 and 57 T8.1
   inputs, 4 ground truths, 31 predictions). The debug-build check that every intermediate state
   reads back as itself printed in a spelling no caller receives; it now prints as the callers do
