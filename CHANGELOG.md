@@ -7,7 +7,7 @@
   under other load), in every mode: under 1% of calls take more than 0.1 s and none takes more
   than 1 s (0.14.7: up to 18.1% and 1.49%, permissive on the predictions). Total time falls by
   31% (`f64`), 30% (`real`) and 33% (`permissive`) on the T8.1 draws, 22-25% on the ground truths,
-  and by 79%, 77% and 88% on the predictions.
+  and by 79%, 77% and 89% on the predictions.
 - **A work budget per search, the default in permissive.** `simplify()` takes `work`: the budget
   of each search in deterministic units (one step of the matcher or one canonical-constructor
   call), so a budget cuts the same walk at the same place on every machine and under any load. A
