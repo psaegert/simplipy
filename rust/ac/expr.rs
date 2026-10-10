@@ -3117,6 +3117,56 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
         }
     }
 
+    // OPPOSITE TWINS: a sign-trade site whose sum is the negation of another factor's sum --
+    // `(9.6 - x) * (x - 9.6)` -- is that factor up to the sign `sign_place` trades, so it is
+    // flipped (the coefficient takes the sign; f(-S) = -f(S) is total on the odd carriers)
+    // and the pair collects below like any two equal bases: `-(x - 9.6)^2`, and under the
+    // usual exponent licence `(x - 9.6) / (9.6 - x)` to `-1`. Of two carriers the
+    // structurally smaller sum is kept; a sum under a negative power is no carrier and keeps
+    // its orientation, the carrier moves onto it. So the result is a function of the bag.
+    // Without this the pair survived wherever it met in one bag (`sign_place` skips a flip
+    // that collides with another base) but collected wherever the parse built a smaller
+    // product first, in which the site traded alone: a state and the parse of its own print
+    // differed (srbf ground truth 4174, in all three modes). Bags with an infinity, a Const
+    // or a coefficient partition keep their own sign owners.
+    if inf_sign.is_none() && !has_const && !coeff.is_zero() && coeff_overflow.is_empty() {
+        fn sum_of(f: &Ex) -> Option<&[Ex]> {
+            match factor_split_ref(f).0 {
+                Ex::Add(ts) => Some(ts.as_slice()),
+                _ => None,
+            }
+        }
+        for i in 0..factors.len() {
+            let Some(ti) = sum_of(&factors[i]) else {
+                continue;
+            };
+            let twin = (0..factors.len()).find(|&j| {
+                j != i && sum_of(&factors[j]).is_some_and(|tj| opposite_sums(ti, tj, cx.view))
+            });
+            let Some(j) = twin else {
+                continue;
+            };
+            let Some(nf) = sign_trade_flip(&factors[i], cx) else {
+                continue; // not a carrier (a negative power): only its twin can move
+            };
+            // Both carriers: the structurally smaller sum stays. A twin that is no carrier
+            // (the sum under a negative power) cannot move, so this one moves onto it.
+            let twin_moves = sign_trade_flip(&factors[j], cx).is_some()
+                && cmp_ex(
+                    factor_split_ref(&factors[i]).0,
+                    factor_split_ref(&factors[j]).0,
+                    cx.view,
+                ) == Ordering::Less;
+            if twin_moves {
+                continue;
+            }
+            if let Some(nc) = coeff.checked_neg() {
+                factors[i] = nf;
+                coeff = nc;
+            }
+        }
+    }
+
     // Like-base exponent collection. The BRANCH-CUT licence gates every single merge step,
     // including same-sign ones: merging exponents `a` and `b` into `a + b` is sound iff both
     // are integers (TOTAL up to null poles), OR the base is certainly non-negative, OR the sum
@@ -3418,12 +3468,14 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     // of the ORBIT, not of the entry spelling. Ties: the positive-coefficient
     // spelling wins (ruling A -- a leading minus is only ever minted when strictly
     // cheaper, and what the user typed survives whenever prices tie); residual
-    // equal-mu same-sign ties fall to a fixed structural order. n > 6 refuses to
-    // trade (2^n materializations): whether it refuses is a class function (n is
-    // orbit-invariant), but the refusal keeps the entry orientation, which is not. On
-    // srbf's 125,127 model predictions (f64) it binds on 48 with the search off and 51
-    // with the default search, and every answer there that changes on a second call (24
-    // at effort 0, 26 with the search) is among them. A negate_term overflow
+    // equal-mu same-sign ties fall to a fixed structural order. n > 6 does not
+    // enumerate (2^n materializations): `sign_place_wide` computes the same argmin price
+    // from the per-site prices and the flip parity, with its own orbit-invariant tie
+    // order. (Until it existed n > 6 refused and kept the entry orientation, which is
+    // not orbit-invariant: on srbf's 125,127 model predictions every answer that changed
+    // on a second call in f64 and real -- 24 at effort 0, 26 with the search -- was such
+    // a product, re-read through a parse whose shorter prefix products had traded.)
+    // A negate_term overflow
     // refusal keeps the entry spelling, whose display is injective. This arm
     // SUBSUMES the former lone `-1 x Add` distribution arm (its case is n=1 with
     // out.len() == 1; the mu comparison and the A-tie give the identical decision).
@@ -3437,12 +3489,27 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     sign_place(coeff, out, cx)
 }
 
+/// Is the sum `b` the negation of the sum `a`, term by term? Both are canonical bags, sorted
+/// by their coefficient-stripped keys, so a negation keeps every term in its place.
+fn opposite_sums(a: &[Ex], b: &[Ex], view: &TokenView) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| match (x, y) {
+            (Ex::Num(p), Ex::Num(q)) => p.checked_neg().is_some_and(|n| n == *q),
+            (Ex::Num(_), _) | (_, Ex::Num(_)) => false,
+            _ => {
+                let (cx_, kx) = term_split(x.clone(), view);
+                let (cy, ky) = term_split(y.clone(), view);
+                kx == ky && cx_.checked_neg().is_some_and(|n| n == cy)
+            }
+        })
+}
+
 /// F63: assemble a product from `(coefficient, factor bag)` in its CANONICAL sign
 /// placement -- the shared owner behind `mul()`'s final assembly and `term_join`'s
 /// negative-coefficient joins, so every site that mints a product builds the SAME
 /// spelling the orientation machinery prices (the row-120 law). With no trade site
-/// (or the n > 6 cap, or a negation overflow) this is exactly the plain assembly:
-/// push the non-unit coefficient, sort, wrap.
+/// (or a negation overflow, or a wide orbit `sign_place_wide` refuses) this is exactly the
+/// plain assembly: push the non-unit coefficient, sort, wrap.
 fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
     let assemble = |factors: Vec<Ex>, c: &Rat| -> Ex {
         let mut v = factors;
@@ -3509,17 +3576,20 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
             }
         };
         let enumerates = !sites.is_empty() && sites.len() <= 6;
-        let base_price: Vec<u64> = if enumerates {
+        // More than six sites: the WIDE owner below decides the orbit without enumerating
+        // it (it used to refuse and keep the entry orientation, which depends on the route).
+        let wide = sites.len() > 6;
+        let base_price: Vec<u64> = if enumerates || wide {
             out.iter().map(&factor_price).collect()
         } else {
             Vec::new()
         };
-        let flip_price: Vec<u64> = if enumerates {
+        let flip_price: Vec<u64> = if enumerates || wide {
             site_flips.iter().map(|(_, nf)| factor_price(nf)).collect()
         } else {
             Vec::new()
         };
-        if enumerates {
+        if enumerates || wide {
             // Priority: Free FIRST -- a Const-carrier eats EVERY sign (coefficient
             // and bare-infinity signs alike, by the forall-exists refit), so with one
             // present the whole sign dimension collapses and orientations are chosen
@@ -3546,7 +3616,27 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
             } else {
                 Carrier::Coeff
             };
-            if let Some(nc) = coeff.checked_neg() {
+            if let (true, Some(nc)) = (wide, coeff.checked_neg()) {
+                if let Some(chosen) = sign_place_wide(
+                    &out,
+                    &coeff,
+                    &nc,
+                    &site_flips,
+                    &base_price,
+                    &flip_price,
+                    match carrier {
+                        Carrier::Free => WideCarrier::Free,
+                        Carrier::Coeff => WideCarrier::Coeff,
+                        Carrier::Inf(i) => WideCarrier::Inf(i),
+                        Carrier::Absorb(i) => WideCarrier::Absorb(i),
+                    },
+                    &factor_price,
+                    &assemble,
+                    cx,
+                ) {
+                    return chosen;
+                }
+            } else if let Some(nc) = coeff.checked_neg() {
                 let mut best: Option<(i128, bool, Ex)> = None;
                 let mut all_ok = true;
                 'subsets: for mask in 0u32..(1u32 << sites.len()) {
@@ -3678,6 +3768,37 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                         best = Some((mu, c.is_negative(), cand));
                     }
                 }
+                // The wide owner's price is the enumeration's optimum wherever both apply (a
+                // bag of two or more members prices additively): checked on every small orbit.
+                #[cfg(debug_assertions)]
+                if all_ok && out.iter().filter(|f| !matches!(f, Ex::Num(_))).count() >= 2 {
+                    if let Some((bmu, _, _)) = &best {
+                        let wc = match carrier {
+                            Carrier::Free => WideCarrier::Free,
+                            Carrier::Coeff => WideCarrier::Coeff,
+                            Carrier::Inf(i) => WideCarrier::Inf(i),
+                            Carrier::Absorb(i) => WideCarrier::Absorb(i),
+                        };
+                        if let Some(w) = sign_place_wide(
+                            &out,
+                            &coeff,
+                            &nc,
+                            &site_flips,
+                            &base_price,
+                            &flip_price,
+                            wc,
+                            &factor_price,
+                            &assemble,
+                            cx,
+                        ) {
+                            debug_assert_eq!(
+                                complexity(&w, cx.view) as i128,
+                                *bmu,
+                                "wide sign orbit prices a small orbit off its enumeration"
+                            );
+                        }
+                    }
+                }
                 if all_ok {
                     if let Some((_, _, chosen)) = best {
                         return chosen;
@@ -3687,6 +3808,277 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
         }
     }
     assemble(out, &coeff)
+}
+
+/// The sign carrier of a wide orbit (mirrors `sign_place`'s local `Carrier`).
+enum WideCarrier {
+    Inf(usize),
+    Free,
+    Absorb(usize),
+    Coeff,
+}
+
+/// F63, WIDE ORBITS (n > 6 trade sites): the orbit's choice without enumerating its 2^n
+/// spellings. The enumeration above prices each mask as a SUM of per-factor prices plus the
+/// carrier's price (the additive case of `complexity`'s Mul arm, which always holds here:
+/// seven or more non-number factors), so the cheapest spelling is separable up to the one
+/// coupling the sites share, the PARITY of their flips (the carrier's sign): per site the
+/// cheaper orientation, and where the parity the carrier wants differs, the one site whose
+/// switch costs least. That makes the argmin price exact in O(n). Ties resolve by a fixed
+/// order that is a function of the ORBIT, never of the entry spelling: first a non-negative
+/// coefficient (ruling A), a positive infinity, the structurally smaller absorbing sum; then,
+/// site by site in the order of each site's smaller orientation, the smaller orientation
+/// wherever the rest can still complete an optimal spelling. (The enumeration breaks its
+/// residual ties by comparing whole products instead; n is orbit-invariant, so the two
+/// regimes never meet on one value.)
+///
+/// Before this owner, n > 6 kept the entry orientation: the binary `*` chain a parse builds
+/// decides each prefix product of up to six sites by its own argmin and freezes the rest as
+/// it arrives, so a state and the parse of its own print could carry two orientations of
+/// one value (the `stable()` failures on long products; formal.md, I3 residuals).
+///
+/// `None` keeps the entry spelling (the old n > 6 behavior) in two cases: some orientation of a
+/// factor shares its base with another factor (the enumeration skips the colliding masks one
+/// by one; here any possible collision refuses the whole orbit), or the absorbing sum's
+/// negation overflows. Whether it refuses is a function of the orbit; the spelling it then
+/// keeps is not -- the residual every n > 6 orbit had before.
+#[allow(clippy::too_many_arguments)]
+fn sign_place_wide(
+    out: &[Ex],
+    coeff: &Rat,
+    nc: &Rat,
+    site_flips: &[(usize, Ex)],
+    base_price: &[u64],
+    flip_price: &[u64],
+    carrier: WideCarrier,
+    factor_price: &dyn Fn(&Ex) -> u64,
+    assemble: &dyn Fn(Vec<Ex>, &Rat) -> Ex,
+    cx: &Cx,
+) -> Option<Ex> {
+    let n = site_flips.len();
+    let view = cx.view;
+    // Collision screen: any two factors (in any orientation) sharing a base.
+    {
+        let mut options: Vec<Vec<&Ex>> = out.iter().map(|f| vec![f]).collect();
+        for (pos, nf) in site_flips {
+            options[*pos].push(nf);
+        }
+        for i in 0..options.len() {
+            for j in (i + 1)..options.len() {
+                for a in &options[i] {
+                    for b in &options[j] {
+                        if cmp_ex(factor_split_ref(a).0, factor_split_ref(b).0, view)
+                            == Ordering::Equal
+                        {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // The non-site factors' prices (the absorbing sum's entry price included).
+    let fixed: u64 = {
+        let mut is_site = vec![false; out.len()];
+        for (pos, _) in site_flips {
+            is_site[*pos] = true;
+        }
+        (0..out.len())
+            .filter(|i| !is_site[*i])
+            .fold(0u64, |acc, i| acc.saturating_add(base_price[i]))
+    };
+    let p0: Vec<u64> = site_flips.iter().map(|(pos, _)| base_price[*pos]).collect();
+    // Is the flipped orientation the structurally smaller one?
+    let small1: Vec<bool> = site_flips
+        .iter()
+        .map(|(pos, nf)| cmp_ex(nf, &out[*pos], view) == Ordering::Less)
+        .collect();
+    let pref: Vec<bool> = (0..n)
+        .map(|j| {
+            if flip_price[j] != p0[j] {
+                flip_price[j] < p0[j]
+            } else {
+                small1[j]
+            }
+        })
+        .collect();
+    let d: Vec<u64> = (0..n).map(|j| p0[j].abs_diff(flip_price[j])).collect();
+    let site_lo: u64 = (0..n).fold(0u64, |acc, j| acc.saturating_add(p0[j].min(flip_price[j])));
+    let g_par = pref.iter().filter(|b| **b).count() % 2 == 1;
+    let dmin = d.iter().copied().min().unwrap_or(u64::MAX);
+    let site_cost = |par: bool| -> u64 {
+        if par == g_par {
+            site_lo
+        } else {
+            site_lo.saturating_add(dmin)
+        }
+    };
+    let coef_price = |c: &Rat| -> u64 {
+        if c.is_one() || *c == Rat::NEG_ONE {
+            0
+        } else {
+            mu_rat(c)
+        }
+    };
+    // The carrier's parity, coefficient and (Absorb) flipped sum.
+    let mut absorb_flip: Option<Ex> = None;
+    let mut absorb_delta: Option<(u64, u64)> = None;
+    let (par, c): (Option<bool>, Rat) = match carrier {
+        WideCarrier::Free => (
+            None,
+            if coeff.is_negative() {
+                nc.clone()
+            } else {
+                coeff.clone()
+            },
+        ),
+        WideCarrier::Coeff => {
+            let k0 = (
+                site_cost(false).saturating_add(coef_price(coeff)),
+                coeff.is_negative(),
+            );
+            let k1 = (
+                site_cost(true).saturating_add(coef_price(nc)),
+                nc.is_negative(),
+            );
+            if k1 < k0 {
+                (Some(true), nc.clone())
+            } else {
+                (Some(false), coeff.clone())
+            }
+        }
+        WideCarrier::Inf(i) => {
+            // The toggled infinity keeps its base price, as in the enumeration.
+            let pos_at = |p: bool| matches!(out[i], Ex::PosInf) != p;
+            let k0 = (site_cost(false), !pos_at(false));
+            let k1 = (site_cost(true), !pos_at(true));
+            (Some(k1 < k0), coeff.clone())
+        }
+        WideCarrier::Absorb(i) => {
+            let Ex::Add(ts) = &out[i] else {
+                return None;
+            };
+            let mut fl = ts
+                .iter()
+                .map(|x| negate_term(x, cx))
+                .collect::<Option<Vec<Ex>>>()?;
+            fl.sort_by(|a, b| add_term_cmp(a, b, view));
+            let fl = Ex::Add(fl);
+            let fp = factor_price(&fl);
+            let fl_smaller = cmp_ex(&fl, &out[i], view) == Ordering::Less;
+            let k0 = (site_cost(false).saturating_add(base_price[i]), fl_smaller);
+            let k1 = (site_cost(true).saturating_add(fp), !fl_smaller);
+            let p = k1 < k0;
+            absorb_delta = Some((base_price[i], fp));
+            if p {
+                absorb_flip = Some(fl);
+            }
+            (Some(p), coeff.clone())
+        }
+    };
+    let bits: Vec<bool> = match par {
+        None => pref.clone(),
+        Some(par) => {
+            // Site order: by each site's structurally smaller orientation (orbit-invariant).
+            let small_item = |j: usize| -> &Ex {
+                if small1[j] {
+                    &site_flips[j].1
+                } else {
+                    &out[site_flips[j].0]
+                }
+            };
+            let mut order: Vec<usize> = (0..n).collect();
+            order.sort_by(|&a, &b| cmp_ex(small_item(a), small_item(b), view));
+            let extra_star = if par == g_par { 0 } else { dmin };
+            // Suffix (in `order`) parity of the preferred choices and least switch cost.
+            let mut suf_par = vec![false; n + 1];
+            let mut suf_min = vec![u64::MAX; n + 1];
+            for t in (0..n).rev() {
+                let j = order[t];
+                suf_par[t] = suf_par[t + 1] ^ pref[j];
+                suf_min[t] = suf_min[t + 1].min(d[j]);
+            }
+            let mut used = 0u64;
+            let mut cur = false;
+            let mut bits = vec![false; n];
+            for t in 0..n {
+                let j = order[t];
+                let fits = |b: bool| -> bool {
+                    let extra = if b == pref[j] { 0 } else { d[j] };
+                    let need = par ^ cur ^ b;
+                    let rest = if need == suf_par[t + 1] {
+                        0
+                    } else {
+                        suf_min[t + 1]
+                    };
+                    rest != u64::MAX
+                        && used.saturating_add(extra).saturating_add(rest) <= extra_star
+                };
+                let b = if fits(small1[j]) {
+                    small1[j]
+                } else {
+                    !small1[j]
+                };
+                used = used.saturating_add(if b == pref[j] { 0 } else { d[j] });
+                cur ^= b;
+                bits[j] = b;
+            }
+            debug_assert!(
+                cur == par && used == extra_star,
+                "wide sign orbit: the greedy completion missed the optimum"
+            );
+            bits
+        }
+    };
+    let mut factors = out.to_vec();
+    for (j, (pos, nf)) in site_flips.iter().enumerate() {
+        if bits[j] {
+            factors[*pos] = nf.clone();
+        }
+    }
+    match carrier {
+        WideCarrier::Inf(i) if par == Some(true) => {
+            factors[i] = match &factors[i] {
+                Ex::PosInf => Ex::NegInf,
+                Ex::NegInf => Ex::PosInf,
+                _ => unreachable!(),
+            };
+        }
+        WideCarrier::Absorb(i) => {
+            if let Some(fl) = absorb_flip {
+                factors[i] = fl;
+            }
+        }
+        WideCarrier::Free => {
+            for f in factors.iter_mut() {
+                if matches!(f, Ex::NegInf) {
+                    *f = Ex::PosInf;
+                }
+            }
+        }
+        _ => {}
+    }
+    let cand = assemble(factors, &c);
+    #[cfg(not(debug_assertions))]
+    let _ = (absorb_delta, fixed);
+    #[cfg(debug_assertions)]
+    {
+        // The separable price the choice optimized IS the product's complexity.
+        let carrier_price: i128 = match absorb_delta {
+            Some((base, fp)) if par == Some(true) => fp as i128 - base as i128,
+            _ => 0,
+        };
+        let sites_price: u64 = (0..n)
+            .map(|j| if bits[j] { flip_price[j] } else { p0[j] })
+            .sum();
+        let predicted = (mu_mul() + fixed + sites_price + coef_price(&c)) as i128 + carrier_price;
+        debug_assert_eq!(
+            predicted,
+            complexity(&cand, view) as i128,
+            "wide sign orbit: summed price differs from complexity()"
+        );
+    }
+    Some(cand)
 }
 
 /// F63: cheap shape test for [`sign_trade_flip`] -- true iff the factor is an odd

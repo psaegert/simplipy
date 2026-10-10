@@ -1389,10 +1389,31 @@ fn render_exponent(r: &Rat) -> String {
 /// Negate every term of a sum for DISPLAY sign redistribution (`None` on the i128 edge, in
 /// which case the caller falls back to the literal `-1` rendering).
 fn flip_terms(terms: &[Ex], cx: &Cx) -> Option<Vec<Ex>> {
+    // A lossy mode's kept reciprocal of an infinity (`inv(inf)`, the mask sentinel the
+    // sentinel-keeping canon holds until phase 2) does not survive `negate_term` in a spelling
+    // context that folds it: the flipped term printed `0 * ..`, a term the re-read drops. The
+    // `neg (..)` display keeps it as it is.
+    if terms.iter().any(holds_inf_reciprocal) {
+        return None;
+    }
     terms
         .iter()
         .map(|t| super::expr::negate_term(t, cx))
         .collect()
+}
+
+/// Does `e` hold a reciprocal of an infinity anywhere?
+fn holds_inf_reciprocal(e: &Ex) -> bool {
+    match e {
+        Ex::Pow(b, x) => {
+            (matches!(**b, Ex::PosInf | Ex::NegInf)
+                && matches!(&**x, Ex::Num(r) if r.is_negative()))
+                || holds_inf_reciprocal(b)
+                || holds_inf_reciprocal(x)
+        }
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(holds_inf_reciprocal),
+        _ => false,
+    }
 }
 
 /// Display-only odd-literal sign hoist (owner ruling 2026-08-08): inside a printed sum,

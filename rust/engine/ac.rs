@@ -1704,7 +1704,17 @@ impl Engine {
         };
 
         let stable_in = |e: &Ex, pb: &Cx, cxx: &Cx| {
-            let t = to_prefix(e, cxx);
+            // Print in the SPELLING context every consumer prints in (`project`, the
+            // permissive selection's `print_prefix`, the certificate-cache keys): `bare`,
+            // in the run's number domain. The mode's own context licenses more of the
+            // explicit form's grouped denominators (`n / (d1 * d2)`: every member in a lossy
+            // mode, every certified one in a sound mode) -- a spelling no caller ever
+            // receives, whose re-read builds the product of the members, a construction
+            // the state never went through (pair sign trades, folds and merges across a
+            // joined reciprocal); checking it made the instrument fail on states whose
+            // real serialization round-trips.
+            let spell = Cx::bare(cxx.view);
+            let t = to_prefix(e, &spell);
             // Re-parse under the PHASE's MODE (cert-less, like the entry parse):
             // serialization stability is a PER-MODE contract -- phase 2 states must
             // round-trip under the sentinel-expired canon, phase 1 states under the
@@ -1742,7 +1752,7 @@ impl Engine {
                             "STABLE-DIFF (state)  mu: {me} vs {mp} ({})  reconverges: {reconverge}\n                               T : {}\n  T': {}\n  e : {e:?}\n  p : {p:?}",
                             if me == mp { "mu-equal: D7 route-invariance trigger" } else { "mu-UNEQUAL: value-suspect" },
                             s(&t),
-                            s(&to_prefix(&p, cxx))
+                            s(&to_prefix(&p, &spell))
                         );
                     }
                     p == *e
