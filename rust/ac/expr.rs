@@ -4119,7 +4119,89 @@ fn is_sign_trade_site(f: &Ex, cx: &Cx) -> bool {
 /// extended reals: the sum itself; Pow(S, odd n >= 3) (positive odd only -- the
 /// negative-odd identity fails at the one-zero pole); rootn(S, odd m >= 3) (the
 /// SIGNED total root is an odd bijection); the eight odd functions (`odd_fun`).
+///
+/// MEMOIZED for the dynamic extent of the outermost call: the flip is a pure function of
+/// `(f, cx)` and the thread's number domain, and computing it re-enters itself FOUR times per
+/// nesting level -- it negates each term through `term_join`, whose site test
+/// (`is_sign_trade_site`) and `mul()` assembly (`sign_place`) each ask the flip of the nested
+/// sum, and the files-bare gate (`flipped_orientation_wins`) negates the flipped terms again
+/// through the same two. Without the memo a sum nested `d` deep cost `4^d` flips (measured:
+/// `x1*(x1 + (N + 1)/x1)` nested 9 deep took 7 s with the search off, all of it here).
 fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
+    if !matches!(f, Ex::Add(_) | Ex::Pow(..) | Ex::Fun(..)) {
+        return None;
+    }
+    let key = (flip_cx_key(cx), f.clone());
+    let outer = FLIP_MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.is_none() {
+            *m = Some(rustc_hash::FxHashMap::default());
+            true
+        } else {
+            false
+        }
+    });
+    let _scope = FlipScope(outer);
+    if let Some(hit) = FLIP_MEMO.with(|m| m.borrow().as_ref().and_then(|t| t.get(&key).cloned())) {
+        return hit;
+    }
+    let r = sign_trade_flip_raw(f, cx);
+    FLIP_MEMO.with(|m| {
+        if let Some(t) = m.borrow_mut().as_mut() {
+            t.insert(key, r.clone());
+        }
+    });
+    r
+}
+
+/// The memo key's context part: everything `sign_trade_flip` reads besides the factor -- the
+/// token view, the four certificate closures (by identity), the mode, the two fold switches and
+/// the thread's number domain. All of them outlive the outermost call, so no identity is reused
+/// within the memo's extent.
+type FlipCxKey = (usize, [usize; 4], u8);
+type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex), Option<Ex>>;
+
+thread_local! {
+    static FLIP_MEMO: std::cell::RefCell<Option<FlipMemo>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Drops the memo when the outermost `sign_trade_flip` returns (or unwinds).
+struct FlipScope(bool);
+
+impl Drop for FlipScope {
+    fn drop(&mut self) {
+        if self.0 {
+            FLIP_MEMO.with(|m| *m.borrow_mut() = None);
+        }
+    }
+}
+
+fn flip_cx_key(cx: &Cx) -> FlipCxKey {
+    fn id(c: Option<&dyn Fn(&Ex) -> bool>) -> usize {
+        c.map_or(0, |f| f as *const dyn Fn(&Ex) -> bool as *const () as usize)
+    }
+    let mode = match cx.mode {
+        RuleMode::Default => 0u8,
+        RuleMode::Real => 1,
+        RuleMode::Permissive => 2,
+    };
+    let bits = mode
+        | (u8::from(cx.fold_f64) << 2)
+        | (u8::from(cx.sentinels_expired) << 3)
+        | (u8::from(super::rat::f64_numbers()) << 4);
+    (
+        cx.view as *const TokenView as usize,
+        [
+            id(cx.cert_fin),
+            id(cx.cert_finnz),
+            id(cx.cert_nzae),
+            id(cx.cert_nce),
+        ],
+        bits,
+    )
+}
+
+fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
     let flip_sum = |ts: &[Ex]| -> Option<Vec<Ex>> {
         // Exclusions = the absorption owners' classes: Const-bearing (H-020),
         // absorbing-member (H-030), and BARE-infinity terms (the inf carries the

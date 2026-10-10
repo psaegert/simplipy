@@ -37,7 +37,7 @@ use crate::tokens::{Tok, TokenView};
 
 use super::convert::from_prefix;
 use super::expr::{add, canon, cmp_ex, complexity, mul, Cx, Ex};
-use super::matcher::{match_bag_each, matches_each, substitute, BagKind, Binds, MCx};
+use super::matcher::{match_bag_each_cls, matches_each, substitute, BagKind, Binds, MCx};
 use super::rat::Rat;
 
 /// One translated rule. `lhs`/`rhs` are canonical-with-bare-context AC expressions over TABLE
@@ -628,6 +628,8 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
         }
         _ => (EMPTY, p.rules.bucket_for(e)),
     };
+    // The subject bag's equality classes, computed by the first rule whose match needs them.
+    let bag_cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
     for &ri in exact_hits.iter().chain(scan.iter()) {
         let rule = &p.rules.rules[ri];
         if rule.sig & !node_sig != 0 {
@@ -649,23 +651,32 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
             (Ex::Add(pv), Ex::Add(sv)) => {
                 let mut binds = Binds::default();
                 let mut out: Option<Ex> = None;
-                match_bag_each(
+                match_bag_each_cls(
                     pv,
                     sv,
+                    &bag_cls,
                     BagKind::Add,
                     true,
                     &mut binds,
                     p.mcx,
                     &mut |b, used| {
                         let replacement = substitute(&rule.rhs, b, p.cx.view);
+                        // The unmatched members join as they are: members of a canonical bag
+                        // built under this pass's context are constructor output already, and
+                        // constructors are idempotent on their own output (the premise the pass
+                        // skips unchanged children on). Only the substituted replacement is new.
                         let mut parts: Vec<Ex> = sv
                             .iter()
                             .zip(used.iter())
                             .filter(|(_, &u)| !u)
                             .map(|(x, _)| x.clone())
                             .collect();
-                        parts.push(replacement);
-                        let next = add(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
+                        debug_assert!(
+                            parts.iter().all(|x| canon(x.clone(), p.cx) == *x),
+                            "an unmatched bag member is not constructor output: {parts:?}"
+                        );
+                        parts.push(canon(replacement, p.cx));
+                        let next = add(parts, p.cx);
                         if oriented_mu(&next, node_mu(), e, p) {
                             out = Some(next);
                             true
@@ -679,23 +690,32 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
             (Ex::Mul(pv), Ex::Mul(sv)) => {
                 let mut binds = Binds::default();
                 let mut out: Option<Ex> = None;
-                match_bag_each(
+                match_bag_each_cls(
                     pv,
                     sv,
+                    &bag_cls,
                     BagKind::Mul,
                     true,
                     &mut binds,
                     p.mcx,
                     &mut |b, used| {
                         let replacement = substitute(&rule.rhs, b, p.cx.view);
+                        // The unmatched members join as they are: members of a canonical bag
+                        // built under this pass's context are constructor output already, and
+                        // constructors are idempotent on their own output (the premise the pass
+                        // skips unchanged children on). Only the substituted replacement is new.
                         let mut parts: Vec<Ex> = sv
                             .iter()
                             .zip(used.iter())
                             .filter(|(_, &u)| !u)
                             .map(|(x, _)| x.clone())
                             .collect();
-                        parts.push(replacement);
-                        let next = mul(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
+                        debug_assert!(
+                            parts.iter().all(|x| canon(x.clone(), p.cx) == *x),
+                            "an unmatched bag member is not constructor output: {parts:?}"
+                        );
+                        parts.push(canon(replacement, p.cx));
+                        let next = mul(parts, p.cx);
                         if oriented_mu(&next, node_mu(), e, p) {
                             out = Some(next);
                             true
