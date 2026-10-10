@@ -77,6 +77,19 @@ impl Ex {
         }
     }
 
+    /// Does this expression SPELL an infinity anywhere (an `Ex::PosInf`/`Ex::NegInf` node)?
+    /// Such a subtree can be infinite on a set of full measure, so the lossy blanket's
+    /// premise ("finite almost everywhere") is not an approximation there but false (see
+    /// `ac::search::distribute_product`).
+    pub fn contains_infinity(&self) -> bool {
+        match self {
+            Ex::PosInf | Ex::NegInf => true,
+            Ex::Num(_) | Ex::Pi | Ex::E | Ex::NaN | Ex::Const | Ex::Leaf(_) => false,
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(Ex::contains_infinity),
+            Ex::Pow(b, e) => b.contains_infinity() || e.contains_infinity(),
+        }
+    }
+
     /// Does this expression contain a VARIABLE leaf or a `<constant>` -- i.e., does it have a
     /// measure space for "almost everywhere" to quantify over? The a.e. certificates are
     /// statements about null sets in (variable, constant)-space; a fully ground expression
@@ -1338,7 +1351,15 @@ impl<'a> Cx<'a> {
     /// list of an addend). Also the value-preservation licence of the D39 exploration
     /// moves (`ac::search::distribute_product`), which is why it is crate-visible.
     pub(crate) fn fin_licensed(&self, e: &Ex) -> bool {
-        if self.lossy() || self.certainly_finite(e) {
+        self.lossy() || self.fin_certified(e)
+    }
+
+    /// The certificate body of [`fin_licensed`] WITHOUT the lossy blanket: the answer the
+    /// SOUND licence gives (the `nz_ae_certified` pattern). Lossy-mode callers use it where
+    /// the blanket's premise cannot hold (`ac::search::distribute_product`, a piece that
+    /// spells an infinity).
+    pub(crate) fn fin_certified(&self, e: &Ex) -> bool {
+        if self.certainly_finite(e) {
             return true;
         }
         // Ground expressions have no measure space: a.e. tolerance degenerates to exactness,

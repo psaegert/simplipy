@@ -317,7 +317,16 @@ fn local_moves(e: &Ex, cx: &Cx, out: &mut Vec<Ex>) {
 ///   is non-finite (e.g. `a = inf, b = 2, c = -1`: `inf*1` vs `inf - inf`), so every
 ///   factor and every distributed term must carry the finite-a.e. licence
 ///   (`Cx::fin_licensed` -- the `!`-certificate machinery, blanket-granted in lossy
-///   mode exactly like the chain's own collections).
+///   mode exactly like the chain's own collections) -- EXCEPT a piece that spells an
+///   infinity, which needs the sound certificate (`Cx::fin_certified`) in every mode.
+///   The constructor steps the blanket licenses (opposite-sign cancellation, the zero
+///   collapse, an infinity absorbing a term) give a value only where their input has
+///   none (NaN); this move runs the other way, and at an infinite piece it turns a
+///   defined `+-inf` into NaN on a set of full measure (`-inf*(x1 - 1/2)` becomes
+///   `inf - inf*x1`, NaN for every `x1 > 0`). The chain then legitimately fills that NaN
+///   (`inf - inf*x1 -> inf`), so the search would accept `inf` for a value that is
+///   `-inf` on `x1 > 1/2`. For a piece that spells an infinity the blanket's premise
+///   ("finite a.e.") is false everywhere, not on a null set, so the blanket stops there.
 /// * `<constant>` INDEPENDENCE -- every `Const` occurrence is an independent fitted
 ///   constant; distribution DUPLICATES the factors it multiplies in, and duplicating
 ///   a `Const`-bearing subtree would mint independent copies of one constant (a
@@ -350,10 +359,17 @@ fn distribute_product(factors: &[Ex], cx: &Cx) -> Option<Ex> {
             return None;
         }
     }
-    // Finite-a.e. licences for the distribution identity itself.
-    if !rest.iter().all(|f| cx.fin_licensed(f))
-        || !adds.iter().all(|v| v.iter().all(|t| cx.fin_licensed(t)))
-    {
+    // Finite-a.e. licences for the distribution identity itself; the lossy blanket does
+    // not cover a piece that spells an infinity (see the doc above). Outside lossy mode
+    // both branches are the same certificate, so the sound modes are unchanged.
+    let licensed = |f: &Ex| {
+        if f.contains_infinity() {
+            cx.fin_certified(f)
+        } else {
+            cx.fin_licensed(f)
+        }
+    };
+    if !rest.iter().all(licensed) || !adds.iter().all(|v| v.iter().all(licensed)) {
         return None;
     }
     // The cartesian picks, in canonical bag order (deterministic).
@@ -451,5 +467,116 @@ mod tests {
                 .unwrap(),
             out
         );
+    }
+
+    /// The move's licence at a spelled infinity, at the constructor level (no assets): the
+    /// lossy blanket distributes `x2 * (x1 - 1/2)` but not `-inf * (x1 - 1/2)`, whose
+    /// distributed form `inf - inf*x1` is NaN on `x1 > 0` where the product is `+-inf`
+    /// (and which the constructors finish to `inf`, wrong on `x1 > 1/2`).
+    #[test]
+    fn distribute_refuses_a_spelled_infinity_in_every_mode() {
+        use super::distribute_product;
+        use crate::ac::expr::{add, Cx, Ex};
+        use crate::ac::rat::Rat;
+        use crate::operators::{OperatorSpec, Operators};
+        use crate::tokens::{TokenOverlay, TokenTable, TokenView};
+        let mut order = Vec::new();
+        let mut specs: rustc_hash::FxHashMap<String, OperatorSpec> = Default::default();
+        for (n, arity) in [
+            ("+", 2),
+            ("-", 2),
+            ("*", 2),
+            ("/", 2),
+            ("pow", 2),
+            ("tanh", 1),
+        ] {
+            order.push(n.to_string());
+            specs.insert(
+                n.to_string(),
+                OperatorSpec {
+                    realization: String::new(),
+                    alias: vec![],
+                    inverse: None,
+                    arity,
+                    precedence: None,
+                    commutative: n == "+" || n == "*",
+                },
+            );
+        }
+        let ops = Operators::from_specs(order.clone(), specs);
+        let table = TokenTable::build(&order, &ops);
+        let overlay = std::cell::RefCell::new(TokenOverlay::new(table.len()));
+        let view = TokenView::new(&table, &overlay);
+        let mut lossy = Cx::bare(&view);
+        lossy.mode = RuleMode::Permissive;
+        lossy.sentinels_expired = true;
+        let sound = Cx::bare(&view);
+        let x1 = Ex::Leaf(view.intern("x1"));
+        let x2 = Ex::Leaf(view.intern("x2"));
+        let half = Ex::Num(Rat::new(-1, 2).unwrap());
+        let sum = add(vec![x1.clone(), half], &lossy);
+        assert!(matches!(sum, Ex::Add(_)), "x1 - 1/2 stays a sum: {sum:?}");
+        for inf in [Ex::NegInf, Ex::PosInf] {
+            for cx in [&lossy, &sound] {
+                assert_eq!(
+                    distribute_product(&[inf.clone(), sum.clone()], cx),
+                    None,
+                    "{inf:?} * (x1 - 1/2) must not distribute (lossy = {})",
+                    cx.lossy()
+                );
+                // An infinity inside a co-factor is the same piece.
+                let carrier = crate::ac::expr::mul(vec![inf.clone(), x2.clone()], cx);
+                assert_eq!(distribute_product(&[carrier, sum.clone()], cx), None);
+            }
+        }
+        // A finite factor still distributes under the blanket (the move is kept).
+        assert!(distribute_product(&[x2.clone(), sum.clone()], &lossy).is_some());
+    }
+
+    /// End to end (acj-4): permissive keeps the value of an infinity times a sign-changing
+    /// sum at every effort, the repro and its finite-valued relatives included.
+    #[test]
+    fn permissive_search_keeps_signed_infinity_products() {
+        let Some(e) = engine() else { return };
+        let form = crate::engine::AcForm::Explicit;
+        for (input, wrong) in [
+            (
+                t(&["*", "float(\"-inf\")", "-", "x1", "/", "1", "2"]),
+                t(&["float(\"inf\")"]),
+            ),
+            (
+                t(&[
+                    "+",
+                    "1",
+                    "tanh",
+                    "*",
+                    "float(\"inf\")",
+                    "-",
+                    "x1",
+                    "/",
+                    "1",
+                    "2",
+                ]),
+                t(&["0"]),
+            ),
+            (
+                t(&["*", "float(\"inf\")", "*", "x1", "-", "x2", "1"]),
+                t(&["*", "float(\"-inf\")", "x1"]),
+            ),
+        ] {
+            let off = e
+                .ac_simplify_proj(&input, 48, RuleMode::Permissive, form)
+                .unwrap();
+            for budget in [1, 4, usize::MAX] {
+                let out = e
+                    .ac_explore_proj(&input, 48, RuleMode::Permissive, form, budget)
+                    .unwrap();
+                assert_ne!(out, wrong, "{input:?} at budget {budget}");
+                assert_eq!(
+                    out, off,
+                    "{input:?} at budget {budget}: the search moved it"
+                );
+            }
+        }
     }
 }
