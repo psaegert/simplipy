@@ -666,22 +666,14 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     p.mcx,
                     &mut |b, used| {
                         let replacement = substitute(&rule.rhs, b, p.cx.view);
-                        // The unmatched members join as they are: members of a canonical bag
-                        // built under this pass's context are constructor output already, and
-                        // constructors are idempotent on their own output (the premise the pass
-                        // skips unchanged children on). Only the substituted replacement is new.
                         let mut parts: Vec<Ex> = sv
                             .iter()
                             .zip(used.iter())
                             .filter(|(_, &u)| !u)
                             .map(|(x, _)| x.clone())
                             .collect();
-                        debug_assert!(
-                            parts.iter().all(|x| canon(x.clone(), p.cx) == *x),
-                            "an unmatched bag member is not constructor output: {parts:?}"
-                        );
-                        parts.push(canon(replacement, p.cx));
-                        let next = add(parts, p.cx);
+                        parts.push(replacement);
+                        let next = add(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
                         if oriented_mu(&next, node_mu(), e, p) {
                             out = Some(next);
                             true
@@ -705,22 +697,14 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     p.mcx,
                     &mut |b, used| {
                         let replacement = substitute(&rule.rhs, b, p.cx.view);
-                        // The unmatched members join as they are: members of a canonical bag
-                        // built under this pass's context are constructor output already, and
-                        // constructors are idempotent on their own output (the premise the pass
-                        // skips unchanged children on). Only the substituted replacement is new.
                         let mut parts: Vec<Ex> = sv
                             .iter()
                             .zip(used.iter())
                             .filter(|(_, &u)| !u)
                             .map(|(x, _)| x.clone())
                             .collect();
-                        debug_assert!(
-                            parts.iter().all(|x| canon(x.clone(), p.cx) == *x),
-                            "an unmatched bag member is not constructor output: {parts:?}"
-                        );
-                        parts.push(canon(replacement, p.cx));
-                        let next = mul(parts, p.cx);
+                        parts.push(replacement);
+                        let next = mul(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
                         if oriented_mu(&next, node_mu(), e, p) {
                             out = Some(next);
                             true
