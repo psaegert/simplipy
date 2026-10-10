@@ -775,8 +775,9 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
 /// plain prefix (fixed arity needs no delimiters). `neg`/`inv` exist ONLY as the standalone
 /// unary spellings (function arguments, lone terms: `tan neg x0`, `inv x0`); inside bags the
 /// sections own all inverses, so bags contain no negative literals and no inverse operators.
-/// Rational literals spell as one token: integers bare (`7`), exact decimals as decimals
-/// (`0.2`), everything else as a fraction (`1/3`).
+/// Integers spell bare (`7`), every fraction as a bag (`<mul> 1 <div> 3 </mul>`), and decimals as
+/// one token (`0.15915494309189535`) except small ones, which spell as a bag too (`0.2` is
+/// `<mul> 1 <div> 5 </mul>`).
 ///
 /// Faithful: `from_prefix` parses this form back to the same canonical expression (both
 /// languages share the parser, which is LIBERAL -- it also accepts `neg`/`inv`/negative
@@ -810,7 +811,7 @@ pub fn to_prefix_tagged(e: &Ex, cx: &Cx) -> Vec<Tok> {
 fn emit_rational_tagged(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let view = cx.view;
     if !fraction_spells_structurally(r) {
-        // Integer, or a fraction outside the consumer's vocabulary: one argmin token.
+        // Integer, or a decimal beyond the bound: one token.
         out.push(view.intern(&num_token(r)));
         return;
     }
@@ -944,7 +945,22 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                         // a mul bag: the same-type nesting the census measured at 8,918
                         // events/1M. The grammar's >=1-numerator-member floor is kept by
                         // the post-loop `1` (below); partition bags stay verbatim (F73).
-                        match mag.clone().filter(fraction_spells_structurally) {
+                        // Outside the bound the ratified divisor side comes first (below); a
+                        // coefficient it does not move splits too when its one token would be a
+                        // fraction (the tagged form writes none), and stays one token when it is
+                        // a decimal.
+                        let inv = mag
+                            .as_ref()
+                            .filter(|m| !within_tagged_bound(m))
+                            .and_then(divisor_side)
+                            .filter(|_| has_plain_mul_factor(v));
+                        let split = mag.clone().filter(|m| {
+                            within_tagged_bound(m)
+                                || (inv.is_none()
+                                    && !m.is_integer()
+                                    && !crate::ac::expr::decimal_spelling_wins(m))
+                        });
+                        match split {
                             Some(m) => {
                                 den.push(Ex::Num(m.denom()));
                                 if m.numer().is_one() {
@@ -978,10 +994,7 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                                 // has the shorter exact token. In-bound behaviour is
                                 // untouched. H-020 holds -- the sign never enters
                                 // `<div>`; it splits out as a `-1` bag literal.
-                                match mag
-                                    .and_then(|m| divisor_side(&m))
-                                    .filter(|_| has_plain_mul_factor(v))
-                                {
+                                match inv {
                                     Some(inv) => {
                                         neg_one = r.is_negative();
                                         den.push(Ex::Num(inv));
@@ -1087,14 +1100,8 @@ fn num_token(r: &Rat) -> String {
     format!("{}/{}", r.numer_string(), r.denom_string())
 }
 
-/// Largest |numerator| and denominator the TAGGED form spells structurally.
-///
-/// The tagged dialect is model-facing, and a tokenized consumer's numeric vocabulary is a
-/// finite integer range; a fraction whose components fall inside it is spellable as
-/// `<mul> p <div> q </mul>` with no new token, while one that does not is unspellable
-/// either way and is better emitted as the compact argmin token than as a long structure
-/// the consumer must discard anyway. Overridable so a consumer with a wider vocabulary can
-/// widen the structural range to match it.
+/// Largest |numerator| and denominator of a DECIMAL the TAGGED form spells structurally
+/// (`0.2` is `<mul> 1 <div> 5 </mul>`); a decimal beyond it stays one token. Overridable.
 fn tagged_fraction_bound() -> i128 {
     static BOUND: OnceLock<i128> = OnceLock::new();
     *BOUND.get_or_init(|| {
@@ -1105,8 +1112,17 @@ fn tagged_fraction_bound() -> i128 {
     })
 }
 
-/// Does `r` spell structurally in the tagged form (both components inside the bound)?
+/// Does `r` spell structurally in the tagged form? Every non-integer whose one token would be a
+/// fraction (`17/4`) does, at any size: the tagged form never writes a one-token fraction, so a
+/// tagged answer that holds a fraction carries a bag delimiter and reads back as tagged (a
+/// bag-free `pow x10 17/4` re-read as the explicit form, `pow x10 / 17 4`). A decimal does inside
+/// [`tagged_fraction_bound`].
 fn fraction_spells_structurally(r: &Rat) -> bool {
+    within_tagged_bound(r) || (!r.is_integer() && !crate::ac::expr::decimal_spelling_wins(r))
+}
+
+/// Is `r` a non-integer with both components inside [`tagged_fraction_bound`]?
+fn within_tagged_bound(r: &Rat) -> bool {
     let bound = tagged_fraction_bound();
     // A component beyond i128 is beyond every bound.
     !r.is_integer()

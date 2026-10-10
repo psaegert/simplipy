@@ -2002,8 +2002,11 @@ class SimpliPyEngine:
               ``(2*x1)/(x2*x3)`` is ``<mul> 2 x1 <div> x2 x3 </mul>``. ``pow`` and the
               unary functions stay plain prefix; ``neg``/``inv`` exist only as the
               standalone unary spellings (``tan neg x0``, ``inv x0``) -- inside bags the
-              sections own all inverses. Exact literals are one token each: ``7``, ``0.2``,
-              ``1/3``. Tagged output is accepted back as input (one shared, liberal parser).
+              sections own all inverses. Integers are one token (``7``), every fraction is a
+              bag (``<mul> 1 <div> 3 </mul>``), and so is a small decimal (``0.2`` is
+              ``<mul> 1 <div> 5 </mul>``); other decimals are one token. So a tagged answer
+              that holds a fraction always carries a bag and reads back as tagged. Tagged
+              output is accepted back as input (one shared, liberal parser).
             * ``'infix'`` -- the PRETTY human-readable rendering (default for ``str``
               inputs; always returns ``str``): ``x8 + 1.2*x3``, ``-x0/3``, ``(x0 + 1)^2``.
               Round-trips: feeding the rendering back as a ``str`` input reaches the same
