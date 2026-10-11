@@ -5,9 +5,9 @@
 - **Fast in every mode.** Against 0.14.7, on the 129,490 simplify inputs of flash-ansr's T8.1
   training draws, srbf's 6,531 ground truths and its 125,127 model predictions (both versions side
   by side on one machine under other load), in every mode: under 1% of calls take more than 0.1 s
-  and none takes more than 1 s (0.14.7: up to 18.0% and 1.47%, permissive on the predictions).
-  Total time falls by 37% (`f64`), 29% (`real`) and 35% (`permissive`) on the T8.1 inputs, 21-30%
-  on the ground truths, and by 80%, 78% and 89% on the predictions.
+  and none takes more than 1 s (0.14.7: up to 18.2% and 1.47%, permissive on the predictions).
+  Total time falls by 30% (`f64`), 34% (`real`) and 35% (`permissive`) on the T8.1 inputs, 21-33%
+  on the ground truths, and by 81%, 77% and 90% on the predictions.
 - **A work budget per search, the default in permissive.** `simplify()` takes `work`: the budget
   of each search in deterministic units (one step of the matcher or one canonical-constructor
   call), so a budget cuts the same walk at the same place on every machine and under any load. A
@@ -29,17 +29,19 @@
   sign can move kept the orientation it arrived in (the cheapest orientation is now found exactly
   for any number of them), two sums that are each other's negation stayed apart where they met in
   one product, and a term whose coefficient became 1 kept its factors' signs. A product now
-  brings each pair of opposite sums to its cheapest orientation after collecting its factors, and
-  decides again until no flip is cheaper: the bare sum and its odd powers move a sign to the
-  coefficient, its even powers flip freely, and inverses, roots and symbolic powers stay. So
+  decides all its pairs of opposite sums together after collecting its factors: it prices every
+  combination of flips as the whole product, and decides again until nothing is cheaper. The bare
+  sum and its odd powers move a sign to the coefficient (or to a bare constant or infinity, which
+  carries it), its even powers flip freely, and inverses, roots and symbolic powers stay. So
   `(x - a)*(a - x)` is `-(x - a)^2` and `(x - a)^2/(a - x)/(x - a)` is `-1`, in any order of the
-  factors. On 1,140 products of opposite sums no answer changes on a second call or depends on
-  the order of its factors, in any mode (0.14.7 at its default: 17 change on a second call in
-  `f64` and in `real`), and none is costlier than 0.14.7's. In `f64` and `real` no answer changes
+  factors. On 3,100 products of opposite sums no answer changes on a second call or depends on
+  the order of its factors, in any mode (0.14.7 at its default: 30 change on a second call in
+  `f64` and in `real`); in each mode's own measure two are costlier than 0.14.7's, both in
+  `permissive` and both holding an infinity. In `f64` and `real` no answer changes
   on a second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
   predictions). The debug-build check that every intermediate state reads back as itself printed
   in a spelling no caller receives; it now prints as the callers do and passes on all ground
-  truths and predictions in every mode and on all 129,490 T8.1 inputs in `permissive`.
+  truths, predictions and T8.1 inputs in every mode.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
@@ -69,7 +71,7 @@
   precision moved to their floats), and the input as read. So its answer never prices above the
   input, above its answer with the search off, or above its answer at a smaller `effort`; on the
   three sets none does (efforts checked: 0, 1, 4 and the default). Against 0.14.7 in permissive's
-  own measure, 1,795 T8.1 answers get cheaper and 567 costlier, and 40,863 predictions cheaper and
+  own measure, 1,796 T8.1 answers get cheaper and 567 costlier, and 40,863 predictions cheaper and
   6,633 costlier. 31 of the predictions' answers print a literal beyond float precision (0.14.7:
   25); none prices above the same answer with those literals at their floats (14 below, 17 equal).
 - **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:

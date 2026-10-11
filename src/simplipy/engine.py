@@ -2233,10 +2233,12 @@ class SimpliPyEngine:
 
         With ``certified=False`` the expression is priced on the bare
         (certificate-less, fail-closed) canonicalization instead: still invariant
-        to operand order, bracketing and serialization sugar, but a certificate-licensed
-        respelling the bare context cannot re-derive keeps its own measure, so a
-        simplify output can price ABOVE its input (measured live: 0.48% of 64k corpus
-        rows, in quanta of one symbol unit; the certified default closes exactly this).
+        to operand order and serialization sugar, and to bracketing except in a product of
+        a sum and its negation, which the bare context collects only partly, so the
+        grouping can decide the price. A certificate-licensed respelling the bare context
+        cannot re-derive keeps its own measure, so a simplify output can price ABOVE its
+        input (measured live: 0.48% of 64k corpus rows, in quanta of one symbol unit; the
+        certified default closes exactly this).
 
         Invariant in every case: mu prices structure and information, not spelling --
         signs and magnitude-1 coefficient/exponent slots are free, literals pay their

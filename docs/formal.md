@@ -136,7 +136,7 @@ specimens remain. The instrument itself printed each state with the mode's certi
 context, a spelling no caller receives (every caller prints with the bare context), which
 raised false alarms and hid three real classes (the closed I3 class above); it now prints as
 the callers do, and in a debug build it holds on every state of srbf's ground truths and
-predictions in every mode and of all 129,490 T8.1 simplify inputs in permissive. A second
+predictions and of the 129,490 T8.1 simplify inputs, in every mode. A second
 measured class (2026-08-24) sat not in `canon()` but in the
 *pricing instrument*: `complexity()` parsed fold-free while the `f64`/`permissive` chains
 parse fold-at-parse, so on 10 of 65,536 benchmark rows the instrument priced a
@@ -216,16 +216,23 @@ differs; its exact ties resolve by an order that is a function of the orbit, nev
 spelling. It skips a placement in which a flipped factor lands on the base another factor is
 collected under (an even root counts as a power of its radicand); beyond six sites such a
 possible collision, or a negation overflow, keeps the entry placement. Opposite sums $S$ and
-$-S$ are one base up to a sign. After like-base collection `mul()` prices each class's outcomes
-as whole products: kept, or every carrier flipped onto one orientation (the bare sum and its odd
-powers move a sign to the coefficient, its even powers flip freely; negative odd, fractional and
-symbolic powers and roots never move). It takes a flip only when strictly cheaper (between two
-equally cheap flips the smaller product), then collects and decides again until no flip is
-cheaper; the first decision also prices the members as they arrived. So the product it returns
-is the product its own factors build, in any order (`(x - a)*(a - x)` is `-(x - a)^2`,
-`(a - x)*(x - a)/(a - x)` is `x - a`, and `(x - a)^2/(a - x)/(x - a)` is `-1`). A bare
-(certificate-free) context, such as the entry parse or a rule's sides, keeps each class as it
-arrived and leaves the decision to the certified construction. A join whose coefficient becomes 1 re-places its key's signs (`term_join`). The decision is three-tier:
+$-S$ are one base up to a sign. After like-base collection `mul()` decides a bag's classes
+together: each combination of outcomes (a class kept, or every carrier flipped onto one
+orientation; the bare sum and its odd powers move a sign to the coefficient, or to a bare
+infinity or a bare Const that carries it, its even powers flip freely, and negative odd,
+fractional and symbolic powers and roots never move) is priced as the whole product, beyond 64
+combinations one class at a time, and the cheapest wins, an exact tie going to a non-negative
+coefficient and then the structurally smaller product, as in `sign_place`. It collects and
+decides again until nothing is cheaper, the first decision also pricing the members as they
+arrived, so the product it returns is the product its own factors build, in any order
+(`(x - a)*(a - x)` is `-(x - a)^2`, `(a - x)*(x - a)/(a - x)` is `x - a`, and
+`(x - a)^2/(a - x)/(x - a)` is `-1`). A bare (certificate-free) context, such as the entry parse,
+the bare measure or a rule's sides, cannot price the cancellations these outcomes turn on: it
+moves carriers onto the other orientation only where an exponent of the opposite sign waits there
+alone, merges a class of carriers alone onto the orientation it reaches without a sign, and
+leaves every other class to the certified construction, its carriers collected apart from its
+non-carriers. A join whose coefficient becomes 1 re-places its key's signs (`term_join`). The
+decision is three-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
 2. an exact $\mu$ tie at a SIGN-TRADE site goes to the structurally distinguished
@@ -562,8 +569,8 @@ assertion), `to_prefix` has a left inverse and is therefore injective — two st
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
 debug, so every state reached by the tests and the mini-mines satisfies it, and so does every
-state of srbf's ground truths and model predictions in every mode and of all 129,490 T8.1
-simplify inputs in permissive). It fails on the documented I3 residuals at literals that stay leaves. These
+state of srbf's ground truths and model predictions and of the 129,490 T8.1 simplify inputs, in
+every mode). It fails on the documented I3 residuals at literals that stay leaves. These
 residuals scope the cache guarantee too.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass
@@ -615,9 +622,14 @@ both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
-permutation gate (0 violations / 400 canonical corpus expressions at head). One
-registered residual class: the I3 residuals above. (The scale gates held 0 idempotence and 0 permutation failures when last run, on the 128-bit
-engine.)
+permutation gate (0 violations / 400 canonical corpus expressions at head). Two registered
+residual classes: the I3 residuals above, and re-bracketings of a product with the search off.
+A sub-product that holds only one orientation of a sum collects before it meets the other, or
+trades its sign alone, so the nesting can decide the form: on a fuzz of products over opposite
+sums, odd functions and odd powers, the left, right and balanced nestings of 25 of 150
+expressions reach different answers at effort 0 in `f64` and `real` and 24 in `permissive`
+(0.14.7: 87, 87 and 82); each answer reads back as itself. (The scale gates held 0 idempotence
+and 0 permutation failures when last run, on the 128-bit engine.)
 
 **Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
 (training-corpus canonicalization). It relaxes *soundness* licences, never the ordering:
