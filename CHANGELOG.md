@@ -32,13 +32,15 @@
   decides all its pairs of opposite sums together after collecting its factors: it prices every
   combination of flips as the whole product, and decides again until nothing is cheaper. The bare
   sum and its odd powers move a sign to the coefficient (or to a bare constant or infinity, which
-  carries it), its even powers flip freely, and inverses, roots and symbolic powers stay. So
-  `(x - a)*(a - x)` is `-(x - a)^2` and `(x - a)^2/(a - x)/(x - a)` is `-1`, in any order of the
-  factors. On 3,100 products of opposite sums no answer changes on a second call or depends on
-  the order of its factors, in any mode (0.14.7 at its default: 30 change on a second call in
-  `f64` and in `real`); in each mode's own measure two are costlier than 0.14.7's, both in
-  `permissive` and both holding an infinity. In `f64` and `real` no answer changes
-  on a second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
+  carries it), its even powers flip freely, and negative odd powers (`1/(a - x)`), roots and
+  symbolic powers stay. So `(x - a)*(a - x)` is `-(x - a)^2` and `(x - a)^2/(a - x)/(x - a)` is
+  `-1`, in any order of the factors. On 3,100 generated products of opposite sums no answer
+  changes on a second call or depends on the order of its factors, in any mode (0.14.7 at its
+  default: 30 change on a second call in `f64` and in `real`); in each mode's own measure two are
+  costlier than 0.14.7's, both in `permissive` and both holding an infinity. With the search off,
+  re-bracketing such a product can still change its form (25 of 150 fuzzed products in `f64`;
+  0.14.7: 87), each answer reading back as itself. In `f64` and `real` no answer changes on a
+  second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
   predictions). The debug-build check that every intermediate state reads back as itself printed
   in a spelling no caller receives; it now prints as the callers do and passes on all ground
   truths, predictions and T8.1 inputs in every mode.
