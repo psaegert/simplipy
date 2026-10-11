@@ -213,14 +213,19 @@ it finds the argmin without materializing the orbit: a placement's price is the 
 prices, coupled only by the parity of the flips, so the cheapest placement is each site's
 cheaper orientation, with the one site whose switch costs least switched where the parity
 differs; its exact ties resolve by an order that is a function of the orbit, never of the entry
-spelling. It keeps the entry placement only where an orientation would collide with another
-factor's base or a negation overflows. Opposite sums $S$ and $-S$ collect per class: a member that
-cannot flip (a negative odd power, a fractional power) fixes the class's orientation, the others
-follow it (the bare sum and its odd powers move a sign to the coefficient, its even powers flip
-freely), and a class with no fixed member takes the smaller orientation; the decision reads only
-the class's members, never their order (`(x - a)*(a - x)` is `-(x - a)^2`, and
-`(a - x)*(x - a)/(a - x)` is `x - a`). A join whose coefficient becomes 1 re-places its key's
-signs (`term_join`). The decision is three-tier:
+spelling. It skips a placement in which a flipped factor lands on the base another factor is
+collected under (an even root counts as a power of its radicand); beyond six sites such a
+possible collision, or a negation overflow, keeps the entry placement. Opposite sums $S$ and
+$-S$ are one base up to a sign. After like-base collection `mul()` prices each class's outcomes
+as whole products: kept, or every carrier flipped onto one orientation (the bare sum and its odd
+powers move a sign to the coefficient, its even powers flip freely; negative odd, fractional and
+symbolic powers and roots never move). It takes a flip only when strictly cheaper (between two
+equally cheap flips the smaller product), then collects and decides again until no flip is
+cheaper; the first decision also prices the members as they arrived. So the product it returns
+is the product its own factors build, in any order (`(x - a)*(a - x)` is `-(x - a)^2`,
+`(a - x)*(x - a)/(a - x)` is `x - a`, and `(x - a)^2/(a - x)/(x - a)` is `-1`). A bare
+(certificate-free) context, such as the entry parse or a rule's sides, keeps each class as it
+arrived and leaves the decision to the certified construction. A join whose coefficient becomes 1 re-places its key's signs (`term_join`). The decision is three-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
 2. an exact $\mu$ tie at a SIGN-TRADE site goes to the structurally distinguished

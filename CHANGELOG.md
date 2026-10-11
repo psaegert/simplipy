@@ -27,10 +27,16 @@
 - **Answers read back as themselves.** Three canonical forms depended on the route that built
   them, so an answer could change on a second call: a product with more than six factors whose
   sign can move kept the orientation it arrived in (the cheapest orientation is now found exactly
-  for any number of them), two sums that are each other's negation stayed apart (they now collect
-  per class, whatever the order of the factors: `(x - a)*(a - x)` is `-(x - a)^2`), and a term
-  whose coefficient became 1 kept its factors' signs. In `f64` and `real` no answer changes on a
-  second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
+  for any number of them), two sums that are each other's negation stayed apart where they met in
+  one product, and a term whose coefficient became 1 kept its factors' signs. A product now
+  brings each pair of opposite sums to its cheapest orientation after collecting its factors, and
+  decides again until no flip is cheaper: the bare sum and its odd powers move a sign to the
+  coefficient, its even powers flip freely, and inverses, roots and symbolic powers stay. So
+  `(x - a)*(a - x)` is `-(x - a)^2` and `(x - a)^2/(a - x)/(x - a)` is `-1`, in any order of the
+  factors. On 1,140 products of opposite sums no answer changes on a second call or depends on
+  the order of its factors, in any mode (0.14.7 at its default: 17 change on a second call in
+  `f64` and in `real`), and none is costlier than 0.14.7's. In `f64` and `real` no answer changes
+  on a second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
   predictions). The debug-build check that every intermediate state reads back as itself printed
   in a spelling no caller receives; it now prints as the callers do and passes on all ground
   truths and predictions in every mode and on all 129,490 T8.1 inputs in `permissive`.

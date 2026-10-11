@@ -3187,19 +3187,81 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     }
 
     // OPPOSITE SUMS: factors whose sums are each other's negation -- `(9.6 - x) * (x - 9.6)`
-    // -- are one base up to a sign, so they are brought to ONE orientation and collect below
-    // like any equal bases: `-(x - 9.6)^2`, and under the usual exponent licence
-    // `(x - 9.6) / (9.6 - x)` to `-1`. Decided per class {S, -S} from the class's members
-    // alone, so the result is a function of the bag (`collect_opposite_sums`). Without this
+    // -- are one base up to a sign, so after collection their classes {S, -S} are brought to
+    // the cheapest orientation and collected again: `-(x - 9.6)^2`, and under the usual
+    // exponent licence `(x - 9.6) / (9.6 - x)` to `-1` (`collect_opposite_sums`). Without this
     // the pair survived wherever it met in one bag (`sign_place` skips a flip that collides
     // with another base) but collected wherever the parse built a smaller product first, in
     // which the site traded alone: a state and the parse of its own print differed (srbf
     // ground truth 4174, in all three modes). Bags with an infinity, a Const or a
-    // coefficient partition keep their own sign owners.
-    if inf_sign.is_none() && !has_const && !coeff.is_zero() && coeff_overflow.is_empty() {
-        collect_opposite_sums(&mut factors, &mut coeff, cx);
+    // coefficient partition keep their own sign owners. Only the scan runs on every bag.
+    let opposite = (inf_sign.is_none()
+        && !has_const
+        && !coeff.is_zero()
+        && coeff_overflow.is_empty()
+        && holds_opposite_sums(&factors, cx))
+    .then(|| factors.clone());
+
+    let (mut out, spliced) = collect_like_bases(factors, cx);
+    if has_const {
+        // Const absorbs every nonzero rational factor (c * r = c'), the members a refused
+        // coefficient partition kept included (design 2c, review M3).
+        coeff_overflow.clear();
+    }
+    out.extend(coeff_overflow);
+    if spliced {
+        if !coeff.is_one() {
+            out.push(Ex::Num(coeff));
+        }
+        if has_const {
+            out.push(Ex::Const);
+        }
+        if let Some(sign) = inf_sign {
+            out.push(if sign { Ex::PosInf } else { Ex::NegInf });
+        }
+        return mul(out, cx);
+    }
+    if let Some(raw) = opposite {
+        return collect_opposite_sums(coeff, raw, out, cx);
     }
 
+    // Coefficient 0 (no infinity): collapse where licensed (see the gate doc above). A bare
+    // Const vanishes here (0 * c = 0 -- Const is certainly finite), so `has_const` is simply
+    // not consulted on this path.
+    if inf_sign.is_none() && coeff.is_zero() {
+        // Each LICENSED factor drops individually (`0 * f == 0` wherever `f` is finite --
+        // the same finite-a.e. licence as the full collapse, applied per-factor). Keeping
+        // licensed factors would make the kept-zero form depend on ASSOCIATION order
+        // (`(0 * x) * (1/D)` collapses the inner pair, `0 * (x * (1/D))` would not) and
+        // break serialization stability; only the unlicensed factors stay with the 0.
+        let v: Vec<Ex> = out.into_iter().filter(|f| !cx.fin_licensed(f)).collect();
+        if v.is_empty() {
+            return Ex::Num(Rat::ZERO);
+        }
+        // F68 (fuzz rows 392777/647852, introduced by F63): assemble through the
+        // sign-placement owner, not raw -- the zero is a sign-eating carrier (see
+        // sign_place's carrier list), so the orbit files ONE orientation for every
+        // trade-site factor where the raw assembly froze whichever mirror arrived
+        // (direct build vs parse-of-own-rendering shipped two states; row-120 law).
+        return sign_place(Rat::ZERO, v, cx);
+    }
+
+    if has_const {
+        // Bare Const absorbs the (nonzero) rational coefficient: c * r = c'.
+        coeff = Rat::ONE;
+        out.push(Ex::Const);
+    }
+    if let Some(sign) = inf_sign {
+        out.push(if sign { Ex::PosInf } else { Ex::NegInf });
+    }
+    finish_product(coeff, out, cx)
+}
+
+/// Like-base exponent collection, `mul()`'s step after the coefficient: the factors with one
+/// base (and one symbolic exponent) merge their exponents, and each result is rebuilt through
+/// [`pow`]. Returns the rebuilt factors and whether one of them came back as a product
+/// (`spliced`: its members are in the list, and the caller re-runs the constructor on it).
+fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
     // Like-base exponent collection. The BRANCH-CUT licence gates every single merge step,
     // including same-sign ones: merging exponents `a` and `b` into `a + b` is sound iff both
     // are integers (TOTAL up to null poles), OR the base is certainly non-negative, OR the sum
@@ -3297,54 +3359,13 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
             }
         }
     }
-    if has_const {
-        // Const absorbs every nonzero rational factor (c * r = c'), the members a refused
-        // coefficient partition kept included (design 2c, review M3).
-        coeff_overflow.clear();
-    }
-    out.extend(coeff_overflow);
-    if spliced {
-        if !coeff.is_one() {
-            out.push(Ex::Num(coeff));
-        }
-        if has_const {
-            out.push(Ex::Const);
-        }
-        if let Some(sign) = inf_sign {
-            out.push(if sign { Ex::PosInf } else { Ex::NegInf });
-        }
-        return mul(out, cx);
-    }
+    (out, spliced)
+}
 
-    // Coefficient 0 (no infinity): collapse where licensed (see the gate doc above). A bare
-    // Const vanishes here (0 * c = 0 -- Const is certainly finite), so `has_const` is simply
-    // not consulted on this path.
-    if inf_sign.is_none() && coeff.is_zero() {
-        // Each LICENSED factor drops individually (`0 * f == 0` wherever `f` is finite --
-        // the same finite-a.e. licence as the full collapse, applied per-factor). Keeping
-        // licensed factors would make the kept-zero form depend on ASSOCIATION order
-        // (`(0 * x) * (1/D)` collapses the inner pair, `0 * (x * (1/D))` would not) and
-        // break serialization stability; only the unlicensed factors stay with the 0.
-        let v: Vec<Ex> = out.into_iter().filter(|f| !cx.fin_licensed(f)).collect();
-        if v.is_empty() {
-            return Ex::Num(Rat::ZERO);
-        }
-        // F68 (fuzz rows 392777/647852, introduced by F63): assemble through the
-        // sign-placement owner, not raw -- the zero is a sign-eating carrier (see
-        // sign_place's carrier list), so the orbit files ONE orientation for every
-        // trade-site factor where the raw assembly froze whichever mirror arrived
-        // (direct build vs parse-of-own-rendering shipped two states; row-120 law).
-        return sign_place(Rat::ZERO, v, cx);
-    }
-
-    if has_const {
-        // Bare Const absorbs the (nonzero) rational coefficient: c * r = c'.
-        coeff = Rat::ONE;
-        out.push(Ex::Const);
-    }
-    if let Some(sign) = inf_sign {
-        out.push(if sign { Ex::PosInf } else { Ex::NegInf });
-    }
+/// `mul()`'s last step: the sign owners, then the assembly, for a nonzero coefficient and a
+/// collected factor list (bare `Const` and infinities included). `collect_opposite_sums` prices
+/// its candidates through it, so a priced product is exactly the product built.
+fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
     // CANONICAL SIGN ORIENTATION for `Mul[-1, Add[S]]` (H-014 root cause, 2026-08-03):
     // the orientation of a sum class {S, -S} is owned by `flipped_orientation_wins`, but
     // two assembly paths could ship the LOSING orientation wrapped in a -1 coefficient:
@@ -3522,8 +3543,8 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
     sign_place(coeff, out, cx)
 }
 
-/// OPPOSITE SUMS (see `mul()`): bring every class {S, -S} of factors over a sum to one
-/// orientation, deciding from the class alone. A member is one of
+/// OPPOSITE SUMS (see `mul()`): the bag holds factors over a sum S and over its negation -S,
+/// one base up to a sign. A member of the class {S, -S} is one of
 ///
 /// * an ODD carrier -- the bare sum or `S^n` for odd n >= 3, a sign-trade site
 ///   (`sign_trade_flip`): flipping it moves a sign to the coefficient, `f(-S) = -f(S)`, total;
@@ -3531,25 +3552,29 @@ pub fn mul(items: Vec<Ex>, cx: &Cx) -> Ex {
 ///   (the one-zero convention gives `+inf` on both sides at a zero of an inverse), so it flips
 ///   with no sign at all;
 /// * no carrier -- a negative odd power (the pole trilemma: `(-S)^-1` and `-(S^-1)` differ at
-///   the zero), a fractional or symbolic power, a sum the absorption owners keep (Const-bearing,
-///   negation-absorbing, bare infinity), or a flip `sign_trade_flip` refuses.
+///   the zero), a fractional power (an even root among them) or a symbolic one, a sum the
+///   absorption owners keep (Const-bearing, negation-absorbing, bare infinity), or a flip
+///   `sign_trade_flip` refuses. A non-carrier never moves.
 ///
-/// A class with members of only one orientation is left alone. Otherwise the target is the
-/// orientation of its non-carriers -- they cannot move -- and the class is left alone when they
-/// hold both; with no non-carrier it is the structurally smaller orientation. Every carrier of
-/// the other orientation takes the target's sum. The decision reads only the multiset of
-/// members (the partition into classes, each member's orientation and kind), never their
-/// order, so every arrival order of one bag collects the same way (the first version walked
-/// the factors once in arrival order and could flip a pair onto each other while a later
-/// non-carrier wanted the other side: `(3 - x1) * (x1 - 3) / (3 - x1)` gave `x1 - 3` in half
-/// the orders and `-(x1 - 3)^2 / (3 - x1)` in the rest).
-fn collect_opposite_sums(factors: &mut [Ex], coeff: &mut Rat, cx: &Cx) {
-    fn sum_of(f: &Ex) -> Option<&[Ex]> {
-        match factor_split_ref(f).0 {
-            Ex::Add(ts) => Some(ts.as_slice()),
-            _ => None,
-        }
-    }
+/// A class has three outcomes: kept as it is, every carrier over -S flipped onto S, or every
+/// carrier over S flipped onto -S. Each is priced as the whole product it builds -- the class
+/// collected, the rest of the bag (`out`, collected) beside it, the coefficient's sign placed
+/// by `finish_product` -- and a flip is taken only when it is strictly cheaper than keeping the
+/// class; of two equally cheap flips the structurally smaller product wins. So a carrier joins
+/// the non-carriers where that collects (`(x1 - 3) / (3 - x1)` to `-1`), and where
+/// non-carriers hold both sides it goes where it is cheapest (`(3 - x1)^-2 * sqrt(x1 - 3)` to
+/// `(x1 - 3)^-1.5`).
+///
+/// Collection changes what a member is: `S^2 * S^-1` collects to the odd carrier `S`, `S * S^-3`
+/// to the even power `S^-2`, which `pow` may turn onto -S beside a member there, and `S^-2 * S`
+/// to the non-carrier `S^-1`. So the first decision on a class offers the flips of its members
+/// both as they arrived (`raw`) and collected, every flip is collected before it is priced
+/// (until the collection moves nothing), and the decisions repeat until no flip of a collected
+/// class is cheaper. The product returned is then the one `mul()` builds again from its own
+/// factors: they are collected, and no flip of theirs is cheaper. Each flip lowers the price,
+/// so the loop ends. Classes are visited in the order of their smaller sums, so the result
+/// depends on the bag alone, not on the order of its factors.
+fn collect_opposite_sums(mut coeff: Rat, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> Ex {
     enum Kind {
         Odd,
         Even,
@@ -3578,90 +3603,293 @@ fn collect_opposite_sums(factors: &mut [Ex], coeff: &mut Rat, cx: &Cx) {
             Kind::Fixed
         }
     };
-    // The members over a sum, grouped into classes {S, -S}; `side` is false for the class's
-    // first-seen orientation, true for its negation (only a label: the decision below
-    // reads the two orientations themselves).
-    type SumClass = (Vec<Ex>, Vec<(usize, bool)>);
+    // A class's members collected until the collection moves nothing (a re-oriented even power
+    // meets the member it merges with on the next round); `None` if a rebuilt factor is a
+    // product, which no power of a sum is.
+    let collect = |mut v: Vec<Ex>| -> Option<Vec<Ex>> {
+        v.sort_by(|a, b| mul_factor_cmp(a, b, cx.view));
+        for _ in 0..=v.len() {
+            let (mut next, spliced) = collect_like_bases(v.clone(), cx);
+            if spliced {
+                return None;
+            }
+            next.sort_by(|a, b| mul_factor_cmp(a, b, cx.view));
+            if next == v {
+                return Some(v);
+            }
+            v = next;
+        }
+        None
+    };
+    // The classes of two or more members among the bag's own factors, in the order of their
+    // smaller sums: the two orientations' sums (the second empty while no member is over it)
+    // and the members.
+    struct SumClass {
+        sums: [Vec<Ex>; 2],
+        members: Vec<Ex>,
+    }
+    let over = |c: &SumClass, ts: &[Ex]| {
+        c.sums[0].as_slice() == ts
+            || c.sums[1].as_slice() == ts
+            || (c.sums[1].is_empty() && negated_sums(&c.sums[0], ts, cx))
+    };
     let mut classes: Vec<SumClass> = Vec::new();
-    for (i, f) in factors.iter().enumerate() {
-        let Some(ts) = sum_of(f) else {
+    for f in &raw {
+        let Some(ts) = sum_base(f, cx) else {
             continue;
         };
-        match classes.iter_mut().find(|(r, _)| {
-            r.len() == ts.len() && (r.as_slice() == ts || opposite_sums(r, ts, cx.view))
-        }) {
-            Some((r, members)) => {
-                let side = r.as_slice() != ts;
-                members.push((i, side));
+        match classes.iter_mut().find(|c| over(c, ts)) {
+            Some(c) => {
+                if c.sums[0].as_slice() != ts && c.sums[1].is_empty() {
+                    c.sums[1] = ts.to_vec();
+                }
+                c.members.push(f.clone());
             }
-            None => classes.push((ts.to_vec(), vec![(i, false)])),
+            None => classes.push(SumClass {
+                sums: [ts.to_vec(), Vec::new()],
+                members: vec![f.clone()],
+            }),
         }
     }
-    for (rep, members) in classes {
-        if !members.iter().any(|m| m.1) || members.iter().all(|m| m.1) {
-            continue; // one orientation only
+    classes.retain(|c| c.members.len() >= 2);
+    for c in classes.iter_mut() {
+        if !c.sums[1].is_empty() && cmp_vec(&c.sums[1], &c.sums[0], cx.view) == Ordering::Less {
+            c.sums.swap(0, 1);
         }
-        let kinds: Vec<Kind> = members.iter().map(|&(i, _)| kind(&factors[i])).collect();
-        let fixed_side = |side: bool| {
-            members
-                .iter()
-                .zip(&kinds)
-                .any(|(m, k)| m.1 == side && matches!(k, Kind::Fixed))
-        };
-        let target_side = match (fixed_side(false), fixed_side(true)) {
-            (true, true) => continue, // non-carriers on both sides: nothing may move
-            (true, false) => false,
-            (false, true) => true,
-            (false, false) => {
-                // The structurally smaller orientation. The other side's sum is any member's.
-                let other = members.iter().find(|m| m.1).map(|&(i, _)| i).unwrap();
-                let neg = sum_of(&factors[other]).unwrap();
-                cmp_vec(neg, &rep, cx.view) == Ordering::Less
+    }
+    classes.sort_by(|a, b| cmp_vec(&a.sums[0], &b.sums[0], cx.view));
+    // The rest of the bag, collected, and each class's members as they arrived.
+    let rest: Vec<Ex> = out
+        .into_iter()
+        .filter(|f| !sum_base(f, cx).is_some_and(|ts| classes.iter().any(|c| over(c, ts))))
+        .collect();
+    let arrived: Vec<Vec<Ex>> = classes
+        .iter_mut()
+        .map(|c| std::mem::take(&mut c.members))
+        .collect();
+    let bag = |held: &[Vec<Ex>], skip: usize, with: &[Ex]| -> Vec<Ex> {
+        let mut v = rest.clone();
+        for (k, m) in held.iter().enumerate() {
+            if k != skip {
+                v.extend(m.iter().cloned());
             }
-        };
-        let target: Vec<Ex> = match members.iter().find(|m| m.1 == target_side) {
-            Some(&(i, _)) => sum_of(&factors[i]).unwrap().to_vec(),
-            None => continue,
-        };
-        let odd_flips = members
-            .iter()
-            .zip(&kinds)
-            .filter(|(m, k)| m.1 != target_side && matches!(k, Kind::Odd))
-            .count();
-        let new_coeff = if odd_flips % 2 == 1 {
-            match coeff.checked_neg() {
-                Some(nc) => nc,
-                None => continue, // the i128 edge: keep the class as it is
-            }
-        } else {
-            coeff.clone()
-        };
-        for (&(i, side), k) in members.iter().zip(&kinds) {
-            if side == target_side || matches!(k, Kind::Fixed) {
-                continue;
-            }
-            factors[i] = match &factors[i] {
-                Ex::Pow(_, e) => Ex::Pow(Box::new(Ex::Add(target.clone())), e.clone()),
-                _ => Ex::Add(target.clone()),
+        }
+        v.extend(with.iter().cloned());
+        v
+    };
+
+    // A context without the `$`-certificate (the entry parse, the measure, a rule's sides) refuses
+    // every merge of opposite-sign exponents over a sum, so it cannot price what a flip or a
+    // merge inside a class forecloses: in `(3 - x1) / (3 - x1) / (x1 - 3)` it would flip the bare
+    // `3 - x1` onto `x1 - 3`, and the certified construction that follows could only cancel that
+    // against `1/(x1 - 3)`, leaving `-1/(3 - x1)` where `1/(x1 - 3)` is cheaper; and collecting
+    // `(3 - x1) * sqrt(3 - x1)` beside `1/(x1 - 3)` would leave no carrier to cancel. Such a
+    // context keeps every class as it arrived, and the certified construction decides.
+    if !cx.lossy() && cx.cert_finnz.is_none() {
+        return finish_product(coeff, bag(&arrived, usize::MAX, &[]), cx);
+    }
+
+    // Each class as the bag holds it (collected), and as it arrived until its first decision.
+    let mut held: Vec<Vec<Ex>> = arrived
+        .iter()
+        .map(|m| collect(m.clone()).unwrap_or_else(|| m.clone()))
+        .collect();
+    let mut arrived: Vec<Option<Vec<Ex>>> = arrived.into_iter().map(Some).collect();
+    // The current bag's product and its price, once a decision needs them.
+    let mut built: Option<(Ex, u64)> = None;
+    'decide: loop {
+        for k in 0..classes.len() {
+            let keep_mu = match &built {
+                Some((_, mu)) => *mu,
+                None => {
+                    let p = finish_product(coeff.clone(), bag(&held, usize::MAX, &[]), cx);
+                    let mu = complexity(&p, cx.view);
+                    built = Some((p, mu));
+                    mu
+                }
             };
+            let mut sources = vec![held[k].clone()];
+            if let Some(a) = arrived[k].take() {
+                if a != held[k] {
+                    sources.push(a);
+                }
+            }
+            let mut pick: Option<(u64, Ex, Vec<Ex>, Rat)> = None;
+            for src in &sources {
+                // Each member's orientation; a member over -S names the second sum.
+                let mut sides: Vec<usize> = Vec::with_capacity(src.len());
+                for f in src {
+                    let ts = sum_base(f, cx).unwrap_or(&[]);
+                    if classes[k].sums[0].as_slice() == ts {
+                        sides.push(0);
+                    } else {
+                        if classes[k].sums[1].is_empty() {
+                            classes[k].sums[1] = ts.to_vec();
+                        }
+                        sides.push(1);
+                    }
+                }
+                for target in 0..2 {
+                    if classes[k].sums[target].is_empty() {
+                        continue;
+                    }
+                    let mut flipped = false;
+                    let mut odd = false;
+                    let mut members: Vec<Ex> = Vec::with_capacity(src.len());
+                    for (f, &side) in src.iter().zip(&sides) {
+                        let kd = if side == target { Kind::Fixed } else { kind(f) };
+                        if matches!(kd, Kind::Fixed) {
+                            members.push(f.clone());
+                            continue;
+                        }
+                        flipped = true;
+                        odd ^= matches!(kd, Kind::Odd);
+                        let sum = Ex::Add(classes[k].sums[target].clone());
+                        members.push(match f {
+                            Ex::Pow(_, e) => Ex::Pow(Box::new(sum), e.clone()),
+                            _ => sum,
+                        });
+                    }
+                    if !flipped {
+                        continue;
+                    }
+                    let c2 = if odd {
+                        match coeff.checked_neg() {
+                            Some(nc) => nc,
+                            None => continue, // the i128 edge: no flip
+                        }
+                    } else {
+                        coeff.clone()
+                    };
+                    let Some(members) = collect(members) else {
+                        continue;
+                    };
+                    let p = finish_product(c2.clone(), bag(&held, k, &members), cx);
+                    let mu = complexity(&p, cx.view);
+                    let better = mu < keep_mu
+                        && match &pick {
+                            None => true,
+                            Some((m, q, _, _)) => {
+                                mu < *m || (mu == *m && cmp_ex(&p, q, cx.view) == Ordering::Less)
+                            }
+                        };
+                    if better {
+                        pick = Some((mu, p, members, c2));
+                    }
+                }
+            }
+            if let Some((mu, p, members, c2)) = pick {
+                held[k] = members;
+                coeff = c2;
+                built = Some((p, mu));
+                continue 'decide;
+            }
         }
-        *coeff = new_coeff;
+        break;
+    }
+    match built {
+        Some((p, _)) => p,
+        None => finish_product(coeff, bag(&held, usize::MAX, &[]), cx),
+    }
+}
+
+/// Does the bag hold a factor over a sum and one over its negation (`collect_opposite_sums`)?
+fn holds_opposite_sums(factors: &[Ex], cx: &Cx) -> bool {
+    for (i, f) in factors.iter().enumerate() {
+        let Some(a) = sum_base(f, cx) else {
+            continue;
+        };
+        for g in &factors[i + 1..] {
+            if sum_base(g, cx).is_some_and(|b| negated_sums(a, b, cx)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The base a factor is collected under (`factor_split`'s reading, borrowed): a power's base, an
+/// even root's radicand, else the factor itself.
+fn collection_base<'a>(f: &'a Ex, cx: &Cx) -> &'a Ex {
+    match f {
+        Ex::Pow(b, _) => b,
+        Ex::Fun(op, args)
+            if args.len() == 2
+                && matches!(&args[1], Ex::Num(n)
+                    if n.is_even_integer() && n.cmp_int(2) != Ordering::Less)
+                && cx.view.tok_is(*op, "rootn") =>
+        {
+            &args[0]
+        }
+        _ => f,
+    }
+}
+
+/// The sum a factor is collected under, if its base is one.
+fn sum_base<'a>(f: &'a Ex, cx: &Cx) -> Option<&'a [Ex]> {
+    match collection_base(f, cx) {
+        Ex::Add(ts) => Some(ts.as_slice()),
+        _ => None,
     }
 }
 
 /// Is the sum `b` the negation of the sum `a`, term by term? Both are canonical bags, sorted
 /// by their coefficient-stripped keys, so a negation keeps every term in its place.
 fn opposite_sums(a: &[Ex], b: &[Ex], view: &TokenView) -> bool {
-    a.len() == b.len()
-        && a.iter().zip(b).all(|(x, y)| match (x, y) {
-            (Ex::Num(p), Ex::Num(q)) => p.checked_neg().is_some_and(|n| n == *q),
-            (Ex::Num(_), _) | (_, Ex::Num(_)) => false,
-            _ => {
-                let (cx_, kx) = term_split(x.clone(), view);
-                let (cy, ky) = term_split(y.clone(), view);
-                kx == ky && cx_.checked_neg().is_some_and(|n| n == cy)
-            }
-        })
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| opposite_terms(x, y, view))
+}
+
+/// Is the term `y` the term `x` with its coefficient negated?
+fn opposite_terms(x: &Ex, y: &Ex, view: &TokenView) -> bool {
+    match (x, y) {
+        (Ex::Num(p), Ex::Num(q)) => p.checked_neg().is_some_and(|n| n == *q),
+        (Ex::Num(_), _) | (_, Ex::Num(_)) => false,
+        _ => {
+            let (cx_, kx) = term_split(x.clone(), view);
+            let (cy, ky) = term_split(y.clone(), view);
+            kx == ky && cx_.checked_neg().is_some_and(|n| n == cy)
+        }
+    }
+}
+
+/// Is the sum `b` the negation of the sum `a`? Term by term (`opposite_sums`) where negation
+/// keeps every key. A term holding a sum may take the sign into that sum instead
+/// (`-sin(x1 - x2)` is `sin(x2 - x1)`) and so change its key; every other term keeps its key,
+/// so those must pair up term by term before the sum's own flip (`sign_trade_flip`) decides.
+fn negated_sums(a: &[Ex], b: &[Ex], cx: &Cx) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    if opposite_sums(a, b, cx.view) {
+        return true;
+    }
+    if !a.iter().any(holds_sum) {
+        return false;
+    }
+    let (pa, na): (Vec<&Ex>, Vec<&Ex>) = a.iter().partition(|t| !holds_sum(t));
+    let (pb, nb): (Vec<&Ex>, Vec<&Ex>) = b.iter().partition(|t| !holds_sum(t));
+    na.len() == nb.len()
+        && pa.len() == pb.len()
+        && pa
+            .iter()
+            .zip(&pb)
+            .all(|(x, y)| opposite_terms(x, y, cx.view))
+        && matches!(sign_trade_flip(&Ex::Add(a.to_vec()), cx), Some(Ex::Add(f)) if f.as_slice() == b)
+}
+
+/// Does the expression hold a sum anywhere?
+fn holds_sum(e: &Ex) -> bool {
+    match e {
+        Ex::Add(_) => true,
+        Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(holds_sum),
+        Ex::Pow(b, x) => holds_sum(b) || holds_sum(x),
+        _ => false,
+    }
+}
+
+/// Are the two factors collected under one base (`sign_place`'s collision test)?
+fn same_collection_base(f: &Ex, g: &Ex, cx: &Cx) -> bool {
+    cmp_ex(collection_base(f, cx), collection_base(g, cx), cx.view) == Ordering::Equal
 }
 
 /// F63: assemble a product from `(coefficient, factor bag)` in its CANONICAL sign
@@ -3808,23 +4036,23 @@ fn sign_place(coeff: Rat, out: Vec<Ex>, cx: &Cx) -> Ex {
                             price[*pos] = flip_price[bit];
                         }
                     }
-                    // A flip may mint a factor whose BASE collides with another's
-                    // (`sin(-2)` flipped beside `sin(2)`, or a flipped sum landing on
-                    // its own twin): `assemble` builds RAW, so the candidate would be
-                    // an unmerged duplicate-base bag `mul()` itself never emits -- a
-                    // non-canonical spelling that re-parses to a different state
-                    // (idempotence loss, B5 hazard). Such masks are not candidates.
-                    // Mask 0 never collides (the entry bag is `mul()`-merged), so
-                    // `best` is always Some.
+                    // A flip may mint a factor over another factor's base (`sin(-2)` flipped
+                    // beside `sin(2)`, a flipped sum landing on its own twin or on an even
+                    // root's radicand): `assemble` builds RAW, so the candidate is an unmerged
+                    // bag that collection -- here, or in a later context with more licences --
+                    // merges, a spelling that re-parses to a different state (idempotence
+                    // loss, B5 hazard). Such masks are not candidates. Only the flipped factors
+                    // are tested: two factors the entry already holds over one base (a
+                    // symbolic power beside a rational one, a merge the licences refuse) are
+                    // how `mul()` emits them, and they block no other site. Mask 0 never
+                    // collides, so `best` is always Some.
                     if mask != 0 {
-                        let collides = (0..factors.len()).any(|i| {
-                            (i + 1..factors.len()).any(|j| {
-                                cmp_ex(
-                                    factor_split_ref(&factors[i]).0,
-                                    factor_split_ref(&factors[j]).0,
-                                    cx.view,
-                                ) == std::cmp::Ordering::Equal
-                            })
+                        let collides = site_flips.iter().enumerate().any(|(bit, (pos, _))| {
+                            mask & (1 << bit) != 0
+                                && (0..factors.len()).any(|j| {
+                                    j != *pos
+                                        && same_collection_base(&factors[*pos], &factors[j], cx)
+                                })
                         });
                         if collides {
                             continue;
@@ -3997,9 +4225,9 @@ enum WideCarrier {
 /// it arrives, so a state and the parse of its own print could carry two orientations of
 /// one value (the `stable()` failures on long products; formal.md, I3 residuals).
 ///
-/// `None` keeps the entry spelling (the old n > 6 behavior) in two cases: some orientation of a
-/// factor shares its base with another factor (the enumeration skips the colliding masks one
-/// by one; here any possible collision refuses the whole orbit), or the absorbing sum's
+/// `None` keeps the entry spelling (the old n > 6 behavior) in two cases: a site in some
+/// orientation shares its base with another factor (the enumeration skips the colliding masks
+/// one by one; here any possible collision refuses the whole orbit), or the absorbing sum's
 /// negation overflows. Whether it refuses is a function of the orbit; the spelling it then
 /// keeps is not -- the residual every n > 6 orbit had before.
 #[allow(clippy::too_many_arguments)]
@@ -4017,7 +4245,8 @@ fn sign_place_wide(
 ) -> Option<Ex> {
     let n = site_flips.len();
     let view = cx.view;
-    // Collision screen: any two factors (in any orientation) sharing a base.
+    // Collision screen: a site, in either orientation, over the base of another factor in any
+    // of its orientations (two non-sites over one base are how `mul()` emits them).
     {
         let mut options: Vec<Vec<&Ex>> = out.iter().map(|f| vec![f]).collect();
         for (pos, nf) in site_flips {
@@ -4025,11 +4254,12 @@ fn sign_place_wide(
         }
         for i in 0..options.len() {
             for j in (i + 1)..options.len() {
+                if options[i].len() == 1 && options[j].len() == 1 {
+                    continue;
+                }
                 for a in &options[i] {
                     for b in &options[j] {
-                        if cmp_ex(factor_split_ref(a).0, factor_split_ref(b).0, view)
-                            == Ordering::Equal
-                        {
+                        if same_collection_base(a, b, cx) {
                             return None;
                         }
                     }

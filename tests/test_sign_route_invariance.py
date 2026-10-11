@@ -162,6 +162,8 @@ def test_one_bag_collects_the_same_in_every_order(eng, mode, bag):
         tokens = ['<mul>'] + [t for m in order for t in m] + ['</mul>']
         answers.add(' '.join(eng.simplify(tokens, mode=mode, effort=0)))
     assert len(answers) == 1, answers
+    answer = answers.pop().split()
+    assert list(eng.simplify(answer, mode=mode, effort=0)) == answer
 
 
 # The parse builds `(3 - x1)(x1 - 3)` first; the pair must still collect with the `1/(3 - x1)` it
@@ -176,3 +178,65 @@ def test_a_collected_pair_still_meets_its_inverse(eng, mode, effort, src, parent
     answer = list(eng.simplify(src.split(), mode=mode, effort=effort))
     assert eng.complexity(answer, mode=mode) <= eng.complexity(parent.split(), mode=mode), answer
     assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
+
+
+# A CLASS IS DECIDED ON WHAT ITS MEMBERS COLLECT TO, UNTIL NOTHING MOVES. Collection changes what a
+# member is: `S^2 * S^-1` is the bare sum `S`, `S * S^-3` the even power `S^-2` (which `pow` turns
+# onto the other sum, beside a member there), and `S^-2 * S` the negative power `S^-1`. A class
+# decided once, before collection, left states that a second call decided differently (the debug
+# build's stability check failed on them) and answers costlier than 0.14.7's. Every answer is
+# simplified again.
+def _sq(s):
+    return ['pow'] + s + ['0.5']
+
+
+REDECIDED = [
+    # (x1 - 3) / (x1 - 3)^3 is an even power, which then joins 1/(3 - x1)
+    (['<mul>', 'inv'] + _S + _N + ['inv', 'pow'] + _N + ['3', '</mul>'], 'pow <add> 3 <sub> x1 </add> -3'),
+    # (3 - x1)^2 / (3 - x1) is the bare 3 - x1, which joins the root over x1 - 3
+    ('* / pow - 3 x1 2 - 3 x1 pow - x1 3 0.5'.split(), 'neg pow - x1 3 / 3 2'),
+    # inverses on both sides: the even power joins the root
+    ('* * inv pow - 3 x1 2 inv - 3 x1 pow - x1 3 0.5'.split(), '* inv pow - x1 3 / 3 2 inv - 3 x1'),
+    # a symbolic power cannot move; the even power cancels the bare sum
+    ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(), '/ pow - 3 x1 x3 - x1 3'),
+    # (3 - x1) / (3 - x1)^3 is an even power over x1 - 3, which meets the bare x1 - 3
+    (['<mul>'] + _S + ['inv', 'pow'] + _S + ['3'] + _N + ['</mul>'], 'inv <add> x1 <sub> 3 </add>'),
+    # (x1 - 3)^2 / (x1 - 3) is the bare x1 - 3, which cancels against 1/(3 - x1)
+    (['<mul>', 'pow'] + _N + ['2', 'inv'] + _S + ['inv'] + _N + ['</mul>'], '-1'),
+    # x1 - 3 flips onto the root's sum and collects with both members there
+    (['<mul>'] + _S + _sq(_S) + _N + ['</mul>'], 'neg pow <add> 3 <sub> x1 </add> <mul> 5 <div> 2 </mul>'),
+]
+
+
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('src, expected', REDECIDED)
+def test_a_class_is_decided_on_its_collected_members(eng, mode, effort, src, expected):
+    answer = list(eng.simplify(src, mode=mode, effort=effort))
+    assert ' '.join(answer) == expected
+    assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
+
+
+# The same bags, as one product, in every order of their members.
+REDECIDED_BAGS = {
+    'inv S, N, inv N^3': [['inv'] + _S, _N, ['inv', 'pow'] + _N + ['3']],
+    'S^2, inv S, sqrt N': [['pow'] + _S + ['2'], ['inv'] + _S, _sq(_N)],
+    'inv S^2, inv S, sqrt N': [['inv', 'pow'] + _S + ['2'], ['inv'] + _S, _sq(_N)],
+    'inv S^2, S^x3, N': [['inv', 'pow'] + _S + ['2'], ['pow'] + _S + ['x3'], _N],
+    'S, inv S^3, N': [_S, ['inv', 'pow'] + _S + ['3'], _N],
+    'N^2, inv S, inv N': [['pow'] + _N + ['2'], ['inv'] + _S, ['inv'] + _N],
+    'S, sqrt S, N': [_S, _sq(_S), _N],
+}
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('bag', sorted(REDECIDED_BAGS))
+def test_a_redecided_class_does_not_depend_on_the_order(eng, mode, bag):
+    import itertools
+    answers = set()
+    for order in itertools.permutations(REDECIDED_BAGS[bag]):
+        tokens = ['<mul>'] + [t for m in order for t in m] + ['</mul>']
+        answers.add(' '.join(eng.simplify(tokens, mode=mode, effort=0)))
+    assert len(answers) == 1, answers
+    answer = answers.pop().split()
+    assert list(eng.simplify(answer, mode=mode, effort=0)) == answer
