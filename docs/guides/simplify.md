@@ -127,8 +127,8 @@ candidates to reach its uncapped answer, a sum of two copies of it 13, of three 
 eight 39, so no fixed cap is enough. Capped at 4, the old default, 2,675 of srbf's 125,127 model
 predictions change on a second call in `f64` (2,672 to a cheaper form; `real` 2,677), because the
 first call stopped between two improvements. Uncapped, none does in `f64` or `real`, on any of
-the three sets. No answer is costlier than at cap 4 and 2,888 are cheaper.
-The search runs in two phases. For its first 8 candidates it is the capped default's
+the three sets. On the predictions in `f64` no answer is costlier than at cap 4 and 2,888 are
+cheaper. The search runs in two phases. For its first 8 candidates it is the capped default's
 breadth-first search: every candidate of every accepted state, against the best so far; on
 srbf's predictions that alone gives the final answer on 124,572 of the 125,127 in `f64` and
 `real`. If it has not settled by then, it steps from the best answer to the first of its
@@ -226,9 +226,9 @@ engine.simplify('5/8')                                   # -> '5/8'
 ```
 
 The token answers keep the fraction (explicit `['/', '500000000000000', '3141592653589793']`,
-tagged `['500000000000000/3141592653589793']`): the engine prints states as tokens and reads
-them back, and callers mask and compare token
-answers, so one fixed spelling serves them.
+tagged `['<mul>', '500000000000000', '<div>', '3141592653589793', '</mul>']`): the engine prints
+states as tokens and reads them back, and callers mask and compare token answers, so one fixed
+spelling serves them.
 
 Each mode names one **distinct, complete** rule set — `rules_f64.json` / `rules_real.json` /
 `rules_permissive.json` (artifacts published before the rename, acj-4 among them, call the f64

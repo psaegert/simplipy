@@ -241,10 +241,10 @@ __all__ = ['SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT']
 DEFAULT_ENGINE = 'acj-5-4-llm'
 DEFAULT_ENGINE_REVISION: str | None = None
 
-#: The exploration budget ``simplify()`` runs under when ``effort`` is not given
-#: (D39 B7). ``None``: the search runs until a round finds nothing, so a second call
-#: returns the answer unchanged (owner, 2026-10-06; in ``permissive`` its work budget can
-#: stop a search, see ``DEFAULT_WORK``). The previous default, 4, stops searches between
+#: The exploration budget ``simplify()`` runs under when ``effort`` is not given.
+#: ``None``: the search runs until a round finds nothing, so a second call returns the
+#: answer unchanged (in ``permissive`` its work budget can stop a search, see
+#: ``DEFAULT_WORK``). The previous default, 4, stops searches between
 #: two improvements: on srbf's 125,127 model predictions 2,675 answers change on a second
 #: call in f64 at cap 4 (none uncapped).
 #: Callers on throughput-critical paths pin ``effort=0``
@@ -2041,7 +2041,7 @@ class SimpliPyEngine:
             token answer, convert it: ``simplify(to_infix(tokens))``.
 
         effort : int or None, optional
-            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, an
+            The SEARCH BUDGET: after the chain reaches its fixpoint, an
             exploration phase proposes expansion moves the strict descent refuses
             (distributing a product over its sums, expanding an integer power of a
             sum), runs each candidate through the same certified constructors and the

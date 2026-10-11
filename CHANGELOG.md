@@ -39,10 +39,10 @@
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
   `x1 > 1/2` (`1 + tanh(inf*(x1 - 1/2))` became `0`). Distributing over an infinity now needs
   certified finiteness, as in `f64` and `real`. On the 2,131 of 3,008 fuzzed expressions whose
-  value does not hang on the sign of a zero, permissive's wrong answers go from 389 to 0. 187 of the
-  2,243 T8.1 inputs whose answer holds an infinity change: 185 price higher (2 equal), the old
+  value does not hang on the sign of a zero, permissive's wrong answers go from 389 to 0. 187 of
+  the 2,243 T8.1 inputs whose answer holds an infinity change: 185 price higher (2 equal), the old
   answers having used the step now refused, and 137 of the old answers were wrong at sampled
-  points.
+  points (49 of the new ones are too, each with the value of its answer with the search off).
 - **The tagged form writes every fraction as a bag.** `simplify` answers in the notation it was
   given and tells the tagged one by its bag delimiters. An answer whose bags all collapsed carried
   none, and a one-token fraction in it (`-25/4`, `pow x10 17/4`) re-read as the explicit notation
@@ -85,8 +85,8 @@
   13, of 3 copies 19 and of 8 copies 39). Capped at 4 in this release, 2,675 of srbf's 125,127
   model predictions change on a second call in `f64` (2,672 to a cheaper form; `real` 2,677).
   Uncapped, none does in `f64` and `real` (with the canonical forms that read back as themselves,
-  above). No answer is
-  costlier than at cap 4, and 2,888 are cheaper. `permissive` bounds each search with its work
+  above). On the predictions in `f64` no answer is costlier than at cap 4, and 2,888 are
+  cheaper. `permissive` bounds each search with its work
   budget by default (above). The search tries the capped default's breadth-first order for its
   first 8 candidates (on srbf's predictions in `f64` and `real` that alone gives the final answer
   on 124,572 of 125,127) and then steps to the first cheaper candidate of the best answer until a
@@ -109,7 +109,7 @@
   numbers beyond 128 bits. Answers are byte-identical on every input of flash-ansr's T8.1
   training draws, srbf's ground truths and srbf's model predictions, in every mode. On srbf's
   predictions `simplify` takes 40-45% less time than without this in `f64` and about half the time
-  in `permissive`, where the slowest inputs run about 5 times faster (local measurements).
+  in `permissive`, where the slowest inputs run about 5 times faster.
 - **A literal costs at most what its float costs.** The evaluator reads every literal as its
   nearest float64, so the measure (`complexity`, and the ordering every simplification follows)
   caps a literal's price at the price of that float's shortest decimal (at most 17 significant
@@ -152,18 +152,17 @@
   them fold, so each such group re-reads to itself where a fold is refused. The old one-pass fold left
   pieces the next call merged (also in 0.14.7: `10/((250000000/1571)/(pi*pi*x3))` with pi written
   out needed two calls). `<constant>` and the infinities absorb the pieces a refused fold keeps,
-  and a fraction beyond 128 bits stays together (one `p/q` numeral in the text answer and the
-  tagged list answer, its own `/ p q` in the explicit list answer) instead of being split across a
-  product (the evaluator multiplied a 300-digit numerator in before dividing and overflowed).
+  and a fraction beyond 128 bits stays together (one `p/q` numeral in the text answer,
+  `<mul> p <div> q </mul>` in the tagged list answer, its own `/ p q` in the explicit list answer)
+  instead of being split across a product (the evaluator multiplied a 300-digit numerator in
+  before dividing and overflowed).
   Known limits: where a fold is refused, the grouping of the input can decide which inner
   products fold (`(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different forms);
-  a like term whose coefficient is itself a refused two-number product can split coefficient and
-  term differently on a second call (also in earlier versions, at 128 bits); and the search can
-  find a cheaper form when started again from an answer, more often now that folded constants
-  are long.
-- **What moves.** Against 0.15.0.dev1: none of the 400 corpus rows; 23 of srbf's 6,531 ground
-  truths, all by literal arithmetic the 128-bit limit refused (two of them are coefficient sums
-  that then allow a distribution), their values equal to 1e-15. srbf's judge sees a few more
+  and a like term whose coefficient is itself a refused two-number product can split coefficient
+  and term differently on a second call (also in earlier versions, at 128 bits).
+- **What the wider range moves.** Against the same code at 128 bits: none of the 400 corpus
+  rows; 23 of srbf's 6,531 ground truths, all by literal arithmetic the 128-bit limit refused
+  (two of them are coefficient sums that then allow a distribution), their values equal to 1e-15. srbf's judge sees a few more
   recoveries and loses none: in a sample of 6,000 result rows whose answers move, 6 verdicts go
   from not recovered to recovered, where a truth's or a prediction's coefficients now fold to the
   same form (`3.097*x2 + 0.966*14.68*x2` becomes one coefficient). The `real` and `permissive` rule
@@ -171,7 +170,7 @@
   constructor now computes them; the next re-mine drops them from the files. A mode's rules are
   read in that mode's number domain, whichever mode asks for them first. The verification
   instruments fold only within the engine's cap and refuse oversized spellings before building
-  them. Version 0.15.0.dev2.
+  them.
 - **The compiled evaluator reads every literal as its nearest float64.** A compiled expression
   is Python source, and Python read an integer literal as an exact `int`: numpy's ufuncs reject
   one above int64 (`sin(100000000000000000000)` raised TypeError, and the engine printed that
@@ -188,25 +187,21 @@
   components exceed 128 bits as its correctly rounded float64 (`10^400/10^399` is 10, not NaN),
   and the interval kernel certifies such a fraction like a decimal and certifies an integer
   literal beyond 2^127 as a point when its float64 is exactly that integer (`2^200` written out;
-  this closes H-045's beyond-i128 residual for the integers float64 holds; `1e40` still
-  brackets, as its nearest float64 is not 10^40). The mining oracles read a fraction token instead
+  `1e40` still brackets, as its nearest float64 is not 10^40). The mining oracles read a fraction token instead
   of failing on it (`utils.literal_float`), and the contract judge refuses an oversized spelling
   (`1e999999999`, more than 4,300 digits) before building it and reads a value beyond float64's
   range as `inf` in its deployed lane (it skipped the deployed check for such a rule).
   Canonical forms move only where a literal is beyond i128, because the kernel now
   certifies such literals: a fraction token behaves like its decimal spelling. The contract
   judge kills none of the moved forms; the underflow folds among them (`log(-1/10^400)` is
-  NaN) get the verdict main already gives the decimal `log(-1e-400)`. Some moves undo a wrong
-  fold: `pow(-2, (3*2^200)/3)` is (-2)^(2^200), which is finite, and main folded it to NaN.
-- **Exact numbers get a big-integer form (no behaviour change yet).** A literal is an exact
-  rational whose numerator and denominator were limited to 128 bits; beyond that it stayed an
-  opaque symbol. The number type now also holds big integers, up to a cap of 1,100 bits per
-  component (every float64's shortest spelling fits), on num-bigint (MIT OR Apache-2.0). This
-  release keeps the 128-bit arithmetic verbatim and never builds a big number, so every answer is
-  byte-identical to before; the next steps of the number work switch the wider range on. Integer
-  questions ("is this an integer, odd, negative?") no longer go through a 128-bit value, which
-  would have read an integer beyond 128 bits as "not an integer" at four sites (a `rootn` index,
-  the pow-of-pow and power-through-root licences, the F83 guard).
+  NaN) get the verdict the decimal `log(-1e-400)` already gets. Some moves undo a wrong fold:
+  `pow(-2, (3*2^200)/3)` is (-2)^(2^200), which is finite, and used to fold to NaN.
+- **Integer questions at any size.** The number type holds big integers on num-bigint (MIT OR
+  Apache-2.0). Integer questions ("is this an integer, odd, negative?") no longer go through a
+  128-bit value, which would read an integer beyond 128 bits as "not an integer" at four sites (a
+  `rootn` index, the pow-of-pow and power-through-root licences, and the guard that keeps a
+  negative coefficient from distributing over a factor that may vanish under a negative odd
+  power).
 - **Exact literals are read as their nearest float.** The deployed evaluator reads a literal
   correctly rounded (Python's `float()` of a decimal, `int / int` for a fraction), but two
   engine paths computed `float(p) / float(q)`, which is an ulp or two off once `p` or `q` leaves
@@ -232,7 +227,7 @@
   evaluates. Folding `neg` into a literal turns a leading `+` into `-` (`neg +5` is `-5`; it was
   `-+5`). A token that starts like a number but is not a numeral (`1/0`, `1/6.28`, `0.5/3`,
   `--5`, `-+5`, `1e5.5`, `1/-3`, `2x`) is now refused at every boundary, like the reserved
-  spellings of H-007. Before, it became a free symbol (`1/0 - 1/0` simplified to `0`), or was
+  numeric spellings (`inf`, `1_000`, `0x10`). Before, it became a free symbol (`1/0 - 1/0` simplified to `0`), or was
   read as something else (`-+5` as -5, `1/-3` as -1/3), and the tagged form, which skips the
   arity check, split `--5` into `-1 -5`. These refusals are for token lists, which are expected
   well formed; infix text is read as written (`1/6.28` is a division there).

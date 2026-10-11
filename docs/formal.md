@@ -82,9 +82,9 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   subsets and re-reads to itself in any printed order. *Known residuals* [EMPIRICAL, tracked]:
   the partition makes each group re-read to itself, not every form around it. Two boundary
   fuzzes with literals at the 128-bit, float64-range and cap boundaries give canonical-form
-  idempotence failures (at effort 0) below main's on the same inputs in every mode: 3 f64, 0
-  real, 1 permissive over 60,000 calls per mode (main 6, 6, 3), and 10, 7, 5 over a review's
-  52,000 (main 16, 16, 19; exact McNemar p = 0.26, 0.064, 0.001, so only permissive's gap is
+  idempotence failures (at effort 0) below the 128-bit engine's on the same inputs in every
+  mode: 3 f64, 0 real, 1 permissive over 60,000 calls per mode (128 bits: 6, 6, 3), and 10, 7, 5
+  over another 52,000 (128 bits: 16, 16, 19; exact McNemar p = 0.26, 0.064, 0.001, so only permissive's gap is
   significant). The classes: sums whose sign orientation stays open because they hold literals
   that stay opaque leaves (beyond the cap, or in f64 mode outside the admissible set: `1e400`,
   subnormals, `1.7976931348623157e308`, and the decimal `2.2250738585072014e-308`, whose exact
@@ -92,15 +92,15 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   `inf*(x1 - x2)`, in real mode too); in permissive mode,
   an infinity that absorbs a term only on re-read (`x1*(inf - c/(1e400*x1*x2))` becomes
   `inf*x1`); a like term whose coefficient is itself a refused two-member partition, whose
-  coefficient and key can split differently on re-read (also on main at 128 bits); and
+  coefficient and key can split differently on re-read (also in the 128-bit engine); and
   odd-function sign extraction. A class independent of literal size is closed: a product with
   more than six sign-trade sites kept the placement it entered with, two sums that are each
   other's negation stayed apart, and a join whose coefficient became 1 kept its key's signs, so
-  a state and the parse of its own print could differ (24 of srbf's 125,127 model predictions
-  changed on re-read in f64 at effort 0, 26 uncapped). Each is now decided by the orbit (§3), and
-  no f64 or real answer changes on a second call on the 129,490 simplify inputs of flash-ansr's
-  T8.1 draws, srbf's
-  ground truths or its predictions at the default effort. The sign placement keeps the entry
+  a state and the parse of its own print could differ (0.14.7: 28 of srbf's 125,127 model
+  predictions change on a second call in f64 with the search off). Each is now decided by the
+  orbit (§3), and no f64 or real answer changes on a second call on the 129,490 simplify inputs of
+  flash-ansr's T8.1 draws, srbf's ground truths or its predictions, with the search off or at the
+  default effort. The sign placement keeps the entry
   spelling where an orientation would collide with another factor's base or a negation overflows
   (§3). And at a
   refusal the grouping of the input can decide which inner products fold:
@@ -523,7 +523,7 @@ legitimate input; neither has ever been observed to bind [EMPIRICAL], and by T6 
 bound now *proves* an implementation bug. When one binds, rewriting stops and the state
 reached is returned — sound, possibly non-minimal.
 
-**Equal-$\mu$ ties, measured** [EMPIRICAL, before phase 2c's numbers beyond 128 bits — instrumented build over 50,800 simplify
+**Equal-$\mu$ ties, measured** [EMPIRICAL, on the 128-bit engine — instrumented build over 50,800 simplify
 calls: the 400-expression mined corpus in strict and permissive modes, plus 50,000 fuzz
 expressions biased toward coefficient/exponent cost shifts and i128-boundary literals].
 Tie **fires**: none occurred (0). Tie **rebuilds**: 169 calls (0.3%), every one on a
@@ -581,8 +581,8 @@ and are refused again. Two further premises: the step cap does not bind (a cappe
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
 valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
-srbf's 125,127 model predictions change on a second call 2,701 times in `f64` at cap 4, the former
-default, 2,673 of them to a cheaper form; uncapped, never, in `f64` and `real`, on these and on
+srbf's 125,127 model predictions change on a second call 2,675 times in `f64` at cap 4, the former
+default, 2,672 of them to a cheaper form (`real` 2,677); uncapped, never, in `f64` and `real`, on these and on
 srbf's ground truths and the simplify inputs of flash-ansr's T8.1 draws]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
@@ -611,7 +611,8 @@ both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
 permutation gate (0 violations / 400 canonical corpus expressions at head). One
-registered residual class: the I3 residuals above. (The scale gates held 0 idempotence and 0 permutation failures when last run, before phase 2c.)
+registered residual class: the I3 residuals above. (The scale gates held 0 idempotence and 0 permutation failures when last run, on the 128-bit
+engine.)
 
 **Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
 (training-corpus canonicalization). It relaxes *soundness* licences, never the ordering:
