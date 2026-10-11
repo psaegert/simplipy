@@ -136,7 +136,8 @@ specimens remain. The instrument itself printed each state with the mode's certi
 context, a spelling no caller receives (every caller prints with the bare context), which
 raised false alarms and hid three real classes (the closed I3 class above); it now prints as
 the callers do, and in a debug build it holds on every state of srbf's ground truths and
-predictions in every mode and of 20,000 T8.1 simplify inputs in permissive. A second measured class (2026-08-24) sat not in `canon()` but in the
+predictions in every mode and of all 129,490 T8.1 simplify inputs in permissive. A second
+measured class (2026-08-24) sat not in `canon()` but in the
 *pricing instrument*: `complexity()` parsed fold-free while the `f64`/`permissive` chains
 parse fold-at-parse, so on 10 of 65,536 benchmark rows the instrument priced a
 different state than the chain descended from and $\mu(\mathrm{simplify}(e)) \le
@@ -556,8 +557,8 @@ assertion), `to_prefix` has a left inverse and is therefore injective — two st
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
 debug, so every state reached by the tests and the mini-mines satisfies it, and so does every
-state of srbf's ground truths and model predictions in every mode and of 20,000 T8.1 simplify
-inputs in permissive). It fails on the documented I3 residuals at literals that stay leaves. These
+state of srbf's ground truths and model predictions in every mode and of all 129,490 T8.1
+simplify inputs in permissive). It fails on the documented I3 residuals at literals that stay leaves. These
 residuals scope the cache guarantee too.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass

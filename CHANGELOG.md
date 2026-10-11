@@ -5,9 +5,9 @@
 - **Fast in every mode.** Against 0.14.7, on the 129,490 simplify inputs of flash-ansr's T8.1
   training draws, srbf's 6,531 ground truths and its 125,127 model predictions (both versions side
   by side on one machine under other load), in every mode: under 1% of calls take more than 0.1 s
-  and none takes more than 1 s (0.14.7: up to 18.1% and 1.49%, permissive on the predictions).
-  Total time falls by 31% (`f64`), 30% (`real`) and 33% (`permissive`) on the T8.1 inputs, 22-25%
-  on the ground truths, and by 79%, 77% and 89% on the predictions.
+  and none takes more than 1 s (0.14.7: up to 18.0% and 1.47%, permissive on the predictions).
+  Total time falls by 37% (`f64`), 29% (`real`) and 35% (`permissive`) on the T8.1 inputs, 21-30%
+  on the ground truths, and by 80%, 78% and 89% on the predictions.
 - **A work budget per search, the default in permissive.** `simplify()` takes `work`: the budget
   of each search in deterministic units (one step of the matcher or one canonical-constructor
   call), so a budget cuts the same walk at the same place on every machine and under any load. A
@@ -28,12 +28,12 @@
   them, so an answer could change on a second call: a product with more than six factors whose
   sign can move kept the orientation it arrived in (the cheapest orientation is now found exactly
   for any number of them), two sums that are each other's negation stayed apart (they now collect
-  per class, whatever the order of the factors: `(x - a)*(a - x)` is `-(x - a)^2`), and a term whose coefficient became 1 kept its factors' signs. In `f64`
-  and `real` no answer changes on a second call on any of the three sets (0.14.7: 59 and 57 T8.1
-  inputs, 4 ground truths, 31 predictions). The debug-build check that every intermediate state
-  reads back as itself printed in a spelling no caller receives; it now prints as the callers do
-  and passes on all ground truths and predictions in every mode and on 20,000 T8.1 inputs in
-  `permissive`.
+  per class, whatever the order of the factors: `(x - a)*(a - x)` is `-(x - a)^2`), and a term
+  whose coefficient became 1 kept its factors' signs. In `f64` and `real` no answer changes on a
+  second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
+  predictions). The debug-build check that every intermediate state reads back as itself printed
+  in a spelling no caller receives; it now prints as the callers do and passes on all ground
+  truths and predictions in every mode and on all 129,490 T8.1 inputs in `permissive`.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for

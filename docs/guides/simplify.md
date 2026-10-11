@@ -118,7 +118,7 @@ every machine and under any load. A search that spends its budget returns its be
 `simplipy.DEFAULT_WORK = 10_000` units (a few tens of milliseconds per search); `f64` and `real`
 run without a budget by default. `work=None` lifts it. With these defaults no call on the simplify
 inputs of flash-ansr's T8.1 draws, srbf's ground truths or its model predictions takes more than
-1 s in any mode, and under 1% take more than 0.1 s (0.14.7: up to 18.1% and 1.49%, `permissive` on
+1 s in any mode, and under 1% take more than 0.1 s (0.14.7: up to 18.0% and 1.47%, `permissive` on
 the predictions).
 
 A cap counts every candidate tried, refused ones included, over the whole expression, so
