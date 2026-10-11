@@ -240,3 +240,143 @@ def test_a_redecided_class_does_not_depend_on_the_order(eng, mode, bag):
     assert len(answers) == 1, answers
     answer = answers.pop().split()
     assert list(eng.simplify(answer, mode=mode, effort=0)) == answer
+
+
+# A FLIP'S SIGN GOES TO THE BAG'S SIGN HOST. A product with a bare `<constant>` (which absorbs any
+# sign) or an infinity (which carries it) collects its opposite sums like any other, so it reads
+# back the way its own sub-products do.
+INF = 'float("inf")'
+HOSTED = [
+    ('* <constant> * - 3 x1 - x1 3', '* <constant> pow - x1 3 2'),
+    ('+ <constant> * <constant> * - x1 x2 - x2 x1', '+ * <constant> pow - x1 x2 2 <constant>'),
+    (f'* {INF} * - 3 x1 - x1 3', '* float("-inf") pow - x1 3 2'),
+    (f'<mul> {INF} ' + ' '.join(_S) + ' pow ' + ' '.join(_N) + ' 0.5 </mul>',
+     '<mul> float("-inf") pow <add> x1 <sub> 3 </add> <mul> 3 <div> 2 </mul> </mul>'),
+    (f'* * - 3 x1 {INF} * * - x1 3 - 3 x1 pow + x1 sin 2 x3', '* float("inf") * pow - x1 3 3 pow + x1 sin 2 x3'),
+    (f'<mul> {INF} <add> 0.5 <sub> x2 </add> inv pow <add> 0.5 <sub> x2 </add> 3 pow <add> x1 x2 <sub> 1 </add> '
+     'x3 inv pow <add> 1 <sub> x1 x2 </add> 3 pow <add> x2 <sub> 0.5 </add> 0.5 </mul>',
+     '<mul> float("-inf") pow <add> x1 x2 <sub> 1 </add> x3 <div> pow <add> x1 x2 <sub> 1 </add> 3 pow <add> x2 '
+     '<sub> <mul> 1 <div> 2 </mul> </add> <mul> 3 <div> 2 </mul> </mul>'),
+]
+
+
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('src, expected', HOSTED)
+def test_a_hosted_sign_lets_opposite_sums_collect(eng, mode, effort, src, expected):
+    answer = list(eng.simplify(src.split(), mode=mode, effort=effort))
+    assert ' '.join(answer) == expected
+    assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
+
+
+# A CLASS THAT APPEARS ONLY AFTER AN INNER COLLECTION: x2 + (3 - x1)(x1 - 3) collects to
+# x2 - (x1 - 3)^2 inside its sum, which is then the negation of (x1 - 3)^2 - x2. The parse must
+# collect the inner pair (or the outer sums are no class there) and must not merge the bare outer
+# sum with its root before the certified construction cancels it against the inverse.
+_A = ['<add>', 'x2', '<mul>'] + _S + _N + ['</mul>', '</add>']
+_B = ['<add>', '<mul>'] + _N + _N + ['</mul>', '<sub>', 'x2', '</add>']
+
+
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+def test_a_class_formed_by_an_inner_collection_still_cancels(eng, mode, effort):
+    src = ['<mul>'] + _A + ['pow'] + _A + ['0.5', 'inv'] + _B + ['</mul>']
+    answer = list(eng.simplify(src, mode=mode, effort=effort))
+    assert ' '.join(answer) == 'neg rootn <add> x2 <sub> pow <add> x1 <sub> 3 </add> 2 </add> 2'
+    assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
+
+
+# The bare measure reads `(3 - x1)^2 (x1 - 3)` the same way whatever the bracketing: equal bases
+# merge in a context without certificates too.
+@pytest.mark.parametrize('mode', MODES)
+def test_the_bare_measure_does_not_depend_on_the_bracketing(eng, mode):
+    spellings = [['<mul>'] + _S + _S + _N + ['</mul>'], '* - 3 x1 * - 3 x1 - x1 3'.split(),
+                 '* * - 3 x1 - 3 x1 - x1 3'.split()]
+    prices = {eng.complexity(s, mode=mode, certified=False) for s in spellings}
+    assert len(prices) == 1, prices
+
+
+# A price tie between keeping a class and flipping it goes by the sign owner's own order, so the
+# product is the same whichever smaller products the parse builds first.
+TIED = [['<add>', 'x2', '<sub>', 'x5', '</add>'], ['<add>', 'x2', '<sub>', 'x5', '</add>'],
+        ['<add>', 'x5', '<sub>', 'x2', '</add>'],
+        ['<add>', '<mul>', '2', 'x1', '</mul>', '<sub>', '<mul>', '3', 'x2', '</mul>', '</add>'],
+        ['pow', '<add>', '<mul>', '3', 'x2', '</mul>', '<sub>', '<mul>', '2', 'x1', '</mul>', '</add>', 'x3']]
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_a_tie_is_broken_the_way_the_sign_owner_breaks_it(eng, mode):
+    import itertools
+    tagged, binary = set(), set()
+    for order in itertools.permutations(TIED):
+        tokens = ['<mul>'] + [t for m in order for t in m] + ['</mul>']
+        tagged.add(' '.join(eng.simplify(tokens, mode=mode, effort=0)))
+        for tokens in _trees(list(order)):
+            binary.add(' '.join(eng.simplify(tokens, mode=mode, effort=0)))
+    assert len(tagged) == 1 and len(binary) == 1, (tagged, binary)
+    for answer in tagged | binary:
+        assert list(eng.simplify(answer.split(), mode=mode, effort=0)) == answer.split()
+
+
+# Two classes and a coefficient: one class's flip may take the sign the other's sends to `-7`
+# (`7 (x2 - 1/2)^(1/4) (1/2 - x2)^(5/4) ...`, not `-7 ...`). The parse must not merge the bare
+# `x2 - 1/2` into its fourth root before the certified construction can flip it.
+@pytest.mark.parametrize('mode', MODES)
+def test_classes_are_decided_together(eng, mode):
+    w, z = ['<add>', 'x2', '<sub>', '0.5', '</add>'], ['<add>', 'x3', 'sin', '<add>', 'x1', '<sub>', 'x2', '</add>',
+                                                       '</add>']
+    zn = ['<add>', 'sin', '<add>', 'x2', '<sub>', 'x1', '</add>', '<sub>', 'x3', '</add>']
+    wn = ['<add>', '0.5', '<sub>', 'x2', '</add>']
+    src = (['<mul>', 'rootn'] + w + ['4', 'rootn'] + z + ['4', 'pow'] + zn + ['0.5'] + w + ['-7', 'rootn'] + wn
+           + ['4', 'pow'] + zn + ['0.5', '</mul>'])
+    answer = list(eng.simplify(src, mode=mode))
+    assert answer[:2] == ['<mul>', '7'], answer
+    assert list(eng.simplify(answer, mode=mode)) == answer
+
+
+# A CONTEXT WITHOUT CERTIFICATES KEEPS A CARRIER OUT OF A NON-CARRIER OVER THE SAME SUM: the parse
+# reads `1/(3 - x1)^2` as `1/(x1 - 3)^2`, which must not merge with `1/(x1 - 3)` into
+# `1/(x1 - 3)^3` before the certified construction flips it onto `1/(3 - x1)^3`.
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+def test_a_carrier_is_not_merged_into_a_non_carrier(eng, mode, effort):
+    src = ['<mul>', 'inv', 'pow'] + _S + ['2', 'inv', 'pow'] + _S + ['3', 'inv'] + _N + ['</mul>']
+    answer = list(eng.simplify(src, mode=mode, effort=effort))
+    assert ' '.join(answer) == '<mul> <div> <add> x1 <sub> 3 </add> pow <add> 3 <sub> x1 </add> 5 </mul>'
+    assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
+
+
+# A PRODUCT WRITTEN AS SMALLER PRODUCTS COLLECTS AS THE FLAT ONE DOES. A context without
+# certificates moves no carrier onto a non-carrier: in `((3 - x1)^-2 / (3 - x1)) * sqrt(x1 - 3)` the
+# inner product would merge to `(3 - x1)^-3`, and the root outside would find no partner left.
+BRACKETED = {
+    'S, sqrt N, inv S': [_S, _sq(_N), ['inv'] + _S],
+    'inv S^2, inv S, sqrt N': [['inv', 'pow'] + _S + ['2'], ['inv'] + _S, _sq(_N)],
+    'inf, S, sqrt N': [[INF], _S, _sq(_N)],
+    # the inner `(3 - x1) / (x1 - 3)` is `-1`, leaving `-1/(3 - x1)`; the members as they arrived
+    # flip to `1/(x1 - 3)`
+    'inv S, inv N, S': [['inv'] + _S, ['inv'] + _N, _S],
+}
+
+
+def _trees(fs):
+    if len(fs) == 1:
+        yield fs[0]
+        return
+    for i in range(1, len(fs)):
+        for a in _trees(fs[:i]):
+            for b in _trees(fs[i:]):
+                yield ['*'] + a + b
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('bag', sorted(BRACKETED))
+def test_a_bracketed_product_collects_as_the_flat_one(eng, mode, bag):
+    import itertools
+    flat = list(eng.simplify(['<mul>'] + [t for m in BRACKETED[bag] for t in m] + ['</mul>'], mode=mode))
+    price = eng.complexity(flat, mode=mode)
+    for order in itertools.permutations(BRACKETED[bag]):
+        for tokens in _trees(list(order)):
+            answer = list(eng.simplify(tokens, mode=mode))
+            assert eng.complexity(answer, mode=mode) == price, (tokens, answer, flat)
+            assert list(eng.simplify(answer, mode=mode)) == answer
