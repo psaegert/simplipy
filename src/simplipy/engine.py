@@ -242,11 +242,22 @@ DEFAULT_ENGINE = 'acj-5-4-llm'
 DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given
-#: (D39 B7). RULED from the acceptance benchmark's explore-budget arms (owner,
-#: 2026-08-24, 65,536-row panel): budget 4 strictly improves 2,084 rows (3.18%)
-#: with ZERO regressions and captures every win budget 64 finds, at +18% median
-#: per-row cost. Callers on throughput-critical paths pin ``effort=0`` explicitly.
-DEFAULT_EFFORT: int = 4
+#: (D39 B7). ``None``: the search runs until a round finds nothing, so a second call
+#: returns the answer unchanged (owner, 2026-10-06; in ``permissive`` its work budget can
+#: stop a search, see ``DEFAULT_WORK``). The previous default, 4, stops searches between
+#: two improvements: on srbf's 125,127 model predictions 2,675 answers change on a second
+#: call in f64 at cap 4 (none uncapped).
+#: Callers on throughput-critical paths pin ``effort=0``
+#: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
+DEFAULT_EFFORT: int | None = None
+
+#: The WORK BUDGET of each search ``simplify(.., mode='permissive')`` runs when ``work`` is not
+#: given. Its units are deterministic -- one step of the AC matcher or one canonical-constructor
+#: call -- so a budget cuts the same walk at the same place on every machine and under any load. A
+#: search that spends it stops as if its descent cap had bound and returns its best answer so far.
+#: ``work=None`` lifts the bound: the search runs until a round finds nothing, the default of
+#: ``f64`` and ``real``, which stay fast without one.
+DEFAULT_WORK: int | None = 10_000
 
 
 class _ModeMeta(EnumMeta):
@@ -944,19 +955,6 @@ class SimpliPyEngine:
         ----------
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
-
-        effort : int, optional
-            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, a
-            bounded exploration phase proposes expansion moves the strict descent
-            refuses (distributing a product over its sums, expanding an integer power
-            of a sum), runs each candidate through the same certified constructors and
-            the same descent loop, and replaces the result only when the candidate's
-            endpoint lands STRICTLY below it in the serve-time reduction ordering.
-            ``effort`` counts candidate descents; ``0`` never enters the phase and is
-            byte-identical to the plain chain. Every guarantee survives any budget:
-            soundness (same certificates), never-worse (strictly-below acceptance),
-            termination (well-founded ordering, independent of the budget) and
-            deterministic, idempotent output. Defaults to ``DEFAULT_EFFORT``.
 
         Returns
         -------
@@ -1955,7 +1953,8 @@ class SimpliPyEngine:
             *,
             max_passes: int | None = None,
             mode: Mode | str = Mode.f64,
-            effort: int | None = None) -> str | list[str] | tuple[str, ...] | np.ndarray:
+            effort: int | None = None,
+            work: int | None | str = 'default') -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
         The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
@@ -1972,7 +1971,9 @@ class SimpliPyEngine:
         (finite-a.e. for sign-cancelling addition, finite-and-nonzero-a.e. for
         exponent-cancelling multiplication), and coefficient arithmetic is exact rational
         computation rather than mined rules. The output is idempotent
-        (``simplify(simplify(x)) == simplify(x)``).
+        (``simplify(simplify(x)) == simplify(x)``) when every search runs until a round finds
+        nothing, the default of ``f64`` and ``real``; in ``permissive`` a search its work budget
+        stops, or another of its arms, can continue on a second call (``effort``, ``work``).
 
         .. note::
             Pair this engine with SORT-PROMOTED rulesets (the ``2-1``/``3-2``/``4-3``
@@ -2004,8 +2005,11 @@ class SimpliPyEngine:
               ``(2*x1)/(x2*x3)`` is ``<mul> 2 x1 <div> x2 x3 </mul>``. ``pow`` and the
               unary functions stay plain prefix; ``neg``/``inv`` exist only as the
               standalone unary spellings (``tan neg x0``, ``inv x0``) -- inside bags the
-              sections own all inverses. Exact literals are one token each: ``7``, ``0.2``,
-              ``1/3``. Tagged output is accepted back as input (one shared, liberal parser).
+              sections own all inverses. Integers are one token (``7``), every fraction is a
+              bag (``<mul> 1 <div> 3 </mul>``), and so is a small decimal (``0.2`` is
+              ``<mul> 1 <div> 5 </mul>``); other decimals are one token. So a tagged answer
+              that holds a fraction always carries a bag and reads back as tagged. Tagged
+              output is accepted back as input (one shared, liberal parser).
             * ``'infix'`` -- the PRETTY human-readable rendering (default for ``str``
               inputs; always returns ``str``): ``x8 + 1.2*x3``, ``-x0/3``, ``(x0 + 1)^2``.
               Round-trips: feeding the rendering back as a ``str`` input reaches the same
@@ -2036,6 +2040,33 @@ class SimpliPyEngine:
             -- and a spelling chosen for a reader must not move any of those. To read a
             token answer, convert it: ``simplify(to_infix(tokens))``.
 
+        effort : int or None, optional
+            The SEARCH BUDGET (ledger D39): after the chain reaches its fixpoint, an
+            exploration phase proposes expansion moves the strict descent refuses
+            (distributing a product over its sums, expanding an integer power of a
+            sum), runs each candidate through the same certified constructors and the
+            same descent loop, and replaces the result only when the candidate's
+            endpoint lands STRICTLY below it in the serve-time reduction ordering.
+            ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
+            nothing, so a second call returns the answer unchanged (up to the residual
+            classes in ``docs/formal.md``, I3 and L6, and in ``permissive`` a search its
+            work budget stopped); an int caps each search at that many candidate descents
+            (``permissive`` runs several per call), after which a second call can continue
+            it; ``0`` never enters the phase and is byte-identical to the plain chain.
+            Every guarantee survives any budget: soundness (same certificates), never-worse
+            (strictly-below acceptance; in ``permissive`` its selection too, never above its
+            input, its search-off answer or its answer at a smaller ``effort``, among calls
+            with the same ``work``), termination (well-founded ordering, independent of the
+            budget) and deterministic output.
+        work : int, None or 'default', optional
+            The WORK BUDGET of each search, in deterministic units (one AC-matcher step or
+            one canonical-constructor call). ``'default'`` is ``DEFAULT_WORK`` in
+            ``permissive`` and no bound in ``f64`` and ``real``; ``None`` lifts the bound (the
+            search runs until a round finds nothing). A search that spends its budget returns
+            its best answer so far, and the guarantees above hold at every budget;
+            ``permissive``'s three bounds hold among calls with the same ``work``. Under a
+            budget, ``permissive`` continues its literal fold without the search.
+
         Returns
         -------
         str | list[str] | tuple[str, ...] | np.ndarray
@@ -2056,19 +2087,38 @@ class SimpliPyEngine:
             raise ValueError(f"max_passes must be non-negative, got {max_passes}")
         if effort is None:
             effort = DEFAULT_EFFORT
-        if isinstance(effort, bool):
-            # bool is an int subclass and would silently mean 0 or 1 candidate
-            # descents -- a type error, not a budget.
-            raise TypeError(f"effort must be an int >= 0, not bool ({effort!r})")
-        try:
-            # __index__: plain and numpy ints alike (max_passes takes numpy ints
-            # through pyo3's __index__ extraction; the two int knobs agree).
-            effort = effort.__index__()
-        except AttributeError:
-            raise TypeError(
-                f"effort must be an int >= 0, not {type(effort).__name__} ({effort!r})") from None
-        if effort < 0:
-            raise ValueError(f"effort must be non-negative, got {effort}")
+        # None stays None: the core then searches until a round finds nothing.
+        if effort is not None:
+            if isinstance(effort, bool):
+                # bool is an int subclass and would silently mean 0 or 1 candidate
+                # descents -- a type error, not a budget.
+                raise TypeError(f"effort must be None or an int >= 0, not bool ({effort!r})")
+            try:
+                # __index__: plain and numpy ints alike (max_passes takes numpy ints
+                # through pyo3's __index__ extraction; the two int knobs agree).
+                effort = effort.__index__()
+            except AttributeError:
+                raise TypeError(
+                    f"effort must be None or an int >= 0, not {type(effort).__name__} ({effort!r})") from None
+            if effort < 0:
+                raise ValueError(f"effort must be non-negative, got {effort}")
+            if effort > 2 ** 63 - 1:
+                effort = None  # beyond the index range no cap binds: the uncapped search
+        if isinstance(work, str):
+            if work != 'default':
+                raise ValueError(f"work must be None, an int >= 0 or 'default', not {work!r}")
+        elif work is not None:
+            if isinstance(work, bool):
+                raise TypeError(f"work must be None or an int >= 0, not bool ({work!r})")
+            try:
+                work = work.__index__()
+            except AttributeError:
+                raise TypeError(
+                    f"work must be None or an int >= 0, not {type(work).__name__} ({work!r})") from None
+            if work < 0:
+                raise ValueError(f"work must be non-negative, got {work}")
+            if work > 2 ** 64 - 1:
+                work = None  # beyond the counter's range no budget binds
         # A STRING mode must coerce, never silently compare unequal to the enum:
         # `mode='lossy'` used to run the default because `'lossy' == Mode.LOSSY` was False
         # (audit Tier-2, 2026-08-03). Accept the enum, its names (any case), and its
@@ -2091,6 +2141,9 @@ class SimpliPyEngine:
             raise TypeError(
                 f"mode must be a simplipy.Mode or one of "
                 f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
+
+        if work == 'default':
+            work = DEFAULT_WORK if mode is Mode.permissive else None
 
         # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds
         # HERE, on the mode's first use -- once, lock-guarded, announced. Under the
@@ -2143,9 +2196,9 @@ class SimpliPyEngine:
         # for it by name, so the two output paths cannot end up serving different sets.
         rule_mode = _RULE_MODE[mode]
         if form == 'infix':
-            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort)
+            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort, work)
 
-        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort)
+        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort, work)
 
         if isinstance(expression, str):
             # The old infix converter cannot render the tagged form; a str input asking for
@@ -2158,32 +2211,25 @@ class SimpliPyEngine:
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             certified: bool = True,
             mode: Mode | str = Mode.f64,
-            canon: str = 'default') -> int:
-        """The SEMANTIC COMPLEXITY of an expression, measured on its canonical form.
+            canon: str = 'mode') -> int:
+        """The SEMANTIC COMPLEXITY of an expression in a mode: its price as that mode reads it.
 
-        This is the functional :meth:`simplify` minimizes (the unified measure mu),
-        measured by default on the CERTIFIED canonical state -- the same
-        certificate-carrying canonicalization the simplify chain runs on. The CANON is
-        pinned to the sound DEFAULT mode (owner ruling, SHIP BOTH): ``complexity()`` is
-        THE public measure, one Default-canon yardstick for every mode's output.
-        ``mode`` routes only the PARSE (the F2 route fix: the instrument prices the
-        state the requested mode's chain starts from), never the canon.
+        Each mode reads an expression into its own canonical form, because the modes accept
+        different simplifications as true: ``f64`` follows the deployed float evaluator
+        (``1/exp(5132.3)`` is ``0``), ``real`` exact real arithmetic (it is not), and
+        ``permissive`` also what holds only up to sign or domain (``(x^2)^(1/2)`` is ``x``,
+        where ``f64`` and ``real`` give ``abs(x)``).
+        This prices that form, on the
+        CERTIFIED canonical state (the same certificate-carrying canonicalization the
+        simplify chain runs on), with the one codebook (the unified measure mu). It is the
+        measure :meth:`simplify` descends in that mode, so for every mode
+        ``complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)``. Prices in
+        different modes price different readings and are not comparable across modes.
 
-        The theorem this instrument carries is therefore DEFAULT-scoped:
-        ``complexity(simplify(e)) <= complexity(e)`` is a THEOREM (chain descent,
-        docs/formal.md L3) for the default ``f64`` mode, whose chain descends this very
-        pricing. A ``real``- or ``permissive``-mode chain descends ITS OWN mode's canon
-        measure -- an INTERNAL descent -- and a fixpoint it licenses may price ABOVE
-        its input under the public Default-canon yardstick.
-
-        ``canon='mode'`` is the engine-internal DIAGNOSTIC that routes the CANON
-        through the requested ``mode`` as well, pricing in the measure that mode's
-        chain actually descends -- exactly what makes the per-mode serve guarantee
-        ``complexity(simplify(e, mode=m), mode=m, canon='mode') <=
-        complexity(e, mode=m, canon='mode')`` checkable from the outside. Each mode's
-        diagnostic is its own yardstick: not comparable across modes and NOT the public
-        measure. Quote Default-canon numbers (``canon='default'``, byte-identical to
-        the pre-0.14.1 behaviour) everywhere a complexity is reported.
+        ``canon='default'`` (deprecated) keeps the mode's parse but canonicalizes and prices
+        in ``f64``'s canon, as ``complexity()`` did before 0.15.0: identical for
+        ``mode='f64'``, and a ``FutureWarning`` for ``real`` and ``permissive``, whose own
+        answers it can price above their inputs.
 
         With ``certified=False`` the expression is priced on the bare
         (certificate-less, fail-closed) canonicalization instead: still invariant
@@ -2212,8 +2258,14 @@ class SimpliPyEngine:
         canon = str(canon).strip().lower()
         if canon not in ('default', 'mode'):
             raise ValueError(
-                f"unknown canon {canon!r}: expected 'default' (the public Default-pinned "
-                f"measure) or 'mode' (diagnostic: the canon routed through the requested mode)")
+                f"unknown canon {canon!r}: expected 'mode' (the mode's own reading, the default) "
+                f"or 'default' (deprecated: the mode's parse priced in f64's canon)")
+        if canon == 'default' and rule_mode != _RULE_MODE[Mode.f64]:
+            warnings.warn(
+                "complexity(..., canon='default') prices a real or permissive expression in "
+                "f64's canon; complexity() now prices each mode in its own reading (the "
+                "default, canon='mode'), and canon='default' will be removed.",
+                FutureWarning, stacklevel=2)
         if certified:
             return self._core.ac_complexity_certified(tokens, rule_mode, canon)
         return self._core.ac_complexity(tokens, rule_mode, canon)
@@ -2262,6 +2314,10 @@ class SimpliPyEngine:
         # (the numeric-string pricer -- invisible until 2026-08-22: its clamp stayed
         # at two bits after the floor ruling and NO probe moved, S15), and `<constant>`.
         ('1000',), ('1/2',), ('355/113',), ('0.2',), ('1e-40',), ('<constant>',),
+        # the FLOAT CAP: a literal costs at most the shortest decimal of the float64
+        # it reads as, so a decimal carrying more than float precision costs that decimal. Every
+        # probe above is its own float's shortest decimal (or cheaper), so none of them moved.
+        ('0.0766541268471677307861497420516056347394916180597539647375669841',),
         # the SYMBOL TABLE, one probe per entry (2026-08-21). Before these, six of the
         # nine entries were invisible to the fingerprint: changing `Pow` from 4 bits to
         # 3 left the digest at `355f6ba90801f603`, so an artifact mined under one table

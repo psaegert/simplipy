@@ -303,6 +303,7 @@ class TestCorpusGate:
         # chain's own parse route (F2 -- the re-pin half), and the ruled
         # DEFAULT_EFFORT=4 explores every walk row (a real movement: outputs rest
         # 197,624 milli-bits cheaper). The inflation bound held throughout.
+        # THE UNCAPPED SEARCH (0.15.0, DEFAULT_EFFORT=None): the walk does not move.
         assert walk['complexity_out'] == 56310982, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout

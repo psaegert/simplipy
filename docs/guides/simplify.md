@@ -28,16 +28,17 @@ function simplify(expr, max_passes=48, mode=f64, effort=DEFAULT_EFFORT):
 Every step preserves the function almost everywhere: like-term collection inside the
 canonical constructors, rule application, and the exact fold. The result is therefore
 sound, never costlier than the input in the measure the chain itself descends — each
-mode's own canonical pricing — and idempotent at any fixpoint run. The public
-instrument `complexity()` prices under the **Default canon**, one yardstick for every
-mode's output (`mode` routes only the parse, never the canon), so `μ(simplify(e)) ≤
-μ(e)` as `complexity()` states it is exact for the default `f64` mode, whose chain
-descends exactly this pricing. A `real`- or `permissive`-mode chain descends its *own*
-mode's canon measure — an internal descent — and a fixpoint it licenses may price above
-its input on the public Default yardstick; the engine-internal diagnostic
-`complexity(..., canon='mode')` prices in the requested mode's own measure and makes
-that per-mode guarantee checkable. Two *different spellings* of the same value may
-still settle at different fixpoints; each obeys its own bound.
+mode's own canonical pricing — and idempotent at any fixpoint run. `complexity(e,
+mode=m)` is that measure: each mode reads an expression into its own canonical form,
+because the modes accept different simplifications as true (`f64` follows the float
+evaluator, so `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not;
+`permissive` also what holds only up to sign or domain, so `(x^2)^(1/2)` is `x`, where `f64`
+and `real` give `abs(x)`), and prices
+that form. So
+`complexity(simplify(e, mode=m), mode=m) ≤ complexity(e, mode=m)` in every mode, and
+prices of different modes are prices of different readings, not comparable across
+modes. Two *different spellings* of the same value may still settle at different
+fixpoints; each obeys its own bound.
 
 The chain itself does not search: **cancellation IS canonicalization** — like-term
 collection in flat bags, computed by one deterministic function, so inside a pass there
@@ -95,7 +96,7 @@ cheaper `1 + x1 + x2**2` only by distributing first — which prices *higher* at
 node — and recollecting after, so the chain above, which only ever takes descending
 steps, never finds that valley. The search budget exists for exactly this class.
 
-With a budget, the chain first runs unchanged to its fixpoint. A bounded exploration
+With a budget, the chain first runs unchanged to its fixpoint. An exploration
 phase then proposes expansion moves the descent refuses — distributing a product over
 its sums, expanding an integer power of a sum — runs every candidate through the same
 certified constructors and the same descent loop, and replaces the incumbent only when
@@ -103,27 +104,73 @@ the candidate's endpoint lands strictly below it in the engine's one reduction
 ordering. Acceptance is that ordering test and nothing else; no new measure or
 tolerance enters.
 
-The budget is the `effort` parameter: `simplify(expr, effort=64)` explores with 64
-candidate descents, and `effort=0` never enters the phase — byte-identical to the
-chain alone. The default is `simplipy.DEFAULT_EFFORT` = 4, set from the release
-benchmark's explore-budget sweep below: budget 4 captures every win a 16x larger
-budget finds, with zero regressions. Pass `effort=0` on throughput-critical paths.
+The budget is the `effort` parameter. The default, `effort=None`
+(`simplipy.DEFAULT_EFFORT`), searches until a round finds nothing, so a second call
+has nothing left to continue (in `f64` and `real`; `permissive` bounds each search by its work
+budget, below). `simplify(expr, effort=64)` caps each search at 64 candidate
+descents (`permissive` runs several per call), and `effort=0` never enters the phase — byte-identical to the chain alone. Pass
+`effort=0` on throughput-critical paths.
 
-The sweep, re-measured on the release build over the same 65,536 rows, is the whole
-argument for the default in one panel: effort 0 to 4 moves the mean ratio from 0.9685
-to 0.9658 and lifts strictly-simplified rows from 10.2% to 13.2% for ~70 µs of median
-cost, and effort 64 is display-identical to effort 4 — budget 4 captures every
-budget-64 win, and the two mean ratios differ only in the fifth decimal (2.8e-5,
-what little there is sitting on the effort-64 side).
+The second knob is `work`: the budget of each search in deterministic units, one step of the
+matcher or one canonical-constructor call, so a budget cuts the same walk at the same place on
+every machine and under any load. A search that spends its budget returns its best answer so far.
+`permissive`, whose selection runs many searches per call, defaults to
+`simplipy.DEFAULT_WORK = 10_000` units (a few tens of milliseconds per search); `f64` and `real`
+run without a budget by default. `work=None` lifts it. With these defaults no call on the simplify
+inputs of flash-ansr's T8.1 draws, srbf's ground truths or its model predictions takes more than
+1 s in any mode, and under 1% take more than 0.1 s (0.14.7: up to 18.0% and 1.47%, `permissive` on
+the predictions).
 
-![Search-budget sweep, effort 0 / 4 / 64](../assets/benchmarks/ecdf_effort_sweep.png)
+A cap counts every candidate tried, refused ones included, over the whole expression, so
+the cap a search needs grows with the expression: one of srbf's model predictions needs 8
+candidates to reach its uncapped answer, a sum of two copies of it 13, of three 19 and of
+eight 39, so no fixed cap is enough. Capped at 4, the old default, 2,675 of srbf's 125,127 model
+predictions change on a second call in `f64` (2,672 to a cheaper form; `real` 2,677), because the
+first call stopped between two improvements. Uncapped, none does in `f64` or `real`, on any of
+the three sets. No answer is costlier than at cap 4 and 2,888 are cheaper.
+The search runs in two phases. For its first 8 candidates it is the capped default's
+breadth-first search: every candidate of every accepted state, against the best so far; on
+srbf's predictions that alone gives the final answer on 124,572 of the 125,127 in `f64` and
+`real`. If it has not settled by then, it steps from the best answer to the first of its
+candidates that is cheaper, resuming where the last improvement happened, until a whole round
+of the best answer's candidates finds nothing; on the other 555 that saves a median of 58
+bits. A breadth-first search re-tries every candidate of every accepted state, which on a
+large sum of terms that each need several expansions grows with the square of the number of
+terms; on 16 copies of one prediction the two-phase search takes about six times as long as
+`effort=4`, for an answer a third of the price. On srbf's predictions it takes 8% more time
+than `effort=4` in `f64` and `real`. Every internal caller that passes no
+`effort` (normalization, masking, mining, the verification monitor, the promotion refund)
+follows the default.
+
+`permissive` runs three arms (its two fold disciplines and the `f64` chain) and returns the
+cheapest of its candidates, each priced as it is returned — what it prints, re-read in
+`permissive`'s own measure: every state its two fold disciplines can end on under some budget
+(a capped run is the same walk cut short), the `f64` arm's states finished in `permissive`
+where they read cheaper than `permissive`'s own fixpoints and the input, the literal-fold
+continuation of every capped run's winner that carries long exact literals (and that winner
+with only its literals that print beyond float precision moved to their floats), and the input
+as read. So its answer never prices above the input, above its answer with the search off, or
+above its answer at a smaller `effort`, among calls with the same `work`; on flash-ansr's T8.1
+draws, srbf's ground truths and its predictions none does (efforts checked: 0, 1, 4 and the
+default). Under a work budget the literal-fold continuations run without the search. A second
+call can still change the answer, through another arm or a search the budget stopped: 67 of the
+129,490 T8.1 answers and 1,359 of srbf's 125,127 predictions change on a second call.
+
+What the search buys, on the 129,490 simplify inputs of flash-ansr's T8.1 training draws
+(output price over input price, `complexity(.., mode=m)`): in `f64` it moves the mean ratio from 0.979
+with the search off to 0.976 and lifts the strictly simplified answers from 6.0% to 9.2%, for
+about 24% more median time per call; in `permissive` from 0.960 to 0.955
+and from 21.9% to 28.0%, for about 42% more.
 
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
 below it (the result is never worse than the fixpoint, hence never costlier than the
-input), the frontier only grows on strict descent of a well-founded ordering
+input; in `permissive` for its selection too), both
+phases move only on strict descent of a well-founded ordering
 (termination, independent of the budget), and the walk order is deterministic
-(idempotence and reproducibility).
+(reproducibility; the work budget counts units, not time). Idempotence needs the search to run
+until a round finds nothing, the default of `f64` and `real`: a cap or a work budget can stop it
+between two improvements, which a second call then continues.
 
 ## Soundness modes
 
@@ -329,8 +376,8 @@ n = 65,536), the same prior under the engine mask policy 'all'
 (n = 65,536), and an external neutral problem set (SOOSE fc/nc/wc,
 n = 600; every row compiles in the engine language). The engine is the
 pinned acj-5-4-llm artifact: `f64` is the shipped default, `real` is
-`Mode.real`, `permissive` is `Mode.permissive`, every arm at the default
-`effort=4`. Scoring runs in the deployment space:
+`Mode.real`, `permissive` is `Mode.permissive`, every arm at `effort=4`, the
+default before 0.15.0. Scoring runs in the deployment space:
 ratio = `complexity(output)` / `complexity(input)`, priced by the engine's
 shipped `complexity()` instrument in the default (f64) canonicalization;
 lower is better, means carry bootstrap 95% CIs, and "made bigger" is the
@@ -356,7 +403,7 @@ cap and end the wall-clock ECDFs below 1.
 | | simplipy permissive | 0.992 | 9.8% | **0.0%** |
 | | sympy simplify | 1.006 | 26.3% | 15.0% |
 
-The shipped default arm (f64, effort 4) made no expression bigger: 0 of
+The f64 arm at effort 4 (the default when this was measured) made no expression bigger: 0 of
 131,072 SR rows and 0 of 600 external rows. The real and permissive arms
 minimize their own mode's reduction ordering, which is not the default
 pricing: under the table's measure they returned a form pricing above

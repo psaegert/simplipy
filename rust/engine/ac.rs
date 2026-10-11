@@ -112,7 +112,7 @@ impl Engine {
     /// and [`Engine::translate_rules`] for the load gates every set faces.
     pub(crate) fn ac_rules(&self) -> &AcRules {
         self.ac_rules_cell
-            .get_or_init(|| self.translate_rules(&self.rules.raw))
+            .get_or_init(|| self.translate_rules(&self.rules.raw, RuleMode::Default))
     }
 
     /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE (owner
@@ -141,10 +141,14 @@ impl Engine {
     pub(crate) fn ac_rules_for(&self, mode: RuleMode) -> &AcRules {
         match mode {
             RuleMode::Default => self.ac_rules(),
-            RuleMode::Real => self.ac_mode_rules(&self.real_rules, &self.ac_real_rules_cell),
-            RuleMode::Permissive => {
-                self.ac_mode_rules(&self.permissive_rules, &self.ac_permissive_rules_cell)
+            RuleMode::Real => {
+                self.ac_mode_rules(&self.real_rules, &self.ac_real_rules_cell, RuleMode::Real)
             }
+            RuleMode::Permissive => self.ac_mode_rules(
+                &self.permissive_rules,
+                &self.ac_permissive_rules_cell,
+                RuleMode::Permissive,
+            ),
         }
     }
 
@@ -155,10 +159,11 @@ impl Engine {
         &'a self,
         set: &'a Option<CompiledRules>,
         cell: &'a std::sync::OnceLock<AcRules>,
+        mode: RuleMode,
     ) -> &'a AcRules {
         match set {
             None => self.ac_rules(),
-            Some(compiled) => cell.get_or_init(|| self.translate_rules(&compiled.raw)),
+            Some(compiled) => cell.get_or_init(|| self.translate_rules(&compiled.raw, mode)),
         }
     }
 
@@ -188,7 +193,11 @@ impl Engine {
     fn translate_rules(
         &self,
         raw: &[(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)],
+        mode: RuleMode,
     ) -> AcRules {
+        // A mode's rules are read in that mode's number domain (design 2c), whichever run
+        // first asks for them (translation is lazy and may start inside another mode's run).
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
         let view = TokenView::new(&self.tokens, &overlay);
         let is_wildcard = |s: &str| {
@@ -459,7 +468,8 @@ impl Engine {
                 if !r.is_integer() {
                     return None;
                 }
-                (r.is_negative(), r.is_odd_integer())
+                // the parity, or fall through where the f64 domain does not know it
+                (r.is_negative(), r.parity()?)
             }
             Ex::Leaf(t) => view.with_str(*t, crate::numeric::integer_literal_parity)?,
             Ex::Mul(v) if v.len() == 2 => match (&v[0], &v[1]) {
@@ -690,7 +700,7 @@ impl Engine {
         // folding entirely. Only the mine's entry below bypasses the dispatcher, and it
         // does so on purpose.
         let (ctx, best) = self.ac_simplify_ex(tokens, max_passes, mode);
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, mode)
     }
 
     /// [`Engine::ac_simplify_proj`] with the fold discipline stated rather than derived.
@@ -705,7 +715,7 @@ impl Engine {
         fold_tr: bool,
     ) -> Option<Vec<String>> {
         let (ctx, best) = self.ac_simplify_ex_fold(tokens, max_passes, mode, 0, fold_tr);
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, mode)
     }
 
     /// The shared tail of both projections: malformed input is `None` -- the AC parser is
@@ -713,14 +723,24 @@ impl Engine {
     /// ValueError). The old contract returned the input unchanged, which silently passed
     /// garbage through the one entry point whose inputs skip `is_valid` (audit Tier-2,
     /// 2026-08-03).
-    fn project(&self, ctx: SimplifyCtx, best: Option<Ex>, form: AcForm) -> Option<Vec<String>> {
+    fn project(
+        &self,
+        ctx: SimplifyCtx,
+        best: Option<Ex>,
+        form: AcForm,
+        mode: RuleMode,
+    ) -> Option<Vec<String>> {
         // Malformed input is `None` -- the AC parser is the arbiter, and the FAILURE
         // SIGNAL propagates to the caller (the FFI raises ValueError). The old contract
         // returned the input unchanged, which silently passed garbage through the one
         // entry point whose inputs skip `is_valid` (audit Tier-2, 2026-08-03).
         let best = best?;
         let view = self.view(&ctx);
+        // Spelled in the run's number domain (design 2c): `mode` built these numbers. Only
+        // the domain follows the run; the spelling context stays `bare` (a lossy mode's
+        // licences would change the spelling).
         let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &bare),
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
@@ -744,7 +764,11 @@ impl Engine {
         let (ctx, best) = self.ac_simplify_ex_explore(tokens, max_passes, mode, explore_budget);
         let best = best?;
         let view = self.view(&ctx);
+        // Spelled in the run's number domain (design 2c): `mode` built these numbers. Only
+        // the domain follows the run; the spelling context stays `bare` (a lossy mode's
+        // licences would change the spelling).
         let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let toks = match form {
             AcForm::Explicit => to_prefix(&best, &bare),
             AcForm::Tagged => to_prefix_tagged(&best, &bare),
@@ -772,8 +796,9 @@ impl Engine {
             explore_budget,
             Cx::folds_for(RuleMode::Default),
             Some(suppressed),
+            None,
         );
-        self.project(ctx, best, form)
+        self.project(ctx, best, form, RuleMode::Default)
     }
 
     /// The PRETTY INFIX rendering of the simplified expression: `x8 + 1.2*x3`, `-x0/3`,
@@ -790,6 +815,7 @@ impl Engine {
         let best = best?;
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         Some(to_infix_pretty(&best, &bare))
     }
 
@@ -806,6 +832,7 @@ impl Engine {
         let best = best?;
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         Some(to_infix_pretty(&best, &bare))
     }
 
@@ -864,11 +891,10 @@ impl Engine {
     /// form -- the same functional the simplify search minimizes (`ac::expr::complexity`).
     /// `None` on malformed input.
     ///
-    /// `canon` is the mode the CANON itself runs in. `RuleMode::Default` is the public
-    /// measure (owner ruling, SHIP BOTH: `complexity()` stays Default-pinned); any other
-    /// value is the engine-internal diagnostic that re-prices under that mode's own canon
-    /// licences, making the per-mode serve guarantee checkable. The canon context stays
-    /// certificate-free and fold-free either way: that is this instrument's contract.
+    /// `canon` is the mode the CANON itself runs in: `complexity()` passes the requested
+    /// mode (each mode's own reading); `RuleMode::Default` keeps the mode's parse and prices
+    /// in f64's canon (the deprecated `canon='default'`). The canon context stays certificate-free and
+    /// fold-free either way: that is this instrument's contract.
     pub fn ac_complexity(
         &self,
         tokens: &[String],
@@ -990,13 +1016,12 @@ impl Engine {
     /// found live as 0.48% of 64k corpus rows measuring above ratio 1, in quanta of
     /// one symbol unit (2026-08-02).
     ///
-    /// `canon_mode` is the mode the certified CANON itself runs in. `RuleMode::Default`
-    /// pins the canon to the sound default -- THE public measure (owner ruling, SHIP
-    /// BOTH), and the theorem above is a theorem of THAT pricing for the default-mode
-    /// chain. Any other value is the engine-internal diagnostic that re-prices under
-    /// the requested mode's own canon (its fold discipline and licences) -- the measure
-    /// that mode's chain actually descends, which makes the per-mode serve guarantee
-    /// `mu_mode(simplify(e, mode)) <= mu_mode(e)` checkable from the outside.
+    /// `canon_mode` is the mode the certified CANON itself runs in: `complexity()` passes
+    /// the requested mode, pricing in that mode's own canon (its fold discipline and
+    /// licences) -- the measure that mode's simplify descends, under which
+    /// `mu_mode(simplify(e, mode)) <= mu_mode(e)` holds in every mode (for `permissive` by
+    /// its selection: `Engine::ac_simplify_ex_permissive`). `RuleMode::Default` keeps the
+    /// mode's parse and prices in f64's canon (the deprecated `canon='default'`).
     pub fn ac_complexity_certified(
         &self,
         tokens: &[String],
@@ -1004,12 +1029,24 @@ impl Engine {
         canon_mode: RuleMode,
     ) -> Option<u64> {
         let ctx = SimplifyCtx::new(self.tokens.len());
-        let toks = self.intern_seq(tokens, &ctx);
-        let view = self.view(&ctx);
-        let cf = |e: &Ex| self.ac_cert(e, &ctx, false);
-        let cfz = |e: &Ex| self.ac_cert(e, &ctx, true);
-        let czn = |e: &Ex| self.ac_zsn(e, &ctx);
-        let cnc = |e: &Ex| self.ac_nce(e, &ctx);
+        self.certified_reading(tokens, mode, canon_mode, &ctx)
+            .map(|(_, mu)| mu)
+    }
+
+    /// The state [`Engine::ac_complexity_certified`] prices, built in `ctx`, with its price.
+    fn certified_reading(
+        &self,
+        tokens: &[String],
+        mode: RuleMode,
+        canon_mode: RuleMode,
+        ctx: &SimplifyCtx,
+    ) -> Option<(Ex, u64)> {
+        let toks = self.intern_seq(tokens, ctx);
+        let view = self.view(ctx);
+        let cf = |e: &Ex| self.ac_cert(e, ctx, false);
+        let cfz = |e: &Ex| self.ac_cert(e, ctx, true);
+        let czn = |e: &Ex| self.ac_zsn(e, ctx);
+        let cnc = |e: &Ex| self.ac_nce(e, ctx);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1020,6 +1057,9 @@ impl Engine {
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
         };
+        // The whole call runs in the mode's number domain (design 2c): the
+        // certificates and folds below build numbers too.
+        let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         // Parse with the CHAIN'S context for the requested mode (F2 route fix,
         // 2026-08-24) -- see ac_complexity; this is the theorem-bearing
         // instrument, and its parse route must be the one the descent actually
@@ -1027,8 +1067,9 @@ impl Engine {
         let mut pbare = Cx::bare(&view);
         pbare.mode = mode;
         pbare.fold_f64 = Cx::folds_for(mode);
-        let e = from_prefix(&toks, &pbare)?;
-        Some(complexity(&canon(e, &cx), &view))
+        let e = canon(from_prefix(&toks, &pbare)?, &cx);
+        let mu = complexity(&e, &view);
+        Some((e, mu))
     }
 
     /// OFFLINE instrument (F80 E3 read, 2026-08-11): the kept negative-exponent bag
@@ -1073,6 +1114,9 @@ impl Engine {
             fold_f64: Cx::folds_for(RuleMode::Default),
             sentinels_expired: false,
         };
+        // The whole call runs in the mode's number domain (design 2c): the
+        // certificates and folds below build numbers too.
+        let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         let bare = Cx::bare(&view);
         let mut out = Vec::new();
         let mut stack: Vec<&Ex> = vec![&best];
@@ -1150,7 +1194,8 @@ impl Engine {
     /// `explore_budget > 0` runs the budgeted expansion search under the SAME pass
     /// context and accepts only endpoints strictly below in the reduction ordering.
     /// Dispatcher. Every mode but `permissive` runs once, with the fold discipline its mode
-    /// derives. `permissive` runs TWICE and keeps the cheaper endpoint.
+    /// derives. `permissive` runs both fold disciplines (and the default arm) and keeps the
+    /// cheapest candidate ([`Engine::ac_simplify_ex_permissive`]).
     ///
     /// "Real where possible, f64 as a fallback" cannot be a sequencing rule: folding is
     /// bottom-up, so `tanh 30` becomes `1` before `atanh` ever sees it, and no ordering
@@ -1184,74 +1229,376 @@ impl Engine {
                 Cx::folds_for(mode),
             );
         }
-        // THE PERMISSIVE LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03):
-        // an exact literal the chain's endpoint carries is replaced by its f64 nearest
-        // when mu' prices that spelling strictly cheaper, and the chain re-runs on the
-        // moved state -- a moved literal can re-fold with its neighbours, and the
-        // endpoint must stay the chain's own fixpoint (the per-state `stable()`
-        // contract). Each round lowers mu by at least a milli-bit, so the loop is finite;
-        // the cap is a backstop, never reached on the corpus (a moved literal has no
-        // second move: it already is a shortest f64 spelling). Permissive only: the
-        // strict tiers never move a value, and their literals keep the exact fraction.
-        let mut owned: Vec<String> = tokens.to_vec();
-        for _ in 0..4 {
-            let picked = self.ac_simplify_ex_permissive_once(&owned, max_passes, explore_budget);
-            let Some(e) = picked.1.as_ref() else {
-                return picked;
-            };
-            let Some(snapped) = crate::ac::expr::snap_lossy_literals(e) else {
-                return picked;
-            };
-            let view = self.view(&picked.0);
-            let bare = Cx::bare(&view);
-            let toks = to_prefix(&snapped, &bare);
-            owned = self.resolve_seq(&toks, &picked.0);
-        }
-        self.ac_simplify_ex_permissive_once(&owned, max_passes, explore_budget)
+        self.ac_simplify_ex_permissive(tokens, max_passes, explore_budget)
     }
-    /// One permissive selection: both fold disciplines and the default arm, the cheapest
-    /// endpoint wins (see `ac_simplify_ex_explore` for the literal-fold loop around it).
-    fn ac_simplify_ex_permissive_once(
+    /// PERMISSIVE: THE CHEAPEST CANDIDATE, PRICED AS RETURNED. Permissive runs three arms
+    /// -- its two fold disciplines and the default-mode chain at the same budget (THE THIRD
+    /// CANDIDATE, owner ruling 2026-08-24: the certified descent can steer past a structure
+    /// the relaxed descent freezes, so f64 can out-simplify permissive on individual rows).
+    /// Its candidates are:
+    ///
+    /// * every state a permissive arm can end on under some budget (its fixpoint, the states
+    ///   its search accepts, its answer), with the smallest budget that reaches it
+    ///   (`ac::search::explore`'s trace: a capped run is the same walk cut short);
+    /// * the default arm's states that read strictly cheaper than every permissive fixpoint
+    ///   and than the input, each finished through permissive's two chains: a default-mode
+    ///   spelling that permissive reads further (`x7/(x7*..)`, `x^2/x`) is never returned
+    ///   raw, and the threshold does not depend on the budget;
+    /// * the input as read.
+    ///
+    /// Every candidate is priced by re-reading what it prints in permissive's own measure
+    /// (`complexity(.., mode='permissive')`, the measure a caller sees). For every budget at
+    /// which some candidate first appears, the selection takes the winner among the
+    /// candidates a run capped there has, and continues it as that run would: THE PERMISSIVE
+    /// LITERAL FOLD (`ac::expr::lossy_literal`, owner ruling 2026-09-03) moves its long
+    /// exact literals to their floats and runs the three arms again at the same budget
+    /// (their states join, each at its own smallest budget, and so do the moved state itself
+    /// and the winner with only its long-printed literals moved, both read in permissive), up
+    /// to [`LITERAL_FOLD_ROUNDS`] rounds. The answer is the cheapest of these winners. So every capped run's answer is
+    /// among them, and by construction the answer never prices above the input, never above
+    /// the answer with the search off, and never above the answer under any smaller budget.
+    ///
+    /// A TIE GOES TO THE FOLDED FORM -- policy, not arithmetic: permissive exists for the
+    /// flash-ansr training path, where one literal token beats four. So at equal price a
+    /// candidate without a literal the fold would move wins (the float cap prices a long
+    /// exact literal and its float alike), then the earlier one: the folded arm's states
+    /// (its answer first), the unfolded arm's, the finished default states, the input, the
+    /// literal-fold continuations; among the budgets' winners of equal price, the one taken
+    /// last.
+    fn ac_simplify_ex_permissive(
         &self,
         tokens: &[String],
         max_passes: usize,
         explore_budget: usize,
     ) -> (SimplifyCtx, Option<Ex>) {
-        let mode = RuleMode::Permissive;
-        let unfolded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, false);
-        let folded = self.ac_simplify_ex_fold(tokens, max_passes, mode, explore_budget, true);
-        // THE THIRD CANDIDATE (owner ruling 2026-08-24): the DEFAULT-mode result at
-        // the same budget. Corpus is the permissive superset by doctrine, yet
-        // exploration is mode-dependent -- the certified descent can steer a
-        // candidate past a structure the relaxed descent freezes, so at nonzero
-        // budgets f64 can out-simplify permissive on individual rows (first observed on
-        // the shipped triple's dominance gate the day DEFAULT_EFFORT became 4).
-        // Arbitrating over the default-mode result too makes permissive dominance a
-        // THEOREM rather than an empirical gate property: permissive picks the best of
-        // its own two constructions and the sound chain's. Strictly-better wins
-        // only -- ties keep the permissive-own winner, so outputs churn exactly where
-        // the default candidate genuinely improves.
-        let default_arm = self.ac_simplify_ex_fold(
+        let mut ctxs: Vec<SimplifyCtx> = Vec::new();
+        let pctx = SimplifyCtx::new(self.tokens.len());
+        let mut prices: FxHashMap<Vec<String>, Option<u64>> = FxHashMap::default();
+        let (perm, fixes, defaults) =
+            self.permissive_arms(tokens, max_passes, explore_budget, &mut ctxs);
+        if perm.is_empty() && defaults.is_empty() {
+            return (SimplifyCtx::new(self.tokens.len()), None);
+        }
+        let ictx = SimplifyCtx::new(self.tokens.len());
+        let input =
+            self.certified_reading(tokens, RuleMode::Permissive, RuleMode::Permissive, &ictx);
+        let mut threshold = input.as_ref().map_or(u64::MAX, |(_, mu)| *mu);
+        let mut pool: Vec<Cand> = perm
+            .into_iter()
+            .map(|(i, e, b)| self.cand(i, e, b, &ctxs, &pctx, &mut prices))
+            .collect();
+        for &f in &fixes {
+            if let Some(mu) = pool[f].price {
+                threshold = threshold.min(mu);
+            }
+        }
+        let finished = self.finish_defaults(
+            defaults,
+            threshold,
+            max_passes,
+            &mut ctxs,
+            &pctx,
+            &mut prices,
+        );
+        pool.extend(finished);
+        if let Some((read, _)) = input {
+            let i = ctxs.len();
+            ctxs.push(ictx);
+            let cand = self.cand(i, read, 0, &ctxs, &pctx, &mut prices);
+            pool.push(cand);
+        }
+        // Continuations, by the snapped print they start from: the range of `conts` they fill.
+        let mut conts: Vec<Cand> = Vec::new();
+        let mut runs: FxHashMap<Vec<String>, (usize, usize)> = FxHashMap::default();
+        // A winner with only its long-printed literals moved, read in permissive: by print, its
+        // index in `conts`.
+        let mut reads: FxHashMap<Vec<String>, Option<usize>> = FxHashMap::default();
+        let mut budgets: std::collections::BTreeSet<usize> = pool.iter().map(|c| c.birth).collect();
+        let mut done: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        // (price, long, which: (in conts?, index))
+        let mut answer: Option<(u64, bool, bool, usize)> = None;
+        while let Some(c) = budgets.iter().copied().find(|b| !done.contains(b)) {
+            done.insert(c);
+            let mut seen: Vec<(bool, usize)> = (0..pool.len())
+                .filter(|&k| pool[k].birth <= c)
+                .map(|k| (false, k))
+                .collect();
+            let get = |w: (bool, usize), pool: &Vec<Cand>, conts: &Vec<Cand>| -> (u64, bool) {
+                let x = if w.0 { &conts[w.1] } else { &pool[w.1] };
+                (x.price.unwrap_or(u64::MAX), x.long)
+            };
+            let pick = |seen: &[(bool, usize)], pool: &Vec<Cand>, conts: &Vec<Cand>| {
+                let mut best: Option<((u64, bool), (bool, usize))> = None;
+                for &w in seen {
+                    let key = get(w, pool, conts);
+                    if key.0 == u64::MAX {
+                        continue;
+                    }
+                    if best.as_ref().is_none_or(|(k, _)| key < *k) {
+                        best = Some((key, w));
+                    }
+                }
+                best.map(|(_, w)| w)
+            };
+            let Some(mut w) = pick(&seen, &pool, &conts) else {
+                continue;
+            };
+            for _ in 0..LITERAL_FOLD_ROUNDS {
+                let x = if w.0 { &conts[w.1] } else { &pool[w.1] };
+                if !x.long {
+                    break;
+                }
+                let Some(snapped) = crate::ac::expr::snap_lossy_literals(&x.state) else {
+                    break;
+                };
+                let toks = self.print_prefix(&snapped, &ctxs[x.ctx]);
+                // Its long-printed literals moved alone, too: the float cap prices each like its
+                // float, where the snap's ground fold and its moved quotients (`1/25.06..`,
+                // printed as a division by that decimal) can price above the winner.
+                let alone = crate::ac::expr::snap_long_literals(&x.state)
+                    .map(|s| self.print_prefix(&s, &ctxs[x.ctx]))
+                    .filter(|t| *t != toks);
+                let (lo, hi) = match runs.get(&toks) {
+                    Some(r) => *r,
+                    None => {
+                        // Under a work budget the continuation re-reads the moved winner
+                        // through the three chains with the search OFF: its states are all born
+                        // at budget 0, so every capped run's continuation is still among them,
+                        // and its cost is the chains' (re-searching a state that differs from
+                        // the searched one only in its literals was most of the selection's
+                        // time). `work=None` keeps the searching continuation.
+                        let cont_budget = if crate::ac::work::search_budget() == u64::MAX {
+                            explore_budget
+                        } else {
+                            0
+                        };
+                        let (perm2, _, defaults2) =
+                            self.permissive_arms(&toks, max_passes, cont_budget, &mut ctxs);
+                        let lo = conts.len();
+                        for (i, e, b) in perm2 {
+                            let cand = self.cand(i, e, b, &ctxs, &pctx, &mut prices);
+                            conts.push(cand);
+                        }
+                        let fin = self.finish_defaults(
+                            defaults2,
+                            threshold,
+                            max_passes,
+                            &mut ctxs,
+                            &pctx,
+                            &mut prices,
+                        );
+                        conts.extend(fin);
+                        // The snapped winner itself, read in permissive: the float cap prices it
+                        // like the long state, so the fold applies even where the re-run offers
+                        // nothing as cheap.
+                        let rctx = SimplifyCtx::new(self.tokens.len());
+                        if let Some((read, _)) = self.certified_reading(
+                            &toks,
+                            RuleMode::Permissive,
+                            RuleMode::Permissive,
+                            &rctx,
+                        ) {
+                            let k = ctxs.len();
+                            ctxs.push(rctx);
+                            let cand = self.cand(k, read, 0, &ctxs, &pctx, &mut prices);
+                            conts.push(cand);
+                        }
+                        let hi = conts.len();
+                        budgets.extend(conts[lo..hi].iter().map(|c| c.birth));
+                        runs.insert(toks, (lo, hi));
+                        (lo, hi)
+                    }
+                };
+                let alone = alone.and_then(|t| match reads.get(&t) {
+                    Some(k) => *k,
+                    None => {
+                        let rctx = SimplifyCtx::new(self.tokens.len());
+                        let k = self
+                            .certified_reading(
+                                &t,
+                                RuleMode::Permissive,
+                                RuleMode::Permissive,
+                                &rctx,
+                            )
+                            .map(|(read, _)| {
+                                let i = ctxs.len();
+                                ctxs.push(rctx);
+                                let cand = self.cand(i, read, 0, &ctxs, &pctx, &mut prices);
+                                conts.push(cand);
+                                conts.len() - 1
+                            });
+                        reads.insert(t, k);
+                        k
+                    }
+                });
+                let fresh: Vec<(bool, usize)> = (lo..hi)
+                    .chain(alone)
+                    .filter(|&k| conts[k].birth <= c)
+                    .map(|k| (true, k))
+                    .collect();
+                seen.extend(fresh.iter().copied());
+                // The fold goes on while the continuation is at most as costly: folding a moved
+                // literal with its neighbours can mint a new long exact literal of equal price,
+                // which the next round moves again (the old loop's unconditional rounds).
+                match pick(&fresh, &pool, &conts) {
+                    Some(w2) if w2 != w && get(w2, &pool, &conts).0 <= get(w, &pool, &conts).0 => {
+                        w = w2
+                    }
+                    _ => break,
+                }
+            }
+            let (mu, long) = get(w, &pool, &conts);
+            if answer
+                .as_ref()
+                .is_none_or(|(m, l, _, _)| (mu, long) <= (*m, *l))
+            {
+                answer = Some((mu, long, w.0, w.1));
+            }
+        }
+        let Some((_, _, in_conts, k)) = answer else {
+            let first = pool.swap_remove(0);
+            return (ctxs.swap_remove(first.ctx), Some(first.state));
+        };
+        let x = if in_conts {
+            conts.swap_remove(k)
+        } else {
+            pool.swap_remove(k)
+        };
+        (ctxs.swap_remove(x.ctx), Some(x.state))
+    }
+
+    /// One priced candidate: its print re-read in permissive's own measure (cached by print).
+    fn cand(
+        &self,
+        ctx: usize,
+        state: Ex,
+        birth: usize,
+        ctxs: &[SimplifyCtx],
+        pctx: &SimplifyCtx,
+        prices: &mut FxHashMap<Vec<String>, Option<u64>>,
+    ) -> Cand {
+        let toks = self.print_prefix(&state, &ctxs[ctx]);
+        let price = *prices.entry(toks).or_insert_with_key(|t| {
+            self.certified_reading(t, RuleMode::Permissive, RuleMode::Permissive, pctx)
+                .map(|(_, mu)| mu)
+        });
+        let long = crate::ac::expr::snap_lossy_literals(&state).is_some();
+        Cand {
+            ctx,
+            state,
+            birth,
+            long,
+            price,
+        }
+    }
+
+    /// The default arm's states that read strictly cheaper than `threshold`, each finished
+    /// through permissive's two chains (no search) at the budget the state needs.
+    fn finish_defaults(
+        &self,
+        mut defaults: Vec<(usize, Ex, usize)>,
+        threshold: u64,
+        max_passes: usize,
+        ctxs: &mut Vec<SimplifyCtx>,
+        pctx: &SimplifyCtx,
+        prices: &mut FxHashMap<Vec<String>, Option<u64>>,
+    ) -> Vec<Cand> {
+        defaults.sort_by_key(|(_, _, b)| *b);
+        let mut out = Vec::new();
+        let mut seen: FxHashSet<Vec<String>> = FxHashSet::default();
+        for (i, d, birth) in defaults {
+            let raw = self.cand(i, d, birth, ctxs, pctx, prices);
+            if raw.price.is_none_or(|mu| mu >= threshold) {
+                continue;
+            }
+            let toks = self.print_prefix(&raw.state, &ctxs[i]);
+            if !seen.insert(toks.clone()) {
+                continue;
+            }
+            for fold in [true, false] {
+                let (ctx, best) = self.ac_simplify_ex_fold_sup(
+                    &toks,
+                    max_passes,
+                    RuleMode::Permissive,
+                    0,
+                    fold,
+                    None,
+                    None,
+                );
+                if let Some(best) = best {
+                    let k = ctxs.len();
+                    ctxs.push(ctx);
+                    out.push(self.cand(k, best, birth, ctxs, pctx, prices));
+                }
+            }
+        }
+        out
+    }
+
+    /// The three arms on `tokens` at `budget`, each arm's context pushed onto `ctxs`: the two
+    /// fold disciplines' states (folded first, each arm's answer first) with the smallest
+    /// budget reaching each, the indices of their fixpoints among them, and the default
+    /// arm's states likewise (finished only by the selection).
+    #[allow(clippy::type_complexity)]
+    fn permissive_arms(
+        &self,
+        tokens: &[String],
+        max_passes: usize,
+        budget: usize,
+        ctxs: &mut Vec<SimplifyCtx>,
+    ) -> (Vec<(usize, Ex, usize)>, Vec<usize>, Vec<(usize, Ex, usize)>) {
+        let mut perm = Vec::new();
+        let mut fixes = Vec::new();
+        for fold in [true, false] {
+            let mut trace = Vec::new();
+            let (ctx, best) = self.ac_simplify_ex_fold_sup(
+                tokens,
+                max_passes,
+                RuleMode::Permissive,
+                budget,
+                fold,
+                None,
+                Some(&mut trace),
+            );
+            if best.is_none() {
+                continue;
+            }
+            let i = ctxs.len();
+            ctxs.push(ctx);
+            for (b, s) in trace.into_iter().rev() {
+                if b == 0 {
+                    fixes.push(perm.len());
+                }
+                perm.push((i, s, b));
+            }
+        }
+        let mut trace = Vec::new();
+        let (ctx, best) = self.ac_simplify_ex_fold_sup(
             tokens,
             max_passes,
             RuleMode::Default,
-            explore_budget,
+            budget,
             Cx::folds_for(RuleMode::Default),
+            None,
+            Some(&mut trace),
         );
-        let cost = |p: &(SimplifyCtx, Option<Ex>)| -> Option<u64> {
-            p.1.as_ref().map(|e| complexity(e, &self.view(&p.0)))
-        };
-        let own = match (cost(&unfolded), cost(&folded)) {
-            (Some(cu), Some(cf)) if cu < cf => unfolded,
-            (Some(_), Some(_)) => folded,
-            (Some(_), None) => unfolded,
-            _ => folded,
-        };
-        match (cost(&own), cost(&default_arm)) {
-            (Some(co), Some(cd)) if cd < co => default_arm,
-            (None, Some(_)) => default_arm,
-            _ => own,
+        let mut defaults = Vec::new();
+        if best.is_some() {
+            let i = ctxs.len();
+            ctxs.push(ctx);
+            defaults.extend(trace.into_iter().rev().map(|(b, s)| (i, s, b)));
         }
+        (perm, fixes, defaults)
+    }
+
+    /// `e` (a state of `ctx`) in the explicit prefix projection, spelled in the f64 number
+    /// domain the permissive and default arms build their numbers in.
+    fn print_prefix(&self, e: &Ex, ctx: &SimplifyCtx) -> Vec<String> {
+        let view = self.view(ctx);
+        let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(true);
+        let toks = to_prefix(e, &bare);
+        self.resolve_seq(&toks, ctx)
     }
 
     fn ac_simplify_ex_fold(
@@ -1262,7 +1609,15 @@ impl Engine {
         explore_budget: usize,
         fold_tr: bool,
     ) -> (SimplifyCtx, Option<Ex>) {
-        self.ac_simplify_ex_fold_sup(tokens, max_passes, mode, explore_budget, fold_tr, None)
+        self.ac_simplify_ex_fold_sup(
+            tokens,
+            max_passes,
+            mode,
+            explore_budget,
+            fold_tr,
+            None,
+            None,
+        )
     }
 
     /// [`Engine::ac_simplify_ex_fold`] with an optional SUPPRESSION SET of artifact rule
@@ -1279,6 +1634,13 @@ impl Engine {
     /// probes each `?`-rule under the engine WITHOUT that rule: per-candidate engine
     /// rebuilds cost seconds each (lazy rule translation) and the refund needs tens of
     /// thousands of them, while a per-probe suppression set costs microseconds.
+    ///
+    /// `trace`, when given, receives the states this run can END on under any smaller
+    /// budget, each with the smallest budget that reaches it: the fixpoint the search
+    /// starts from (budget 0), then every state the search accepts, in order -- each
+    /// finished exactly as the answer is (the lossy output projection). The last one is
+    /// the answer itself.
+    #[allow(clippy::too_many_arguments)]
     fn ac_simplify_ex_fold_sup(
         &self,
         tokens: &[String],
@@ -1287,6 +1649,7 @@ impl Engine {
         explore_budget: usize,
         fold_tr: bool,
         suppressed: Option<&FxHashSet<usize>>,
+        mut trace: Option<&mut Vec<(usize, Ex)>>,
     ) -> (SimplifyCtx, Option<Ex>) {
         // The RECALL switch is DERIVED from the mode, once, here -- every layer below
         // this line already speaks `wildcard_all` and is untouched. Deriving it (rather
@@ -1311,6 +1674,9 @@ impl Engine {
             fold_f64: fold_tr,
             sentinels_expired: false,
         };
+        // The whole call runs in the mode's number domain (design 2c): the
+        // certificates and folds below build numbers too.
+        let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
         // Parse with the CALL's MODE: a bare (sound) parse let sound-only
         // constructor arms destroy structure lossy passes need -- `inv
         // float("inf")` folded to 0 AT PARSE, so the mul bag never saw the
@@ -1349,7 +1715,17 @@ impl Engine {
         };
 
         let stable_in = |e: &Ex, pb: &Cx, cxx: &Cx| {
-            let t = to_prefix(e, cxx);
+            // Print in the SPELLING context every consumer prints in (`project`, the
+            // permissive selection's `print_prefix`, the certificate-cache keys): `bare`,
+            // in the run's number domain. The mode's own context licenses more of the
+            // explicit form's grouped denominators (`n / (d1 * d2)`: every member in a lossy
+            // mode, every certified one in a sound mode) -- a spelling no caller ever
+            // receives, whose re-read builds the product of the members, a construction
+            // the state never went through (pair sign trades, folds and merges across a
+            // joined reciprocal); checking it made the instrument fail on states whose
+            // real serialization round-trips.
+            let spell = Cx::bare(cxx.view);
+            let t = to_prefix(e, &spell);
             // Re-parse under the PHASE's MODE (cert-less, like the entry parse):
             // serialization stability is a PER-MODE contract -- phase 2 states must
             // round-trip under the sentinel-expired canon, phase 1 states under the
@@ -1387,7 +1763,7 @@ impl Engine {
                             "STABLE-DIFF (state)  mu: {me} vs {mp} ({})  reconverges: {reconverge}\n                               T : {}\n  T': {}\n  e : {e:?}\n  p : {p:?}",
                             if me == mp { "mu-equal: D7 route-invariance trigger" } else { "mu-UNEQUAL: value-suspect" },
                             s(&t),
-                            s(&to_prefix(&p, cxx))
+                            s(&to_prefix(&p, &spell))
                         );
                     }
                     p == *e
@@ -1433,8 +1809,19 @@ impl Engine {
         // its OWN final fixpoint after sentinel expiry instead (phase 2 below):
         // exploration is post-FIXPOINT by definition, and phase-1 lossy states are a
         // search licence, not an answer (H-015).
+        if !wildcard_all {
+            if let Some(t) = trace.as_deref_mut() {
+                t.push((0, current.clone()));
+            }
+        }
         if explore_budget > 0 && !wildcard_all {
-            current = crate::ac::search::explore(current, &pass, max_passes, explore_budget);
+            current = crate::ac::search::explore(
+                current,
+                &pass,
+                max_passes,
+                explore_budget,
+                trace.as_deref_mut(),
+            );
             debug_assert!(
                 stable(&current),
                 "explored endpoint is not serialization-stable: {current:?}"
@@ -1506,8 +1893,17 @@ impl Engine {
             // D39 EXPLORATION, lossy mode: same phase, run on the sentinel-expired
             // final fixpoint under the phase-2 pass (blanket licences -- the shipped
             // wildcard_all semantics apply to the moves exactly as to the chain).
+            if let Some(t) = trace.as_deref_mut() {
+                t.push((0, current.clone()));
+            }
             if explore_budget > 0 {
-                current = crate::ac::search::explore(current, &pass2, max_passes, explore_budget);
+                current = crate::ac::search::explore(
+                    current,
+                    &pass2,
+                    max_passes,
+                    explore_budget,
+                    trace.as_deref_mut(),
+                );
                 debug_assert!(
                     stable2(&current),
                     "explored phase-2 endpoint is not serialization-stable: {current:?}"
@@ -1523,6 +1919,13 @@ impl Engine {
         // working endpoint, whose projection reproduces the output (idempotence as a
         // funnel property; see `ac::expr::rejoin_reciprocals`).
         let current = if wildcard_all {
+            if let Some(t) = trace {
+                let finished: Vec<(usize, Ex)> = t
+                    .drain(..)
+                    .map(|(b, s)| (b, rejoin_projection(s, &cx)))
+                    .collect();
+                t.extend(finished);
+            }
             rejoin_projection(current, &cx)
         } else {
             current
@@ -1530,6 +1933,21 @@ impl Engine {
         (ctx, Some(current))
     }
 }
+
+/// One permissive candidate: a state of `ctxs[ctx]`, the smallest budget at which its run
+/// reaches it, whether it carries a literal the fold would move, and its price as returned.
+struct Cand {
+    ctx: usize,
+    state: Ex,
+    birth: usize,
+    long: bool,
+    price: Option<u64>,
+}
+
+/// How many times permissive's literal fold moves a candidate's long exact literals to their
+/// floats and re-runs the chains (a re-run can mint new long exact literals, so the rounds
+/// are bounded, not priced).
+const LITERAL_FOLD_ROUNDS: usize = 4;
 
 /// THE ENGINE'S RULE MODE -- three inhabitants, one distinct COMPLETE rule set each
 /// (`rules.json`, `rules_real.json`, `rules_permissive.json`). This is the internal
@@ -2018,7 +2436,7 @@ mod tests {
     fn h051_num_exponents_classify_exactly() {
         let Some(e) = engine() else { return };
         let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
                 .unwrap()
         };
         let odd = "10000000000000000001"; // 10^19 + 1: Num, not f64-representable
@@ -2057,7 +2475,7 @@ mod tests {
             odd,
             "-0.9999999999999999",
         ];
-        let kept = e.ac_simplify(&t(&chain), 48, RuleMode::Default).unwrap();
+        let kept = e.ac_simplify(&t(&chain), 48, RuleMode::Real).unwrap();
         assert_eq!(
             kept,
             // H-059 (2026-08-07): the coefficient now takes the DIVISOR side, per the
@@ -2076,7 +2494,7 @@ mod tests {
                 "</mul>"
             ])
         );
-        assert_eq!(e.ac_simplify(&kept, 48, RuleMode::Default).unwrap(), kept);
+        assert_eq!(e.ac_simplify(&kept, 48, RuleMode::Real).unwrap(), kept);
     }
 
     /// H-045-R (owner Option B, 2026-08-05): `pow` with a negative ground base and a
@@ -2091,7 +2509,7 @@ mod tests {
     fn h045_beyond_i128_integer_exponents_classify_exactly() {
         let Some(e) = engine() else { return };
         let s = |toks: &[&str]| {
-            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
                 .unwrap()
         };
         let odd_huge = "10000000000000000000000000000000000000001"; // 10^40 + 1
@@ -2108,17 +2526,16 @@ mod tests {
         // H-048: the SIGNED leaf spelling "-1e40" splits into structure at parse
         // (the sign is never inside an opaque leaf), so the kept form is the
         // structural negation -- identical to the `neg`-spelled twin below.
-        assert_eq!(
-            s(&["pow", "float(\"-inf\")", "-1e40"]),
-            t(&["pow", "float(\"-inf\")", "neg", "1e40"])
-        );
-        assert_eq!(
-            s(&["pow", "float(\"-inf\")", "neg", "1e40"]),
-            t(&["pow", "float(\"-inf\")", "neg", "1e40"])
-        );
+        // Phase 2c: 1e40 is an exact number (no longer an opaque leaf), so the negative
+        // exponent decomposes as H-051's Num exponents do: inv((-inf)^(10^40)) = 0 exactly.
+        assert_eq!(s(&["pow", "float(\"-inf\")", "-1e40"]), t(&["0"]));
+        assert_eq!(s(&["pow", "float(\"-inf\")", "neg", "1e40"]), t(&["0"]));
         // Finite negative bases: finite class, REFUSE (the old path shipped nan).
-        assert_eq!(s(&["pow", "(-2)", "1e40"]), t(&["pow", "-2", "1e40"]));
-        assert_eq!(s(&["pow", "(-1)", "1e40"]), t(&["pow", "-1", "1e40"]));
+        // Phase 2c: 1e40 is the exact integer 10^40 and prints as its digits; 2^(10^40) is far
+        // over the cap and stays, while (-1)^(10^40) is exactly 1 in real mode.
+        let ten40 = "10000000000000000000000000000000000000000";
+        assert_eq!(s(&["pow", "(-2)", "1e40"]), t(&["pow", "-2", ten40]));
+        assert_eq!(s(&["pow", "(-1)", "1e40"]), t(&["1"]));
         // A ground COMPOSITE base classifying -inf takes the same arm.
         assert_eq!(s(&["pow", "log", "0", "1e40"]), t(&["float(\"inf\")"]));
         // Untouched paths: +inf base; non-integer spelling keeps the correct Nan;
@@ -2132,6 +2549,33 @@ mod tests {
             s(&["pow", "float(\"-inf\")", "1e19"]),
             t(&["float(\"inf\")"])
         );
+    }
+
+    /// Phase 2c (design review H3): in f64 mode an integer beyond 2^53 has no known parity --
+    /// the deployed evaluator reads it as an even float -- so a parity fold refuses. Main folded
+    /// `(-1)^9007199254740993` to -1 where the evaluator computes 1.0. Real mode keeps the exact
+    /// parity (`h045_...`, `h051_...`, run in real mode).
+    #[test]
+    fn f64_parity_beyond_2_53_is_unknown() {
+        let Some(e) = engine() else { return };
+        let s = |toks: &[&str]| {
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Default, super::AcForm::Explicit)
+                .unwrap()
+        };
+        let odd = "9007199254740993"; // 2^53 + 1
+        assert_eq!(s(&["pow", "(-1)", odd]), t(&["pow", "-1", odd]));
+        assert_eq!(s(&["pow", "(-1)", "9007199254740992"]), t(&["1"])); // 2^53: exact
+        assert_eq!(s(&["pow", "(-1)", "9007199254740991"]), t(&["-1"]));
+        let big_odd = "10000000000000000001";
+        assert_eq!(
+            s(&["pow", "float(\"-inf\")", big_odd]),
+            t(&["pow", "float(\"-inf\")", big_odd])
+        );
+        let r = |toks: &[&str]| {
+            e.ac_simplify_proj(&t(toks), 48, RuleMode::Real, super::AcForm::Explicit)
+                .unwrap()
+        };
+        assert_eq!(r(&["pow", "(-1)", odd]), t(&["-1"]));
     }
 
     /// REGRESSION (64k/1M-gate idempotence rows 29663/37873/59042 + 274133/514869): a

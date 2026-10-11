@@ -250,6 +250,23 @@ pub fn match_bag_each(
     cx: &MCx,
     k: &mut dyn FnMut(&mut Binds, &[bool]) -> bool,
 ) -> bool {
+    let cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
+    match_bag_each_cls(pv, sv, &cls, kind, allow_remainder, binds, cx, k)
+}
+
+/// [`match_bag_each`] with the subject's equality classes (`equality_classes`) supplied by the
+/// caller, so that every rule tried at one node computes them at most once.
+#[allow(clippy::too_many_arguments)]
+pub fn match_bag_each_cls(
+    pv: &[Ex],
+    sv: &[Ex],
+    cls: &std::cell::OnceCell<Vec<usize>>,
+    kind: BagKind,
+    allow_remainder: bool,
+    binds: &mut Binds,
+    cx: &MCx,
+    k: &mut dyn FnMut(&mut Binds, &[bool]) -> bool,
+) -> bool {
     if pv.len() > sv.len() {
         return false;
     }
@@ -265,6 +282,7 @@ pub fn match_bag_each(
         0,
         pv,
         sv,
+        cls,
         kind,
         allow_remainder,
         &mut used,
@@ -272,6 +290,16 @@ pub fn match_bag_each(
         cx,
         k,
     )
+}
+
+/// The equality classes of a bag's elements: `cls[i]` is the first index holding an element
+/// equal to `sv[i]`. Computed once per node visit, on the first refused structured placement.
+fn equality_classes(sv: &[Ex]) -> Vec<usize> {
+    let mut first: FxHashMap<&Ex, usize> = FxHashMap::default();
+    sv.iter()
+        .enumerate()
+        .map(|(i, e)| *first.entry(e).or_insert(i))
+        .collect()
 }
 
 /// Recursive backtracking over pattern elements in `order[at..]`, continuation-passing: a
@@ -286,6 +314,7 @@ fn try_assign(
     at: usize,
     pv: &[Ex],
     sv: &[Ex],
+    cls: &std::cell::OnceCell<Vec<usize>>,
     kind: BagKind,
     allow_remainder: bool,
     used: &mut Vec<bool>,
@@ -293,6 +322,12 @@ fn try_assign(
     cx: &MCx,
     k: &mut dyn FnMut(&mut Binds, &[bool]) -> bool,
 ) -> bool {
+    // A matcher step is a unit of the search's work budget (`ac::work`); past an armed
+    // ceiling the enumeration stops (the search discards the descent it was part of).
+    super::work::tick(1);
+    if super::work::over() {
+        return false;
+    }
     if at == order.len() {
         // All pattern elements placed. In nested (full-cover) mode every subject element must
         // be consumed; in root mode leftovers become the remainder.
@@ -309,32 +344,39 @@ fn try_assign(
             Ex::Leaf(t) => *t,
             _ => unreachable!(),
         };
-        if let Some(bound) = binds.get(&pk).cloned() {
+        if let Some(bound) = binds.get(&pk) {
             // Bound wildcard: consumption is DETERMINISTIC. A same-kind bag consumes its
             // elements as a sub-multiset; anything else consumes one equal element. The
-            // rebind-through-<constant> guard applies as everywhere.
+            // rebind-through-<constant> guard applies as everywhere. The consumption is
+            // decided under the borrow (no clone of the bound value), then the search goes on.
             if bound.contains_const() {
                 return false;
             }
-            let bag_elems: Option<&[Ex]> = match (&bound, kind) {
+            let bag_elems: Option<&[Ex]> = match (bound, kind) {
                 (Ex::Add(b), BagKind::Add) => Some(b),
                 (Ex::Mul(b), BagKind::Mul) => Some(b),
                 _ => None,
             };
-            match bag_elems {
+            let consume: Result<Vec<usize>, Option<usize>> = match bag_elems {
                 Some(belems) => {
                     // Multiset-subtract: each bound element consumes one unused equal subject
                     // element.
                     let mut taken: Vec<usize> = Vec::with_capacity(belems.len());
-                    'outer: for be in belems {
-                        for (i, se) in sv.iter().enumerate() {
-                            if !used[i] && !taken.contains(&i) && se == be {
-                                taken.push(i);
-                                continue 'outer;
-                            }
+                    for be in belems {
+                        match (0..sv.len())
+                            .find(|&i| !used[i] && !taken.contains(&i) && sv[i] == *be)
+                        {
+                            Some(i) => taken.push(i),
+                            None => return false,
                         }
-                        return false;
                     }
+                    Ok(taken)
+                }
+                // Equal elements are interchangeable: only the first unused copy is tried.
+                None => Err((0..sv.len()).find(|&i| !used[i] && sv[i] == *bound)),
+            };
+            match consume {
+                Ok(taken) => {
                     for &i in &taken {
                         used[i] = true;
                     }
@@ -343,6 +385,7 @@ fn try_assign(
                         at + 1,
                         pv,
                         sv,
+                        cls,
                         kind,
                         allow_remainder,
                         used,
@@ -357,17 +400,15 @@ fn try_assign(
                     }
                     false
                 }
-                None => {
-                    for i in 0..sv.len() {
-                        if used[i] || sv[i] != bound {
-                            continue;
-                        }
+                Err(first) => {
+                    if let Some(i) = first {
                         used[i] = true;
                         if try_assign(
                             order,
                             at + 1,
                             pv,
                             sv,
+                            cls,
                             kind,
                             allow_remainder,
                             used,
@@ -378,9 +419,6 @@ fn try_assign(
                             return true;
                         }
                         used[i] = false;
-                        // Equal elements are interchangeable: trying further copies of the
-                        // same value cannot change the outcome.
-                        break;
                     }
                     false
                 }
@@ -406,6 +444,7 @@ fn try_assign(
                         at + 1,
                         pv,
                         sv,
+                        cls,
                         kind,
                         allow_remainder,
                         used,
@@ -435,9 +474,13 @@ fn try_assign(
                     return false;
                 }
                 let sub = make_bag(kind, free.iter().map(|&i| sv[i].clone()).collect());
-                if !bind(pk, &sub, binds, cx) {
+                // `pk` is unbound here (the singles undo their bindings), so this is `bind`'s
+                // fresh arm with the built bag moved in rather than cloned.
+                debug_assert!(!binds.contains_key(&pk));
+                if !bind_ok(cx.view.sigil(pk), &sub, cx) {
                     return false;
                 }
+                binds.insert(pk, sub);
                 for &i in &free {
                     used[i] = true;
                 }
@@ -446,6 +489,7 @@ fn try_assign(
                     at + 1,
                     pv,
                     sv,
+                    cls,
                     kind,
                     allow_remainder,
                     used,
@@ -475,14 +519,17 @@ fn try_assign(
         // Structured pattern element: enumerate subject elements AND, per element, every
         // internal assignment of the member match (the F1 fix -- the continuation resumes
         // INSIDE the member before the search moves to the next subject element).
-        let mut tried_shapes: Vec<Ex> = Vec::new();
+        // The classes of the shapes whose whole enumeration failed this slot: the same test as
+        // comparing the shapes (`equality_classes`), without cloning or re-comparing them --
+        // on wide bags the clones and the quadratic comparisons were most of the search's time.
+        let mut tried: Vec<usize> = Vec::new();
         for i in 0..sv.len() {
             if used[i] {
                 continue;
             }
             // Equal elements are interchangeable: skip duplicates of a shape whose whole
             // assignment enumeration already failed this slot under the same binding state.
-            if tried_shapes.iter().any(|e| e == &sv[i]) {
+            if !tried.is_empty() && tried.contains(&cls.get_or_init(|| equality_classes(sv))[i]) {
                 continue;
             }
             used[i] = true;
@@ -492,6 +539,7 @@ fn try_assign(
                     at + 1,
                     pv,
                     sv,
+                    cls,
                     kind,
                     allow_remainder,
                     used,
@@ -504,7 +552,7 @@ fn try_assign(
                 return true;
             }
             used[i] = false;
-            tried_shapes.push(sv[i].clone());
+            tried.push(cls.get_or_init(|| equality_classes(sv))[i]);
         }
         false
     }

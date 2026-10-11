@@ -52,8 +52,11 @@ $$ t ::= q \mid \pi \mid e \mid +\infty \mid -\infty \mid \mathrm{NaN} \mid \dia
    \mid x \mid \mathrm{Add}\,M \mid \mathrm{Mul}\,M \mid \mathrm{Pow}(t, t)
    \mid f(t_1, \dots, t_n) $$
 
-where $q$ ranges over exact rationals (`Rat`: $p/q$ over `i128`, normalized $q > 0$,
-$\gcd(|p|, q) = 1$, $p \neq$ `i128::MIN`), $\diamond$ is the abstract fitted constant
+where $q$ ranges over exact rationals (`Rat`: $p/q$ with $|p|$ and $q$ of at most 1,100 bits
+each, `CAP_BITS`; normalized $q > 0$, $\gcd(|p|, q) = 1$; held as `i128` whenever it fits, never
+`i128::MIN`; in f64 mode only the numbers the float64 evaluator reads back as themselves --
+zero or normal, $|p| \leq$ DBL_MAX, $q \leq 2^{1022}$ -- and in real mode every number within
+the cap; any other literal stays a token leaf as written), $\diamond$ is the abstract fitted constant
 (`Const`), $x$ over vocabulary leaves, $f$ over operator tokens, and $M$ over multisets of
 terms with $|M| \geq 2$.
 
@@ -68,16 +71,46 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   exponent-stripped base (rational coefficient first). Stripping makes the order invariant
   under sign and exponent edits, which is what makes the sign orientation of sums
   well-defined (`rust/ac/expr.rs`, "STRIPPED comparators").
-- **I3 (coefficient normal form):** a $\mathrm{Mul}$ carries at most one rational factor; an
-  $\mathrm{Add}$ carries at most one rational term; rational arithmetic inside bags is
-  folded in a deterministic (sorted) merge order, exactly (`Rat` checked ops; overflow
-  refuses the merge and keeps the operands symbolic). *Known residual at the overflow
-  boundary* [EMPIRICAL, tracked]: when a merge is refused, the bag holds two-plus literal
-  members whose relative order can depend on construction history — measured as 2
-  idempotence violations in 50,000 adversarial fuzz calls (i128-scale literal pairs only;
-  0 on the mined corpus). This
-  is the accepted i128-boundedness design boundary; the cure (bignum content plus a
-  widened token boundary) is deliberately out of scope for this engine line.
+- **I3 (coefficient normal form):** a $\mathrm{Mul}$ carries one rational factor and an
+  $\mathrm{Add}$ one rational term, unless a fold is refused. The literals of a bag, the
+  coefficients of one like-term bucket and the exponents of one like-base pool fold to a
+  CANONICAL PARTITION (`Rat::partition_with`): sorted ascending, each member folds into the
+  lowest kept member it folds with, until no two members fold. A fold refuses beyond the cap,
+  and in f64 mode where the result is not admissible (numerator and denominator at most
+  $2^{1022}$, a set closed under negation and reciprocals); an exponent merge also needs its
+  branch-cut licence. No two members of a partition fold, so it is the partition of each of its
+  subsets and re-reads to itself in any printed order. *Known residuals* [EMPIRICAL, tracked]:
+  the partition makes each group re-read to itself, not every form around it. Two boundary
+  fuzzes with literals at the 128-bit, float64-range and cap boundaries give canonical-form
+  idempotence failures (at effort 0) below main's on the same inputs in every mode: 3 f64, 0
+  real, 1 permissive over 60,000 calls per mode (main 6, 6, 3), and 10, 7, 5 over a review's
+  52,000 (main 16, 16, 19; exact McNemar p = 0.26, 0.064, 0.001, so only permissive's gap is
+  significant). The classes: sums whose sign orientation stays open because they hold literals
+  that stay opaque leaves (beyond the cap, or in f64 mode outside the admissible set: `1e400`,
+  subnormals, `1.7976931348623157e308`, and the decimal `2.2250738585072014e-308`, whose exact
+  denominator is $10^{324}$) or stand beside a $\pm\infty$ factor (`-inf*(x2 - x1)` re-reads as
+  `inf*(x1 - x2)`, in real mode too); in permissive mode,
+  an infinity that absorbs a term only on re-read (`x1*(inf - c/(1e400*x1*x2))` becomes
+  `inf*x1`); a like term whose coefficient is itself a refused two-member partition, whose
+  coefficient and key can split differently on re-read (also on main at 128 bits); and
+  odd-function sign extraction. A class independent of literal size is closed: a product with
+  more than six sign-trade sites kept the placement it entered with, two sums that are each
+  other's negation stayed apart, and a join whose coefficient became 1 kept its key's signs, so
+  a state and the parse of its own print could differ (24 of srbf's 125,127 model predictions
+  changed on re-read in f64 at effort 0, 26 uncapped). Each is now decided by the orbit (§3), and
+  no f64 or real answer changes on a second call on the 129,490 simplify inputs of flash-ansr's
+  T8.1 draws, srbf's
+  ground truths or its predictions at the default effort. The sign placement keeps the entry
+  spelling where an orientation would collide with another factor's base or a negation overflows
+  (§3). And at a
+  refusal the grouping of the input can decide which inner products fold:
+  `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
+  (canonicity across spellings, not idempotence; both pinned in tests). Uncapped (the default in
+  f64 and real; L6), the exploration phase can reach states of the literal classes above that the
+  chain alone never visits (for example an unmerged `3e-310` coefficient that re-reads in another
+  order; a `<constant>` absorbed on re-read). In `permissive` the selection among three arms adds
+  a class of its own (L6). A capped search, or one its work budget stops, can stop between two
+  improvements, which a second call continues.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
@@ -99,7 +132,12 @@ round-trip (serialize → parse → canon) onto the *same state*, debug-asserted
 `simplify` call and exercised by the full suite and the corpus gates. The one measured
 divergence class (the odd-function literal-sign pair: `mul()`-built vs collector-built
 spellings of one value) was removed by the shared sign-trade owner; zero
-specimens remain. A second measured class (2026-08-24) sat not in `canon()` but in the
+specimens remain. The instrument itself printed each state with the mode's certificate
+context, a spelling no caller receives (every caller prints with the bare context), which
+raised false alarms and hid three real classes (the closed I3 class above); it now prints as
+the callers do, and in a debug build it holds on every state of srbf's ground truths and
+predictions in every mode and of all 129,490 T8.1 simplify inputs in permissive. A second
+measured class (2026-08-24) sat not in `canon()` but in the
 *pricing instrument*: `complexity()` parsed fold-free while the `f64`/`permissive` chains
 parse fold-at-parse, so on 10 of 65,536 benchmark rows the instrument priced a
 different state than the chain descended from and $\mu(\mathrm{simplify}(e)) \le
@@ -170,8 +208,19 @@ $m \ge 3$, and the eight odd functions — because $f(-S) = -f(S)$ is total on t
 carriers (negative odd exponents are NOT carriers: the pole trilemma). The
 sign-placement owner (`ac::expr::sign_place`, shared by `mul()`'s final assembly and
 `term_join`'s negative joins so the priced spelling is always the built spelling)
-materializes every reachable placement and keeps the $\mu$-argmin. The decision is
-three-tier:
+materializes every reachable placement and keeps the $\mu$-argmin. Beyond six sign-trade sites
+it finds the argmin without materializing the orbit: a placement's price is the sum of per-site
+prices, coupled only by the parity of the flips, so the cheapest placement is each site's
+cheaper orientation, with the one site whose switch costs least switched where the parity
+differs; its exact ties resolve by an order that is a function of the orbit, never of the entry
+spelling. It keeps the entry placement only where an orientation would collide with another
+factor's base or a negation overflows. Opposite sums $S$ and $-S$ collect per class: a member that
+cannot flip (a negative odd power, a fractional power) fixes the class's orientation, the others
+follow it (the bare sum and its odd powers move a sign to the coefficient, its even powers flip
+freely), and a class with no fixed member takes the smaller orientation; the decision reads only
+the class's members, never their order (`(x - a)*(a - x)` is `-(x - a)^2`, and
+`(a - x)*(x - a)/(a - x)` is `x - a`). A join whose coefficient becomes 1 re-places its key's
+signs (`term_join`). The decision is three-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
 2. an exact $\mu$ tie at a SIGN-TRADE site goes to the structurally distinguished
@@ -309,8 +358,8 @@ with no terminating decimal pays the rational codeword alone — still plus the
 selector, so every priced numeric leaf pays exactly one selector bit and the codebook
 is a genuine prefix code. A magnitude-$1$
 coefficient or rational-exponent slot is a bare sign and costs $0$, every other such
-slot pays its literal cost; a numeric literal whose
-exact rational exceeds `i128` lives as a token string and pays the same two-codeword
+slot pays its literal cost; a numeric literal that is no number to the engine (beyond the
+cap, or in f64 mode not admissible) lives as a token string and pays the same two-codeword
 rule parsed from its canonical print (`mu_numeric_str`, monotone in significand and
 scale within each codeword, with the astronomic knee at scale $2^{32}$ keeping the
 codomain inside `u64`); and the
@@ -327,8 +376,23 @@ guarantees (a beyond-f64 literal can price below it — $\mu(10^{-400}) = 10.647
 via its scientific codeword — and nothing rests on outpricing those). Final ties are broken
 by the canonical total order `cmp_ex` (rank, then structural lexicographic comparison,
 with *exact* rational comparison — the 256-bit `cmp_exact`). There is no separate
-literal-size tier: $\mu$'s literal component carries its content, so
-the ordering is a pair, not a triple.
+literal-size tier: $\mu$'s literal component carries its content up to float precision
+(the float cap below), and the 1,100-bit cap keeps the literals finite (L5), so the ordering
+is a pair, not a triple.
+
+**The float cap.** The evaluator reads every literal as its nearest float64, so a literal's
+price is capped at that float's shortest round-trip decimal $d(v)$ (at most 17 significant
+digits), priced by the same codebook: $\mu'(v) = \min\big(\mu(v),\, \mu(d(v))\big)$ for a
+finite nonzero nearest float, $\mu(v)$ otherwise; a literal the engine holds as a numeric
+string (beyond the 1,100-bit cap, or in f64 mode not admissible) keeps its print's price
+(`mu_numeric_str`). Every literal that is its own float's
+shortest decimal keeps its price (every constant drawn for flash-ansr's training data among
+them), and no price rises; a literal carrying more digits than its float needs (the 64-digit
+fourth power of a 16-digit constant, or a fitted constant printed with 17 digits where 16
+suffice) costs its float's shortest decimal. The cap is a decimal, never a fraction: a fraction that reads as the same
+float is no candidate unless it is the literal itself, so `0.3333333333333333` keeps its
+16-digit price while `1/3` costs 4 bits. Below, $\mu$ denotes the capped price wherever it
+prices a term.
 
 **Two codewords, one value.** The minimum is over *codes for the same exact value*,
 never over values — $\mu$ stays spelling-free, and the symmetry the codebook buys is
@@ -338,16 +402,20 @@ asymmetry with no informational content, since fitted constants arrive as
 decimal-printed f64s and a fraction-only code forces them through "two arbitrary
 integers" at $\log_2 10 \approx 3.32$ bits per decimal shift.
 
-**The emitted spelling is the priced spelling** [BY CONSTRUCTION]. The serializer
+**The emitted spelling is the priced spelling, up to the float cap** [BY CONSTRUCTION]. The serializer
 chooses each literal's print by the argmin over the *same* two codeword totals the
 measure minimizes (`decimal_spelling_wins`), so $\mu(t)$ is the description length
-of the representation actually emitted, not of a hypothetical one. An exact codeword
+of the representation actually emitted, not of a hypothetical one — except where the float
+cap applies: the state is exact and prints its exact value, which then costs more than its
+price; the capped price is that of the float's shortest decimal (what Python's `repr`
+prints for it, up to the last digit on an exact tie). An exact codeword
 tie goes to the fraction — the structurally distinguished caller-dialect member,
 mirroring tier 2 of the sign-placement convention (§3); states carry no spelling, so
 the tie-break must be spelling-free, and either member realizes the same $\mu$. The
 clause is defensive: no exact tie exists in the reachable `i128` lattice [EMPIRICAL —
 exhaustive scan over all 3,563 denominators $2^a 5^b < 2^{127}$ at dense-plus-spread
-numerator samples; the closest observed gap is 3–4 milli-bits].
+numerator samples; the closest observed gap is 3–4 milli-bits; numbers beyond 128 bits
+were not scanned].
 
 - $\mu$ takes values in $\mathbb{N}$ [THEOREM — trivially].
 - `cmp_ex` is a strict total order on $T_{\mathrm{can}}$ [BY CONSTRUCTION — rank +
@@ -362,10 +430,11 @@ canonical terms $t$ have $\mu(t) = \mu_0$. *Proof.* $\mu$ bounds the node count
 slot per bag and one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \leq \mu_0$
 in bits — the carrier being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
-vocabulary are finite; $\mu_0$ bounds every in-range literal in whichever codeword
-achieves its minimum, and each codeword admits finitely many values under any bound
-($L$ is monotone and unbounded in each component, and a codeword determines its
-value); and a beyond-`i128` numeric-string leaf pays a cost that grows with its
+vocabulary are finite; and there are finitely many numbers at all: a number's numerator
+and denominator have at most 1,100 bits each. $\mu_0$ does not bound a number's codeword
+components (the float cap prices every literal at most at its float's shortest decimal), so
+the finiteness of the literals comes from the 1,100-bit cap, not from the price. A numeric-string leaf
+(beyond the cap, or not admissible in f64 mode) pays a cost that grows with its
 canonical print (`mu_numeric_str` is strictly monotone in significand digits and in
 the scale within each codeword), so $\mu_0$ bounds the print's significand length
 and scale magnitude too, leaving finitely many leaf choices per slot.
@@ -376,18 +445,24 @@ $<_o$-descending sequence. *Proof.* Along such a sequence $\mu$ is non-increasin
 eventually constant; the tail then lives in one finite level set (L5) and descends the
 strict total order `cmp_ex`, so it is finite. $\square$
 
-Because a literal pays its bits, a dense-literal chain **ascends** outright: the chain $\mathrm{Mul}[3/2^k, x]$ grows strictly
-in $\mu$ with $k$ (such a chain cannot be a reduction sequence;
-pinned in `tests/test_unified_measure.py`). A pure re-sort or re-orientation preserves
+A dense-literal chain ascends while its literals carry no more than float precision: the
+chain $\mathrm{Mul}[3/2^k, x]$ grows strictly in $\mu$ with $k$ up to $k = 55$; at $k = 56$
+and for $58 \le k \le 1022$ in f64 mode ($1076$ in real mode), $3/2^k$'s exact
+spelling costs more than its float's shortest decimal, so the literal costs that decimal's
+price (the term 64–72 bits up to $k = 200$), which no longer ascends strictly. It stays finite all the same — $k$ is
+bounded by the 1,100-bit cap, and T-wf holds through L5 — and a rewrite cannot walk it
+anyway: every step preserves the term's value, and changing one literal alone changes it
+(pinned in `tests/test_unified_measure.py`: the chain ascends up to the float cap's onset, and
+simplifying the chain's members settles and re-reads to itself). A pure re-sort or re-orientation preserves
 $\mu$ (the leaf multiset and shape are unchanged) and is decided by `cmp_ex`, exactly
 as before.
 
 **Why numeric-string leaves are priced.** The numeric fold interns its result as a
 token; a term can therefore carry literals that exist only as opaque numeric *strings*
-(values whose exact rational exceeds `i128`). Pricing them at one vocabulary symbol
-would break L5 (unboundedly many strings at one level), invert the ordering at the
-`i128` boundary, and license deep-magnitude roundings; `mu_numeric_str` closes all
-three.
+(values beyond the 1,100-bit cap, or in f64 mode not admissible). Pricing them at one
+vocabulary symbol would break L5 (unboundedly many strings at one level), invert the
+ordering at the number/leaf boundary, and license deep-magnitude roundings;
+`mu_numeric_str` closes all three.
 
 **The property that fails, and why it matters.** $<_o$ is **not** closed under
 substitution or context: $\mu$ is *not additive* (coefficients and exponents carry
@@ -448,7 +523,7 @@ legitimate input; neither has ever been observed to bind [EMPIRICAL], and by T6 
 bound now *proves* an implementation bug. When one binds, rewriting stops and the state
 reached is returned — sound, possibly non-minimal.
 
-**Equal-$\mu$ ties, measured** [EMPIRICAL — instrumented build over 50,800 simplify
+**Equal-$\mu$ ties, measured** [EMPIRICAL, before phase 2c's numbers beyond 128 bits — instrumented build over 50,800 simplify
 calls: the 400-expression mined corpus in strict and permissive modes, plus 50,000 fuzz
 expressions biased toward coefficient/exponent cost shifts and i128-boundary literals].
 Tie **fires**: none occurred (0). Tie **rebuilds**: 169 calls (0.3%), every one on a
@@ -481,9 +556,10 @@ holds ($\mathrm{canon}(\mathrm{parse}(\mathrm{serialize}(t))) = t$, the `stable(
 assertion), `to_prefix` has a left inverse and is therefore injective — two states
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
-debug, so every state reached by the tests and the mini-mines satisfies it); its one known exception class is the documented I3
-i128-boundary residual (2/50k fuzz, corpus-unreachable), which therefore also scopes
-the cache guarantee — the same boundary, the same bignum cure if ever needed.
+debug, so every state reached by the tests and the mini-mines satisfies it, and so does every
+state of srbf's ground truths and model predictions in every mode and of all 129,490 T8.1
+simplify inputs in permissive). It fails on the documented I3 residuals at literals that stay leaves. These
+residuals scope the cache guarantee too.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass
 fixpoint within budget ($\mathrm{pass}(t_k) = t_k$ — by T6 the fixpoint *exists* and is
@@ -497,14 +573,45 @@ order, and the certificate analyses are all deterministic; the pass memo is fres
 call). $\square$ Whether the premises hold on real data is what the gates measure [EMPIRICAL —
 §7]. The run returns its *final* state — which by L3 carries the chain's minimum
 complexity — so L6's fixpoint premise is structural whenever the budget does not
-truncate.
+truncate. **The exploration phase** (`effort`) keeps L6 when it runs until a round finds
+nothing, the default since 0.15.0: its answer is a valley whose own expansions were all
+refused against it, the re-run's chain returns that valley (the premises above), and its
+search proposes the same candidates in the same order, which descend to the same endpoints
+and are refused again. Two further premises: the step cap does not bind (a capped walk
+skips fire sites), and the descent of a candidate does not depend on the memo's contents
+(the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
+valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
+srbf's 125,127 model predictions change on a second call 2,701 times in `f64` at cap 4, the former
+default, 2,673 of them to a cheaper form; uncapped, never, in `f64` and `real`, on these and on
+srbf's ground truths and the simplify inputs of flash-ansr's T8.1 draws]. Where
+the round-trip premise fails (L6a) the re-run starts from a different state. A further
+premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
+`permissive` returns the cheapest of its candidates, each priced by re-reading what it prints in
+`permissive`'s own measure: the states its two fold-discipline arms can end on under some
+budget (each search's trace, with the smallest budget reaching each state), the `f64` arm's
+states finished
+in `permissive` where they read below a budget-independent threshold (the cheapest of the
+`permissive` fixpoints and the input), the literal-fold continuation of the winner a run capped
+at each such budget would have (where it carries long exact literals; the winner with only its
+literals that print beyond float precision moved joins it), and the input as read. Under a work
+budget the continuations run without the search, so every continuation state is born at budget
+0. **Proposition (permissive selection)**
+[THEOREM, given the trace]: its answer prices at most its input, at most its search-off answer,
+and at most its answer under any smaller budget, among calls with the same work budget. *Proof.*
+The input is a candidate; a run capped at $k$ is the same walk cut short (a work budget cuts each
+search at the same place in both runs), so its candidates, its winner and that winner's
+continuation (the same walk cut short again) are among the uncapped run's; the answer is the
+cheapest of a superset. $\square$ Its winner is a valley of its own arm only: the re-run's other
+arms, started from the winner, can descend further, and a search the work budget stopped can
+continue, so L6 does not cover the selection [EMPIRICAL: 67 second-call changes on flash-ansr's
+129,490 T8.1 simplify inputs, 1,359 on srbf's 125,127 predictions; the three bounds hold on every input of
+both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
 permutation gate (0 violations / 400 canonical corpus expressions at head). One
-registered residual class at the 10^6 fuzz scale: the I3 i128-boundary bag-order class
-above. (The scale gates hold 0 idempotence and 0 permutation failures at head.)
+registered residual class: the I3 residuals above. (The scale gates held 0 idempotence and 0 permutation failures when last run, before phase 2c.)
 
 **Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
 (training-corpus canonicalization). It relaxes *soundness* licences, never the ordering:
@@ -518,7 +625,7 @@ fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in permissi
 | L1 nf termination | structural recursion; the two audited self-calls (`pow`, `fun`/rootn) | full suites exercise both self-call sites |
 | G1–G7 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; shipped counts pinned by `test_translation_audit_surface` |
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted step |
-| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends |
+| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle |
 | composite acceptance | the exploration branch in `rewrite_pass` (one level, private memo) | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form |
 | T6 defense-in-depth | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | by T6 a binding bound proves an implementation bug; fixpoint break covered by idempotence gates |
 | L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 at head |

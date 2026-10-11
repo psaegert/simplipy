@@ -2,6 +2,176 @@
 
 ## Unreleased
 
+- **Fast in every mode.** Against 0.14.7, on the 129,490 simplify inputs of flash-ansr's T8.1
+  training draws, srbf's 6,531 ground truths and its 125,127 model predictions (both versions side
+  by side on one machine under other load), in every mode: under 1% of calls take more than 0.1 s
+  and none takes more than 1 s (0.14.7: up to 18.0% and 1.47%, permissive on the predictions).
+  Total time falls by 37% (`f64`), 29% (`real`) and 35% (`permissive`) on the T8.1 inputs, 21-30%
+  on the ground truths, and by 80%, 78% and 89% on the predictions.
+- **A work budget per search, the default in permissive.** `simplify()` takes `work`: the budget
+  of each search in deterministic units (one step of the matcher or one canonical-constructor
+  call), so a budget cuts the same walk at the same place on every machine and under any load. A
+  search that spends it returns its best answer so far. The default is
+  `simplipy.DEFAULT_WORK = 10_000` in `permissive` (a few tens of milliseconds per search) and no
+  budget in `f64` and `real`; `work=None` restores the search that runs until a round finds
+  nothing. Under a budget, permissive continues its literal fold without the search. Its three
+  bounds below hold among calls with the same `work`. A search the budget stopped, or another arm
+  started from the answer, can continue on a second call: in `permissive`, 1,359 of srbf's
+  predictions change on a second call (0.14.7: 137) and 67 of the T8.1 inputs (0.14.7: 306).
+- **Faster canonical forms.** Placing the signs of a nested sum asked the same flip four times per
+  nesting level, so an expression nested `d` deep cost `4^d` flips: even with the faster products
+  below, `x1*(x1 + (N + 1)/x1)` nested 10 deep took 23.5 s in `f64` with the search off, and a
+  73-token nested input 25 s in `permissive` (0.14.7: over 4 minutes at 8 deep). The flip is now
+  computed once per call (0.04 s and 0.3 s), and the matcher no longer copies the expressions it
+  compares. Answers are byte-identical.
+- **Answers read back as themselves.** Three canonical forms depended on the route that built
+  them, so an answer could change on a second call: a product with more than six factors whose
+  sign can move kept the orientation it arrived in (the cheapest orientation is now found exactly
+  for any number of them), two sums that are each other's negation stayed apart (they now collect
+  per class, whatever the order of the factors: `(x - a)*(a - x)` is `-(x - a)^2`), and a term
+  whose coefficient became 1 kept its factors' signs. In `f64` and `real` no answer changes on a
+  second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
+  predictions). The debug-build check that every intermediate state reads back as itself printed
+  in a spelling no caller receives; it now prints as the callers do and passes on all ground
+  truths and predictions in every mode and on all 129,490 T8.1 inputs in `permissive`.
+- **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
+  permissive's "finite almost everywhere" licence even when a factor was an infinity:
+  `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
+  `x1 > 1/2` (`1 + tanh(inf*(x1 - 1/2))` became `0`). Distributing over an infinity now needs
+  certified finiteness, as in `f64` and `real`. On the 2,131 of 3,008 fuzzed expressions whose
+  value does not hang on the sign of a zero, permissive's wrong answers go from 389 to 0. 187 of the
+  2,243 T8.1 inputs whose answer holds an infinity change: 185 price higher (2 equal), the old
+  answers having used the step now refused, and 137 of the old answers were wrong at sampled
+  points.
+- **The tagged form writes every fraction as a bag.** `simplify` answers in the notation it was
+  given and tells the tagged one by its bag delimiters. An answer whose bags all collapsed carried
+  none, and a one-token fraction in it (`-25/4`, `pow x10 17/4`) re-read as the explicit notation
+  on a second call (`/ -25 4`). Every fraction is now `<mul> p <div> q </mul>` in the tagged form
+  (or splits into the product it is a coefficient of); decimals keep their spelling (as in 0.14.7:
+  a small one is a bag, `0.2` is `<mul> 1 <div> 5 </mul>`, the others one token). So a tagged
+  answer that holds a fraction always carries a delimiter. Explicit input is unchanged, `exp 1/2`
+  included.
+- **Permissive never returns more than it was given.** `simplify(.., mode='permissive')` runs
+  three arms (its two fold disciplines and the `f64` chain) and used to choose between them by the
+  price of internal states it did not return: 0.14.7 returns 250 of the T8.1 inputs, 2,867 of srbf's
+  predictions and 7 of its ground truths costlier than they came in, in permissive's own measure.
+  It now returns the cheapest of its candidates, each priced as it is returned (what it prints,
+  re-read in permissive's own measure): every state its two fold disciplines can end on under some
+  budget, the `f64` arm's states finished in permissive where they read cheaper than permissive's
+  own fixpoints and the input, the literal-fold continuation of every capped run's winner that
+  carries long exact literals (and that winner with only the literals that print beyond float
+  precision moved to their floats), and the input as read. So its answer never prices above the
+  input, above its answer with the search off, or above its answer at a smaller `effort`; on the
+  three sets none does (efforts checked: 0, 1, 4 and the default). Against 0.14.7 in permissive's
+  own measure, 1,795 T8.1 answers get cheaper and 567 costlier, and 40,863 predictions cheaper and
+  6,633 costlier. 31 of the predictions' answers print a literal beyond float precision (0.14.7:
+  25); none prices above the same answer with those literals at their floats (14 below, 17 equal).
+- **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:
+  the modes accept different simplifications as true (`f64` follows the float evaluator, so
+  `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not; `permissive` also what
+  holds only up to sign or domain, so `(x^2)^(1/2)` is `x`, where `f64` and `real` give `abs(x)`),
+  and each mode's `simplify` descends its own reading. So
+  `complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)` in every mode (on the three
+  sets above, no answer of any mode prices above its input), and prices of different modes are not
+  comparable. Before, `complexity()` read every expression the `f64` way, under which a `real` or
+  `permissive` answer could price above its input although its own mode made it cheaper. `f64` is
+  unchanged; `canon='default'` (the mode's parse, priced in `f64`'s canon) is deprecated and warns in
+  `real` and `permissive`.
+- **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now `None`
+  (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round of
+  expansions finds nothing cheaper, so a second call has nothing left to continue. A cap counts
+  every candidate tried over the whole expression, refused ones included, so the cap a search
+  needs grows with the expression (one srbf prediction needs 8 candidates, a sum of 2 copies of it
+  13, of 3 copies 19 and of 8 copies 39). Capped at 4 in this release, 2,675 of srbf's 125,127
+  model predictions change on a second call in `f64` (2,672 to a cheaper form; `real` 2,677).
+  Uncapped, none does in `f64` and `real` (with the canonical forms that read back as themselves,
+  above). No answer is
+  costlier than at cap 4, and 2,888 are cheaper. `permissive` bounds each search with its work
+  budget by default (above). The search tries the capped default's breadth-first order for its
+  first 8 candidates (on srbf's predictions in `f64` and `real` that alone gives the final answer
+  on 124,572 of 125,127) and then steps to the first cheaper candidate of the best answer until a
+  whole round finds nothing; on 16 copies of one prediction it takes about six times as long as
+  `effort=4`, for an answer a third of the price. Each candidate's whole state is rebuilt only
+  when it is tried and is no longer re-canonicalized in full before its descent. On srbf's
+  predictions the uncapped search takes 8% more time than `effort=4` in `f64` and `real`. Every
+  internal caller that passes no `effort` (normalization, masking, mining, the verification
+  monitor, the promotion refund) follows the default. `effort=k` caps each search at `k`
+  candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), tried in the
+  previous breadth-first order up to 8; `effort=0` never enters the search, so the search change
+  leaves its answers byte-identical (the float cap below changes some: 269 of srbf's 125,127
+  predictions in `f64`, 11,175 in `permissive`; so do permissive's selection and the canonical-form
+  fixes above). Code that
+  compares `DEFAULT_EFFORT` with an int now sees `None`.
+- **Faster products.** Building a product decides where its sign goes by pricing every
+  orientation of its sign-carrying factors. It now negates each such factor once instead of once
+  per orientation (each negation builds products of its own, so the waste compounded with
+  nesting), sums each orientation's price from per-factor prices, and remembers the prices of
+  numbers beyond 128 bits. Answers are byte-identical on every input of flash-ansr's T8.1
+  training draws, srbf's ground truths and srbf's model predictions, in every mode. On srbf's
+  predictions `simplify` takes 40-45% less time than without this in `f64` and about half the time
+  in `permissive`, where the slowest inputs run about 5 times faster (local measurements).
+- **A literal costs at most what its float costs.** The evaluator reads every literal as its
+  nearest float64, so the measure (`complexity`, and the ordering every simplification follows)
+  caps a literal's price at the price of that float's shortest decimal (at most 17 significant
+  digits); a literal kept as written (beyond the 1,100-bit cap, or not admissible in f64 mode)
+  keeps its price. A number carrying more digits than its float needs -- a product or power of
+  long constants folded exactly, or a constant printed with 17 digits where 16 suffice -- now
+  costs that decimal, not its exact digits; every literal that is its own float's shortest decimal
+  keeps its price (every constant drawn for flash-ansr's training data among them), and no price
+  rises. The cap is a decimal, never a fraction that reads as the same float: `0.3333333333333333`
+  keeps its price, `1/3` costs less. Answers still carry and print the exact value. Because long
+  exact numbers no longer count against a form, the search accepts more expansions in `f64` and
+  `real`: on srbf's model predictions 21% of the `f64` answers change (26,440 of 125,127; 0.2% of
+  flash-ansr's T8.1 training draws), almost all (98%) to expanded forms (a product of sums
+  multiplied out, a constant distributed over a sum) with about as many tokens (0.7% fewer) but
+  long exact coefficients, so they print 25% longer (all answers 7%). In `permissive`, whose
+  literal fold keeps such numbers short, the changed answers print shorter: 34% of srbf's
+  predictions change and print 7% shorter, and 2.6% of the T8.1 training draws, 4% shorter. The
+  measure fingerprint gains a probe and moves, so loading a ruleset mined under the previous
+  measure (the published ones included) warns until it is re-mined.
+- **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
+  denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
+  number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds
+  where it used to stay apart: `x1*1e-40*3` is one coefficient, `3e-40*x1 - x1*1e-40*3` is `0`,
+  and the Larmor denominator `6*3.1415926535897*8.854e-12*(2.99792458e8)^3` is one number. A
+  result beyond the cap keeps its pieces (`2^1100*x1` stays a power). Answers carry these numbers
+  exactly and in full, so a product or power of long constants can print as a number of hundreds
+  of digits, and a literal that used to come back as written now comes back as its digits
+  (`x1*1e-300`). The measure prices such a number at most like the float it reads as (above).
+- **f64 mode holds a number only where float64 can.** In `mode='f64'` (and `permissive`) a
+  number's numerator and denominator must both be at most 2^1022, so the number and its reciprocal
+  are normal float64 values; any other literal stays as written (`1e308`, `1e400`, the subnormal
+  `5e-324`), as before. `real` mode holds everything within the cap: `x1 + 1e308 + 1e308` is
+  `x1 + 2000...0` (2e308 in full) there and `2*1e308 + x1` in f64 mode. Two more f64 readings follow the evaluator:
+  an integer beyond 2^53 has unknown parity (`(-1)^9007199254740993` stays, and `x1^(2^53)*x1`
+  is not merged: the evaluator reads 2^53 + 1 as 2^53), and a literal the evaluator reads as inf
+  or as 0 is neither certainly finite nor certainly nonzero (`0*1e400` and `1e400/1e400` stay;
+  the evaluator gives NaN). `real` keeps exact parity and finiteness.
+- **Literal bags fold to a canonical partition.** The literals of a product or sum, the
+  coefficients of one like term and the exponents of one like base fold pairwise until no two of
+  them fold, so each such group re-reads to itself where a fold is refused. The old one-pass fold left
+  pieces the next call merged (also in 0.14.7: `10/((250000000/1571)/(pi*pi*x3))` with pi written
+  out needed two calls). `<constant>` and the infinities absorb the pieces a refused fold keeps,
+  and a fraction beyond 128 bits stays together (one `p/q` numeral in the text answer and the
+  tagged list answer, its own `/ p q` in the explicit list answer) instead of being split across a
+  product (the evaluator multiplied a 300-digit numerator in before dividing and overflowed).
+  Known limits: where a fold is refused, the grouping of the input can decide which inner
+  products fold (`(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different forms);
+  a like term whose coefficient is itself a refused two-number product can split coefficient and
+  term differently on a second call (also in earlier versions, at 128 bits); and the search can
+  find a cheaper form when started again from an answer, more often now that folded constants
+  are long.
+- **What moves.** Against 0.15.0.dev1: none of the 400 corpus rows; 23 of srbf's 6,531 ground
+  truths, all by literal arithmetic the 128-bit limit refused (two of them are coefficient sums
+  that then allow a distribution), their values equal to 1e-15. srbf's judge sees a few more
+  recoveries and loses none: in a sample of 6,000 result rows whose answers move, 6 verdicts go
+  from not recovered to recovered, where a truth's or a prediction's coefficients now fold to the
+  same form (`3.097*x2 + 0.966*14.68*x2` becomes one coefficient). The `real` and `permissive` rule
+  sets of acj-5-4-llm serve 42 fewer rules (`(+-0.1)^n -> 1e-n` for n >= 40), because the
+  constructor now computes them; the next re-mine drops them from the files. A mode's rules are
+  read in that mode's number domain, whichever mode asks for them first. The verification
+  instruments fold only within the engine's cap and refuse oversized spellings before building
+  them. Version 0.15.0.dev2.
 - **The compiled evaluator reads every literal as its nearest float64.** A compiled expression
   is Python source, and Python read an integer literal as an exact `int`: numpy's ufuncs reject
   one above int64 (`sin(100000000000000000000)` raised TypeError, and the engine printed that
@@ -114,13 +284,12 @@
   keeps the fraction (`x0^(500000000000000/3141592653589793)`), and the first value that moves
   is 100/101 (`1/1.01`). The state, `complexity()`,
   the measure and every rewrite are unchanged, and the text re-parses to the same state. The
-  token answers (explicit prefix and tagged) keep the 0.14.7 spelling byte for byte: the engine
+  token answers (explicit prefix and tagged) do not use this spelling: the engine
   prints states in the explicit form and reads them back (certificates, folds, served rules,
   the mining judge), and callers mask and compare token answers, so a spelling chosen for a
-  reader stays out of them. Measured: the explicit and tagged answers for srbf's 6,531 ground
-  truths and the 400-row corpus are identical to 0.14.7's in the f64 and real modes; 57 infix
-  answers change. In permissive mode one srbf answer differs, from the nearest-float fold above
-  (`6.0e-7*pi` folds to `0.0000018849555921538758`, where 0.14.7 was one ulp off).
+  reader stays out of them. Measured when it landed: the infix spelling changes no token answer,
+  and 57 of the infix answers for srbf's 6,531 ground truths and the 400-row corpus change (the
+  entries above change token answers for their own reasons).
 
 ## 0.14.7 (2026-10-01)
 

@@ -13,7 +13,7 @@ import pytest
 
 # R1-R13 + __version__ — the root column, verbatim.
 ROOT_ALL = {
-    'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION',
+    'DEFAULT_EFFORT', 'DEFAULT_ENGINE', 'DEFAULT_ENGINE_REVISION', 'DEFAULT_WORK',
     'Mode', 'SimpliPyEngine', '__version__',
     'codify', 'deduplicate_rules', 'explicit_constant_placeholders',
     'get_path', 'install', 'list_assets', 'uninstall',
@@ -95,7 +95,9 @@ class TestModuleSurfaces:
     def test_every_declared_name_resolves(self, module_name: str) -> None:
         module = importlib.import_module(module_name)
         for name in module.__all__:
-            assert getattr(module, name, None) is not None, name
+            # hasattr, not a None check: a declared constant may be None
+            # (DEFAULT_EFFORT, the uncapped search).
+            assert hasattr(module, name), name
 
 
 class TestPowerUserCaveatsInline:

@@ -64,18 +64,18 @@ fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
     })
 }
 
-/// The complexity instruments' canon selector: `"default"` keeps the canon pinned to
-/// the sound default (THE public measure, owner ruling: SHIP BOTH), `"mode"` routes the
-/// canon through the requested rule mode itself -- the engine-internal diagnostic that
-/// makes the per-mode serve guarantee checkable. Two spellings only, so the knob cannot
-/// silently become a third pricing.
+/// The complexity instruments' canon selector: `"mode"` routes the canon through the
+/// requested rule mode itself -- that mode's own reading, the measure its simplify descends
+/// (what `complexity()` prices); `"default"` pins the canon to the sound default -- the
+/// mode's parse, priced in f64's canon (the deprecated `canon='default'`). Two spellings only, so
+/// the knob cannot silently become a third pricing.
 fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine::RuleMode> {
     match canon {
         "default" => Ok(engine::RuleMode::Default),
         "mode" => Ok(rule_mode),
         other => Err(PyValueError::new_err(format!(
-            "unknown canon {other:?}: expected 'default' (the public Default-pinned \
-             measure) or 'mode' (diagnostic: canon routed through rule_mode)"
+            "unknown canon {other:?}: expected 'mode' (the mode's own reading) or \
+             'default' (deprecated: f64's reading for every mode)"
         ))),
     }
 }
@@ -92,9 +92,19 @@ fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
     }
 }
 
+/// The public `effort=` wire. `None` explores until a round finds nothing (owner,
+/// 2026-10-06): the search stops when a whole round of the answer's candidates finds
+/// nothing, which the well-founded
+/// ordering bounds, so its answer re-explores to nothing on a second call. `Some(k)` caps
+/// it at `k` candidate descents; `Some(0)` never enters it.
+fn explore_budget_of(effort: Option<usize>) -> usize {
+    effort.unwrap_or(usize::MAX)
+}
+
 /// THE ONE simplify implementation behind the FFI. `ac_simplify` (the `wildcard_all`
 /// spelling that shipped) and `ac_simplify_in_mode` (the mode spelling) both land here,
 /// so the bool is a SPELLING of a mode and never a second mechanism beside it.
+#[allow(clippy::too_many_arguments)]
 fn ac_simplify_impl(
     inner: &engine::Engine,
     py: Python<'_>,
@@ -103,6 +113,7 @@ fn ac_simplify_impl(
     mode: engine::RuleMode,
     form: engine::AcForm,
     explore_budget: usize,
+    work_budget: Option<u64>,
 ) -> PyResult<Py<PyList>> {
     // The documented empty-input contract: `simplify([]) == []` (the one valid
     // case `is_valid` rejects). Restored explicitly after the malformed-input
@@ -115,6 +126,7 @@ fn ac_simplify_impl(
     // BY ROUTING, not by trusting the explore path's early return (D39 effort=0).
     let out = py
         .detach(|| {
+            let _work = crate::ac::work::search_budget_scope(work_budget);
             if explore_budget > 0 {
                 inner.ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
             } else {
@@ -134,6 +146,7 @@ fn ac_simplify_infix_impl(
     max_passes: usize,
     mode: engine::RuleMode,
     explore_budget: usize,
+    work_budget: Option<u64>,
 ) -> PyResult<String> {
     // Empty-input contract, as in `ac_simplify` (H-003): the empty rendering.
     if tokens.is_empty() {
@@ -142,6 +155,7 @@ fn ac_simplify_infix_impl(
     ensure_ac_well_formed(inner, &tokens)?;
     // Same routing doctrine as `ac_simplify_impl`: budget 0 is the chain's own entry.
     py.detach(|| {
+        let _work = crate::ac::work::search_budget_scope(work_budget);
         if explore_budget > 0 {
             inner.ac_simplify_infix_explore(&tokens, max_passes, mode, explore_budget)
         } else {
@@ -451,6 +465,7 @@ impl PyEngine {
             engine::RuleMode::from_wildcard_all(wildcard_all),
             parse_ac_form(form)?,
             0,
+            None,
         )
     }
 
@@ -462,9 +477,12 @@ impl PyEngine {
     ///
     /// Contracts (empty input, malformed input, forms) are the SAME code as `ac_simplify`
     /// -- both entries are one call into `ac_simplify_impl`.
-    /// `explore_budget` is the D39 B7 wire: the public `effort=` rides this parameter.
-    /// 0 (the default) routes to the chain's own entry, byte-identical behaviour.
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged", explore_budget=0))]
+    /// `explore_budget` is the D39 B7 wire: the public `effort=` rides this parameter
+    /// (see [`explore_budget_of`]: `None` explores until a round finds nothing). 0 (the
+    /// default here) routes to the chain's own entry, byte-identical behaviour.
+    /// `work_budget` bounds each search's work in `ac::work` units (`None`: unbounded).
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged", explore_budget=Some(0), work_budget=None))]
+    #[allow(clippy::too_many_arguments)]
     fn ac_simplify_in_mode(
         &self,
         py: Python<'_>,
@@ -472,7 +490,8 @@ impl PyEngine {
         max_passes: usize,
         rule_mode: &str,
         form: &str,
-        explore_budget: usize,
+        explore_budget: Option<usize>,
+        work_budget: Option<u64>,
     ) -> PyResult<Py<PyList>> {
         ac_simplify_impl(
             &self.inner,
@@ -481,7 +500,8 @@ impl PyEngine {
             max_passes,
             parse_rule_mode(rule_mode)?,
             parse_ac_form(form)?,
-            explore_budget,
+            explore_budget_of(explore_budget),
+            work_budget,
         )
     }
 
@@ -496,16 +516,18 @@ impl PyEngine {
     /// Contracts (empty input, malformed input, forms) are the SAME as `ac_simplify`;
     /// an empty `suppressed_rows` is byte-identical to `ac_simplify_in_mode` at
     /// `rule_mode="default"`.
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=0, suppressed_rows=vec![]))]
+    /// `explore_budget` reads as in `ac_simplify_in_mode` ([`explore_budget_of`]).
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), suppressed_rows=vec![]))]
     fn ac_simplify_suppressed(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
         form: &str,
-        explore_budget: usize,
+        explore_budget: Option<usize>,
         suppressed_rows: Vec<usize>,
     ) -> PyResult<Py<PyList>> {
+        let explore_budget = explore_budget_of(explore_budget);
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
@@ -535,8 +557,9 @@ impl PyEngine {
     /// phase, so this entry is then byte-identical to `ac_simplify` (the ledger's
     /// effort=0 semantics). The public `effort=` API (D39 B7, wired 2026-08-24) rides
     /// the `_in_mode` entries' `explore_budget` parameter instead -- this bool-mode
-    /// entry stays as the B1 scaffolding surface its falsifier suite drives. Contracts
-    /// (empty input, malformed input, forms) exactly as `ac_simplify`.
+    /// entry stays as the B1 scaffolding surface its falsifier suite drives. It opens no work
+    /// budget, so `permissive` here runs unbounded and continues its literal fold with the
+    /// search. Contracts (empty input, malformed input, forms) exactly as `ac_simplify`.
     #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false, form="tagged", explore_budget=0))]
     fn ac_simplify_explore(
         &self,
@@ -584,18 +607,21 @@ impl PyEngine {
             max_passes,
             engine::RuleMode::from_wildcard_all(wildcard_all),
             0,
+            None,
         )
     }
 
-    /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`).
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", explore_budget=0))]
+    /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`,
+    /// whose `explore_budget` this reads the same way).
+    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", explore_budget=Some(0), work_budget=None))]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
         rule_mode: &str,
-        explore_budget: usize,
+        explore_budget: Option<usize>,
+        work_budget: Option<u64>,
     ) -> PyResult<String> {
         ac_simplify_infix_impl(
             &self.inner,
@@ -603,7 +629,8 @@ impl PyEngine {
             tokens,
             max_passes,
             parse_rule_mode(rule_mode)?,
-            explore_budget,
+            explore_budget_of(explore_budget),
+            work_budget,
         )
     }
 
@@ -683,9 +710,9 @@ impl PyEngine {
 
     /// Certified-canon complexity (the serve ordering's own pricing; see
     /// `engine::ac::ac_complexity_certified`): `mu(simplify(e)) <= mu(e)` is a
-    /// theorem under this pricing, unlike the bare `ac_complexity`. `canon="default"`
-    /// keeps the canon Default-pinned (THE public measure); `canon="mode"` is the
-    /// engine-internal diagnostic that routes the canon through `rule_mode` itself.
+    /// theorem under this pricing, unlike the bare `ac_complexity`. `canon="mode"` routes
+    /// the canon through `rule_mode` itself (each mode's own measure, what `complexity()`
+    /// prices); `canon="default"` pins it to f64's canon (the mode's parse is kept).
     #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
     fn ac_complexity_certified(
         &self,

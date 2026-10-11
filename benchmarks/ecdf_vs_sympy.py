@@ -9,12 +9,13 @@ same prior under the engine mask policy 'all' (n = 65,536), and an external
 neutral problem set (SOOSE fc/nc/wc, n = 600; every row compiles in the engine
 language). The engine is the pinned acj-5-4-llm artifact: ``f64`` is the
 shipped default, ``real`` is ``Mode.real``, ``permissive`` is
-``Mode.permissive``, every arm at the default ``effort=4``; the unmasked leg
+``Mode.permissive``, every arm at ``effort=4`` (the default before 0.15.0); the unmasked leg
 adds the explore-budget sweep arms ``effort=0`` and ``effort=64``.
 
-Scoring runs in the deployment space: ratio = complexity(output) /
-complexity(input), priced by the engine's shipped ``complexity()`` instrument
-in the default (f64) canonicalization; lower is better. SymPy is censored — a
+Scoring runs in the deployment space: ratio = complexity(output, mode) /
+complexity(input, mode), priced by the engine's shipped ``complexity()`` instrument
+in each arm's own mode (the measure that mode's simplify descends; SymPy in the f64
+reading); lower is better. SymPy is censored — a
 1 s timeout, or an output with no spelling in the engine's language
 (Piecewise, sign, complex, ...) — and censored rows score ratio 1.0 in every
 mean and table stat, the charitable choice; in the ECDF panels the censored
@@ -289,8 +290,10 @@ def score(cfg, corpora, results):
         mu0 = np.array([pricer.complexity(r) for r in corpus], float)
         arrays[f'{tag}/mu0'] = mu0
         for label, d in results[tag]['modes'].items():
-            mu = np.array([pricer.complexity(r) for r in d['outputs']], float)
-            ratio = mu / mu0
+            mode = label.split('_')[0]  # 'f64', 'real', 'permissive', 'f64_e64', ...
+            mu_in = mu0 if mode == 'f64' else np.array([pricer.complexity(r, mode=mode) for r in corpus], float)
+            mu = np.array([pricer.complexity(r, mode=mode) for r in d['outputs']], float)
+            ratio = mu / mu_in
             arrays[f'{tag}/{label}/t'] = np.array(d['seconds'], float)
             arrays[f'{tag}/{label}/ratio'] = ratio
             summary[f'{tag}/{label}'] = {
@@ -777,7 +780,7 @@ def make_sweep(plt, A, S, figdir):
     ci = S['boot_ci_mean_ratio']
     rows = []
     for a, lbl in (('f64_e0', 'effort 0 (plain chain)'),
-                   ('f64', 'effort 4 (the default)'),
+                   ('f64', 'effort 4 (the default until 0.15.0)'),
                    ('f64_e64', 'effort 64')):
         s = S['sweep'][a]
         lo, hi = ci[f'unmasked/{a}']
