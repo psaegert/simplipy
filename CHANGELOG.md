@@ -37,9 +37,11 @@
   `-1`, in any order of the factors. On 3,100 generated products of opposite sums no answer
   changes on a second call or depends on the order of its factors, in any mode (0.14.7 at its
   default: 30 change on a second call in `f64` and in `real`); in each mode's own measure two are
-  costlier than 0.14.7's, both in `permissive` and both holding an infinity. With the search off,
-  re-bracketing such a product can still change its form (25 of 150 fuzzed products in `f64`;
-  0.14.7: 87), each answer reading back as itself. In `f64` and `real` no answer changes on a
+  costlier than 0.14.7's, both in `permissive`, where 0.14.7's answer gives an infinity the wrong
+  sign. Re-bracketing a product can still change its form where an odd function of a sum meets the
+  same function of its negation: `tanh(x1 - x2)*(tanh(x1 - x2)*(-1))` stays
+  `tanh(x1 - x2)*tanh(x2 - x1)`, written flat it is `-tanh(x1 - x2)^2` (25 of 150 fuzzed products
+  in `f64`, with or without the search; 0.14.7: 87); each answer reads back as itself. In `f64` and `real` no answer changes on a
   second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
   predictions). The debug-build check that every intermediate state reads back as itself printed
   in a spelling no caller receives; it now prints as the callers do and passes on all ground

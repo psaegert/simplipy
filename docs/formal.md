@@ -623,12 +623,14 @@ both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
 permutation gate (0 violations / 400 canonical corpus expressions at head). Two registered
-residual classes: the I3 residuals above, and re-bracketings of a product with the search off.
-A sub-product that holds only one orientation of a sum collects before it meets the other, or
-trades its sign alone, so the nesting can decide the form: on a fuzz of products over opposite
-sums, odd functions and odd powers, the left, right and balanced nestings of 25 of 150
-expressions reach different answers at effort 0 in `f64` and `real` and 24 in `permissive`
-(0.14.7: 87, 87 and 82); each answer reads back as itself. (The scale gates held 0 idempotence
+residual classes: the I3 residuals above, and re-bracketings of a product. A sub-product trades
+its sign alone, so an odd function of a sum can meet the same function of its negation, which
+the opposite-sum classes do not hold: `tanh(x1 - x2)*(tanh(x1 - x2)*(-1))` stays
+`tanh(x1 - x2)*tanh(x2 - x1)` where the flat product is `-tanh(x1 - x2)^2`. On a fuzz of
+products over opposite sums, odd functions and odd powers, the left, right and balanced nestings
+of 25 of 150 expressions reach different answers in `f64` and `real`, with the search off and at
+the default effort alike, and 24 (23 with the search) in `permissive` (0.14.7: 87, 87 and 82);
+each answer reads back as itself. (The scale gates held 0 idempotence
 and 0 permutation failures when last run, on the 128-bit engine.)
 
 **Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
