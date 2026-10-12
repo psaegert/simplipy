@@ -195,8 +195,11 @@ REDECIDED = [
     (['<mul>', 'inv'] + _S + _N + ['inv', 'pow'] + _N + ['3', '</mul>'], 'pow <add> 3 <sub> x1 </add> -3'),
     # (3 - x1)^2 / (3 - x1) is the bare 3 - x1, which joins the root over x1 - 3
     ('* / pow - 3 x1 2 - 3 x1 pow - x1 3 0.5'.split(), 'neg pow - x1 3 / 3 2'),
-    # inverses on both sides: the even power joins the root
-    ('* * inv pow - 3 x1 2 inv - 3 x1 pow - x1 3 0.5'.split(), '* inv pow - x1 3 / 3 2 inv - 3 x1'),
+    # inverses on both sides: the even power joins the root (in permissive the lone inverse too,
+    # whose orientation only the sign of the infinity at the zero tells apart)
+    ('* * inv pow - 3 x1 2 inv - 3 x1 pow - x1 3 0.5'.split(),
+     {'f64': '* inv pow - x1 3 / 3 2 inv - 3 x1', 'real': '* inv pow - x1 3 / 3 2 inv - 3 x1',
+      'permissive': '/ -1 pow - x1 3 / 5 2'}),
     # a symbolic power cannot move; the even power cancels the bare sum
     ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(), '/ pow - 3 x1 x3 - x1 3'),
     # (3 - x1) / (3 - x1)^3 is an even power over x1 - 3, which meets the bare x1 - 3
@@ -213,7 +216,7 @@ REDECIDED = [
 @pytest.mark.parametrize('src, expected', REDECIDED)
 def test_a_class_is_decided_on_its_collected_members(eng, mode, effort, src, expected):
     answer = list(eng.simplify(src, mode=mode, effort=effort))
-    assert ' '.join(answer) == expected
+    assert ' '.join(answer) == (expected[mode] if isinstance(expected, dict) else expected)
     assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
 
 
@@ -334,15 +337,20 @@ def test_classes_are_decided_together(eng, mode):
     assert list(eng.simplify(answer, mode=mode)) == answer
 
 
-# A CONTEXT WITHOUT CERTIFICATES KEEPS A CARRIER OUT OF A NON-CARRIER OVER THE SAME SUM: the parse
-# reads `1/(3 - x1)^2` as `1/(x1 - 3)^2`, which must not merge with `1/(x1 - 3)` into
-# `1/(x1 - 3)^3` before the certified construction flips it onto `1/(3 - x1)^3`.
+# AN ODD NEGATIVE TOTAL KEEPS ONE INVERSE AND MOVES ITS EVEN PART: `(3 - x1)^-2 (3 - x1)^-3` is the
+# total `^-5` over `3 - x1`, and `1/(x1 - 3)` the total `^-1` over `x1 - 3`; each side keeps one
+# inverse, and the even parts gather on one side (`1/((x1 - 3)^5 (3 - x1))`; `1/((x1 - 3) (3 - x1)^5)`
+# costs the same and loses the tie), however the parse first reads `1/(3 - x1)^2`. Permissive reads
+# a function up to its values at a zero, where only the sign of the infinity tells the two
+# orientations of a lone inverse apart: there it moves too.
 @pytest.mark.parametrize('effort', (0, None))
 @pytest.mark.parametrize('mode', MODES)
-def test_a_carrier_is_not_merged_into_a_non_carrier(eng, mode, effort):
+def test_an_odd_negative_total_keeps_one_inverse(eng, mode, effort):
     src = ['<mul>', 'inv', 'pow'] + _S + ['2', 'inv', 'pow'] + _S + ['3', 'inv'] + _N + ['</mul>']
     answer = list(eng.simplify(src, mode=mode, effort=effort))
-    assert ' '.join(answer) == '<mul> <div> <add> x1 <sub> 3 </add> pow <add> 3 <sub> x1 </add> 5 </mul>'
+    expected = ('neg pow <add> x1 <sub> 3 </add> -6' if mode == 'permissive'
+                else '<mul> <div> pow <add> x1 <sub> 3 </add> 5 <add> 3 <sub> x1 </add> </mul>')
+    assert ' '.join(answer) == expected
     assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
 
 

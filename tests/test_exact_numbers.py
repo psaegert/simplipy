@@ -152,11 +152,21 @@ class TestFixedPoint:
         assert numbers(simplify(engine, '* x1 * * 1e300 1e10 1e-100', mode)) == [10 ** 210]
 
     @pytest.mark.parametrize('mode', MODES)
-    def test_the_grouping_can_decide_a_refused_bag(self, engine: SimpliPyEngine, mode: str) -> None:
-        # Known limit (design M2): at a refusal the input's grouping decides which inner
-        # products fold, so these equal inputs keep different canonical forms.
-        assert numbers(simplify(engine, '* * 1e200 1e100 * 1e100 x1', mode)) == [10 ** 100, 10 ** 300]
-        assert numbers(simplify(engine, '* 1e200 * 1e100 * 1e100 x1', mode)) == [10 ** 200, 10 ** 200]
+    def test_the_grouping_does_not_decide_a_refused_bag(self, engine: SimpliPyEngine, mode: str) -> None:
+        # A product is parsed as one bag of all its members, so at a refusal every grouping
+        # partitions the same multiset of coefficients.
+        for prefix in ('* * 1e200 1e100 * 1e100 x1', '* 1e200 * 1e100 * 1e100 x1', '* * * 1e200 1e100 1e100 x1'):
+            assert numbers(simplify(engine, prefix, mode)) == [10 ** 200, 10 ** 200]
+
+    def test_a_tagged_fraction_in_a_refused_bag_is_one_member(self, engine: SimpliPyEngine) -> None:
+        # `<mul> p <div> q </mul>` spells one number, as `/ p q` does: an answer whose refused
+        # bag holds a fraction (`2.7e34/9e28 * (2e300 - 5)/2 * x1^2`) reads back as itself
+        src = ('<mul> <add> <mul> x1 <add> <mul> 2.5 x1 </mul> 7.8073246475749528e-4 </add> </mul> <sub> <mul> 1e300 '
+               'pow x1 2 </mul> </add> <add> <mul> <add> x2 5.5037064977545249e2 </add> <add> x2 <sub> '
+               '5.5037064977545249e2 </add> </mul> <mul> <add> x1 1/3 </add> <add> x1 <sub> 1/3 </add> </mul> <sub> '
+               'pow x2 2 pow x1 2 </add> </mul>')
+        answer = list(engine.simplify(src.split()))
+        assert list(engine.simplify(answer)) == answer
 
 
 class TestLeftovers:

@@ -24,7 +24,7 @@ use std::sync::OnceLock;
 
 use crate::tokens::{Tok, TokenView};
 
-use super::expr::{add, canon, fun, mul, pow, Cx, Ex};
+use super::expr::{add, canon, fun, mul, pow, Cx, Ex, FlipScope};
 use super::rat::Rat;
 use num_bigint::BigInt;
 use num_traits::{One, Zero};
@@ -36,6 +36,8 @@ pub fn from_prefix(tokens: &[Tok], cx: &Cx) -> Option<Ex> {
     // Literals parse in the context's number domain: in the f64 domain a literal that is not
     // admissible (subnormal, beyond float64's range) stays a leaf as written (design 2c).
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // One scope for the whole parse: a product met again is decided once (`FlipScope`).
+    let _memo = FlipScope::open();
     let (e, next) = parse_one(tokens, 0, cx)?;
     if next != tokens.len() {
         return None;
@@ -47,28 +49,31 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
     let view = cx.view;
     let t = *tokens.get(idx)?;
     let s = view.resolve_owned(t);
+    // A PRODUCT is built once, from all of its members (`parse_members`): the smaller products
+    // a spelling nests (`* a * b c`, `neg`, a `/` numerator, a `<mul>` bag inside another)
+    // are not built on their own, so what `mul()` collects and decides cannot depend on the
+    // bracketing.
+    if product_head(&s, view.arity(t)) {
+        let mut members = Vec::new();
+        let at = parse_members(tokens, idx, cx, &mut members)?;
+        return Some((mul(members, cx), at));
+    }
     // The TAGGED bags of the strict prefix form: `<add> ... </add>` / `<mul> ... </mul>`.
     // Children are read until the matching closer; a bag needs >= 2 children and a closer
     // (anything else is malformed and fails the parse). The two languages share one parser:
     // tag tokens are not operators of any config, so there is no ambiguity.
-    if s == "<add>" || s == "<mul>" {
-        let is_add = s == "<add>";
-        let (closer, section) = if is_add {
-            ("</add>", "<sub>")
-        } else {
-            ("</mul>", "<div>")
-        };
+    if s == "<add>" {
         let mut parts = Vec::new();
-        let mut inverted = false; // past the <sub>/<div> INVERSE SECTION marker?
+        let mut inverted = false; // past the <sub> INVERSE SECTION marker?
         let mut at = idx + 1;
         loop {
             let nt = *tokens.get(at)?;
             let ns = view.resolve_owned(nt);
-            if ns == closer {
+            if ns == "</add>" {
                 at += 1;
                 break;
             }
-            if ns == section {
+            if ns == "<sub>" {
                 if inverted {
                     return None; // at most one inverse section per bag
                 }
@@ -77,32 +82,21 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
                 continue;
             }
             let (p, next) = parse_one(tokens, at, cx)?;
-            // The inverse section applies the bag's group inverse to each of its members:
-            // subtracted terms after `<sub>`, denominator factors after `<div>`.
-            let p = if !inverted {
-                p
-            } else if is_add {
+            // The inverse section applies the bag's group inverse to each of its members.
+            let p = if inverted {
                 mul(vec![Ex::Num(Rat::NEG_ONE), p], cx)
             } else {
-                pow(p, Ex::Num(Rat::NEG_ONE), cx)
+                p
             };
             parts.push(p);
             at = next;
         }
-        // An empty numerator/positive part is allowed (`<mul> <div> x y </mul>` = 1/(x*y));
-        // the CANONICAL result still needs at least 2 members overall, and the constructors
-        // handle singleton collapse (`<mul> <div> x </mul>` would be `inv x`'s job -- reject
-        // a bag that parses to fewer than 2 raw members to keep the form canonical-ish while
-        // staying liberal about sections).
+        // An empty positive part is allowed (`<add> <sub> x y </add>` = -x - y); the result
+        // still needs at least 2 raw members.
         if parts.len() < 2 {
             return None;
         }
-        let e = if is_add {
-            add(parts, cx)
-        } else {
-            mul(parts, cx)
-        };
-        return Some((e, at));
+        return Some((add(parts, cx), at));
     }
     if s == "</add>" || s == "</mul>" || s == "<sub>" || s == "<div>" {
         return None; // a closer or section marker with no enclosing bag
@@ -126,6 +120,108 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
                 at = next;
             }
             Some((desugar(&s, t, args, cx), at))
+        }
+    }
+}
+
+/// Does this token head a product spelling: a `<mul>` bag, or the binary `*`, the binary `/` or
+/// the unary `neg` of the explicit notation?
+fn product_head(s: &str, arity: Option<u8>) -> bool {
+    s == "<mul>"
+        || matches!(
+            (s, arity),
+            ("*", Some(2)) | ("/", Some(2)) | ("neg", Some(1))
+        )
+}
+
+/// Push the members of the product spelled at `idx` to `out` and return the index after it. A
+/// member that is itself a product spelling contributes its own members: `* a * b c` and
+/// `* * a b c` both give `a, b, c`, `neg a` gives `-1` and the members of `a`, `/ a b` the
+/// members of `a` and `b^-1`, and a `<mul>` bag the members of its children and the inverse of
+/// each divisor; a literal over a literal, in either notation, is one number. A divisor is one
+/// member, built on its own: `pow` distributes the inverse over a product only where that is
+/// licensed. Every other spelling is one member. A `<mul>` bag still needs two children and its
+/// closer.
+fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Option<usize> {
+    let view = cx.view;
+    let t = *tokens.get(idx)?;
+    let s = view.resolve_owned(t);
+    if !product_head(&s, view.arity(t)) {
+        let (e, at) = parse_one(tokens, idx, cx)?;
+        out.push(e);
+        return Some(at);
+    }
+    match s.as_str() {
+        "*" => {
+            let at = parse_members(tokens, idx + 1, cx, out)?;
+            parse_members(tokens, at, cx, out)
+        }
+        "neg" => {
+            out.push(Ex::Num(Rat::NEG_ONE));
+            parse_members(tokens, idx + 1, cx, out)
+        }
+        "/" => {
+            let mut num = Vec::new();
+            let at = parse_members(tokens, idx + 1, cx, &mut num)?;
+            let (b, at) = parse_one(tokens, at, cx)?;
+            // A literal over a literal is the spelling of one number (`/ p q`), and stays one
+            // member of the coefficient's partition.
+            match (num.as_slice(), &b) {
+                ([Ex::Num(_)], Ex::Num(_)) => out.push(desugar("/", t, vec![num.remove(0), b], cx)),
+                _ => {
+                    out.extend(num);
+                    out.push(pow(b, Ex::Num(Rat::NEG_ONE), cx));
+                }
+            }
+            Some(at)
+        }
+        _ => {
+            let mut at = idx + 1;
+            let mut children = 0usize;
+            let mut inverted = false; // past the <div> INVERSE SECTION marker?
+            let (mut num, mut den) = (Vec::new(), Vec::new());
+            loop {
+                let nt = *tokens.get(at)?;
+                let ns = view.resolve_owned(nt);
+                if ns == "</mul>" {
+                    at += 1;
+                    break;
+                }
+                if ns == "<div>" {
+                    if inverted {
+                        return None; // at most one inverse section per bag
+                    }
+                    inverted = true;
+                    at += 1;
+                    continue;
+                }
+                children += 1;
+                at = if inverted {
+                    let (p, next) = parse_one(tokens, at, cx)?;
+                    den.push(p);
+                    next
+                } else {
+                    parse_members(tokens, at, cx, &mut num)?
+                };
+            }
+            // A literal over a literal is the tagged spelling of one number, as `/ p q` is the
+            // explicit one, and stays one member of the coefficient's partition.
+            match (num.as_slice(), den.as_slice()) {
+                ([Ex::Num(_)], [Ex::Num(_)]) => {
+                    let q = den.remove(0);
+                    out.push(mul(
+                        vec![num.remove(0), pow(q, Ex::Num(Rat::NEG_ONE), cx)],
+                        cx,
+                    ));
+                }
+                _ => {
+                    out.extend(num);
+                    out.extend(den.into_iter().map(|p| pow(p, Ex::Num(Rat::NEG_ONE), cx)));
+                }
+            }
+            // An empty numerator is allowed (`<mul> <div> x y </mul>` = 1/(x*y)); the bag still
+            // needs at least 2 children.
+            (children >= 2).then_some(at)
         }
     }
 }
@@ -792,6 +888,19 @@ pub fn to_prefix_tagged(e: &Ex, cx: &Cx) -> Vec<Tok> {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut out = Vec::new();
     emit_tagged(e, cx, &mut out);
+    // A spelling without a bag reads back as explicit notation, so a tagged answer either
+    // carries a bag or is the spelling the explicit printer gives the same state (`pow x1 -2`
+    // would come back as `inv pow x1 2`). A negated divisor keeps its bag instead
+    // (`<mul> -1 <div> x1 </mul>`, not `neg inv x1`, which comes back as `/ -1 x1`).
+    let bags = [cx.view.intern("<add>"), cx.view.intern("<mul>")];
+    let bagged = |o: &[Tok]| o.iter().any(|t| bags.contains(t));
+    if !bagged(&out) {
+        out.clear();
+        emit_tagged_at(e, cx, &mut out, true);
+        if !bagged(&out) {
+            return to_prefix(e, cx);
+        }
+    }
     out
 }
 
@@ -826,6 +935,12 @@ fn emit_rational_tagged(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
 }
 
 fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
+    emit_tagged_at(e, cx, out, false);
+}
+
+/// `top`: `e` is the whole answer and its spelling holds no other bag, so a bag here decides the
+/// notation a second call reads (`to_prefix_tagged`).
+fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
     let view = cx.view;
     match e {
         Ex::Num(r) => emit_rational_tagged(r, cx, out),
@@ -896,9 +1011,18 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
                                 return;
                             }
                         }
-                        out.push(view.intern("neg"));
-                        emit_tagged(&v[1], cx, out);
-                        return;
+                        // As a whole answer with no other bag a divisor keeps the bag, as under
+                        // any other coefficient (`<mul> -1 <div> x1 </mul>`, like `<mul> -2
+                        // <div> x1 </mul>`): the bare `neg inv x1` reads back as explicit
+                        // notation, `/ -1 x1`. Where a bag settles the notation, `neg` is shorter.
+                        let divisor = matches!(&v[1], Ex::Pow(b, ex)
+                            if matches!(&**ex, Ex::Num(q) if q.is_negative())
+                                && !matches!(&**b, Ex::Num(z) if z.is_zero()));
+                        if !(top && divisor) {
+                            out.push(view.intern("neg"));
+                            emit_tagged(&v[1], cx, out);
+                            return;
+                        }
                     }
                 }
             }
