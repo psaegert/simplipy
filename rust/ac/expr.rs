@@ -1647,6 +1647,27 @@ impl<'a> Cx<'a> {
                 }
                 self.sign_blind_rep(b).map(|s| pow(s, (**ex).clone(), self))
             }
+            // A product's sign is erased here too, so each of its sign-trade sites takes its
+            // cheaper spelling whatever sign that leaves (`SIGN_BLIND_SITES_TAKE_THE_CHEAPER_SPELLING`):
+            // `|333 atan(u - 0.66)^5|` is `|333 atan(0.66 - u)^5|`, a sign bit cheaper, where the
+            // product alone keeps its coefficient positive on the tie.
+            Ex::Mul(v) if SIGN_BLIND_SITES_TAKE_THE_CHEAPER_SPELLING => {
+                let mut out = v.clone();
+                let mut moved = false;
+                for f in out.iter_mut() {
+                    if let Some(nf) = sign_trade_flip(f, self) {
+                        if complexity(&nf, self.view) < complexity(f, self.view) {
+                            *f = nf;
+                            moved = true;
+                        }
+                    }
+                }
+                if !moved {
+                    return None;
+                }
+                let m = mul(out, self);
+                Some(self.carried_negative(&m).unwrap_or(m))
+            }
             _ => None,
         }
     }
@@ -1958,6 +1979,36 @@ fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
     // through `fun()` (which folds boundary grounds); a fold here would change the
     // key's shape mid-collection.
     fn unsign(e: &mut Ex, view: &TokenView) -> bool {
+        // A positive odd power of such a function carries its sign out (`f(-u)^3 = -f(u)^3`).
+        if let Ex::Pow(b, x) = e {
+            if matches!(&**x, Ex::Num(n) if n.is_odd_integer() && n.signum() > 0)
+                && odd_of_literal_multiple(b, view).is_some_and(|r| r.is_negative())
+            {
+                return unsign(b, view);
+            }
+            return false;
+        }
+        // An odd function or odd root of a negative literal multiple, or of a negation where the
+        // owner takes one: the multiple's sign, or the negation.
+        if odd_of_literal_multiple(e, view).is_some_and(|r| r.is_negative()) {
+            if let Ex::Fun(_, args) = e {
+                if let Ex::Mul(v) = &mut args[0] {
+                    let Ex::Num(r) = &v[0] else { return false };
+                    if *r == Rat::NEG_ONE {
+                        v.remove(0);
+                        if v.len() == 1 {
+                            args[0] = v.pop().expect("one member");
+                        }
+                        return true;
+                    }
+                    if let Some(p) = r.checked_neg() {
+                        v[0] = Ex::Num(p);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
         if let Ex::Fun(f, args) = e {
             if args.len() == 1 && odd_fun(view, *f) {
                 if let Ex::Num(r) = &args[0] {
@@ -2098,6 +2149,65 @@ pub(crate) fn odd_fun(view: &TokenView, f: Tok) -> bool {
     ODD.iter().any(|s| view.tok_is(f, s))
 }
 
+/// Does an odd function or an odd root of a literal multiple own an adjacent sign, as an odd
+/// function of a literal does (`-1 * sin(2 x)` is `sin(-2 x)`, `-5 * rootn(3 x, 5)` is
+/// `5 * rootn(-3 x, 5)`)? `f(-c u) = -f(c u)` exactly, so the sign moves between the coefficient
+/// and the literal, and one owner (`sign_trade_flip`) prices both spellings. Otherwise a sum
+/// holding `rootn(-c u, 5)` is priced in its other orientation as `-rootn(-c u, 5)`, the sign left
+/// outside, and keeps the dearer orientation.
+///
+/// Where a sum orients its terms' sites (`SUMS_ORIENT_SITES_BY_CLASS`), an odd function of a
+/// negation is one too, its negation handed to the product or read as the sum's term sign
+/// (`x + tan(-u)` is `x - tan(u)`): the sum's choice counts its terms' signs, and the printer spells
+/// `x - tan(u)` as `x + tan(-u)`, so both spellings must count alike. Without that choice the
+/// sign-pull rules keep `f(-u)` with the sign inside. An odd function of a negated sum is never
+/// one: it and the function of the sum are one class, which a product holding both decides
+/// (`collect_opposite_sums`).
+const ODD_FUNCTIONS_OF_LITERAL_MULTIPLES_TRADE: bool = true;
+
+/// Does a product in a sign-blind context (an even function's argument, `sign_blind_rep`) give
+/// each sign-trade site its cheaper spelling, whatever sign that leaves? Its sign is erased there,
+/// so the tie `mul()` breaks toward a non-negative coefficient costs a sign bit for nothing.
+const SIGN_BLIND_SITES_TAKE_THE_CHEAPER_SPELLING: bool = true;
+
+/// The literal of an odd function or odd root of a literal multiple, or of a negation where a sum
+/// orients its terms' sites (`ODD_FUNCTIONS_OF_LITERAL_MULTIPLES_TRADE`): `f(c * u..)` with `c` a
+/// literal other than 0 and 1 (and -1 only with `SUMS_ORIENT_SITES_BY_CLASS`), `f` odd (`odd_fun`)
+/// or `rootn` of an odd index of at least 3; never `f(-S)` for a sum `S`.
+fn odd_of_literal_multiple<'a>(e: &'a Ex, view: &TokenView) -> Option<&'a Rat> {
+    if !ODD_FUNCTIONS_OF_LITERAL_MULTIPLES_TRADE {
+        return None;
+    }
+    let Ex::Fun(f, args) = e else { return None };
+    let odd = (args.len() == 1 && odd_fun(view, *f))
+        || (args.len() == 2
+            && view.tok_is(*f, "rootn")
+            && matches!(&args[1], Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less));
+    if !odd {
+        return None;
+    }
+    match &args[0] {
+        // A negated sum is not one: an odd function of a sum and of its negation are one class
+        // the product decides (`collect_opposite_sums`).
+        Ex::Mul(v)
+            if v.len() == 2 && matches!(v[1], Ex::Add(_)) && v[0] == Ex::Num(Rat::NEG_ONE) =>
+        {
+            None
+        }
+        Ex::Mul(v) => match v.first() {
+            Some(Ex::Num(r))
+                if !r.is_zero()
+                    && !r.is_one()
+                    && (SUMS_ORIENT_SITES_BY_CLASS || *r != Rat::NEG_ONE) =>
+            {
+                Some(r)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Does a unit-coefficient join of `key` have to go through `mul()`? Only a plain product
 /// (no literal, infinity or Const member: those carry or eat the sign themselves) or a lone
 /// factor that holds a sign-trade site. The shape screen keeps `sign_trade_flip` off the keys
@@ -2105,8 +2215,8 @@ pub(crate) fn odd_fun(view: &TokenView, f: Tok) -> bool {
 fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
     let may_be_site = |f: &Ex| match f {
         Ex::Add(_) => true,
-        Ex::Pow(b, _) => matches!(**b, Ex::Add(_)),
-        Ex::Fun(_, args) => matches!(args.first(), Some(Ex::Add(_) | Ex::Num(_))),
+        Ex::Pow(b, _) => matches!(**b, Ex::Add(_) | Ex::Fun(..)),
+        Ex::Fun(_, args) => matches!(args.first(), Some(Ex::Add(_) | Ex::Num(_) | Ex::Mul(_))),
         _ => false,
     };
     match key {
@@ -2123,7 +2233,310 @@ fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
     }
 }
 
+/// Does a sum decide the orientation of its terms' sign-trade sites, class by class? A term's sign
+/// is the sum's to carry (a negative term is a subtraction), so a product inside a sum need not
+/// hand its sign to a site, and a sum whose terms each decided alone could hold one class over `S`
+/// in one term and over `-S` in another (`x/(a - b) + y/(b - a)`), terms the search cannot
+/// combine. In a sum every site that is an odd carrier of a sum (`sign_trade_flip`) takes the
+/// spelling its class takes, and the term's coefficient carries the sign:
+///
+/// * the cheaper of the two spellings;
+/// * where they cost the same, one spelling for all of the sum's sites over that class, chosen so
+///   that as many of the sum's terms as possible carry one sign. A sum and its negation read
+///   alike, so negating a sum term by term keeps its choice. The classes are taken one at a time
+///   in the canonical order of their sums, each against the choices before it;
+/// * where that ties too, the smaller in the canonical order.
+///
+/// The choice reads the sum's terms up to the orientation of their sites, so it is one per sum
+/// whatever the bracketing, the order or the spelling of its terms, and it is a fixpoint. A term
+/// whose sign another member carries (a `Const`, an infinity, a sum that absorbs a negation, a kept
+/// zero), that holds a literal member or a site whose sign a literal or the product owns (an odd
+/// function of a literal, of a literal multiple or of a negation), or whose site would meet another
+/// member's base in its other spelling, is placed by `mul()` as before, and so is a sum's one
+/// remaining term, which is a product again.
+const SUMS_ORIENT_SITES_BY_CLASS: bool = false;
+
+/// The other spelling of a sign-trade site whose orientation a sum decides
+/// (`SUMS_ORIENT_SITES_BY_CLASS`): an odd carrier of a sum.
+fn class_site(f: &Ex, cx: &Cx) -> Option<Ex> {
+    let over_sum = match f {
+        Ex::Add(_) => true,
+        Ex::Pow(b, _) => match &**b {
+            Ex::Add(_) => true,
+            Ex::Fun(_, a) => matches!(a.first(), Some(Ex::Add(_))),
+            _ => false,
+        },
+        Ex::Fun(_, a) => matches!(a.first(), Some(Ex::Add(_))),
+        _ => false,
+    };
+    if !over_sum {
+        return None;
+    }
+    super::work::tick(1);
+    sign_trade_flip(f, cx)
+}
+
+/// The sum a site carries.
+fn site_sum(f: &Ex) -> &Ex {
+    match f {
+        Ex::Pow(b, _) => match &**b {
+            Ex::Fun(_, a) => &a[0],
+            b => b,
+        },
+        Ex::Fun(_, a) => &a[0],
+        f => f,
+    }
+}
+
+/// A site of a sum's term (`class_sites`): its position among the key's members, its other
+/// spelling, whether the two cost the same, and whether it stands in its base spelling (the
+/// cheaper, or on a tie the smaller in the canonical order; every carrier wraps the same sum, so
+/// the base spelling of each carrier is over the base spelling of the sum).
+struct ClassSite {
+    pos: usize,
+    other: Ex,
+    tied: bool,
+    base: bool,
+}
+
+/// The sites of a sum's term `c * key` whose orientation the sum decides, or `None` where `mul()`
+/// places the term (`SUMS_ORIENT_SITES_BY_CLASS`).
+fn class_sites(key: &Ex, cx: &Cx) -> Option<Vec<ClassSite>> {
+    if !SUMS_ORIENT_SITES_BY_CLASS || matches!(key, Ex::Add(_)) {
+        return None;
+    }
+    let members: &[Ex] = match key {
+        Ex::Mul(v) => v,
+        k => std::slice::from_ref(k),
+    };
+    let placed_elsewhere = |f: &Ex| match f {
+        Ex::Num(_) | Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN => true,
+        Ex::Add(ts) => ts
+            .iter()
+            .any(|t| matches!(t, Ex::PosInf | Ex::NegInf) || term_absorbs_negation(t)),
+        _ => false,
+    };
+    if members
+        .iter()
+        .any(|f| placed_elsewhere(f) || f.contains_const())
+    {
+        return None;
+    }
+    let mut sites = Vec::new();
+    for (i, f) in members.iter().enumerate() {
+        let Some(other) = class_site(f, cx) else {
+            // A site whose sign a literal or the product owns (an odd function of a literal, of a
+            // literal multiple or of a negation) leaves the term to `mul()`.
+            if matches!(f, Ex::Fun(..) | Ex::Pow(..)) && sign_trade_flip(f, cx).is_some() {
+                return None;
+            }
+            continue;
+        };
+        if members
+            .iter()
+            .enumerate()
+            .any(|(j, g)| j != i && same_collection_base(&other, g, cx))
+        {
+            return None;
+        }
+        let (p, q) = (complexity(f, cx.view), complexity(&other, cx.view));
+        let base = p < q || (p == q && cmp_ex(f, &other, cx.view) != Ordering::Greater);
+        sites.push(ClassSite {
+            pos: i,
+            other,
+            tied: p == q,
+            base,
+        });
+    }
+    (!sites.is_empty()).then_some(sites)
+}
+
+/// `c * key` with the given sites of `key` in their other spelling and the sign moved to the
+/// coefficient, assembled as it stands (`None` where the coefficient cannot take the sign).
+fn class_respelled(c: Rat, key: Ex, moved: &[&ClassSite], cx: &Cx) -> Option<(Rat, Ex)> {
+    if moved.is_empty() {
+        return Some((c, key));
+    }
+    let c = if moved.len() % 2 == 1 {
+        c.checked_neg()?
+    } else {
+        c
+    };
+    let key = match key {
+        Ex::Mul(mut v) => {
+            for s in moved {
+                v[s.pos] = s.other.clone();
+            }
+            v.sort_by(|a, b| mul_factor_cmp(a, b, cx.view));
+            Ex::Mul(v)
+        }
+        _ => moved[0].other.clone(),
+    };
+    Some((c, key))
+}
+
+/// A sum's term `c * key` with each site the sum decides in its base spelling, every site
+/// (`ties`) or those whose two spellings differ in cost, and whether `key` holds such a site.
+fn class_based(c: Rat, key: Ex, ties: bool, cx: &Cx) -> (Rat, Ex, bool) {
+    if !SUMS_ORIENT_SITES_BY_CLASS || c.is_zero() {
+        return (c, key, false);
+    }
+    let Some(sites) = class_sites(&key, cx) else {
+        return (c, key, false);
+    };
+    let moved: Vec<&ClassSite> = sites
+        .iter()
+        .filter(|s| !s.base && (ties || !s.tied))
+        .collect();
+    match class_respelled(c.clone(), key.clone(), &moved, cx) {
+        Some((c, key)) => (c, key, true),
+        None => (c, key, false),
+    }
+}
+
+/// The sum's choice for its classes whose two spellings cost the same (`SUMS_ORIENT_SITES_BY_CLASS`),
+/// made on its terms as `add()` built them, each site the sum decides then standing in its base
+/// spelling.
+fn orient_sum_classes(terms: &mut [Ex], cx: &Cx) {
+    struct Sited {
+        idx: usize,
+        c: Rat,
+        key: Ex,
+        sites: Vec<ClassSite>,
+        // The class of each tied site, by position in `sites` (`None` for the others).
+        classes: Vec<Option<usize>>,
+        // The coefficient's sign with every site in its base spelling.
+        negative: bool,
+    }
+    let (mut pos, mut neg) = (0usize, 0usize);
+    let mut sited: Vec<Sited> = Vec::new();
+    let mut classes: Vec<Ex> = Vec::new();
+    for (idx, t) in terms.iter().enumerate() {
+        let negative = match t {
+            Ex::Const => continue,
+            Ex::Num(r) => r.is_negative(),
+            t => {
+                let (c, key) = term_split(t.clone(), cx.view);
+                // A term holding an odd function of zero is its own negation (`tanh(0)` is
+                // `tanh(-0)`): it carries no sign to count.
+                let members: &[Ex] = match &key {
+                    Ex::Mul(v) => v,
+                    k => std::slice::from_ref(k),
+                };
+                if members.iter().any(|f| {
+                    matches!(f, Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op)
+                        && matches!(&a[0], Ex::Num(r) if r.is_zero()))
+                }) {
+                    continue;
+                }
+                let negative = c.is_negative();
+                if let Some(sites) = class_sites(&key, cx) {
+                    if sites.iter().any(|s| s.tied) {
+                        let flips = sites.iter().filter(|s| !s.base).count();
+                        let mut of = Vec::with_capacity(sites.len());
+                        for s in &sites {
+                            if !s.tied {
+                                of.push(None);
+                                continue;
+                            }
+                            let member = match &key {
+                                Ex::Mul(v) => &v[s.pos],
+                                k => k,
+                            };
+                            let sum = site_sum(if s.base { member } else { &s.other });
+                            let k = match classes.iter().position(|x| x == sum) {
+                                Some(k) => k,
+                                None => {
+                                    classes.push(sum.clone());
+                                    classes.len() - 1
+                                }
+                            };
+                            of.push(Some(k));
+                        }
+                        sited.push(Sited {
+                            idx,
+                            c,
+                            key,
+                            sites,
+                            classes: of,
+                            negative: negative ^ (flips % 2 == 1),
+                        });
+                        continue;
+                    }
+                }
+                negative
+            }
+        };
+        if negative {
+            neg += 1;
+        } else {
+            pos += 1;
+        }
+    }
+    if classes.is_empty() {
+        return;
+    }
+    let agreement = |flipped: &[bool]| -> usize {
+        let (mut p, mut n) = (pos, neg);
+        for t in &sited {
+            let odd = t.classes.iter().flatten().filter(|&&k| flipped[k]).count() % 2 == 1;
+            if t.negative ^ odd {
+                n += 1;
+            } else {
+                p += 1;
+            }
+        }
+        p.max(n)
+    };
+    let mut order: Vec<usize> = (0..classes.len()).collect();
+    order.sort_by(|&a, &b| cmp_ex(&classes[a], &classes[b], cx.view));
+    let mut flipped = vec![false; classes.len()];
+    for k in order {
+        super::work::tick(1);
+        let keep = agreement(&flipped);
+        flipped[k] = true;
+        if agreement(&flipped) <= keep {
+            flipped[k] = false;
+        }
+    }
+    for t in sited {
+        let moved: Vec<&ClassSite> = t
+            .sites
+            .iter()
+            .zip(&t.classes)
+            .filter(|(s, k)| s.base == k.is_some_and(|k| flipped[k]))
+            .map(|(s, _)| s)
+            .collect();
+        if moved.is_empty() {
+            continue;
+        }
+        if let Some((c, key)) = class_respelled(t.c, t.key, &moved, cx) {
+            terms[t.idx] = class_assembled(c, key);
+        }
+    }
+}
+
+/// A sum's term from its coefficient and a key whose sites the sum has decided, as it stands.
+fn class_assembled(c: Rat, key: Ex) -> Ex {
+    if c.is_one() {
+        return key;
+    }
+    match key {
+        Ex::Mul(mut v) => {
+            v.insert(0, Ex::Num(c));
+            Ex::Mul(v)
+        }
+        k => Ex::Mul(vec![Ex::Num(c), k]),
+    }
+}
+
 fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
+    // A site whose orientation the sum decides keeps the spelling the sum gave it, and the
+    // coefficient carries the sign (`SUMS_ORIENT_SITES_BY_CLASS`).
+    let (c, key, sited) = class_based(c, key, false, cx);
+    if sited {
+        return class_assembled(c, key);
+    }
     // An ODD function of a LITERAL argument owns any adjacent SIGN (owner ruling
     // 2026-08-08; I4): `-1 * sin(2)` joins as `sin(-2)`, and `-5 * sin(2)` as
     // `5 * sin(-2)`. HOISTED (audit B5+B19): the fusion is no longer a private arm
@@ -2442,6 +2855,8 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // The terms' sites are oriented by their classes (`class_based`), each flip computed once.
+    let _flips = SUMS_ORIENT_SITES_BY_CLASS.then(FlipScope::open);
     // Flatten (Flat) + literal scan.
     let mut lits: Vec<Rat> = Vec::new();
     let mut acc_overflow: Vec<Ex> = Vec::new(); // Num partials an overflowed accumulator emitted
@@ -2522,6 +2937,8 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     let mut const_terms = false; // any r*Const term seen (merges into the bare-Const pool)
     for t in terms {
         let (c, key) = term_split(t, cx.view);
+        // Like terms meet with their sites in one spelling (`SUMS_ORIENT_SITES_BY_CLASS`).
+        let (c, key, _) = class_based(c, key, true, cx);
         if key == Ex::Const {
             // r*Const: joins the bare-Const pool (c1*r1 + c2*r2 = c3, forall-exists).
             const_terms = true;
@@ -2726,8 +3143,20 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
 
     match out.len() {
         0 => Ex::Num(Rat::ZERO),
-        1 => out.pop().unwrap(),
+        // A sum's last term is a product again, whose sign `mul()` places.
+        1 => match out.pop().unwrap() {
+            Ex::Mul(v)
+                if SUMS_ORIENT_SITES_BY_CLASS
+                    && class_sites(&term_split(Ex::Mul(v.clone()), cx.view).1, cx).is_some() =>
+            {
+                mul(v, cx)
+            }
+            t => t,
+        },
         _ => {
+            if SUMS_ORIENT_SITES_BY_CLASS {
+                orient_sum_classes(&mut out, cx);
+            }
             out.sort_by(|a, b| add_term_cmp(a, b, cx.view));
             primitive_sum(out, cx)
         }
@@ -4959,6 +5388,7 @@ fn opposite_terms(x: &Ex, y: &Ex, view: &TokenView) -> bool {
                 k.iter().any(|f| {
                     matches!(f, Ex::Fun(op, a)
                         if a.len() == 1 && matches!(a[0], Ex::Num(_)) && odd_fun(view, *op))
+                        || odd_of_literal_multiple(f, view).is_some()
                 })
             };
             if !literal_odd(kx) && !literal_odd(ky) {
@@ -5741,7 +6171,7 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
 /// Does a negative odd power trade its sign in a lossy context as a positive one does, its pole's
 /// infinity being a value at a zero (`sign_trade_flip`)? Then a lone inverse's orientation is the
 /// product's choice there, as every other carrier's is, whichever orientation it was spelled in.
-const LOSSY_NEGATIVE_ODD_POWERS_TRADE: bool = true;
+const LOSSY_NEGATIVE_ODD_POWERS_TRADE: bool = false;
 
 fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
     let flip_sum = |ts: &[Ex]| -> Option<Vec<Ex>> {
@@ -5792,8 +6222,12 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
         Ex::Pow(b, e) if odd_power(e) => match &**b {
             Ex::Add(ts) => flip_sum(ts).map(|s| Ex::Pow(Box::new(Ex::Add(s)), e.clone())),
             // An odd power of an odd carrier over a sum (an odd function or an odd root of it)
-            // is one too: `f(-S)^n = -f(S)^n`.
-            Ex::Fun(_, args) if matches!(args.first(), Some(Ex::Add(_))) => {
+            // is one too: `f(-S)^n = -f(S)^n`; so is a positive odd power of one over a literal
+            // multiple or a negation.
+            Ex::Fun(_, args)
+                if matches!(args.first(), Some(Ex::Add(_)))
+                    || (matches!(args.first(), Some(Ex::Mul(_))) && odd_int_ge3(e)) =>
+            {
                 sign_trade_flip(b, cx).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
             }
             _ => None,
@@ -5801,7 +6235,9 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
         Ex::Fun(op, args)
             if args.len() == 2 && cx.view.tok_is(*op, "rootn") && odd_int_ge3(&args[1]) =>
         {
-            let Ex::Add(ts) = &args[0] else { return None };
+            let Ex::Add(ts) = &args[0] else {
+                return literal_multiple_flip(f, cx);
+            };
             flip_sum(ts).map(|s| Ex::Fun(*op, vec![Ex::Add(s), args[1].clone()]))
         }
         Ex::Fun(op, args) if args.len() == 1 && odd_fun(cx.view, *op) => match &args[0] {
@@ -5822,10 +6258,37 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
                 let flipped = fun(*op, vec![Ex::Num(r.checked_neg()?)], cx);
                 matches!(flipped, Ex::Fun(..)).then_some(flipped)
             }
+            Ex::Mul(_) => literal_multiple_flip(f, cx),
             _ => None,
         },
+        Ex::Fun(..) => literal_multiple_flip(f, cx),
         _ => None,
     }
+}
+
+/// The other spelling of an odd function or odd root of a literal multiple or of a negation
+/// (`ODD_FUNCTIONS_OF_LITERAL_MULTIPLES_TRADE`): the argument negated through `mul()` (a negation
+/// leaves it), rebuilt through `fun()`; `None` where the rebuild leaves the shape (a fold, or a
+/// negation the argument's own sites took instead of the literal).
+fn literal_multiple_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
+    let c = odd_of_literal_multiple(f, cx.view)?;
+    let Ex::Fun(op, args) = f else { return None };
+    let Ex::Mul(v) = &args[0] else { return None };
+    let negation = *c == Rat::NEG_ONE;
+    let mut items = Vec::with_capacity(v.len());
+    if !negation {
+        items.push(Ex::Num(c.checked_neg()?));
+    }
+    items.extend(v[1..].iter().cloned());
+    let mut flipped_args = args.clone();
+    flipped_args[0] = mul(items, cx);
+    let flipped = fun(*op, flipped_args, cx);
+    let kept = if negation {
+        matches!(&flipped, Ex::Fun(f, _) if f == op)
+    } else {
+        odd_of_literal_multiple(&flipped, cx.view).is_some()
+    };
+    kept.then_some(flipped)
 }
 
 // F72 (2026-08-09): the residual equal-mu same-coefficient-sign tie in the
@@ -5895,7 +6358,7 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
 /// itself is guarded by the F68 re-derivability comparison at the return (see there):
 /// a join ships only when it strictly beats its own re-settle image, which is what
 /// makes the shipped spelling a fixpoint under re-parse.
-fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
+fn rejoin_reciprocals(settled: Ex, signed: bool, cx: &Cx) -> Ex {
     let Ex::Mul(members) = &settled else {
         return settled;
     };
@@ -5936,6 +6399,10 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
         })
         .collect();
     let inner = mul(inner_members.clone(), cx);
+    // The joined base's own decision can trade a member's sign into its coefficient (a sum
+    // whose other orientation is cheaper once it stands in a product); that sign leaves the base
+    // (`JOINED_BASE_SIGN_LEAVES`).
+    let (inner, base_sign) = joined_base_sign(inner, cx);
     {
         let Ex::Mul(v) = &inner else {
             // The positive-power bag collapsed below two factors: no joined SHAPE exists.
@@ -5947,12 +6414,27 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
             return settled;
         }
     }
-    let rest: Vec<Ex> = members
+    let mut rest: Vec<Ex> = members
         .iter()
         .enumerate()
         .filter(|(i, _)| !eligible.contains(i))
         .map(|(_, f)| f.clone())
         .collect();
+    if base_sign {
+        // The rest of the bag takes the sign, placed by its own decision (`mul()`): the parse of the
+        // joined spelling decides the same members with the base's inverted members beside them,
+        // which carry no sign of their own.
+        rest.push(Ex::Num(Rat::NEG_ONE));
+        rest = match mul(rest, cx) {
+            Ex::Mul(v) => v,
+            Ex::Num(r) if r.is_one() => Vec::new(),
+            f => vec![f],
+        };
+        // A bag that may not take a new sign (`signed`) keeps its working spelling.
+        if !signed && gains_a_sign(&rest, &settled) {
+            return settled;
+        }
+    }
     let assemble = |mut cand: Vec<Ex>| match cand.len() {
         1 => cand.pop().unwrap(),
         _ => {
@@ -6063,11 +6545,72 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
         mul(parts, cx)
     };
     let mu_best = complexity(&best, cx.view);
-    if mu_best < complexity(&settled, cx.view) && mu_best < complexity(&resettle(&best), cx.view) {
+    let mu_settled = complexity(&settled, cx.view);
+    let image = resettle(&best);
+    let mu_image = complexity(&image, cx.view);
+    if mu_best < mu_settled && mu_best < mu_image {
         best
+    } else if base_sign
+        && mu_image < mu_settled
+        && (signed || !gains_a_sign(std::slice::from_ref(&image), &settled))
+    {
+        // The base's decision found a cheaper orientation for a member the working state holds
+        // under its inverse: the re-settle image keeps it, distributed, and re-derives itself.
+        image
     } else {
         settled
     }
+}
+
+/// Does `members` (a bag's members, or the bag itself) carry a negative coefficient where the bag
+/// `settled` carries none?
+fn gains_a_sign(members: &[Ex], settled: &Ex) -> bool {
+    let negative = |f: &Ex| match f {
+        Ex::Num(r) => r.is_negative(),
+        Ex::Mul(v) => v.iter().any(|g| matches!(g, Ex::Num(r) if r.is_negative())),
+        _ => false,
+    };
+    members.iter().any(negative) && !negative(settled)
+}
+
+/// Does a sign the joined base's own product placed in its coefficient leave the base for the rest
+/// of the bag (`rejoin_reciprocals`)? The base is decided as a product of its own, so a sum the
+/// distributed bag held under its inverse can take its cheaper orientation there and hand the sign
+/// to the base's coefficient, while the bag keeps the sign it had. Kept in the base, the two signs
+/// print as `(-a)/(-(b (x - u)))`, which the parse reads as `a/(b (x - u))`, so a second call
+/// prints another spelling. In the lossy context the projection runs in, the inverse of `-P` is
+/// minus the inverse of `P` (they differ only at `P`'s zero), so the sign joins the rest of the bag,
+/// whose own decision places it. A bag the parse reads with its sign kept (the answer, or a term of
+/// a sum) takes it as it comes; inside a function's argument or a power's base, where the parse
+/// moves or drops a product's sign, a bag that would gain a sign keeps its working spelling.
+const JOINED_BASE_SIGN_LEAVES: bool = true;
+
+/// The joined base without a negative coefficient of its own, and whether one left it
+/// (`JOINED_BASE_SIGN_LEAVES`).
+fn joined_base_sign(inner: Ex, cx: &Cx) -> (Ex, bool) {
+    if !JOINED_BASE_SIGN_LEAVES || !cx.lossy() {
+        return (inner, false);
+    }
+    let Ex::Mul(mut v) = inner else {
+        return (inner, false);
+    };
+    if !matches!(v.first(), Some(Ex::Num(r)) if r.is_negative()) {
+        return (Ex::Mul(v), false);
+    }
+    let Ex::Num(r) = &v[0] else { unreachable!() };
+    match r.checked_neg() {
+        Some(p) if p.is_one() => {
+            v.remove(0);
+        }
+        Some(p) => v[0] = Ex::Num(p),
+        None => return (Ex::Mul(v), false),
+    }
+    let base = if v.len() == 1 {
+        v.pop().expect("one member")
+    } else {
+        Ex::Mul(v)
+    };
+    (base, true)
 }
 
 /// The output-boundary rejoin walk (see [`rejoin_reciprocals`]): apply the reciprocal
@@ -6076,22 +6619,32 @@ fn rejoin_reciprocals(settled: Ex, cx: &Cx) -> Ex {
 /// (`pow`'s lossy blanket). Bags whose members changed are re-sorted under their own
 /// comparator so the projected tree spells deterministically.
 pub fn rejoin_projection(e: Ex, cx: &Cx) -> Ex {
+    rejoin_walk(e, true, cx)
+}
+
+/// [`rejoin_projection`] at a node; `signed`: does the parse keep a sign the node's bag takes (the
+/// answer itself, a term of a sum, a member of a product), or move or drop it (a function's
+/// argument, a power's base or exponent)?
+fn rejoin_walk(e: Ex, signed: bool, cx: &Cx) -> Ex {
     match e {
         Ex::Add(v) => {
-            let mut terms: Vec<Ex> = v.into_iter().map(|x| rejoin_projection(x, cx)).collect();
+            let mut terms: Vec<Ex> = v.into_iter().map(|x| rejoin_walk(x, true, cx)).collect();
             terms.sort_by(|a, b| add_term_cmp(a, b, cx.view));
             Ex::Add(terms)
         }
         Ex::Mul(v) => {
-            let mut m: Vec<Ex> = v.into_iter().map(|x| rejoin_projection(x, cx)).collect();
+            let mut m: Vec<Ex> = v.into_iter().map(|x| rejoin_walk(x, true, cx)).collect();
             m.sort_by(|a, b| mul_factor_cmp(a, b, cx.view));
-            rejoin_reciprocals(Ex::Mul(m), cx)
+            rejoin_reciprocals(Ex::Mul(m), signed, cx)
         }
         Ex::Pow(b, ex) => Ex::Pow(
-            Box::new(rejoin_projection(*b, cx)),
-            Box::new(rejoin_projection(*ex, cx)),
+            Box::new(rejoin_walk(*b, false, cx)),
+            Box::new(rejoin_walk(*ex, false, cx)),
         ),
-        Ex::Fun(f, v) => Ex::Fun(f, v.into_iter().map(|x| rejoin_projection(x, cx)).collect()),
+        Ex::Fun(f, v) => Ex::Fun(
+            f,
+            v.into_iter().map(|x| rejoin_walk(x, false, cx)).collect(),
+        ),
         leaf => leaf,
     }
 }
