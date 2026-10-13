@@ -131,7 +131,74 @@ POLES = [
     # `cbrt(x2 - exp(x1))^-1 * cbrt(x2 - exp(x1))^-2` collects to `1/(x2 - exp(x1))`, outside the class whose table
     # counts those members: it is counted once
     '<mul> inv ' + R + ' inv pow ' + R + ' 2 pow ' + RN + ' 0.5 pow ' + RN + ' 4 </mul>',
+    # a divisor that is a product joins the product its quotient builds: each member keeps its own pole
+    '/ x2 * - 3 x1 - x1 3',
+    '/ x2 * sin - 3 x1 sin - x1 3',
+    'inv * - x1 3 - 3 x1',
+    '<mul> x2 <div> <mul> ' + S + ' ' + N + ' </mul> </mul>',
 ]
+
+
+# A divisor that is a product, an inverted product and the product of the inverses are one product: members over
+# one base merge before a negated sum gives its sign away, an infinite member licenses the inverse of each member,
+# and the inverted members meet the rest of the product in one decision.
+DIVISORS = [
+    ('/ x2 * - 3 x1 - x1 3', '* x2 * inv - 3 x1 inv - x1 3'),
+    ('inv * sin - x1 3 sin - 3 x1', '* inv sin - x1 3 inv sin - 3 x1'),
+    ('<mul> x2 <div> <mul> ' + S + ' ' + N + ' </mul> </mul>', '<mul> x2 <div> ' + S + ' ' + N + ' </mul>'),
+    ('pow * - 3 x1 - x1 3 -3', '* pow - 3 x1 -3 pow - x1 3 -3'),
+    ('/ 1 * - - 1 x1 x2 pow - - 1 x1 x2 / 1 3', '* inv - - 1 x1 x2 inv pow - - 1 x1 x2 / 1 3'),
+    ('/ * pow - 3 x1 2 pow - x1 3 / 1 3 * rootn - + x1 x2 1 3 - x2 float("inf")',
+     '* pow - 3 x1 2 * pow - x1 3 / 1 3 * inv rootn - + x1 x2 1 3 inv - x2 float("inf")'),
+    ('/ rootn - 3 x1 3 * pow rootn - 3 x1 3 2 rootn - 3 x1 3',
+     '* rootn - 3 x1 3 * inv pow rootn - 3 x1 3 2 inv rootn - 3 x1 3'),
+    ('/ * pow rootn - - 1 x1 x2 3 3 rootn - * 2 x1 * 3 x2 3 * pow rootn - 3 x1 5 3 pow rootn - x1 3 5 3',
+     '* pow rootn - - 1 x1 x2 3 3 * rootn - * 2 x1 * 3 x2 3 * inv pow rootn - 3 x1 5 3 inv pow rootn - x1 3 5 3'),
+    ('/ * - * 2 x1 x2 - x1 <constant> * - x2 * 2 x1 x3', '* - * 2 x1 x2 * - x1 <constant> * inv - x2 * 2 x1 inv x3'),
+]
+
+
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('a, b', DIVISORS)
+def test_a_divisor_product_is_decided_with_its_quotient(eng, mode, effort, a, b):
+    x = list(eng.simplify(a.split(), mode=mode, effort=effort))
+    y = list(eng.simplify(b.split(), mode=mode, effort=effort))
+    assert eng.to_prefix(x) == eng.to_prefix(y)
+    assert list(eng.simplify(x, mode=mode, effort=effort)) == x
+
+
+# A placement can leave two odd roots of one index, and a collection a factor over another base (`cbrt(u)^3` is `u`
+# beside `u`): the product is built again, so its answer reads back as itself.
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('src', [
+    '* rootn - x2 x3 3 * inv rootn - * 2 x1 * 3 x2 3 pow rootn - * 3 x2 * 2 x1 3 2',
+    '<mul> pow rootn - * 3 x2 * 2 x1 5 3 pow rootn - * 2 x1 * 3 x2 5 -2 rootn - * 3 x2 * 2 x1 5 '
+    'rootn - * 2 x1 * 3 x2 5 </mul>',
+    '<mul> rootn - + x1 x2 1 5 pow rootn - * 3 x2 * 2 x1 5 -1 pow rootn - * 2 x1 * 3 x2 5 3 '
+    'pow rootn - * 2 x1 * 3 x2 5 -1 </mul>',
+    '<mul> pow rootn - + x1 x2 1 3 -1 rootn - - 1 x1 x2 3 pow rootn - + x1 x2 1 3 4 pow rootn - + x1 x2 1 3 3 </mul>',
+])
+def test_a_product_its_decision_leaves_unjoined_is_built_again(eng, mode, effort, src):
+    answer = list(eng.simplify(src.split(), mode=mode, effort=effort))
+    assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
+
+
+# A sum holding a `<constant>` takes a product's sign into its other terms (`-(x1 + c)` is `-x1 + c'`, never
+# `x1 + c'`), whatever factor the sign leaves: `(2 x1 - x2)(x1 - c)` is `(x1 + c')(2 x1 - x2)`, and
+# `(2 x1 - x2)(x1 - c) / (x2 - 2 x1)` is `c' - x1`, never `x1 + c'`.
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('src, expected', [
+    ('* - x2 x1 - x1 <constant>', '* + x1 <constant> - x2 x1'),
+    ('* -1 * - x2 * 2 x1 - x1 <constant>', '* + x1 <constant> - * 2 x1 x2'),
+    ('/ * - * 2 x1 x2 - x1 <constant> - x2 * 2 x1', '- <constant> x1'),
+])
+def test_a_constant_sum_takes_the_sign_into_its_terms(eng, mode, effort, src, expected):
+    answer = list(eng.simplify(src.split(), mode=mode, effort=effort))
+    assert eng.to_prefix(answer) == eng.to_prefix(expected.split())
+    assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
 
 
 @pytest.mark.parametrize('mode', ('f64', 'real'))

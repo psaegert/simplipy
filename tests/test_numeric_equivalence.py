@@ -304,11 +304,19 @@ class TestCorpusGate:
         # DEFAULT_EFFORT=4 explores every walk row (a real movement: outputs rest
         # 197,624 milli-bits cheaper). The inflation bound held throughout.
         # THE UNCAPPED SEARCH (0.15.0, DEFAULT_EFFORT=None): the walk does not move.
-        assert walk['complexity_out'] == 56310982, walk['complexity_out']
+        # DIVISOR PRODUCTS AND CONSTANT SUMS (2026-10-13): 56,310,982 -> 56,312,982. A
+        # divisor that is a product gives the enclosing product its members' inverses, each
+        # keeping its pole as the product of the inverses does: rows 130 and 288 keep a
+        # divisor sum's spelled orientation (+3,000 each). And a Const-bearing sum carries a
+        # product's sign into its other terms instead of eating it (`(x2 - x1)(x1 - c)` shipped
+        # as `(x1 + c)(x1 - x2)`): the five `<constant>` rows whose old answers let a sign
+        # vanish so now keep it: 340 and 395 (-6,000 each), 111 (0), 172 (+6,000), 200
+        # (+2,000).
+        assert walk['complexity_out'] == 56312982, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 56310982, \
+            assert m and int(m.group(1)) == 56312982, \
                 'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):

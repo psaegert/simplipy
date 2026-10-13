@@ -24,7 +24,7 @@ use std::sync::OnceLock;
 
 use crate::tokens::{Tok, TokenView};
 
-use super::expr::{add, canon, fun, mul, pow, Cx, Ex, FlipScope};
+use super::expr::{add, canon, fun, mul, mul_undecided, pow, raised_members, Cx, Ex, FlipScope};
 use super::rat::Rat;
 use num_bigint::BigInt;
 use num_traits::{One, Zero};
@@ -56,6 +56,9 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
     if product_head(&s, view.arity(t)) {
         let mut members = Vec::new();
         let at = parse_members(tokens, idx, cx, &mut members)?;
+        return Some((mul(members, cx), at));
+    }
+    if let Some((members, at)) = product_power(tokens, idx, cx) {
         return Some((mul(members, cx), at));
     }
     // The TAGGED bags of the strict prefix form: `<add> ... </add>` / `<mul> ... </mul>`.
@@ -138,15 +141,20 @@ fn product_head(s: &str, arity: Option<u8>) -> bool {
 /// member that is itself a product spelling contributes its own members: `* a * b c` and
 /// `* * a b c` both give `a, b, c`, `neg a` gives `-1` and the members of `a`, `/ a b` the
 /// members of `a` and `b^-1`, and a `<mul>` bag the members of its children and the inverse of
-/// each divisor; a literal over a literal, in either notation, is one number. A divisor is one
-/// member, built on its own: `pow` distributes the inverse over a product only where that is
-/// licensed. Every other spelling is one member. A `<mul>` bag still needs two children and its
+/// each divisor; a literal over a literal, in either notation, is one number. A divisor that is
+/// itself a product (and `inv` or a negative integer power of one) gives its members' inverses
+/// where `pow` would distribute the inverse (`powered_members`), else it is one member, built on
+/// its own. Every other spelling is one member. A `<mul>` bag still needs two children and its
 /// closer.
 fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Option<usize> {
     let view = cx.view;
     let t = *tokens.get(idx)?;
     let s = view.resolve_owned(t);
     if !product_head(&s, view.arity(t)) {
+        if let Some((members, at)) = product_power(tokens, idx, cx) {
+            out.extend(members);
+            return Some(at);
+        }
         let (e, at) = parse_one(tokens, idx, cx)?;
         out.push(e);
         return Some(at);
@@ -163,14 +171,16 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
         "/" => {
             let mut num = Vec::new();
             let at = parse_members(tokens, idx + 1, cx, &mut num)?;
-            let (b, at) = parse_one(tokens, at, cx)?;
+            let (mut den, at) = divisor_members(tokens, at, cx)?;
             // A literal over a literal is the spelling of one number (`/ p q`), and stays one
             // member of the coefficient's partition.
-            match (num.as_slice(), &b) {
-                ([Ex::Num(_)], Ex::Num(_)) => out.push(desugar("/", t, vec![num.remove(0), b], cx)),
+            match (num.as_slice(), den.as_slice()) {
+                ([Ex::Num(_)], [Ex::Num(_)]) => {
+                    out.push(desugar("/", t, vec![num.remove(0), den.remove(0)], cx))
+                }
                 _ => {
                     out.extend(num);
-                    out.push(pow(b, Ex::Num(Rat::NEG_ONE), cx));
+                    out.extend(powered_members(den, &Rat::NEG_ONE, cx));
                 }
             }
             Some(at)
@@ -197,8 +207,8 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
                 }
                 children += 1;
                 at = if inverted {
-                    let (p, next) = parse_one(tokens, at, cx)?;
-                    den.push(p);
+                    let (d, next) = divisor_members(tokens, at, cx)?;
+                    den.push(d);
                     next
                 } else {
                     parse_members(tokens, at, cx, &mut num)?
@@ -207,8 +217,8 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
             // A literal over a literal is the tagged spelling of one number, as `/ p q` is the
             // explicit one, and stays one member of the coefficient's partition.
             match (num.as_slice(), den.as_slice()) {
-                ([Ex::Num(_)], [Ex::Num(_)]) => {
-                    let q = den.remove(0);
+                ([Ex::Num(_)], [d]) if matches!(d.as_slice(), [Ex::Num(_)]) => {
+                    let q = den.remove(0).remove(0);
                     out.push(mul(
                         vec![num.remove(0), pow(q, Ex::Num(Rat::NEG_ONE), cx)],
                         cx,
@@ -216,13 +226,92 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
                 }
                 _ => {
                     out.extend(num);
-                    out.extend(den.into_iter().map(|p| pow(p, Ex::Num(Rat::NEG_ONE), cx)));
+                    for d in den {
+                        out.extend(powered_members(d, &Rat::NEG_ONE, cx));
+                    }
                 }
             }
             // An empty numerator is allowed (`<mul> <div> x y </mul>` = 1/(x*y)); the bag still
             // needs at least 2 children.
             (children >= 2).then_some(at)
         }
+    }
+}
+
+/// The members of a divisor spelled at `idx`: those of a product spelling, else the one member.
+fn divisor_members(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Vec<Ex>, usize)> {
+    let t = *tokens.get(idx)?;
+    if product_head(&cx.view.resolve_owned(t), cx.view.arity(t)) {
+        let mut members = Vec::new();
+        let at = parse_members(tokens, idx, cx, &mut members)?;
+        return Some((members, at));
+    }
+    let (e, at) = parse_one(tokens, idx, cx)?;
+    Some((vec![e], at))
+}
+
+/// `inv P` or `pow P k` (`k` a negative integer literal) over a product spelling `P`: its
+/// members, raised as `powered_members` raises them, and the index after it; `pow P e` with any
+/// other exponent raises the product `P` as one member. `None` for any other spelling.
+fn product_power(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Vec<Ex>, usize)> {
+    let view = cx.view;
+    let t = *tokens.get(idx)?;
+    let s = view.resolve_owned(t);
+    let inv = s == "inv" && view.arity(t) == Some(1);
+    if !(inv || (s == "pow" && view.arity(t) == Some(2))) {
+        return None;
+    }
+    let bt = *tokens.get(idx + 1)?;
+    if !product_head(&view.resolve_owned(bt), view.arity(bt)) {
+        return None;
+    }
+    let mut members = Vec::new();
+    let at = parse_members(tokens, idx + 1, cx, &mut members)?;
+    if inv {
+        return Some((powered_members(members, &Rat::NEG_ONE, cx), at));
+    }
+    let (e, at) = parse_one(tokens, at, cx)?;
+    match &e {
+        Ex::Num(k) if k.is_integer() && k.is_negative() => {
+            let k = k.clone();
+            Some((powered_members(members, &k, cx), at))
+        }
+        _ => Some((vec![pow(mul(members, cx), e, cx)], at)),
+    }
+}
+
+/// A product's members raised to a negative integer `k` (a divisor is `k = -1`): where the power
+/// distributes over the product (`raised_members`: each member raised, or the bag `pow` folds a
+/// negative coefficient into), so the enclosing product decides them with its other members, as
+/// it decides the same members spelled one by one, and each keeps its pole; else the product,
+/// built without deciding its classes (`mul_undecided`), under the power as one member, whose
+/// members the certified `canon` gives the enclosing product where the certificate licenses it
+/// (and builds as one product where it does not). A unit negation of one member is that member's
+/// negation, built as `neg S` always is.
+fn powered_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Vec<Ex> {
+    // A unit negation of one member (`neg S`) is that member's negation, one member: the
+    // printer spells a sum of negative terms so.
+    if let [Ex::Num(r), f] | [f, Ex::Num(r)] = members.as_slice() {
+        if *r == Rat::NEG_ONE && !matches!(f, Ex::Num(_)) {
+            return vec![pow(mul(members, cx), Ex::Num(k.clone()), cx)];
+        }
+    }
+    if members.len() < 2 {
+        return members
+            .into_iter()
+            .map(|f| pow(f, Ex::Num(k.clone()), cx))
+            .collect();
+    }
+    match raised_members(members, k, cx) {
+        Ok(raised) => raised,
+        Err(Ex::Mul(v)) if k.cmp_int(-1) == std::cmp::Ordering::Less => {
+            // Held as `(prod f^|k|)^-1`, the form `pow` keeps a refused power in, its product
+            // still undecided.
+            let m = Ex::Num(k.checked_neg().expect("a negative integer negates"));
+            let parts = v.into_iter().map(|f| pow(f, m.clone(), cx)).collect();
+            vec![pow(mul_undecided(parts, cx), Ex::int(-1), cx)]
+        }
+        Err(held) => vec![pow(held, Ex::Num(k.clone()), cx)],
     }
 }
 
@@ -938,6 +1027,11 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
     emit_tagged_at(e, cx, out, false);
 }
 
+/// Is a negated divisor spelled as a bag at every depth, `<mul> -1 <div> B </mul>` as `-c/B` is for
+/// every other `c`? Else only as a whole answer that holds no other bag (`emit_tagged_at`), and
+/// `neg` inside one, which spells no literal.
+const NEGATED_DIVISOR_IS_A_BAG: bool = false;
+
 /// `top`: `e` is the whole answer and its spelling holds no other bag, so a bag here decides the
 /// notation a second call reads (`to_prefix_tagged`).
 fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
@@ -1018,7 +1112,7 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                         let divisor = matches!(&v[1], Ex::Pow(b, ex)
                             if matches!(&**ex, Ex::Num(q) if q.is_negative())
                                 && !matches!(&**b, Ex::Num(z) if z.is_zero()));
-                        if !(top && divisor) {
+                        if !((top || NEGATED_DIVISOR_IS_A_BAG) && divisor) {
                             out.push(view.intern("neg"));
                             emit_tagged(&v[1], cx, out);
                             return;
