@@ -3513,8 +3513,16 @@ fn holds_infinity(e: &Ex) -> bool {
 /// almost everywhere, by the certificate (`nz_ae_licensed`) or, with
 /// `FORM_LICENSES_DISTRIBUTION`, by its form (`zero_set_null_by_form`)? The parse, which has no
 /// certificate, reads the form, so a quotient it distributes is one `pow` distributes too.
+///
+/// A negative power `b^-q` is zero only where `b` is infinite, so its zero set is null wherever `b`
+/// is finite almost everywhere (`fin_licensed`); where `b` is undefined the power is too, and an
+/// inverse of an undefined product is undefined as each member's is. So the inverse of a quotient
+/// distributes as the quotient's members would: `1/(x12^(-1/2)/x14)` is `x14 x12^(1/2)`.
 fn zero_set_null(e: &Ex, cx: &Cx) -> bool {
-    cx.nz_ae_licensed(e) || (FORM_LICENSES_DISTRIBUTION && zero_set_null_by_form(e, cx))
+    cx.nz_ae_licensed(e)
+        || matches!(e, Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_negative())
+            && cx.fin_licensed(b))
+        || (FORM_LICENSES_DISTRIBUTION && zero_set_null_by_form(e, cx))
 }
 
 /// Does a member's form (a polynomial, an analytic function of one, ...) license distributing an

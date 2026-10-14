@@ -168,6 +168,23 @@ def test_a_divisor_product_is_decided_with_its_quotient(eng, mode, effort, a, b)
     assert list(eng.simplify(x, mode=mode, effort=effort)) == x
 
 
+# A negative power is zero only where its base is infinite, so the inverse of a quotient distributes as the quotient's
+# members do: `x14 / (x12 / (x14 sqrt(x12)))` is `x14^2 / sqrt(x12)` in every mode.
+INVERTED_QUOTIENTS = [
+    ('/ x14 / x12 * x14 rootn x12 2', '/ pow x14 2 rootn x12 2'),
+    ('inv * inv x14 pow x12 -0.5', '* x14 rootn x12 2'),
+]
+
+
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('a, b', INVERTED_QUOTIENTS)
+def test_an_inverted_quotient_distributes(eng, mode, effort, a, b):
+    x = list(eng.simplify(a.split(), mode=mode, effort=effort))
+    assert x == list(eng.simplify(b.split(), mode=mode, effort=effort))
+    assert list(eng.simplify(x, mode=mode, effort=effort)) == x
+
+
 # A placement can leave two odd roots of one index, and a collection a factor over another base (`cbrt(u)^3` is `u`
 # beside `u`): the product is built again, so its answer reads back as itself.
 @pytest.mark.parametrize('effort', (0, None))

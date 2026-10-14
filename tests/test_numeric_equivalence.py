@@ -312,11 +312,14 @@ class TestCorpusGate:
         # as `(x1 + c)(x1 - x2)`): the five `<constant>` rows whose old answers let a sign
         # vanish so now keep it: 340 and 395 (-6,000 each), 111 (0), 172 (+6,000), 200
         # (+2,000).
-        assert walk['complexity_out'] == 56312982, walk['complexity_out']
+        # INVERTED QUOTIENTS (2026-10-14): 56,312,982 -> 56,307,982. A negative power is zero
+        # only where its base is infinite, so the inverse of a quotient distributes as the
+        # quotient's members do: rows 279 (-2,000) and 399 (-3,000).
+        assert walk['complexity_out'] == 56307982, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 56312982, \
+            assert m and int(m.group(1)) == 56307982, \
                 'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):
