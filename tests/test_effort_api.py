@@ -86,12 +86,12 @@ class TestEffortValidation:
             [str(t) for t in engine.to_tagged(tokens)], 48, False, "explicit")
         assert via_plain == engine._core.ac_simplify_in_mode(
             [str(t) for t in engine.to_tagged(tokens)], 48, "default", "explicit", 0)
-        # The RULED default (owner 2026-08-24, benchmark panel): 4 -- the default
-        # call explores, and explicitly asking for the chain alone differs on a
-        # mu-hill.
+        # The RULED default (owner 2026-10-06; 4 from 2026-08-24): None -- the default
+        # call explores until a round finds nothing, and explicitly asking for the
+        # chain alone differs on a mu-hill.
         from simplipy import DEFAULT_EFFORT
-        assert DEFAULT_EFFORT == 4
-        assert engine.simplify(HILL) == engine.simplify(HILL, effort=4)
+        assert DEFAULT_EFFORT is None
+        assert engine.simplify(HILL) == engine.simplify(HILL, effort=None)
         assert engine.simplify(HILL) != engine.simplify(HILL, effort=0)
 
     @pytest.mark.parametrize('bad', [-1, -64])
@@ -103,3 +103,70 @@ class TestEffortValidation:
     def test_non_int_budgets_raise(self, engine, bad) -> None:
         with pytest.raises(TypeError, match='effort'):
             engine.simplify(HILL, effort=bad)
+
+    def test_a_cap_beyond_the_index_range_is_no_cap(self, engine) -> None:
+        # pyo3 cannot carry it as a usize; any such cap is the uncapped search.
+        assert engine.simplify(HILL, effort=2 ** 70) == engine.simplify(HILL, effort=None)
+
+
+# An srbf model prediction (f64): exact folds let the search multiply the 17-digit
+# coefficients out, which takes more than 4 candidate descents. Capped at 4, the first call
+# stopped between two improvements and a second call continued (473.8 -> 275.8 bits).
+PARTIAL = ('* - * 1.8426336222334249e-5 x_0 66.651398870432352 - + + * 0.0017852549531278935 x_0 '
+           '* - * -3.7410441585838554e-6 x_0 29.336341980886485 - * 0.003721137246172343 x_0 '
+           '1.4144809534136968 pow + * 0.00020869130391839415 x_0 0.46214648267002759 2 '
+           '41.682127161183045').split()
+
+
+def _copies(k):
+    # PARTIAL over k distinct variables, summed: every copy needs its own descents, so no
+    # fixed cap fits every size.
+    out = list(PARTIAL)
+    for j in range(1, k):
+        out = ['+'] + out + [t.replace('x_0', f'x_{j}') for t in PARTIAL]
+    return out
+
+
+@pytest.fixture(scope='module')
+def shipped():
+    try:
+        return SimpliPyEngine.load('acj-5-4-llm')
+    except Exception:
+        import os
+        if os.environ.get('SIMPLIPY_TEST_REQUIRE_ASSETS'):
+            raise
+        pytest.skip('acj-5-4-llm not resolvable here')
+
+
+class TestTheSearchRunsUntilItSettles:
+    def test_the_default_answer_is_its_own_answer(self, shipped) -> None:
+        once = shipped.simplify(PARTIAL)
+        assert shipped.simplify(once) == once
+
+    def test_a_cap_can_stop_between_two_improvements(self, shipped) -> None:
+        # What the old default did: the cap is still available, and still a cap.
+        once = shipped.simplify(PARTIAL, effort=4)
+        twice = shipped.simplify(once, effort=4)
+        assert twice != once
+        assert shipped.complexity(twice) < shipped.complexity(once)
+        assert shipped.complexity(shipped.simplify(PARTIAL)) <= shipped.complexity(twice)
+
+    @pytest.mark.parametrize('k', [3, 4])
+    def test_larger_expressions_need_more_than_any_small_cap(self, shipped, k) -> None:
+        # What a search needs grows with the expression: 2 copies reach the uncapped answer
+        # within 13 candidates, 3 need 19 and 4 need 23, so a cap of 16 falls short here.
+        t = _copies(k)
+        once = shipped.simplify(t)
+        assert shipped.simplify(once) == once
+        capped = shipped.simplify(t, effort=16)
+        assert shipped.complexity(once) < shipped.complexity(capped)
+        assert shipped.simplify(capped, effort=16) != capped
+
+    def test_the_finish_does_not_retry_what_the_prefix_refused(self, shipped) -> None:
+        # Eight products whose expansion does not pay, then one that does: the breadth-first
+        # prefix refuses the first eight, and the finish's first round starts at the ninth.
+        terms = [f'(x{4 * i + 1} + x{4 * i + 2})*(x{4 * i + 3} + x{4 * i + 4})' for i in range(8)]
+        t = shipped.infix_to_prefix(' + '.join(terms + ['(y + 1)*(y - 1)']))
+        once = shipped.simplify(t)
+        assert shipped.simplify(t, effort=8) != once
+        assert shipped.simplify(t, effort=9) == once

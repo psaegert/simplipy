@@ -147,6 +147,20 @@ class TestUnchangedSurface:
         assert engine.simplify(['<mul>', '2', 'atan', 'x0', '</mul>']) \
             == ['<mul>', '2', 'atan', 'x0', '</mul>']
 
+    def test_a_tagged_answer_whose_bags_collapsed_stays_tagged(self, engine: SimpliPyEngine) -> None:
+        # The tagged form spells every fraction as a bag, so an answer that holds one carries a
+        # delimiter even when its other bags collapsed; a one-token `-25/4` or `pow x10 17/4`
+        # re-read as the explicit form (`/ -25 4`).
+        for tagged, want in ((['<add>', 'x1', '<sub>', 'x1', '25/4', '</add>'], ['<mul>', '-25', '<div>', '4', '</mul>']),
+                             (engine.to_tagged(['pow', 'x10', '/', '17', '4']),
+                              ['pow', 'x10', '<mul>', '17', '<div>', '4', '</mul>'])):
+            for effort in (0, None):
+                out = engine.simplify(tagged, effort=effort)
+                assert out == want, (tagged, effort)
+                assert engine.simplify(out, effort=effort) == out
+        # explicit input keeps the explicit form, a one-token fraction included
+        assert engine.simplify(['exp', '1/2']) == ['exp', '/', '1', '2']
+
     def test_to_prefix_still_reads_a_tagged_answer(self, engine: SimpliPyEngine) -> None:
         out = engine.simplify(['<mul>', '2', 'atan', 'x0', '</mul>'])
         assert engine.to_prefix(out) == ['*', '2', 'atan', 'x0']

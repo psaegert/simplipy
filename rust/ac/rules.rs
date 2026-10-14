@@ -37,7 +37,7 @@ use crate::tokens::{Tok, TokenView};
 
 use super::convert::from_prefix;
 use super::expr::{add, canon, cmp_ex, complexity, mul, Cx, Ex};
-use super::matcher::{match_bag_each, matches_each, substitute, BagKind, Binds, MCx};
+use super::matcher::{match_bag_each_cls, matches_each, substitute, BagKind, Binds, MCx};
 use super::rat::Rat;
 
 /// One translated rule. `lhs`/`rhs` are canonical-with-bare-context AC expressions over TABLE
@@ -524,17 +524,18 @@ pub struct PassCtx<'a> {
 ///
 /// Stage 2 (design/UNIFIED_SIMPLICITY_MEASURE.md): the first component is the unified
 /// simplicity measure mu (`ac::expr::complexity`), which ABSORBS the old lit_size
-/// middle tier -- mu's literal component IS the bit-length content lit_size carried,
-/// so the ordering loses a layer and the dense-literal hazard its own tier existed
-/// for (T7: `Mul[3/2^k, x]` now strictly ASCENDS in k instead of sitting at one
-/// complexity level).
+/// middle tier -- mu's literal component carries a literal's content up to float
+/// precision (the float cap), so the ordering loses a layer. The dense-literal chain its
+/// own tier existed for (T7: `Mul[3/2^k, x]`) ascends in k up to k = 55 and then sits at
+/// 64-72 bits up to k = 200; it stays finite through the 1,100-bit cap (below).
 ///
 /// The pair is a strict total order (mu is a u64; cmp_ex is total by construction
 /// with EXACT literal comparison) that is WELL-FOUNDED: mu can strictly drop only
 /// finitely often, and at a FIXED mu value only finitely many terms exist -- mu
 /// bounds the node count (every structural node and leaf costs >= 8 except zero-cost
 /// magnitude-1 coefficient/exponent slots, of which each bag and pow carries at most
-/// one), bounds every literal's bit length (a literal pays its bits), and the
+/// one), literals are finitely many under the 1,100-bit cap (a literal's price is
+/// capped at its float's shortest decimal, so mu no longer bounds its bit length), and the
 /// vocabulary of `Leaf`/`Fun` tokens is finite -- so the total cmp_ex admits no
 /// infinite descent within a level. Hence EVERY descending chain is finite:
 /// termination of the pass and of the outer loop are theorems (T6, docs/formal.md),
@@ -594,6 +595,11 @@ fn exact_index_enabled() -> bool {
 }
 
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
+    // Past an armed work ceiling no rule is tried: the descent in progress settles quickly
+    // and the search discards it (`ac::search::explore`).
+    if super::work::over() {
+        return None;
+    }
     let node_sig = atom_sig(e, p.cx.view);
     // Lazy per-visit complexity of the subject (first candidate that needs it pays it).
     let node_mu_cell: std::cell::Cell<Option<u64>> = std::cell::Cell::new(None);
@@ -627,6 +633,8 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
         }
         _ => (EMPTY, p.rules.bucket_for(e)),
     };
+    // The subject bag's equality classes, computed by the first rule whose match needs them.
+    let bag_cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
     for &ri in exact_hits.iter().chain(scan.iter()) {
         let rule = &p.rules.rules[ri];
         if rule.sig & !node_sig != 0 {
@@ -648,9 +656,10 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
             (Ex::Add(pv), Ex::Add(sv)) => {
                 let mut binds = Binds::default();
                 let mut out: Option<Ex> = None;
-                match_bag_each(
+                match_bag_each_cls(
                     pv,
                     sv,
+                    &bag_cls,
                     BagKind::Add,
                     true,
                     &mut binds,
@@ -678,9 +687,10 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
             (Ex::Mul(pv), Ex::Mul(sv)) => {
                 let mut binds = Binds::default();
                 let mut out: Option<Ex> = None;
-                match_bag_each(
+                match_bag_each_cls(
                     pv,
                     sv,
+                    &bag_cls,
                     BagKind::Mul,
                     true,
                     &mut binds,

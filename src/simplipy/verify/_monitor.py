@@ -522,7 +522,7 @@ BAG_OPEN = {'<add>': ('<sub>', '</add>', '+', '-'),
             '<mul>': ('<div>', '</mul>', '*', '/')}
 BAG_TOKENS = frozenset(BAG_OPEN) | {'<sub>', '</add>', '<div>', '</mul>'}
 
-RAT_RE = re.compile(r'^-?\d+/\d+$')      # the exact-rational coefficient spelling
+RAT_RE = re.compile(r'^[+-]?\d+/\d+$')   # the exact-rational coefficient spelling
 VAR_RE = re.compile(r'^x\d+$')
 SORT_RE = re.compile(r'^[_?!$]\d+$')     # rule-sort slots, judged as quantified reals
 
@@ -748,7 +748,7 @@ def _fold_noise_floor(tokens, env, base):
         if not _is_num(t) or RAT_RE.match(s):
             continue
         v = mpf(s)
-        if v == 0 or v == mp.nint(v):
+        if v == 0 or (v == mp.nint(v) and abs(v) <= 2 ** 53):
             continue                         # exact in f64: the fold adds no rounding
         toks2 = list(tokens)
         toks2[k] = mp.nstr(v * (1 + eps), 40)
@@ -778,9 +778,11 @@ def _fold_noise_floor(tokens, env, base):
 # a non-integer rootn index and fabricated nan -- the base table's GAP class).
 
 FOLD_OPS = frozenset({'+', '-', '*', '/', 'neg', 'inv', 'abs', 'pow'})
-FOLD_BITS_BUDGET = 15900   # ~2400 decimal digits per side of the emitted p/q token:
-                           # bounded work, and safely under CPython's 4300-digit
-                           # int<->str conversion limit (emission uses str(int)).
+#: The engine's number cap (`CAP_BITS` in rust/ac/rat.rs): a numerator or denominator of
+#: more bits is no number to the engine but a literal leaf, so a fold whose result leaves
+#: it is refused rather than spelled as a token the engine reads differently. Bounded work,
+#: and far under CPython's 4,300-digit int<->str limit (emission uses str(int)).
+ENGINE_CAP_BITS = 1100
 
 
 class _FoldRefused(Exception):
@@ -789,12 +791,20 @@ class _FoldRefused(Exception):
 
 
 def _rat_leaf(t):
-    """The exact Fraction a rational-literal token denotes, else None."""
+    """The exact Fraction a rational-literal token denotes, else None -- also for a spelling
+    too large to build (more than 4,300 digits, or a decimal exponent beyond 4,000: the
+    mpf/contract path reads those)."""
     s = t.strip('()')
     if RAT_RE.match(s):
         p, q = s.split('/')
+        if len(p.lstrip('+-')) > 4300 or len(q) > 4300:
+            return None
         return Fraction(int(p), int(q))
     if not _is_num(t):
+        return None
+    mantissa, _, exponent = s.lower().partition('e')
+    exponent = exponent.lstrip('+-').lstrip('0')
+    if sum(c.isdigit() for c in mantissa) > 4300 or len(exponent) > 4 or int(exponent or '0') > 4000:
         return None
     try:
         return Fraction(Decimal(s))          # exact for every decimal spelling
@@ -803,7 +813,7 @@ def _rat_leaf(t):
 
 
 def _fold_budget(f):
-    if f.numerator.bit_length() + f.denominator.bit_length() > FOLD_BITS_BUDGET:
+    if max(f.numerator.bit_length(), f.denominator.bit_length()) > ENGINE_CAP_BITS:
         raise _FoldRefused()
     return f
 
@@ -894,7 +904,7 @@ def _fold_exact_rational_spans(tokens):
                     e = b.numerator
                     base_bits = max(vals[0].numerator.bit_length(),
                                     vals[0].denominator.bit_length(), 1)
-                    if abs(e) * base_bits > FOLD_BITS_BUDGET:
+                    if abs(e) * (base_bits - 1) > ENGINE_CAP_BITS:  # surely beyond it
                         raise _FoldRefused()
                     acc = _fold_budget(vals[0] ** e)     # Fraction(0)**0 == 1: contract
             except (_FoldRefused, ZeroDivisionError):

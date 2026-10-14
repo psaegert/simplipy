@@ -59,6 +59,10 @@ ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 #: that cannot swallow a genuine mismatch (the last blanket one nearly did).
 ACJ_SHIPPED_DIGEST = '32302640b359a348'
 
+#: The digest the engine computes under the float cap (with its probe). The published
+#: rulesets were mined under ACJ_SHIPPED_DIGEST, so loading them warns until the re-mine.
+CURRENT_DIGEST = '9a89036bd9cd33f3'
+
 
 def L(n) -> int:
     """1000 * log2(1 + |n|), computed independently of the Rust bit-extraction
@@ -497,14 +501,11 @@ class TestTheFloorIsMirroredAcrossTheI128Boundary:
         assert eng.complexity(['1e-40']) == eng.complexity(['1/1' + '0' * 40])
 
 
-class TestTheCanonKnob:
-    """Task #87 (owner ruling: SHIP BOTH). `complexity()` stays Default-canon-pinned as
-    THE public measure -- `canon='default'` is the default and byte-identical to the
-    pre-0.14.1 behaviour -- and `canon='mode'` is the explicit engine-internal
-    diagnostic that routes the CANON through the requested mode, pricing in the measure
-    that mode's chain actually descends. Validated on the 25 run-5 inflated fixpoints
-    (real/permissive arms priced above input under the Default yardstick): under
-    canon='mode' with the arm's mode, 0 of 25 price above input (2026-08-30)."""
+class TestOneMeasurePerMode:
+    """`complexity(e, mode=m)` prices `e` as mode `m` reads it: each mode reads an expression into
+    its own canonical form, because the modes accept different simplifications as true, and that
+    form is what `simplify(.., mode=m)` descends. `canon='default'` (deprecated) is the f64 reading
+    whatever the mode, as `complexity()` priced before 0.15.0."""
 
     SPECIMENS = [
         ['*', '2', 'x0'],
@@ -513,43 +514,45 @@ class TestTheCanonKnob:
         ['rootn', 'x0', '3'],
     ]
 
-    def test_canon_default_is_the_default_and_identical_in_every_mode(self, eng):
+    def test_the_default_reading_is_the_mode_own(self, eng):
         for e in self.SPECIMENS:
-            assert eng.complexity(e) == eng.complexity(e, canon='default')
             for mode in ('f64', 'real', 'permissive'):
-                assert eng.complexity(e, mode=mode) == \
-                    eng.complexity(e, mode=mode, canon='default'), (e, mode)
+                assert eng.complexity(e, mode=mode) == eng.complexity(e, mode=mode, canon='mode'), (e, mode)
                 assert eng.complexity(e, certified=False, mode=mode) == \
-                    eng.complexity(e, certified=False, mode=mode, canon='default'), (e, mode)
+                    eng.complexity(e, certified=False, mode=mode, canon='mode'), (e, mode)
 
-    def test_canon_mode_differs_on_a_known_real_mode_respell(self, eng):
-        # The real canon keeps `log <literal>` unfolded where the Default canon
-        # respells through the fold -- the two yardsticks price DIFFERENT states,
-        # which is the entire point of the diagnostic.
+    def test_f64_is_unchanged(self, eng):
+        # f64's own reading IS the former public yardstick: no number moves, and no warning.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            for e in self.SPECIMENS:
+                assert eng.complexity(e) == eng.complexity(e, mode='f64', canon='default'), e
+
+    def test_the_modes_read_one_expression_differently(self, eng):
+        # The float evaluator reads exp(5132.3) as inf, so f64 folds 1/exp(5132.3) to 0; real
+        # keeps it (the value is finite). Real keeps `log <literal>` unfolded where f64 folds it.
+        e = ['+', 'x0', '/', '1', 'exp', '5132.277024704901']
+        assert eng.complexity(e, mode='f64') == eng.complexity(['x0'], mode='f64')
+        assert eng.complexity(e, mode='real') > eng.complexity(['x0'], mode='real')
         e = ['inv', 'log', '1.60604019536491']
-        assert eng.complexity(e, mode='real', canon='mode') != \
-            eng.complexity(e, mode='real', canon='default')
+        with pytest.warns(FutureWarning, match="canon='default'"):
+            assert eng.complexity(e, mode='real') != eng.complexity(e, mode='real', canon='default')
 
-    def test_canon_mode_with_the_default_mode_is_the_public_measure(self, eng):
-        # `mode='f64'` routes to the Default rule mode, so canon='mode' collapses to
-        # the pin: the diagnostic is a strict extension, never a fork, of the measure.
-        for e in self.SPECIMENS:
-            assert eng.complexity(e, mode='f64', canon='mode') == eng.complexity(e), e
-
-    def test_the_diagnostic_makes_the_per_mode_descent_checkable(self, eng):
-        # The serve guarantee the diagnostic exists to check: a mode's own fixpoint
-        # never prices above its input in that mode's own canon measure.
+    def test_simplify_never_prices_above_its_input_in_its_mode(self, eng):
         from simplipy.engine import Mode
         exprs = [
             ['*', 'x17', '+', '*', '4', '*', 'inv', 'log', '1.60604019536491', 'inv',
              'pow', '+', 'x17', '1', '2.3456097805248', '/', '5', '9'],
             ['+', 'x0', '*', 'cos', 'x1', 'tan', 'x1'],
+            ['+', '2.776554647964275', '/', '*', '*', 'x3', '-4.015771028388646', '/', '*',
+             '6.187291139906707', '/', '24.29404452212941', '/', '-8.931762382675254', '/', 'x3',
+             'exp', '5132.277024704901', 'asinh', 'x3', 'x3'],
         ]
         for expr in exprs:
-            for mode in (Mode.real, Mode.permissive):
+            for mode in (Mode.f64, Mode.real, Mode.permissive):
                 out = list(eng.simplify(list(expr), mode=mode))
-                assert eng.complexity(out, mode=mode, canon='mode') <= \
-                    eng.complexity(list(expr), mode=mode, canon='mode'), (expr, mode)
+                assert eng.complexity(out, mode=mode) <= eng.complexity(list(expr), mode=mode), (expr, mode)
 
     def test_an_unknown_canon_is_refused(self, eng):
         with pytest.raises(ValueError, match='canon'):
@@ -571,6 +574,9 @@ class TestFingerprintAndArtifactLoad:
             '0.2': 3585,              # (2, 1): selector + L(2) + L(1)
             '1e-40': 7358,            # beyond-i128 leaf: selector + max(floor, L(1)) + L(40)
             '<constant>': MU_FREE_PRIME,
+            # the float cap: 64 digits cost their float's shortest decimal,
+            # 0.07665412684716773 (selector + L(7665412684716773) + L(17))
+            '0.0766541268471677307861497420516056347394916180597539647375669841': mu_prime_expected(Fraction('0.07665412684716773')),
             # the symbol table, one probe per entry (2026-08-21). Add and Mul price the
             # same here and still need separate probes: a change to ONE of them has to
             # move the digest.
@@ -585,23 +591,23 @@ class TestFingerprintAndArtifactLoad:
         }
         assert fp['digest'] != ACJ_MINED_DIGEST
 
-    def test_acj_load_is_fingerprint_clean(self):
-        """D25, on the real asset, after the re-mine: NO fingerprint warning.
+    def test_acj_load_warns_until_the_remine(self):
+        """D25, on the real asset, under the float cap: EXACTLY ONE fingerprint warning, naming
+        the digest the served cell was mined under and the one the engine computes now.
 
-        The served cell (acj-4, ×3 byte-identical on solomon 2026-08-23) was mined
-        under the symbol-table measure, so its provenance digest EQUALS the engine's
-        computed one -- pinned verbatim below, so a measure change without a re-mine
-        fails here rather than sliding through as a tolerated warning. This is the
-        empty-list state the predecessor test (`test_acj_load_warns_until_the_remine`)
-        was written to force."""
+        Both digests are pinned verbatim, so any other measure change -- or a re-mine that
+        leaves this allowance in place -- fails here instead of sliding through as a
+        tolerated warning. After the re-mine under the float cap this becomes the empty-list
+        state again (`test_acj_load_is_fingerprint_clean`)."""
         import warnings as _w
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter('always')
             engine = SimpliPyEngine.from_config(acj_config_path())
         mismatch = [str(x.message) for x in caught
                     if 'measure fingerprint mismatch' in str(x.message)]
-        assert mismatch == [], mismatch
-        assert engine._measure_fingerprint()['digest'] == ACJ_SHIPPED_DIGEST
+        assert len(mismatch) == 1, mismatch
+        assert ACJ_SHIPPED_DIGEST in mismatch[0] and CURRENT_DIGEST in mismatch[0], mismatch
+        assert engine._measure_fingerprint()['digest'] == CURRENT_DIGEST
         out = engine.simplify(engine.to_prefix(['+', 'x0', 'x0']))
         assert list(out) == ['*', '2', 'x0']
 
