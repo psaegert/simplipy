@@ -5,9 +5,9 @@
 - **Fast in every mode.** Against 0.14.7, on the 129,490 simplify inputs of flash-ansr's T8.1
   training draws, srbf's 6,531 ground truths and its 125,127 model predictions (both versions side
   by side on one machine under other load), in every mode: under 1% of calls take more than 0.1 s
-  and none takes more than 1 s (0.14.7: up to 18.2% and 1.47%, permissive on the predictions).
-  Total time falls by 30% (`f64`), 34% (`real`) and 35% (`permissive`) on the T8.1 inputs, 21-33%
-  on the ground truths, and by 81%, 77% and 90% on the predictions.
+  and none takes more than 1 s (0.14.7: up to 18.9% and 1.56%, permissive on the predictions).
+  Total time falls by 34% (`f64`), 30% (`real`) and 34% (`permissive`) on the T8.1 inputs, 19-24%
+  on the ground truths, and by 77%, 75% and 89% on the predictions.
 - **A work budget per search, the default in permissive.** `simplify()` takes `work`: the budget
   of each search in deterministic units (one step of the matcher or one canonical-constructor
   call), so a budget cuts the same walk at the same place on every machine and under any load. A
@@ -16,36 +16,49 @@
   budget in `f64` and `real`; `work=None` restores the search that runs until a round finds
   nothing. Under a budget, permissive continues its literal fold without the search. Its three
   bounds below hold among calls with the same `work`. A search the budget stopped, or another arm
-  started from the answer, can continue on a second call: in `permissive`, 1,359 of srbf's
-  predictions change on a second call (0.14.7: 137) and 67 of the T8.1 inputs (0.14.7: 306).
+  started from the answer, can continue on a second call: in `permissive`, 1,458 of srbf's
+  predictions change on a second call (0.14.7: 137) and 151 of the T8.1 inputs (0.14.7: 306).
 - **Faster canonical forms.** Placing the signs of a nested sum asked the same flip four times per
   nesting level, so an expression nested `d` deep cost `4^d` flips: even with the faster products
   below, `x1*(x1 + (N + 1)/x1)` nested 10 deep took 23.5 s in `f64` with the search off, and a
   73-token nested input 25 s in `permissive` (0.14.7: over 4 minutes at 8 deep). The flip is now
-  computed once per call (0.04 s and 0.3 s), and the matcher no longer copies the expressions it
+  computed once per call (0.006 s and 0.11 s), and the matcher no longer copies the expressions it
   compares. Answers are byte-identical.
-- **Answers read back as themselves.** Three canonical forms depended on the route that built
-  them, so an answer could change on a second call: a product with more than six factors whose
-  sign can move kept the orientation it arrived in (the cheapest orientation is now found exactly
-  for any number of them), two sums that are each other's negation stayed apart where they met in
-  one product, and a term whose coefficient became 1 kept its factors' signs. A product now
-  decides all its pairs of opposite sums together after collecting its factors: it prices every
-  combination of flips as the whole product, and decides again until nothing is cheaper. The bare
-  sum and its odd powers move a sign to the coefficient (or to a bare constant or infinity, which
-  carries it), its even powers flip freely, and negative odd powers (`1/(a - x)`), roots and
-  symbolic powers stay. So `(x - a)*(a - x)` is `-(x - a)^2` and `(x - a)^2/(a - x)/(x - a)` is
-  `-1`, in any order of the factors. On 3,100 generated products of opposite sums no answer
-  changes on a second call or depends on the order of its factors, in any mode (0.14.7 at its
-  default: 30 change on a second call in `f64` and in `real`); in each mode's own measure two are
-  costlier than 0.14.7's, both in `permissive`, where 0.14.7's answer gives an infinity the wrong
-  sign. Re-bracketing a product can still change its form where an odd function of a sum meets the
-  same function of its negation: `tanh(x1 - x2)*(tanh(x1 - x2)*(-1))` stays
-  `tanh(x1 - x2)*tanh(x2 - x1)`, written flat it is `-tanh(x1 - x2)^2` (25 of 150 fuzzed products
-  in `f64`, with or without the search; 0.14.7: 87); each answer reads back as itself. In `f64` and `real` no answer changes on a
-  second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground truths, 31
-  predictions). The debug-build check that every intermediate state reads back as itself printed
-  in a spelling no caller receives; it now prints as the callers do and passes on all ground
-  truths, predictions and T8.1 inputs in every mode.
+- **Answers read back as themselves, whatever the brackets.** Three canonical forms depended on
+  the route that built them, so an answer could change on a second call: a product with more than
+  six factors whose sign can move kept the orientation it arrived in (the cheapest orientation is
+  now found exactly for any number of them), two sums that are each other's negation stayed apart
+  where they met in one product, and a term whose coefficient became 1 kept its factors' signs. A
+  product is now built once from all of its factors, however brackets, `/`, `neg` or the tagged
+  `<mul>`/`<div>` spell it, and each class of factors over a sum and its negation, or over an odd
+  function or odd root of one (`tanh(x1 - x2)` and `tanh(x2 - x1)`), is decided once from its
+  exponent totals, every placement priced as the whole product. Positive powers and even negative
+  powers move between the two orientations (an odd amount moves a sign to the coefficient, or to a
+  bare constant or infinity, which carries it); the fractional part of a power and symbolic powers
+  stay; and in `f64` and `real` a lone `1/(a - x)` stays, because moving it would flip the sign of
+  the infinity at `x = a` (`permissive` moves it where both orientations meet). A sum's own
+  canonical orientation can still move a lone inverse: `1/(1 - x1 - x2)` becomes
+  `-1/(x1 + x2 - 1)`, with the other infinity at `x1 + x2 = 1`, as in 0.14.7. So
+  `(x - a)*(a - x)` is `-(x - a)^2`, `(x - a)^2/(a - x)/(x - a)` is `-1`, and
+  `tanh(x1 - x2)*(tanh(x1 - x2)*(-1))` is `-tanh(x1 - x2)^2`, as written flat (0.14.7:
+  `tanh(x1 - x2)*tanh(x2 - x1)`). An odd function of a negative literal multiple has one spelling
+  in a product: `x2*atan(-2*x1)` and `-x2*atan(2*x1)` reach one answer, so
+  `x2*atan(-2*x1) + x2*atan(2*x1)` is `0` (0.14.7 keeps both terms). On 1,653 generated products
+  over opposite sums, odd functions and odd roots, each in up to eleven spellings (four
+  bracketings and the tagged bag for all; two division spellings, the inverse of a product, a
+  chain of divisions and the tagged bag with `<div>` where the product has a divisor; a negation
+  for 72), one `permissive` product reaches two answers, of equal value (0.14.7: 616 in `f64` and
+  `real`, 687 in `permissive`), and none changes on a second call. In `f64` and `real` no answer
+  changes on a second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground
+  truths, 31 predictions). The
+  debug-build check that every intermediate state reads back as itself printed in a spelling no
+  caller receives; it now prints as the callers do and passes on all ground truths, predictions
+  and T8.1 inputs in every mode.
+- **A fitted constant beside a sum keeps its family.** A product of a sum and a sum holding
+  `<constant>` let the constant's sum take the product's sign as if the constant absorbed it:
+  `(x2 - x1)*(x1 - <constant>)` became `(x1 + <constant>)*(x1 - x2)`, which no value of the
+  constant makes equal to the input (also in 0.14.7). The sign now goes to the sum's other terms:
+  `(x1 + <constant>)*(x2 - x1)`.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
@@ -61,11 +74,14 @@
   on a second call (`/ -25 4`). Every fraction is now `<mul> p <div> q </mul>` in the tagged form
   (or splits into the product it is a coefficient of); decimals keep their spelling (as in 0.14.7:
   a small one is a bag, `0.2` is `<mul> 1 <div> 5 </mul>`, the others one token). So a tagged
-  answer that holds a fraction always carries a delimiter. Explicit input is unchanged, `exp 1/2`
-  included.
+  answer that holds a fraction always carries a delimiter. A tagged answer without a bag is
+  spelled as the explicit notation spells it, and `-1/x1` keeps its bag
+  (`<mul> -1 <div> x1 </mul>`, like `-2/x1`; 0.14.7 answered `neg inv x1`, which re-read as
+  `/ -1 x1`), so every tagged answer reads back as itself. Explicit input is unchanged,
+  `exp 1/2` included.
 - **Permissive never returns more than it was given.** `simplify(.., mode='permissive')` runs
   three arms (its two fold disciplines and the `f64` chain) and used to choose between them by the
-  price of internal states it did not return: 0.14.7 returns 250 of the T8.1 inputs, 2,867 of srbf's
+  price of internal states it did not return: 0.14.7 returns 391 of the T8.1 inputs, 3,099 of srbf's
   predictions and 7 of its ground truths costlier than they came in, in permissive's own measure.
   It now returns the cheapest of its candidates, each priced as it is returned (what it prints,
   re-read in permissive's own measure): every state its two fold disciplines can end on under some
@@ -75,9 +91,9 @@
   precision moved to their floats), and the input as read. So its answer never prices above the
   input, above its answer with the search off, or above its answer at a smaller `effort`; on the
   three sets none does (efforts checked: 0, 1, 4 and the default). Against 0.14.7 in permissive's
-  own measure, 1,796 T8.1 answers get cheaper and 567 costlier, and 40,863 predictions cheaper and
-  6,633 costlier. 31 of the predictions' answers print a literal beyond float precision (0.14.7:
-  25); none prices above the same answer with those literals at their floats (14 below, 17 equal).
+  own measure, 2,716 T8.1 answers get cheaper and 894 costlier, and 41,526 predictions cheaper and
+  6,835 costlier. 30 of the predictions' answers print a literal beyond float precision (0.14.7:
+  25); none prices above the same answer with those literals at their floats (14 below, 16 equal).
 - **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:
   the modes accept different simplifications as true (`f64` follows the float evaluator, so
   `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not; `permissive` also what
@@ -94,18 +110,18 @@
   expansions finds nothing cheaper, so a second call has nothing left to continue. A cap counts
   every candidate tried over the whole expression, refused ones included, so the cap a search
   needs grows with the expression (one srbf prediction needs 8 candidates, a sum of 2 copies of it
-  13, of 3 copies 19 and of 8 copies 39). Capped at 4 in this release, 2,675 of srbf's 125,127
-  model predictions change on a second call in `f64` (2,672 to a cheaper form; `real` 2,677).
+  13, of 3 copies 19 and of 8 copies 39). Capped at 4 in this release, 2,680 of srbf's 125,127
+  model predictions change on a second call in `f64` (2,677 to a cheaper form; `real` 2,682).
   Uncapped, none does in `f64` and `real` (with the canonical forms that read back as themselves,
-  above). On the predictions in `f64` no answer is costlier than at cap 4, and 2,888 are
+  above). On the predictions in `f64` no answer is costlier than at cap 4, and 2,893 are
   cheaper. `permissive` bounds each search with its work
   budget by default (above). The search tries the capped default's breadth-first order for its
   first 8 candidates (on srbf's predictions in `f64` and `real` that alone gives the final answer
   on 124,572 of 125,127) and then steps to the first cheaper candidate of the best answer until a
-  whole round finds nothing; on 16 copies of one prediction it takes about six times as long as
+  whole round finds nothing; on 16 copies of one prediction it takes seven to eight times as long as
   `effort=4`, for an answer a third of the price. Each candidate's whole state is rebuilt only
   when it is tried and is no longer re-canonicalized in full before its descent. On srbf's
-  predictions the uncapped search takes 8% more time than `effort=4` in `f64` and `real`. Every
+  predictions the uncapped search takes 7% (`f64`) and 8% (`real`) more time than `effort=4`. Every
   internal caller that passes no `effort` (normalization, masking, mining, the verification
   monitor, the promotion refund) follows the default. `effort=k` caps each search at `k`
   candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), tried in the
@@ -168,10 +184,8 @@
   `<mul> p <div> q </mul>` in the tagged list answer, its own `/ p q` in the explicit list answer)
   instead of being split across a product (the evaluator multiplied a 300-digit numerator in
   before dividing and overflowed).
-  Known limits: where a fold is refused, the grouping of the input can decide which inner
-  products fold (`(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different forms);
-  and a like term whose coefficient is itself a refused two-number product can split coefficient
-  and term differently on a second call (also in earlier versions, at 128 bits).
+  Known limit: a like term whose coefficient is itself a refused two-number product can split
+  coefficient and term differently on a second call (also in earlier versions, at 128 bits).
 - **What the wider range moves.** Against the same code at 128 bits: none of the 400 corpus
   rows; 23 of srbf's 6,531 ground truths, all by literal arithmetic the 128-bit limit refused
   (two of them are coefficient sums that then allow a distribution), their values equal to 1e-15. srbf's judge sees a few more

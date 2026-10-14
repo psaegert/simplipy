@@ -245,7 +245,7 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: ``None``: the search runs until a round finds nothing, so a second call returns the
 #: answer unchanged (in ``permissive`` its work budget can stop a search, see
 #: ``DEFAULT_WORK``). The previous default, 4, stops searches between
-#: two improvements: on srbf's 125,127 model predictions 2,675 answers change on a second
+#: two improvements: on srbf's 125,127 model predictions 2,680 answers change on a second
 #: call in f64 at cap 4 (none uncapped).
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
@@ -2233,9 +2233,8 @@ class SimpliPyEngine:
 
         With ``certified=False`` the expression is priced on the bare
         (certificate-less, fail-closed) canonicalization instead: still invariant
-        to operand order and serialization sugar, and to bracketing except in a product of
-        a sum and its negation, which the bare context collects only partly, so the
-        grouping can decide the price. A certificate-licensed respelling the bare context
+        to operand order, bracketing and serialization sugar (a product is built once from
+        all of its factors). A certificate-licensed respelling the bare context
         cannot re-derive keeps its own measure, so a simplify output can price ABOVE its
         input (measured live: 0.48% of 64k corpus rows, in quanta of one symbol unit; the
         certified default closes exactly this).

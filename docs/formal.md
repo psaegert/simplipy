@@ -102,10 +102,10 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   flash-ansr's T8.1 draws, srbf's ground truths or its predictions, with the search off or at the
   default effort. The sign placement keeps the entry
   spelling where an orientation would collide with another factor's base or a negation overflows
-  (§3). And at a
-  refusal the grouping of the input can decide which inner products fold:
-  `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` keep different canonical forms
-  (canonicity across spellings, not idempotence; both pinned in tests). Uncapped (the default in
+  (§3). At a refusal every grouping of a product partitions the same multiset of coefficients,
+  because the parse builds the product once from all of its members:
+  `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` reach one canonical form (pinned
+  in tests). Uncapped (the default in
   f64 and real; L6), the exploration phase can reach states of the literal classes above that the
   chain alone never visits (for example an unmerged `3e-310` coefficient that re-reads in another
   order; a `<constant>` absorbed on re-read). In `permissive` the selection among three arms adds
@@ -215,24 +215,40 @@ cheaper orientation, with the one site whose switch costs least switched where t
 differs; its exact ties resolve by an order that is a function of the orbit, never of the entry
 spelling. It skips a placement in which a flipped factor lands on the base another factor is
 collected under (an even root counts as a power of its radicand); beyond six sites such a
-possible collision, or a negation overflow, keeps the entry placement. Opposite sums $S$ and
-$-S$ are one base up to a sign. After like-base collection `mul()` decides a bag's classes
-together: each combination of outcomes (a class kept, or every carrier flipped onto one
-orientation; the bare sum and its odd powers move a sign to the coefficient, or to a bare
-infinity or a bare Const that carries it, its even powers flip freely, and negative odd,
-fractional and symbolic powers and roots never move) is priced as the whole product, beyond 64
-combinations one class at a time, and the cheapest wins, an exact tie going to a non-negative
-coefficient and then the structurally smaller product, as in `sign_place`. It collects and
-decides again until nothing is cheaper, the first decision also pricing the members as they
-arrived, so the product it returns is the product its own factors build, in any order
-(`(x - a)*(a - x)` is `-(x - a)^2`, `(a - x)*(x - a)/(a - x)` is `x - a`, and
-`(x - a)^2/(a - x)/(x - a)` is `-1`). A bare (certificate-free) context, such as the entry parse,
-the bare measure or a rule's sides, cannot price the cancellations these outcomes turn on: it
-moves carriers onto the other orientation only where an exponent of the opposite sign waits there
-alone, merges a class of carriers alone onto the orientation it reaches without a sign, and
-leaves every other class to the certified construction, its carriers collected apart from its
-non-carriers. A join whose coefficient becomes 1 re-places its key's signs (`term_join`). The
-decision is three-tier:
+possible collision, or a negation overflow, keeps the entry placement.
+
+**Convention (opposite classes, one table per product).** A sum $S$ and its negation are one
+base up to a sign, and so are $f(S)$ and $f(-S)$ for an odd function $f$ and
+$\mathrm{rootn}(S, m)$ and $\mathrm{rootn}(-S, m)$ for odd $m$: each pair $\{B, -B\}$ is one
+class (an even function needs none: `fun` files `cos(S)` and `cos(-S)` in one orientation). The
+parse builds a product once from all of its members, whatever brackets, `/`, `neg` or the tagged
+`<mul>`/`<div>` spell it, so no bracket is decided on its own. A divisor that is itself a product
+gives the enclosing product its members' inverses wherever `pow` would distribute the power (one
+licence for `pow`, the parse and `canon`); where the certificate refuses, it stays one inverted
+product, decided as a whole. `mul()` reads each class as a table of exponent totals per
+orientation: the positive integer mass $p$, the negative integer mass $n$ (a fractional exponent
+gives its integer part, toward zero, to $p$ or $n$: $S^{5/2} = S^2 S^{1/2}$) and the fixed
+factors (fractional remainders, symbolic powers, totals beyond $2^{100}$). All of $p$ may move to
+the other orientation, an odd amount with a sign to the bag's host (the coefficient, or a bare
+infinity or a bare Const that carries it); the even part of $n$ moves freely; in a sound context
+an orientation with odd $n$ keeps one $B^{-1}$, whose move would flip the sign of the infinity
+at its pole (the class decision never conflates $S^{-n}$ and $-(-S)^{-n}$; the canonical
+orientation of a lone sum still can, as in 0.14.7: `1/(1 - x1 - x2)` is `-1/(x1 + x2 - 1)`),
+while `permissive`, which reads a function up to its values at a zero, moves it too; fractional
+and symbolic parts never move.
+Every placement, including how a side's mass splits between its integer and its fractional
+powers, is priced as the whole product, and the cheapest wins, an exact tie going to a
+non-negative coefficient and then the structurally smaller product, as in `sign_place`. The
+classes are decided together while their placements combine to at most 4,096 products (priced
+in the order of a lower bound on their prices), else one at a time until none moves. The
+decision is a function of the multiset of members, so the product does not depend on how its
+factors were bracketed or ordered: `(x - a)*(a - x)` is `-(x - a)^2`, `(x - a)^2/(a - x)/(x - a)`
+is `-1`, and `tanh(x - a)*(tanh(x - a)*(-1))` is `-tanh(x - a)^2`, as written flat. The bare
+(certificate-free) context, such as the entry parse, the bare measure or a rule's sides, uses
+the same tables and rule and differs only in the collections it may license. An odd function of
+a negative literal multiple is a sign site of its own (`x2*atan(-2*x1)` and `-x2*atan(2*x1)`
+are one answer, so their sum is `0`). A join whose coefficient becomes 1 re-places its key's
+signs (`term_join`). The decision is three-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
 2. an exact $\mu$ tie at a SIGN-TRADE site goes to the structurally distinguished
@@ -593,8 +609,8 @@ and are refused again. Two further premises: the step cap does not bind (a cappe
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
 valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
-srbf's 125,127 model predictions change on a second call 2,675 times in `f64` at cap 4, the former
-default, 2,672 of them to a cheaper form (`real` 2,677); uncapped, never, in `f64` and `real`, on these and on
+srbf's 125,127 model predictions change on a second call 2,680 times in `f64` at cap 4, the former
+default, 2,677 of them to a cheaper form (`real` 2,682); uncapped, never, in `f64` and `real`, on these and on
 srbf's ground truths and the simplify inputs of flash-ansr's T8.1 draws]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
@@ -615,23 +631,27 @@ search at the same place in both runs), so its candidates, its winner and that w
 continuation (the same walk cut short again) are among the uncapped run's; the answer is the
 cheapest of a superset. $\square$ Its winner is a valley of its own arm only: the re-run's other
 arms, started from the winner, can descend further, and a search the work budget stopped can
-continue, so L6 does not cover the selection [EMPIRICAL: 67 second-call changes on flash-ansr's
-129,490 T8.1 simplify inputs, 1,359 on srbf's 125,127 predictions; the three bounds hold on every input of
+continue, so L6 does not cover the selection [EMPIRICAL: 151 second-call changes on flash-ansr's
+129,490 T8.1 simplify inputs, 1,458 on srbf's 125,127 predictions; the three bounds hold on every input of
 both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
-permutation gate (0 violations / 400 canonical corpus expressions at head). Two registered
-residual classes: the I3 residuals above, and re-bracketings of a product. A sub-product trades
-its sign alone, so an odd function of a sum can meet the same function of its negation, which
-the opposite-sum classes do not hold: `tanh(x1 - x2)*(tanh(x1 - x2)*(-1))` stays
-`tanh(x1 - x2)*tanh(x2 - x1)` where the flat product is `-tanh(x1 - x2)^2`. On a fuzz of
-products over opposite sums, odd functions and odd powers, the left, right and balanced nestings
-of 25 of 150 expressions reach different answers in `f64` and `real`, with the search off and at
-the default effort alike, and 24 (23 with the search) in `permissive` (0.14.7: 87, 87 and 82);
-each answer reads back as itself. (The scale gates held 0 idempotence
-and 0 permutation failures when last run, on the 128-bit engine.)
+permutation gate (0 violations / 400 canonical corpus expressions at head). One registered
+residual class: the I3 residuals above. Re-bracketings of a product reach one representative:
+the parse builds a product once from all of its members and `mul()` decides its opposite classes
+from their exponent totals, a function of the multiset of members (§3). On 1,653 generated
+products over opposite sums, odd functions and odd roots, each in up to eleven spellings (four
+bracketings and the tagged bag for all; two division spellings, the inverse of a product, a
+chain of divisions and the tagged bag with `<div>` where the product has a divisor; a negation
+for 72), one `permissive` product reaches two
+answers, of equal value (0.14.7: 616 in `f64` and `real`, 687 in `permissive`); on the route fuzz
+of 150 products none depends on the nesting in any mode, with the search off or at the default
+(0.14.7: 87, 87 and 82). Where the certificate refuses to split an inverse over a product (a
+factor that vanishes on a region, such as `abs(x2) - x2`), `1/(a*b)` and `1/a*1/b` are different
+functions and keep different answers. (The scale gates held 0 idempotence and 0 permutation
+failures when last run, on the 128-bit engine.)
 
 **Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
 (training-corpus canonicalization). It relaxes *soundness* licences, never the ordering:
