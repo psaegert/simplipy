@@ -1065,9 +1065,12 @@ class TestSpecialPointCertification:
         seam_minus = ['/', '-', 'pow', 'x0', '3', '*', 'pow', 'x0', '2', 'x1', '-', 'x0', 'x1']
         stable = ['/', '-', 'pow', 'x0', '2', 'pow', 'x1', '2', '+', 'x0', 'x1']
         # non-vacuity guard: none of these are already reduced by the loaded rules
-        # (certify_rules skips already-covered sources without judging them)
+        # (certify_rules skips already-covered sources without judging them). The rules'
+        # chain is the mark certify_rules beats, so the guard reads it at effort 0: the
+        # search's factor stage takes x^2 out of the numerator and cancels the sum, a
+        # route through the constructors that no rule takes.
         for src in (seam_plus, seam_minus, stable):
-            assert len(dev.simplify(list(src))) >= len(src)
+            assert len(dev.simplify(list(src), effort=0)) >= len(src)
         out = dev.certify_rules(
             [seam_plus, seam_minus, stable],
             [['pow', 'x0', '2'], ['pow', 'x0', '2'], ['-', 'x0', 'x1']],

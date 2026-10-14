@@ -200,6 +200,32 @@ class TestExplicitConstants:
                     and abs(want - got) <= 1e-12 * max(abs(want), abs(got)))
                 assert agree, f"rootn({x}, {n}): realization {want}, engine {got}"
 
+    def test_fractional_power_of_negative_zero_is_unsigned(self, engine: SimpliPyEngine) -> None:
+        # A finite non-integer exponent has no odd part to carry a sign: pow(-0, y) is +0
+        # (y > 0) or +inf (y < 0), as IEEE-754 pow and rootn give, on every input path.
+        # Integer exponents keep IEEE's signed zeros. The two spellings of a square root
+        # therefore agree at -0, so respelling one as the other cannot flip a pole.
+        import math
+
+        import numpy as np
+
+        from simplipy import operators as ops
+
+        for y in (0.5, 1.5, 1 / 3, 2.5):
+            for got in (ops.pow(-0.0, y), ops.pow(np.array([-0.0]), y)[0]):
+                assert got == 0.0 and math.copysign(1.0, got) == 1.0, (y, got)
+        for y in (-0.5, -1.5):
+            assert ops.pow(-0.0, y) == math.inf
+            assert ops.pow(np.array([-0.0]), y)[0] == math.inf
+        assert math.copysign(1.0, ops.pow(-0.0, 3.0)) == -1.0
+        assert ops.pow(-0.0, -1.0) == -math.inf
+        assert ops.pow(np.array([-0.0, 4.0]), 0.5).tolist() == [0.0, 2.0]
+        x = np.array([0.0])
+        with np.errstate(divide='ignore'):
+            by_pow = engine.as_callable(['inv', 'pow', 'neg', 'x1', '/', '1', '2'], ['x1'])(x)
+            by_root = engine.as_callable(['inv', 'rootn', 'neg', 'x1', '2'], ['x1'])(x)
+        assert by_pow.tolist() == by_root.tolist() == [math.inf]
+
     def test_str_input_returns_pretty_infix(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify("x1 * 2 + x1 * 3") == "5*x1"
 

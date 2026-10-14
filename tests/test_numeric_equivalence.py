@@ -315,7 +315,11 @@ class TestCorpusGate:
         # INVERTED QUOTIENTS (2026-10-14): 56,312,982 -> 56,307,982. A negative power is zero
         # only where its base is infinite, so the inverse of a quotient distributes as the
         # quotient's members do: rows 279 (-2,000) and 399 (-3,000).
-        assert walk['complexity_out'] == 56307982, walk['complexity_out']
+        # THE FACTOR STAGE: 56,307,982 -> 56,106,168. After the expansion moves, the search
+        # takes the shared factor out of a sum (`x1/(x1*x2 - x1**2)` is `1/(x2 - x1)`), with
+        # the common-factor rules also serving bare terms; it starts from the expansion
+        # answer and accepts only states below it, so no walk row rests dearer.
+        assert walk['complexity_out'] == 56106168, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())

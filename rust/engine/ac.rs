@@ -1712,6 +1712,7 @@ impl Engine {
             normal: RefCell::new(FxHashSet::default()),
             explore: true,
             suppressed,
+            unit_twins: false,
         };
 
         let stable_in = |e: &Ex, pb: &Cx, cxx: &Cx| {
@@ -1869,6 +1870,7 @@ impl Engine {
                 normal: RefCell::new(FxHashSet::default()),
                 explore: true,
                 suppressed,
+                unit_twins: false,
             };
             let stable2 = |e: &Ex| stable_in(e, &pbare2, &cx2);
             current = canon(current, &cx2);
