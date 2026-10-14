@@ -6677,6 +6677,11 @@ fn rebuild_factor(base: Ex, sym: Option<Ex>, r: Rat, cx: &Cx) -> Ex {
 /// over (a negative coefficient folded into a sign-trade site first, F63), or `None` where it
 /// refuses. The divisor parse and `canon` ask it too (`distributes_power`, `inverted_members`),
 /// so a quotient is distributed exactly where `pow` would distribute it.
+/// Does `pow` distribute the integer power `e` over the product of `v` (`power_bag`'s licence)?
+pub(crate) fn distributes_power(v: &[Ex], e: &Rat, cx: &Cx) -> bool {
+    power_bag(v, e, cx).is_some()
+}
+
 fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     let licensed = !e.is_negative()
         || e.is_even_integer()

@@ -279,16 +279,20 @@ fn unit_twins(lhs: &Ex, rhs: &Ex, view: &TokenView, cx: &Cx) -> Vec<(Ex, Ex)> {
         let Ex::Mul(fs) = t else {
             continue;
         };
-        if fs.len() != 2 {
+        // The term's factors besides its coefficient: `w * u`, or `c * w * u` (an orientation
+        // twin's term carries `-1`; with `w` bound to 1 it is `c * u`, the product a matcher
+        // reaches).
+        let core: Vec<&Ex> = fs.iter().filter(|f| !matches!(f, Ex::Num(_))).collect();
+        if core.len() != 2 {
             continue;
         }
-        for (i, f) in fs.iter().enumerate() {
+        for (i, f) in core.iter().enumerate() {
             let Ex::Leaf(w) = f else {
                 continue;
             };
             // `u`, the factor left, must be a term the bare spelling can show: not a literal
             // (the term `-1 * w` is the coefficient's, not a bare term), and still a pattern.
-            let u = &fs[1 - i];
+            let u = core[1 - i];
             if view.sigil(*w) == 0
                 || leaf_count(lhs, *w) != 1
                 || matches!(u, Ex::Num(_))
@@ -419,59 +423,6 @@ impl AcRules {
                 unit: false,
             });
         }
-        // UNIT TWINS (a bare term is its own product with 1): a product pattern matches only
-        // a term that is itself a product, so a sum pattern holding the term `w * u`, `w` a
-        // wildcard that occurs nowhere else, never reaches a bare `u`. A coefficient makes
-        // a term a product (`-x1` is `-1 * x1`, which `w` binds), so `x1*x2 - x1` factors
-        // through `?0*?1 + ?2*?1 -> (?0 + ?2)*?1` while `x1 - x1*x2` and `x1 + x1*x2`, whose
-        // bare term has the unit coefficient, do not. The twin binds `w` to 1: a rule holds
-        // at every value of its wildcards, 1 among them, so `L[w := 1] -> R[w := 1]` is the
-        // same identity stated for the bare term. It passes the asset rules' admission gates
-        // and is minted before the orientation closure, which then twins it as well.
-        // Twins of one rule that differ only in their wildcards' names mint once. They serve
-        // only the search's factor stage (`PassCtx::unit_twins`): the chain and the
-        // expansion stage stay exactly what the asset rules make them, so the factor stage,
-        // which starts from their answer and only descends, can never end costlier.
-        let n_assets = out.rules.len();
-        for i in 0..n_assets {
-            for (tl, tr) in unit_twins(&out.rules[i].lhs, &out.rules[i].rhs, view, &cx) {
-                if tl == tr || const_count(&tr) > const_count(&tl) {
-                    continue;
-                }
-                let mut lhs_wilds = FxHashSet::default();
-                let mut rhs_wilds = FxHashSet::default();
-                collect_wildcards(&tl, view, &mut lhs_wilds);
-                collect_wildcards(&tr, view, &mut rhs_wilds);
-                if !rhs_wilds.is_subset(&lhs_wilds) || !ordered_below(&tr, &tl, view) {
-                    continue;
-                }
-                if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(tr.clone(), tl.clone())) {
-                    out.shadow_census
-                        .push((out.src[i], owner, owner_was_twin, "unit-inverse"));
-                    continue;
-                }
-                if out.rules.iter().any(|r| r.lhs == tl && r.rhs == tr) {
-                    continue;
-                }
-                seen_pairs
-                    .entry((tl.clone(), tr.clone()))
-                    .or_insert((out.src[i], true));
-                let idx = out.rules.len();
-                out.add_idx.push(idx);
-                out.src.push(out.src[i]);
-                let sig = atom_sig(&tl, view);
-                let is_pattern = tl.contains_wildcard(view);
-                out.rules.push(AcRule {
-                    lhs: tl,
-                    rhs: tr,
-                    sig,
-                    is_pattern,
-                    unit: true,
-                });
-                out.n_twins += 1;
-                out.n_unit_twins += 1;
-            }
-        }
         // ORIENTATION CLOSURE (rules fire modulo the sign orientation class): an admitted
         // rule `L -> T` entails `-L -> -T` -- negation is total, so the twin inherits the
         // rule's soundness outright, and sub-multiset semantics carry over term-by-term
@@ -575,6 +526,60 @@ impl AcRules {
                 unit,
             });
             out.n_twins += 1;
+        }
+        // UNIT TWINS (a bare term is its own product with 1): a product pattern matches only
+        // a term that is itself a product, so a sum pattern holding the term `w * u`, `w` a
+        // wildcard that occurs nowhere else, never reaches a bare `u`. A coefficient makes
+        // a term a product (`-x1` is `-1 * x1`, which `w` binds), so `x1*x2 - x1` factors
+        // through `?0*?1 + ?2*?1 -> (?0 + ?2)*?1` while `x1 - x1*x2` and `x1 + x1*x2`, whose
+        // bare term has the unit coefficient, do not. The twin binds `w` to 1: a rule holds
+        // at every value of its wildcards, 1 among them, so `L[w := 1] -> R[w := 1]` is the
+        // same identity stated for the bare term. It passes the asset rules' admission gates
+        // and is minted after the orientation closure, from every chain rule (an asset or its
+        // orientation twin): a unit entry never takes a chain rule's place, as a shadow or as
+        // an inverse. Twins of one rule that differ only in their wildcards' names mint once. They serve
+        // only the search's factor stage (`PassCtx::unit_twins`): the chain and the
+        // expansion stage stay exactly what the asset rules make them, so the factor stage,
+        // which starts from their answer and only descends, can never end costlier.
+        let n_chain = out.rules.len();
+        for i in 0..n_chain {
+            for (tl, tr) in unit_twins(&out.rules[i].lhs, &out.rules[i].rhs, view, &cx) {
+                if tl == tr || const_count(&tr) > const_count(&tl) {
+                    continue;
+                }
+                let mut lhs_wilds = FxHashSet::default();
+                let mut rhs_wilds = FxHashSet::default();
+                collect_wildcards(&tl, view, &mut lhs_wilds);
+                collect_wildcards(&tr, view, &mut rhs_wilds);
+                if !rhs_wilds.is_subset(&lhs_wilds) || !ordered_below(&tr, &tl, view) {
+                    continue;
+                }
+                if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(tr.clone(), tl.clone())) {
+                    out.shadow_census
+                        .push((out.src[i], owner, owner_was_twin, "unit-inverse"));
+                    continue;
+                }
+                if out.rules.iter().any(|r| r.lhs == tl && r.rhs == tr) {
+                    continue;
+                }
+                seen_pairs
+                    .entry((tl.clone(), tr.clone()))
+                    .or_insert((out.src[i], true));
+                let idx = out.rules.len();
+                out.add_idx.push(idx);
+                out.src.push(out.src[i]);
+                let sig = atom_sig(&tl, view);
+                let is_pattern = tl.contains_wildcard(view);
+                out.rules.push(AcRule {
+                    lhs: tl,
+                    rhs: tr,
+                    sig,
+                    is_pattern,
+                    unit: true,
+                });
+                out.n_twins += 1;
+                out.n_unit_twins += 1;
+            }
         }
         // Exact-before-pattern within every bucket (stable: asset order within each class).
         let rules = &out.rules;

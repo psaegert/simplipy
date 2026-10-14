@@ -191,6 +191,17 @@ class TestUnitTwins:
         # a unit twin's left side is a sum holding a bare wildcard term
         assert any(lhs[0] in ("+", "-") and "?" in lhs[1] for lhs, _, _ in served[-twins:])
 
+    def test_unit_twins_never_take_a_chain_rules_place(self) -> None:
+        # A rule whose orientation twin is another rule's unit twin: the chain keeps the twin.
+        # Unit twins are minted after the closure, so `x1 + x1*x2` factors at effort 0 (the chain
+        # alone), whichever order the artifact lists the rules in.
+        common = [["+", "*", "?0", "?1", "*", "?2", "?1"], ["*", "+", "?0", "?2", "?1"]]
+        negated = [["-", "neg", "?1", "*", "?1", "?2"], ["neg", "*", "?1", "+", "?2", "1"]]
+        for rules in ([negated, common], [common, negated]):
+            e = make_engine(rules)
+            got = e.simplify(["+", "x1", "*", "x1", "x2"], effort=0)
+            assert got == e.simplify(["*", "x1", "+", "x2", "1"], effort=0), rules
+
     def test_a_rule_without_a_private_wildcard_mints_none(self) -> None:
         e = make_engine([[["+", "*", "?0", "?1", "*", "2", "*", "?0", "?1"], ["*", "3", "*", "?0", "?1"]]])
         served = e._core.ac_served_rules()

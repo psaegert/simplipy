@@ -223,6 +223,14 @@ class TestFactorMove:
             out = explore(engine, tok(engine, self.HILL), BUDGET, lossy=lossy)
             assert out == fix(engine, self.VALLEY, lossy), lossy
 
+    def test_factoring_under_an_inverse_takes_its_licence(self, engine: SimpliPyEngine) -> None:
+        # Factoring a sum under a negative power is distributing that power read backwards:
+        # `1/(x1*x2 - x1*|x2|)` would become `1/(x1*(x2 - |x2|))`, where `x2 - |x2|` vanishes on
+        # the whole of x2 > 0 and the inverse takes x1's sign there; `pow` holds such a product,
+        # so the sum is not factored.
+        src = ['inv', '-', '*', 'x1', 'x2', '*', 'x1', 'abs', 'x2']
+        assert explore(engine, src, BUDGET) == fix(engine, engine.to_infix(src))
+
     def test_shared_constant_is_not_factored(self, engine: SimpliPyEngine) -> None:
         # Each `<constant>` is its own fitted constant: factoring a shared one out of two
         # terms would merge two constants into one, so the move does not propose it.

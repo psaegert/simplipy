@@ -59,7 +59,7 @@
 
 use std::collections::VecDeque;
 
-use super::expr::{add, complexity, fun, mul, pow, Cx, Ex};
+use super::expr::{add, complexity, distributes_power, fun, mul, pow, Cx, Ex};
 use super::rat::Rat;
 use super::rules::{no_nested_bags, ordered_below, rewrite_pass, PassCtx};
 
@@ -197,6 +197,7 @@ fn factor_stage(
         unit_twins: true,
     };
     let best = factor_rounds(start, &twins, true, max_passes, budget, spent, trace);
+    pass.fires.set(twins.fires.get());
     *pass.normal.borrow_mut() = twins.normal.into_inner();
     best
 }
@@ -421,18 +422,39 @@ fn factor_sites(
     path: &mut Vec<usize>,
     out: &mut Vec<(Vec<usize>, Ex)>,
 ) {
+    factor_sites_under(e, cx, near, None, path, out);
+}
+
+/// [`factor_sites`] at a node that is the base of the integer power `power`, if any. Factoring a
+/// sum under a negative power is distributing that power read backwards: the factored product
+/// then splits under it, so it takes the same licence (`distributes_power`). Where `pow` would
+/// hold the product -- a factor whose zero set may hold a region, where the inverse's infinity
+/// takes the product's sign -- the sum is not factored either.
+fn factor_sites_under(
+    e: &Ex,
+    cx: &Cx,
+    near: &[&Ex],
+    power: Option<&Rat>,
+    path: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, Ex)>,
+) {
     match e {
         Ex::Add(v) => {
             if let Some((cand, content)) = factor_content(v, cx) {
-                if term_bases(&content).iter().any(|b| near.contains(b))
-                    || complexity(&cand, cx.view) < complexity(e, cx.view)
+                let licensed = match (power, &cand) {
+                    (Some(k), Ex::Mul(fs)) if k.is_negative() => distributes_power(fs, k, cx),
+                    _ => true,
+                };
+                if licensed
+                    && (term_bases(&content).iter().any(|b| near.contains(b))
+                        || complexity(&cand, cx.view) < complexity(e, cx.view))
                 {
                     out.push((path.clone(), cand));
                 }
             }
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
-                factor_sites(c, cx, &[], path, out);
+                factor_sites_under(c, cx, &[], None, path, out);
                 path.pop();
             }
         }
@@ -440,23 +462,27 @@ fn factor_sites(
             let bases = term_bases(e);
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
-                factor_sites(c, cx, &bases, path, out);
+                factor_sites_under(c, cx, &bases, None, path, out);
                 path.pop();
             }
         }
         Ex::Fun(_, v) => {
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
-                factor_sites(c, cx, &[], path, out);
+                factor_sites_under(c, cx, &[], None, path, out);
                 path.pop();
             }
         }
         Ex::Pow(b, x) => {
+            let k = match &**x {
+                Ex::Num(r) if r.is_integer() => Some(r),
+                _ => None,
+            };
             path.push(0);
-            factor_sites(b, cx, near, path, out);
+            factor_sites_under(b, cx, near, k, path, out);
             path.pop();
             path.push(1);
-            factor_sites(x, cx, &[], path, out);
+            factor_sites_under(x, cx, &[], None, path, out);
             path.pop();
         }
         _ => {}
@@ -591,6 +617,16 @@ fn factor_content(terms: &[Ex], cx: &Cx) -> Option<(Ex, Ex)> {
         return None;
     }
     let split: Vec<SplitTerm> = terms.iter().map(term_factors).collect();
+    // The exponent arithmetic below reads each base once per term, which a canonical product
+    // guarantees; a term that holds one base twice is not factored.
+    let twice = |fs: &[(Ex, Rat)]| {
+        fs.iter()
+            .enumerate()
+            .any(|(i, (b, _))| fs[i + 1..].iter().any(|(c, _)| c == b))
+    };
+    if split.iter().any(|(_, fs)| twice(fs)) {
+        return None;
+    }
     let mut common: Vec<(Ex, Rat)> = split[0].1.clone();
     for (_, fs) in &split[1..] {
         common = common

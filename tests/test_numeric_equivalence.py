@@ -319,7 +319,10 @@ class TestCorpusGate:
         # takes the shared factor out of a sum (`x1/(x1*x2 - x1**2)` is `1/(x2 - x1)`), with
         # the common-factor rules also serving bare terms; it starts from the expansion
         # answer and accepts only states below it, so no walk row rests dearer.
-        assert walk['complexity_out'] == 56106168, walk['complexity_out']
+        # FACTORING UNDER AN INVERSE TAKES DISTRIBUTION'S LICENCE: 56,106,168 -> 56,107,168. A
+        # sum under a negative power is factored only where the power would distribute over the
+        # factored product; one walk row keeps its sum (+1,000).
+        assert walk['complexity_out'] == 56107168, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
