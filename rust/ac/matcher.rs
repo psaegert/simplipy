@@ -29,7 +29,28 @@ use rustc_hash::FxHashMap;
 
 use crate::tokens::{Tok, TokenView};
 
-use super::expr::Ex;
+use super::expr::{orientation_near_miss, Ex};
+
+thread_local! {
+    static NEAR_MISSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many near misses (`orientation_near_miss`) the matcher has met on this thread: a caller
+/// reads it before and after a match to learn whether one occurred there.
+pub fn near_misses() -> u64 {
+    NEAR_MISSES.with(|c| c.get())
+}
+
+/// A repeated wildcard bound to `bound` refused `subject`: count it if they are negations of each
+/// other through their classes' orientation.
+fn note_near_miss(bound: &Ex, subject: &Ex, cx: &MCx) -> bool {
+    if orientation_near_miss(bound, subject, cx.view) {
+        NEAR_MISSES.with(|c| c.set(c.get() + 1));
+        true
+    } else {
+        false
+    }
+}
 
 /// Match-time context: view + the two certificates + the LOSSY switch (mirrors the old
 /// `match_pattern_with_cert` plumbing; absent certificates fail closed).
@@ -101,8 +122,11 @@ fn bind(pk: Tok, subject: &Ex, binds: &mut Binds, cx: &MCx) -> bool {
             // The independence guard: never rebind through a <constant>-containing binding.
             if existing.contains_const() {
                 false
+            } else if existing == subject {
+                true
             } else {
-                existing == subject
+                note_near_miss(existing, subject, cx);
+                false
             }
         }
         None => {
@@ -373,7 +397,16 @@ fn try_assign(
                     Ok(taken)
                 }
                 // Equal elements are interchangeable: only the first unused copy is tried.
-                None => Err((0..sv.len()).find(|&i| !used[i] && sv[i] == *bound)),
+                None => {
+                    let first = (0..sv.len()).find(|&i| !used[i] && sv[i] == *bound);
+                    if first.is_none() {
+                        // An unused element that is the bound value's negation through a class's
+                        // orientation is a near miss: the caller may retry up to sign.
+                        let _ =
+                            (0..sv.len()).any(|i| !used[i] && note_near_miss(bound, &sv[i], cx));
+                    }
+                    Err(first)
+                }
             };
             match consume {
                 Ok(taken) => {

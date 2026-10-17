@@ -59,7 +59,10 @@
 
 use std::collections::VecDeque;
 
-use super::expr::{add, complexity, distributes_power, fun, mul, pow, Cx, Ex};
+use super::expr::{
+    add, complexity, distributes_power, fun, mul, orient_term_classes, orientation_near_miss, pow,
+    Cx, Ex,
+};
 use super::rat::Rat;
 use super::rules::{no_nested_bags, ordered_below, rewrite_pass, PassCtx};
 
@@ -171,9 +174,9 @@ fn factor_stage(
     spent: usize,
     trace: Option<&mut Vec<(usize, Ex)>>,
 ) -> Ex {
-    // Both the unit twins and FACTOR take a factor out of terms that share it: a state
-    // with no such sum has nothing for this stage.
-    if !shares_a_factor(&start) {
+    // Both the unit twins and FACTOR take a factor out of terms that share it (FACTOR up to
+    // sign): a state with no such sum has nothing for this stage.
+    if !shares_a_factor(&start, Some(pass.cx.view)) {
         return start;
     }
     // With unit twins to serve, the descents run under their own pass. It takes over the
@@ -184,7 +187,7 @@ fn factor_stage(
         return factor_rounds(start, pass, false, max_passes, budget, spent, trace);
     }
     let mut memo = std::mem::take(&mut *pass.normal.borrow_mut());
-    memo.retain(|e| !shares_a_factor(e));
+    memo.retain(|e| !shares_a_factor(e, None));
     let twins = PassCtx {
         rules: pass.rules,
         cx: pass.cx,
@@ -265,19 +268,22 @@ fn factor_rounds(
     }
 }
 
-/// Does some sum in `e` hold two terms that share a factor?
-fn shares_a_factor(e: &Ex) -> bool {
+/// Does a sum in `e` hold two terms that share a base -- or, given the token view, a base up to
+/// sign through a class's orientation (`orientation_near_miss`), as FACTOR reads them?
+fn shares_a_factor(e: &Ex, up_to_sign: Option<&crate::tokens::TokenView>) -> bool {
+    let same =
+        |x: &Ex, y: &Ex| x == y || up_to_sign.is_some_and(|v| orientation_near_miss(x, y, v));
     match e {
         Ex::Add(v) => {
             let bases: Vec<Vec<&Ex>> = v.iter().map(term_bases).collect();
             bases.iter().enumerate().any(|(i, a)| {
                 bases[i + 1..]
                     .iter()
-                    .any(|b| a.iter().any(|x| b.contains(x)))
-            }) || v.iter().any(shares_a_factor)
+                    .any(|b| a.iter().any(|x| b.iter().any(|y| same(x, y))))
+            }) || v.iter().any(|t| shares_a_factor(t, up_to_sign))
         }
-        Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(shares_a_factor),
-        Ex::Pow(b, x) => shares_a_factor(b) || shares_a_factor(x),
+        Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|t| shares_a_factor(t, up_to_sign)),
+        Ex::Pow(b, x) => shares_a_factor(b, up_to_sign) || shares_a_factor(x, up_to_sign),
         _ => false,
     }
 }
@@ -606,6 +612,12 @@ fn term_factors(t: &Ex) -> SplitTerm {
 /// finite-a.e. licence (the sound certificate for a piece that spells an infinity); and `c`
 /// holds no `<constant>`, whose occurrences in the n terms are n independent constants that
 /// one factor would merge into one.
+///
+/// A factor the terms share up to sign counts too, as a repeated wildcard binds a class up to sign:
+/// where a base of the first term meets, in every other term, itself or its negation through a
+/// class's orientation (a near miss, `orientation_near_miss`), the terms are factored with every
+/// class in one orientation, the signs in the coefficients (`orient_term_classes`):
+/// `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)`.
 fn factor_content(terms: &[Ex], cx: &Cx) -> Option<(Ex, Ex)> {
     if terms.len() < 2 || terms.len() > EXPAND_TERM_CAP {
         return None;
@@ -613,9 +625,35 @@ fn factor_content(terms: &[Ex], cx: &Cx) -> Option<(Ex, Ex)> {
     // Most sums share nothing: decide that on borrowed bases before building anything.
     let first = term_bases(&terms[0]);
     let rest: Vec<Vec<&Ex>> = terms[1..].iter().map(term_bases).collect();
-    if !first.iter().any(|b| rest.iter().all(|r| r.contains(b))) {
+    if first.iter().any(|b| rest.iter().all(|r| r.contains(b))) {
+        return factor_shared(terms, cx);
+    }
+    let near = first.iter().any(|b| {
+        rest.iter().all(|r| {
+            r.iter()
+                .any(|c| c == b || orientation_near_miss(b, c, cx.view))
+        })
+    });
+    if !near {
         return None;
     }
+    let oriented: Vec<Ex> = terms
+        .iter()
+        .map(|t| orient_term_classes(t, cx).unwrap_or_else(|| t.clone()))
+        .collect();
+    let first = term_bases(&oriented[0]);
+    if !first
+        .iter()
+        .any(|b| oriented[1..].iter().all(|t| term_bases(t).contains(b)))
+    {
+        return None;
+    }
+    let (cand, c) = factor_shared(&oriented, cx)?;
+    (cand != Ex::Add(terms.to_vec())).then_some((cand, c))
+}
+
+/// [`factor_content`] on terms that share a base as spelled.
+fn factor_shared(terms: &[Ex], cx: &Cx) -> Option<(Ex, Ex)> {
     let split: Vec<SplitTerm> = terms.iter().map(term_factors).collect();
     // The exponent arithmetic below reads each base once per term, which a canonical product
     // guarantees; a term that holds one base twice is not factored.

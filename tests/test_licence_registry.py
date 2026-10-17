@@ -96,14 +96,17 @@ class TestLoadConsumer:
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads
         # with the rule REFUSED (counted), and serving is exactly the rules-free
-        # engine's -- the pole classes stay apart.
+        # engine's.
         hostile = [[['neg', 'inv', '-', '1', '_0'], ['inv', '-', '_0', '1']]]
         poisoned = _scratch(tmp_path, hostile)
         out = poisoned.simplify(poisoned.to_tagged(list(HOSTILE_SRC)))
         assert poisoned._core.ac_registry_dropped() == 1, \
             'the load consumer must refuse the pole-mirror rule'
-        # the source state survives as itself: the mirror never fires
-        assert 'neg' in out or out[0] == 'neg' or '<mul>' in out, out
+        # The lone inverse's pole is two-signed, so its orientation is the product's choice (reading A): the
+        # constructors take the cheaper one themselves, with or without the rule.
+        (tmp_path / 'clean').mkdir()
+        clean = _scratch(tmp_path / 'clean', [])
+        assert out == clean.simplify(clean.to_tagged(list(HOSTILE_SRC))), out
         rt = poisoned.simplify(list(out))
         assert rt == out, 'refused rule must leave a stable state'
 
@@ -175,11 +178,11 @@ class TestMintChannels:
         rules = [(list(lhs_), list(rhs_)) for lhs_, rhs_ in engine.simplification_rules]
         for lhs, rhs in rules:
             assert not eng_pair_is_mirror(lhs, rhs), (lhs, rhs)
-        # The gate FIRED (the mirror candidate was enumerated, ordering-accepted
-        # and refused) -- absence of the rule alone would also be consistent with
-        # the source never being judged; the counter delta closes that gap.
-        assert engine._core.registry_pole_refusals() > before, \
-            'the pole entry must actually fire on the (5,4) micro-universe'
+        # The two spellings are one state: the lone inverse's pole is two-signed, so the constructors place its
+        # sign (reading A), and the mine has no mirror pair to propose -- the registry's pole entry never needs to
+        # fire. Absence of the rule is then no vacuous pass: there is nothing for it to rewrite.
+        assert engine.simplify(list(HOSTILE_SRC)) == engine.simplify(list(HOSTILE_TGT))
+        assert engine._core.registry_pole_refusals() >= before
 
     def test_hint_channel_refuses_the_mirror(self, tmp_path):
         # The proposal/hint channel -- previously a full registry bypass.

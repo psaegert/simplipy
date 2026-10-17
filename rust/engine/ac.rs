@@ -1677,6 +1677,8 @@ impl Engine {
         // The whole call runs in the mode's number domain (design 2c): the
         // certificates and folds below build numbers too.
         let _domain = crate::ac::rat::number_domain(cx.f64_numbers());
+        // Each distinct base's region verdict is decided once per context in the call.
+        let _regions = crate::ac::expr::RegionScope::open();
         // Parse with the CALL's MODE: a bare (sound) parse let sound-only
         // constructor arms destroy structure lossy passes need -- `inv
         // float("inf")` folded to 0 AT PARSE, so the mul bag never saw the
@@ -3714,7 +3716,9 @@ mod tests {
             t(&["/", "3", "x0"]),
             "positive twin distributes"
         );
-        // A sign-trade site absorbs the coefficient sign (F63) -- still licensed.
+        // A sign-trade site beside the coefficient sign -- still licensed. The pole at x1 = 5
+        // is two-signed, so the inverse's orientation is the product's choice (reading A): it
+        // keeps the sum and the sign, a bit cheaper than `inv(5 - x1)/2`.
         assert_eq!(
             e.ac_simplify_proj(
                 &t(&["inv", "*", "-2", "-", "x1", "5"]),
@@ -3723,7 +3727,7 @@ mod tests {
                 crate::engine::AcForm::Explicit
             )
             .unwrap(),
-            t(&["/", "inv", "-", "5", "x1", "2"]),
+            t(&["/", "neg", "inv", "-", "x1", "5", "2"]),
             "traded sign distributes"
         );
         // Zero-free co-factors (exp of a finite arg) have no exceptional point.

@@ -191,6 +191,20 @@ class TestUnitTwins:
         # a unit twin's left side is a sum holding a bare wildcard term
         assert any(lhs[0] in ("+", "-") and "?" in lhs[1] for lhs, _, _ in served[-twins:])
 
+    def test_a_repeated_wildcard_binds_a_class_up_to_sign(self) -> None:
+        # `x1/(x2 - x3) + x4/(x3 - x2)`: the two inverses carry one class in its two orientations.
+        # A wildcard of a sort that binds a subtree, repeated, binds the class up to sign: the
+        # terms are read with the class in one orientation, the sign in the coefficient.
+        over = [[["+", "*", "_0", "pow", "_2", "-1", "*", "_1", "pow", "_2", "-1"],
+                 ["*", "+", "_0", "_1", "pow", "_2", "-1"]]]
+        e = make_engine(over)
+        src = ["+", "*", "x1", "pow", "-", "x2", "x3", "-1", "*", "x4", "pow", "-", "x3", "x2", "-1"]
+        want = e.simplify(["*", "-", "x1", "x4", "pow", "-", "x2", "x3", "-1"], effort=0)
+        assert e.simplify(list(src), effort=0) == want
+        # A `?` wildcard binds variable leaves only outside permissive, so no class is bound there.
+        leaf = [[[t.replace("_", "?") for t in over[0][0]], [t.replace("_", "?") for t in over[0][1]]]]
+        assert make_engine(leaf).simplify(list(src), effort=0) != want
+
     def test_unit_twins_never_take_a_chain_rules_place(self) -> None:
         # A rule whose orientation twin is another rule's unit twin: the chain keeps the twin.
         # Unit twins are minted after the closure, so `x1 + x1*x2` factors at effort 0 (the chain

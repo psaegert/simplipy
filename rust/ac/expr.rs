@@ -2073,6 +2073,335 @@ fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
 /// negates its coefficient through [`term_split`]/[`term_join`]. TOTAL: `(-1) * t` IS
 /// coefficient negation in the bag representation. `None` only on the i128::MIN edge.
 /// Used by the DISPLAY emitters for sign redistribution of `Mul[-1, Add]`.
+/// A term with every class it holds as a factor -- a sum, an odd function of one or an odd root
+/// of one, possibly under an integer power -- in the class's one orientation (the lower of `S`
+/// and `-S` in the canonical order), the signs the flips move out gathered into the term's
+/// coefficient. `None` where nothing flips. Raw, for matching: a repeated wildcard then binds a
+/// class whichever orientation each of its terms carries (`?0/?2 + ?1/?2` reaches
+/// `a/(x - y) + b/(y - x)`), and the replacement is re-canonicalized.
+/// Are `x` and `y` (which differ) negations of each other through the orientation of the classes
+/// they hold? Then a repeated wildcard bound to one meets the other: a near miss, which the
+/// up-to-sign retry (`orient_term_classes`) may resolve. A sign-blind multiset of their leaves is
+/// compared first, so a pair that differs in content is refused without building a key.
+pub(crate) fn orientation_near_miss(x: &Ex, y: &Ex, view: &TokenView) -> bool {
+    if leaf_sig(x) != leaf_sig(y) {
+        return false;
+    }
+    let cx = Cx::bare(view);
+    let (kx, mx) = up_to_sign_key(x, &cx);
+    let (ky, my) = up_to_sign_key(y, &cx);
+    (mx || my) && kx == ky
+}
+
+/// An order-free hash of the leaves of `e`, literals by magnitude and unit literals left out, so
+/// that a sum and its negation, or a product and its negation, hash alike.
+fn leaf_sig(e: &Ex) -> u64 {
+    use std::hash::{Hash, Hasher};
+    fn one<T: Hash>(t: &T) -> u64 {
+        let mut h = rustc_hash::FxHasher::default();
+        t.hash(&mut h);
+        h.finish()
+    }
+    match e {
+        Ex::Leaf(t) => one(t),
+        Ex::Num(r) => {
+            if r.is_one() || r.checked_neg().is_some_and(|n| n.is_one()) {
+                0
+            } else if r.is_negative() {
+                r.checked_neg().map_or(1, |n| one(&n))
+            } else {
+                one(r)
+            }
+        }
+        Ex::Add(v) | Ex::Mul(v) => v.iter().map(leaf_sig).fold(0, u64::wrapping_add),
+        Ex::Fun(op, args) => args.iter().map(leaf_sig).fold(one(op), u64::wrapping_add),
+        Ex::Pow(b, q) => leaf_sig(b).wrapping_add(leaf_sig(q)).wrapping_mul(31),
+        other => one(&std::mem::discriminant(other)),
+    }
+}
+
+/// `x` read up to sign: every class factor (a sum, an odd function or odd root of one, under an
+/// integer power or not) in its one orientation, the coefficient's sign dropped; and whether a
+/// class moved.
+fn up_to_sign_key(x: &Ex, cx: &Cx) -> (Ex, bool) {
+    let fs: Vec<&Ex> = match x {
+        Ex::Mul(v) => v.iter().collect(),
+        _ => vec![x],
+    };
+    let mut moved = false;
+    let mut out: Vec<Ex> = Vec::with_capacity(fs.len());
+    for f in fs {
+        match f {
+            Ex::Num(r) => {
+                let a = if r.is_negative() {
+                    match r.checked_neg() {
+                        Some(a) => a,
+                        None => return (x.clone(), false),
+                    }
+                } else {
+                    r.clone()
+                };
+                if !a.is_one() {
+                    out.push(Ex::Num(a));
+                }
+            }
+            Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_integer()) => {
+                match orient_base(b, cx) {
+                    Some((nb, _)) => {
+                        moved = true;
+                        out.push(Ex::Pow(Box::new(nb), q.clone()));
+                    }
+                    None => out.push(f.clone()),
+                }
+            }
+            _ => match orient_base(f, cx) {
+                Some((nb, _)) => {
+                    moved = true;
+                    out.push(nb);
+                }
+                None => out.push(f.clone()),
+            },
+        }
+    }
+    out.sort_by(|a, b| cmp_ex(a, b, cx.view));
+    let key = match out.len() {
+        0 => Ex::Num(Rat::int(1)),
+        1 => out.pop().expect("one member"),
+        _ => Ex::Mul(out),
+    };
+    (key, moved)
+}
+
+pub(crate) fn orient_term_classes(t: &Ex, cx: &Cx) -> Option<Ex> {
+    let (factors, coef): (Vec<Ex>, Rat) = match t {
+        Ex::Mul(fs) => {
+            let mut c = Rat::int(1);
+            let mut v = Vec::new();
+            for f in fs {
+                match f {
+                    Ex::Num(r) => c = r.clone(),
+                    _ => v.push(f.clone()),
+                }
+            }
+            (v, c)
+        }
+        Ex::Num(_) => return None,
+        _ => (vec![t.clone()], Rat::int(1)),
+    };
+    let mut odd = false;
+    let mut changed = false;
+    let mut out: Vec<Ex> = Vec::with_capacity(factors.len());
+    for f in factors {
+        match orient_factor(&f, cx) {
+            Some((g, s)) => {
+                changed = true;
+                odd ^= s;
+                out.push(g);
+            }
+            None => out.push(f),
+        }
+    }
+    if !changed {
+        return None;
+    }
+    let c = if odd { coef.checked_neg()? } else { coef };
+    let mut v = Vec::with_capacity(out.len() + 1);
+    if !c.is_one() {
+        v.push(Ex::Num(c));
+    }
+    v.extend(out);
+    Some(if v.len() == 1 {
+        v.pop().expect("one member")
+    } else {
+        Ex::Mul(v)
+    })
+}
+
+/// `f` in its class's orientation, and whether the flip moved a sign out of it; `None` where it
+/// already is, or holds no class.
+fn orient_factor(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
+    let (b, k) = match f {
+        Ex::Pow(b, e) => match &**e {
+            Ex::Num(r) if r.is_integer() => (&**b, Some(r)),
+            _ => return None,
+        },
+        _ => (f, None),
+    };
+    // A class under a negative power whose zero set may hold a region keeps its spelling: there
+    // its inverse is infinite on the region, a value the answer keeps, and the sign of that
+    // infinity follows the spelling (the products' fat-zero-set refusal, `power_bag`).
+    if k.is_some_and(|r| r.is_negative()) && !zero_set_null(b, cx) {
+        return None;
+    }
+    let (nb, flipped) = orient_base(b, cx)?;
+    let odd = k.is_none_or(|r| r.is_odd_integer());
+    let g = match k {
+        None => nb,
+        Some(r) => Ex::Pow(Box::new(nb), Box::new(Ex::Num(r.clone()))),
+    };
+    Some((g, flipped && odd))
+}
+
+/// A sum, an odd function of one or an odd root of one, in its class's orientation, and whether
+/// it flipped (each is odd in its sum, so a flip moves a sign out); `None` where it already has
+/// it. The sum's terms are read with every odd function of a negative literal multiple turned
+/// positive (`sin(-x1)` as `-sin(x1)`), so that a sum and its negation spell their terms alike.
+fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
+    match b {
+        Ex::Add(ts) => {
+            if ts
+                .iter()
+                .any(|t| t.contains_const() || t.contains_infinity())
+            {
+                return None;
+            }
+            let mut pos: Vec<Ex> = ts.iter().map(|t| odd_signs_out(t, cx)).collect();
+            pos.sort_by(|x, y| add_term_cmp(x, y, cx.view));
+            let mut neg: Vec<Ex> = pos
+                .iter()
+                .map(raw_negate_term)
+                .collect::<Option<Vec<Ex>>>()?;
+            neg.sort_by(|x, y| add_term_cmp(x, y, cx.view));
+            let (pb, nb) = (Ex::Add(pos), Ex::Add(neg));
+            if cmp_ex(&nb, &pb, cx.view) == Ordering::Less {
+                Some((nb, true))
+            } else {
+                (pb != *b).then_some((pb, false))
+            }
+        }
+        Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
+            let (a, s) = orient_base(&args[0], cx)?;
+            Some((Ex::Fun(*fk, vec![a]), s))
+        }
+        Ex::Fun(fk, args)
+            if args.len() == 2
+                && cx.view.tok_is(*fk, "rootn")
+                && matches!(&args[1], Ex::Num(k) if k.is_odd_integer()) =>
+        {
+            let (a, s) = orient_base(&args[0], cx)?;
+            Some((Ex::Fun(*fk, vec![a, args[1].clone()]), s))
+        }
+        _ => None,
+    }
+}
+
+/// `a` with its negative literal coefficient made positive, raw; `None` where it has none.
+fn positive_multiple(a: &Ex) -> Option<Ex> {
+    match a {
+        Ex::Num(r) if r.is_negative() => Some(Ex::Num(r.checked_neg()?)),
+        Ex::Mul(fs) => match fs.first() {
+            Some(Ex::Num(r)) if r.is_negative() => {
+                let c = r.checked_neg()?;
+                let mut v: Vec<Ex> = Vec::with_capacity(fs.len());
+                if !c.is_one() {
+                    v.push(Ex::Num(c));
+                }
+                v.extend(fs[1..].iter().cloned());
+                Some(if v.len() == 1 {
+                    v.pop().expect("one member")
+                } else {
+                    Ex::Mul(v)
+                })
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A term with each odd function of a negative literal multiple (possibly under an integer
+/// power) turned positive, the signs moved into the term's coefficient. Raw.
+fn odd_signs_out(t: &Ex, cx: &Cx) -> Ex {
+    let flip_fun = |f: &Ex| -> Option<Ex> {
+        match f {
+            Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
+                Some(Ex::Fun(*fk, vec![positive_multiple(&args[0])?]))
+            }
+            _ => None,
+        }
+    };
+    let (mut c, factors): (Rat, Vec<Ex>) = match t {
+        Ex::Mul(fs) => match fs.first() {
+            Some(Ex::Num(r)) => (r.clone(), fs[1..].to_vec()),
+            _ => (Rat::int(1), fs.clone()),
+        },
+        Ex::Num(_) => return t.clone(),
+        _ => (Rat::int(1), vec![t.clone()]),
+    };
+    let mut changed = false;
+    let mut out: Vec<Ex> = Vec::with_capacity(factors.len());
+    for f in factors {
+        let (g, sign) = match &f {
+            Ex::Pow(b, e) => match (&**e, flip_fun(b)) {
+                (Ex::Num(k), Some(nb)) if k.is_integer() => {
+                    (Some(Ex::Pow(Box::new(nb), e.clone())), k.is_odd_integer())
+                }
+                _ => (None, false),
+            },
+            _ => match flip_fun(&f) {
+                Some(nf) => (Some(nf), true),
+                None => (None, false),
+            },
+        };
+        match g {
+            Some(g) => {
+                changed = true;
+                if sign {
+                    match c.checked_neg() {
+                        Some(n) => c = n,
+                        None => return t.clone(),
+                    }
+                }
+                out.push(g);
+            }
+            None => out.push(f),
+        }
+    }
+    if !changed {
+        return t.clone();
+    }
+    let mut v: Vec<Ex> = Vec::with_capacity(out.len() + 1);
+    if !c.is_one() {
+        v.push(Ex::Num(c));
+    }
+    v.extend(out);
+    if v.len() == 1 {
+        v.pop().expect("one member")
+    } else {
+        Ex::Mul(v)
+    }
+}
+
+/// A term negated in its coefficient, raw (no spelling choice: `-1 * f` stays a product).
+fn raw_negate_term(t: &Ex) -> Option<Ex> {
+    Some(match t {
+        Ex::Num(r) => Ex::Num(r.checked_neg()?),
+        Ex::Mul(fs) => match fs.first() {
+            Some(Ex::Num(r)) => {
+                let c = r.checked_neg()?;
+                if c.is_one() {
+                    if fs.len() == 2 {
+                        fs[1].clone()
+                    } else {
+                        Ex::Mul(fs[1..].to_vec())
+                    }
+                } else {
+                    let mut v = fs.clone();
+                    v[0] = Ex::Num(c);
+                    Ex::Mul(v)
+                }
+            }
+            _ => {
+                let mut v = Vec::with_capacity(fs.len() + 1);
+                v.push(Ex::int(-1));
+                v.extend(fs.iter().cloned());
+                Ex::Mul(v)
+            }
+        },
+        _ => Ex::Mul(vec![Ex::int(-1), t.clone()]),
+    })
+}
+
 pub(crate) fn negate_term(t: &Ex, cx: &Cx) -> Option<Ex> {
     match t {
         Ex::Num(r) => Some(Ex::Num(r.checked_neg()?)),
@@ -3518,11 +3847,59 @@ fn holds_infinity(e: &Ex) -> bool {
 /// is finite almost everywhere (`fin_licensed`); where `b` is undefined the power is too, and an
 /// inverse of an undefined product is undefined as each member's is. So the inverse of a quotient
 /// distributes as the quotient's members would: `1/(x12^(-1/2)/x14)` is `x14 x12^(1/2)`.
+///
+/// The verdict is a function of `e` and the context alone, so within a simplify call
+/// (`RegionScope`) each distinct `e` is decided once per context however often the products
+/// holding it are built.
 fn zero_set_null(e: &Ex, cx: &Cx) -> bool {
-    cx.nz_ae_licensed(e)
+    if cx.lossy() {
+        return true;
+    }
+    let key = flip_cx_key(cx);
+    let hit = REGION_MEMO.with(|m| {
+        m.borrow()
+            .as_ref()
+            .and_then(|t| t.get(&key).and_then(|v| v.get(e).copied()))
+    });
+    if let Some(hit) = hit {
+        return hit;
+    }
+    let r = cx.nz_ae_licensed(e)
         || matches!(e, Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_negative())
             && cx.fin_licensed(b))
-        || (FORM_LICENSES_DISTRIBUTION && zero_set_null_by_form(e, cx))
+        || (FORM_LICENSES_DISTRIBUTION && zero_set_null_by_form(e, cx));
+    REGION_MEMO.with(|m| {
+        if let Some(t) = m.borrow_mut().as_mut() {
+            t.entry(key).or_default().insert(e.clone(), r);
+        }
+    });
+    r
+}
+
+/// `zero_set_null`'s verdicts, per context (`flip_cx_key`) and expression.
+type RegionMemo = rustc_hash::FxHashMap<FlipCxKey, rustc_hash::FxHashMap<Ex, bool>>;
+
+thread_local! {
+    static REGION_MEMO: std::cell::RefCell<Option<RegionMemo>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Holds a fresh region memo (`zero_set_null`) open for one simplify call and restores the
+/// caller's when it drops. The memo's key holds the context's identities (its token view and
+/// certificate closures), which live as long as the call that opens the scope, so no identity is
+/// reused within one memo's extent; a nested call keys its own contexts in its own memo.
+pub(crate) struct RegionScope(Option<RegionMemo>);
+
+impl RegionScope {
+    pub(crate) fn open() -> Self {
+        RegionScope(REGION_MEMO.with(|m| m.borrow_mut().replace(RegionMemo::default())))
+    }
+}
+
+impl Drop for RegionScope {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        REGION_MEMO.with(|m| *m.borrow_mut() = outer);
+    }
 }
 
 /// Does a member's form (a polynomial, an analytic function of one, ...) license distributing an
@@ -4762,6 +5139,101 @@ fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
     tradeable.then_some(ClassRead { head, terms, exp })
 }
 
+/// A factor's order at the zero set of the sum it is built over, and the sum's terms: its exponent
+/// times its head's order there -- 1 for the sum and for an odd function of it (each vanishes
+/// linearly), `1/k` for its `k`-th root; `None` where the factor is not such a power of such a head
+/// (a symbolic exponent, an even function of the sum, a product).
+fn pole_read<'a>(f: &'a Ex, cx: &Cx) -> Option<(&'a [Ex], Rat)> {
+    let (m, e) = match f {
+        Ex::Pow(b, q) => match &**q {
+            Ex::Num(r) => (&**b, r.clone()),
+            _ => return None,
+        },
+        _ => (f, Rat::ONE),
+    };
+    let (terms, order) = match m {
+        Ex::Add(ts) => (ts.as_slice(), Rat::ONE),
+        Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => match &a[0] {
+            Ex::Add(ts) => (ts.as_slice(), Rat::ONE),
+            _ => return None,
+        },
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") => match (&a[0], &a[1]) {
+            (Ex::Add(ts), Ex::Num(k)) if k.is_integer() && k.signum() > 0 => {
+                (ts.as_slice(), k.checked_inv()?)
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some((terms, e.checked_mul(&order)?))
+}
+
+/// Is `b` the sum `a` or its negation?
+fn same_sum_up_to_sign(a: &[Ex], b: &[Ex], cx: &Cx) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.len() != b.len() || negation_key(a) != negation_key(b) {
+        return false;
+    }
+    let key = |ts: &[Ex]| {
+        let s = Ex::Add(ts.to_vec());
+        orient_base(&s, cx).map_or(s, |(o, _)| o)
+    };
+    key(a) == key(b)
+}
+
+/// Is the pole the product of `members` has where the sum `terms` vanishes two-signed? The
+/// members built over the sum or its negation (`pole_read`) add their orders; the pole is
+/// two-signed when that total is negative with an odd numerator and an odd denominator, so its
+/// sides disagree and the sign of its infinity is no value the answer keeps (reading A). A total
+/// with an even numerator is a one-signed pole, whose infinity is the limit there (`1/(cbrt(u) u)`,
+/// -4/3); an even denominator is a pole with one side undefined. A member over the sum whose
+/// order is unknown (an even function of it, a symbolic exponent) leaves the pole unread: not
+/// two-signed.
+fn two_signed_pole(terms: &[Ex], members: &[&Ex], cx: &Cx) -> bool {
+    let mut total = Rat::ZERO;
+    for f in members {
+        match pole_read(f, cx) {
+            Some((ts, o)) => {
+                if same_sum_up_to_sign(terms, ts, cx) {
+                    match total.checked_add(&o) {
+                        Some(t) => total = t,
+                        None => return false,
+                    }
+                }
+            }
+            None => {
+                let inner = match f {
+                    Ex::Pow(b, _) => &**b,
+                    other => other,
+                };
+                if let Ex::Fun(_, a) = inner {
+                    if matches!(a.first(), Some(Ex::Add(ts)) if same_sum_up_to_sign(terms, ts, cx))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    total.is_negative() && total.numer().is_odd_integer() && total.denom().is_odd_integer()
+}
+
+/// Is `f` a negative odd power over a sum whose pole in the product of `members` is not two-signed
+/// (`two_signed_pole`)? Then it is no sign-trade site there.
+fn over_one_signed_pole(f: &Ex, members: &[&Ex], cx: &Cx) -> bool {
+    match f {
+        Ex::Pow(_, e) if matches!(&**e, Ex::Num(r) if r.is_odd_integer() && r.is_negative()) => {
+            match pole_read(f, cx) {
+                Some((ts, _)) => !two_signed_pole(ts, members, cx),
+                None => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// A class {B, -B}: the head of `B`, the terms of the sum on each side (the second empty until a
 /// factor over it is seen), and the key and flip that recognise the negation of the first.
 struct Class<'a> {
@@ -4849,7 +5321,10 @@ impl<'a> Class<'a> {
         // `B` is (an odd function's zeros are its argument's, an odd root's its radicand's); a
         // symbolic one need not be.
         let mut vanishes = false;
+        // Every member of the product read over a sum, for the order of its pole.
+        let mut members: Vec<&Ex> = Vec::new();
         for (f, read) in factors {
+            members.push(f);
             let Some(s) = self.side_of(&read) else {
                 continue;
             };
@@ -4880,7 +5355,14 @@ impl<'a> Class<'a> {
                 });
             }
         }
-        t.free_inverse = cx.lossy() || (INVERSE_MOVES_WHERE_THE_CLASS_VANISHES && vanishes);
+        // A lone inverse moves where the product's pole over the class is two-signed: its sides
+        // disagree, so the sign of its infinity is no value the answer keeps (reading A). A class
+        // whose zero set may hold a region keeps its inverse, infinite on the region, and so does
+        // a one-signed pole, whose infinity is the limit there (`two_signed_pole`); a lossy context
+        // keeps neither value.
+        t.free_inverse = (zero_set_null(&self.base(0), cx)
+            && (cx.lossy() || two_signed_pole(&self.sums[0], &members, cx)))
+            || (INVERSE_MOVES_WHERE_THE_CLASS_VANISHES && vanishes);
         for side in t.sides.iter_mut() {
             side.fixed.sort_by(|a, b| cmp_ex(a, b, cx.view));
         }
@@ -5067,7 +5549,8 @@ const INVERSE_MOVES_WHERE_THE_CLASS_VANISHES: bool = false;
 
 /// A class's exponent totals on each side (`collect_opposite_sums`): the positive integer mass
 /// `p`, the negative `n`, and the factors that never move; and whether a lone inverse moves too
-/// (a lossy context, or a class that vanishes at the pole).
+/// (at a two-signed pole off a region, in a lossy context, or in a class that vanishes at the
+/// pole).
 #[derive(Default)]
 struct Table {
     sides: [TableSide; 2],
@@ -5115,8 +5598,7 @@ impl Table {
     }
 
     /// The inverse a side keeps: one `B^-1` where its negative total is odd, none where it may
-    /// move (a lossy context reads a function up to its values at a zero; a class that vanishes
-    /// there is undefined at the pole).
+    /// move (`Table::free_inverse`).
     fn kept(&self, n: i128) -> i128 {
         if self.free_inverse {
             0
@@ -5518,9 +6000,14 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
         // so re-flipping per mask multiplied the work at every nesting level. Each mask's
         // price is the sum of per-factor prices (see `complexity`'s Mul arm), each factor and
         // each flip priced once.
+        // A negative odd power trades its sign only where the product's pole over its sum is
+        // two-signed (`two_signed_pole`): `1/(cbrt(u) u)` keeps both spellings, its pole at `u = 0`
+        // being one-signed (order -4/3), so the sign of its infinity is the limit's.
+        let members: Vec<&Ex> = out.iter().collect();
         let site_flips: Vec<(usize, Ex)> = out
             .iter()
             .enumerate()
+            .filter(|(_, f)| cx.lossy() || !over_one_signed_pole(f, &members, cx))
             .filter_map(|(i, f)| sign_trade_flip(f, cx).map(|nf| (i, nf)))
             .collect();
         let sites: Vec<usize> = site_flips.iter().map(|(i, _)| *i).collect();
@@ -6061,12 +6548,12 @@ fn is_sign_trade_site(f: &Ex, cx: &Cx) -> bool {
 /// the factor with that sum FLIPPED (`None` = not a site, or refused: Const-bearing
 /// and negation-absorbing sums have absorption owners (H-020/H-030), and negation
 /// overflow fails safe). The odd carriers, each a TOTAL identity f(-S) = -f(S) on the
-/// extended reals: the sum itself; Pow(S, odd n >= 3) (positive odd only -- the
-/// negative-odd identity fails at the one-zero pole); rootn(S, odd m >= 3) (the
+/// extended reals: the sum itself; Pow(S, odd n >= 3); rootn(S, odd m >= 3) (the
 /// SIGNED total root is an odd bijection); the eight odd functions (`odd_fun`); and
-/// Pow(c, odd n >= 3) of either of the last two over a sum. With
-/// `LOSSY_NEGATIVE_ODD_POWERS_TRADE`, a negative odd power of any of them is one too in a lossy
-/// context.
+/// Pow(c, odd n >= 3) of either of the last two over a sum. A negative odd power of any of them
+/// is one too, its identity failing only at the pole: there the two sides disagree, so the sign
+/// of the pole's infinity is no value the answer keeps (reading A). Where the product's pole over
+/// the sum is one-signed, the product keeps the site's spelling (`sign_place`, `two_signed_pole`).
 ///
 /// MEMOIZED for the dynamic extent of the outermost call: the flip is a pure function of
 /// `(f, cx)` and the thread's number domain, and computing it re-enters itself FOUR times per
@@ -6176,11 +6663,6 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
     )
 }
 
-/// Does a negative odd power trade its sign in a lossy context as a positive one does, its pole's
-/// infinity being a value at a zero (`sign_trade_flip`)? Then a lone inverse's orientation is the
-/// product's choice there, as every other carrier's is, whichever orientation it was spelled in.
-const LOSSY_NEGATIVE_ODD_POWERS_TRADE: bool = false;
-
 fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
     let flip_sum = |ts: &[Ex]| -> Option<Vec<Ex>> {
         // Exclusions = the absorption owners' classes: Const-bearing (H-020),
@@ -6217,29 +6699,33 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
     let odd_int_ge3 = |e: &Ex| -> bool {
         matches!(e, Ex::Num(r) if r.is_odd_integer() && r.cmp_int(3) != Ordering::Less)
     };
-    // A lossy context reads a function up to its values at a zero, so a negative odd power's
-    // pole does not pin its orientation there (`-1/(x1 - 3)` is `1/(3 - x1)`).
+    // A negative odd power's pole is two-signed, so its orientation is not pinned there
+    // (`-1/(x1 - 3)` is `1/(3 - x1)`).
     let odd_power = |e: &Ex| -> bool {
-        odd_int_ge3(e)
-            || (LOSSY_NEGATIVE_ODD_POWERS_TRADE
-                && cx.lossy()
-                && matches!(e, Ex::Num(r) if r.is_odd_integer() && r.is_negative()))
+        odd_int_ge3(e) || matches!(e, Ex::Num(r) if r.is_odd_integer() && r.is_negative())
     };
     match f {
         Ex::Add(ts) => flip_sum(ts).map(Ex::Add),
-        Ex::Pow(b, e) if odd_power(e) => match &**b {
-            Ex::Add(ts) => flip_sum(ts).map(|s| Ex::Pow(Box::new(Ex::Add(s)), e.clone())),
-            // An odd power of an odd carrier over a sum (an odd function or an odd root of it)
-            // is one too: `f(-S)^n = -f(S)^n`; so is a positive odd power of one over a literal
-            // multiple or a negation.
-            Ex::Fun(_, args)
-                if matches!(args.first(), Some(Ex::Add(_)))
-                    || (matches!(args.first(), Some(Ex::Mul(_))) && odd_int_ge3(e)) =>
-            {
-                sign_trade_flip(b, cx).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
-            }
-            _ => None,
-        },
+        Ex::Pow(b, e) if odd_power(e) => {
+            let flipped = match &**b {
+                Ex::Add(ts) => flip_sum(ts).map(|s| Ex::Pow(Box::new(Ex::Add(s)), e.clone())),
+                // An odd power of an odd carrier over a sum (an odd function or an odd root of it)
+                // is one too: `f(-S)^n = -f(S)^n`; so is a positive odd power of one over a literal
+                // multiple or a negation.
+                Ex::Fun(_, args)
+                    if matches!(args.first(), Some(Ex::Add(_)))
+                        || (matches!(args.first(), Some(Ex::Mul(_))) && odd_int_ge3(e)) =>
+                {
+                    sign_trade_flip(b, cx).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
+                }
+                _ => None,
+            }?;
+            // A negative power's pole pins the orientation where the base's zero set may hold a
+            // region: there the inverse is infinite on the region, a value the answer keeps. Asked
+            // last, of a base whose flip exists.
+            (cx.lossy() || !matches!(&**e, Ex::Num(r) if r.is_negative()) || zero_set_null(b, cx))
+                .then_some(flipped)
+        }
         Ex::Fun(op, args)
             if args.len() == 2 && cx.view.tok_is(*op, "rootn") && odd_int_ge3(&args[1]) =>
         {

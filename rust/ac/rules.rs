@@ -36,7 +36,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::tokens::{Tok, TokenView};
 
 use super::convert::from_prefix;
-use super::expr::{add, canon, cmp_ex, complexity, mul, Cx, Ex};
+use super::expr::{add, canon, cmp_ex, complexity, mul, orient_term_classes, Cx, Ex};
 use super::matcher::{match_bag_each_cls, matches_each, substitute, BagKind, Binds, MCx};
 use super::rat::Rat;
 
@@ -59,6 +59,36 @@ pub struct AcRule {
     /// A unit twin, or the orientation twin of one: served only to a pass that asks for
     /// them (`PassCtx::unit_twins`, the search's factor stage).
     pub unit: bool,
+    /// Does a wildcard occur more than once in the LHS? Then it binds a class (a sum, an odd
+    /// function or odd root of one) up to sign: a sum pattern whose first match met a near miss
+    /// (a binding refused by its repeat's negation, `matcher::near_misses`) tries its subject again
+    /// with every class in one orientation (`orient_term_classes`). `Repeat::Class` where the repeated
+    /// wildcard's sort can bind a class in every mode (`_`, `!`, `$`); `Repeat::Leaf` where only
+    /// a pass that binds any subtree (permissive) lets it, `?` binding variable leaves otherwise.
+    pub repeat: Repeat,
+}
+
+/// Whether, and through which wildcard sorts, an LHS repeats a wildcard (`AcRule::repeat`).
+#[derive(Clone, Copy, PartialEq)]
+pub enum Repeat {
+    No,
+    Leaf,
+    Class,
+}
+
+/// How `lhs` repeats a wildcard (`AcRule::repeat`).
+fn repeated_wildcard(lhs: &Ex, view: &TokenView) -> Repeat {
+    let mut ws = FxHashSet::default();
+    collect_wildcards(lhs, view, &mut ws);
+    let mut out = Repeat::No;
+    for &w in ws.iter().filter(|&&w| leaf_count(lhs, w) > 1) {
+        if view.sigil(w) == b'?' {
+            out = Repeat::Leaf;
+        } else {
+            return Repeat::Class;
+        }
+    }
+    out
 }
 
 /// The translated rule set, bucketed by root kind. Bucket vectors hold indices into `rules` in
@@ -415,12 +445,14 @@ impl AcRules {
                 Ex::Fun(f, _) => out.fun_idx.entry(*f).or_default().push(idx),
                 _ => out.leaf_idx.push(idx),
             }
+            let repeat = repeated_wildcard(&lhs, view);
             out.rules.push(AcRule {
                 lhs,
                 rhs,
                 sig,
                 is_pattern,
                 unit: false,
+                repeat,
             });
         }
         // ORIENTATION CLOSURE (rules fire modulo the sign orientation class): an admitted
@@ -518,12 +550,14 @@ impl AcRules {
             let sig = atom_sig(&tl, view);
             let is_pattern = tl.contains_wildcard(view);
             let unit = out.rules[i].unit;
+            let repeat = repeated_wildcard(&tl, view);
             out.rules.push(AcRule {
                 lhs: tl,
                 rhs: tr,
                 sig,
                 is_pattern,
                 unit,
+                repeat,
             });
             out.n_twins += 1;
         }
@@ -570,12 +604,14 @@ impl AcRules {
                 out.src.push(out.src[i]);
                 let sig = atom_sig(&tl, view);
                 let is_pattern = tl.contains_wildcard(view);
+                let repeat = repeated_wildcard(&tl, view);
                 out.rules.push(AcRule {
                     lhs: tl,
                     rhs: tr,
                     sig,
                     is_pattern,
                     unit: true,
+                    repeat,
                 });
                 out.n_twins += 1;
                 out.n_unit_twins += 1;
@@ -802,6 +838,10 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     };
     // The subject bag's equality classes, computed by the first rule whose match needs them.
     let bag_cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
+    // A sum subject's terms with every class in one orientation (`None`: none flips), and their
+    // equality classes, computed by the first rule with a repeated wildcard that needs them.
+    let oriented_terms: std::cell::OnceCell<Option<Vec<Ex>>> = std::cell::OnceCell::new();
+    let oriented_cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
     for &ri in exact_hits.iter().chain(scan.iter()) {
         let rule = &p.rules.rules[ri];
         if rule.sig & !node_sig != 0 || (rule.unit && !p.unit_twins) {
@@ -821,35 +861,73 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
         // assignments, where this is exactly the old fire-then-check behavior.)
         let fired: Option<Ex> = match (&rule.lhs, e) {
             (Ex::Add(pv), Ex::Add(sv)) => {
-                let mut binds = Binds::default();
-                let mut out: Option<Ex> = None;
-                match_bag_each_cls(
-                    pv,
-                    sv,
-                    &bag_cls,
-                    BagKind::Add,
-                    true,
-                    &mut binds,
-                    p.mcx,
-                    &mut |b, used| {
-                        let replacement = substitute(&rule.rhs, b, p.cx.view);
-                        let mut parts: Vec<Ex> = sv
-                            .iter()
-                            .zip(used.iter())
-                            .filter(|(_, &u)| !u)
-                            .map(|(x, _)| x.clone())
-                            .collect();
-                        parts.push(replacement);
-                        let next = add(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
-                        if oriented_mu(&next, node_mu(), e, p) {
-                            out = Some(next);
-                            true
-                        } else {
-                            false
-                        }
-                    },
-                );
-                out
+                let fire = |sv: &[Ex], cls: &std::cell::OnceCell<Vec<usize>>| -> Option<Ex> {
+                    let mut binds = Binds::default();
+                    let mut out: Option<Ex> = None;
+                    match_bag_each_cls(
+                        pv,
+                        sv,
+                        cls,
+                        BagKind::Add,
+                        true,
+                        &mut binds,
+                        p.mcx,
+                        &mut |b, used| {
+                            let replacement = substitute(&rule.rhs, b, p.cx.view);
+                            let mut parts: Vec<Ex> = sv
+                                .iter()
+                                .zip(used.iter())
+                                .filter(|(_, &u)| !u)
+                                .map(|(x, _)| x.clone())
+                                .collect();
+                            parts.push(replacement);
+                            let next =
+                                add(parts.into_iter().map(|x| canon(x, p.cx)).collect(), p.cx);
+                            if oriented_mu(&next, node_mu(), e, p) {
+                                out = Some(next);
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                    );
+                    out
+                };
+                // A repeated wildcard binds a class up to sign: where the first match met a
+                // binding refused by its repeat's negation (a near miss, `matcher::near_misses`),
+                // the same terms with every class in one orientation, the signs in the
+                // coefficients, are tried too.
+                let misses = super::matcher::near_misses();
+                fire(sv, &bag_cls).or_else(|| {
+                    let class_binds = match rule.repeat {
+                        Repeat::No => false,
+                        Repeat::Leaf => p.mcx.wildcard_all,
+                        Repeat::Class => true,
+                    };
+                    if !class_binds {
+                        return None;
+                    }
+                    if super::matcher::near_misses() == misses {
+                        return None;
+                    }
+                    let oriented = oriented_terms
+                        .get_or_init(|| {
+                            let mut changed = false;
+                            let v: Vec<Ex> = sv
+                                .iter()
+                                .map(|t| match orient_term_classes(t, p.cx) {
+                                    Some(o) => {
+                                        changed = true;
+                                        o
+                                    }
+                                    None => t.clone(),
+                                })
+                                .collect();
+                            changed.then_some(v)
+                        })
+                        .as_ref()?;
+                    fire(oriented, &oriented_cls)
+                })
             }
             (Ex::Mul(pv), Ex::Mul(sv)) => {
                 let mut binds = Binds::default();

@@ -322,7 +322,11 @@ class TestCorpusGate:
         # FACTORING UNDER AN INVERSE TAKES DISTRIBUTION'S LICENCE: 56,106,168 -> 56,107,168. A
         # sum under a negative power is factored only where the power would distribute over the
         # factored product; one walk row keeps its sum (+1,000).
-        assert walk['complexity_out'] == 56107168, walk['complexity_out']
+        # READING A AT POLES: 56,107,168 -> 56,053,168. A negative odd power's pole is
+        # two-signed, so its orientation is the product's choice in every mode (a one-signed
+        # pole keeps its spelling); a repeated wildcard binds a class up to sign, and FACTOR
+        # takes a factor the terms share up to sign. The walk rests 54,000 milli-bits cheaper.
+        assert walk['complexity_out'] == 56053168, walk['complexity_out']
         gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
         if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
             m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
