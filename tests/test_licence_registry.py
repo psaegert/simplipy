@@ -170,10 +170,6 @@ class TestMintChannels:
         # universe contains the hostile source and the library enumerates the
         # mirror target; without the registry the pair is mu-descending,
         # a.e.-confirmed and otherwise gate-invisible.
-        # The counter is process-global and other tests in this file increment it
-        # (the registry API tests); assert the DELTA across THIS mine, or the
-        # assertion passes vacuously off their residue.
-        before = SimpliPyEngine.from_config(acj_config_path())._core.registry_pole_refusals()
         engine = self._mine(tmp_path)
         rules = [(list(lhs_), list(rhs_)) for lhs_, rhs_ in engine.simplification_rules]
         for lhs, rhs in rules:
@@ -182,7 +178,6 @@ class TestMintChannels:
         # sign (reading A), and the mine has no mirror pair to propose -- the registry's pole entry never needs to
         # fire. Absence of the rule is then no vacuous pass: there is nothing for it to rewrite.
         assert engine.simplify(list(HOSTILE_SRC)) == engine.simplify(list(HOSTILE_TGT))
-        assert engine._core.registry_pole_refusals() >= before
 
     def test_hint_channel_refuses_the_mirror(self, tmp_path):
         # The proposal/hint channel -- previously a full registry bypass.

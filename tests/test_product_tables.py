@@ -119,7 +119,9 @@ def test_equal_tables_give_one_answer(eng, mode, effort, a, b):
 
 
 # At the zero of a class's sum a negative odd power is an infinity whose sign the orientation decides; a negative
-# even power is `+inf` either way. The answer keeps every value, the sign of every infinity included.
+# even power is `+inf` either way. The answer keeps every finite value; at an infinity it has the limit where the
+# source's two sides agree (reading A: the class is written in one orientation, so `x2/((3 - x1)(x1 - 3))` is
+# `-x2/(x1 - 3)^2`, whose infinity at x1 = 3 is the limit's), and a pole whose sides disagree is not compared.
 POLES = [
     '<mul> inv pow ' + S + ' 3 inv pow ' + N + ' 2 </mul>',
     '<mul> inv ' + S + ' inv pow ' + N + ' 2 pow ' + N + ' 0.5 </mul>',
@@ -233,11 +235,21 @@ def test_the_answer_keeps_every_value_at_the_zeros(eng, mode, src):
         return np.broadcast_to(np.asarray(v, dtype=float), xs[0].shape)
 
     before, after = values(src.split()), values(answer)
-    finite, infinite = np.isfinite(before), np.isinf(before)
-    # where the source is defined the answer agrees; where it is an infinity, the same one (a
-    # certified cancellation may fill a NaN the source has at a zero, `S/S` is 1 there)
+    finite = np.isfinite(before)
+    # where the source is finite the answer agrees (a certified cancellation may fill a NaN the source has at a
+    # zero, `S/S` is 1 there)
     assert np.allclose(before[finite], after[finite], rtol=1e-9, atol=1e-12), (before, after, answer)
-    assert np.array_equal(before[infinite], after[infinite]), (before, after, answer)
+    f_src = eng.as_callable(src.split(), ['x1', 'x2', 'x3'])
+    dirs = np.random.default_rng(7).normal(size=(12, 3))
+    for i in np.flatnonzero(np.isinf(before)):
+        pt = np.array([x[i] for x in xs])
+        near = np.array([pt + h * d for d in dirs for h in (1e-7, -1e-7)])
+        with np.errstate(all='ignore'):
+            v = np.asarray(f_src(*near.T), dtype=float) * np.ones(len(near))
+        if (np.abs(v) > 1e5).all() and len(set(np.sign(v))) == 1:
+            assert after[i] == np.sign(v[0]) * np.inf, (pt, before[i], after[i], answer)
+        elif not (np.abs(v) > 1e5).all():
+            assert after[i] == before[i], (pt, before[i], after[i], answer)
     assert list(eng.simplify(answer, mode=mode)) == answer
 
 
