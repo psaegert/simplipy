@@ -166,7 +166,7 @@ class TestD12CleanCut:
         ops = {'+': {'realization': '+', 'alias': [], 'arity': 2,
                      'precedence': 1, 'commutative': True}}
         eng = SimpliPyEngine(operators=ops)  # no 'inverse' anywhere: must load
-        assert eng.simplify(['+', 'x0', '0']) is not None
+        assert eng.simplify(['+', 'x0', '0']) == ['x0']
 
     def test_shipped_configs_carry_no_inverse_key(self):
         import os

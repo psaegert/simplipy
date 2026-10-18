@@ -3985,9 +3985,6 @@ mod tests {
         let corpus: Vec<Vec<String>> =
             serde_json::from_str(&std::fs::read_to_string(path).expect("corpus present"))
                 .expect("corpus parses");
-        let mut comp_sound = 0u64;
-        let mut comp_lossy = 0u64;
-        let mut n_lossy_wins = 0usize;
         for expr in corpus.iter() {
             let sound = e.ac_simplify(expr, 48, RuleMode::Default).unwrap();
             let lossy = e.ac_simplify(expr, 48, RuleMode::Permissive).unwrap();
@@ -4009,18 +4006,13 @@ mod tests {
             let cl = e
                 .ac_complexity(&lossy, RuleMode::Default, RuleMode::Default)
                 .expect("lossy parses");
-            comp_sound += cs;
-            comp_lossy += cl;
-            if cl < cs {
-                n_lossy_wins += 1;
-            }
+            // Permissive rewrites more, so on f64's yardstick its answer is never dearer
+            // than f64's (measured: on every corpus row).
+            assert!(
+                cl <= cs,
+                "permissive answer dearer than f64's on {expr:?}: {cl} > {cs}"
+            );
         }
-        // Reported, not asserted: lossy rewrites more, so it should rarely be worse -- but
-        // rule-path divergence makes a hard <= assert too strong.
-        eprintln!(
-            "AC lossy corpus: complexity sound={comp_sound} lossy={comp_lossy}, lossy strictly smaller on {n_lossy_wins}/{} rows",
-            corpus.len()
-        );
     }
 
     /// Corpus gates, amortized over one engine build: output validity, idempotence,
@@ -4040,10 +4032,6 @@ mod tests {
                 .expect("corpus parses");
         assert!(!corpus.is_empty());
 
-        let mut n_shorter = 0usize;
-        let mut tok_in = 0usize;
-        let mut tok_out = 0usize;
-        let mut comp_ac = 0u64;
         for expr in corpus.iter() {
             // The EXPLICIT projection is gated for validity; the TAGGED default is gated
             // separately: it must round-trip through the shared parser (idempotence feeds
@@ -4072,12 +4060,6 @@ mod tests {
                 .unwrap();
             assert_eq!(out_swapped, out, "permutation variance on {expr:?}");
 
-            tok_in += expr.len();
-            tok_out += out.len();
-            if out.len() < expr.len() {
-                n_shorter += 1;
-            }
-
             if expr.iter().any(|t| t == "<constant>") {
                 continue;
             }
@@ -4087,26 +4069,19 @@ mod tests {
                 !out.iter().any(|t| t == "<constant>"),
                 "minted <constant>: {expr:?} -> {out:?}"
             );
-            // Complexity accounting on the canonical form.
-            {
-                let ctx2 = super::super::memo_ctx_for_tests(&e);
-                let toks_a = super::super::intern_for_tests(&e, &out, &ctx2);
-                let view2 = super::super::view_for_tests(&e, &ctx2);
-                let bare2 = crate::ac::expr::Cx::bare(&view2);
-                if let Some(p) = crate::ac::convert::from_prefix(&toks_a, &bare2) {
-                    comp_ac +=
-                        crate::ac::expr::complexity(&crate::ac::expr::canon(p, &bare2), &view2);
-                }
-            }
+            // The answer never prices above its input, both read in the certified canon
+            // the serve ordering descends.
+            let c_in = e
+                .ac_complexity_certified(expr, RuleMode::Default, RuleMode::Default)
+                .expect("input parses");
+            let c_out = e
+                .ac_complexity_certified(&out, RuleMode::Default, RuleMode::Default)
+                .expect("answer parses");
+            assert!(
+                c_out <= c_in,
+                "answer dearer than input on {expr:?}: {c_out} > {c_in}"
+            );
         }
-        eprintln!(
-            "AC corpus: {} exprs, {} shorter-than-input, tokens input={} ac={}, COMPLEXITY (const-free rows) ac={}",
-            corpus.len(),
-            n_shorter,
-            tok_in,
-            tok_out,
-            comp_ac
-        );
     }
 
     /// Swap the operands of every binary commutative (`+`/`*`) node -- a deterministic
@@ -4141,9 +4116,9 @@ mod probe_stab {
     use crate::ac::convert::{from_prefix, to_prefix};
     use crate::ac::expr::{canon, Cx};
 
+    /// The bare canonical form is a fixpoint of print-and-reparse on every corpus row.
     #[test]
-    #[ignore]
-    fn find_unstable() {
+    fn bare_canon_is_stable_under_reparse() {
         let Some(e) = crate::test_engine() else {
             return;
         };
@@ -4153,6 +4128,7 @@ mod probe_stab {
         );
         let corpus: Vec<Vec<String>> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut unstable: Vec<String> = Vec::new();
         for (i, expr) in corpus.iter().enumerate() {
             let ctx = super::super::memo_ctx_for_tests(&e);
             let toks = super::super::intern_for_tests(&e, expr, &ctx);
@@ -4164,7 +4140,9 @@ mod probe_stab {
             let c1 = canon(ex, &bare);
             let t1 = to_prefix(&c1, &bare);
             let Some(p) = from_prefix(&t1, &bare) else {
-                eprintln!("row {i}: REPARSE FAILED");
+                unstable.push(format!(
+                    "row {i}: the printed canonical form does not reparse"
+                ));
                 continue;
             };
             let c2 = canon(p, &bare);
@@ -4172,14 +4150,9 @@ mod probe_stab {
             if t1 != t2 {
                 let s1: Vec<String> = t1.iter().map(|&t| view.resolve_owned(t)).collect();
                 let s2: Vec<String> = t2.iter().map(|&t| view.resolve_owned(t)).collect();
-                eprintln!(
-                    "row {i} UNSTABLE:\n  t1: {}\n  t2: {}",
-                    s1.join(" "),
-                    s2.join(" ")
-                );
-                return;
+                unstable.push(format!("row {i}: {} -> {}", s1.join(" "), s2.join(" ")));
             }
         }
-        eprintln!("all stable (bare ctx)");
+        assert!(unstable.is_empty(), "unstable rows: {unstable:#?}");
     }
 }

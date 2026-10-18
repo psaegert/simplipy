@@ -81,7 +81,7 @@ class TestRemovedParameters:
             eng.simplify('x0 + 0', node_budget=8)
 
     def test_max_passes_survives_with_its_guard(self, eng) -> None:
-        assert eng.simplify('x0 + 0', max_passes=4) is not None
+        assert eng.simplify('x0 + 0', max_passes=4) == 'x0'
         with pytest.raises(ValueError, match='non-negative'):
             eng.simplify('x0 + 0', max_passes=-1)
 

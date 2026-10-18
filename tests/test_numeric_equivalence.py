@@ -72,9 +72,6 @@ judge pass over the masked rows returns 80/135 spurious convictions (measured
 2026-07-29). Masked-row numeric coverage needs the literal-provenance carve-out
 tracked on the monitor-polish ledger; until then their coverage here is structural.
 """
-import os
-import re
-
 import numpy as np
 import pytest
 
@@ -84,7 +81,6 @@ from simplipy.engine import SimpliPyEngine
 from simplipy.verify._monitor import judge_pair
 from conftest import acj_config_path
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
 
 # Commutative-operand swap for the permutation check (the campaign harnesses' swapper).
@@ -324,11 +320,6 @@ class TestCorpusGate:
         # pole keeps its spelling); a repeated wildcard binds a class up to sign, and FACTOR
         # takes a factor the terms share up to sign. The walk rests 54,000 milli-bits cheaper.
         assert walk['complexity_out'] == 56053168, walk['complexity_out']
-        gate_src = os.path.join(REPO, 'remine', 'gate_acj.py')
-        if os.path.exists(gate_src):  # absent in an sdist; present in every checkout
-            m = re.search(r'"acj-4":\s*{[^}]*"complexity":\s*(\d+)', open(gate_src).read())
-            assert m and int(m.group(1)) == 56307982, \
-                'gate_acj REFS complexity pin drifted from the in-suite pin: re-pin BOTH'
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

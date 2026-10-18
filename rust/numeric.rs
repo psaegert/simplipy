@@ -478,8 +478,8 @@ mod tests {
         e.evaluate_constant_subtree(&toks.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
 
-    /// Exact (non-transcendental) folds + the custom operator semantics. Transcendental folds are
-    /// numerically-correct-modulo-numpy-ULP (see benchmarks/diff_numeric.py); not asserted here.
+    /// Exact (non-transcendental) folds + the custom operator semantics. Transcendental folds go
+    /// through the host libm, so their last bit is the platform's; they are not asserted here.
     #[test]
     fn evaluate_exact_cases() {
         let Some(e) = engine() else { return };

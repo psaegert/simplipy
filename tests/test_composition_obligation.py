@@ -31,10 +31,10 @@ import pytest
 
 from simplipy.verify import _contract as C
 
-# The serving vocabulary: every operator the contract judge speaks that the current
-# engine serves (the acj family's 23 config operators + rootn). Enumerated here
+# The serving vocabulary: the 23 operators of the shipped config. Enumerated here
 # EXPLICITLY -- the point of the pin is that a vocabulary change must come HERE and
-# re-justify itself, not inherit the discharge silently.
+# re-justify itself, not inherit the discharge silently; `test_the_lists_are_the_served_
+# vocabulary` fails the moment the config and these lists disagree.
 UNARY = [
     'neg', 'abs', 'inv', 'exp', 'log',
     'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
@@ -118,3 +118,13 @@ def test_absorbing_cells_are_constant_in_the_absorbing_slot(algebra, point):
         assert outs == {absorbed}, (
             f'{algebra} algebra: {op} slot {slot} at other={other} is not constant: {outs}'
         )
+
+
+def test_the_lists_are_the_served_vocabulary():
+    """The discharge covers exactly what is served: every operator of the shipped
+    config, with its arity, and nothing else."""
+    from conftest import acj_config_path, require_or_skip
+    from simplipy.io import load_config
+    require_or_skip(acj_config_path(), 'the acj-4 config is not staged')
+    served = {name: spec['arity'] for name, spec in load_config(acj_config_path())['operators'].items()}
+    assert {**{op: 1 for op in UNARY}, **{op: 2 for op in BINARY}} == served

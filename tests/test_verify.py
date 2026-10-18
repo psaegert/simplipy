@@ -185,7 +185,6 @@ class TestShippingArtifact:
         _staged_or_skip(ACJ_RULES)
         rules = json.load(open(ACJ_RULES))
         census = {'CERTIFIED': 0, 'TOLERATED': 0}
-        tolerated = set()
         for lhs, rhs in rules:
             toks = list(lhs) + list(rhs)
             if 'rootn' not in toks and not any(t.startswith('$') for t in toks):
@@ -198,8 +197,6 @@ class TestShippingArtifact:
             # form would have waved it through.
             assert r['verdict'] in census, (lhs, rhs, r)
             census[r['verdict']] += 1
-            if r['verdict'] == 'TOLERATED':
-                tolerated.add((tuple(lhs), tuple(rhs)))
         # measured census of the shipped artifact (2026-08-07, acj-4-3 @ 7,147 rules;
         # was 68/4 at 1008 rules on 2026-08-03, then 4330/4 at 7,153). An artifact
         # refresh re-pins this alongside the gate_acj REFS, with evidence. The 4330 ->
@@ -244,21 +241,11 @@ class TestShippingArtifact:
         # constant-binding folds retired by the canonical-source-class certification.
         # Net +5 in this subset, every one CERTIFIED; TOLERATED stays 0.
         assert census == {'CERTIFIED': 3820, 'TOLERATED': 0}, census
-        # ...and WHICH rules are excused, not merely how many. The count alone would
-        # wave through a swap (a $-rule turning CERTIFIED while some rootn rule turns
-        # TOLERATED); this pins the excused set itself. All four are the one documented
-        # R3 class -- clause (b), undefined->defined on the null set {0} only -- and are
-        # the $-sort spellings of the judge's own '/ ?0 ?0 -> 1' and '/ 0 mult2 ?0 -> 0'
-        # touchstones. A NEW member here is a contract question, never a re-pin.
-        # ...and WHICH rules are excused. All four moved to rules_real.json with the
-        # triple: they are TOLERATED (true off the null set {0}) and NOT f64-realised
-        # (f64 answers nan at 0 and at both infinities), which is precisely the `real`
-        # tier. So the f64 file excuses NOTHING, and the four are asserted where they
-        # now live. A new member in either place is a contract question, never a re-pin.
-        # (Implied by `census['TOLERATED'] == 0` above, so it guards nothing on its own;
-        # kept as the statement of intent, with the real check being the membership
-        # assertions below -- WHICH rules are excused, not how many.)
-        assert tolerated == set(), sorted(tolerated)
+        # The f64 file excuses NOTHING: the four excused rules of the one documented R3
+        # class (clause (b), undefined->defined on the null set {0} only) are TOLERATED
+        # and not f64-realised, which is the `real` tier, so they live in rules_real.json
+        # and are asserted there by the next test. A new excused rule in either place is
+        # a contract question, never a re-pin.
 
     def test_the_excused_rules_live_in_the_real_file(self):
         """The other half of the split, kept as its own test so that shipping the f64
@@ -407,13 +394,13 @@ class TestD15DiagonalBinding:
         from simplipy.verify import verify_rule
         # diagonal-safe multi-slot rules must not be collateral: x*y -> y*x is exact
         # everywhere including the diagonal (nan*x and x*nan agree at the atom too).
-        assert verify_rule(['*', '_0', '_1'], ['*', '_1', '_0'])['verdict'] in ('CERTIFIED', 'TOLERATED')
+        assert verify_rule(['*', '_0', '_1'], ['*', '_1', '_0'])['verdict'] == 'CERTIFIED'
         # (a-b)+(b-a) -> 0 at `_` died with S14 (2026-08-22): it erases nan whenever
         # EITHER subtree is nan-valued -- off the diagonal, not because of it. The
         # data-sort spelling keeps this test's question -- the DIAGONAL must not
         # convict -- alive without the nan question: at ?0 = ?1 the residual is 0.
         assert verify_rule(['+', '-', '_0', '_1', '-', '_1', '_0'], ['0'])['verdict'] == 'KILL'
-        assert verify_rule(['+', '-', '?0', '?1', '-', '?1', '?0'], ['0'])['verdict'] != 'KILL'
+        assert verify_rule(['+', '-', '?0', '?1', '-', '?1', '?0'], ['0'])['verdict'] == 'CERTIFIED'
 
 
 class TestTheRealisationAxis:
@@ -802,7 +789,7 @@ class TestTheExistsWitnessIsActuallySearchedFor:
         want = math.exp(9) ** 5
         got = fit_witness(tl, tr, set(), 5.0)
         assert got is not None, 'no witness for a plain constant-fold'
-        assert abs(got - want) <= 1e-6 * abs(want), (got, want)
+        assert got == want, (got, want)
 
     def test_a_defined_lhs_with_no_witness_is_convicted_not_swallowed(self) -> None:
         """The rule holds at every constant that fits, so the verdict used to be
@@ -1078,25 +1065,27 @@ class TestTheQuantifierWidensWithoutConvictingTheTrue:
     it could not resolve. Six of them, each measurable on its own."""
 
     #: `(lhs, rhs, c)` -- the rule, and the source constant that convicted it.
+    #: (lhs, rhs, source constant, (verdict, tier)) -- the verdict and tier measured for
+    #: each row: certified in the tier its truth earns, or the documented abstention.
     WAS_CONVICTED = [
         # the noise floor swallowed an honestly tiny target and took 0 as the witness
-        (['pow', 'acos', '0', '<constant>'], ['<constant>'], -3000.0),
-        (['pow', 'acosh', '2', '<constant>'], ['<constant>'], -3000.0),
-        (['asin', 'tanh', 'exp', '<constant>'], ['<constant>'], -1000.0),
+        (['pow', 'acos', '0', '<constant>'], ['<constant>'], -3000.0, ('CERTIFIED', 'core')),
+        (['pow', 'acosh', '2', '<constant>'], ['<constant>'], -3000.0, ('CERTIFIED', 'core')),
+        (['asin', 'tanh', 'exp', '<constant>'], ['<constant>'], -1000.0, ('CERTIFIED', 'core')),
         # the floor was scaled by a magnitude that had already cancelled away
-        (['asin', 'inv', 'cosh', '<constant>'], ['<constant>'], 1000.0),
-        (['log', 'atan', 'cosh', '<constant>'], ['<constant>'], 100.0),
+        (['asin', 'inv', 'cosh', '<constant>'], ['<constant>'], 1000.0, ('CERTIFIED', 'core')),
+        (['log', 'atan', 'cosh', '<constant>'], ['<constant>'], 100.0, ('CERTIFIED', 'core')),
         # rung 1 lost a side entirely and the drop was measured from the rail
-        (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -100.0),
-        (['log', 'cosh', 'exp', '<constant>'], ['<constant>'], -100.0),
+        (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -100.0, ('CERTIFIED', 'core')),
+        (['log', 'cosh', 'exp', '<constant>'], ['<constant>'], -100.0, ('CERTIFIED', 'core')),
         # an absolute snap band inside the evaluator
-        (['asin', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0),
-        (['atanh', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0),
+        (['asin', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'real')),
+        (['atanh', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'real')),
         # past MAX_DPS, where the judge documents abstention and used to convict
-        (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -3000.0),
+        (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -3000.0, ('UNRESOLVED-COVERAGE', None)),
         # the witness search stopped eight decades short of the f64 ceiling
-        (['pow', 'cosh', '(-3)', '<constant>'], ['<constant>'], 300.0),
-        (['pow', 'sinh', '3', '<constant>'], ['<constant>'], 300.0),
+        (['pow', 'cosh', '(-3)', '<constant>'], ['<constant>'], 300.0, ('CERTIFIED', 'core')),
+        (['pow', 'sinh', '3', '<constant>'], ['<constant>'], 300.0, ('CERTIFIED', 'core')),
     ]
 
     @staticmethod
@@ -1113,15 +1102,12 @@ class TestTheQuantifierWidensWithoutConvictingTheTrue:
 
     def test_no_true_rule_is_convicted_at_a_widened_constant(self) -> None:
         """Each row is true for EVERY source constant by construction -- the RHS constant
-        is the fitted witness, so there is nothing for the quantifier to falsify. An
-        abstention is not a conviction and is allowed: past `MAX_DPS` it is the answer the
+        is the fitted witness, so there is nothing for the quantifier to falsify. Each row's
+        verdict and tier are pinned: certified, or -- past `MAX_DPS` -- the abstention the
         contract documents."""
-        bad = []
-        for lhs, rhs, c in self.WAS_CONVICTED:
-            got = self._judge_at(lhs, rhs, c)
-            if got.get('verdict') in ('KILL', 'NO-WITNESS') or got.get('tier') == 'reject':
-                bad.append((' '.join(lhs), c, got.get('verdict'), got.get('clause')))
-        assert not bad, f'true rules convicted at a widened constant: {bad}'
+        verdicts = [self._judge_at(lhs, rhs, c) for lhs, rhs, c, _ in self.WAS_CONVICTED]
+        got = [(v.get('verdict'), v.get('tier')) for v in verdicts]
+        assert got == [want for *_, want in self.WAS_CONVICTED]
 
     def test_the_noise_floor_still_refuses_a_cancellation_zero(self) -> None:
         """The other direction. The floor exists to stop `sin(pi)` -- which reads ~1e-300

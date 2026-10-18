@@ -250,6 +250,10 @@ def test_the_answer_keeps_every_value_at_the_zeros(eng, mode, src):
             assert after[i] == np.sign(v[0]) * np.inf, (pt, before[i], after[i], answer)
         elif not (np.abs(v) > 1e5).all():
             assert after[i] == before[i], (pt, before[i], after[i], answer)
+        else:
+            # the two sides disagree in sign: the value there is not part of the
+            # function, but the answer keeps the pole
+            assert np.isinf(after[i]), (pt, before[i], after[i], answer)
     assert list(eng.simplify(answer, mode=mode)) == answer
 
 

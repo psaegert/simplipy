@@ -6,6 +6,12 @@ from simplipy.utils import violates_wildcard_multiplicity
 from conftest import acj_config_path
 
 
+@pytest.fixture(scope='module')
+def eng() -> SimpliPyEngine:
+    """The shipped acj-4 engine, built once for the classes that only read it."""
+    return SimpliPyEngine.from_config(acj_config_path())
+
+
 # Minimal operator set for pruning tests
 _MINIMAL_OPERATORS = {
     "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
@@ -472,6 +478,8 @@ class TestFindRules:
         compiled core, so mining (and everything else) is always available."""
         engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
         assert engine._core is not None
+        assert engine._core.ac_simplify_in_mode(['+', 'x0', 'x0'], 48, 'default', 'explicit') == \
+            ['*', '2', 'x0']
 
     def test_default_mine_ships_promoted_seeds(self, tmp_path) -> None:
         """promote_sorts defaults ON (owner ruling 2026-08-01: features do not ship
@@ -907,10 +915,6 @@ class TestB2TailArm:
     API. Scope honesty: the arm removes the HORIZON class only -- dependency-loss
     unsoundness remains, and the D9 wording obligation forbids "finite_ae is sound"."""
 
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
-
     def test_tail_nan_no_longer_cancels(self, eng) -> None:
         assert eng.simplify('log(1 - 0.001*x1) - log(1 - 0.001*x1)') != '0'
         assert eng.simplify('asin(0.001*x1)/asin(0.001*x1)') != '1'
@@ -934,10 +938,6 @@ class TestB5B19OddSignFusion:
     at collection. Artifact effect, measured: 400-corpus row-identical; 30 shipped
     rules subsume at translation (0 dropped), twins 10 -> 8 -- the dated interim
     pins live in gate_acj.py and ac_translation_stats until the G2 republish."""
-
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
 
     def test_routes_agree_on_the_ratified_spelling(self, eng) -> None:
         via_mul = list(eng.simplify(eng.to_tagged(['*', '-5', 'sin', '2'])))
@@ -1093,10 +1093,6 @@ class TestApi1ModeParameter:
     of a JSON config got the mode that trades soundness for recall. max_passes /
     mode / form are keyword-only now, and mode accepts only Mode members and their
     documented string names."""
-
-    @pytest.fixture(scope='class')
-    def eng(self):
-        return SimpliPyEngine.from_config(acj_config_path())
 
     def test_positional_arguments_are_refused(self, eng) -> None:
         from simplipy import Mode

@@ -366,8 +366,7 @@ class TestRootnIsCertainlyNonNegative:
                        ['abs', 'rootn', 'abs', 'x0', '3']):
             a = ev(tokens)
             b = ev(eng.simplify(list(tokens)))
-            assert bool(((np.isnan(a) & np.isnan(b))
-                         | np.isclose(a, b, rtol=1e-9, atol=1e-12)).all()), tokens
+            assert np.array_equal(a, b, equal_nan=True), (tokens, a, b)
 
 
 class TestPowerOfExpIsExp:
