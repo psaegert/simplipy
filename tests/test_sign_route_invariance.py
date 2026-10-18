@@ -198,8 +198,12 @@ REDECIDED = [
     # inverses on both sides: the class is written in one orientation, the lone inverse joining the
     # even power and the root (its infinity at the zero is the one-sided limit's, -inf)
     ('* * inv pow - 3 x1 2 inv - 3 x1 pow - x1 3 0.5'.split(), '/ -1 pow - x1 3 / 5 2'),
-    # a symbolic power cannot move; the even power cancels the bare sum
-    ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(), '/ pow - 3 x1 x3 - x1 3'),
+    # a symbolic power cannot move; the even power cancels the bare sum, and the symbolic power,
+    # defined where 3 - x1 is positive, orients the class (its infinity at the zero is the
+    # one-sided limit's; permissive keeps no value at a pole)
+    ('* * inv pow - 3 x1 2 pow - 3 x1 x3 - x1 3'.split(),
+     {'f64': '/ neg pow - 3 x1 x3 - 3 x1', 'real': '/ neg pow - 3 x1 x3 - 3 x1',
+      'permissive': '/ pow - 3 x1 x3 - x1 3'}),
     # (3 - x1) / (3 - x1)^3 is an even power over x1 - 3, which meets the bare x1 - 3
     (['<mul>'] + _S + ['inv', 'pow'] + _S + ['3'] + _N + ['</mul>'], 'inv <add> x1 <sub> 3 </add>'),
     # (x1 - 3)^2 / (x1 - 3) is the bare x1 - 3, which cancels against 1/(3 - x1)

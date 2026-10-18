@@ -5,8 +5,10 @@ A negative odd power's pole is two-signed (its sides disagree), so the sign of i
 keeps: the inverse's orientation is the product's choice in every mode, as every other sign carrier's is
 (`sign_trade_flip`, `sign_place` in rust/ac/expr.rs). The class of a sum is decided as a whole: a factor belongs to
 it by its parity in the sum (`zero_read`), the sites over one sum flip together, and where the product is even in
-the sum its pole is one-signed and its value there is the limit, which the answer keeps; where that value is not
-read, the class keeps the input's orientation (`class_pinned`). Like terms are like up to sign, so `x + f - f`
+the sum its pole is one-signed and its value there is the limit, which the answer keeps; where a member is defined
+on one side of the zero only (a log, an even root, a fractional or symbolic power), the class is written in the
+orientation positive on that side and the value there is that side's limit (`zero_limit`); where the value is not
+read, the class takes its cheapest orientation. Like terms are like up to sign, so `x + f - f`
 cancels whichever orientation each `f` arrived in. A lossy context (permissive) keeps no value at a pole.
 """
 import math
@@ -136,14 +138,14 @@ def test_the_up_to_sign_retry_keeps_a_class_whole(eng, src):
 # The answer's value at x1 = 3 is the source's limit there (one-sided where the source is defined on one side only).
 # The source's own value there need not be: `-(3 - x1)` is -0 at its zero but positive beside it, so
 # `1/(cbrt(-2 (x1 - 3)) * -(3 - x1))` is +inf at x1 = 3 where its limit is -inf.
-#   * A sum that holds the class is no regular factor at its zero: the class's own sum under a square root, or
-#     `S - S^3`, vanishes there, so the class keeps the input's orientation, and so does every site holding it.
+#   * A member defined on one side of the zero (the class's own sum under a square root) fixes the side: the class is
+#     written in the orientation positive there, so the value at the zero is that side's limit.
 #   * A class is a zero set: `tanh(2 (3 - x1))` is built over `6 - 2 x1`, a multiple of `x1 - 3`, and `2 x1 - 6`
 #     beside `x1 - 3` is one class with it.
 #   * An odd root reads like an odd function, also over a factor of unknown sign: `1/(cbrt(x2 (x1 - 3)) (3 - x1))`
 #     is `-1/(cbrt(x2 (x1 - 3)) (x1 - 3))`, -inf at x1 = 3 like its limit.
 CLASS_AT_ITS_ZERO = ['inv * pow - 3 x1 / 1 2 sin - 3 x1', 'inv * rootn - 3 x1 2 tanh - 3 x1',
-                     'inv * - - x1 3 pow - x1 3 3 * -1 - x1 3', 'inv * tanh * 2 - 3 x1 * -1 - 3 x1',
+                     'inv * tanh * 2 - 3 x1 * -1 - 3 x1',
                      'inv * rootn * - x1 3 -2 3 * -1 - 3 x1', 'inv * * -1 - x1 3 - * 2 x1 6',
                      'inv * - - x1 3 pow - x1 3 3 - * x2 x1 * 3 x2', 'inv * rootn * x2 - x1 3 3 - 3 x1']
 
@@ -161,6 +163,42 @@ def test_the_value_at_the_zero_of_a_class_is_kept(eng, mode, src):
         assert len({math.copysign(1.0, v) for v in beside}) == 1  # one-sided, or two sides that agree
         limit = math.copysign(math.inf, beside[0])
         assert f_ans(3.0, 1.5) == limit, ' '.join(ans)
+
+
+# A member defined on one side of the class's zero (a log, a symbolic power) fixes the class's orientation: positive on
+# that side, so every spelling of the function gets one answer and its value at x1 = 3 is that side's limit.
+ONE_SIDED = [(['/ log - x1 3 - 3 x1', 'neg / log - x1 3 - x1 3', '/ * log - x1 3 - 3 x1 pow - x1 3 2'], 1.0),
+             (['/ pow - 3 x1 x2 - x1 3', 'neg / pow - 3 x1 x2 - 3 x1'], -1.0),
+             (['/ pow - x1 3 x2 - 3 x1', 'neg / pow - x1 3 x2 - x1 3'], 1.0),
+             (['/ * * x2 rootn - 3 x1 3 pow rootn - 3 x1 3 x2 * - x1 3 pow - + x1 x2 1 7',
+               'neg / * * x2 rootn - x1 3 3 pow rootn - 3 x1 3 x2 * - x1 3 pow - + x1 x2 1 7'], None)]
+
+
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+@pytest.mark.parametrize('spellings,side', ONE_SIDED)
+def test_a_one_sided_member_fixes_the_orientation(eng, mode, spellings, side):
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert len(answers) == 1, answers
+    if side is None:
+        return
+    t, ans = spellings[0].split(), answers.pop().split()
+    f_src = eng.as_callable(t, ['x1', 'x2'])
+    f_ans = eng.as_callable(ans, ['x1', 'x2'])
+    with np.errstate(all='ignore'):
+        beside = f_src(3.0 + side * 1e-9, -0.5)
+        assert abs(beside) > 1e6 and math.isnan(f_src(3.0 - side * 1e-9, -0.5))
+        assert f_ans(3.0, -0.5) == math.copysign(math.inf, beside), ' '.join(ans)
+
+
+# A sum that holds the class among terms free of it (`S - S^3` written flat, `(x1 - 3)^3 + 3 - x1`) is not read at the
+# zero, so its product keeps no value there and takes its cheapest orientation: one answer for every spelling of the
+# function, whose value at x1 = 3 need not be the limit (a registered residual).
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+def test_an_unread_class_takes_its_cheapest_orientation(eng, mode):
+    spellings = ['inv * - - x1 3 pow - x1 3 3 * -1 - x1 3', 'inv * - pow - x1 3 3 - x1 3 - x1 3',
+                 'neg inv * - - x1 3 pow - x1 3 3 - x1 3']
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert len(answers) == 1, answers
 
 
 # An odd root keeps the sign of zero, as IEEE-754 `rootn` and every odd function do, so a canonical form that moves a

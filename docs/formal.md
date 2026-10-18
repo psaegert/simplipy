@@ -280,20 +280,27 @@ sign-trade site only as a whole, so a single member never flips: `-1/(x1 - 3)` a
 are one answer, and `1/((x1 - 3)*(3 - x1))` is `-1/(x1 - 3)^2`. At the zero of $S$ each member's
 float value is read from its parts (an exactly cancelling sum evaluates to $+0$); a placement is a
 candidate only if the product's value at the zero is its limit, so an even product with an odd
-count of members whose zero sign differs is refused (`zero_off`) and no sign moves through a pole
-whose two sides agree. Where a member's value at the zero cannot be read and it is not regular
-there (a log, a fractional or symbolic power) and the
-product has a pole over $S$, the class keeps the orientation it was written with, and so does
-every factor holding the class that may vanish there (`class_pinned`); a lossy context keeps no
-value at a point and pins nothing. A sign never moves where the class's zero set may hold a
-region (`zero_set_null`, decided once per base and call). Like terms collect up to sign (`add()`
+count of members whose zero sign differs is refused and no sign moves through a pole whose two
+sides agree. A member defined beside the zero on one side only (a log, an even root, a fractional
+or symbolic power of an odd member) fixes that side: the class is written in the orientation
+positive there, so every base over $S$ is $+0$ at the zero and the float value is that side's
+limit (`(3 - x1)^x4/(x1 - 3)` is `-(3 - x1)^x4/(3 - x1)`, `-inf` at `x1 = 3` like its limit from
+`x1 < 3`). Members defined on opposite sides leave no domain and fix nothing, and a product that is
+NaN at the zero in every orientation (an infinity times a zero, `log(x1 - 3)*(3 - x1)`) keeps no
+value there. The sign trade, the product table's placements and the sum's like terms ask one
+predicate (`zero_limit`); where a member's value at the zero is not read, the product keeps no
+value there and the class takes its cheapest orientation. A lossy context keeps no value at a
+point. A sign never moves where the class's zero set may hold a region (`zero_set_null`, decided
+once per base and call). Like terms collect up to sign (`add()`
 keys a term by its classes in one orientation), and a pattern variable that occurs twice binds a
 class up to sign (in every mode for `_`, `!` and `$`, where they bind a class; for `?` only where
 it binds any subtree, in `permissive`), the matcher retrying in one orientation only after a
 binding was refused by its own negation; the factoring stage takes a factor shared up to sign the
 same way. So `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and
-`x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`. Residuals [EMPIRICAL]: two spellings of one product
-can keep different orientations where a pinned class meets its pole; one class split across the
+`x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`. Residuals [EMPIRICAL]: where a member's value at the
+zero is not read, the class's cheapest orientation can leave that value off the limit (a sum holding
+the class among terms free of it, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))` is `+inf` at `x1 = 3` where
+its limit is `-inf`); one class split across the
 terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite;
 where two singularities meet, the float value can differ from the joint limit (most such points
 have none); polynomial factors are not classes (`9 - x1^2` does not hold `3 - x1`), and a sum that

@@ -34,9 +34,13 @@
   gives two answers for each pair). `1/((x1 - 3)*(3 - x1))` is `-1/(x1 - 3)^2`, which is `-inf`
   at `x1 = 3` like its limit (0.14.7 and the input give `+inf` there), and
   `1/(-(x1 - 3)*(2*x1 - 6))` keeps `-inf` (0.14.7: `1/(x1 - 3)/(6 - 2*x1)`, `+inf`). A class
-  trades its sign only as a whole, so no sign moves through a pole whose two sides agree; where a
-  member's value at the zero cannot be read (a log, a fractional power), the class keeps the
-  orientation it was written with. Like terms collect up to
+  trades its sign only as a whole, so no sign moves through a pole whose two sides agree. A member
+  defined on one side of the zero only (a log, an even root, a fractional or symbolic power) fixes
+  the class's orientation, positive on that side, so the value at the zero is that side's limit:
+  `log(x1 - 3)/(3 - x1)`, `-log(x1 - 3)/(x1 - 3)` and `log(x1 - 3)*(3 - x1)/(x1 - 3)^2` are one
+  answer, `-log(x1 - 3)/(x1 - 3)`, `+inf` at `x1 = 3` like the limit from `x1 > 3`, and
+  `(3 - x1)^x4/(x1 - 3)` and `-(3 - x1)^x4/(3 - x1)` are `-(3 - x1)^x4/(3 - x1)`, `-inf` there like
+  the limit from `x1 < 3`. Like terms collect up to
   sign and a pattern variable that occurs twice matches a sum or its negation:
   `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and `x1 + sin(x3 - x2) - sin(x3 - x2)`
   is `x1` (0.14.7 keeps the first as written and gives `x1 + sin(x2 - x3) + sin(x3 - x2)` for
@@ -45,8 +49,9 @@
   answer, `-1/3/x1^2`, and `1/(-x1/3)` is `-3/x1`, all `-inf` at the zero like their inputs.
   Where two singularities meet, the float value at that point is the one the
   canonical spelling gives (most such points have no limit at all).
-  Known limits: where a member's value at the zero cannot be read, two spellings of one product
-  can keep different orientations (a fractional or symbolic power of the class beside its pole);
+  Known limits: where a member's value at the zero is not read, the class takes its cheapest
+  orientation, which can leave that value off the limit (`1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))`, a
+  sum holding the class among terms free of it, is `+inf` at `x1 = 3` where its limit is `-inf`);
   one class split across the terms of a sum with a dominant even term can give NaN at its zero,
   where the limit is infinite (`x5/abs(x3 - x2) - 2*x1/tan(x2 - x3)` at `x2 = x3`), because no
   single orientation is right at every such point; a class is read up to constant factors, not

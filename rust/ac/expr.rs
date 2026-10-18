@@ -1991,7 +1991,7 @@ fn up_to_sign_key(x: &Ex, cx: &Cx) -> (Ex, bool) {
                 }
             }
             Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_integer()) => {
-                match orient_base(b, cx) {
+                match orient_base(b, cx, &[]) {
                     Some((nb, _)) => {
                         moved = true;
                         out.push(Ex::Pow(Box::new(nb), q.clone()));
@@ -1999,7 +1999,7 @@ fn up_to_sign_key(x: &Ex, cx: &Cx) -> (Ex, bool) {
                     None => out.push(f.clone()),
                 }
             }
-            _ => match orient_base(f, cx) {
+            _ => match orient_base(f, cx, &[]) {
                 Some((nb, _)) => {
                     moved = true;
                     out.push(nb);
@@ -2033,70 +2033,39 @@ pub(crate) fn orient_term_classes(t: &Ex, cx: &Cx) -> Option<Ex> {
         Ex::Num(_) => return None,
         _ => (vec![t.clone()], Rat::int(1)),
     };
-    // A class is reoriented only as a whole, and only where reading A allows it: not where its
-    // value at the zero is not read (`class_pinned`), nor where a factor the orientation does not
-    // reach would leave the product's value there off the limit (`zero_off`). Every factor carrying
-    // a class that stays keeps its spelling, and so does every other class such a factor carries.
-    let carried: Vec<Vec<Ex>> = factors
-        .iter()
-        .map(|f| {
-            let mut v = Vec::new();
-            carried_classes(f, cx, &mut v);
-            v
-        })
-        .collect();
-    let mut pinned: Vec<Ex> = Vec::new();
-    for k in carried.iter().flatten() {
-        if !pinned.contains(k) && class_pinned(&factors, k, cx) {
-            pinned.push(k.clone());
-        }
+    // A class is reoriented only as a whole: each class the factors carry is written in its own
+    // orientation (`orient_base`), unless the term keeps a value at the class's zero
+    // (`zero_limit`) that this orientation leaves off the limit. Then it is written in its other
+    // orientation where that restores the limit (an odd count of odd members, as beside a log of
+    // the class, whose side fixes the orientation), else as it stands.
+    let mut classes: Vec<Ex> = Vec::new();
+    for f in &factors {
+        carried_classes(f, cx, &mut classes);
     }
-    let spread = |pinned: &mut Vec<Ex>| loop {
-        let before = pinned.len();
-        for cs in &carried {
-            if cs.iter().any(|k| pinned.contains(k)) {
-                for k in cs {
-                    if !pinned.contains(k) {
-                        pinned.push(k.clone());
-                    }
-                }
-            }
-        }
-        if pinned.len() == before {
-            break;
-        }
-    };
-    spread(&mut pinned);
-    let orient = |pinned: &[Ex]| -> Vec<(Ex, bool, bool)> {
+    let orient = |turns: &[(Ex, Turn)]| -> Vec<(Ex, bool, bool)> {
         factors
             .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                if carried[i].iter().any(|k| pinned.contains(k)) {
-                    return (f.clone(), false, false);
-                }
-                match orient_factor(f, cx) {
-                    Some((g, s)) => (g, true, s),
-                    None => (f.clone(), false, false),
-                }
+            .map(|f| match orient_factor(f, cx, turns) {
+                Some((g, s)) => (g, true, s),
+                None => (f.clone(), false, false),
             })
             .collect()
     };
-    let mut oriented = orient(&pinned);
-    for _ in 0..factors.len() {
+    let mut turns: Vec<(Ex, Turn)> = Vec::new();
+    let mut oriented = orient(&turns);
+    for _ in 0..2 * classes.len() {
         let now: Vec<Ex> = oriented.iter().map(|(g, _, _)| g.clone()).collect();
-        let off: Vec<Ex> = carried
-            .iter()
-            .flatten()
-            .filter(|k| !pinned.contains(k) && zero_off(&now, k, cx) == Some(true))
-            .cloned()
-            .collect();
-        if off.is_empty() {
+        let off = classes.iter().find(|k| {
+            !turns.contains(&((*k).clone(), Turn::Keep)) && zero_off(&now, k, cx) == Some(true)
+        });
+        let Some(k) = off else {
             break;
+        };
+        match turns.iter_mut().find(|(c, _)| c == k) {
+            Some(t) => t.1 = Turn::Keep,
+            None => turns.push((k.clone(), Turn::Other)),
         }
-        pinned.extend(off);
-        spread(&mut pinned);
-        oriented = orient(&pinned);
+        oriented = orient(&turns);
     }
     let mut odd = false;
     let mut changed = false;
@@ -2122,9 +2091,17 @@ pub(crate) fn orient_term_classes(t: &Ex, cx: &Cx) -> Option<Ex> {
     })
 }
 
-/// `f` in its class's orientation, and whether the flip moved a sign out of it; `None` where it
-/// already is, or holds no class.
-fn orient_factor(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
+/// A class written against its own orientation (`orient_term_classes`): in the other one, or as
+/// it stands.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Turn {
+    Other,
+    Keep,
+}
+
+/// `f` in its class's orientation (`orient_base`), and whether the flip moved a sign out of it;
+/// `None` where it already is, or holds no class.
+fn orient_factor(f: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
     let (b, k) = match f {
         Ex::Pow(b, e) => match &**e {
             Ex::Num(r) if r.is_integer() => (&**b, Some(r)),
@@ -2138,7 +2115,7 @@ fn orient_factor(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     if k.is_some_and(|r| r.is_negative()) && !zero_set_null(b, cx) {
         return None;
     }
-    let (nb, flipped) = orient_base(b, cx)?;
+    let (nb, flipped) = orient_base(b, cx, turns)?;
     let odd = k.is_none_or(|r| r.is_odd_integer());
     let g = match k {
         None => nb,
@@ -2151,13 +2128,23 @@ fn orient_factor(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
 /// it flipped (each is odd in its sum, so a flip moves a sign out); `None` where it already has
 /// it. The sum's terms are read with every odd function of a negative literal multiple turned
 /// positive (`sin(-x1)` as `-sin(x1)`), so that a sum and its negation spell their terms alike.
-fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
+/// The class's orientation is the structurally smaller one, or as `turns` gives it.
+fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
     match b {
         Ex::Add(ts) => {
             if ts
                 .iter()
                 .any(|t| t.contains_const() || t.contains_infinity())
             {
+                return None;
+            }
+            let turn = if turns.is_empty() {
+                None
+            } else {
+                class_of(ts, cx)
+                    .and_then(|(k, _, _)| turns.iter().find(|(c, _)| *c == k).map(|(_, t)| *t))
+            };
+            if turn == Some(Turn::Keep) {
                 return None;
             }
             let mut pos: Vec<Ex> = ts.iter().map(|t| odd_signs_out(t, cx)).collect();
@@ -2168,14 +2155,14 @@ fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
                 .collect::<Option<Vec<Ex>>>()?;
             neg.sort_by(|x, y| add_term_cmp(x, y, cx.view));
             let (pb, nb) = (Ex::Add(pos), Ex::Add(neg));
-            if cmp_ex(&nb, &pb, cx.view) == Ordering::Less {
+            if (cmp_ex(&nb, &pb, cx.view) == Ordering::Less) != (turn == Some(Turn::Other)) {
                 Some((nb, true))
             } else {
                 (pb != *b).then_some((pb, false))
             }
         }
         Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-            let (a, s) = orient_base(&args[0], cx)?;
+            let (a, s) = orient_base(&args[0], cx, turns)?;
             Some((Ex::Fun(*fk, vec![a]), s))
         }
         Ex::Fun(fk, args)
@@ -2183,7 +2170,7 @@ fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
                 && cx.view.tok_is(*fk, "rootn")
                 && matches!(&args[1], Ex::Num(k) if k.is_odd_integer()) =>
         {
-            let (a, s) = orient_base(&args[0], cx)?;
+            let (a, s) = orient_base(&args[0], cx, turns)?;
             Some((Ex::Fun(*fk, vec![a, args[1].clone()]), s))
         }
         // An integer power of a class carrier: odd powers move the sign out, even ones do not. A
@@ -2194,7 +2181,7 @@ fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
             if !r.is_integer() || (r.is_negative() && !zero_set_null(pb, cx)) {
                 return None;
             }
-            let (nb, s) = orient_base(pb, cx)?;
+            let (nb, s) = orient_base(pb, cx, turns)?;
             Some((Ex::Pow(Box::new(nb), q.clone()), s && r.is_odd_integer()))
         }
         // A product holding a class carrier: each carrier in its orientation and a negative
@@ -2214,7 +2201,7 @@ fn orient_base(b: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
                             v.push(Ex::Num(a));
                         }
                     }
-                    _ => match orient_base(f, cx) {
+                    _ => match orient_base(f, cx, turns) {
                         Some((g, s)) => {
                             flipped ^= s;
                             changed = true;
@@ -2548,18 +2535,6 @@ fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
         // A lone sum is `add()`'s to orient (`primitive_sum`), never a product's.
         Ex::Add(_) => false,
         k => may_be_site(k) && !k.contains_const() && is_sign_trade_site(k, cx),
-    }
-}
-
-/// The sum a site carries.
-fn site_sum(f: &Ex) -> &Ex {
-    match f {
-        Ex::Pow(b, _) => match &**b {
-            Ex::Fun(_, a) => &a[0],
-            b => b,
-        },
-        Ex::Fun(_, a) => &a[0],
-        f => f,
     }
 }
 
@@ -4513,6 +4488,11 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         }
         classes.push(Class::new(&read));
     }
+    for c in classes.iter_mut() {
+        c.kept = class_of(&c.sums[0], cx)
+            .map(|(k, _, _)| k)
+            .filter(|k| zero_limit(&raw, k, cx).is_some());
+    }
     // A class whose factors all arrived over one sum is decided too where they hold exponents of
     // both signs, as the cancellation they meet may be cheaper over the other sum
     // (`-(x1 - 3) / (x1 - 3)^2` is `1/(3 - x1)`), or fractional powers that split its mass
@@ -4714,11 +4694,27 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
             );
             bound(members, lb)
         };
+        // A placement that leaves the product's value at a class's zero off the limit it keeps
+        // there (`zero_limit`, as `sign_place` reads it) is priced above every other.
+        let off = |p: &Ex| {
+            let members = match p {
+                Ex::Mul(v) => v.as_slice(),
+                p => std::slice::from_ref(p),
+            };
+            classes
+                .iter()
+                .filter_map(|c| c.kept.as_ref())
+                .any(|k| zero_off(members, k, cx) == Some(true))
+        };
         let price = |choice: &[usize]| -> Option<(Ex, u64)> {
             super::work::tick(1);
             let (v, odd) = bag(choice)?;
             let p = host.build(neg != odd, v, cx)?;
-            let mu = complexity(&p, cx.view);
+            let mu = if off(&p) {
+                u64::MAX
+            } else {
+                complexity(&p, cx.view)
+            };
             debug_assert!(mu >= lower(choice), "a candidate priced below its bound");
             Some((p, mu))
         };
@@ -5067,25 +5063,34 @@ fn shape_sig(e: &Ex) -> u64 {
 }
 
 /// How a factor reads in a class `S` (a sum in its one orientation): free of it, even (alike over
-/// `S` and `-S`), odd (negated with it), or neither. Compositional: `S` and `-S` are odd; a
-/// product's parity is the product of its factors' (a factor free of `S` is even); an odd function
-/// or an odd root keeps its argument's; an even function of anything in `S`, an even integer power
-/// of it, or any function of something even in it, is even; a sum has the parity its terms share.
+/// `S` and `-S`), odd (negated with it), defined beside the zero of `S` on one side only, or
+/// neither. Compositional: `S` and `-S` are odd; a product's parity is the product of its factors'
+/// (a factor free of `S` is even); an odd function or an odd root keeps its argument's; an even
+/// function of anything in `S`, an even integer power of it, or any function of something even in
+/// it, is even; a sum has the parity its terms share. A log, an even root or a fractional or
+/// symbolic power of something odd in `S` whose sign beside the zero is read is defined only on
+/// the side where that is positive (`Side(true)`: where `S` is negative), and so is a product or
+/// an integer power holding one; members defined on opposite sides leave no domain beside the
+/// zero, and are not read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Parity {
     Free,
     Even,
     Odd,
+    Side(bool),
     Unknown,
 }
 
 /// A factor read at the zero of a class `S` (READING A): its parity in `S`; whether its sign at
-/// the zero differs from its sign beside the zero on the side where the oriented sum is positive;
-/// and that sign beside the zero (negative?). The sum spelled in its other orientation is `+0` at
-/// its zero but negative beside it; a product counts its members (a literal or a factor free of
-/// `S` signs both alike); an odd power, an odd function and an odd root keep the sign of zero; an
-/// even power or an even function differs nowhere. `None` where that is not read (a sum that holds
-/// `S` among other terms or times a factor its terms share, `3 x2 - x1 x2`, any other head).
+/// the zero differs from its sign beside the zero on the side where the oriented sum is positive
+/// (for a factor defined on one side only, on that side); and that sign beside the zero
+/// (negative?). The sum spelled in its other orientation is `+0` at its zero but negative beside
+/// it; a product counts its members (a literal or a factor free of `S` signs both alike); an odd
+/// power, an odd function and an odd root keep the sign of zero; an even power or an even function
+/// differs nowhere, and neither does a one-sided head (`log(±0)` is `-inf`, a fractional power of
+/// `±0` is `+0` or `+inf`, each with the sign it has beside the zero). `None` where that is not
+/// read (a sum that holds `S` among other terms or times a factor its terms share,
+/// `3 x2 - x1 x2`, any other head).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ZeroRead {
     parity: Parity,
@@ -5137,8 +5142,61 @@ fn parity_in(e: &Ex, class: &Ex, cx: &Cx) -> Parity {
     zero_read(e, class, cx).parity
 }
 
+/// The read of a product from its members' reads: its parity is theirs multiplied, and on the side
+/// a one-sided member is defined on (the side where the class's key is positive otherwise) the
+/// members whose sign at the zero differs from their sign beside it are counted, and so are those
+/// negative beside it. An odd member read on the side where the key is negative changes both.
+/// Members defined on opposite sides leave no domain beside the zero: not read.
+fn product_read(reads: impl Iterator<Item = ZeroRead> + Clone) -> ZeroRead {
+    use Parity::{Even, Free, Odd, Side, Unknown};
+    let unread = ZeroRead {
+        parity: Unknown,
+        differs: None,
+        below: None,
+    };
+    let mut side: Option<bool> = None;
+    for r in reads.clone() {
+        match r.parity {
+            Unknown => return unread,
+            Side(s) if side.is_some_and(|t| t != s) => return unread,
+            Side(s) => side = Some(s),
+            _ => {}
+        }
+    }
+    let other = side == Some(true);
+    let (mut odd, mut held) = (false, false);
+    let (mut differs, mut below) = (Some(false), Some(false));
+    for r in reads {
+        let turn = match r.parity {
+            Odd => {
+                odd = !odd;
+                held = true;
+                other
+            }
+            Even | Side(_) => {
+                held = true;
+                false
+            }
+            _ => false,
+        };
+        differs = differs.zip(r.differs).map(|(a, b)| a ^ b ^ turn);
+        below = below.zip(r.below).map(|(a, b)| a ^ b ^ turn);
+    }
+    let parity = match (side, odd, held) {
+        (Some(s), _, _) => Side(s),
+        (None, true, _) => Odd,
+        (None, false, true) => Even,
+        _ => Free,
+    };
+    ZeroRead {
+        parity,
+        differs,
+        below,
+    }
+}
+
 fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
-    use Parity::{Even, Free, Odd, Unknown};
+    use Parity::{Even, Free, Odd, Side, Unknown};
     let read = |parity, differs, below| ZeroRead {
         parity,
         differs,
@@ -5147,6 +5205,15 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
     let unread = read(Unknown, None, None);
     let free = |below| read(Free, Some(false), below);
     let even = read(Even, Some(false), Some(false));
+    // A head defined where its argument is positive, over an argument odd in `S` whose sign beside
+    // the zero is read: defined on the side where that sign is positive, where the head is
+    // positive (a root or a power) or of the sign `below` gives (a log: negative where its argument
+    // tends to zero, read for no argument here).
+    let one_sided = |r: ZeroRead, below: Option<bool>| match (r.parity, r.below) {
+        (Odd, Some(b)) => read(Side(b), Some(false), below),
+        (Side(s), Some(false)) => read(Side(s), Some(false), below),
+        _ => unread,
+    };
     let is_even_fun = |op: Tok| {
         cx.view.tok_is(op, "abs") || cx.view.tok_is(op, "cos") || cx.view.tok_is(op, "cosh")
     };
@@ -5164,7 +5231,7 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
             let (mut odd, mut even_t, mut free_t) = (false, false, false);
             for t in ts {
                 match read_walk(t, class, n, nk, cx).parity {
-                    Unknown => return unread,
+                    Unknown | Side(_) => return unread,
                     Odd => odd = true,
                     Even => even_t = true,
                     Free => free_t = true,
@@ -5178,26 +5245,11 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
             }
         }
         Ex::Mul(fs) => {
-            let (mut odd, mut held) = (false, false);
-            let (mut differs, mut below) = (Some(false), Some(false));
-            for f in fs {
-                let r = read_walk(f, class, n, nk, cx);
-                match r.parity {
-                    Unknown => return unread,
-                    Odd => {
-                        odd = !odd;
-                        held = true;
-                    }
-                    Even => held = true,
-                    Free => {}
-                }
-                differs = differs.zip(r.differs).map(|(a, b)| a ^ b);
-                below = below.zip(r.below).map(|(a, b)| a ^ b);
-            }
-            match (odd, held) {
-                (true, _) => read(Odd, differs, below),
-                (false, true) => read(Even, differs, below),
-                _ => free(below),
+            let r = product_read(fs.iter().map(|f| read_walk(f, class, n, nk, cx)));
+            if r.parity == Free {
+                free(r.below)
+            } else {
+                r
             }
         }
         Ex::Pow(b, q) => {
@@ -5210,18 +5262,22 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
                 (Free, Ex::Num(r)) if r.is_even_integer() => free(Some(false)),
                 (Free, _) => free(None),
                 (Unknown, _) => unread,
+                (Side(s), Ex::Num(r)) if r.is_even_integer() => {
+                    read(Side(s), Some(false), Some(false))
+                }
                 (_, Ex::Num(r)) if r.is_even_integer() => even,
                 (p, Ex::Num(r)) if r.is_odd_integer() => read(p, rb.differs, rb.below),
                 (Even, _) => read(Even, None, None),
-                _ => unread,
+                // A fractional or symbolic power: defined where its base is positive.
+                _ => one_sided(rb, Some(false)),
             }
         }
         Ex::Fun(op, args) if args.len() == 1 && odd_fun(cx.view, *op) => {
             let ra = read_walk(&args[0], class, n, nk, cx);
-            if ra.parity == Free {
-                free(None)
-            } else {
-                ra
+            match ra.parity {
+                Free => free(None),
+                Side(_) => unread,
+                _ => ra,
             }
         }
         Ex::Fun(op, args) if args.len() == 2 && cx.view.tok_is(*op, "rootn") => {
@@ -5230,19 +5286,29 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
             }
             let ra = read_walk(&args[0], class, n, nk, cx);
             let odd_index = matches!(&args[1], Ex::Num(k) if k.is_odd_integer());
+            let even_index = matches!(&args[1], Ex::Num(k) if k.is_even_integer());
             match ra.parity {
                 Free if odd_index => free(ra.below),
                 Free => free(Some(false)),
                 Unknown => unread,
                 _ if odd_index => ra,
                 Even => even,
+                _ if even_index => one_sided(ra, Some(false)),
                 _ => unread,
+            }
+        }
+        Ex::Fun(op, args) if args.len() == 1 && cx.view.tok_is(*op, "log") => {
+            let ra = read_walk(&args[0], class, n, nk, cx);
+            match ra.parity {
+                Free => free(None),
+                Even => read(Even, None, None),
+                _ => one_sided(ra, None),
             }
         }
         Ex::Fun(op, args) if args.len() == 1 && is_even_fun(*op) => {
             match read_walk(&args[0], class, n, nk, cx).parity {
                 Free => free(None),
-                Unknown => unread,
+                Unknown | Side(_) => unread,
                 _ => even,
             }
         }
@@ -5265,120 +5331,151 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
     }
 }
 
-/// READING A AT THE ZERO OF A CLASS: a sign moves through a pole over a sum `S` only where the
-/// answer's value at the zero of `S` is read, and there it must be the limit. Where a factor's
-/// value there is not read -- neither even nor odd in `S` (a log of it, an even root or a
-/// fractional power of it) or of unread sign at the zero (a sum of `S` and an odd function of
-/// it), and not regular there (`regular_at_zero`) -- and the product has a pole over
-/// `S`, the class keeps the input's orientation (`log(S)/S` keeps `S`, the sign of its pole's
-/// infinity being the limit's from the side `log` is defined on). Without a pole the orientation
-/// moves no infinity. A lossy context keeps no value at a pole, so it pins nothing. The sign
-/// trade (`sign_place`), the up-to-sign retry, FACTOR and the sum's like terms
-/// (`orient_term_classes`) ask this; the product table only collects a class's powers, and every
-/// product it builds is signed by the sign trade.
-fn class_pinned(factors: &[Ex], class: &Ex, cx: &Cx) -> bool {
-    !cx.lossy()
-        && factors.iter().any(|f| {
-            let r = zero_read(f, class, cx);
-            r.parity != Parity::Free
-                && (r.parity == Parity::Unknown || r.differs.is_none())
-                && !regular_at_zero(f, class, cx)
-        })
-        && factors.iter().any(|f| pole_at_zero(f, class, cx))
+/// READING A AT THE ZERO OF A CLASS `S`: the value a product keeps at the zero of `S` -- the side
+/// whose limit it is (`true`: where the class's key is negative) and whether the factors as written
+/// leave the value off that limit -- or `None` where it keeps none. It keeps one where that value
+/// is a limit: where the product is even in `S` (two or more odd members, an even count, so its two
+/// sides agree), or defined beside the zero on one side only (`Parity::Side`: a log, an even root,
+/// a fractional or symbolic power of `S` among its members, which fixes the side), and the product
+/// is not NaN there in every orientation (an infinity times a zero, `log(S) S`). An odd product
+/// with no one-sided member has a two-signed pole or zero, whose sign is no value the answer keeps.
+/// The float value at the zero is the limit exactly where the members whose sign there differs
+/// from their sign beside the zero on that side are even in number (`ZeroRead::differs`): written
+/// in the orientation positive on that side, every member's base is `+0` there. Where a member is
+/// not read (an odd root of a product of unknown sign, `cbrt(x2 (x1 - 3))`, or a class scaled by a
+/// factor of unknown sign), the product keeps nothing and its orientation is its cheapest. A lossy
+/// context keeps no value at a pole. The product owners all ask this one predicate: the sign trade
+/// (`sign_place`), the product table's lone inverse (`Class::table`) and the sum's like terms
+/// (`orient_term_classes`).
+fn zero_limit(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<(bool, bool)> {
+    if cx.lossy() {
+        return None;
+    }
+    let reads: Vec<ZeroRead> = factors.iter().map(|f| zero_read(f, class, cx)).collect();
+    let r = product_read(reads.iter().copied());
+    let side = match r.parity {
+        Parity::Side(s) => s,
+        Parity::Even if reads.iter().filter(|r| r.parity == Parity::Odd).count() >= 2 => false,
+        _ => return None,
+    };
+    let off = r.differs?;
+    let mags = factors.iter().map(|f| zero_mag(f, class, cx));
+    (product_mag(mags) != Mag::Nan).then_some((side, off))
 }
 
-/// Whether a product's value at the zero of a class `S` is off the limit there: the product is even
-/// in `S` (an even count of odd members), so its two sides agree, and an odd count of its members
-/// has a sign at the zero other than beside it (`ZeroRead::differs`); `None` where not read.
+/// Whether a product's value at the zero of a class is off the limit it keeps there
+/// (`zero_limit`); `None` where it keeps none.
 fn zero_off(factors: &[Ex], class: &Ex, cx: &Cx) -> Option<bool> {
-    let (mut odd, mut differs) = (0usize, false);
-    for f in factors {
-        let r = zero_read(f, class, cx);
-        match r.parity {
-            Parity::Free => continue,
-            Parity::Unknown => return None,
-            Parity::Odd => odd += 1,
-            Parity::Even => {}
+    zero_limit(factors, class, cx).map(|(_, off)| off)
+}
+
+/// A factor's magnitude at the zero of a class `S` (`zero_limit`'s NaN test): zero, finite and
+/// nonzero, infinite, NaN, or not read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mag {
+    Zero,
+    Finite,
+    Inf,
+    Nan,
+    Unknown,
+}
+
+/// The magnitude of a product from its members': NaN where an infinity meets a zero.
+fn product_mag(mags: impl Iterator<Item = Mag>) -> Mag {
+    let (mut zero, mut inf) = (false, false);
+    for m in mags {
+        match m {
+            Mag::Nan => return Mag::Nan,
+            Mag::Unknown => return Mag::Unknown,
+            Mag::Zero => zero = true,
+            Mag::Inf => inf = true,
+            Mag::Finite => {}
         }
-        differs ^= r.differs?;
     }
-    Some(odd >= 2 && odd % 2 == 0 && differs)
+    match (zero, inf) {
+        (true, true) => Mag::Nan,
+        (true, false) => Mag::Zero,
+        (false, true) => Mag::Inf,
+        _ => Mag::Finite,
+    }
+}
+
+/// `e`'s magnitude at the zero of a class `S`: a factor free of `S` is finite there (at a generic
+/// point), a sum of the class and a sum of terms that vanish there are zero, and the heads carry it:
+/// a negative power or a negative root index inverts it, a log of a zero is infinite, an odd
+/// function keeps a zero, `exp`, `cos` and `cosh` of a finite argument are finite.
+fn zero_mag(e: &Ex, class: &Ex, cx: &Cx) -> Mag {
+    let inverse = |m: Mag| match m {
+        Mag::Zero => Mag::Inf,
+        Mag::Inf => Mag::Zero,
+        m => m,
+    };
+    if parity_in(e, class, cx) == Parity::Free {
+        return match e {
+            Ex::PosInf | Ex::NegInf => Mag::Inf,
+            _ => Mag::Finite,
+        };
+    }
+    match e {
+        Ex::Add(ts) if matches!(class_of(ts, cx), Some((k, _, _)) if k == *class) => Mag::Zero,
+        Ex::Add(ts) => {
+            let mut all_zero = true;
+            for t in ts {
+                match zero_mag(t, class, cx) {
+                    Mag::Zero => {}
+                    Mag::Finite => all_zero = false,
+                    _ => return Mag::Unknown,
+                }
+            }
+            if all_zero {
+                Mag::Zero
+            } else {
+                Mag::Finite
+            }
+        }
+        Ex::Mul(fs) => product_mag(fs.iter().map(|f| zero_mag(f, class, cx))),
+        Ex::Pow(b, q) => match &**q {
+            Ex::Num(r) if r.is_negative() => inverse(zero_mag(b, class, cx)),
+            Ex::Num(_) => zero_mag(b, class, cx),
+            _ => match zero_mag(b, class, cx) {
+                Mag::Finite => Mag::Finite,
+                _ => Mag::Unknown,
+            },
+        },
+        Ex::Fun(op, args) if args.len() == 2 && cx.view.tok_is(*op, "rootn") => match &args[1] {
+            Ex::Num(k) if k.is_negative() => inverse(zero_mag(&args[0], class, cx)),
+            Ex::Num(_) => zero_mag(&args[0], class, cx),
+            _ => Mag::Unknown,
+        },
+        Ex::Fun(op, args) if args.len() == 1 => {
+            let m = zero_mag(&args[0], class, cx);
+            let view = cx.view;
+            if view.tok_is(*op, "log") {
+                match m {
+                    Mag::Zero | Mag::Inf => Mag::Inf,
+                    m => m,
+                }
+            } else if odd_fun(view, *op) || view.tok_is(*op, "abs") {
+                match m {
+                    Mag::Zero | Mag::Finite => m,
+                    _ => Mag::Unknown,
+                }
+            } else if ["exp", "cos", "cosh"].iter().any(|n| view.tok_is(*op, n)) {
+                match m {
+                    Mag::Zero | Mag::Finite => Mag::Finite,
+                    _ => Mag::Unknown,
+                }
+            } else {
+                Mag::Unknown
+            }
+        }
+        _ => Mag::Unknown,
+    }
 }
 
 /// The sites of one class in a product (`sign_place`): the class, and per site its index among the
 /// sites and whether it spells the class against the class's own orientation.
 type ClassGroup = (Option<Ex>, Vec<(usize, bool)>);
-
-/// Whether `e` is infinite at the zero of a class `S` (a sum in its one orientation): a negative
-/// power or a log of something that holds `S`, anywhere in it.
-fn pole_at_zero(e: &Ex, class: &Ex, cx: &Cx) -> bool {
-    let holds = |x: &Ex| parity_in(x, class, cx) != Parity::Free;
-    match e {
-        Ex::Pow(b, q) => {
-            (matches!(&**q, Ex::Num(r) if r.is_negative()) && holds(b))
-                || pole_at_zero(b, class, cx)
-        }
-        Ex::Fun(op, args) => {
-            (cx.view.tok_is(*op, "log") && args.iter().any(holds))
-                || args.iter().any(|a| pole_at_zero(a, class, cx))
-        }
-        Ex::Add(v) | Ex::Mul(v) => v.iter().any(|x| pole_at_zero(x, class, cx)),
-        _ => false,
-    }
-}
-
-/// Whether `e` is regular at the zero of a class `S`: continuous through it, built from `S` by
-/// sums, products, non-negative integer powers, odd roots and functions defined on the whole line
-/// (`exp`, `sin`, `cos`, `sinh`, `cosh`, `tanh`, `atan`, `asinh`, `abs`), and away from zero there
-/// (an exponential or a cosine of such, or a factor free of `S`), so that its value there is
-/// finite, nonzero and the same in both orientations of `S`.
-fn regular_at_zero(e: &Ex, class: &Ex, cx: &Cx) -> bool {
-    fn whole(e: &Ex, class: &Ex, cx: &Cx) -> bool {
-        if parity_in(e, class, cx) == Parity::Free {
-            return true;
-        }
-        match e {
-            Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| whole(x, class, cx)),
-            Ex::Pow(b, q) => {
-                matches!(&**q, Ex::Num(r) if r.is_integer() && !r.is_negative())
-                    && whole(b, class, cx)
-            }
-            Ex::Fun(op, args)
-                if args.len() == 2
-                    && cx.view.tok_is(*op, "rootn")
-                    && matches!(&args[1], Ex::Num(k) if k.is_odd_integer() && !k.is_negative()) =>
-            {
-                whole(&args[0], class, cx)
-            }
-            Ex::Fun(op, args) => {
-                [
-                    "exp", "sin", "cos", "sinh", "cosh", "tanh", "atan", "asinh", "abs",
-                ]
-                .iter()
-                .any(|n| cx.view.tok_is(*op, n))
-                    && args.iter().all(|a| whole(a, class, cx))
-            }
-            _ => false,
-        }
-    }
-    match e {
-        // A sum that holds the class -- the class's own sum, one of its multiples, or a sum among
-        // whose terms it sits (`S - S^3`) -- may vanish at the zero: it is regular there only
-        // where it reads free of the class.
-        Ex::Add(_) => parity_in(e, class, cx) == Parity::Free,
-        Ex::Mul(v) => v.iter().all(|x| regular_at_zero(x, class, cx)),
-        Ex::Pow(b, q) => matches!(&**q, Ex::Num(_)) && regular_at_zero(b, class, cx),
-        Ex::Fun(op, args)
-            if args.len() == 1
-                && (cx.view.tok_is(*op, "exp")
-                    || cx.view.tok_is(*op, "cos")
-                    || cx.view.tok_is(*op, "cosh")) =>
-        {
-            whole(&args[0], class, cx)
-        }
-        _ => parity_in(e, class, cx) == Parity::Free,
-    }
-}
 
 /// A class {B, -B}: the head of `B`, the terms of the sum on each side (the second empty until a
 /// factor over it is seen), and the key and flip that recognise the negation of the first.
@@ -5387,6 +5484,8 @@ struct Class<'a> {
     sums: [Vec<Ex>; 2],
     key: u64,
     flip: SumFlip,
+    /// The class's key where the product keeps a value at its zero (`zero_limit`).
+    kept: Option<Ex>,
 }
 
 impl<'a> Class<'a> {
@@ -5396,6 +5495,7 @@ impl<'a> Class<'a> {
             sums: [read.terms.to_vec(), Vec::new()],
             key: negation_key(read.terms),
             flip: SumFlip::new(),
+            kept: None,
         }
     }
 
@@ -5496,8 +5596,9 @@ impl<'a> Class<'a> {
         // A lone inverse moves, its sign going to the product: the table writes the class in one
         // orientation, so at the zero of its sum (where every member's base is +0) the product's
         // value is the coefficient's infinity, the limit wherever the pole is one-signed
-        // (`1/((x1 - 3)(3 - x1))` is `-1/(x1 - 3)^2`). A class whose zero set may hold a region
-        // keeps its inverse, infinite on the region.
+        // (`1/((x1 - 3)(3 - x1))` is `-1/(x1 - 3)^2`); where the product keeps a value at the
+        // zero (`zero_limit`), only to a placement that keeps it. A class whose zero set may hold
+        // a region keeps its inverse, infinite on the region.
         t.free_inverse = zero_set_null(&self.base(0), cx);
         for side in t.sides.iter_mut() {
             side.fixed.sort_by(|a, b| cmp_ex(a, b, cx.view));
@@ -6255,52 +6356,6 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
                 }
             }
         }
-        // Reading A at the zero of each class (`class_pinned`): where the value there is not
-        // read, the class's sites keep their spelling.
-        let pinned: Vec<Ex> = groups
-            .iter()
-            .filter_map(|(k, _)| k.as_ref().filter(|k| class_pinned(&out, k, cx)).cloned())
-            .collect();
-        if !pinned.is_empty() {
-            // Every site that holds a pinned class and vanishes at its zero keeps its spelling
-            // too: a sum among whose terms the class sits (`S - S^3`) is zero there as well, and
-            // its flip would move the sign of the infinity there just as the class's own sites
-            // would. A site over a sum infinite there (`(x9 - 1)^(-1/4) - x9`) flips exactly.
-            let holds = |pos: usize| {
-                pinned.iter().any(|k| {
-                    parity_in(&out[pos], k, cx) != Parity::Free
-                        && !pole_at_zero(site_sum(&out[pos]), k, cx)
-                })
-            };
-            // The sites left keep their order in `site_flips`, so a site's new bit is its rank
-            // among them.
-            let mut free: Vec<usize> = groups
-                .iter()
-                .filter(|(k, _)| !k.as_ref().is_some_and(|k| pinned.contains(k)))
-                .flat_map(|(_, m)| m.iter().map(|(bit, _)| *bit))
-                .filter(|bit| !holds(site_flips[*bit].0))
-                .collect();
-            free.sort_unstable();
-            let renumber = |bit: usize| free.iter().position(|&b| b == bit);
-            groups = groups
-                .into_iter()
-                .filter(|(k, _)| !k.as_ref().is_some_and(|k| pinned.contains(k)))
-                .map(|(k, m)| {
-                    let m: Vec<(usize, bool)> = m
-                        .into_iter()
-                        .filter_map(|(bit, other)| renumber(bit).map(|b| (b, other)))
-                        .collect();
-                    (k, m)
-                })
-                .filter(|(_, m)| !m.is_empty())
-                .collect();
-            site_flips = site_flips
-                .into_iter()
-                .enumerate()
-                .filter(|(bit, _)| free.contains(bit))
-                .map(|(_, sf)| sf)
-                .collect();
-        }
         // More than six groups go to the closed form, which decides site by site: a class of two
         // or more members then keeps its spelling there.
         if groups.len() > 6 && groups.iter().any(|(_, m)| m.len() > 1) {
@@ -6319,45 +6374,30 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
                 .map(|b| (None, vec![(b, false)]))
                 .collect();
         }
-        // At the zero of a class the product is even in (an even count of odd members), the two
-        // sides agree, and the value there is the limit, which the answer keeps (reading A). Every
-        // member's value there is its sum's at +0 carried through its head, so the product's value
-        // is the limit exactly when the members whose sign there differs from their sign beside the
-        // zero (`ZeroRead::differs`) are even in number; a configuration that leaves an odd count is no
-        // candidate. A member built over the sum's other orientation inside a product
-        // (`sin(-(x1 (x1 - 3)))` for `sin(x1 (3 - x1))`) is counted where it stands, so the product
-        // restores the limit an inner orientation moved. A lossy context keeps no value at a pole.
-        let checks: Vec<(bool, Vec<Option<bool>>)> = if cx.lossy() {
-            Vec::new()
-        } else {
-            groups
-                .iter()
-                .filter_map(|(k, _)| {
-                    let k = k.as_ref()?;
-                    let reads: Vec<ZeroRead> = out.iter().map(|f| zero_read(f, k, cx)).collect();
-                    let odd = reads.iter().filter(|r| r.parity == Parity::Odd).count();
-                    if odd < 2 || odd % 2 == 1 || reads.iter().any(|r| r.parity == Parity::Unknown)
-                    {
-                        return None;
-                    }
-                    let mut now = false;
-                    for r in reads.iter().filter(|r| r.parity != Parity::Free) {
-                        now ^= r.differs?;
-                    }
-                    let toggles: Vec<Option<bool>> = site_flips
-                        .iter()
-                        .map(|(pos, nf)| {
-                            let r = reads[*pos];
-                            if r.parity == Parity::Free {
-                                return Some(false);
-                            }
-                            Some(r.differs? != zero_read(nf, k, cx).differs?)
-                        })
-                        .collect();
-                    Some((now, toggles))
-                })
-                .collect()
-        };
+        // Reading A at the zero of each class (`zero_limit`): where the product keeps a value
+        // there, a configuration that leaves it off the limit is no candidate. A configuration
+        // changes the count of members whose sign at the zero differs from their sign beside it by
+        // the sites it flips whose own count changes; a member built over the sum's other
+        // orientation inside a product (`sin(-(x1 (x1 - 3)))` for `sin(x1 (3 - x1))`) is counted
+        // where it stands, so the product restores the limit an inner orientation moved.
+        let checks: Vec<(bool, Vec<Option<bool>>)> = groups
+            .iter()
+            .filter_map(|(k, _)| {
+                let k = k.as_ref()?;
+                let (_, now) = zero_limit(&out, k, cx)?;
+                let toggles: Vec<Option<bool>> = site_flips
+                    .iter()
+                    .map(|(pos, nf)| {
+                        let r = zero_read(&out[*pos], k, cx);
+                        if r.parity == Parity::Free {
+                            return Some(false);
+                        }
+                        Some(r.differs? != zero_read(nf, k, cx).differs?)
+                    })
+                    .collect();
+                Some((now, toggles))
+            })
+            .collect();
         let sites: Vec<usize> = site_flips.iter().map(|(i, _)| *i).collect();
         let factor_price = |f: &Ex| -> u64 {
             match f {
