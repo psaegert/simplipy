@@ -164,32 +164,30 @@ COMMON_FACTOR = [
 ]
 
 
-class TestUnitTwins:
-    """A product pattern matches only a term that is itself a product. A coefficient makes
-    a term one (``-x1`` is ``-1 * x1``), so ``x1*x2 - x1`` reached the common-factor rules
-    while ``x1 - x1*x2`` and ``x1 + x1*x2``, whose bare term has the unit coefficient, did
-    not. Translate mints the rule with the term's private wildcard bound to 1, which states
-    the same identity for the bare term, and it passes the asset rules' gates."""
+class TestFactoringIsASearchMove:
+    """The distributive law read as factoring is a move of the search, not a rule: a bare term is
+    its own product with the unit coefficient, so ``x1 - x1*x2`` and ``x1 + x1*x2`` factor with no
+    rule at all, and no rule is minted for them (the unit twins this replaced)."""
 
     def test_bare_terms_factor(self) -> None:
-        e = make_engine(COMMON_FACTOR)
+        e = make_engine([])
         for src, factored in ((["-", "x1", "*", "x1", "x2"], ["*", "x1", "-", "1", "x2"]),
                               (["+", "x1", "*", "x1", "x2"], ["*", "x1", "+", "1", "x2"])):
             assert e.simplify(list(src)) == e.simplify(list(factored)), src
 
     def test_both_orientations_of_a_sum_factor_alike(self) -> None:
-        e = make_engine(COMMON_FACTOR)
+        e = make_engine([])
         a = e.simplify(["-", "x1", "*", "x1", "x2"])
         b = e.simplify(["neg", "-", "*", "x1", "x2", "x1"])
         assert a == b, (a, b)
 
-    def test_served_set_is_the_artifact_plus_the_twins(self) -> None:
+    def test_no_rule_is_minted_for_a_bare_term(self) -> None:
         e = make_engine(COMMON_FACTOR)
         kept, _, _, twins = e._core.ac_rules_info()
         served = e._core.ac_served_rules()
-        assert len(served) == kept == len(e.simplification_rules) + twins
-        # a unit twin's left side is a sum holding a bare wildcard term
-        assert any(lhs[0] in ("+", "-") and "?" in lhs[1] for lhs, _, _ in served[-twins:])
+        assert len(served) == kept
+        # a unit twin's left side was a sum holding a bare wildcard term
+        assert not any(lhs[0] in ("+", "-") and lhs[1].startswith("?") for lhs, _, _ in served)
 
     def test_a_repeated_wildcard_binds_a_class_up_to_sign(self) -> None:
         # `x1/(x2 - x3) + x4/(x3 - x2)`: the two inverses carry one class in its two orientations.
@@ -204,19 +202,3 @@ class TestUnitTwins:
         # A `?` wildcard binds variable leaves only outside permissive, so no class is bound there.
         leaf = [[[t.replace("_", "?") for t in over[0][0]], [t.replace("_", "?") for t in over[0][1]]]]
         assert make_engine(leaf).simplify(list(src), effort=0) != want
-
-    def test_unit_twins_never_take_a_chain_rules_place(self) -> None:
-        # A rule whose orientation twin is another rule's unit twin: the chain keeps the twin.
-        # Unit twins are minted after the closure, so `x1 + x1*x2` factors at effort 0 (the chain
-        # alone), whichever order the artifact lists the rules in.
-        common = [["+", "*", "?0", "?1", "*", "?2", "?1"], ["*", "+", "?0", "?2", "?1"]]
-        negated = [["-", "neg", "?1", "*", "?1", "?2"], ["neg", "*", "?1", "+", "?2", "1"]]
-        for rules in ([negated, common], [common, negated]):
-            e = make_engine(rules)
-            got = e.simplify(["+", "x1", "*", "x1", "x2"], effort=0)
-            assert got == e.simplify(["*", "x1", "+", "x2", "1"], effort=0), rules
-
-    def test_a_rule_without_a_private_wildcard_mints_none(self) -> None:
-        e = make_engine([[["+", "*", "?0", "?1", "*", "2", "*", "?0", "?1"], ["*", "3", "*", "?0", "?1"]]])
-        served = e._core.ac_served_rules()
-        assert not any("?" in lhs[1] and lhs[0] in ("+", "-") for lhs, _, _ in served)

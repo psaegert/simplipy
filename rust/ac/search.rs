@@ -43,9 +43,9 @@
 //!
 //! MOVE SET (B1): `distribute` (a Mul bag's Add children, fully distributed -- the
 //! row-156 move) and its Pow sibling `pow-expand` (integer power of a sum, expanded
-//! through the same product builder), and their reverse `factor` (a sum whose terms share
-//! a factor, as that factor times the quotient sum), which runs in a second stage from the
-//! first stage's answer (see [`explore`]). The enumeration in `local_moves` is the single
+//! through the same product builder), and their reverse `factor` (terms of a sum that share
+//! a factor, as that factor times the quotient sum: the distributive law, which the search
+//! owns, see [`factorings`]). The enumeration in `local_moves` is the single
 //! extension point for further kinds (common-denominator is deferred to the B7 lane
 //! with its own falsifier). One deliberate scaffolding bound: the frontier extends
 //! only from ACCEPTED valleys, so every win is reachable by depth-1 moves from a
@@ -115,20 +115,16 @@ const BFS_PREFIX: usize = 8;
 /// last of these with at most `k` descents (or on the fixpoint): `permissive` uses this to
 /// make more budget never end costlier.
 ///
-/// Two stages share the descents and the work budget. The EXPANSION stage is the search
-/// above under the chain's own rules. The FACTOR stage then starts from its answer and
-/// accepts only states strictly below, so it never ends above it: its descents also serve
-/// the unit twins (`PassCtx::unit_twins`) and its candidates include FACTOR. Its first round
-/// tries the answer's FACTOR moves (and, where the mode's rules have unit twins, the answer
-/// re-descended with them); once a state is accepted, every move kind, round after round,
-/// until a round finds nothing. A state in which no sum has two terms sharing a factor skips
-/// the stage.
+/// One move set ([`local_moves`]: DISTRIBUTE, POW-EXPAND and FACTOR) under one acceptance. A
+/// FACTOR candidate is descended only when its rebuilt state is already below the best: the
+/// merges a factored sum enables across its product happen in the constructors that rebuild its
+/// ancestors, so a factoring that does not pay there is not walked.
 pub fn explore(
     fix: Ex,
     pass: &PassCtx,
     max_passes: usize,
     budget: usize,
-    mut trace: Option<&mut Vec<(usize, Ex)>>,
+    trace: Option<&mut Vec<(usize, Ex)>>,
 ) -> Ex {
     if budget == 0 {
         return fix;
@@ -140,11 +136,7 @@ pub fn explore(
     // place under every `budget`: a run capped at `k` descents is still the same walk cut short,
     // and permissive's selection keeps its three bounds (docs/formal.md).
     let _ceiling = super::work::limit(super::work::search_budget());
-    let (best, spent) = expand_stage(fix, pass, max_passes, budget, trace.as_deref_mut());
-    if spent >= budget || super::work::over() {
-        return best;
-    }
-    factor_stage(best, pass, max_passes, budget, spent, trace)
+    search(fix, pass, max_passes, budget, trace)
 }
 
 /// The descent of a candidate to its fixpoint under `pass` (or the `max_passes` truncation
@@ -164,139 +156,29 @@ fn descend(mut cur: Ex, pass: &PassCtx, max_passes: usize) -> Ex {
     cur
 }
 
-/// The FACTOR stage of [`explore`]: first improvement from the expansion stage's answer,
-/// under a pass that also serves the unit twins. Returns the best state.
-fn factor_stage(
-    start: Ex,
-    pass: &PassCtx,
-    max_passes: usize,
-    budget: usize,
-    spent: usize,
-    trace: Option<&mut Vec<(usize, Ex)>>,
-) -> Ex {
-    // Both the unit twins and FACTOR take a factor out of terms that share it (FACTOR up to
-    // sign): a state with no such sum has nothing for this stage.
-    if !shares_a_factor(&start, Some(pass.cx.view)) {
-        return start;
+/// A candidate: the place of a move, the moved node, and whether it is a FACTOR move (descended
+/// only when its rebuilt state is already below the best).
+type Site = (Vec<usize>, Ex, bool);
+
+/// The candidate `site` of `state`, rebuilt and descended; `None` for a FACTOR move whose
+/// rebuilt state is not below `best`.
+fn try_site(state: &Ex, best: &Ex, site: &Site, pass: &PassCtx, max_passes: usize) -> Option<Ex> {
+    let (path, moved, probe) = site;
+    let rebuilt = rebuild(state, path, moved.clone(), pass.cx);
+    if *probe && !ordered_below(&rebuilt, best, pass.cx.view) {
+        return None;
     }
-    // With unit twins to serve, the descents run under their own pass. It takes over the
-    // caller's normal-form memo less the entries holding a sum whose terms share a factor
-    // (no unit twin can fire inside the others, and no other rule could before), and hands
-    // it back: what is normal with the unit twins is normal without them.
-    if pass.rules.n_unit_twins == 0 {
-        return factor_rounds(start, pass, false, max_passes, budget, spent, trace);
-    }
-    let mut memo = std::mem::take(&mut *pass.normal.borrow_mut());
-    memo.retain(|e| !shares_a_factor(e, None));
-    let twins = PassCtx {
-        rules: pass.rules,
-        cx: pass.cx,
-        mcx: pass.mcx,
-        fold: pass.fold,
-        fires: std::cell::Cell::new(pass.fires.get()),
-        normal: std::cell::RefCell::new(memo),
-        explore: pass.explore,
-        suppressed: pass.suppressed,
-        unit_twins: true,
-    };
-    let best = factor_rounds(start, &twins, true, max_passes, budget, spent, trace);
-    pass.fires.set(twins.fires.get());
-    *pass.normal.borrow_mut() = twins.normal.into_inner();
-    best
+    Some(descend(rebuilt, pass, max_passes))
 }
 
-/// The rounds of the factor stage under `pass`; `twins`: does it serve unit twins (then the
-/// answer itself, re-descended, is the first candidate)?
-fn factor_rounds(
-    start: Ex,
-    pass: &PassCtx,
-    twins: bool,
-    max_passes: usize,
-    budget: usize,
-    mut spent: usize,
-    mut trace: Option<&mut Vec<(usize, Ex)>>,
-) -> Ex {
-    let mut best = start;
-    // Candidates that are descended (`walk`), and FACTOR candidates (`probe`), which are
-    // descended only when their rebuilt state is already below the best: the merges a
-    // factored sum enables across its product happen in the constructors that rebuild its
-    // ancestors, so a factoring that does not pay there is not walked.
-    let mut walk: Vec<(Vec<usize>, Ex)> = Vec::new();
-    let mut probe: Vec<(Vec<usize>, Ex)> = Vec::new();
-    if twins {
-        // The answer itself, re-descended where the unit twins can now fire.
-        walk.push((Vec::new(), best.clone()));
-    }
-    factor_sites(&best, pass.cx, &[], &mut Vec::new(), &mut probe);
-    loop {
-        let mut accepted: Option<Ex> = None;
-        let candidates = walk
-            .iter()
-            .map(|s| (s, true))
-            .chain(probe.iter().map(|s| (s, false)));
-        for ((path, moved), full) in candidates {
-            if spent >= budget || super::work::over() {
-                return best;
-            }
-            spent += 1;
-            let rebuilt = rebuild(&best, path, moved.clone(), pass.cx);
-            if !full && !ordered_below(&rebuilt, &best, pass.cx.view) {
-                continue;
-            }
-            let cur = descend(rebuilt, pass, max_passes);
-            if super::work::over() {
-                return best;
-            }
-            if ordered_below(&cur, &best, pass.cx.view) {
-                accepted = Some(cur);
-                break;
-            }
-        }
-        match accepted {
-            Some(cur) => {
-                if let Some(t) = trace.as_deref_mut() {
-                    t.push((spent, cur.clone()));
-                }
-                best = cur;
-                walk.clear();
-                probe.clear();
-                site_list(&best, pass.cx, &mut Vec::new(), &mut walk);
-                factor_sites(&best, pass.cx, &[], &mut Vec::new(), &mut probe);
-            }
-            None => return best,
-        }
-    }
-}
-
-/// Does a sum in `e` hold two terms that share a base -- or, given the token view, a base up to
-/// sign through a class's orientation (`orientation_near_miss`), as FACTOR reads them?
-fn shares_a_factor(e: &Ex, up_to_sign: Option<&crate::tokens::TokenView>) -> bool {
-    let same =
-        |x: &Ex, y: &Ex| x == y || up_to_sign.is_some_and(|v| orientation_near_miss(x, y, v));
-    match e {
-        Ex::Add(v) => {
-            let bases: Vec<Vec<&Ex>> = v.iter().map(term_bases).collect();
-            bases.iter().enumerate().any(|(i, a)| {
-                bases[i + 1..]
-                    .iter()
-                    .any(|b| a.iter().any(|x| b.iter().any(|y| same(x, y))))
-            }) || v.iter().any(|t| shares_a_factor(t, up_to_sign))
-        }
-        Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|t| shares_a_factor(t, up_to_sign)),
-        Ex::Pow(b, x) => shares_a_factor(b, up_to_sign) || shares_a_factor(x, up_to_sign),
-        _ => false,
-    }
-}
-
-/// The EXPANSION stage of [`explore`]. Returns the best state and the descents spent.
-fn expand_stage(
+/// The search of [`explore`]. Returns the best state.
+fn search(
     fix: Ex,
     pass: &PassCtx,
     max_passes: usize,
     budget: usize,
     mut trace: Option<&mut Vec<(usize, Ex)>>,
-) -> (Ex, usize) {
-    let descend = |cur: Ex| -> Ex { descend(cur, pass, max_passes) };
+) -> Ex {
     let mut best = fix;
     let mut spent = 0usize;
     // Phase 1: breadth-first over accepted states.
@@ -307,11 +189,11 @@ fn expand_stage(
     // already tried were refused against that same best: the finish's first round skips them.
     let mut refused_of_best = 0usize;
     'bfs: while let Some(state) = frontier.pop_front() {
-        let mut sites: Vec<(Vec<usize>, Ex)> = Vec::new();
-        site_list(&state, pass.cx, &mut Vec::new(), &mut sites);
-        for (i, (path, moved)) in sites.into_iter().enumerate() {
+        let mut sites: Vec<Site> = Vec::new();
+        site_list(&state, pass.cx, &[], None, &mut Vec::new(), &mut sites);
+        for (i, site) in sites.iter().enumerate() {
             if spent >= budget || super::work::over() {
-                return (best, spent);
+                return best;
             }
             if spent >= BFS_PREFIX {
                 settled = false;
@@ -323,9 +205,11 @@ fn expand_stage(
                 break 'bfs;
             }
             spent += 1;
-            let cur = descend(rebuild(&state, &path, moved, pass.cx));
+            let Some(cur) = try_site(&state, &best, site, pass, max_passes) else {
+                continue;
+            };
             if super::work::over() {
-                return (best, spent);
+                return best;
             }
             if ordered_below(&cur, &best, pass.cx.view) {
                 best = cur.clone();
@@ -337,7 +221,7 @@ fn expand_stage(
         }
     }
     if settled {
-        return (best, spent);
+        return best;
     }
     // Phase 2: first improvement from the best until a full round finds nothing. A round
     // walks the best's candidates cyclically from where the last improvement happened; the
@@ -346,29 +230,31 @@ fn expand_stage(
     let mut resume: Vec<usize> = Vec::new();
     let mut skip = refused_of_best;
     loop {
-        let mut sites: Vec<(Vec<usize>, Ex)> = Vec::new();
-        site_list(&best, pass.cx, &mut Vec::new(), &mut sites);
+        let mut sites: Vec<Site> = Vec::new();
+        site_list(&best, pass.cx, &[], None, &mut Vec::new(), &mut sites);
         let n = sites.len();
         let start = if skip > 0 {
             skip
         } else {
-            sites.partition_point(|(p, _)| *p < resume)
+            sites.partition_point(|(p, _, _)| *p < resume)
         };
         let round = n.saturating_sub(skip);
         skip = 0;
         let mut accepted: Option<(Ex, Vec<usize>)> = None;
         for off in 0..round {
             if spent >= budget || super::work::over() {
-                return (best, spent);
+                return best;
             }
             spent += 1;
-            let (path, moved) = &sites[(start + off) % n];
-            let cur = descend(rebuild(&best, path, moved.clone(), pass.cx));
+            let site = &sites[(start + off) % n];
+            let Some(cur) = try_site(&best, &best, site, pass, max_passes) else {
+                continue;
+            };
             if super::work::over() {
-                return (best, spent);
+                return best;
             }
             if ordered_below(&cur, &best, pass.cx.view) {
-                accepted = Some((cur, path.clone()));
+                accepted = Some((cur, site.0.clone()));
                 break;
             }
         }
@@ -380,87 +266,33 @@ fn expand_stage(
                 best = cur;
                 resume = path;
             }
-            None => return (best, spent),
+            None => return best,
         }
     }
 }
 
-/// The places of `e` with an expansion move, in deterministic pre-order (the move at a node
-/// first, then its children in canonical bag order), each with its moved node.
-fn site_list(e: &Ex, cx: &Cx, path: &mut Vec<usize>, out: &mut Vec<(Vec<usize>, Ex)>) {
-    let mut own = Vec::new();
-    local_moves(e, cx, &mut own);
-    for m in own {
-        out.push((path.clone(), m));
-    }
-    match e {
-        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
-            for (i, c) in v.iter().enumerate() {
-                path.push(i);
-                site_list(c, cx, path, out);
-                path.pop();
-            }
-        }
-        Ex::Pow(b, x) => {
-            path.push(0);
-            site_list(b, cx, path, out);
-            path.pop();
-            path.push(1);
-            site_list(x, cx, path, out);
-            path.pop();
-        }
-        _ => {}
-    }
-}
-
-/// The places of `e` with a FACTOR move, in the same order: a sum whose terms share a factor,
-/// as that factor times the quotient sum -- the reverse of DISTRIBUTE. Under a lone inverse
-/// the factored spelling can tie the sum (`1/(x1 - x1*x2)` against `-(1/(x2 - 1))/x1`), so
-/// the chain never takes it, while the merges it enables across the product pay
-/// (`rootn(x1, 2)/(x1 - x1*x2)` becomes `-(1/pow(x1, 1/2))*(1/(x2 - 1))`). A factoring is
-/// proposed where it can pay: the factored sum is cheaper by itself, or a factor it takes out
-/// shares a base with the product the sum (or a power of it) is a factor of (`near`, the
-/// bases of that product's factors).
-fn factor_sites(
-    e: &Ex,
-    cx: &Cx,
-    near: &[&Ex],
-    path: &mut Vec<usize>,
-    out: &mut Vec<(Vec<usize>, Ex)>,
-) {
-    factor_sites_under(e, cx, near, None, path, out);
-}
-
-/// [`factor_sites`] at a node that is the base of the integer power `power`, if any. Factoring a
-/// sum under a negative power is distributing that power read backwards: the factored product
-/// then splits under it, so it takes the same licence (`distributes_power`). Where `pow` would
-/// hold the product -- a factor whose zero set may hold a region, where the inverse's infinity
-/// takes the product's sign -- the sum is not factored either.
-fn factor_sites_under(
+/// The places of `e` with a move, in deterministic pre-order (the moves at a node first, then its
+/// children in canonical bag order), each with its moved node. `near` holds the bases of the
+/// product `e` is a factor of, and `power` the integer exponent `e` is the base of, if any (what
+/// FACTOR reads, see [`factor_moves`]).
+fn site_list(
     e: &Ex,
     cx: &Cx,
     near: &[&Ex],
     power: Option<&Rat>,
     path: &mut Vec<usize>,
-    out: &mut Vec<(Vec<usize>, Ex)>,
+    out: &mut Vec<Site>,
 ) {
+    let mut own = Vec::new();
+    local_moves(e, cx, near, power, &mut own);
+    for (m, probe) in own {
+        out.push((path.clone(), m, probe));
+    }
     match e {
-        Ex::Add(v) => {
-            if let Some((cand, content)) = factor_content(v, cx) {
-                let licensed = match (power, &cand) {
-                    (Some(k), Ex::Mul(fs)) if k.is_negative() => distributes_power(fs, k, cx),
-                    _ => true,
-                };
-                if licensed
-                    && (term_bases(&content).iter().any(|b| near.contains(b))
-                        || complexity(&cand, cx.view) < complexity(e, cx.view))
-                {
-                    out.push((path.clone(), cand));
-                }
-            }
+        Ex::Add(v) | Ex::Fun(_, v) => {
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
-                factor_sites_under(c, cx, &[], None, path, out);
+                site_list(c, cx, &[], None, path, out);
                 path.pop();
             }
         }
@@ -468,14 +300,7 @@ fn factor_sites_under(
             let bases = term_bases(e);
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
-                factor_sites_under(c, cx, &bases, None, path, out);
-                path.pop();
-            }
-        }
-        Ex::Fun(_, v) => {
-            for (i, c) in v.iter().enumerate() {
-                path.push(i);
-                factor_sites_under(c, cx, &[], None, path, out);
+                site_list(c, cx, &bases, None, path, out);
                 path.pop();
             }
         }
@@ -485,10 +310,10 @@ fn factor_sites_under(
                 _ => None,
             };
             path.push(0);
-            factor_sites_under(b, cx, near, k, path, out);
+            site_list(b, cx, near, k, path, out);
             path.pop();
             path.push(1);
-            factor_sites_under(x, cx, &[], None, path, out);
+            site_list(x, cx, &[], None, path, out);
             path.pop();
         }
         _ => {}
@@ -528,15 +353,15 @@ fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
     }
 }
 
-/// The B1 move kinds at one node. THE extension point: a new expansion move is a new
-/// arm here (with its own licences), nothing else changes.
-fn local_moves(e: &Ex, cx: &Cx, out: &mut Vec<Ex>) {
+/// The move kinds at one node, each with whether it is FACTOR. THE extension point: a new move
+/// is a new arm here (with its own licences), nothing else changes.
+fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec<(Ex, bool)>) {
     match e {
         // DISTRIBUTE (the row-156 move): fully distribute a Mul bag over its Add
         // children.
         Ex::Mul(v) => {
             if let Some(cand) = distribute_product(v, cx) {
-                out.push(cand);
+                out.push((cand, false));
             }
         }
         // POW-EXPAND: `(sum)^n` for small integer n, expanded through the same
@@ -549,10 +374,16 @@ fn local_moves(e: &Ex, cx: &Cx, out: &mut Vec<Ex>) {
                             .take(n as usize)
                             .collect();
                         if let Some(cand) = distribute_product(&factors, cx) {
-                            out.push(cand);
+                            out.push((cand, false));
                         }
                     }
                 }
+            }
+        }
+        // FACTOR: the reverse of DISTRIBUTE, at a sum.
+        Ex::Add(v) => {
+            for cand in factor_moves(v, cx, near, power) {
+                out.push((cand, true));
             }
         }
         _ => {}
@@ -605,55 +436,176 @@ fn term_factors(t: &Ex) -> SplitTerm {
     }
 }
 
-/// The FACTOR move: `c*q1 + ... + c*qn` as `c*(q1 + ... + qn)`, `c` every factor all the
-/// terms share, each at its least exponent; returned with `c`. `None` when the terms share
-/// nothing or the move is not licensed. The licences are DISTRIBUTE's, read backwards: the
-/// identity can fail only where a piece is non-finite, so `c` and every quotient carry the
-/// finite-a.e. licence (the sound certificate for a piece that spells an infinity); and `c`
-/// holds no `<constant>`, whose occurrences in the n terms are n independent constants that
-/// one factor would merge into one.
+/// The FACTOR moves of the sum `terms` at its place (see [`site_list`]): every factoring
+/// ([`factorings`]) whose pieces carry DISTRIBUTE's licences, read backwards: the identity can
+/// fail only where a piece is non-finite, so the content and every quotient carry the finite-a.e.
+/// licence (the sound certificate for a piece that spells an infinity). Factoring a sum under a
+/// negative power is distributing that power read backwards: the factored product then splits
+/// under it, so it takes the same licence (`distributes_power`). Where `pow` would hold the
+/// product -- a factor whose zero set may hold a region, where the inverse's infinity takes the
+/// product's sign -- the sum is not factored either.
 ///
-/// A factor the terms share up to sign counts too, as a repeated wildcard binds a class up to sign:
-/// where a base of the first term meets, in every other term, itself or its negation through a
-/// class's orientation (a near miss, `orientation_near_miss`), the terms are factored with every
-/// class in one orientation, the signs in the coefficients (`orient_term_classes`):
-/// `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)`.
-fn factor_content(terms: &[Ex], cx: &Cx) -> Option<(Ex, Ex)> {
-    if terms.len() < 2 || terms.len() > EXPAND_TERM_CAP {
-        return None;
+/// A factoring is proposed where it can pay: the factored sum is cheaper by itself, or a factor
+/// it takes out of the whole sum shares a base with the product the sum (or a power of it) is a
+/// factor of (`near`). Under a lone inverse the factored spelling can tie the sum
+/// (`1/(x1 - x1*x2)` against `-(1/(x2 - 1))/x1`), so the chain never takes it, while the merges
+/// it enables across the product pay (`rootn(x1, 2)/(x1 - x1*x2)` becomes
+/// `-(1/pow(x1, 1/2))*(1/(x2 - 1))`).
+fn factor_moves(terms: &[Ex], cx: &Cx, near: &[&Ex], power: Option<&Rat>) -> Vec<Ex> {
+    if terms.len() > EXPAND_TERM_CAP {
+        return Vec::new();
     }
-    // Most sums share nothing: decide that on borrowed bases before building anything.
-    let first = term_bases(&terms[0]);
-    let rest: Vec<Vec<&Ex>> = terms[1..].iter().map(term_bases).collect();
-    if first.iter().any(|b| rest.iter().all(|r| r.contains(b))) {
-        return factor_shared(terms, cx);
+    let licensed = |f: &Ex| {
+        if f.contains_infinity() {
+            cx.fin_certified(f)
+        } else {
+            cx.fin_licensed(f)
+        }
+    };
+    let cands = factorings(terms, cx, &licensed);
+    if cands.is_empty() {
+        return Vec::new();
     }
-    let near = first.iter().any(|b| {
-        rest.iter().all(|r| {
-            r.iter()
-                .any(|c| c == b || orientation_near_miss(b, c, cx.view))
-        })
-    });
-    if !near {
-        return None;
+    let whole = complexity(&Ex::Add(terms.to_vec()), cx.view);
+    let mut out = Vec::new();
+    for (cand, c) in cands {
+        let pays = match &cand {
+            Ex::Mul(fs) => {
+                if let Some(k) = power.filter(|k| k.is_negative()) {
+                    if !distributes_power(fs, k, cx) {
+                        continue;
+                    }
+                }
+                term_bases(&c).iter().any(|b| near.contains(b))
+            }
+            _ => false,
+        };
+        if pays || complexity(&cand, cx.view) < whole {
+            out.push(cand);
+        }
     }
-    let oriented: Vec<Ex> = terms
-        .iter()
-        .map(|t| orient_term_classes(t, cx).unwrap_or_else(|| t.clone()))
-        .collect();
-    let first = term_bases(&oriented[0]);
-    if !first
-        .iter()
-        .any(|b| oriented[1..].iter().all(|t| term_bases(t).contains(b)))
-    {
-        return None;
-    }
-    let (cand, c) = factor_shared(&oriented, cx)?;
-    (cand != Ex::Add(terms.to_vec())).then_some((cand, c))
+    out
 }
 
-/// [`factor_content`] on terms that share a base as spelled.
-fn factor_shared(terms: &[Ex], cx: &Cx) -> Option<(Ex, Ex)> {
+/// THE DISTRIBUTIVE LAW read as factoring, at the sum `terms`: each candidate is the sum with
+/// some of its terms replaced by their content `c` times the sum of their quotients, returned with
+/// `c`. Every way the engine factors is here, once: the search proposes these moves
+/// ([`factor_moves`], with the licences in `licensed`).
+///
+/// * SHARED BASES -- for every base two or more terms share, those terms factored by everything
+///   they share, each base at its least exponent (`x1*x2 + x1*x3 + x4` is `x4 + x1*(x2 + x3)`).
+///   A bare term is its own product with the unit coefficient ([`term_factors`]):
+///   `x2*x3 + x2` is `x2*(x3 + 1)`. A base counts up to sign, as a repeated wildcard binds a
+///   class up to sign: where a base of one term meets in another its negation through a class's
+///   orientation (a near miss, `orientation_near_miss`), those terms are factored with every class
+///   in one orientation, the signs in the coefficients (`orient_term_classes`):
+///   `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)`.
+/// * A SUM FACTOR SPREAD AMONG THE TERMS -- a term `c*S*q` whose sum factor `S`, or its negation,
+///   also stands among the other terms (flattened into the bag, so no term holds it as a factor)
+///   factors as `S*(c*q + 1)` or `S*(c*q - 1)`: `x3 - x2 + (x2 - x3)*x4` is `(x2 - x3)*(x4 - 1)`.
+///
+/// The content holds no `<constant>`, whose occurrences in the terms are independent constants
+/// that one factor would merge into one.
+pub(crate) fn factorings(terms: &[Ex], cx: &Cx, licensed: &dyn Fn(&Ex) -> bool) -> Vec<(Ex, Ex)> {
+    let mut out: Vec<(Ex, Ex)> = Vec::new();
+    if terms.len() < 2 {
+        return out;
+    }
+    let whole = Ex::Add(terms.to_vec());
+    // The sum with the terms at `members` (ascending) replaced by `group` factored.
+    let push = |members: &[usize], group: &[Ex], out: &mut Vec<(Ex, Ex)>| {
+        let Some((factored, c)) = factor_shared(group, cx, licensed) else {
+            return;
+        };
+        let mut items: Vec<Ex> = terms
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| members.binary_search(j).is_err())
+            .map(|(_, t)| t.clone())
+            .collect();
+        let cand = if items.is_empty() {
+            factored
+        } else {
+            items.push(factored);
+            add(items, cx)
+        };
+        if cand != whole && !out.iter().any(|(o, _)| *o == cand) {
+            out.push((cand, c));
+        }
+    };
+    // Shared bases: the terms holding each base (as spelled, or up to sign), once per group.
+    let bases: Vec<Vec<&Ex>> = terms.iter().map(term_bases).collect();
+    let mut seen: Vec<&Ex> = Vec::new();
+    let mut groups: Vec<(Vec<usize>, bool)> = Vec::new();
+    for bs in &bases {
+        for &b in bs {
+            if seen.contains(&b) {
+                continue;
+            }
+            seen.push(b);
+            let mut members = Vec::new();
+            let mut signed = false;
+            for (j, cs) in bases.iter().enumerate() {
+                if cs.contains(&b) {
+                    members.push(j);
+                } else if cs.iter().any(|c| orientation_near_miss(b, c, cx.view)) {
+                    members.push(j);
+                    signed = true;
+                }
+            }
+            if members.len() >= 2 && !groups.iter().any(|g| g.0 == members && g.1 == signed) {
+                groups.push((members, signed));
+            }
+        }
+    }
+    for (members, signed) in &groups {
+        let group: Vec<Ex> = members
+            .iter()
+            .map(|&j| {
+                let t = &terms[j];
+                if *signed {
+                    orient_term_classes(t, cx).unwrap_or_else(|| t.clone())
+                } else {
+                    t.clone()
+                }
+            })
+            .collect();
+        push(members, &group, &mut out);
+    }
+    // A sum factor spread among the other terms, as itself (`k = 1`) or negated (`k = -1`).
+    for (i, t) in terms.iter().enumerate() {
+        let (_, fs) = term_factors(t);
+        for (s, r) in &fs {
+            if !matches!(s, Ex::Add(_)) || r.is_negative() {
+                continue;
+            }
+            for k in [1, -1] {
+                let spread = mul(vec![Ex::int(k), s.clone()], cx);
+                let Ex::Add(us) = &spread else {
+                    continue;
+                };
+                let mut members = vec![i];
+                let found = us.iter().all(|u| {
+                    let hit = (0..terms.len()).find(|j| !members.contains(j) && terms[*j] == *u);
+                    hit.inspect(|&j| members.push(j)).is_some()
+                });
+                if !found {
+                    continue;
+                }
+                members.sort_unstable();
+                // The spread terms as the one product `k*S` they are, so the content is `S`.
+                let group = [t.clone(), Ex::Mul(vec![Ex::int(k), s.clone()])];
+                push(&members, &group, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// `terms` as their content `c` (every base they all share, each at its least exponent) times
+/// the sum of their quotients; returned with `c`. `None` when they share nothing, `c` holds a
+/// `<constant>`, or a piece is not `licensed`.
+fn factor_shared(terms: &[Ex], cx: &Cx, licensed: &dyn Fn(&Ex) -> bool) -> Option<(Ex, Ex)> {
     let split: Vec<SplitTerm> = terms.iter().map(term_factors).collect();
     // The exponent arithmetic below reads each base once per term, which a canonical product
     // guarantees; a term that holds one base twice is not factored.
@@ -718,18 +670,10 @@ fn factor_shared(terms: &[Ex], cx: &Cx) -> Option<(Ex, Ex)> {
             mul(items, cx)
         });
     }
-    let licensed = |f: &Ex| {
-        if f.contains_infinity() {
-            cx.fin_certified(f)
-        } else {
-            cx.fin_licensed(f)
-        }
-    };
     if !licensed(&c) || !quotients.iter().all(licensed) {
         return None;
     }
-    let cand = mul(vec![c.clone(), add(quotients, cx)], cx);
-    (cand != Ex::Add(terms.to_vec())).then_some((cand, c))
+    Some((mul(vec![c.clone(), add(quotients, cx)], cx), c))
 }
 
 /// Fully distribute a product over its Add factors: the cartesian expansion

@@ -56,9 +56,6 @@ pub struct AcRule {
     /// the `Mul` bucket here, and the pattern rule is unsound exactly on the ground poles the
     /// exact rules exist for.
     pub is_pattern: bool,
-    /// A unit twin, or the orientation twin of one: served only to a pass that asks for
-    /// them (`PassCtx::unit_twins`, the search's factor stage).
-    pub unit: bool,
     /// Does a wildcard occur more than once in the LHS? Then it binds a class (a sum, an odd
     /// function or odd root of one) up to sign: a sum pattern whose first match met a near miss
     /// (a binding refused by its repeat's negation, `matcher::near_misses`) tries its subject again
@@ -129,13 +126,9 @@ pub struct AcRules {
     pub n_dropped: usize,
     /// Orientation twins MINTED at translate (not asset rules): for an admitted rule
     /// `L -> T`, the negated identity `-L -> -T`, added when the flipped LHS absorbs the
-    /// sign and every admission gate passes; and the unit twins (`n_unit_twins`). Counted
-    /// separately so the asset-rule accounting (`n_subsumed`/`n_dropped`) keeps its meaning.
+    /// sign and every admission gate passes. Counted separately so the asset-rule accounting
+    /// (`n_subsumed`/`n_dropped`) keeps its meaning.
     pub n_twins: usize,
-    /// Unit twins MINTED at translate: for an admitted sum rule whose term `w * u` holds a
-    /// wildcard `w` found nowhere else, the rule with `w` bound to 1, so that the bare term
-    /// `u` (unit coefficient, not a product) is reached too. Included in `n_twins`.
-    pub n_unit_twins: usize,
     /// Rules refused by the licence registry's load consumer (C1.20, SWEEP row 3): the
     /// rule changes a DEFINED extended-real value at a constructed exceptional point.
     /// The engine pre-filters the raw rules BEFORE translate (the caller sets this
@@ -259,96 +252,6 @@ fn leaf_count(e: &Ex, tok: Tok) -> usize {
     }
 }
 
-/// Is the rule `(l2, r2)` the rule `(l1, r1)` with its wildcards renamed? Rules here have a
-/// handful of wildcards, so every bijection is tried.
-fn alpha_equal(l1: &Ex, r1: &Ex, l2: &Ex, r2: &Ex, view: &TokenView, cx: &Cx) -> bool {
-    let sorted = |l: &Ex, r: &Ex| {
-        let mut s = FxHashSet::default();
-        collect_wildcards(l, view, &mut s);
-        collect_wildcards(r, view, &mut s);
-        let mut v: Vec<Tok> = s.into_iter().collect();
-        v.sort_by_key(|t| t.0);
-        v
-    };
-    let (w1, w2) = (sorted(l1, r1), sorted(l2, r2));
-    if w1.len() != w2.len() || w1.len() > 6 {
-        return false;
-    }
-    fn perms(rest: &mut Vec<Tok>, k: usize, f: &mut dyn FnMut(&[Tok]) -> bool) -> bool {
-        if k == rest.len() {
-            return f(rest);
-        }
-        for i in k..rest.len() {
-            rest.swap(k, i);
-            if perms(rest, k + 1, f) {
-                return true;
-            }
-            rest.swap(k, i);
-        }
-        false
-    }
-    let mut target = w2.clone();
-    perms(&mut target, 0, &mut |p| {
-        let b: Binds = w1.iter().zip(p).map(|(&a, &t)| (a, Ex::Leaf(t))).collect();
-        canon(substitute(l1, &b, view), cx) == *l2 && canon(substitute(r1, &b, view), cx) == *r2
-    })
-}
-
-/// The unit twins of one rule (see `AcRules::translate`): for each term `w * u` of a sum
-/// pattern whose wildcard `w` occurs once in the pattern, the rule with `w` bound to 1, so
-/// the term becomes the bare `u`. Canonical sides; renamings of one twin are kept once.
-fn unit_twins(lhs: &Ex, rhs: &Ex, view: &TokenView, cx: &Cx) -> Vec<(Ex, Ex)> {
-    let Ex::Add(terms) = lhs else {
-        return Vec::new();
-    };
-    let mut wilds = FxHashSet::default();
-    collect_wildcards(lhs, view, &mut wilds);
-    collect_wildcards(rhs, view, &mut wilds);
-    let mut out: Vec<(Ex, Ex)> = Vec::new();
-    for t in terms {
-        let Ex::Mul(fs) = t else {
-            continue;
-        };
-        // The term's factors besides its coefficient: `w * u`, or `c * w * u` (an orientation
-        // twin's term carries `-1`; with `w` bound to 1 it is `c * u`, the product a matcher
-        // reaches).
-        let core: Vec<&Ex> = fs.iter().filter(|f| !matches!(f, Ex::Num(_))).collect();
-        if core.len() != 2 {
-            continue;
-        }
-        for (i, f) in core.iter().enumerate() {
-            let Ex::Leaf(w) = f else {
-                continue;
-            };
-            // `u`, the factor left, must be a term the bare spelling can show: not a literal
-            // (the term `-1 * w` is the coefficient's, not a bare term), and still a pattern.
-            let u = core[1 - i];
-            if view.sigil(*w) == 0
-                || leaf_count(lhs, *w) != 1
-                || matches!(u, Ex::Num(_))
-                || !u.contains_wildcard(view)
-            {
-                continue;
-            }
-            let mut b: Binds = wilds.iter().map(|&x| (x, Ex::Leaf(x))).collect();
-            b.insert(*w, Ex::int(1));
-            let tl = canon(substitute(lhs, &b, view), cx);
-            if !matches!(tl, Ex::Add(_)) {
-                continue;
-            }
-            let tr = canon(substitute(rhs, &b, view), cx);
-            if out
-                .iter()
-                .any(|(l, r)| alpha_equal(l, r, &tl, &tr, view, cx))
-            {
-                continue;
-            }
-            out.push((tl, tr));
-        }
-    }
-    out
-}
-
 impl AcRules {
     /// Translate a compiled ruleset's raw (asset-order) rules. `view` must be a table-backed
     /// view; translation is read-only on the token side (parse + canon mint no tokens), so the
@@ -451,7 +354,6 @@ impl AcRules {
                 rhs,
                 sig,
                 is_pattern,
-                unit: false,
                 repeat,
             });
         }
@@ -549,73 +451,15 @@ impl AcRules {
             out.src.push(out.src[i]);
             let sig = atom_sig(&tl, view);
             let is_pattern = tl.contains_wildcard(view);
-            let unit = out.rules[i].unit;
             let repeat = repeated_wildcard(&tl, view);
             out.rules.push(AcRule {
                 lhs: tl,
                 rhs: tr,
                 sig,
                 is_pattern,
-                unit,
                 repeat,
             });
             out.n_twins += 1;
-        }
-        // UNIT TWINS (a bare term is its own product with 1): a product pattern matches only
-        // a term that is itself a product, so a sum pattern holding the term `w * u`, `w` a
-        // wildcard that occurs nowhere else, never reaches a bare `u`. A coefficient makes
-        // a term a product (`-x1` is `-1 * x1`, which `w` binds), so `x1*x2 - x1` factors
-        // through `?0*?1 + ?2*?1 -> (?0 + ?2)*?1` while `x1 - x1*x2` and `x1 + x1*x2`, whose
-        // bare term has the unit coefficient, do not. The twin binds `w` to 1: a rule holds
-        // at every value of its wildcards, 1 among them, so `L[w := 1] -> R[w := 1]` is the
-        // same identity stated for the bare term. It passes the asset rules' admission gates
-        // and is minted after the orientation closure, from every chain rule (an asset or its
-        // orientation twin): a unit entry never takes a chain rule's place, as a shadow or as
-        // an inverse. Twins of one rule that differ only in their wildcards' names mint once. They serve
-        // only the search's factor stage (`PassCtx::unit_twins`): the chain and the
-        // expansion stage stay exactly what the asset rules make them, so the factor stage,
-        // which starts from their answer and only descends, can never end costlier.
-        let n_chain = out.rules.len();
-        for i in 0..n_chain {
-            for (tl, tr) in unit_twins(&out.rules[i].lhs, &out.rules[i].rhs, view, &cx) {
-                if tl == tr || const_count(&tr) > const_count(&tl) {
-                    continue;
-                }
-                let mut lhs_wilds = FxHashSet::default();
-                let mut rhs_wilds = FxHashSet::default();
-                collect_wildcards(&tl, view, &mut lhs_wilds);
-                collect_wildcards(&tr, view, &mut rhs_wilds);
-                if !rhs_wilds.is_subset(&lhs_wilds) || !ordered_below(&tr, &tl, view) {
-                    continue;
-                }
-                if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(tr.clone(), tl.clone())) {
-                    out.shadow_census
-                        .push((out.src[i], owner, owner_was_twin, "unit-inverse"));
-                    continue;
-                }
-                if out.rules.iter().any(|r| r.lhs == tl && r.rhs == tr) {
-                    continue;
-                }
-                seen_pairs
-                    .entry((tl.clone(), tr.clone()))
-                    .or_insert((out.src[i], true));
-                let idx = out.rules.len();
-                out.add_idx.push(idx);
-                out.src.push(out.src[i]);
-                let sig = atom_sig(&tl, view);
-                let is_pattern = tl.contains_wildcard(view);
-                let repeat = repeated_wildcard(&tl, view);
-                out.rules.push(AcRule {
-                    lhs: tl,
-                    rhs: tr,
-                    sig,
-                    is_pattern,
-                    unit: true,
-                    repeat,
-                });
-                out.n_twins += 1;
-                out.n_unit_twins += 1;
-            }
         }
         // Exact-before-pattern within every bucket (stable: asset order within each class).
         let rules = &out.rules;
@@ -714,9 +558,6 @@ pub struct PassCtx<'a> {
     /// pre-existing entry point) is byte-identical to the field not existing. Consumer:
     /// the promotion refund's per-candidate "engine WITHOUT this rule" probes.
     pub suppressed: Option<&'a FxHashSet<usize>>,
-    /// Does this pass serve the unit twins (`AcRule::unit`)? `false` for the chain and the
-    /// search's expansion stage, `true` for its factor stage.
-    pub unit_twins: bool,
 }
 
 /// The REDUCTION ORDERING: is `a` strictly smaller than `b` in the lexicographic pair
@@ -835,7 +676,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     let oriented_cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
     for &ri in exact_hits.iter().chain(scan.iter()) {
         let rule = &p.rules.rules[ri];
-        if rule.sig & !node_sig != 0 || (rule.unit && !p.unit_twins) {
+        if rule.sig & !node_sig != 0 {
             continue;
         }
         if let Some(sup) = p.suppressed {
@@ -1114,7 +955,6 @@ pub fn rewrite_pass(e: Ex, p: &PassCtx) -> Ex {
                     normal: RefCell::new(FxHashSet::default()),
                     explore: false,
                     suppressed: p.suppressed,
-                    unit_twins: p.unit_twins,
                 };
                 let endpoint = rewrite_pass(rebuilt, &sub);
                 p.fires.set(sub.fires.get());
@@ -1236,7 +1076,6 @@ pub fn rewrite_pass_opt(node0: &Ex, p: &PassCtx) -> Option<Ex> {
                 normal: RefCell::new(FxHashSet::default()),
                 explore: false,
                 suppressed: p.suppressed,
-                unit_twins: p.unit_twins,
             };
             let endpoint = rewrite_pass(rebuilt, &sub);
             p.fires.set(sub.fires.get());
