@@ -1,6 +1,11 @@
 //! The OFFLINE mining surface of the `Engine`: thin delegates into `crate::eval` /
 //! `crate::worker` / `crate::fit`, plus the mine driver's `set_rules` / `mine_one_length` /
 //! `prune_explicit`.
+//!
+//! ONE ACCEPTANCE. Every mint channel -- the batch mine, the proposals' library scan and
+//! the hint arms -- asks the same question through the same object: [`MineSpec`] says what
+//! the mine mints FOR, [`Engine::mine_mark`] computes the bar a target must beat, and the
+//! [`Acceptor`] built from that mark is the only acceptance predicate there is.
 
 use rayon::prelude::*;
 
@@ -9,7 +14,292 @@ use crate::rules::CompiledRules;
 
 use super::Engine;
 
+/// The canonical form a mine's MARK is computed in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MineCanon {
+    /// 0.14's mark, kept until the per-mode marks land: the Default rule set, the
+    /// transcendental fold OFF, the search off (effort 0), f64 numbers. It is one hybrid
+    /// canon that no mode serves, so it is defined for `RuleMode::Default` only.
+    Legacy,
+}
+
+impl MineCanon {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "legacy" => Some(MineCanon::Legacy),
+            _ => None,
+        }
+    }
+
+    /// Whether this canon is defined for `mode`. A pair it is not defined for is an
+    /// error at the boundary, never a silent fallback to Default.
+    pub fn check(self, mode: RuleMode) -> Result<(), String> {
+        match (self, mode) {
+            (MineCanon::Legacy, RuleMode::Default) => Ok(()),
+            (MineCanon::Legacy, _) => Err(format!(
+                "canon 'legacy' is 0.14's Default-mode mark and is not defined for \
+                 rule_mode {mode:?}"
+            )),
+        }
+    }
+}
+
+/// What one mine mints FOR. Everything mode-dependent is derived from `mode` and `canon`,
+/// once, here.
+#[derive(Clone, Copy, Debug)]
+pub struct MineSpec {
+    pub mode: RuleMode,
+    pub canon: MineCanon,
+    pub rtol: f64,
+    pub atol: f64,
+    pub min_informative: usize,
+    pub challenges: usize,
+    pub retries: usize,
+}
+
+/// The engine's own answer for a source: the bar every target must beat. `mu` is `None`
+/// only for a state the measure cannot price; the scan then keeps its token bound.
+pub struct Mark {
+    tokens: Vec<String>,
+    mu: Option<u64>,
+}
+
+impl Mark {
+    pub fn tokens(&self) -> &[String] {
+        &self.tokens
+    }
+
+    /// A single atom: no sound target sits strictly below it (see `Acceptor::new`).
+    pub fn is_atomic(&self) -> bool {
+        self.tokens.len() == 1
+    }
+}
+
+/// Why the [`Acceptor`] refused a target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MineRefusal {
+    /// The licence registry (`refusals::mint_refusals`), by its wire name.
+    Registry(&'static str),
+    /// Not strictly below the mark in the serve ordering.
+    NotBelow,
+    /// The serve ordering could not compare the two sides (a bug; counted).
+    Undecided,
+    /// The pole entry: a defined value changes at a constructed exceptional point.
+    Pole,
+    /// A resolved literal that does not strictly descend or only respells the mark.
+    NotStructural,
+}
+
+impl MineRefusal {
+    pub fn name(self) -> &'static str {
+        match self {
+            MineRefusal::Registry(name) => name,
+            MineRefusal::NotBelow => "not_below",
+            MineRefusal::Undecided => "undecided",
+            MineRefusal::Pole => super::refusals::Refusal::PoleClassChange.name(),
+            MineRefusal::NotStructural => "not_structural",
+        }
+    }
+}
+
+/// THE acceptance predicate (one copy). Built from a source and its [`Mark`]; every mint
+/// channel asks it, so a channel cannot accept what another refuses.
+pub(crate) struct Acceptor<'a> {
+    eng: &'a Engine,
+    spec: &'a MineSpec,
+    src: &'a [String],
+    mark: Mark,
+    vars: &'a [String],
+}
+
+impl<'a> Acceptor<'a> {
+    /// `None` for an ATOMIC mark: nothing is mintable. When the engine folds the source to a
+    /// single atom, no sound target exists strictly below it -- a different atom is a
+    /// different VALUE, and the ordering tiebreak happily ranks atoms among themselves
+    /// (+inf sits below -inf), so searching mints value-changes (signed-zero finding,
+    /// 2026-08-02: two artifact rows claimed the IEEE value for states the engine's
+    /// one-zero convention constructs away).
+    pub(crate) fn new(
+        eng: &'a Engine,
+        spec: &'a MineSpec,
+        src: &'a [String],
+        mark: Mark,
+        vars: &'a [String],
+    ) -> Option<Self> {
+        if mark.is_atomic() {
+            return None;
+        }
+        Some(Acceptor {
+            eng,
+            spec,
+            src,
+            mark,
+            vars,
+        })
+    }
+
+    /// THE SEARCH BOUND IS THE ACCEPTANCE MARK (owner ruling, re-mine 2026-08-20): the
+    /// scan stops at the first mu tier that cannot descend below the mark, so a token
+    /// ceiling no longer splits search from acceptance.
+    pub(crate) fn scan_bound(&self) -> Option<u64> {
+        self.mark.mu
+    }
+
+    /// The licence registry, then the serve ordering, then the pole entry. A refused
+    /// candidate yields to the next one in the scan.
+    ///
+    /// The registry (`refusals::mint_refusals`) holds the determined-source Const gate
+    /// and the special-absorption count, the latter taken on the MAX of the raw source
+    /// and the mark (spelling independence, F49). The ordering is the one the rewrite
+    /// pass fires under, so the serving engine never refuses a mined rule. The POLE entry
+    /// runs LAST, only on candidates that pass the cheap licences and the ordering: it
+    /// constructs the exceptional points of both sides and refuses a candidate that
+    /// changes a DEFINED extended-real value there (the a.e. pole-mirror family, otherwise
+    /// gate-invisible).
+    pub(crate) fn accept(&self, t: &[String]) -> Result<(), MineRefusal> {
+        if let Some(r) = super::refusals::mint_refusals(self.src, &self.mark.tokens, t, self.vars) {
+            return Err(MineRefusal::Registry(r.name()));
+        }
+        match self.eng.ac_ordered_below(t, &self.mark.tokens) {
+            Some(true) => {}
+            Some(false) => return Err(MineRefusal::NotBelow),
+            None => {
+                // Candidates and the engine's own result always parse (the core
+                // serialization language is config-independent), so an UNDECIDABLE
+                // ordering is a bug, never a soft refusal: loud in debug, counted in
+                // release.
+                debug_assert!(
+                    false,
+                    "ordering acceptance could not parse {t:?} vs {:?}",
+                    self.mark.tokens
+                );
+                super::stats::ACCEPT_UNDECIDED_REFUSALS
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Err(MineRefusal::Undecided);
+            }
+        }
+        if super::refusals::pole_refusal(self.src, t, &self.eng.operators, self.vars).is_some() {
+            super::stats::REGISTRY_POLE_REFUSALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Err(MineRefusal::Pole);
+        }
+        Ok(())
+    }
+
+    /// The additional bar for COMPUTED literals (literal-resolved candidates and the
+    /// ground short-circuit's evaluation): STRICT mu descent below the mark (fail closed
+    /// on an unmeasurable side), and a literal skeleton different from the mark's.
+    ///
+    /// Resolution recovers structure whose constant must be computed; it never respells.
+    /// Under mu a rounded literal has FEWER BITS than a long exact rational, so strict
+    /// descent alone would re-license the f64-respell disease against long-literal marks
+    /// (`(0.3333333333333333)^2 * x0`: a mu-descending VALUE CHANGE). A resolved target
+    /// skeleton-equal to the mark differs only in literal content. Structure-recovering
+    /// resolutions (`/ acos 0 np.pi -> 0.5`) are untouched. A materialized rounding of a
+    /// special-bearing state is a long literal against a symbolic mark priced in single
+    /// symbols, so strict descent refuses it from every spelling; the standing falsifier
+    /// is `tests/test_special_constants.py` (no special-bearing rule with a rounded RHS).
+    pub(crate) fn accept_resolved(&self, t: &[String]) -> Result<(), MineRefusal> {
+        let tc = self.eng.mine_price(t, self.spec.mode, self.spec.canon);
+        let descends = matches!((tc, self.mark.mu), (Some(tc), Some(mc)) if tc < mc);
+        if descends
+            && !self
+                .eng
+                .ac_same_literal_skeleton(t, &self.mark.tokens)
+                .unwrap_or(true)
+        {
+            Ok(())
+        } else {
+            Err(MineRefusal::NotStructural)
+        }
+    }
+
+    /// The library scan for this source, under this acceptance: the first candidate in
+    /// scan order that the certification and the acceptance both pass.
+    pub(crate) fn scan(
+        &self,
+        lib: &crate::worker::CandidateLibrary,
+        max_target: Option<usize>,
+        seed: u64,
+    ) -> Result<Option<Vec<String>>, String> {
+        let spec = self.spec;
+        let accept = |t: &[String]| self.accept(t).is_ok();
+        let accept_resolved = |t: &[String]| self.accept_resolved(t).is_ok();
+        // The token bound stays at SOURCE length: canon can respell a source shorter
+        // without reducing it (`/ 1 exp x0` parses to `inv exp x0`), and tightening by
+        // that respelled length would exclude true targets like `exp neg x0` (fewer
+        // COMPLEXITY, equal tokens). It binds only when the mark is unpriceable; the mu
+        // bound decides otherwise.
+        crate::worker::find_rule_with_lib(
+            &self.eng.operators,
+            self.src,
+            self.src.len(),
+            max_target,
+            self.scan_bound(),
+            lib,
+            spec.challenges,
+            spec.retries,
+            seed,
+            spec.rtol,
+            spec.atol,
+            spec.min_informative,
+            Some(&accept),
+            Some(&accept_resolved),
+        )
+    }
+}
+
 impl Engine {
+    /// The MARK for a source under `spec`: the engine's own answer, priced. `None` on
+    /// malformed input (the AC parser is the arbiter).
+    pub fn mine_mark(&self, src: &[String], spec: &MineSpec) -> Option<Mark> {
+        match spec.canon {
+            MineCanon::Legacy => {
+                // The Default rule set, UNFOLDED, effort 0: the hybrid canon 0.14 mined in.
+                let tokens = self.ac_simplify_proj_fold(
+                    src,
+                    48,
+                    RuleMode::Default,
+                    crate::engine::AcForm::Explicit,
+                    false,
+                )?;
+                let mu = self.mine_price(&tokens, spec.mode, spec.canon);
+                Some(Mark { tokens, mu })
+            }
+        }
+    }
+
+    /// The measure a mine prices marks, candidates and resolved literals in: one measure,
+    /// so the scan bound, the library tiers and the strict-descent bar agree.
+    pub fn mine_price(&self, tokens: &[String], mode: RuleMode, canon: MineCanon) -> Option<u64> {
+        match canon {
+            // The bare context of the Default reading (0.14).
+            MineCanon::Legacy => {
+                debug_assert_eq!(mode, RuleMode::Default);
+                self.ac_complexity(tokens, RuleMode::Default, RuleMode::Default)
+            }
+        }
+    }
+
+    /// The library scan for ONE source (the proposals' channel): the mark is computed
+    /// here, from `spec`, so this channel and the batch mine share one acceptance. An
+    /// atomic mark mints nothing.
+    pub fn find_rule_lib(
+        &self,
+        src: &[String],
+        lib: &crate::worker::CandidateLibrary,
+        max_target: Option<usize>,
+        spec: &MineSpec,
+        seed: u64,
+    ) -> Result<Option<Vec<String>>, String> {
+        let mark = self
+            .mine_mark(src, spec)
+            .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
+        match Acceptor::new(self, spec, src, mark, lib.var_names()) {
+            None => Ok(None),
+            Some(acc) => acc.scan(lib, max_target, seed),
+        }
+    }
+
     /// OFFLINE miner kernel: vectorized evaluation of a prefix expression over a batch of
     /// rows. Variable leaves index `var_names` (column order), `<constant>` leaves bind to `params`
     /// left-to-right, numeric/special literals fold to their value. See `crate::eval`.
@@ -100,13 +390,17 @@ impl Engine {
         var_names: &[String],
         x_flat: &[f64],
         n_rows: usize,
+        mode: RuleMode,
+        canon: MineCanon,
     ) -> Result<crate::worker::CandidateLibrary, String> {
-        // mu is scored HERE because it is an engine-level measure (`ac_complexity` reads the
-        // bare context), and the library builder only has the operator table. Bare-context mu
-        // depends on no mined rule, so scoring once at build time is stable for the whole mine.
+        canon.check(mode)?;
+        // mu is scored HERE because it is an engine-level measure, and the library builder
+        // only has the operator table. It is the measure the marks are priced in
+        // (`mine_price`), so the scan bound compares like with like; it depends on no mined
+        // rule, so scoring once at build time is stable for the whole mine.
         let mus: Vec<Option<u64>> = candidates
             .iter()
-            .map(|c| self.ac_complexity(c, RuleMode::Default, RuleMode::Default))
+            .map(|c| self.mine_price(c, mode, canon))
             .collect();
         // THE AC-CLASS QUOTIENT (2026-08-22 audit §7.1). The enumeration spells one
         // canonical class many ways -- commutative orderings, odd-sign twins, inv/abs
@@ -170,45 +464,6 @@ impl Engine {
             var_names,
             x_flat,
             n_rows,
-        )
-    }
-
-    /// OFFLINE miner: the `find_rule_worker` decision over a resident library. `accept`
-    /// threads the caller's acceptance criterion into the candidate scan (finding F2):
-    /// pass the serve-time ordering so the scan itself only yields targets the serving
-    /// pass would fire.
-    #[allow(clippy::too_many_arguments)]
-    pub fn find_rule_with_lib(
-        &self,
-        source: &[String],
-        simplified_length: usize,
-        max_target: Option<usize>,
-        max_mu: Option<u64>,
-        lib: &crate::worker::CandidateLibrary,
-        challenges: usize,
-        retries: usize,
-        seed: u64,
-        rtol: f64,
-        atol: f64,
-        min_informative: usize,
-        accept: Option<crate::worker::AcceptFn<'_>>,
-        accept_resolved: Option<crate::worker::AcceptFn<'_>>,
-    ) -> Result<Option<Vec<String>>, String> {
-        crate::worker::find_rule_with_lib(
-            &self.operators,
-            source,
-            simplified_length,
-            max_target,
-            max_mu,
-            lib,
-            challenges,
-            retries,
-            seed,
-            rtol,
-            atol,
-            min_informative,
-            accept,
-            accept_resolved,
         )
     }
 
@@ -294,18 +549,13 @@ impl Engine {
     /// never enumerates). Strict mode still loses one-step shortcuts relative to relaxed
     /// where the walk genuinely descends part-way (degenerate constant collapses like
     /// `C * acos(np.e) -> <constant>`).
-    #[allow(clippy::too_many_arguments)]
     pub fn mine_one_length(
         &self,
         sources: &[Vec<String>],
         lib: &crate::worker::CandidateLibrary,
         max_target: Option<usize>,
-        challenges: usize,
-        retries: usize,
+        spec: &MineSpec,
         seed: u64,
-        rtol: f64,
-        atol: f64,
-        min_informative: usize,
         relaxed_kruskal: bool,
     ) -> Vec<(Vec<String>, Vec<String>)> {
         // Publish the tier size so a driver polling `mine_progress()` sees within-tier progress
@@ -318,27 +568,19 @@ impl Engine {
                 // AC-JUDGED Kruskal prune: the arbiter is the engine that will SERVE the
                 // rules. A source the AC engine already strictly reduces -- by exact
                 // arithmetic, bag collection, or the rules mined so far -- is skipped
-                // (strict) or sets the mark to beat (relaxed). The candidate search keeps
-                // its token-length bound (the library is length-organized); FINAL
-                // acceptance is the SEMANTIC metric, so every mined rule strictly
-                // descends the AC reduction ordering by construction and the serving
-                // engine never refuses its own artifact.
+                // (strict) or sets the mark to beat (relaxed). FINAL acceptance is the
+                // SEMANTIC metric, so every mined rule strictly descends the AC reduction
+                // ordering by construction and the serving engine never refuses its own
+                // artifact.
                 let out = {
                     // Mine sources are engine-enumerated and well-formed by construction;
                     // `None` (the malformed-input signal at the API boundary) cannot occur
                     // here, and treating it as "already reduced" (source unchanged) keeps
                     // this site total without a panic path in the worker threads.
-                    let ac_out = self
-                        // UNFOLDED: the mine's canonical form is the finest-grained one,
-                        // so no rule is lost at discovery. See `Engine::ac_judge`.
-                        .ac_simplify_proj_fold(
-                            src,
-                            48,
-                            RuleMode::Default,
-                            crate::engine::AcForm::Explicit,
-                            false,
-                        )
-                        .unwrap_or_else(|| src.to_vec());
+                    let mark = self.mine_mark(src, spec).unwrap_or_else(|| Mark {
+                        tokens: src.to_vec(),
+                        mu: self.mine_price(src, spec.mode, spec.canon),
+                    });
                     // "Already reduced" is judged in the serve-time reduction ordering
                     // (one coverage ordering, everywhere): the walk strictly descended,
                     // or the result is a single atom -- nothing mintable sits strictly
@@ -347,8 +589,8 @@ impl Engine {
                     // shorter spelling) is neither and is searched: the token-shrink
                     // arm that used to skip it lost e.g. the `1/exp(t) -> exp(-t)`
                     // family to the enumeration alphabet.
-                    let reduced = ac_out.len() == 1
-                        || match self.ac_ordered_below(&ac_out, src) {
+                    let reduced = mark.is_atomic()
+                        || match self.ac_ordered_below(mark.tokens(), src) {
                             Some(below) => below,
                             None => {
                                 // Both spellings are the engine's own language (the
@@ -358,182 +600,25 @@ impl Engine {
                                 // skipped on a guess.
                                 debug_assert!(
                                     false,
-                                    "skip ordering could not parse {src:?} vs {ac_out:?}"
+                                    "skip ordering could not parse {src:?} vs {:?}",
+                                    mark.tokens()
                                 );
                                 super::stats::ACCEPT_UNDECIDED_REFUSALS
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 false
                             }
                         };
-                    // ATOMIC MARK ENDS THE SEARCH, even under relaxed Kruskal
-                    // (signed-zero finding, 2026-08-02): when the engine folds the
-                    // source to a single atom, no sound target exists strictly below
-                    // it -- a different atom is a different VALUE, and the ordering
-                    // tiebreak happily ranks atoms among themselves (+inf sits below
-                    // -inf), so searching mints value-changes. Found live: the f64
-                    // challenge layer and the interval classifier both follow IEEE
-                    // signed zero (`-1 / -0.0 = +inf`, deployment semantics, which
-                    // they must keep for variable-bearing measure questions), while
-                    // the engine's ratified one-zero convention folds
-                    // `/ (-1) neg 0` to `-inf` -- two artifact rows claimed the
-                    // IEEE value for states the engine constructs away, surviving
-                    // only because load-normalization rejected them.
-                    if ac_out.len() == 1 || (reduced && !relaxed_kruskal) {
+                    if reduced && !relaxed_kruskal {
                         None
                     } else {
-                        let s = seed.wrapping_add(idx as u64);
-                        // The token bound stays at SOURCE length: canon can respell a
-                        // source shorter without reducing it (`/ 1 exp x0` parses to
-                        // `inv exp x0`), and tightening by that respelled length would
-                        // exclude true targets like `exp neg x0` (fewer COMPLEXITY, equal
-                        // tokens). "Beat what the engine reaches" is enforced exactly by
-                        // the ordering acceptance below, not by a token proxy.
-                        //
-                        // Serve-time acceptance RIDES THE SCAN (finding F2): the target
-                        // must sit strictly below the engine's own result in the full
-                        // reduction ordering (complexity, then canonical order) -- a
-                        // refused candidate asks the scan for the next one, so equal-
-                        // complexity canonicalization rules mint iff they fire and a
-                        // longer-but-lower spelling is still reachable.
-                        //
-                        // STAGE-1 CONST-ABSORPTION LICENCE, mint-side twin. Doctrine as
-                        // AMENDED 2026-08-08 (contract 10.11, supersedes the 2026-08-01
-                        // blanket refusal): a special absorbs into an EXISTING `<constant>`
-                        // through the bijective constructor sites (Add-shift / Mul-scale;
-                        // `C + pi -> C'` folds in the engine now), so such sources reach an
-                        // ATOMIC endpoint and never arrive here. What this licence still
-                        // refuses is the NON-absorbable remainder: a `<constant>`-bearing
-                        // target eating a special the constructor's site list would not
-                        // (introduced masks -- `* np.pi _0 -> * <constant> _0`; and
-                        // non-bijective positions -- `pow np.pi <constant> -> <constant>`,
-                        // whose value set is (0,inf), not "anything"). Historical incident
-                        // this closed: the scan minted `+ <constant> np.pi -> <constant>`
-                        // (2026-08-01) while the then-doctrine refused it engine-side --
-                        // the rules channel resurrecting a constructor refusal, C1.20's
-                        // first recorded instance. Special-count-preserving targets and
-                        // Const-free exact hits (`sin np.pi -> 0`) are untouched.
-                        // THE LICENCE REGISTRY (C1.20's dual, 2026-08-08): the two
-                        // syntactic licences that lived inline here -- the determined-
-                        // source Const-introduction gate and the special-absorption
-                        // count (its full incident history: tokens -> spellings ->
-                        // `ac_out` endpoints, F49/F55) -- are RELOCATED verbatim into
-                        // `engine::refusals::mint_refusals` (single home, shared with
-                        // the AC load consumer). Behavior-identical by construction;
-                        // the relocation's falsifier is the triple re-mine's byte
-                        // identity. The endpoint-count subtlety (max of raw source and
-                        // `ac_out` counts, spelling independence) lives with the
-                        // registry now -- see refusals.rs.
-                        //
-                        // The POLE entry (SWEEP row 3) runs LAST, only on candidates
-                        // that pass the cheap licences AND the ordering acceptance:
-                        // it constructs the exceptional points of both sides (affine
-                        // denominators, exact rational roots) and refuses a candidate
-                        // that changes a DEFINED extended-real value there under the
-                        // contract evaluator. This is the gate that keeps the a.e.
-                        // pole-mirror family (`neg inv - 1 _0 -> inv - _0 1`, verified
-                        // mu-descending and otherwise gate-invisible) out of the
-                        // artifact when the tiers rise past (4,3). A refused candidate
-                        // yields to the next one, exactly like every other licence.
-                        let accept = |t: &[String]| {
-                            if super::refusals::mint_refusals(src, &ac_out, t, lib.var_names())
-                                .is_some()
-                            {
-                                return false;
+                        // An atomic mark ends the search even under relaxed Kruskal
+                        // (`Acceptor::new`).
+                        Acceptor::new(self, spec, src, mark, lib.var_names()).and_then(|acc| {
+                            match acc.scan(lib, max_target, seed.wrapping_add(idx as u64)) {
+                                Ok(Some(target)) => Some((src.clone(), target)),
+                                _ => None,
                             }
-                            let below = match self.ac_ordered_below(t, &ac_out) {
-                                Some(below) => below,
-                                None => {
-                                    // Candidates and the engine's own result always parse
-                                    // (the core serialization language is config-
-                                    // independent), so an UNDECIDABLE ordering is a bug,
-                                    // never a soft refusal: loud in debug, counted in
-                                    // release.
-                                    debug_assert!(
-                                        false,
-                                        "ordering acceptance could not parse {t:?} vs {ac_out:?}"
-                                    );
-                                    super::stats::ACCEPT_UNDECIDED_REFUSALS
-                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    false
-                                }
-                            };
-                            if !below {
-                                return false;
-                            }
-                            if super::refusals::pole_refusal(
-                                src,
-                                t,
-                                &self.operators,
-                                lib.var_names(),
-                            )
-                            .is_some()
-                            {
-                                super::stats::REGISTRY_POLE_REFUSALS
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                return false;
-                            }
-                            true
-                        };
-                        // Literal-RESOLVED targets must beat the mark in STRICT mu
-                        // (fail closed on an unmeasurable side): resolution recovers
-                        // structure whose constant must be computed, never respells.
-                        //
-                        // STAGE 2: the stage-1 resolution licence (total refusal for
-                        // special-bearing sources) is DELETED -- it is now a theorem of
-                        // the measure. A materialized rounding of a special-bearing
-                        // state is a ~105-unit literal against a symbolic mark priced
-                        // in single symbols (`* np.pi x0`: mark 24, materialization
-                        // ~117), so the strict-descent gate refuses it by arithmetic,
-                        // from every spelling. What the deletion ADDS is the sound
-                        // half the fail-closed licence gave up: a resolution whose
-                        // correctly-rounded value is genuinely SHORT (an exact
-                        // collapse arriving through the resolution channel) descends
-                        // and may mint -- the hiprec arbiter computes at 1024 bits, so
-                        // an inexact value cannot masquerade as a short rational.
-                        // Standing falsifier: no special-bearing rule with a rounded
-                        // decimal RHS may appear in any mine
-                        // (tests/test_special_constants.py pins it).
-                        // RESPELL GUARD (stage-2 reflection, 2026-08-01): under mu a
-                        // rounded literal has FEWER BITS than a long exact rational,
-                        // so strict descent alone re-licensed the f64-respell disease
-                        // against long-literal marks (`(0.3333333333333333)^2 * x0`:
-                        // exact 32-digit coefficient ~210 units, its f64 rounding
-                        // ~105 -- a mu-descending VALUE CHANGE). A resolved target
-                        // skeleton-equal to the mark differs only in literal content:
-                        // same value (not strictly below, refused anyway) or a
-                        // respell. Structure-recovering resolutions (different
-                        // skeleton: `/ acos 0 np.pi -> 0.5`) are untouched. Fail
-                        // closed on unparseable sides.
-                        let mark_c = self.ac_complexity(&ac_out, RuleMode::Default, RuleMode::Default);
-                        let accept_resolved = |t: &[String]| {
-                            matches!((self.ac_complexity(t, RuleMode::Default, RuleMode::Default), mark_c), (Some(tc), Some(mc)) if tc < mc)
-                                && !self.ac_same_literal_skeleton(t, &ac_out).unwrap_or(true)
-                        };
-                        // THE SEARCH BOUND IS THE ACCEPTANCE MARK (owner ruling, re-mine
-                        // 2026-08-20). `mark_c` is mu of the engine's own endpoint for this
-                        // source -- exactly what `accept_resolved` above requires a target to
-                        // beat -- so passing it as the scan bound removes the last split
-                        // between a token bound for SEARCH and mu for ACCEPTANCE. The scan
-                        // now stops at the first mu tier that cannot descend, and reaches
-                        // longer-but-cheaper targets the token ceiling used to refuse.
-                        match self.find_rule_with_lib(
-                            src,
-                            src.len(),
-                            max_target,
-                            mark_c,
-                            lib,
-                            challenges,
-                            retries,
-                            s,
-                            rtol,
-                            atol,
-                            min_informative,
-                            Some(&accept),
-                            Some(&accept_resolved),
-                        ) {
-                            Ok(Some(target)) => Some((src.clone(), target)),
-                            _ => None,
-                        }
+                        })
                     }
                 };
                 super::stats::mine_tick(); // count the source whether or not it yielded a rule

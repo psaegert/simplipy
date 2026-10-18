@@ -182,6 +182,11 @@ def _load_proposals(
     return entries, record
 
 
+#: The rule mode the mine's marks are computed in. The core's ``canon='legacy'`` (its
+#: default) is 0.14's hybrid mark: the Default rule set, folds off, effort 0, f64 numbers.
+_MINE_RULE_MODE = 'default'
+
+
 #: Which modes a judged tier licenses a rule to serve in. `permissive` is DERIVED (a rule
 #: serves there iff it serves in either), never listed: the ledger's invariant
 #: `rules_permissive == rules_f64 UNION rules_real` then holds by construction rather than by
@@ -670,7 +675,8 @@ class RuleMiner:
             for expression in sorted(expressions_of_length[length])
         ]
         library = self.engine._core.build_candidate_library(
-            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0])
+            candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0],
+            rule_mode=_MINE_RULE_MODE)
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates'
                   f' ({library.n_filtered:,} var-free filtered)')
@@ -1040,7 +1046,7 @@ class RuleMiner:
                     sources, library, max_target_pattern_length,
                     constants_fit_challenges, constants_fit_retries,
                     mine_seed + (length << 40), rtol, atol, min_informative,
-                    relaxed_kruskal),
+                    relaxed_kruskal, rule_mode=_MINE_RULE_MODE),
                 verbose)
             if found and X_confirm is not None:
                 n_mined = len(found)
@@ -1396,7 +1402,7 @@ class RuleMiner:
                       for expression in sorted(expressions[length])]
         library = self.engine._core.build_candidate_library(
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(),
-            X_data.shape[0])
+            X_data.shape[0], rule_mode=_MINE_RULE_MODE)
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates '
                   f'({library.n_filtered:,} var-free filtered)')
@@ -1412,13 +1418,14 @@ class RuleMiner:
             # "already covered" and was never searched, losing e.g.
             # exp(t)*exp(t) -> exp(t+t) forever (the respelled form speaks tokens
             # outside the mining alphabet, so no later tier picks it up). The
-            # serve-time ordering acceptance rides the candidate scan via `mark`.
+            # serve-time ordering acceptance rides the candidate scan (the scan
+            # computes the mark itself, the same one the batch mine uses).
             _, _, ac_out = self.engine._core.ac_judge(list(source), 48)
             target = self.engine._core.find_rule_lib(
-                list(source), len(source), max_target_pattern_length, library,
+                list(source), library, max_target_pattern_length,
                 challenges=constants_fit_challenges, retries=constants_fit_retries,
                 seed=mine_seed + (len(source) << 40) + index, rtol=rtol, atol=atol,
-                min_informative=min_informative, mark=ac_out)
+                min_informative=min_informative, rule_mode=_MINE_RULE_MODE)
             certificate = 'minimal'
             if target is None and hint is not None:
                 hint = [str(t) for t in hint]
@@ -1615,16 +1622,15 @@ class RuleMiner:
             # coverage claim nothing backs.
             engine_reduces = (len(ac_out) == 1
                               or self.engine._core.ac_ordered_below(ac_out, list(source)))
-            simplified_length = len(source)
             # Content-derived per-proposal seed offset (blake2b, not hash(): PYTHONHASHSEED
             # randomises str hashing per process; same policy as _confirm_mined_rules).
             offset = int.from_bytes(
                 hashlib.blake2b(' '.join(source).encode(), digest_size=7).digest(), 'little')
             target = self.engine._core.find_rule_lib(
-                list(source), simplified_length, max_target_pattern_length, library,
+                list(source), library, max_target_pattern_length,
                 challenges=constants_fit_challenges, retries=constants_fit_retries,
                 seed=mine_seed + offset, rtol=rtol, atol=atol,
-                min_informative=min_informative, mark=ac_out)
+                min_informative=min_informative, rule_mode=_MINE_RULE_MODE)
             certificate = 'minimal'
             if target is None and hint is not None:
                 hint_tokens = [str(token) for token in hint]

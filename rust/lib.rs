@@ -81,6 +81,48 @@ fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine
     }
 }
 
+/// The mine canon's wire spelling, checked against the mode it is used with.
+fn parse_mine_canon(canon: &str, mode: engine::RuleMode) -> PyResult<engine::MineCanon> {
+    let c = engine::MineCanon::parse(canon).ok_or_else(|| {
+        PyValueError::new_err(format!("unknown canon {canon:?}: expected 'legacy'"))
+    })?;
+    c.check(mode).map_err(PyValueError::new_err)?;
+    Ok(c)
+}
+
+/// The `MineSpec` of one scan call: the mode and canon must be the ones the library was
+/// priced in, and the evidence floor defaults to 1/8 of the library's rows (never 0: an
+/// explicit 0 would silently disable the evidence gate, D3 / H-038).
+#[allow(clippy::too_many_arguments)]
+fn mine_spec(
+    library: &PyCandidateLibrary,
+    rule_mode: &str,
+    canon: &str,
+    rtol: f64,
+    atol: f64,
+    min_informative: Option<usize>,
+    challenges: usize,
+    retries: usize,
+) -> PyResult<engine::MineSpec> {
+    let mode = parse_rule_mode(rule_mode)?;
+    let canon = parse_mine_canon(canon, mode)?;
+    if (mode, canon) != (library.mode, library.canon) {
+        return Err(PyValueError::new_err(format!(
+            "the library was priced for rule_mode {:?} / canon {:?}, not {mode:?} / {canon:?}",
+            library.mode, library.canon
+        )));
+    }
+    Ok(engine::MineSpec {
+        mode,
+        canon,
+        rtol,
+        atol,
+        min_informative: min_informative.unwrap_or(library.inner.n_rows() / 8).max(1),
+        challenges,
+        retries,
+    })
+}
+
 /// The output projection's wire spelling, factored out of the three FFI entries that
 /// accept it so they cannot drift.
 fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
@@ -393,6 +435,9 @@ fn pushed_rules_digest(rules: &[(Vec<String>, Vec<String>)]) -> u64 {
 #[pyclass(name = "CandidateLibrary", module = "simplipy._core")]
 struct PyCandidateLibrary {
     inner: worker::CandidateLibrary,
+    /// The mode and canon the library's mu tiers were priced in.
+    mode: engine::RuleMode,
+    canon: engine::MineCanon,
 }
 
 #[pymethods]
@@ -1337,9 +1382,14 @@ impl PyEngine {
 
     /// OFFLINE miner: build a RESIDENT candidate library once per mine (precompiles every
     /// candidate's tape + precomputes const-free `y`). Pass the returned handle to
-    /// `find_rule_lib`. Var-free candidates of length >= 2 are dropped unconditionally --
-    /// the library mirrors the emit guard; see `worker::CandidateLibrary::build`.
-    #[pyo3(signature = (candidates, var_names, x_flat, n_rows))]
+    /// `find_rule_lib` / `mine_one_length`. Var-free candidates of length >= 2 are dropped
+    /// unconditionally -- the library mirrors the emit guard; see
+    /// `worker::CandidateLibrary::build`. `rule_mode` is required: the library's mu tiers are
+    /// priced in the mine's own measure, and the handle remembers which, so a scan under
+    /// another mode is refused rather than run on a mismatched bound. `canon="legacy"` is
+    /// 0.14's mark (Default mode only) until the per-mode marks land.
+    #[pyo3(signature = (candidates, var_names, x_flat, n_rows, *, rule_mode, canon="legacy"))]
+    #[allow(clippy::too_many_arguments)]
     fn build_candidate_library(
         &self,
         py: Python<'_>,
@@ -1347,157 +1397,67 @@ impl PyEngine {
         var_names: Vec<String>,
         x_flat: Vec<f64>,
         n_rows: usize,
+        rule_mode: &str,
+        canon: &str,
     ) -> PyResult<PyCandidateLibrary> {
         for c in &candidates {
             ensure_tokens_are_tokens(c)?;
         }
+        let mode = parse_rule_mode(rule_mode)?;
+        let canon = parse_mine_canon(canon, mode)?;
         let inner = py
             .detach(|| {
-                self.inner
-                    .build_candidate_library(&candidates, &var_names, &x_flat, n_rows)
+                self.inner.build_candidate_library(
+                    &candidates,
+                    &var_names,
+                    &x_flat,
+                    n_rows,
+                    mode,
+                    canon,
+                )
             })
             .map_err(PyValueError::new_err)?;
-        Ok(PyCandidateLibrary { inner })
+        Ok(PyCandidateLibrary { inner, mode, canon })
     }
 
-    /// OFFLINE miner: `find_rule_worker` decision over a resident `CandidateLibrary`
-    /// (no per-source rebuild, no per-call X marshaling). Returns the chosen target, or None.
-    /// `mark` (optional): the engine's own result for the source -- when given, the
-    /// serve-time reduction ordering rides the candidate scan (finding F2): only targets
-    /// STRICTLY BELOW the mark are selectable, a refused candidate yields to the next one,
-    /// and a fully refused length yields to the next length.
-    #[pyo3(signature = (source, simplified_length, max_target, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, mark=None))]
+    /// OFFLINE miner: the library scan for ONE source (the proposals' channel), over a
+    /// resident `CandidateLibrary`. Returns the chosen target, or None. The MARK is the
+    /// engine's own (`Engine::mine_mark` under `rule_mode`/`canon`), computed inside, so
+    /// this channel and `mine_one_length` share one acceptance: only targets strictly below
+    /// the mark are selectable, a refused candidate yields to the next one, and an atomic
+    /// mark mints nothing.
+    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, canon="legacy"))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule_lib(
         &self,
         py: Python<'_>,
         source: Vec<String>,
-        simplified_length: usize,
-        max_target: Option<usize>,
         library: PyRef<'_, PyCandidateLibrary>,
+        max_target: Option<usize>,
         challenges: usize,
         retries: usize,
         seed: u64,
         rtol: f64,
         atol: f64,
         min_informative: Option<usize>,
-        mark: Option<Vec<String>>,
+        rule_mode: &str,
+        canon: &str,
     ) -> PyResult<Option<Vec<String>>> {
         ensure_tokens_are_tokens(&source)?;
-        if let Some(m) = &mark {
-            ensure_tokens_are_tokens(m)?;
-        }
+        let spec = mine_spec(
+            &library,
+            rule_mode,
+            canon,
+            rtol,
+            atol,
+            min_informative,
+            challenges,
+            retries,
+        )?;
         let lib = &library.inner;
-        // Universal floor (D3, extends H-038): see equivalent_no_const.
-        let mi = min_informative.unwrap_or(lib.n_rows() / 8).max(1);
-        // A user-supplied mark that does not parse would otherwise refuse EVERY candidate
-        // silently (`ordered_below` = None on either side failing) -- reject it loudly.
-        if let Some(m) = &mark {
-            if self.inner.ac_ordered_below(m, m).is_none() {
-                return Err(PyValueError::new_err(
-                    "mark is not a parseable prefix expression",
-                ));
-            }
-            // ATOMIC MARK ENDS THE SEARCH (signed-zero finding, 2026-08-02; the
-            // native twin lives in engine::miner::mine_one_length): no sound target
-            // sits strictly below a single atom -- a different atom is a different
-            // VALUE, and the ordering tiebreak ranks atoms among themselves, so
-            // searching below an atomic mark can only mint value-changes.
-            if m.len() == 1 {
-                return Ok(None);
-            }
-        }
         py.detach(|| {
-            // THE LICENCE REGISTRY RUNS ON EVERY MINT CHANNEL (C1.20, 2026-08-08).
-            // This is the python-facing single-source channel (the hint/proposal
-            // paths of `find_rules` -- the exact channel family F49's seven
-            // absorptions came through), and it used to carry only the determined-
-            // source gate: the special-count licence and the pole entry existed
-            // solely in `mine_one_length`'s closure. A channel gated by "the LLM
-            // channel is off in the acj configs" is a channel gated by coincidence
-            // -- the C1.20 pattern itself -- so the registry now runs here
-            // unconditionally: `mint_refusals` with the caller's mark as the
-            // endpoint (its absence degrades the special count to the raw source
-            // side, never below it), and the pole entry after the ordering, exactly
-            // as in the native path. No-mark calls previously ran UNGATED; they now
-            // carry the registry too (the ordering acceptance still requires a
-            // mark, as before).
-            let empty: Vec<String> = Vec::new();
-            let mark_for_count: &Vec<String> = mark.as_ref().unwrap_or(&empty);
-            let src_ref: &Vec<String> = &source;
-            let mark_opt: Option<&Vec<String>> = mark.as_ref();
-            let inner = &self.inner;
-            let accept = Some(move |t: &[String]| {
-                if engine::refusals::mint_refusals(src_ref, mark_for_count, t, lib.var_names())
-                    .is_some()
-                {
-                    return false;
-                }
-                if let Some(m) = mark_opt {
-                    let below = match inner.ac_ordered_below(t, m) {
-                        Some(below) => below,
-                        None => {
-                            // The mark parses (validated above) and candidates are library
-                            // spellings: an undecidable ordering here is a bug -- loud in
-                            // debug, counted in release (never a silent refusal).
-                            debug_assert!(
-                                false,
-                                "ordering acceptance could not parse candidate {t:?}"
-                            );
-                            engine::stats::ACCEPT_UNDECIDED_REFUSALS
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            false
-                        }
-                    };
-                    if !below {
-                        return false;
-                    }
-                }
-                if inner.mint_pole_refusal(src_ref, t, lib.var_names()) {
-                    engine::stats::REGISTRY_POLE_REFUSALS
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return false;
-                }
-                true
-            });
-            // Resolved-literal targets additionally need a STRICT mu descent below
-            // the mark AND a DIFFERENT literal-skeleton (see engine::miner): under mu
-            // a rounded literal descends from a long exact one by bits alone, so
-            // strict descent stopped refusing respells -- the skeleton guard is the
-            // doctrine ("resolution recovers structure, never respells literals")
-            // made structural. Fail closed on unparseable sides.
-            // One mu for the mark, used TWICE: as the resolved-target acceptance threshold
-            // and as the scan bound. They were separate criteria (mu vs a token ceiling);
-            // the ruling makes them one, so they must read the same number.
-            let mark_mu = mark
-                .as_ref()
-                .and_then(|m| self.inner.ac_complexity(m, engine::RuleMode::Default, engine::RuleMode::Default));
-            let accept_resolved = mark.as_ref().map(|m| {
-                let mark_c = mark_mu;
-                move |t: &[String]| {
-                    matches!(
-                        (self.inner.ac_complexity(t, engine::RuleMode::Default, engine::RuleMode::Default), mark_c),
-                        (Some(tc), Some(mc)) if tc < mc
-                    ) && !self.inner.ac_same_literal_skeleton(t, m).unwrap_or(true)
-                }
-            });
-            self.inner.find_rule_with_lib(
-                &source,
-                simplified_length,
-                max_target,
-                mark_mu,
-                lib,
-                challenges,
-                retries,
-                seed,
-                rtol,
-                atol,
-                mi,
-                accept.as_ref().map(|f| f as &dyn Fn(&[String]) -> bool),
-                accept_resolved
-                    .as_ref()
-                    .map(|f| f as &dyn Fn(&[String]) -> bool),
-            )
+            self.inner
+                .find_rule_lib(&source, lib, max_target, &spec, seed)
         })
         .map_err(PyValueError::new_err)
     }
@@ -1571,7 +1531,7 @@ impl PyEngine {
     /// shorten, with the bound tightened to the simplified length (targets must beat what
     /// `simplify` already reaches); `False` skips them (strict Kruskal). See
     /// `Engine::mine_one_length`.
-    #[pyo3(signature = (sources, library, max_target, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true))]
+    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, canon="legacy"))]
     #[allow(clippy::too_many_arguments)]
     fn mine_one_length(
         &self,
@@ -1586,26 +1546,26 @@ impl PyEngine {
         atol: f64,
         min_informative: Option<usize>,
         relaxed_kruskal: bool,
+        rule_mode: &str,
+        canon: &str,
     ) -> PyResult<Vec<(Vec<String>, Vec<String>)>> {
         for src in &sources {
             ensure_tokens_are_tokens(src)?;
         }
+        let spec = mine_spec(
+            &library,
+            rule_mode,
+            canon,
+            rtol,
+            atol,
+            min_informative,
+            challenges,
+            retries,
+        )?;
         let lib = &library.inner;
-        // Universal floor (D3, extends H-038): see equivalent_no_const.
-        let mi = min_informative.unwrap_or(lib.n_rows() / 8).max(1);
         Ok(py.detach(|| {
-            self.inner.mine_one_length(
-                &sources,
-                lib,
-                max_target,
-                challenges,
-                retries,
-                seed,
-                rtol,
-                atol,
-                mi,
-                relaxed_kruskal,
-            )
+            self.inner
+                .mine_one_length(&sources, lib, max_target, &spec, seed, relaxed_kruskal)
         }))
     }
 

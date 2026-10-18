@@ -478,14 +478,14 @@ class TestFoldFilter:
         x_flat, n = mining_x
         cands = [["x0"], ["<constant>"], ["exp", "<constant>"], ["pow2", "<constant>"],
                  ["exp", "1"], ["neg", "x0"], ["*", "<constant>", "x0"]]
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         # every var-free composite drops -- including `exp 1`, which the retired
         # `folds_to_leaf` exemption used to admit: the leaf `np.e` is the candidate
         # that emits; the composite spelling never can (emit guard).
         assert lib.n_filtered == 3, "exp(<c>), pow2(<c>) and exp(1) are all var-free composites"
         assert lib.n_candidates == 4
         # and the drop needs no bare `<constant>` guard token: it is unconditional
-        lib2 = engine._core.build_candidate_library(cands[2:], ["x0"], x_flat, n)
+        lib2 = engine._core.build_candidate_library(cands[2:], ["x0"], x_flat, n, rule_mode='default')
         assert lib2.n_filtered == 3
         assert lib2.n_candidates == 2
 
@@ -521,10 +521,12 @@ class TestFoldFilter:
         cands = [["<constant>"], ["x0"], ["exp", "1"]]
         # `exp 1` is dropped from the library (var-free composite); the exact
         # interval-intersection `<constant>` decision must carry the match alone.
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_filtered == 1
-        out = engine._core.find_rule_lib(src, len(src), 2, lib, challenges=16, retries=16,
-                                         seed=7, rtol=1e-9, atol=1e-12)
+        # The certification alone (no mint acceptance): the mine refuses this match anyway,
+        # since its resolved literal is a rounding of the special `e`.
+        out = engine._core.find_rule(src, len(src), 2, cands, ["x0"], x_flat, n,
+                                     challenges=16, retries=16, seed=7, rtol=1e-9, atol=1e-12)
         assert out is not None, 'the feasible near-constant source must match'
 
     def test_the_mine_never_ships_a_var_free_composite_rhs(self, tmp_path) -> None:
@@ -562,7 +564,7 @@ class TestTheLibraryIsQuotientedByCanonicalClass:
         n = 64
         x_flat = [0.13 * i - 4.0 for i in range(2 * n)]
         cands = [["x0"], ["x1"], ["*", "x0", "x1"], ["*", "x1", "x0"]]
-        lib = engine._core.build_candidate_library(cands, ["x0", "x1"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0", "x1"], x_flat, n, rule_mode='default')
         assert lib.n_candidates == 3, "the commuted spelling is the same class and must collapse"
 
     def test_a_different_variable_multiset_is_never_dropped(self, engine) -> None:
@@ -571,7 +573,7 @@ class TestTheLibraryIsQuotientedByCanonicalClass:
         n = 64
         x_flat = [0.13 * i - 4.0 for i in range(n)]
         cands = [["x0"], ["*", "x0", "x0"], ["pow2", "x0"]]
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_candidates == 3, "different variable multisets: both spellings stay"
 
 
@@ -1853,27 +1855,19 @@ class TestProposalHintLengthAllowance:
         X_data = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(0))
         library = core.build_candidate_library(
             [["x0"], ["1"], ["2"], ["sin", "x0"], ["cos", "x0"], list(self.SIN_TGT)],
-            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0])
-        _, _, endpoint = core.ac_judge(list(self.SIN_SRC), 48)
+            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0], rule_mode='default')
         scan = dict(challenges=16, retries=16, seed=1, rtol=1e-9, atol=1e-12,
-                    min_informative=32, mark=endpoint)
-        # Equal token count, strictly mu-below the mark: the mined scan now reaches it,
-        # and the source length no longer changes the answer.
-        assert core.find_rule_lib(list(self.SIN_SRC), len(self.SIN_SRC), None,
-                                  library, **scan) == self.SIN_TGT, \
+                    min_informative=32, rule_mode='default')
+        # Equal token count, strictly mu-below the mark: the mined scan reaches it (the
+        # scan computes the engine's own endpoint as its mark).
+        assert core.find_rule_lib(list(self.SIN_SRC), library, **scan) == self.SIN_TGT, \
             "a mu-descending target must be reachable at equal token count"
-        assert core.find_rule_lib(list(self.SIN_SRC), len(self.SIN_SRC) + 1, None,
-                                  library, **scan) == self.SIN_TGT, \
-            "and the source-length parameter must not change it"
         # THE BOUND THAT STILL BINDS: the (d) tie is a respell of one canonical state,
         # so it is not ordered strictly below the mark and no length admits it.
         tie_lib = core.build_candidate_library(
             [["x0"], ["1"], ["2"], ["sin", "x0"], list(self.TIE_TGT)],
-            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0])
-        _, _, tie_end = core.ac_judge(list(self.TIE_SRC), 48)
-        tie_scan = dict(scan, mark=tie_end)
-        assert core.find_rule_lib(list(self.TIE_SRC), len(self.TIE_SRC), None,
-                                  tie_lib, **tie_scan) is None, \
+            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0], rule_mode='default')
+        assert core.find_rule_lib(list(self.TIE_SRC), tie_lib, **scan) is None, \
             "an exact mu tie is not a descent and must never mint, at any length"
 
     def test_a_mine_without_proposals_only_mints_descending_targets(self, engine) -> None:
@@ -2692,7 +2686,7 @@ class TestVarFreeCandidatesNeverEnterTheLibrary:
         # candidate that emits; the composite spelling never can.
         cands = [["x0"], ["<constant>"], ["exp", "1"], ["exp", "<constant>"],
                  ["pow2", "<constant>"], ["*", "<constant>", "x0"]]
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_filtered == 3, "exp(1), exp(<c>) and pow2(<c>) are all var-free composites"
         assert lib.n_candidates == 3
 
@@ -2704,14 +2698,13 @@ class TestVarFreeCandidatesNeverEnterTheLibrary:
         it is never a var-free composite."""
         x_flat, n = mining_x
         cands = [["x0"], ["<constant>"], ["1"], ["pow", "1", "<constant>"]]
-        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
+        lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_candidates == 3, "the foldable composite must be REFUSED at admission"
         assert lib.n_filtered == 1
         src = ["rootn", "1", "<constant>"]
-        _, _, mark = engine._core.ac_judge(list(src), 48)
-        got = engine._core.find_rule_lib(list(src), len(src), None, lib, challenges=16,
+        got = engine._core.find_rule_lib(list(src), lib, challenges=16,
                                          retries=16, seed=1, rtol=1e-9, atol=1e-12,
-                                         min_informative=32, mark=mark)
+                                         min_informative=32, rule_mode='default')
         assert got is None or len(got) < 2 or any(
             t.startswith(("x", "_", "$", "?", "!")) for t in got), \
             f"emitted a var-free composite target: {got}"

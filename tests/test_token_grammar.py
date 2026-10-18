@@ -209,7 +209,7 @@ class TestRecursionCapEveryEntry:
         core = engine._core
         deep = ["neg"] * 200_000 + ["x0"]
         deepc = ["neg"] * 200_000 + ["1"]
-        lib = core.build_candidate_library([["x0"]], ["x0"], [1.0] * 8, 8)
+        lib = core.build_candidate_library([["x0"]], ["x0"], [1.0] * 8, 8, rule_mode='default')
         calls = [
             lambda: core.evaluate_batch(deep, ["x0"], [1.0], 1, []),
             lambda: core.evaluate_constant_subtree(deepc),
@@ -222,11 +222,11 @@ class TestRecursionCapEveryEntry:
             lambda: core.convert_expression(deep),
             lambda: core.equivalent_no_const(deep, ["x0"], ["x0"], [1.0] * 8, 8),
             lambda: core.find_rule(deep, len(deep), None, [["x0"]], ["x0"], [1.0] * 8, 8),
-            lambda: core.find_rule_lib(deep, len(deep), None, lib),
+            lambda: core.find_rule_lib(deep, lib, rule_mode='default'),
             lambda: core.exist_constants_fit(deepc, ["x0"], [1.0] * 8, 8, [1.0] * 8),
             lambda: core.exist_constants_fit_linear(deepc, ["x0"], [1.0] * 8, 8, [1.0] * 8),
             lambda: core.set_rules([(deep, ["x0"])]),
-            lambda: core.mine_one_length([deep], lib, None),
+            lambda: core.mine_one_length([deep], lib, rule_mode='default'),
             lambda: core.ac_ordered_below(deep, ["x0"]),
             lambda: core.ac_judge(deep, 48),
             lambda: core.parse("neg(" * 100_000 + "x0" + ")" * 100_000, True, False),

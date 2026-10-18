@@ -174,8 +174,8 @@ class TestMuEraResolutionRespell:
         assert mark[1].startswith('0.111111111111111088'), mark  # exact square stands
         x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
         lib = core.build_candidate_library(
-            [['*', '<constant>', 'x0'], ['x0'], ['<constant>']], ['x0'], x, 256)
-        res = core.find_rule_lib(src, len(src), 4, lib, mark=mark)
+            [['*', '<constant>', 'x0'], ['x0'], ['<constant>']], ['x0'], x, 256, rule_mode='default')
+        res = core.find_rule_lib(src, lib, 4, rule_mode='default')
         assert res is None, res
 
     def test_structural_resolution_still_lives(self, mined_acj):
@@ -197,8 +197,8 @@ class TestMuEraResolutionRespell:
         mark = bare.simplify(list(src))
         assert 'acos' in mark, mark
         x = np.random.default_rng(0).uniform(-8, 8, 256).tolist()
-        lib = core.build_candidate_library([['<constant>'], ['x0']], ['x0'], x, 256)
-        res = core.find_rule_lib(src, len(src), 3, lib, mark=mark)
+        lib = core.build_candidate_library([['<constant>'], ['x0']], ['x0'], x, 256, rule_mode='default')
+        res = core.find_rule_lib(src, lib, 3, rule_mode='default')
         assert res == ['0.5'], res
 
 

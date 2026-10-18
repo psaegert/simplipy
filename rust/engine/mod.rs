@@ -26,6 +26,7 @@ use memo::{BangCache, SimplifyCtx};
 
 pub use ac::AcForm;
 pub use ac::RuleMode;
+pub use miner::{MineCanon, MineRefusal, MineSpec};
 
 /// Test-only plumbing for the serialization-stability probes (a per-call ctx + view + intern).
 #[cfg(test)]
