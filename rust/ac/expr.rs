@@ -3164,8 +3164,20 @@ fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
             // HOST are `mul()`'s sign-factored accumulation's to decide -- a raw
             // `Mul[-P, N]` beside the canonical `Mul[-N, P]` is exactly the P1
             // route-dependence one join away.
+            // A negative coefficient beside a sum that takes the sign itself (one holding an
+            // infinity, a constant or a negation-absorbing member) also takes the full
+            // assembly: `mul()` folds the sign into that sum, and `add()` re-settles such a
+            // term the same way when a sum is read, so a raw join here would spell a term the
+            // second read respells (`-x8 (log(x16) - inf)` is `x8 (inf - log(x16))`).
+            let folds_sign = |f: &Ex| {
+                matches!(f, Ex::Add(ts) if ts.iter().any(|m| {
+                    m.contains_const()
+                        || matches!(m, Ex::PosInf | Ex::NegInf)
+                        || term_absorbs_negation(m)
+                }))
+            };
             if v.iter().any(|f| matches!(f, Ex::Num(_)))
-                || (c.is_negative() && v.iter().any(|f| is_sign_trade_site(f, cx)))
+                || (c.is_negative() && v.iter().any(|f| is_sign_trade_site(f, cx) || folds_sign(f)))
             {
                 let mut items = Vec::with_capacity(v.len() + 1);
                 items.push(Ex::Num(c));
@@ -6757,13 +6769,15 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
             .filter_map(|(k, _)| k.as_ref().filter(|k| class_pinned(&out, k, cx)).cloned())
             .collect();
         if !pinned.is_empty() {
-            // Every site that holds a pinned class keeps its spelling too: a sum among whose terms
-            // the class sits (`S - S^3`) vanishes at its zero as well, and its flip would move the
-            // sign of the infinity there just as the class's own sites would.
+            // Every site that holds a pinned class and vanishes at its zero keeps its spelling
+            // too: a sum among whose terms the class sits (`S - S^3`) is zero there as well, and
+            // its flip would move the sign of the infinity there just as the class's own sites
+            // would. A site over a sum infinite there (`(x9 - 1)^(-1/4) - x9`) flips exactly.
             let holds = |pos: usize| {
-                pinned
-                    .iter()
-                    .any(|k| parity_in(&out[pos], k, cx) != Parity::Free)
+                pinned.iter().any(|k| {
+                    parity_in(&out[pos], k, cx) != Parity::Free
+                        && !pole_at_zero(site_sum(&out[pos]), k, cx)
+                })
             };
             // The sites left keep their order in `site_flips`, so a site's new bit is its rank
             // among them.

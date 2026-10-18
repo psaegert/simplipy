@@ -175,3 +175,17 @@ def test_an_odd_function_of_a_negation_reads_as_the_negated_term(eng, mode, fn):
     src = f'* - {fn} x1 x1 + x1 {fn} neg x1'.split()
     want = list(eng.simplify(f'neg pow - x1 {fn} x1 2'.split(), mode=mode))
     assert list(eng.simplify(src, mode=mode)) == want
+
+
+# A second read of an answer gives the answer back. A negated sum the sign folds into (one holding an infinity) is
+# joined as `mul()` joins it, and a pinned class freezes only the sites that may vanish at its zero (a sum with a pole
+# of its own there, `(x9 - 1)^(-1/4) - x9`, flips exactly).
+SECOND_READ = ['* / x8 - x8 + x8 - - x13 x16 x8 - * x8 - - log + - x16 x14 x14 * x2 x13 + x8 atanh / x2 x2 x13',
+               '+ + + x9 x9 x9 - - x9 asin / - rootn - x9 / x9 x9 -4 x9 - x9 pow / x9 x9 4 x9']
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('src', SECOND_READ)
+def test_an_answer_reads_back_as_itself(eng, mode, src):
+    ans = list(eng.simplify(src.split(), mode=mode))
+    assert list(eng.simplify(ans, mode=mode)) == ans
