@@ -113,6 +113,11 @@ def test_functions_of_numbers_fold_only_when_every_number_is_a_float(eng):
     assert show(eng, 'x1 + sin(9463/890)') == 'x1 - 0.9348393354311442'
     # an odd function of a negative literal gives its sign to the joiner, as in `simplify`'s text
     assert show(eng, 'x1 + sin(-2)') == 'x1 - sin(2)'
+    # a power the state keeps only for its size is a number once its base is a float
+    long = '0.001980784624751695158377988284554202796250646643885207061964241892776071925160468502'
+    assert show(eng, f'x1*{long}^5') == '3.0492025996286705e-14*x1'
+    assert show(eng, '3^5000*x1') == '3^5000*x1'
+    assert show(eng, 'x1*2^(1/3)') == '2^(1/3)*x1'
 
 
 def test_divisors(eng):

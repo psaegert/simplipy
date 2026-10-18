@@ -595,6 +595,36 @@ impl<'a, 'v> Display<'a, 'v> {
     /// Rule 6: the value of a ground subtree holding a function of numbers that are all written
     /// as floats, evaluated as the deployed evaluator does; `None` when it does not fold.
     fn fold(&self, e: &Ex) -> Option<Rat> {
+        // An integer power of a number, which the state keeps only because the exact value
+        // leaves the size cap: once the base is written as a float, the power of that float
+        // is a number like any other, combined exactly.
+        if let Ex::Pow(b, x) = e {
+            if let (Ex::Num(base), Ex::Num(k)) = (&**b, &**x) {
+                if base.is_zero() {
+                    return None;
+                }
+                if !k.is_integer() {
+                    return self.fold_function(e);
+                }
+                let (sp, shown) = self.spell(&base.abs(), false);
+                if !matches!(sp, Spelling::Float(_)) {
+                    return None;
+                }
+                let _exact = number_domain(false);
+                let shown = if base.is_negative() {
+                    shown.checked_neg()?
+                } else {
+                    shown
+                };
+                let v = shown.checked_pow_integer(k)?;
+                return writable(v.to_f64_nearest()).then_some(v);
+            }
+        }
+        self.fold_function(e)
+    }
+
+    /// Rule 6 proper: a ground subtree with a function inside, every number of it a float.
+    fn fold_function(&self, e: &Ex) -> Option<Rat> {
         if matches!(e, Ex::Num(_)) || !self.foldable(e) {
             return None;
         }
