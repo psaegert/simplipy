@@ -307,7 +307,8 @@ same way. So `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and
 `x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`. Residuals [EMPIRICAL]: where a member's value at the
 zero is not read, the class's cheapest orientation can leave that value off the limit (a sum holding
 the class among terms free of it, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))` is `+inf` at `x1 = 3` where
-its limit is `-inf`); one class split across the
+its limit is `-inf`; a class scaled by a factor of unknown sign, `log(x2*(x1 - 3))/(3 - x1)` is
+`+inf` at `x1 = 3, x2 = -1` where its limit is `-inf`); one class split across the
 terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite;
 where two singularities meet, the float value can differ from the joint limit (most such points
 have none); polynomial factors are not classes (`9 - x1^2` does not hold `3 - x1`), and a sum that

@@ -5266,9 +5266,29 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
                     }
                 }
             }
+            let reads: Vec<ZeroRead> = ts.iter().map(|t| read_walk(t, class, n, nk, cx)).collect();
+            // A sum holding a term defined on one side only reads as its one-sided terms where those
+            // are infinite at the zero (of one side and one sign) and the rest finite there: they
+            // dominate it at the zero and beside it (`(3 - x1)^(-1/2) + x2*(x1 - 3)`).
+            if reads.iter().any(|r| matches!(r.parity, Side(_))) {
+                let (mut side, mut below) = (None, None);
+                for (t, r) in ts.iter().zip(&reads) {
+                    match (r.parity, zero_mag(t, class, cx)) {
+                        (Side(s), Mag::Inf) if side.is_none_or(|x| x == s) => {
+                            let Some(b) = r.below.filter(|b| below.is_none_or(|x| x == *b)) else {
+                                return unread;
+                            };
+                            (side, below) = (Some(s), Some(b));
+                        }
+                        (Free | Even | Odd, Mag::Zero | Mag::Finite) => {}
+                        _ => return unread,
+                    }
+                }
+                return side.map_or(unread, |s| read(Side(s), Some(false), below));
+            }
             let (mut odd, mut even_t, mut free_t) = (false, false, false);
-            for t in ts {
-                match read_walk(t, class, n, nk, cx).parity {
+            for r in &reads {
+                match r.parity {
                     Unknown | Side(_) => return unread,
                     Odd => odd = true,
                     Even => even_t = true,
@@ -5340,7 +5360,16 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
             match ra.parity {
                 Free => free(None),
                 Even => read(Even, None, None),
-                _ => one_sided(ra, None),
+                // negative beside the zero where its argument vanishes there, positive where it is
+                // infinite
+                _ => one_sided(
+                    ra,
+                    match zero_mag(&args[0], class, cx) {
+                        Mag::Zero => Some(true),
+                        Mag::Inf => Some(false),
+                        _ => None,
+                    },
+                ),
             }
         }
         Ex::Fun(op, args) if args.len() == 1 && is_even_fun(*op) => {

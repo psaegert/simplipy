@@ -165,11 +165,15 @@ def test_the_value_at_the_zero_of_a_class_is_kept(eng, mode, src):
         assert f_ans(3.0, 1.5) == limit, ' '.join(ans)
 
 
-# A member defined on one side of the class's zero (a log, a symbolic power) fixes the class's orientation: positive on
-# that side, so every spelling of the function gets one answer and its value at x1 = 3 is that side's limit.
+# A member defined on one side of the class's zero (a log, a symbolic power, or a sum such members dominate there)
+# fixes the class's orientation: positive on that side, so every spelling of the function gets one answer and its
+# value at x1 = 3 is that side's limit.
 ONE_SIDED = [(['/ log - x1 3 - 3 x1', 'neg / log - x1 3 - x1 3', '/ * log - x1 3 - 3 x1 pow - x1 3 2'], 1.0),
              (['/ pow - 3 x1 x2 - x1 3', 'neg / pow - 3 x1 x2 - 3 x1'], -1.0),
              (['/ pow - x1 3 x2 - 3 x1', 'neg / pow - x1 3 x2 - x1 3'], 1.0),
+             # a sum whose one-sided terms are infinite at the zero and the rest finite reads as them
+             (['/ + log - x1 3 x2 - 3 x1', 'neg / + log - x1 3 x2 - x1 3'], 1.0),
+             (['/ + pow - 3 x1 / -1 2 * x2 - x1 3 - x1 3', 'neg / + pow - 3 x1 / -1 2 * x2 - x1 3 - 3 x1'], -1.0),
              (['/ * * x2 rootn - 3 x1 3 pow rootn - 3 x1 3 x2 * - x1 3 pow - + x1 x2 1 7',
                'neg / * * x2 rootn - x1 3 3 pow rootn - 3 x1 3 x2 * - x1 3 pow - + x1 x2 1 7'], None)]
 

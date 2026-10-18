@@ -55,7 +55,9 @@
   canonical spelling gives (most such points have no limit at all).
   Known limits: where a member's value at the zero is not read, the class takes its cheapest
   orientation, which can leave that value off the limit (`1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))`, a
-  sum holding the class among terms free of it, is `+inf` at `x1 = 3` where its limit is `-inf`);
+  sum holding the class among terms free of it, is `+inf` at `x1 = 3` where its limit is `-inf`,
+  and `log(x2*(x1 - 3))/(3 - x1)`, a class scaled by a factor of unknown sign, is `+inf` at
+  `x1 = 3, x2 = -1` where its limit from `x1 < 3` is `-inf`);
   one class split across the terms of a sum with a dominant even term can give NaN at its zero,
   where the limit is infinite (`x5/abs(x3 - x2) - 2*x1/tan(x2 - x3)` at `x2 = x3`), because no
   single orientation is right at every such point; a class is read up to constant factors, not
