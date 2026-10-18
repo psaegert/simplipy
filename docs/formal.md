@@ -289,7 +289,8 @@ float value is read from its parts (an exactly cancelling sum evaluates to $+0$)
 candidate only if the product's value at the zero is its limit, so an even product with an odd
 count of members whose zero sign differs is refused and no sign moves through a pole whose two
 sides agree. A member defined beside the zero on one side only (a log, an even root, a fractional
-or symbolic power of an odd member) fixes that side: the class is written in the orientation
+or symbolic power of an odd member, or a sum such members dominate there because they are infinite
+at the zero and its other terms finite) fixes that side: the class is written in the orientation
 positive there, so every base over $S$ is $+0$ at the zero and the float value is that side's
 limit (`(3 - x1)^x4/(x1 - 3)` is `-(3 - x1)^x4/(3 - x1)`, `-inf` at `x1 = 3` like its limit from
 `x1 < 3`). Members defined on opposite sides leave no domain and fix nothing, and a product that is
