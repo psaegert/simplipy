@@ -24,9 +24,9 @@
 //! * NEVER-WORSE -- `best` starts at the chain's fixpoint and is only ever replaced
 //!   by a state strictly below it: fall back to the fixpoint is the identity case.
 //! * TERMINATION -- `budget` bounds candidate descents; independent of the budget,
-//!   both phases move only on strict descent of a well-founded ordering (the frontier
-//!   grows only by accepted states, the finish only steps to a strictly lower best), so
-//!   the search terminates as a theorem even with the budget effectively infinite.
+//!   the search moves only on strict descent of a well-founded ordering (it steps only to a
+//!   strictly lower best), so it terminates as a theorem even with the budget effectively
+//!   infinite.
 //! * IDEMPOTENCE -- deterministic order (canonical bag order, pre-order walk, candidates
 //!   ordered by price, single thread), and a reached valley re-explores to nothing: its own
 //!   expansions all settle at or above it (an uncapped search ends on a full round of
@@ -38,11 +38,12 @@
 //!   itself (L6a, docs/formal.md) and the step cap not to bind. `permissive` selects among
 //!   three searches, and its winner is a valley of its own search only (formal.md L6).
 //!
-//! MOVE SET (B1): `distribute` (a Mul bag's Add children, fully distributed -- the
-//! row-156 move) and its Pow sibling `pow-expand` (integer power of a sum, expanded
-//! through the same product builder), and their reverse `factor` (terms of a sum that share
-//! a factor, as that factor times the quotient sum: the distributive law, which the search
-//! owns, see [`factorings`]). The enumeration in `local_moves` is the single
+//! MOVE SET (B1): the distributive law, which the search owns, both ways: `distribute` (a
+//! Mul bag's Add children, fully distributed -- the row-156 move -- or one factor into one
+//! sum factor, or the other factors over one term of a sum factor) and its Pow sibling
+//! `pow-expand` (integer power of a sum, expanded through the same product builder), and
+//! their reverse `factor` (terms of a sum that share a factor, as that factor times the
+//! quotient sum, see [`factorings`]). The enumeration in `local_moves` is the single
 //! extension point for further kinds (common-denominator is deferred to the B7 lane
 //! with its own falsifier). One deliberate scaffolding bound: the search moves only
 //! from ACCEPTED valleys, so every win is reachable by depth-1 moves from a
@@ -94,7 +95,6 @@ const POW_EXPAND_CAP: i128 = 6;
 /// under a smaller budget is the same walk cut short, so a run capped at `k` ends on the
 /// last of these with at most `k` descents (or on the fixpoint): `permissive` uses this to
 /// make more budget never end costlier.
-///
 pub fn explore(
     fix: Ex,
     pass: &PassCtx,
@@ -148,7 +148,7 @@ fn search(
     let mut spent = 0usize;
     loop {
         let mut sites: Vec<Site> = Vec::new();
-        site_list(&best, pass.cx, &[], None, &mut Vec::new(), &mut sites);
+        site_list(&best, pass.cx, None, &mut Vec::new(), &mut sites);
         // The whole states, cheapest first; a state two moves rebuild alike is tried once, and
         // a move that rebuilds the best itself not at all.
         let mut seen: rustc_hash::FxHashSet<Ex> = rustc_hash::FxHashSet::default();
@@ -188,35 +188,19 @@ fn search(
 }
 
 /// The places of `e` with a move, in deterministic pre-order (the moves at a node first, then its
-/// children in canonical bag order), each with its moved node. `near` holds the bases of the
-/// product `e` is a factor of, and `power` the integer exponent `e` is the base of, if any (what
-/// FACTOR reads, see [`factor_moves`]).
-fn site_list(
-    e: &Ex,
-    cx: &Cx,
-    near: &[&Ex],
-    power: Option<&Rat>,
-    path: &mut Vec<usize>,
-    out: &mut Vec<Site>,
-) {
+/// children in canonical bag order), each with its moved node. `power` is the integer exponent
+/// `e` is the base of, if any (FACTOR's licence, see [`factor_moves`]).
+fn site_list(e: &Ex, cx: &Cx, power: Option<&Rat>, path: &mut Vec<usize>, out: &mut Vec<Site>) {
     let mut own = Vec::new();
-    local_moves(e, cx, near, power, &mut own);
+    local_moves(e, cx, power, &mut own);
     for m in own {
         out.push((path.clone(), m));
     }
     match e {
-        Ex::Add(v) | Ex::Fun(_, v) => {
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
             for (i, c) in v.iter().enumerate() {
                 path.push(i);
-                site_list(c, cx, &[], None, path, out);
-                path.pop();
-            }
-        }
-        Ex::Mul(v) => {
-            let bases = term_bases(e);
-            for (i, c) in v.iter().enumerate() {
-                path.push(i);
-                site_list(c, cx, &bases, None, path, out);
+                site_list(c, cx, None, path, out);
                 path.pop();
             }
         }
@@ -226,10 +210,10 @@ fn site_list(
                 _ => None,
             };
             path.push(0);
-            site_list(b, cx, near, k, path, out);
+            site_list(b, cx, k, path, out);
             path.pop();
             path.push(1);
-            site_list(x, cx, &[], None, path, out);
+            site_list(x, cx, None, path, out);
             path.pop();
         }
         _ => {}
@@ -271,7 +255,7 @@ fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
 
 /// The move kinds at one node. THE extension point: a new move is a new arm here (with its own
 /// licences), nothing else changes.
-fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec<Ex>) {
+fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
     match e {
         // DISTRIBUTE (the row-156 move): fully distribute a Mul bag over its Add
         // children; and on a sub-multiset, the reverse of FACTOR on some of a sum's terms: one
@@ -350,7 +334,7 @@ fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec
         }
         // FACTOR: the reverse of DISTRIBUTE, at a sum.
         Ex::Add(v) => {
-            out.extend(factor_moves(v, cx, near, power));
+            out.extend(factor_moves(v, cx, power));
         }
         _ => {}
     }
@@ -411,39 +395,26 @@ fn term_factors(t: &Ex) -> SplitTerm {
 /// product -- a factor whose zero set may hold a region, where the inverse's infinity takes the
 /// product's sign -- the sum is not factored either.
 ///
-/// A factoring is proposed where it can pay: the factored sum is cheaper by itself, or a factor
-/// it takes out of the whole sum shares a base with the product the sum (or a power of it) is a
-/// factor of (`near`). Under a lone inverse the factored spelling can tie the sum
-/// (`1/(x1 - x1*x2)` against `-(1/(x2 - 1))/x1`), so the chain never takes it, while the merges
-/// it enables across the product pay (`rootn(x1, 2)/(x1 - x1*x2)` becomes
-/// `-(1/pow(x1, 1/2))*(1/(x2 - 1))`).
-fn factor_moves(terms: &[Ex], cx: &Cx, near: &[&Ex], power: Option<&Rat>) -> Vec<Ex> {
+/// Every licensed factoring is proposed, whether or not it is cheaper by itself: whether it pays
+/// is the whole state's question. Under a lone inverse the factored spelling can tie the sum
+/// (`1/(x1 - x1*x2)` against `-(1/(x2 - 1))/x1`), while the merges it enables across the product
+/// pay (`rootn(x1, 2)/(x1 - x1*x2)` becomes `-(1/pow(x1, 1/2))*(1/(x2 - 1))`); and a rule can fire
+/// on the factored sum alone.
+fn factor_moves(terms: &[Ex], cx: &Cx, power: Option<&Rat>) -> Vec<Ex> {
+    // A cost bound, not a measure: the groups grow with the square of the terms. No sum on srbf's
+    // ground truths, a tenth of its predictions or a tenth of the T8.1 inputs reaches it.
     if terms.len() > EXPAND_TERM_CAP {
         return Vec::new();
     }
-    let cands = factorings(terms, cx, &|f| licensed(f, cx));
-    if cands.is_empty() {
-        return Vec::new();
-    }
-    let whole = complexity(&Ex::Add(terms.to_vec()), cx.view);
-    let mut out = Vec::new();
-    for (cand, c) in cands {
-        let pays = match &cand {
-            Ex::Mul(fs) => {
-                if let Some(k) = power.filter(|k| k.is_negative()) {
-                    if !distributes_power(fs, k, cx) {
-                        continue;
-                    }
-                }
-                term_bases(&c).iter().any(|b| near.contains(b))
-            }
-            _ => false,
-        };
-        if pays || complexity(&cand, cx.view) < whole {
-            out.push(cand);
-        }
-    }
-    out
+    let negative = power.filter(|k| k.is_negative());
+    factorings(terms, cx, &|f| licensed(f, cx))
+        .into_iter()
+        .filter(|(cand, _)| match (cand, negative) {
+            (Ex::Mul(fs), Some(k)) => distributes_power(fs, k, cx),
+            _ => true,
+        })
+        .map(|(cand, _)| cand)
+        .collect()
 }
 
 /// THE DISTRIBUTIVE LAW read as factoring, at the sum `terms`: each candidate is the sum with
@@ -662,8 +633,10 @@ pub(crate) fn is_factoring(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
 /// `<constant>`, or a piece is not `licensed`.
 fn factor_shared(terms: &[Ex], cx: &Cx, licensed: &dyn Fn(&Ex) -> bool) -> Option<(Ex, Ex)> {
     let split: Vec<SplitTerm> = terms.iter().map(term_factors).collect();
-    // The exponent arithmetic below reads each base once per term, which a canonical product
-    // guarantees; a term that holds one base twice is not factored.
+    // A term that holds one base twice holds two powers of it its constructor would not merge,
+    // so its exponent does not split as `b^r = b^c * b^(r - c)` either: it is not factored
+    // (soundness, not cost; on srbf's ground truths and a tenth of its predictions and of the
+    // T8.1 inputs, no answer depends on it).
     let twice = |fs: &[(Ex, Rat)]| {
         fs.iter()
             .enumerate()
