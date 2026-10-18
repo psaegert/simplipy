@@ -27,17 +27,14 @@
 //!   both phases move only on strict descent of a well-founded ordering (the frontier
 //!   grows only by accepted states, the finish only steps to a strictly lower best), so
 //!   the search terminates as a theorem even with the budget effectively infinite.
-//! * IDEMPOTENCE -- deterministic order (canonical bag order, pre-order walk, FIFO
-//!   frontier, single thread), and a reached valley re-explores to nothing: its own
+//! * IDEMPOTENCE -- deterministic order (canonical bag order, pre-order walk, candidates
+//!   ordered by price, single thread), and a reached valley re-explores to nothing: its own
 //!   expansions all settle at or above it (an uncapped search ends on a full round of
 //!   the answer's own candidates that found nothing). That holds for the answer only when the
 //!   search ran until a whole round of the answer's candidates found nothing (the public
 //!   default, `effort=None`; owner
 //!   2026-10-06): a cap can stop it between two accepted valleys, and a second call then
-//!   continues from the first one's answer. On srbf's 125,127 model predictions (f64) a cap
-//!   of 4, the old default, leaves 2,701 answers that change on a second call; uncapped, 26
-//!   remain, at equal price but one: 23 that also change with the search off, and 3 long
-//!   products that re-read with their factors in another order or sign. It also needs the answer to re-read to
+//!   continues from the first one's answer. It also needs the answer to re-read to
 //!   itself (L6a, docs/formal.md) and the step cap not to bind. `permissive` selects among
 //!   three searches, and its winner is a valley of its own search only (formal.md L6).
 //!
@@ -47,8 +44,8 @@
 //! a factor, as that factor times the quotient sum: the distributive law, which the search
 //! owns, see [`factorings`]). The enumeration in `local_moves` is the single
 //! extension point for further kinds (common-denominator is deferred to the B7 lane
-//! with its own falsifier). One deliberate scaffolding bound: the frontier extends
-//! only from ACCEPTED valleys, so every win is reachable by depth-1 moves from a
+//! with its own falsifier). One deliberate scaffolding bound: the search moves only
+//! from ACCEPTED valleys, so every win is reachable by depth-1 moves from a
 //! valley -- composite hills that need two unaccepted expansions in sequence are
 //! out of scope here and priced in the B7 acceptance study.
 //!
@@ -56,8 +53,6 @@
 //! reused across candidate descents -- same semantics as the chain's own passes; on
 //! very large budgets the defense-in-depth step cap can begin refusing steps, which
 //! is sound (candidates then settle high and are refused by the ordering test).
-
-use std::collections::VecDeque;
 
 use super::expr::{
     add, complexity, distributes_power, fun, mul, orient_term_classes, orientation_near_miss, pow,
@@ -76,38 +71,23 @@ const EXPAND_TERM_CAP: usize = 64;
 /// bounds the width; this keeps the factor list itself small.
 const POW_EXPAND_CAP: i128 = 6;
 
-/// How many candidate descents the breadth-first first phase of [`explore`] runs before
-/// the first-improvement finish takes over. On srbf's 125,127 model predictions (f64) the
-/// first phase alone returns the final answer on 124,572; the finish improves the other 555
-/// (by a median of 58 bits) and runs only where 8 did not settle.
-/// The first phase is the capped default's breadth-first search, so per search an answer
-/// is never worse than the same build's answer at any effort up to the prefix.
-const BFS_PREFIX: usize = 8;
-
 /// The exploration phase (ledger D39). `fix` is the chain's fixpoint for the calling
 /// mode; `pass` is that mode's OWN pass context (sound: the phase-1 pass; lossy: the
 /// sentinel-expired phase-2 pass) -- the same certified machinery, byte for byte.
 /// `budget` counts candidate descents; 0 disables the phase (the caller's guard makes
 /// that the no-call case, so unused exploration is byte-identical behavior).
 ///
-/// Two phases, one acceptance (strictly below the incumbent in [`ordered_below`]):
-/// 1. BREADTH-FIRST, for the first [`BFS_PREFIX`] descents: every candidate of every
-///    accepted state, in pre-order, against the best so far (the capped default's search).
-///    If its frontier empties within the prefix, the answer is the breadth-first one.
-/// 2. FIRST IMPROVEMENT, from the best: try the best's candidates in pre-order starting at
-///    the place that last improved, step to the first one strictly below, and stop after
-///    a full round that finds nothing. Breadth-first search re-tries every candidate of
-///    every accepted state, so `k` independent improvable places cost it `4k^2 + 1`
-///    descents; this finish costs about one round per improvement plus one closing round
-///    (16 copies of one srbf prediction: about six times the time of `effort=4`, for an answer
-///    a third of the price).
-///
-/// A candidate is the move applied at one place with its ancestors rebuilt through the
-/// canonical constructors ([`rebuild`]): a state's moves are computed when the state is
-/// walked ([`site_list`]), and a candidate's whole state is rebuilt only when it is tried,
-/// then descended by
-/// [`rewrite_pass`] to its fixpoint (or the same `max_passes` truncation the chain itself
-/// accepts, which is sound).
+/// One strategy, one acceptance (strictly below the incumbent in [`ordered_below`]): FIRST
+/// IMPROVEMENT. A round takes the best state's candidates -- every move ([`local_moves`]:
+/// DISTRIBUTE, POW-EXPAND and FACTOR) at every place, each with its ancestors rebuilt through the
+/// canonical constructors ([`rebuild`]) into the WHOLE STATE it is -- cheapest rebuilt state first
+/// (ties in pre-order), descends each by [`rewrite_pass`] to its fixpoint (or the same
+/// `max_passes` truncation the chain itself accepts, which is sound), steps to the first endpoint
+/// strictly below the best, and starts the next round there; a round that finds nothing ends the
+/// search. The rebuilt price is the order, not a filter: the merges a move enables across its
+/// ancestors happen in the constructors that rebuild them, so a candidate that already pays there
+/// is tried first, and one whose payoff appears only in its descent (a rule that fires on the
+/// factored sum) is still tried. `budget` counts descents: `effort=k` is the first `k` of them.
 ///
 /// `trace`, when given, receives every state the search accepts, in order, with the number
 /// of descents spent when it was accepted (the starting fixpoint is not recorded). A run
@@ -115,10 +95,6 @@ const BFS_PREFIX: usize = 8;
 /// last of these with at most `k` descents (or on the fixpoint): `permissive` uses this to
 /// make more budget never end costlier.
 ///
-/// One move set ([`local_moves`]: DISTRIBUTE, POW-EXPAND and FACTOR) under one acceptance. A
-/// FACTOR candidate is descended only when its rebuilt state is already below the best: the
-/// merges a factored sum enables across its product happen in the constructors that rebuild its
-/// ancestors, so a factoring that does not pay there is not walked.
 pub fn explore(
     fix: Ex,
     pass: &PassCtx,
@@ -156,20 +132,8 @@ fn descend(mut cur: Ex, pass: &PassCtx, max_passes: usize) -> Ex {
     cur
 }
 
-/// A candidate: the place of a move, the moved node, and whether it is a FACTOR move (descended
-/// only when its rebuilt state is already below the best).
-type Site = (Vec<usize>, Ex, bool);
-
-/// The candidate `site` of `state`, rebuilt and descended; `None` for a FACTOR move whose
-/// rebuilt state is not below `best`.
-fn try_site(state: &Ex, best: &Ex, site: &Site, pass: &PassCtx, max_passes: usize) -> Option<Ex> {
-    let (path, moved, probe) = site;
-    let rebuilt = rebuild(state, path, moved.clone(), pass.cx);
-    if *probe && !ordered_below(&rebuilt, best, pass.cx.view) {
-        return None;
-    }
-    Some(descend(rebuilt, pass, max_passes))
-}
+/// A candidate: the place of a move and the moved node.
+type Site = (Vec<usize>, Ex);
 
 /// The search of [`explore`]. Returns the best state.
 fn search(
@@ -179,92 +143,44 @@ fn search(
     budget: usize,
     mut trace: Option<&mut Vec<(usize, Ex)>>,
 ) -> Ex {
+    let view = pass.cx.view;
     let mut best = fix;
     let mut spent = 0usize;
-    // Phase 1: breadth-first over accepted states.
-    let mut frontier: VecDeque<Ex> = VecDeque::new();
-    frontier.push_back(best.clone());
-    let mut settled = true;
-    // When the prefix runs out while walking the best state itself, the candidates of it
-    // already tried were refused against that same best: the finish's first round skips them.
-    let mut refused_of_best = 0usize;
-    'bfs: while let Some(state) = frontier.pop_front() {
-        let mut sites: Vec<Site> = Vec::new();
-        site_list(&state, pass.cx, &[], None, &mut Vec::new(), &mut sites);
-        for (i, site) in sites.iter().enumerate() {
-            if spent >= budget || super::work::over() {
-                return best;
-            }
-            if spent >= BFS_PREFIX {
-                settled = false;
-                // `best` only ever moves strictly below, so if it equals the state being
-                // walked, it was this state for the whole walk.
-                if state == best {
-                    refused_of_best = i;
-                }
-                break 'bfs;
-            }
-            spent += 1;
-            let Some(cur) = try_site(&state, &best, site, pass, max_passes) else {
-                continue;
-            };
-            if super::work::over() {
-                return best;
-            }
-            if ordered_below(&cur, &best, pass.cx.view) {
-                best = cur.clone();
-                if let Some(t) = trace.as_deref_mut() {
-                    t.push((spent, cur.clone()));
-                }
-                frontier.push_back(cur);
-            }
-        }
-    }
-    if settled {
-        return best;
-    }
-    // Phase 2: first improvement from the best until a full round finds nothing. A round
-    // walks the best's candidates cyclically from where the last improvement happened; the
-    // first round starts after the candidates phase 1 already refused against this best (the
-    // same list: `site_list` is deterministic), so together they still make a full round.
-    let mut resume: Vec<usize> = Vec::new();
-    let mut skip = refused_of_best;
     loop {
         let mut sites: Vec<Site> = Vec::new();
         site_list(&best, pass.cx, &[], None, &mut Vec::new(), &mut sites);
-        let n = sites.len();
-        let start = if skip > 0 {
-            skip
-        } else {
-            sites.partition_point(|(p, _, _)| *p < resume)
-        };
-        let round = n.saturating_sub(skip);
-        skip = 0;
-        let mut accepted: Option<(Ex, Vec<usize>)> = None;
-        for off in 0..round {
+        // The whole states, cheapest first; a state two moves rebuild alike is tried once, and
+        // a move that rebuilds the best itself not at all.
+        let mut seen: rustc_hash::FxHashSet<Ex> = rustc_hash::FxHashSet::default();
+        let mut round: Vec<(u64, Ex)> = Vec::with_capacity(sites.len());
+        for (path, moved) in sites {
+            let rebuilt = rebuild(&best, &path, moved, pass.cx);
+            if rebuilt != best && seen.insert(rebuilt.clone()) {
+                round.push((complexity(&rebuilt, view), rebuilt));
+            }
+        }
+        round.sort_by_key(|(mu, _)| *mu);
+        let mut accepted: Option<Ex> = None;
+        for (_, rebuilt) in round {
             if spent >= budget || super::work::over() {
                 return best;
             }
             spent += 1;
-            let site = &sites[(start + off) % n];
-            let Some(cur) = try_site(&best, &best, site, pass, max_passes) else {
-                continue;
-            };
+            let cur = descend(rebuilt, pass, max_passes);
             if super::work::over() {
                 return best;
             }
-            if ordered_below(&cur, &best, pass.cx.view) {
-                accepted = Some((cur, site.0.clone()));
+            if ordered_below(&cur, &best, view) {
+                accepted = Some(cur);
                 break;
             }
         }
         match accepted {
-            Some((cur, path)) => {
+            Some(cur) => {
                 if let Some(t) = trace.as_deref_mut() {
                     t.push((spent, cur.clone()));
                 }
                 best = cur;
-                resume = path;
             }
             None => return best,
         }
@@ -285,8 +201,8 @@ fn site_list(
 ) {
     let mut own = Vec::new();
     local_moves(e, cx, near, power, &mut own);
-    for (m, probe) in own {
-        out.push((path.clone(), m, probe));
+    for m in own {
+        out.push((path.clone(), m));
     }
     match e {
         Ex::Add(v) | Ex::Fun(_, v) => {
@@ -353,15 +269,15 @@ fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
     }
 }
 
-/// The move kinds at one node, each with whether it is FACTOR. THE extension point: a new move
-/// is a new arm here (with its own licences), nothing else changes.
-fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec<(Ex, bool)>) {
+/// The move kinds at one node. THE extension point: a new move is a new arm here (with its own
+/// licences), nothing else changes.
+fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec<Ex>) {
     match e {
         // DISTRIBUTE (the row-156 move): fully distribute a Mul bag over its Add
         // children.
         Ex::Mul(v) => {
             if let Some(cand) = distribute_product(v, cx) {
-                out.push((cand, false));
+                out.push(cand);
             }
         }
         // POW-EXPAND: `(sum)^n` for small integer n, expanded through the same
@@ -374,7 +290,7 @@ fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec
                             .take(n as usize)
                             .collect();
                         if let Some(cand) = distribute_product(&factors, cx) {
-                            out.push((cand, false));
+                            out.push(cand);
                         }
                     }
                 }
@@ -382,9 +298,7 @@ fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec
         }
         // FACTOR: the reverse of DISTRIBUTE, at a sum.
         Ex::Add(v) => {
-            for cand in factor_moves(v, cx, near, power) {
-                out.push((cand, true));
-            }
+            out.extend(factor_moves(v, cx, near, power));
         }
         _ => {}
     }
