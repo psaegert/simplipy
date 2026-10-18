@@ -385,11 +385,8 @@ class TestMuGovernedFold:
         # Contract 10.11 (2026-08-08) RETIRED the one bag-site policy that beat the
         # measure: C*pi -> C now follows mu's gradient like every ground absorption.
         assert eng.simplify(['*', '<constant>', 'np.pi']) == ['<constant>']
-        # The surviving against-the-gradient refusal is positional, not special-wide:
-        # pi^C keeps the special although mu(pow(pi, C)) > mu(C) -- pow is not an
-        # absorption site (value set (0, inf), not "anything").
-        out = eng.simplify(['pow', 'np.pi', '<constant>'])
-        assert 'np.pi' in out and '<constant>' in out
+        # pi^C follows it too, as 2^C does: every positive base gives the same family of values.
+        assert eng.simplify(['pow', 'np.pi', '<constant>']) == ['<constant>']
 
 
 class TestB10CfreeDerivation:

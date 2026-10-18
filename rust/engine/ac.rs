@@ -418,9 +418,9 @@ impl Engine {
         crate::interval::nonconstant_entire(&strs, &self.operators)
     }
 
-    /// The `<constant>` value-set fold: a node of `<constant>` and ground members (literals and
-    /// special constants) collapses to `<constant>` under the ratified value-set licence
-    /// (unconditionally under LOSSY): `pow(2, C)`, `pow(np.pi, C)` and `exp(C)` alike.
+    /// The `<constant>` value-set fold: a node of `<constant>` and literals (numbers and special
+    /// constants) collapses to `<constant>` under the ratified value-set licence (unconditionally
+    /// under LOSSY): `pow(2, C)`, `pow(np.pi, C)` and `exp(C)` alike.
     ///
     /// FOLD UNIFICATION (owner-approved 2026-08-02): the engine folds ONLY what it
     /// computes EXACTLY -- rational arithmetic, which lives in the constructors (bag
@@ -434,10 +434,11 @@ impl Engine {
     /// evaluation landing exactly on a cheap literal while truly differing at 1e-17
     /// can no longer fold at serve, because nothing transcendental folds at serve.
     ///
-    /// The `<constant>` arm admits `<constant>` and ground members: a special constant is a
-    /// fixed real like a literal, and the value set decides (`pow(np.pi, C)` ranges over
-    /// `(0, inf)` as `pow(2, C)` does). Structural exact symbol algebra (bag cancellation
-    /// `pi/pi -> 1`) is outside the fold and deliberately unaffected.
+    /// The `<constant>` arm admits `<constant>` and literals: a special constant is a fixed real
+    /// like a number, and the value set decides (`pow(np.pi, C)` ranges over `(0, inf)` as
+    /// `pow(2, C)` does); an infinity is no literal here (`C/0` keeps its pole). Structural exact
+    /// symbol algebra (bag cancellation `pi/pi -> 1`) is outside the fold and deliberately
+    /// unaffected.
     /// H-045-R (owner Option B, 2026-08-05): exact-parity classification for
     /// `pow(<negative ground>, <beyond-certification integer literal>)`. Returns
     /// `Some(verdict)` when this arm DECIDES -- `Some(Some(lit))` folds, `Some(None)`
@@ -649,7 +650,7 @@ impl Engine {
         }
         let const_or_fin = children
             .iter()
-            .all(|c| matches!(c, Ex::Const) || is_ground(c, &view))
+            .all(|c| matches!(c, Ex::Const | Ex::Num(_) | Ex::Pi | Ex::E))
             && children.iter().any(|c| matches!(c, Ex::Const));
         if const_or_fin {
             if lossy {
