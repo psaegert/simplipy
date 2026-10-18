@@ -237,3 +237,51 @@ class TestFactorMove:
         src = ['+', '*', '<constant>', 'x1', '*', '<constant>', 'x2']
         out = explore(engine, src, BUDGET, lossy=True)
         assert out.count('<constant>') == 2, out
+
+
+class TestTheSearchOwnsTheDistributiveLaw:
+    """FACTOR takes what some terms of a sum share out of exactly those terms, and DISTRIBUTE
+    moves one factor of a product into one of its sum factors; both are search moves under the
+    whole-state acceptance, in every mode alike (no rule states the law)."""
+
+    MODES = ('f64', 'real', 'permissive')
+
+    @pytest.fixture(scope='class')
+    def llm(self) -> SimpliPyEngine:
+        return SimpliPyEngine.load('acj-5-4-llm', install=True)
+
+    @pytest.mark.parametrize('src, want', [
+        ('x1*x2 + x1*x3 + x4', 'x4 + x1*(x2 + x3)'),
+        ('sin(x1)*x2 + sin(x1)*x3 + x4', 'x4 + sin(x1)*(x2 + x3)'),
+        ('x2*x3 + x2 + x3 + 1', '(x2 + 1)*(x3 + 1)'),
+        ('x1 + x1*x2 + x4', 'x4 + x1*(x2 + 1)'),
+        # A sum factor spread among the other terms, in either orientation.
+        ('x2 - x3 + (x2 - x3)*x4', '(x2 - x3)*(x4 + 1)'),
+        ('x3 - x2 + (x2 - x3)*x4', '(x2 - x3)*(x4 - 1)'),
+        # Two terms that share a base, beside a third holding it at another exponent.
+        ('x8 + x3*x8 + 1/x8**3', '1/x8**3 + x8*(x3 + 1)'),
+    ])
+    def test_every_mode_factors_alike(self, llm: SimpliPyEngine, src: str, want: str) -> None:
+        e = llm
+        for mode in self.MODES:
+            assert e.simplify(src, mode=mode) == e.simplify(want, mode=mode, effort=0), (src, mode)
+
+    def test_one_factor_into_one_sum_factor(self, llm: SimpliPyEngine) -> None:
+        # The reverse of FACTOR on some of a sum's terms: `rootn(x1, 2)` moves into the sum
+        # (where permissive merges it with its square root), `exp(x2)` stays outside.
+        src = 'exp(x2)*rootn(x1, 2)*(rootn(x1, 2) - x2)'
+        want = 'exp(x2)*(x1 - x2*rootn(x1, 2))'
+        assert llm.simplify(src, mode='permissive') == llm.simplify(want, mode='permissive', effort=0)
+
+    def test_cheapest_candidate_first(self, llm: SimpliPyEngine) -> None:
+        # The factoring is the cheapest rebuilt state among this state's candidates, so the
+        # first descent takes it, whatever the expansions before it in pre-order.
+        e = llm
+        src = 'cos(x1*x2 + x1*x3) + sin((x4+1)*(x5+1)) + sin((x6+1)*(x7+1)) + sin((x8+1)*(x9+1))'
+        out = e.simplify(src, effort=1)
+        assert out == e.simplify(src) and 'x1*(x2 + x3)' in out, out
+
+    def test_effort_zero_is_the_chain_alone(self, llm: SimpliPyEngine) -> None:
+        e = llm
+        for mode in self.MODES:
+            assert e.simplify('x1*x2 + x1*x3 + x4', mode=mode, effort=0) == 'x4 + x1*x2 + x1*x3', mode

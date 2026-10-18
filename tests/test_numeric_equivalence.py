@@ -319,7 +319,11 @@ class TestCorpusGate:
         # two-signed, so its orientation is the product's choice in every mode (a one-signed
         # pole keeps its spelling); a repeated wildcard binds a class up to sign, and FACTOR
         # takes a factor the terms share up to sign. The walk rests 54,000 milli-bits cheaper.
-        assert walk['complexity_out'] == 56053168, walk['complexity_out']
+        # THE SEARCH OWNS THE DISTRIBUTIVE LAW: 56,053,168 -> 55,818,866. FACTOR takes what
+        # some terms of a sum share out of exactly those terms, DISTRIBUTE also works on one
+        # factor or one term of a sum factor, and every candidate is tried cheapest rebuilt state
+        # first in one search: 48 walk rows move, every one to a cheaper answer.
+        assert walk['complexity_out'] == 55818866, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

@@ -1056,7 +1056,7 @@ class TestSpecialPointCertification:
         # non-vacuity guard: none of these are already reduced by the loaded rules
         # (certify_rules skips already-covered sources without judging them). The rules'
         # chain is the mark certify_rules beats, so the guard reads it at effort 0: the
-        # search's factor stage takes x^2 out of the numerator and cancels the sum, a
+        # search's FACTOR move takes x^2 out of the numerator and cancels the sum, a
         # route through the constructors that no rule takes.
         for src in (seam_plus, seam_minus, stable):
             assert len(dev.simplify(list(src), effort=0)) >= len(src)
@@ -1283,8 +1283,9 @@ class TestProposalTargetAllowance:
         """`x0*x1 + x0*x2 -> x0*(x1+x2)`: a 7-token source with a 5-token hinted target
         certifies through a ``max_target_pattern_length: 3`` mine (the bound caps the
         candidate search, never the hint), because the target strictly descends the
-        serve ordering. The certified rule joins the ruleset, the artifact, and the
-        SERVING engine."""
+        serve ordering. The certified rule joins the ruleset and the artifact; the serving
+        engine refuses it at load, because it states the distributive law, which the search
+        owns, and the search reduces the source."""
         src = ["+", "*", "x0", "x1", "*", "x0", "x2"]
         tgt = ["*", "x0", "+", "x1", "x2"]
         eng, sidecar, out = self._mine(
@@ -1306,13 +1307,20 @@ class TestProposalTargetAllowance:
                  for rule in json.load(open(out.replace('.json', '_permissive.json')))}
         saved |= {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules
                   if _preempted_by(eng, lhs, rhs, 'permissive')}
-        assert rules == saved, "the artifact must carry the merged ruleset"
-        # The allowance is only real if the rule FIRES at serve time: the engine's
-        # endpoint for the source must now sit strictly below it in the ordering.
+        # A rule translation refuses (here the distributive law, the search's) is served
+        # nowhere, so it is routed to no file -- counted in the drop census, never silent.
         assert eng._core is not None
-        _, _, endpoint = eng._core.ac_judge(src, 48)
+        served = {i for _, _, i in eng._core.ac_served_rules()}
+        refused = {(tuple(lhs), tuple(rhs)) for i, (lhs, rhs) in enumerate(eng.simplification_rules)
+                   if i not in served}
+        assert (("+", "*", "?0", "?1", "*", "?0", "?2"), ("*", "?0", "+", "?1", "?2")) in refused
+        assert eng._core.ac_rules_drop_census().get("engine-owned-law", 0) >= 1
+        assert rules == saved | refused, "the artifact must carry the merged ruleset"
+        # The allowance is real at serve time: the engine's answer for the source sits
+        # strictly below it in the ordering (the search factors it).
+        endpoint = eng.simplify(list(src))
         assert eng._core.ac_ordered_below(endpoint, src), \
-            "the certified long-target rule must actually reduce its source at serve time"
+            "the engine must reduce the source at serve time"
 
     def test_true_but_non_descending_long_target_is_rejected(self, tmp_path) -> None:
         """`pow(x0,2)*pow(x1,2) -> pow(x0*x1,2)` is numerically TRUE everywhere and
