@@ -1511,6 +1511,11 @@ impl CandidateLibrary {
         &self.var_names
     }
 
+    /// The library's X, per variable column.
+    pub fn cols(&self) -> &[Vec<f64>] {
+        &self.cols
+    }
+
     /// Candidates kept in the library (post-filter).
     pub fn n_candidates(&self) -> usize {
         self.n_candidates
@@ -1908,6 +1913,7 @@ pub fn find_rule_with_lib(
     atol: f64,
     min_informative: usize,
     accept: Option<AcceptFn<'_>>,
+    confirm: Option<AcceptFn<'_>>,
     accept_resolved: Option<AcceptFn<'_>>,
 ) -> Result<Option<Vec<String>>, String> {
     // GUARD FIRST (BEFORE the all-constant short-circuit).
@@ -1932,44 +1938,15 @@ pub fn find_rule_with_lib(
     // (inf/nan literals stay excluded -- non-finite algebra is the explicit rules' domain,
     // e.g. `+ float("-inf") <constant> -> float("-inf")`, not absorption).
     let finite_leaf = |t: &str| crate::numeric::leaf_value(t).is_some_and(f64::is_finite);
-    // STAGE-1 GROUND-FOLD LICENCE, miner side (owner-ratified 2026-07-31; a future
-    // theorem of the unified measure, design/UNIFIED_SIMPLICITY_MEASURE.md §5): a
-    // special-bearing source never short-circuits to its f64 evaluation -- that literal
-    // is a ROUNDING of an exact symbolic value (`rootn np.e (-1) ->
-    // 0.36787944117144233`). The refusal is by CHANNEL, not by target shape: exact
-    // finite hits (`sin np.pi -> 0`) still mint through the candidate scan below, whose
-    // equivalence machinery reads specials at high precision (hiprec rescue), while a
-    // rounded value finds no alphabet literal to match. The non-finite class arms stay
-    // OPEN to special-bearing sources: nan/inf collapse is exact (the ratified
-    // nan/inf x special absorption rows), certified by intervals plus the dirac refuter.
-    // SPELLING-COMPLETE, not spelling-literal (2026-08-07). This tests whether the source
-    // DENOTES a special, and since 2026-08-07 the token scan alone no longer decides that:
-    // the constructor folds `exp 1` to the leaf `e` (`fun`, the write half of
-    // `compose_e_power`), so `* <constant> exp 1` is the canonical state
-    // `<mul> np.e <constant> </mul>` while carrying no `np.e` token. Testing the raw tokens
-    // alone let exactly that source through and the re-mine minted
-    // `* <constant> exp 1 -> <constant>` plus its +, - and / mirrors -- an absorption the
-    // licence forbids and the CONSTRUCTOR itself refuses, so the mine was routing around a
-    // ratified refusal through a second spelling of one value.
-    //
-    // `exp 1` is the ONLY spelling that needs adding, and that is a checkable claim rather
-    // than a hope: `Ex::Pi` has no constructor arm producing it at all, and `Ex::E` is
-    // produced by exactly one -- `exp(Num(1))`. In prefix a unary head is immediately
-    // followed by its argument, so consecutive `exp 1` IS the subterm.
-    //
-    // This guard covers the GROUND-FOLD channel (the short-circuit just below). The
-    // ABSORPTION channel has its own twin in `miner.rs`, and that one could not be fixed
-    // this way: `/ <constant> exp (-1)` denotes `<constant> * e` through no `exp 1` subterm
-    // at all, so the mint-side licence counts specials on the engine's own ENDPOINT for the
-    // source instead of on any spelling. Here the spelling test is enough and provably
-    // complete, because this channel only ever sees the source's own leaves.
-    //
-    // The general question both leave open is recorded in the audit (F49, register C1.20):
-    // a gate keyed on a spelling breaks whenever the canon unifies two spellings, and the
-    // miner has no mechanism that asks the engine "would you refuse this?" -- it only asks
-    // "do you already derive it?" (the mint-pristine property). The dual is missing.
-    let src_special = source.iter().any(|t| t == "np.pi" || t == "np.e")
-        || source.windows(2).any(|w| w[0] == "exp" && w[1] == "1");
+    // A GROUND EVALUATION answers to the resolved-literal bar like every computed
+    // literal: strict mu descent below the mark and a different literal skeleton. That bar
+    // is what refuses a ROUNDING of an exact symbolic value (`rootn np.e (-1) ->
+    // 0.36787944117144233`, `acos (-1) -> 3.141592653589793`): the 17-digit literal is far
+    // costlier than the symbolic mark it would replace, from every spelling of the special
+    // (`np.pi`, `exp 1`, `acos (-1)`, pi/2, 2 pi). Exact finite hits that print short
+    // (`cos np.pi -> (-1)`) descend and mint, here or through the scan. The standing
+    // falsifier is `tests/test_special_constants.py`: no special-bearing rule with a
+    // rounded decimal RHS.
     let src_has_const = source.iter().any(|t| t == "<constant>");
     if source.len() > 1
         && source
@@ -1977,38 +1954,8 @@ pub fn find_rule_with_lib(
             .all(|t| t == "<constant>" || ops.is_operator(t) || finite_leaf(t))
     {
         let non_ops: Vec<&String> = source.iter().filter(|t| !ops.is_operator(t)).collect();
-        if !src_special && !non_ops.is_empty() && non_ops.iter().all(|t| finite_leaf(t)) {
+        if !non_ops.is_empty() && non_ops.iter().all(|t| finite_leaf(t)) {
             if let Some(tok) = crate::numeric::evaluate_constant_subtree(source, ops) {
-                // DENOTES A SPECIAL BY VALUE, NOT BY SPELLING (2026-08-08; register B, and the
-                // dual C1.20 records above). The licence's own prose already states the right
-                // test -- whether the source DENOTES a special -- and its token scan cannot
-                // see one that arrives as a computed VALUE: `acos (-1)` carries no `np.pi`
-                // token and no `exp 1` subterm, yet it IS pi. So `exp 1 is the ONLY spelling
-                // that needs adding` above is complete for CONSTRUCTOR-PRODUCED leaves and
-                // silent about evaluated ones; this is the other half.
-                //
-                // Left alone, the short-circuit answers with the f64 decimal
-                // 3.141592653589793 -- a ROUNDING of an exact symbolic value, exactly what
-                // this licence exists to refuse -- and since that decimal is mu-expensive
-                // nothing descends, no rule mints, and the candidate scan never runs. The
-                // corpus paid for it in FORTY-EIGHT rules, every one a context of the single
-                // fact `acos(-1) = pi`: `* acos (-1) _0 -> * np.pi _0` and its +, -, /, pow
-                // and both-argument-order mirrors, `cos acos (-1) -> -1`, `/ acos (-1) np.pi
-                // -> 1` -- with no bare `acos (-1) -> np.pi` among them, because that is the
-                // one rule this channel prevented. Same shape as F49/F51/F52/F53: an arm the
-                // engine lacks shows up as rules.
-                //
-                // Declining routes the source to the CANDIDATE SCAN -- the channel that
-                // already mints `sin np.pi -> 0` -- whose equivalence machinery reads specials
-                // at high precision. The f64 comparison is only the TRIGGER; hiprec is the
-                // proof. A value that merely SHARES pi's f64 without being pi finds no
-                // alphabet match there and stays symbolic, so the failure direction is closed
-                // rather than open. Both signs trigger: the sign is carried by the same
-                // rounding argument, and which of them the mine actually reaches is left to
-                // the re-mine to answer rather than prescribed here.
-                let denotes_special = crate::numeric::leaf_value(&tok).is_some_and(|x| {
-                    x.abs() == std::f64::consts::PI || x.abs() == std::f64::consts::E
-                });
                 // A NON-FINITE f64 verdict must be corroborated by the honest interval
                 // CLASS (H-019/H-021, 2026-08-04): f64 evaluation cannot distinguish an
                 // exact boundary hit from a true domain escape -- `acosh(acos(cos 1))`
@@ -2043,7 +1990,7 @@ pub fn find_rule_with_lib(
                         }
                     },
                 };
-                if corroborated && !denotes_special {
+                if corroborated {
                     let t = vec![tok];
                     // An f64-EVALUATED literal is a COMPUTED value, not an alphabet
                     // spelling, so it answers to the caller's resolved-target criterion
@@ -2057,8 +2004,8 @@ pub fn find_rule_with_lib(
                     // ~1.4k mint-then-drop rules per canonical mine, contained only by
                     // sort promotion's UNSUPPORTED bucket (and `promote_sorts` defaults
                     // to OFF, where they shipped as serve-time rounding rewrites).
-                    // Callers without the criterion (stage-2 confirmation, the public
-                    // query path) keep the short-circuit as-is.
+                    // Callers without the criterion (the per-call query path) keep the
+                    // short-circuit as-is.
                     let resolved_ok = match accept_resolved {
                         Some(f) => f(&t),
                         None => true,
@@ -2078,19 +2025,12 @@ pub fn find_rule_with_lib(
         // (`inv(pow(0, exp C))` = +inf everywhere); a mixed pole -> fall through to the candidate
         // scan. The sampled classifier this replaces could only ever be as good as its grid.
         match crate::interval::value_class(source, ops) {
-            // The Finite -> `<constant>` arm is gated on SPECIAL-FREE sources (stage-1
-            // Const-absorption licence at the channel, owner 2026-08-01): a special
-            // vanishing into a fitted constant is the absorption the policy forbids, for
-            // EVERY caller. This is also what makes stage-2 confirmation honest for the
-            // exact-collapse family: confirmation re-runs this function with the target
-            // as the only candidate, and this arm used to HIJACK the answer for
-            // `cos np.pi` (returning `<constant>` instead of testing `(-1)`), scoring
-            // every bare ground exact collapse "unconfirmed". Gated, the source falls
-            // through to the scan, which verifies the asked target -- exact hits
-            // (`cos np.pi -> (-1)`, owner: "cos(pi) should be simplified to -1") mint
-            // and confirm; inexact values still find no alphabet literal to match.
+            // A special vanishing into a fitted constant is the absorption the licence
+            // registry refuses (`mint_refusals`, counted on the source and its mark), and
+            // the caller's acceptance carries the registry, so this arm needs no special
+            // gate of its own: a refused `<constant>` falls through to the scan.
             //
-            // ALSO gated on `<constant>`-BEARING sources -- the arm's contract as
+            // The arm is gated on `<constant>`-BEARING sources -- the arm's contract as
             // documented above ("a variable-free `<constant>`-bearing source"): a
             // DETERMINED source (var-free, Const-free, all leaves finite literals) is
             // its own reduction -- the engine folds it to its exact value and never
@@ -2105,7 +2045,7 @@ pub fn find_rule_with_lib(
             // carries the matching refusal so the candidate scan cannot re-mint what
             // this arm no longer answers.
             Some(crate::interval::Class::Finite) => {
-                if !src_special && src_has_const {
+                if src_has_const {
                     let t = vec!["<constant>".to_string()];
                     if accepted(&t) {
                         return Ok(Some(t));
@@ -2223,9 +2163,16 @@ pub fn find_rule_with_lib(
                 }
             }
             // CHEAPEST ACCEPTED mu tier wins. When select_best refuses every match in this
-            // tier (wildcard multiplicity or the caller's acceptance), the scan continues:
-            // a costlier spelling can still sit strictly below the caller's mark.
-            if let Some(best) = select_best(source, matches, ops, accept) {
+            // tier (wildcard multiplicity, the caller's acceptance or its confirmation), the
+            // scan continues: a costlier spelling can still sit strictly below the caller's
+            // mark, and an unconfirmed pick yields to the next candidate.
+            //
+            // CONFIRMATION re-tests a NUMERIC certificate on independent rows, so it rides
+            // only this channel. The short-circuit arms above answer from exact sources --
+            // the interval class and the source's own evaluation -- which fresh rows cannot
+            // re-test.
+            let accept_confirmed = |t: &[String]| accepted(t) && confirm.is_none_or(|f| f(t));
+            if let Some(best) = select_best(source, matches, ops, Some(&accept_confirmed)) {
                 return Ok(Some(best));
             }
         }
@@ -2280,7 +2227,71 @@ pub fn find_rule(
         min_informative,
         None,
         None,
+        None,
     )
+}
+
+/// THE PAIR JUDGMENT: one (source, target) pair through `certify_candidate` on the given
+/// rows -- no library, no token bound, no short-circuit -- and then `select_best`'s guards
+/// (wildcard multiplicity, the bare-`<constant>` fold). The pair passes iff the spelling
+/// the scan would EMIT for it is the target asked about: a target that needs literal
+/// resolution would emit a different rule, so it is refused here.
+///
+/// This is stage-2 confirmation (on the independent rows) and the hint arms' numeric test
+/// (on the mine's own rows): one implementation, the same one the scan runs per candidate.
+/// `Ok(None)` is acceptance; `Ok(Some(reason))` a refusal.
+#[allow(clippy::too_many_arguments)]
+pub fn judge_pair(
+    ops: &Operators,
+    source: &[String],
+    target: &[String],
+    var_names: &[String],
+    cols: &[Vec<f64>],
+    n_rows: usize,
+    challenges: usize,
+    retries: usize,
+    seed: u64,
+    rtol: f64,
+    atol: f64,
+    min_informative: usize,
+) -> Result<Option<&'static str>, String> {
+    let sc = SourceCtx::new(ops, source, var_names, cols, n_rows, challenges, seed)?;
+    let cand = CandEntry::compile(target, ops, var_names, cols, n_rows, u64::MAX)?;
+    let Some(c) = certify_candidate(
+        &sc,
+        &cand,
+        ops,
+        var_names,
+        cols,
+        n_rows,
+        retries,
+        rtol,
+        atol,
+        min_informative,
+        seed,
+        None,
+    ) else {
+        return Ok(Some("uncertified"));
+    };
+    match select_best(source, vec![c.tokens], ops, None) {
+        None => Ok(Some("wildcard_multiplicity")),
+        Some(t) if t != target => Ok(Some("respelled")),
+        Some(_) => Ok(None),
+    }
+}
+
+/// An order-free seed for one (source, target) pair: the base plus a hash of BOTH sides,
+/// so a pair's verdict never depends on what else was judged or in which order.
+pub fn pair_seed(base: u64, source: &[String], target: &[String]) -> u64 {
+    base.wrapping_add(token_hash(source).rotate_left(17) ^ token_hash(target))
+}
+
+/// Row-major X to the per-variable columns every evaluation here reads.
+pub fn x_columns(x_flat: &[f64], n_rows: usize, n_vars: usize) -> Result<Vec<Vec<f64>>, String> {
+    if x_flat.len() != n_rows * n_vars {
+        return Err("x_flat shape mismatch".to_string());
+    }
+    Ok(columns_from_row_major(x_flat, n_rows, n_vars))
 }
 
 #[cfg(test)]
@@ -2619,6 +2630,7 @@ mod tests {
                 16,
                 None,
                 None,
+                None,
             )
             .unwrap();
             assert_eq!(got, want, "decision moved on {src:?}");
@@ -2735,6 +2747,7 @@ mod tests {
             16,
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(free, Some(s(&["*", "3", "x0"])));
@@ -2756,9 +2769,61 @@ mod tests {
             16,
             Some(&not_star_head),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(deep, Some(s(&["neg", "*", "-3", "x0"])));
+    }
+
+    /// Stage 2 inside the scan: an UNCONFIRMED pick yields to the next candidate instead of
+    /// leaving the source without a rule, and confirmation rides only the numeric scan --
+    /// the exact ground evaluation answers without it.
+    #[test]
+    fn an_unconfirmed_pick_yields_to_the_next_candidate() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let n = 64usize;
+        let xf = grid_1var(n);
+        let cands = vec![s(&["*", "3", "x0"]), s(&["neg", "*", "-3", "x0"])];
+        let lib =
+            CandidateLibrary::build(ops, &cands, &vec![None; cands.len()], &vars, &xf, n).unwrap();
+        let scan = |src: &[String], confirm: AcceptFn<'_>| {
+            find_rule_with_lib(
+                ops,
+                src,
+                src.len(),
+                None,
+                None,
+                &lib,
+                16,
+                16,
+                7,
+                1e-9,
+                1e-12,
+                16,
+                None,
+                Some(confirm),
+                None,
+            )
+            .unwrap()
+        };
+        let src = s(&["+", "+", "x0", "x0", "x0"]);
+        let not_star_head = |t: &[String]| t[0] != "*";
+        assert_eq!(
+            scan(&src, &not_star_head),
+            Some(s(&["neg", "*", "-3", "x0"])),
+            "the unconfirmed first pick must yield to the next candidate"
+        );
+        let nothing = |_: &[String]| false;
+        assert_eq!(scan(&src, &nothing), None, "nothing confirms: no rule");
+        assert_eq!(
+            scan(&s(&["+", "1", "2"]), &nothing),
+            Some(s(&["3"])),
+            "the exact ground evaluation is not re-tested on fresh rows"
+        );
     }
 
     /// Signed, mixed-magnitude 1-var grid: negatives probe domain extensions, positives feed

@@ -716,48 +716,41 @@ class TestProvenance:
 
 
 class TestStageTwoConfirmation:
-    """The stage-2 confirmation (confirm=True) must actually filter, not pass through."""
+    """Stage-2 confirmation is `judge_pair` on an independent, wider X, inside the scan: it
+    must actually filter, and it must answer exactly the pair it is asked about."""
+
+    @staticmethod
+    def _judge(engine, x, pairs, seed):
+        n = x.shape[0]
+        return [engine._core.judge_pair(list(s), list(t), ['x0'], x.flatten(order='C').tolist(),
+                                        n, 16, 16, seed, 1e-9, 1e-12, 256,
+                                        rule_mode='default')[0]
+                for s, t in pairs]
 
     def test_confirm_filters_a_data_luck_rule(self, engine, mining_x) -> None:
-        """_confirm_mined_rules re-verifies on an INDEPENDENT wider X. A (source, target)
-        pair that the checker rejects there must be dropped. Direct probe of the confirm
-        primitive on the shipped defect (canonical `float("nan")` spelling -- the old
-        artifact's bare `nan` is refused at the alphabet boundary, pinned above):
-        asin(cosh(x0)) -> nan is rejected by the confirm X, so _confirm_mined_rules
-        drops it while keeping a genuine rule."""
+        """A (source, target) pair the checker rejects on the confirmation X is refused,
+        while a genuine rule passes: the shipped defect asin(cosh(x0)) -> nan (canonical
+        `float("nan")` spelling) against `+ x0 0 -> x0`."""
         x_confirm = RuleMiner(engine)._mining_sample_x(2048, 1, np.random.default_rng(99))
-        kept = RuleMiner(engine)._confirm_mined_rules(
-            [(('asin', 'cosh', 'x0'), ('float("nan")',)), (('+', 'x0', '0'), ('x0',))],
-            ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 123)
-        assert (('asin', 'cosh', 'x0'), ('float("nan")',)) not in kept
-        assert (('+', 'x0', '0'), ('x0',)) in kept
+        assert self._judge(engine, x_confirm, [(('asin', 'cosh', 'x0'), ('float("nan")',)),
+                                               (('+', 'x0', '0'), ('x0',))], 123) == [False, True]
 
     def test_confirm_answers_the_question_it_was_asked(self, engine, mining_x) -> None:
-        """The confirm must verify THE PROPOSED TARGET, not merely that `find_rule` returned
-        something.
-
-        `find_rule` does not always answer the question it is asked: for a variable-free
-        `<constant>`-bearing source its all-constant short-circuit classifies the source and
-        returns that CLASS LITERAL without ever reading the candidate list. While the confirm
-        tested only `result is not None`, stage-2 confirmation was therefore VACUOUS for every
-        such source -- it accepted whatever target it was handed. That is what let a false
-        rule survive the gate whose entire purpose is to kill false rules.
-
-        Each absurd pair below was measured to "confirm" before the fix; the control does not
-        hit the short-circuit and failed correctly even then, which is what made the defect
-        invisible to the existing test above."""
+        """The pair judgment verifies THE PROPOSED TARGET. The per-call `find_rule` that
+        stage 2 used to run first tried its all-constant short-circuit, which classifies a
+        variable-free `<constant>`-bearing source and answers with that class literal
+        without reading the candidate; each absurd pair below "confirmed" through it until
+        the result was compared with the target. `judge_pair` has no short-circuit, so the
+        question cannot be swapped for another."""
         x_confirm = RuleMiner(engine)._mining_sample_x(2048, 1, np.random.default_rng(99))
         absurd = [
             (('exp', '<constant>'), ('0',)),
             (('exp', '<constant>'), ('float("nan")',)),
             (('+', '<constant>', '1'), ('float("-inf")',)),
         ]
-        kept = RuleMiner(engine)._confirm_mined_rules(
-            absurd, ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 99)
-        assert kept == [], f"stage-2 confirmation is vacuous: it confirmed {kept}"
-        # Power check: a genuine rule must still survive the same call.
-        assert RuleMiner(engine)._confirm_mined_rules(
-            [(('+', 'x0', '0'), ('x0',))], ['x0'], x_confirm, 16, 16, 1e-9, 1e-12, 256, 99)
+        assert self._judge(engine, x_confirm, absurd, 99) == [False, False, False]
+        # Power check: a genuine rule must still pass the same judgment.
+        assert self._judge(engine, x_confirm, [(('+', 'x0', '0'), ('x0',))], 99) == [True]
 
 
 class TestCertifyRules:
@@ -1782,9 +1775,10 @@ class TestProposalHintLengthAllowance:
         assert core.registry_mint_refusal(
             list(self.COS_SRC), endpoint, list(self.COS_TGT), ["x0"]) is None
         X_data = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(0))
-        assert RuleMiner(eng)._confirm_mined_rules(
-            [(tuple(self.COS_SRC), tuple(self.COS_TGT))], ["x0"], X_data,
-            16, 16, 1e-9, 1e-12, 32, 7), "the pair is numerically TRUE; it dies elsewhere"
+        assert core.judge_pair(
+            list(self.COS_SRC), list(self.COS_TGT), ["x0"], X_data.flatten(order="C").tolist(),
+            X_data.shape[0], 16, 16, 7, 1e-9, 1e-12, 32, rule_mode="default") \
+            == (True, "accepted"), "the pair is numerically TRUE; it dies elsewhere"
         # the ONE gate it fails -- and it fails it in both directions of the ordering:
         # the engine's own endpoint sits strictly BELOW the proposed target, so the
         # hint is an ASCENT, not a reduction.

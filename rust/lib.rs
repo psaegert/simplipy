@@ -123,6 +123,24 @@ fn mine_spec(
     })
 }
 
+/// Stage 2's rows for one scan call: `None` when the caller confirms nothing (a mine run
+/// with `confirm=False`). The evidence floor defaults to 1/8 of the confirmation rows.
+fn confirm_set(
+    confirm_x: Option<Vec<f64>>,
+    confirm_rows: usize,
+    n_vars: usize,
+    confirm_min_informative: Option<usize>,
+    confirm_seed: u64,
+) -> PyResult<Option<engine::ConfirmSet>> {
+    let Some(x) = confirm_x else {
+        return Ok(None);
+    };
+    let mi = confirm_min_informative.unwrap_or(confirm_rows / 8);
+    engine::ConfirmSet::new(&x, confirm_rows, n_vars, mi, confirm_seed)
+        .map(Some)
+        .map_err(PyValueError::new_err)
+}
+
 /// The output projection's wire spelling, factored out of the three FFI entries that
 /// accept it so they cannot drift.
 fn parse_ac_form(name: &str) -> PyResult<engine::AcForm> {
@@ -866,9 +884,9 @@ impl PyEngine {
         Ok(py.detach(|| self.inner.ac_shadow_census()))
     }
 
-    /// The licence registry for one would-be rule (C1.20): the HINT/PROPOSAL channels'
-    /// entry point -- a hint that passes vocabulary/ordering/numeric confirmation is
-    /// still a mint, and every mint channel consults the registry. Returns the refusal
+    /// The licence registry for one would-be rule (C1.20), as a PROBE: the mint channels
+    /// consult the registry through the miner's one acceptance (`judge_hint` for a hint),
+    /// never through this entry. Returns the refusal
     /// name (`"const_introduction"` / `"special_absorption"` / `"pole_class_change"`)
     /// or None. `mark` is the engine's endpoint for the source (the special count is
     /// taken on the max of both sides, F49's spelling-independence); wildcard-shaped
@@ -1425,8 +1443,10 @@ impl PyEngine {
     /// engine's own (`Engine::mine_mark` under `rule_mode`/`canon`), computed inside, so
     /// this channel and `mine_one_length` share one acceptance: only targets strictly below
     /// the mark are selectable, a refused candidate yields to the next one, and an atomic
-    /// mark mints nothing.
-    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, canon="legacy"))]
+    /// mark mints nothing. With `confirm_x` (row-major, `confirm_rows` rows), every numeric
+    /// pick must also certify on those rows (stage 2, at a per-pair seed off `confirm_seed`),
+    /// and an unconfirmed pick yields to the next candidate.
+    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, canon="legacy", confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule_lib(
         &self,
@@ -1442,6 +1462,10 @@ impl PyEngine {
         min_informative: Option<usize>,
         rule_mode: &str,
         canon: &str,
+        confirm_x: Option<Vec<f64>>,
+        confirm_rows: usize,
+        confirm_min_informative: Option<usize>,
+        confirm_seed: u64,
     ) -> PyResult<Option<Vec<String>>> {
         ensure_tokens_are_tokens(&source)?;
         let spec = mine_spec(
@@ -1455,11 +1479,125 @@ impl PyEngine {
             retries,
         )?;
         let lib = &library.inner;
+        let confirm = confirm_set(
+            confirm_x,
+            confirm_rows,
+            lib.var_names().len(),
+            confirm_min_informative,
+            confirm_seed,
+        )?;
         py.detach(|| {
             self.inner
-                .find_rule_lib(&source, lib, max_target, &spec, seed)
+                .find_rule_lib(&source, lib, max_target, &spec, confirm.as_ref(), seed)
         })
         .map_err(PyValueError::new_err)
+    }
+
+    /// OFFLINE miner: THE HINT ARM -- a proposed (source, hint) pair judged by the scan's own
+    /// acceptance: the licences against the engine's mark, `judge_pair` on the library's
+    /// rows at the source's scan `seed`, then stage 2 on `confirm_x` when given. Returns
+    /// `(accepted, reason)`; `reason` is `"accepted"` or the first refusal's name.
+    #[pyo3(signature = (source, hint, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, canon="legacy", confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn judge_hint(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        hint: Vec<String>,
+        library: PyRef<'_, PyCandidateLibrary>,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+        min_informative: Option<usize>,
+        rule_mode: &str,
+        canon: &str,
+        confirm_x: Option<Vec<f64>>,
+        confirm_rows: usize,
+        confirm_min_informative: Option<usize>,
+        confirm_seed: u64,
+    ) -> PyResult<(bool, String)> {
+        ensure_tokens_are_tokens(&source)?;
+        ensure_tokens_are_tokens(&hint)?;
+        let spec = mine_spec(
+            &library,
+            rule_mode,
+            canon,
+            rtol,
+            atol,
+            min_informative,
+            challenges,
+            retries,
+        )?;
+        let lib = &library.inner;
+        let confirm = confirm_set(
+            confirm_x,
+            confirm_rows,
+            lib.var_names().len(),
+            confirm_min_informative,
+            confirm_seed,
+        )?;
+        let verdict = py
+            .detach(|| {
+                self.inner
+                    .judge_hint(&source, &hint, lib, &spec, confirm.as_ref(), seed)
+            })
+            .map_err(PyValueError::new_err)?;
+        Ok(match verdict {
+            None => (true, "accepted".to_string()),
+            Some(why) => (false, why.to_string()),
+        })
+    }
+
+    /// OFFLINE miner: THE PAIR JUDGMENT -- one (source, target) pair through the scan's
+    /// per-candidate certification on the given rows (no library, no token bound, no
+    /// short-circuit), then the selection guards. It answers exactly the question asked:
+    /// `(accepted, reason)`, with `reason` `"accepted"`, `"uncertified"`,
+    /// `"wildcard_multiplicity"` or `"respelled"` (the scan would emit a different
+    /// spelling, e.g. a literal resolution). Stage 2 and the hint arms run this.
+    #[pyo3(signature = (source, target, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, canon="legacy"))]
+    #[allow(clippy::too_many_arguments)]
+    fn judge_pair(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        target: Vec<String>,
+        var_names: Vec<String>,
+        x_flat: Vec<f64>,
+        n_rows: usize,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+        min_informative: Option<usize>,
+        rule_mode: &str,
+        canon: &str,
+    ) -> PyResult<(bool, String)> {
+        ensure_tokens_are_tokens(&source)?;
+        ensure_tokens_are_tokens(&target)?;
+        let mode = parse_rule_mode(rule_mode)?;
+        let canon = parse_mine_canon(canon, mode)?;
+        let spec = engine::MineSpec {
+            mode,
+            canon,
+            rtol,
+            atol,
+            min_informative: min_informative.unwrap_or(n_rows / 8).max(1),
+            challenges,
+            retries,
+        };
+        let verdict = py
+            .detach(|| {
+                self.inner
+                    .judge_pair(&source, &target, &var_names, &x_flat, n_rows, &spec, seed)
+            })
+            .map_err(PyValueError::new_err)?;
+        Ok(match verdict {
+            None => (true, "accepted".to_string()),
+            Some(why) => (false, why.to_string()),
+        })
     }
 
     /// OFFLINE (mine driver): replace the engine's rules (recompile) -- grows the Kruskal-prune
@@ -1531,7 +1669,7 @@ impl PyEngine {
     /// shorten, with the bound tightened to the simplified length (targets must beat what
     /// `simplify` already reaches); `False` skips them (strict Kruskal). See
     /// `Engine::mine_one_length`.
-    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, canon="legacy"))]
+    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, canon="legacy", confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn mine_one_length(
         &self,
@@ -1548,6 +1686,10 @@ impl PyEngine {
         relaxed_kruskal: bool,
         rule_mode: &str,
         canon: &str,
+        confirm_x: Option<Vec<f64>>,
+        confirm_rows: usize,
+        confirm_min_informative: Option<usize>,
+        confirm_seed: u64,
     ) -> PyResult<Vec<(Vec<String>, Vec<String>)>> {
         for src in &sources {
             ensure_tokens_are_tokens(src)?;
@@ -1563,9 +1705,23 @@ impl PyEngine {
             retries,
         )?;
         let lib = &library.inner;
+        let confirm = confirm_set(
+            confirm_x,
+            confirm_rows,
+            lib.var_names().len(),
+            confirm_min_informative,
+            confirm_seed,
+        )?;
         Ok(py.detach(|| {
-            self.inner
-                .mine_one_length(&sources, lib, max_target, &spec, seed, relaxed_kruskal)
+            self.inner.mine_one_length(
+                &sources,
+                lib,
+                max_target,
+                &spec,
+                confirm.as_ref(),
+                seed,
+                relaxed_kruskal,
+            )
         }))
     }
 

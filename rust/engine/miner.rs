@@ -75,6 +75,34 @@ impl Mark {
     }
 }
 
+/// STAGE 2: the independent rows every NUMERIC pick is re-certified on before it may mint
+/// (`judge_pair` on these rows, at a per-pair seed). Fresh rows and fresh constant draws
+/// kill data-luck accepts -- agreement within tolerance only on the mine's own rows,
+/// saturation plateaus, lucky constant draws -- with the same checker the scan runs.
+pub struct ConfirmSet {
+    cols: Vec<Vec<f64>>,
+    n_rows: usize,
+    min_informative: usize,
+    seed: u64,
+}
+
+impl ConfirmSet {
+    pub fn new(
+        x_flat: &[f64],
+        n_rows: usize,
+        n_vars: usize,
+        min_informative: usize,
+        seed: u64,
+    ) -> Result<Self, String> {
+        Ok(ConfirmSet {
+            cols: crate::worker::x_columns(x_flat, n_rows, n_vars)?,
+            n_rows,
+            min_informative: min_informative.max(1),
+            seed,
+        })
+    }
+}
+
 /// Why the [`Acceptor`] refused a target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MineRefusal {
@@ -88,6 +116,8 @@ pub enum MineRefusal {
     Pole,
     /// A resolved literal that does not strictly descend or only respells the mark.
     NotStructural,
+    /// Stage 2: the pair does not certify on the independent rows.
+    Unconfirmed,
 }
 
 impl MineRefusal {
@@ -98,6 +128,7 @@ impl MineRefusal {
             MineRefusal::Undecided => "undecided",
             MineRefusal::Pole => super::refusals::Refusal::PoleClassChange.name(),
             MineRefusal::NotStructural => "not_structural",
+            MineRefusal::Unconfirmed => "unconfirmed",
         }
     }
 }
@@ -110,6 +141,7 @@ pub(crate) struct Acceptor<'a> {
     src: &'a [String],
     mark: Mark,
     vars: &'a [String],
+    confirm: Option<&'a ConfirmSet>,
 }
 
 impl<'a> Acceptor<'a> {
@@ -125,6 +157,7 @@ impl<'a> Acceptor<'a> {
         src: &'a [String],
         mark: Mark,
         vars: &'a [String],
+        confirm: Option<&'a ConfirmSet>,
     ) -> Option<Self> {
         if mark.is_atomic() {
             return None;
@@ -135,6 +168,7 @@ impl<'a> Acceptor<'a> {
             src,
             mark,
             vars,
+            confirm,
         })
     }
 
@@ -146,7 +180,8 @@ impl<'a> Acceptor<'a> {
     }
 
     /// The licence registry, then the serve ordering, then the pole entry. A refused
-    /// candidate yields to the next one in the scan.
+    /// candidate yields to the next one in the scan. THE acceptance of a numeric match is
+    /// `license` and then `confirm`; the exact short-circuit arms answer to `license`.
     ///
     /// The registry (`refusals::mint_refusals`) holds the determined-source Const gate
     /// and the special-absorption count, the latter taken on the MAX of the raw source
@@ -156,7 +191,7 @@ impl<'a> Acceptor<'a> {
     /// constructs the exceptional points of both sides and refuses a candidate that
     /// changes a DEFINED extended-real value there (the a.e. pole-mirror family, otherwise
     /// gate-invisible).
-    pub(crate) fn accept(&self, t: &[String]) -> Result<(), MineRefusal> {
+    pub(crate) fn license(&self, t: &[String]) -> Result<(), MineRefusal> {
         if let Some(r) = super::refusals::mint_refusals(self.src, &self.mark.tokens, t, self.vars) {
             return Err(MineRefusal::Registry(r.name()));
         }
@@ -183,6 +218,35 @@ impl<'a> Acceptor<'a> {
             return Err(MineRefusal::Pole);
         }
         Ok(())
+    }
+
+    /// Stage 2: `t` must certify on the confirmation rows too (`judge_pair`, at a seed that
+    /// hashes both sides, so the verdict depends on nothing else the scan judged). A pick
+    /// that does not confirm yields to the next candidate. Without a `ConfirmSet` (a mine
+    /// run with `confirm=False`) every pair passes.
+    pub(crate) fn confirm(&self, t: &[String]) -> Result<(), MineRefusal> {
+        let Some(c) = self.confirm else {
+            return Ok(());
+        };
+        let verdict = crate::worker::judge_pair(
+            &self.eng.operators,
+            self.src,
+            t,
+            self.vars,
+            &c.cols,
+            c.n_rows,
+            self.spec.challenges,
+            self.spec.retries,
+            crate::worker::pair_seed(c.seed, self.src, t),
+            self.spec.rtol,
+            self.spec.atol,
+            c.min_informative,
+        );
+        match verdict {
+            Ok(None) => Ok(()),
+            // a pair the checker cannot even compile fails closed
+            _ => Err(MineRefusal::Unconfirmed),
+        }
     }
 
     /// The additional bar for COMPUTED literals (literal-resolved candidates and the
@@ -222,7 +286,10 @@ impl<'a> Acceptor<'a> {
         seed: u64,
     ) -> Result<Option<Vec<String>>, String> {
         let spec = self.spec;
-        let accept = |t: &[String]| self.accept(t).is_ok();
+        // The exact short-circuit arms answer to the licences; numeric matches to the
+        // licences and then confirmation (see `worker::find_rule_with_lib`).
+        let license = |t: &[String]| self.license(t).is_ok();
+        let confirm = |t: &[String]| self.confirm(t).is_ok();
         let accept_resolved = |t: &[String]| self.accept_resolved(t).is_ok();
         // The token bound stays at SOURCE length: canon can respell a source shorter
         // without reducing it (`/ 1 exp x0` parses to `inv exp x0`), and tightening by
@@ -242,7 +309,8 @@ impl<'a> Acceptor<'a> {
             spec.rtol,
             spec.atol,
             spec.min_informative,
-            Some(&accept),
+            Some(&license),
+            Some(&confirm),
             Some(&accept_resolved),
         )
     }
@@ -289,15 +357,88 @@ impl Engine {
         lib: &crate::worker::CandidateLibrary,
         max_target: Option<usize>,
         spec: &MineSpec,
+        confirm: Option<&ConfirmSet>,
         seed: u64,
     ) -> Result<Option<Vec<String>>, String> {
         let mark = self
             .mine_mark(src, spec)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
-        match Acceptor::new(self, spec, src, mark, lib.var_names()) {
+        match Acceptor::new(self, spec, src, mark, lib.var_names(), confirm) {
             None => Ok(None),
             Some(acc) => acc.scan(lib, max_target, seed),
         }
+    }
+
+    /// THE HINT ARM: a proposed (source, hint) pair, judged by the same acceptance the scan
+    /// uses -- the licences, `judge_pair` on the library's own rows, then stage-2
+    /// confirmation. `seed` is the source's scan seed, so the hint is certified exactly as
+    /// the scan would certify it as a library candidate. `Ok(None)` is acceptance;
+    /// `Ok(Some(reason))` names the first refusal (`atomic_mark` when the engine already
+    /// folds the source to an atom).
+    pub fn judge_hint(
+        &self,
+        src: &[String],
+        hint: &[String],
+        lib: &crate::worker::CandidateLibrary,
+        spec: &MineSpec,
+        confirm: Option<&ConfirmSet>,
+        seed: u64,
+    ) -> Result<Option<&'static str>, String> {
+        let mark = self
+            .mine_mark(src, spec)
+            .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
+        let Some(acc) = Acceptor::new(self, spec, src, mark, lib.var_names(), confirm) else {
+            return Ok(Some("atomic_mark"));
+        };
+        if let Err(r) = acc.license(hint) {
+            return Ok(Some(r.name()));
+        }
+        if let Some(why) = crate::worker::judge_pair(
+            &self.operators,
+            src,
+            hint,
+            lib.var_names(),
+            lib.cols(),
+            lib.n_rows(),
+            spec.challenges,
+            spec.retries,
+            seed,
+            spec.rtol,
+            spec.atol,
+            spec.min_informative,
+        )? {
+            return Ok(Some(why));
+        }
+        Ok(acc.confirm(hint).err().map(MineRefusal::name))
+    }
+
+    /// The pair judgment on caller rows (`worker::judge_pair`) under `spec`'s tolerances.
+    #[allow(clippy::too_many_arguments)]
+    pub fn judge_pair(
+        &self,
+        src: &[String],
+        tgt: &[String],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+        spec: &MineSpec,
+        seed: u64,
+    ) -> Result<Option<&'static str>, String> {
+        let cols = crate::worker::x_columns(x_flat, n_rows, var_names.len())?;
+        crate::worker::judge_pair(
+            &self.operators,
+            src,
+            tgt,
+            var_names,
+            &cols,
+            n_rows,
+            spec.challenges,
+            spec.retries,
+            seed,
+            spec.rtol,
+            spec.atol,
+            spec.min_informative,
+        )
     }
 
     /// OFFLINE miner kernel: vectorized evaluation of a prefix expression over a batch of
@@ -549,12 +690,14 @@ impl Engine {
     /// never enumerates). Strict mode still loses one-step shortcuts relative to relaxed
     /// where the walk genuinely descends part-way (degenerate constant collapses like
     /// `C * acos(np.e) -> <constant>`).
+    #[allow(clippy::too_many_arguments)]
     pub fn mine_one_length(
         &self,
         sources: &[Vec<String>],
         lib: &crate::worker::CandidateLibrary,
         max_target: Option<usize>,
         spec: &MineSpec,
+        confirm: Option<&ConfirmSet>,
         seed: u64,
         relaxed_kruskal: bool,
     ) -> Vec<(Vec<String>, Vec<String>)> {
@@ -613,12 +756,12 @@ impl Engine {
                     } else {
                         // An atomic mark ends the search even under relaxed Kruskal
                         // (`Acceptor::new`).
-                        Acceptor::new(self, spec, src, mark, lib.var_names()).and_then(|acc| {
-                            match acc.scan(lib, max_target, seed.wrapping_add(idx as u64)) {
+                        Acceptor::new(self, spec, src, mark, lib.var_names(), confirm).and_then(
+                            |acc| match acc.scan(lib, max_target, seed.wrapping_add(idx as u64)) {
                                 Ok(Some(target)) => Some((src.clone(), target)),
                                 _ => None,
-                            }
-                        })
+                            },
+                        )
                     }
                 };
                 super::stats::mine_tick(); // count the source whether or not it yielded a rule

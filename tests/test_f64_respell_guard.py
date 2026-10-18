@@ -98,7 +98,9 @@ class TestF64RespellMintGuard:
         # Positive control: the guard must not touch the owner-ruled exact
         # collapses (special-bearing, minted through the candidate scan).
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        assert (('cos', 'np.pi'), ('(-1)',)) in rules, sorted(rules)
+        # The ground evaluation answers in the engine's own spelling, `-1` (one
+        # canonical key with the alphabet's `(-1)`).
+        assert (('cos', 'np.pi'), ('-1',)) in rules, sorted(rules)
 
     def test_serve_never_rounds(self, mined):
         # The footgun, end to end: with the leak, this artifact (promotion OFF)
@@ -229,4 +231,6 @@ class TestDeterminedSourceConstIntroduction:
         # already `<constant>` -- the canonical re-mine (1753-identical) is that
         # control.
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined_const.simplification_rules}
-        assert (('cos', 'np.pi'), ('(-1)',)) in rules, sorted(rules)
+        # The ground evaluation answers in the engine's own spelling, `-1` (one
+        # canonical key with the alphabet's `(-1)`).
+        assert (('cos', 'np.pi'), ('-1',)) in rules, sorted(rules)

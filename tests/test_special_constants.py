@@ -153,15 +153,12 @@ class TestExactCollapsesMint:
     collapses mint as certified rules (the policy's `f(special) -> exact value` row).
 
     Root cause of the earlier refusal (this test was red): the mint itself worked, but
-    stage-2 confirmation re-runs `find_rule` with the target as the only candidate, and
-    the var-free short-circuit's `Class::Finite -> <constant>` arm HIJACKED the answer
-    for special-bearing sources -- returning `<constant>` instead of testing `(-1)`,
-    which the result-must-equal-target guard rightly scored as unconfirmed. The arm is
-    now gated on special-free sources (the same absorption the Const licence forbids,
-    refused at the channel), so confirmation falls through to the scan and honestly
-    verifies the asked target. Inexact values still cannot mint: their correctly-rounded
-    literals are not in the candidate alphabet, resolution refuses special-bearing
-    sources, and the hiprec point layer refutes near-misses."""
+    stage-2 confirmation re-ran `find_rule`, whose var-free short-circuit answered its
+    own question (`<constant>`) instead of testing `(-1)`. Confirmation is now the pair
+    judgment (`judge_pair`) inside the scan: no short-circuit, the asked target is what
+    is judged. Inexact values still cannot mint: a correctly-rounded literal is far
+    costlier than the symbolic mark, so strict descent refuses it, and the hiprec point
+    layer refutes near-misses."""
 
     @pytest.fixture(scope='class')
     def mined(self, tmp_path_factory):
@@ -192,7 +189,9 @@ class TestExactCollapsesMint:
 
     def test_bare_exact_collapses_mint(self, mined):
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        assert (('cos', 'np.pi'), ('(-1)',)) in rules, sorted(rules)
+        # The ground evaluation answers in the engine's own spelling, `-1` (one
+        # canonical key with the alphabet's `(-1)`).
+        assert (('cos', 'np.pi'), ('-1',)) in rules, sorted(rules)
         assert (('sin', 'np.pi'), ('0',)) in rules, sorted(rules)
         assert (('log', 'np.e'), ('1',)) in rules, sorted(rules)
 

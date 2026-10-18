@@ -32,8 +32,7 @@ from simplipy.utils import (
     deduplicate_rules,
     _dedup_keyed_rules,
     enumerate_expressions, count_expressions,
-    remap_expression,
-    violates_wildcard_multiplicity)
+    remap_expression)
 
 if TYPE_CHECKING:
     from .engine import SimpliPyEngine
@@ -469,70 +468,56 @@ class RuleMiner:
                         np.where(choice == 1, uniform,
                                  np.where(choice == 2, magnitudes, special)))
 
-    def _confirm_mined_rules(
-            self,
-            found: list,
-            dummy_variables: list[str],
-            X_confirm: np.ndarray,
-            constants_fit_challenges: int,
-            constants_fit_retries: int,
-            rtol: float,
-            atol: float,
-            min_informative: int,
-            seed: int) -> list:
-        """STAGE-2 CONFIRMATION: re-verify each mined (source -> target)
-        pair on an INDEPENDENT, wider X before it may enter the rule set.
+    @staticmethod
+    def _confirm_kwargs(X_confirm: np.ndarray | None, X_data: np.ndarray, min_informative: int,
+                        seed: int) -> dict[str, Any]:
+        """Stage 2's arguments for the core's scan entries: the independent, wider X every
+        numeric pick is re-certified on before it may mint, with the evidence floor scaled
+        to its row count. Empty when the mine runs with ``confirm=False``.
 
-        Same checker, fresh data, fresh constant draws and seeds: this kills data-luck
-        accepts (agreement within tolerance only on the mine X, saturation plateaus,
-        lucky constant draws) without a second implementation to keep in sync. The
-        caller scales ``min_informative`` to the confirm matrix's row count.
-
-        ORDER-INDEPENDENT confirm seed: the seed is a pure function of (confirm seed,
-        THIS rule's tokens), never of the rule's POSITION in ``found`` -- position-derived
-        seeds reroll every later rule whenever an earlier rule appears or disappears,
-        flipping the fit-flaky ones and drowning A/B rule-set diffs in noise. Same rule ->
-        same seed, no matter what else was mined; the same policy as the candidate fit
-        seed (``worker.rs``).
+        Confirmation runs INSIDE the scan (``Acceptor::confirm``): an unconfirmed pick yields
+        to the next candidate. Its seed is order-free -- the core adds a hash of both sides
+        of the pair to ``seed`` -- so a pair's verdict never depends on what else was judged.
         """
-        assert self.engine._core is not None
-        n_rows = X_confirm.shape[0]
-        x_flat = X_confirm.flatten(order='C').tolist()
-        confirmed = []
-        for source, target in found:
-            # blake2b, not hash(): PYTHONHASHSEED randomises str hashing per process, which
-            # would make the confirm stage irreproducible across runs.
-            key = f'{" ".join(source)}->{" ".join(target)}'.encode()
-            rule_seed = seed + int.from_bytes(hashlib.blake2b(key, digest_size=7).digest(), 'little')
-            # THE BOUND MUST ADMIT THE PAIR IT IS ASKED ABOUT (2026-08-18). `find_rule`'s
-            # second argument is the MINE's candidate-length bound: the scan runs
-            # `1..min(simplified_length, max_target + 1)` (rust/worker.rs), so `len(source)`
-            # silently skips every candidate as long as the source -- and the candidate
-            # list here holds exactly ONE entry, the target being re-verified. That made
-            # "not confirmed" indistinguishable from "never looked at": a proposal hint
-            # the serve ordering accepts came back refused for a reason with no numerics
-            # in it. `max(...)` never LOWERS the old bound -- for a strictly shorter target
-            # `len(target) + 1 <= len(source)`, so every pair that confirms today keeps its
-            # verdict, mined pairs included (the mine's own bound, untouched, makes every
-            # mined target strictly shorter than its source).
-            scan_len = max(len(source), len(target) + 1)
-            result = self.engine._core.find_rule(
-                list(source), scan_len, None, [list(target)], list(dummy_variables),
-                x_flat, n_rows, constants_fit_challenges, constants_fit_retries,
-                rule_seed, rtol, atol, min_informative)
-            # The result must be THE TARGET WE ASKED ABOUT, not merely "something".
-            # `find_rule` does not always answer the question it was asked: its all-constant
-            # short-circuit classifies a variable-free `<constant>`-bearing source and returns
-            # that CLASS LITERAL without ever reading the candidate list. Testing only
-            # `result is not None` therefore made stage-2 confirmation VACUOUS for every such
-            # source -- measured: `exp <constant> -> 0`, `exp <constant> -> float("nan")` and
-            # `+ <constant> 1 -> float("-inf")` all "confirmed", while the control
-            # `+ x0 x0 -> 0` (which does not hit the short-circuit) correctly failed. Since the
-            # candidate list here holds exactly one entry, any other answer is the short-circuit
-            # speaking, and the honest verdict is "not confirmed".
-            if result is not None and list(result) == list(target):
-                confirmed.append((source, target))
-        return confirmed
+        if X_confirm is None:
+            return {}
+        return {'confirm_x': X_confirm.flatten(order='C').tolist(),
+                'confirm_rows': X_confirm.shape[0],
+                'confirm_min_informative': max(1, round(min_informative * X_confirm.shape[0]
+                                                        / X_data.shape[0])),
+                'confirm_seed': seed}
+
+    def _certify_one(self, source: tuple[str, ...], hint: Any, library: Any, vocabulary: set,
+                     max_target_pattern_length: int | None, fit: dict[str, Any], seed: int,
+                     confirm: dict[str, Any]) -> tuple[list[str] | None, str | None, str | None]:
+        """THE certification chain for one proposed source, shared by :meth:`certify_rules`
+        and the proposal channel of :meth:`find_rules`.
+
+        First the library scan, with the engine's own result as the mark to beat; only when
+        it finds nothing, the hint, judged by the SAME acceptance (``judge_hint``: the
+        licences against the mark, the pair judgment on the mine's X, then stage 2). Both
+        run stage-2 confirmation inside (``confirm``). Returns ``(target, certificate,
+        refusal)``: certificate ``'minimal'`` (scan) or ``'verified'`` (hint); with no
+        target, ``refusal`` names why the hint was refused (None without a hint).
+
+        NO TOKEN-LENGTH BAR on a hint (owner ruling 2026-08-18: "Only 'remove' the length
+        gate for the LLM proposed rules"): descent is decided by the serve ordering, the
+        predicate G7 and the serve-time `oriented` check apply.
+        """
+        core = self.engine._core
+        assert core is not None
+        target = core.find_rule_lib(list(source), library, max_target_pattern_length, seed=seed,
+                                    rule_mode=_MINE_RULE_MODE, **fit, **confirm)
+        if target is not None:
+            return list(target), 'minimal', None
+        if hint is None:
+            return None, None, None
+        hint = [str(t) for t in hint]
+        if not _tokens_in_vocabulary(hint, vocabulary) or not self.engine.is_valid(hint):
+            return None, None, 'vocabulary'
+        ok, why = core.judge_hint(list(source), hint, library, seed=seed,
+                                  rule_mode=_MINE_RULE_MODE, **fit, **confirm)
+        return (hint, 'verified', None) if ok else (None, None, why)
 
     def _mine_tier_with_progress(self, length: int, n_sources: int, mine_call: Callable, verbose: bool) -> Any:
         """Run one length tier's ``mine_one_length`` (a single blocking, rayon-parallel call) while a
@@ -1040,23 +1025,17 @@ class RuleMiner:
             del expressions_of_length[length]
             # Per-length seed block: lengths are spaced by 2^40 (far above any per-length
             # source count) so the per-source streams (seed + index) never collide.
+            # Stage 2 runs inside the scan: an unconfirmed pick yields to the next candidate.
+            confirm_kwargs = self._confirm_kwargs(X_confirm, X_data, min_informative,
+                                                  confirm_seed + (length << 40))
             found = self._mine_tier_with_progress(
                 length, len(sources),
                 lambda: self.engine._core.mine_one_length(
                     sources, library, max_target_pattern_length,
                     constants_fit_challenges, constants_fit_retries,
                     mine_seed + (length << 40), rtol, atol, min_informative,
-                    relaxed_kruskal, rule_mode=_MINE_RULE_MODE),
+                    relaxed_kruskal, rule_mode=_MINE_RULE_MODE, **confirm_kwargs),
                 verbose)
-            if found and X_confirm is not None:
-                n_mined = len(found)
-                found = self._confirm_mined_rules(
-                    found, dummy_variables, X_confirm,
-                    constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0])),
-                    confirm_seed + (length << 40))
-                if verbose and len(found) < n_mined:
-                    print(f'Length {length}: stage-2 confirmation rejected {n_mined - len(found):,} of {n_mined:,} mined rules')
             if found:
                 rules = deduplicate_rules(
                     rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found],
@@ -1409,7 +1388,8 @@ class RuleMiner:
 
         vocabulary = set(leaf_nodes) | set(self.engine.operator_arity)
         certified: list = []
-        confirm_min = max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
+        fit = dict(challenges=constants_fit_challenges, retries=constants_fit_retries,
+                   rtol=rtol, atol=atol, min_informative=min_informative)
         for index, (source, hint) in enumerate(zip(sources, hint_list)):
             if not _tokens_in_vocabulary(source, vocabulary) or not self.engine.is_valid(list(source)):
                 continue
@@ -1417,68 +1397,17 @@ class RuleMiner:
             # (finding F2): a source canon merely RESPELLS shorter used to read as
             # "already covered" and was never searched, losing e.g.
             # exp(t)*exp(t) -> exp(t+t) forever (the respelled form speaks tokens
-            # outside the mining alphabet, so no later tier picks it up). The
-            # serve-time ordering acceptance rides the candidate scan (the scan
-            # computes the mark itself, the same one the batch mine uses).
-            _, _, ac_out = self.engine._core.ac_judge(list(source), 48)
-            target = self.engine._core.find_rule_lib(
-                list(source), library, max_target_pattern_length,
-                challenges=constants_fit_challenges, retries=constants_fit_retries,
-                seed=mine_seed + (len(source) << 40) + index, rtol=rtol, atol=atol,
-                min_informative=min_informative, rule_mode=_MINE_RULE_MODE)
-            certificate = 'minimal'
-            if target is None and hint is not None:
-                hint = [str(t) for t in hint]
-                # NO TOKEN-LENGTH BAR on a proposal hint (owner ruling 2026-08-18:
-                # "Only 'remove' the length gate for the LLM proposed rules"). The
-                # retired conjunct was `len(hint) < len(source)` -- a RAW TOKEN COUNT,
-                # which is not the engine's ordering and disagrees with it:
-                # `1 - cos(2*x0) -> 2*sin(x0)^2` is 6 tokens against 6 while the target
-                # sits strictly BELOW the engine's endpoint (the `-` spelling costs two
-                # extra canonical nodes). Descent is decided below by the ordering, the
-                # same predicate G7 and the serve-time `oriented` check apply. The MINE's
-                # candidate-length bound is a separate thing and stays: a proposal skips
-                # the search entirely, so this costs no mining time, while an unbounded
-                # target length in the SEARCH is what would make e.g. a 5-5 mine
-                # unaffordable.
-                if (_tokens_in_vocabulary(hint, vocabulary)
-                        and self.engine.is_valid(list(hint))
-                        and not violates_wildcard_multiplicity(list(source), list(hint))
-                        # the Const-count invariant (one invariant, every layer: the
-                        # scan's mint gate, the translate-time count gate, and this hint
-                        # arm): a hint may never INCREASE the number of `<constant>`
-                        # placeholders -- abstraction is masking's job downstream. A
-                        # count-increasing hint is dead on arrival at translation; the
-                        # library scan may still find (and literal-resolve) a target.
-                        and hint.count('<constant>') <= list(source).count('<constant>')
-                        # the hint too must sit strictly below the engine's own
-                        # result, or the minted rule is dead on arrival (the serving
-                        # pass would refuse it; translation would drop it)
-                        and self.engine._core.ac_ordered_below(list(hint), ac_out)
-                        # THE LICENCE REGISTRY (C1.20, 2026-08-08): a hint that passes
-                        # every bar above is still a MINT, and every mint channel
-                        # consults the registry -- an a.e.-equal pole mirror or a
-                        # special-eating Const hint passes vocabulary, ordering AND
-                        # the numeric confirmation (measure-zero differences are
-                        # invisible to sampling), and was refused nowhere on this
-                        # path before the registry.
-                        and self.engine._core.registry_mint_refusal(
-                            list(source), ac_out, list(hint), dummy_variables) is None
-                        and self._confirm_mined_rules(
-                            [(source, tuple(hint))], dummy_variables, X_data,
-                            constants_fit_challenges, constants_fit_retries, rtol, atol,
-                            min_informative, mine_seed + (len(source) << 40) + index)):
-                    target = hint
-                    certificate = 'verified'
+            # outside the mining alphabet, so no later tier picks it up).
+            target, certificate, _ = self._certify_one(
+                source, hint, library, vocabulary, max_target_pattern_length, fit,
+                mine_seed + (len(source) << 40) + index,
+                self._confirm_kwargs(X_confirm, X_data, min_informative,
+                                     confirm_seed + (len(source) << 40) + index))
             if target is None:
                 continue
-            if self._confirm_mined_rules(
-                    [(source, tuple(target))], dummy_variables, X_confirm,
-                    constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    confirm_min, confirm_seed + (len(source) << 40) + index):
-                certified.append((source, tuple(target), certificate))
-                if verbose:
-                    print(f'certified ({certificate}): {list(source)} -> {list(target)}')
+            certified.append((source, tuple(target), certificate))
+            if verbose:
+                print(f'certified ({certificate}): {list(source)} -> {list(target)}')
         # SYMBOLIC GATE, matching the mining path (`_finalize`; audit B3, fatal set B7).
         # Every numeric acceptance above is tolerance-bounded, and the impostor family
         # lives BELOW any usable tolerance: `tanh(exp(e)) -> 1` is false by a stable
@@ -1587,8 +1516,9 @@ class RuleMiner:
         counts = {'certified': 0, 'already_covered': 0, 'rejected': 0, 'duplicate': 0,
                   'certified_then_dropped': 0}
         vocabulary = set(leaf_nodes) | set(self.engine.operator_arity)
-        confirm_min = (max(1, round(min_informative * X_confirm.shape[0] / X_data.shape[0]))
-                       if X_confirm is not None else None)
+        fit = dict(challenges=constants_fit_challenges, retries=constants_fit_retries,
+                   rtol=rtol, atol=atol, min_informative=min_informative)
+        confirm = self._confirm_kwargs(X_confirm, X_data, min_informative, confirm_seed)
         certified_pairs: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
         trail: list[dict[str, Any]] = []
         # Index into `trail` for each certified pair, so the post-fold duplicate accounting
@@ -1609,7 +1539,7 @@ class RuleMiner:
                 continue
             # The engine's own result is the MARK TO BEAT, never a reason to skip
             # (finding F2): the serve-time ordering acceptance rides the candidate
-            # scan via `mark`, so 'already_covered' below is a SEARCH-VERIFIED
+            # scan, so 'already_covered' below is a SEARCH-VERIFIED
             # verdict ("the engine reduces it and nothing expressible beats its
             # result"), not a guess from a spelling shrink.
             _, _, ac_out = self.engine._core.ac_judge(list(source), 48)
@@ -1623,53 +1553,22 @@ class RuleMiner:
             engine_reduces = (len(ac_out) == 1
                               or self.engine._core.ac_ordered_below(ac_out, list(source)))
             # Content-derived per-proposal seed offset (blake2b, not hash(): PYTHONHASHSEED
-            # randomises str hashing per process; same policy as _confirm_mined_rules).
+            # randomises str hashing per process).
             offset = int.from_bytes(
                 hashlib.blake2b(' '.join(source).encode(), digest_size=7).digest(), 'little')
-            target = self.engine._core.find_rule_lib(
-                list(source), library, max_target_pattern_length,
-                challenges=constants_fit_challenges, retries=constants_fit_retries,
-                seed=mine_seed + offset, rtol=rtol, atol=atol,
-                min_informative=min_informative, rule_mode=_MINE_RULE_MODE)
-            certificate = 'minimal'
-            if target is None and hint is not None:
-                hint_tokens = [str(token) for token in hint]
-                # NO TOKEN-LENGTH BAR (same ruling, same reasoning as certify_rules'
-                # hint arm above -- one certification chain, both entries).
-                if (_tokens_in_vocabulary(hint_tokens, vocabulary)
-                        and self.engine.is_valid(list(hint_tokens))
-                        and not violates_wildcard_multiplicity(list(source), list(hint_tokens))
-                        # the Const-count invariant (same gate as certify_rules' hint
-                        # arm): a count-increasing hint is dead on arrival at translation
-                        and hint_tokens.count('<constant>') <= list(source).count('<constant>')
-                        # the hint too must sit strictly below the engine's own
-                        # result, or the minted rule is dead on arrival
-                        and self.engine._core.ac_ordered_below(list(hint_tokens), ac_out)
-                        # THE LICENCE REGISTRY (C1.20, 2026-08-08): same gate as the
-                        # certify_rules hint arm -- every mint channel consults it.
-                        and self.engine._core.registry_mint_refusal(
-                            list(source), ac_out, list(hint_tokens), dummy_variables) is None
-                        and self._confirm_mined_rules(
-                            [(source, tuple(hint_tokens))], dummy_variables, X_data,
-                            constants_fit_challenges, constants_fit_retries, rtol, atol,
-                            min_informative, mine_seed)):
-                    target = hint_tokens
-                    certificate = 'verified'
+            target, certificate, refusal = self._certify_one(
+                source, hint, library, vocabulary, max_target_pattern_length, fit,
+                mine_seed + offset, confirm)
             if target is None:
-                if engine_reduces:
+                if refusal == 'unconfirmed':
+                    counts['rejected'] += 1
+                    record(source, hint, 'rejected', 'confirm')
+                elif engine_reduces:
                     counts['already_covered'] += 1
                     record(source, None, 'already_covered', 'covered')
                 else:
                     counts['rejected'] += 1
                     record(source, None, 'rejected', 'search')
-                continue
-            if X_confirm is not None and not self._confirm_mined_rules(
-                    [(source, tuple(target))], dummy_variables, X_confirm,
-                    constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    int(confirm_min if confirm_min is not None else max(1, X_confirm.shape[0] // 8)),
-                    confirm_seed):
-                counts['rejected'] += 1
-                record(source, target, 'rejected', 'confirm', certificate)
                 continue
             certified_trail_idx.append(record(source, target, 'certified', 'accepted', certificate))
             certified_pairs.append((tuple(source), tuple(target)))
