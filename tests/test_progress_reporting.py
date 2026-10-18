@@ -84,14 +84,14 @@ def test_an_empty_stage_costs_one_line() -> None:
 
 
 def test_promotion_is_silent_by_default(engine) -> None:
-    (result, text) = _capture(lambda: promote(list(RULES), engine, run_positive_controls=False))
-    assert text == "", f"promote() printed without being asked: {text!r}"
+    (result, text) = _capture(lambda: promote(list(RULES), engine, run_positive_controls=False, rule_mode='default'))
+    assert text == "", f"promote(rule_mode='default') printed without being asked: {text!r}"
     assert result[0], "and it must still have promoted something"
 
 
 def test_promotion_reports_every_stage_when_verbose(engine) -> None:
     (_, text) = _capture(
-        lambda: promote(list(RULES), engine, run_positive_controls=False, verbose=True))
+        lambda: promote(list(RULES), engine, run_positive_controls=False, verbose=True, rule_mode='default'))
     # Each of the five stages announces itself, so a stall is attributable to one of them.
     for stage in ("stage 1/5", "stage 2/5", "stage 3/5", "stage 4/5", "stage 5/5"):
         assert stage in text, f"{stage} never reported:\n{text}"
@@ -102,10 +102,10 @@ def test_promotion_reports_every_stage_when_verbose(engine) -> None:
 
 
 def test_reporting_does_not_change_the_result(engine) -> None:
-    (quiet, _) = _capture(lambda: promote(list(RULES), engine, run_positive_controls=False))
+    (quiet, _) = _capture(lambda: promote(list(RULES), engine, run_positive_controls=False, rule_mode='default'))
     (loud, _) = _capture(
         lambda: promote(list(RULES), engine, run_positive_controls=False,
-                        progress=Progress(True, stream=io.StringIO(), interval=0.0)))
+                        progress=Progress(True, stream=io.StringIO(), interval=0.0), rule_mode='default'))
     assert quiet[0] == loud[0]
     assert quiet[1]["stage_counts"] == loud[1]["stage_counts"]
 

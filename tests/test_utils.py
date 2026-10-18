@@ -166,7 +166,7 @@ def test_deduplicate_rules():
     with pytest.raises(TypeError):
         utils.deduplicate_rules(rules, dummy_vars)   # type: ignore[call-arg]
 
-    deduped = utils.deduplicate_rules(rules, dummy_vars, engine=engine)
+    deduped = utils.deduplicate_rules(rules, dummy_vars, engine=engine, rule_mode='default')
 
     # Canonical forms of the expected rules (?-sorted: the miner's default --
     # dedup emits variable-leaf wildcards)

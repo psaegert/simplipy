@@ -61,6 +61,16 @@ MODE_TIERS: dict[str, frozenset] = {
 }
 
 
+def effective_tier(detail: dict) -> str:
+    """A judged rule's EFFECTIVE tier -- what ``MODE_TIERS`` licenses against. A verdict that
+    carries no tier reads ``reject`` (fail-closed). The Const-channel sentinel (D36) reads
+    ``core``: the multi-``<constant>`` family's soundness authority is the Const-channel
+    chain, not the contract, so its verdict here is not a verdict about the rule."""
+    if detail.get('detail') == CONST_CHANNEL_DETAIL:
+        return 'core'
+    return detail.get('tier') or 'reject'
+
+
 def verify_ruleset(rules: list | str, *, mode: str | None = None,
                    report_path: str | None = None,
                    build_path: str | None = None, judge_timeout_s: int = 30) -> dict:
@@ -104,18 +114,13 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
                        judge_timeout_s=judge_timeout_s,
                        announce_report=report_path is not None)
     report = json.load(open(tmp))
-    # D36 carve-out, mirrored from `mining._route_triple`: the multi-`<constant>`
+    # D36 carve-out (`effective_tier`, also the mine's judge): the multi-`<constant>`
     # family's soundness authority is the Const-channel chain, not the contract, so
     # the judge's non-jurisdiction sentinel (UNSUPPORTED-SHAPE + CONST_CHANNEL_DETAIL)
     # is not a verdict about the rule. Without this mirror, the moment a mine routes
     # such a rule into the triple as `core`, `verify_ruleset` on the mine's own
     # output reads tier None -> `reject` and reports dirty in every mode -- the gate
     # disagreeing with the router about a ratified decision (audit U3, 2026-08-22).
-    def _eff_tier(d: dict) -> str:
-        if d.get('detail') == CONST_CHANNEL_DETAIL:
-            return 'core'
-        return d.get('tier') or 'reject'
-
     if mode is None:
         d36 = {d.get('idx') for d in report.get('detail', [])
                if d.get('detail') == CONST_CHANNEL_DETAIL}
@@ -128,7 +133,7 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     offenders = [{'idx': d.get('idx'), 'lhs': d.get('lhs'), 'rhs': d.get('rhs'),
                   'verdict': d.get('verdict'), 'tier': d.get('tier')}
                  for d in report.get('detail', [])
-                 if _eff_tier(d) not in allowed]
+                 if effective_tier(d) not in allowed]
     report['mode'] = mode
     report['offenders'] = offenders
     report['is_clean'] = not offenders
@@ -251,5 +256,6 @@ def selftest() -> bool:
     return _gate.selftest() and _contract.selftest(verbose=False)
 
 
-__all__ = ['CONST_CHANNEL_DETAIL', 'FATAL_BUCKETS', 'MODE_TIERS', 'default_corpus', 'verify_rule',
+__all__ = ['CONST_CHANNEL_DETAIL', 'FATAL_BUCKETS', 'MODE_TIERS', 'default_corpus',
+           'effective_tier', 'verify_rule',
            'verify_ruleset', 'verify_triple', 'monitor_ruleset', 'selftest']

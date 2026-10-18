@@ -48,7 +48,8 @@ class Engine:
         form: Literal["tagged", "explicit"] = ...,
         explore_budget: int | None = ...,  # None: until a round finds nothing
         suppressed_rows: list[int] = ...,
-        rule_mode: str = ...,
+        *,
+        rule_mode: str,
     ) -> list[str]: ...
     def ac_simplify_infix(
         self,
@@ -83,6 +84,7 @@ class Engine:
         explore_budget: int = ...,
     ) -> list[str]: ...
     def ac_ordered_below(self, a: list[str], b: list[str]) -> bool: ...
+    def ac_ordered_below_in(self, a: list[str], b: list[str], *, rule_mode: str) -> bool: ...
     def ac_judge(
         self, tokens: list[str], max_passes: int
     ) -> tuple[int, int, list[str]]: ...
@@ -140,6 +142,8 @@ class Engine:
         rtol: float,
         atol: float,
         min_informative: int | None,
+        *,
+        rule_mode: str,
     ) -> list[str] | None: ...
     def registry_mint_refusal(
         self, source: list[str], mark: list[str], target: list[str], var_names: list[str]
@@ -284,11 +288,15 @@ class Engine:
         *,
         rule_mode: str,
         index_offset: int = ...,
+        # the global source index of each entry (default: index_offset + position)
+        indices: list[int] | None = ...,
+        # global source index -> targets the judge loop refused for that source
+        exclusions: dict[int, list[list[str]]] | None = ...,
         confirm_x: list[float] | None = ...,
         confirm_rows: int = ...,
         confirm_min_informative: int | None = ...,
         confirm_seed: int = ...,
-    ) -> list[tuple[list[str], list[str]]]: ...
+    ) -> list[tuple[int, list[str], list[str]]]: ...
     def exist_constants_fit_linear(
         self,
         candidate: list[str],

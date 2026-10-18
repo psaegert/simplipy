@@ -1415,7 +1415,7 @@ class TestSuppressedProbeAndShadowCensus:
         for probe in (["sin", "neg", "x0"], ["*", "(-1)", "abs", "x1"],
                       ["+", "x0", "*", "2", "x0"]):
             assert engine._core.ac_simplify_suppressed(
-                probe, 48, "explicit", DEFAULT_EFFORT, []) == list(engine.simplify(probe))
+                probe, 48, "explicit", DEFAULT_EFFORT, [], rule_mode="default") == list(engine.simplify(probe))
 
     def test_suppressing_a_row_is_the_engine_without_it(self, engine: SimpliPyEngine) -> None:
         from simplipy.engine import DEFAULT_EFFORT
@@ -1432,7 +1432,7 @@ class TestSuppressedProbeAndShadowCensus:
             without = SimpliPyEngine(
                 operators=ops, rules=[r for j, r in enumerate(rules) if j != i])
             assert full._core.ac_simplify_suppressed(
-                probe, 48, "explicit", DEFAULT_EFFORT, [i]) == list(without.simplify(probe))
+                probe, 48, "explicit", DEFAULT_EFFORT, [i], rule_mode="default") == list(without.simplify(probe))
 
     def test_shadow_census_names_the_sign_sibling_pair(self, engine: SimpliPyEngine) -> None:
         # Each rule is canonically the other's orientation twin, so each one's twin is
@@ -1458,5 +1458,5 @@ class TestSuppressedProbeAndShadowCensus:
             (("-", "acosh", "atanh", "?0", "?1"), ("-", "?0", "?1")),
             (("-", "?1", "acosh", "atanh", "?0"), ("-", "?1", "?0")),
         ]
-        kept = refund(list(sib), engine._operators_config, set())
+        kept = refund(list(sib), engine._operators_config, set(), rule_mode='default')
         assert kept == [sib[1]]

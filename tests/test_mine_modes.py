@@ -65,13 +65,3 @@ def test_the_miner_refuses_the_law_the_load_refuses(tmp_path, eng, mode):
          'rules_real': 'rules.json', 'rules_permissive': 'rules.json'}))
     loaded = SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
     assert loaded._core.ac_rules_drop_census(rule_mode=mode).get('engine-owned-law') == 1
-
-
-def test_each_file_keeps_what_its_own_mode_serves(eng):
-    """`cos 0 -> 1` is dead in f64 (its reading folds the LHS) and alive in real: the router
-    asks each mode's own load whether a rule exists there."""
-    from simplipy.mining import _route_triple
-    engine = SimpliPyEngine(operators=eng._operators_config, rules=[(['cos', '0'], ['1'])])
-    triple, _, _ = _route_triple(engine)
-    assert [['cos', '0'], ['1']] in triple['real']
-    assert [['cos', '0'], ['1']] not in triple['f64']

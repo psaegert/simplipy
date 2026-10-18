@@ -153,7 +153,7 @@ def main(argv: str = None) -> None:
 
             engine = SimpliPyEngine.from_config(engine_config_path)
             n_before = len(engine.simplification_rules)
-            n_pruned = engine.prune_covered_rules(verbose=args.verbose)
+            n_pruned = engine.prune_covered_rules(verbose=args.verbose, rule_mode='default')
 
             output_dir = os.path.dirname(args.output_file)
             if output_dir and not os.path.exists(output_dir):

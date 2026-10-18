@@ -1,0 +1,233 @@
+"""The mine's per-length judge loop (miner.md 2.6, 2.7): the judge's tier is decided inside
+the scan, a refused rule never prunes a longer source, and the scan is a function of the
+global source index alone."""
+import json
+
+import numpy as np
+import pytest
+import yaml
+
+from simplipy import SimpliPyEngine
+from simplipy.mining import RuleMiner
+
+_OPERATORS = {
+    "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+    "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+    "neg": {"realization": "simplipy.operators.neg", "alias": [], "inverse": "neg", "arity": 1, "precedence": 2.5, "commutative": False},
+    "pow2": {"realization": "simplipy.operators.pow2", "alias": [], "inverse": "sqrt", "arity": 1, "precedence": 3, "commutative": False},
+    "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
+    "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
+}
+
+SOURCE = ['*', 'exp', 'x0', 'exp', 'x0']
+FIRST = ['exp', '+', 'x0', 'x0']      # the scan's first accepted candidate
+SECOND = ['exp', '*', '2', 'x0']      # the next one, once FIRST is excluded
+
+
+@pytest.fixture(scope='module')
+def eng() -> SimpliPyEngine:
+    return SimpliPyEngine(operators=_OPERATORS, rules=[])
+
+
+def _scan(eng, sources, mode='default'):
+    """`mine(batch, indices, exclusions)` over a library of hand-picked candidates."""
+    x = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(7))
+    lib = eng._core.build_candidate_library(
+        [FIRST, ['pow2', 'exp', 'x0'], SECOND, ['x0'], ['exp', 'x0']], ['x0'],
+        x.flatten(order='C').tolist(), x.shape[0], rule_mode=mode)
+
+    def mine(batch, indices, exclusions):
+        return eng._core.mine_one_length(batch, lib, None, 16, 16, 7, 1e-9, 1e-12, None, True,
+                                         rule_mode=mode, indices=indices, exclusions=exclusions)
+    return mine
+
+
+def test_the_premise_two_accepted_candidates_in_scan_order(eng) -> None:
+    mine = _scan(eng, [SOURCE])
+    assert mine([SOURCE], None, None) == [(0, SOURCE, FIRST)]
+    assert mine([SOURCE], None, {0: [FIRST]}) == [(0, SOURCE, SECOND)]
+    assert mine([SOURCE], None, {0: [FIRST, SECOND]}) == []
+
+
+def test_a_refused_pick_yields_to_the_next_licensed_candidate(eng) -> None:
+    """NO SHADOWING: the judge files the cheapest pick under another mode, and the loop
+    must return the next candidate the mode licenses -- not drop the source."""
+    refused = (('*', 'exp', '?0', 'exp', '?0'), ('exp', '+', '?0', '?0'))
+
+    def judge(pairs):
+        return ['real' if tuple(map(tuple, p)) == refused else 'core' for p in pairs]
+
+    found, stats = RuleMiner(eng)._mine_length([SOURCE], _scan(eng, [SOURCE]), 'default',
+                                               judge, {}, ['x0'])
+    assert found == [(SOURCE, SECOND)]
+    assert stats['judge_rounds'] == 2
+    assert stats['excluded'] == [[SOURCE, FIRST]]
+    # `real` licenses the refused tier: no exclusion, the first pick stands
+    found, stats = RuleMiner(eng)._mine_length([SOURCE], _scan(eng, [SOURCE], 'real'), 'real',
+                                               judge, {}, ['x0'])
+    assert found == [(SOURCE, FIRST)] and stats['judge_rounds'] == 1
+
+
+def test_the_judge_memo_is_consulted_before_the_judge(eng) -> None:
+    calls = []
+
+    def judge(pairs):
+        calls.append(list(pairs))
+        return ['core'] * len(pairs)
+
+    judged: dict = {}
+    miner = RuleMiner(eng)
+    miner._mine_length([SOURCE], _scan(eng, [SOURCE]), 'default', judge, judged, ['x0'])
+    miner._mine_length([SOURCE], _scan(eng, [SOURCE]), 'default', judge, judged, ['x0'])
+    assert len(calls) == 1 and judged
+
+
+def test_two_shards_equal_one_shot(eng) -> None:
+    """The scan of a source is a function of its GLOBAL index (its seed, its exclusions),
+    never of the batch it arrives in: two shards with `index_offset` -- or explicit
+    `indices` -- reproduce the one-shot mine, exclusions included."""
+    sources = [SOURCE, ['pow2', 'exp', 'x0'], ['*', 'exp', 'x0', 'exp', 'x0']]
+    x = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(7))
+    lib = eng._core.build_candidate_library(
+        [FIRST, ['pow2', 'exp', 'x0'], SECOND, ['x0'], ['exp', 'x0']], ['x0'],
+        x.flatten(order='C').tolist(), x.shape[0], rule_mode='default')
+
+    def run(batch, **kw):
+        return eng._core.mine_one_length(batch, lib, None, 16, 16, 7, 1e-9, 1e-12, None, True,
+                                         rule_mode='default', **kw)
+
+    excl = {2: [FIRST]}
+    one_shot = run(sources, exclusions=excl)
+    assert [t for _, _, t in one_shot] == [FIRST, FIRST, SECOND]
+    shards = run(sources[:2], exclusions=excl) + run(sources[2:], index_offset=2, exclusions=excl)
+    assert shards == one_shot
+    assert run(sources[2:], indices=[2], exclusions=excl) == one_shot[2:]
+
+
+PROBE = ['pow2', 'exp', 'x0']
+
+
+def _gated_mine(tmp_path, judge, marks):
+    """A tiny mine whose length loop records, at the start of each f64 length (lengths
+    1..4, in order), the f64 serve answer of `pow2 exp x0` -- the mark a longer source
+    containing it mines against."""
+    original = RuleMiner._mine_length
+
+    def spy(self, sources, mine, rule_mode, judge_, judged, dummy_variables):
+        if rule_mode == 'default':
+            marks.append(self.engine._core.mine_mark(PROBE, rule_mode=rule_mode))
+        return original(self, sources, mine, rule_mode, judge_, judged, dummy_variables)
+
+    tmp_path.mkdir()
+    (tmp_path / 'rules.json').write_text('[]')
+    (tmp_path / 'config.yaml').write_text(
+        yaml.safe_dump({'engine_generation': 2, 'operators': _OPERATORS, 'rules': 'rules.json'}))
+    engine = SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
+    RuleMiner._mine_length = spy  # type: ignore[method-assign]
+    try:
+        engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4,
+                          dummy_variables=1, extra_internal_terms=['2'], X=256, seed=7,
+                          promote_sorts=False, verbose=False, judge=judge,
+                          output_file=str(tmp_path / 'mined.json'))
+    finally:
+        RuleMiner._mine_length = original  # type: ignore[method-assign]
+    return json.load(open(tmp_path / 'mined.json'))
+
+
+def test_a_rule_refused_at_one_length_never_moves_a_longer_mark(tmp_path) -> None:
+    """GATED BEFORE INSTALLED (miner.md 2.7): what the judge refuses at a length is never
+    installed, so no longer source's mark moves for it. Anti-vacuity: with the rule
+    licensed, the same mark DOES move."""
+    bare = SimpliPyEngine(operators=_OPERATORS, rules=[])._core.mine_mark(
+        PROBE, rule_mode='default')
+    lhs = {('pow2', 'exp', '?0'), tuple(bare[:1]) + ('exp', '?0') + tuple(bare[3:])}
+
+    def refuse(pairs):
+        return ['reject' if tuple(p[0]) in lhs else 'core' for p in pairs]
+
+    licensed: list = []
+    _gated_mine(tmp_path / 'licensed', lambda pairs: ['core'] * len(pairs), licensed)
+    assert len(licensed) == 4 and licensed[:3] == [bare] * 3, licensed
+    assert licensed[3] != bare, f'vacuous: no length-3 rule moves the mark ({licensed})'
+    refused: list = []
+    mined = _gated_mine(tmp_path / 'refused', refuse, refused)
+    assert not [r for r in mined if tuple(r[0]) in lhs], mined
+    assert refused == [bare] * 4, refused
+
+
+def test_a_crashed_mine_resumes_from_its_last_length_to_the_same_files(tmp_path) -> None:
+    """RESUME FROM DISK FIRST: a mine that dies inside a length leaves the checkpoint of the
+    last completed one, and the rerun continues from there to byte-identical files."""
+    def mine(directory, crash_at=None):
+        calls: list = []
+        original = RuleMiner._mine_length
+
+        def spy(self, sources, mine_, rule_mode, judge_, judged, dummy_variables):
+            if rule_mode == 'default':
+                calls.append(len(calls))
+                if crash_at is not None and len(calls) == crash_at:
+                    raise KeyboardInterrupt('simulated crash')
+            return original(self, sources, mine_, rule_mode, judge_, judged, dummy_variables)
+
+        directory.mkdir(exist_ok=True)
+        (directory / 'rules.json').write_text('[]')
+        (directory / 'config.yaml').write_text(yaml.safe_dump(
+            {'engine_generation': 2, 'operators': _OPERATORS, 'rules': 'rules.json'}))
+        engine = SimpliPyEngine.from_config(str(directory / 'config.yaml'))
+        RuleMiner._mine_length = spy  # type: ignore[method-assign]
+        try:
+            engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4,
+                              dummy_variables=1, extra_internal_terms=['2'], X=256, seed=7,
+                              promote_sorts=False, verbose=False,
+                              output_file=str(directory / 'mined.json'))
+        finally:
+            RuleMiner._mine_length = original  # type: ignore[method-assign]
+        return calls
+
+    assert len(mine(tmp_path / 'once')) == 4
+    with pytest.raises(KeyboardInterrupt):
+        mine(tmp_path / 'resumed', crash_at=4)
+    checkpoint = json.load(open(tmp_path / 'resumed' / 'mined.json.checkpoint.json'))
+    assert checkpoint['completed_length'] == 3
+    assert len(mine(tmp_path / 'resumed')) == 1, 'the rerun must not re-mine lengths 1..3'
+    assert not (tmp_path / 'resumed' / 'mined.json.checkpoint.json').exists()
+    for name in ('mined.json', 'mined_real.json', 'mined_permissive.json'):
+        assert (tmp_path / 'once' / name).read_bytes() == \
+            (tmp_path / 'resumed' / name).read_bytes(), name
+
+
+def test_the_dedup_tie_break_is_the_modes_ordering_not_token_count(eng) -> None:
+    """Two targets for one canonical source: `pow2 exp ?0` is one token shorter, but it
+    reads as the source itself (`pow exp ?0 2`), while `exp * 2 ?0` is strictly below it
+    in the serve ordering -- the order the rewrite fires under. The ordering decides, in
+    either input order."""
+    from simplipy.utils import deduplicate_rules
+    below = (tuple(SOURCE), ('exp', '*', '2', 'x0'))
+    shorter = (tuple(SOURCE), ('pow2', 'exp', 'x0'))
+    assert eng._core.ac_ordered_below_in(list(below[1]), list(shorter[1]), rule_mode='default')
+    want = [(('*', 'exp', '?0', 'exp', '?0'), ('exp', '*', '2', '?0'))]
+    for rules in ([below, shorter], [shorter, below]):
+        assert deduplicate_rules(rules, ['x0'], engine=eng, rule_mode='default') == want, rules
+
+
+def test_a_twin_shadowed_row_is_dropped_and_nothing_it_served_is_lost() -> None:
+    """TWIN-SHADOW REMOVAL (miner.md 2.7): two rows that are each other's orientation twin
+    serve one rewrite pair twice over. The later row goes, the earlier row's twin mints in
+    its place, and the served set is exactly what it was."""
+    from conftest import acj_config_path, require_or_skip
+    require_or_skip(acj_config_path(), 'needs the acj vocabulary')
+    ops = yaml.safe_load(open(acj_config_path()))['operators']
+    sib = [(('-', 'acosh', 'atanh', '?0', '?1'), ('-', '?0', '?1')),
+           (('-', '?1', 'acosh', 'atanh', '?0'), ('-', '?1', '?0'))]
+    engine = SimpliPyEngine(operators=ops, rules=[[list(lhs), list(rhs)] for lhs, rhs in sib])
+
+    def served():
+        return sorted((tuple(lhs), tuple(rhs))
+                      for lhs, rhs, _ in engine._core.ac_served_rules_in_mode('default'))
+
+    before = served()
+    assert engine._core.ac_shadow_census(rule_mode='default'), 'vacuous: no twin-shadow'
+    kept, dropped = RuleMiner(engine)._deshadow('default', sib)
+    assert kept == [sib[0]] and dropped == [sib[1]]
+    assert engine._core.ac_shadow_census(rule_mode='default') == []
+    assert served() == before

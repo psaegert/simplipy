@@ -569,7 +569,7 @@ impl PyEngine {
     /// an empty `suppressed_rows` is byte-identical to `ac_simplify_in_mode` at
     /// `rule_mode="default"`.
     /// `explore_budget` reads as in `ac_simplify_in_mode` ([`explore_budget_of`]).
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), suppressed_rows=vec![], rule_mode="default"))]
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), suppressed_rows=vec![], *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn ac_simplify_suppressed(
         &self,
@@ -699,6 +699,23 @@ impl PyEngine {
         ensure_tokens_are_tokens(&a)?;
         ensure_tokens_are_tokens(&b)?;
         py.detach(|| self.inner.ac_ordered_below(&a, &b))
+            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+    }
+
+    /// The serve ordering in `rule_mode`: both sides read in the mode's serving context,
+    /// certificates on, as the rewrite pass orders a rule's firing.
+    #[pyo3(signature = (a, b, *, rule_mode))]
+    fn ac_ordered_below_in(
+        &self,
+        py: Python<'_>,
+        a: Vec<String>,
+        b: Vec<String>,
+        rule_mode: &str,
+    ) -> PyResult<bool> {
+        ensure_tokens_are_tokens(&a)?;
+        ensure_tokens_are_tokens(&b)?;
+        let mode = parse_rule_mode(rule_mode)?;
+        py.detach(|| self.inner.ac_ordered_below_in(&a, &b, mode))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
@@ -1468,7 +1485,7 @@ impl PyEngine {
     /// short-circuit + candidate scan (no-constant test / constant fit) + selection. Returns
     /// the chosen target token list, or None. `candidates` = the candidate library (expressions
     /// up to max_target); for the resident path see `build_candidate_library`/`find_rule_lib`.
-    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode="permissive"))]
+    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule(
         &self,
@@ -1773,7 +1790,7 @@ impl PyEngine {
     /// shorten, with the bound tightened to the simplified length (targets must beat what
     /// `simplify` already reaches); `False` skips them (strict Kruskal). See
     /// `Engine::mine_one_length`.
-    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, index_offset=0, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
+    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, index_offset=0, indices=None, exclusions=None, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn mine_one_length(
         &self,
@@ -1790,11 +1807,19 @@ impl PyEngine {
         relaxed_kruskal: bool,
         rule_mode: &str,
         index_offset: u64,
+        indices: Option<Vec<u64>>,
+        exclusions: Option<std::collections::HashMap<u64, Vec<Vec<String>>>>,
         confirm_x: Option<Vec<f64>>,
         confirm_rows: usize,
         confirm_min_informative: Option<usize>,
         confirm_seed: u64,
-    ) -> PyResult<Vec<(Vec<String>, Vec<String>)>> {
+    ) -> PyResult<Vec<engine::MinedRule>> {
+        if let Some(ix) = &indices {
+            if ix.len() != sources.len() {
+                return Err(PyValueError::new_err("indices must parallel sources"));
+            }
+        }
+        let exclusions = exclusions.unwrap_or_default();
         for src in &sources {
             ensure_tokens_are_tokens(src)?;
         }
@@ -1824,6 +1849,8 @@ impl PyEngine {
                 confirm.as_ref(),
                 seed,
                 index_offset,
+                indices.as_deref(),
+                &exclusions,
                 relaxed_kruskal,
             )
         }))

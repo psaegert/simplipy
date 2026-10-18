@@ -42,7 +42,7 @@ from ..utils import _dedup_keyed_rules
 Q = re.compile(r'^\?(\d+)$')
 
 
-def refund(rules, operators, promote_set, progress=None, rule_mode='default'):
+def refund(rules, operators, promote_set, progress=None, *, rule_mode):
     """Apply ?->_ for rules in ``promote_set``, then prune the derivable instances.
 
     ``rules``: iterable of (lhs, rhs) token sequences (all ?-sorted from the mine).
@@ -169,7 +169,8 @@ def refund(rules, operators, promote_set, progress=None, rule_mode='default'):
             # The mode serves the SAME deduplicated list, so its rows are the default rows.
             engine._core.set_mode_rules(
                 rule_mode, [(list(l), list(r)) for l, r in engine.simplification_rules])
-        keyed = _dedup_keyed_rules(live, [f'x{k}' for k in range(100)], engine)
+        keyed = _dedup_keyed_rules(live, [f'x{k}' for k in range(100)], engine,
+                                   rule_mode=rule_mode)
         buckets = {}
         for p, (key, _) in enumerate(keyed):
             buckets.setdefault(key, []).append(p)

@@ -535,7 +535,8 @@ def _dedup_keyed_rules(
         engine: Any,
         variable_prefix: str = '?',
         verbose: bool = False,
-        rule_mode: str = 'default') -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
+        *,
+        rule_mode: str) -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
     """The variable-remapped rules paired with their dedup keys, in input order. The key is
     the canonical form as ``rule_mode`` reads a rule side (its parse and canon).
 
@@ -571,7 +572,17 @@ def _dedup_keyed_rules(
     return out
 
 
-def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any, rule_mode: str = 'default') -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+def dedup_target_wins(engine: Any, new: Any, kept: Any, rule_mode: str) -> bool:
+    """THE DEDUP TIE-BREAK: does a target replace the kept one for the same source? Iff it is
+    strictly below it in ``rule_mode``'s serve ordering -- the order the rewrite pass fires
+    under, never a token count. A pair the ordering cannot read keeps the earlier target."""
+    try:
+        return bool(engine._core.ac_ordered_below_in(list(new), list(kept), rule_mode=rule_mode))
+    except ValueError:
+        return False
+
+
+def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any, rule_mode: str) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     """Deduplicate a list of simplification rules by canonicalizing variables.
 
     This function processes a list of (source, target) simplification rules. It
@@ -617,12 +628,13 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
     """
     deduplicated_rules: dict[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]] = {}
     for key, pair in _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose,
-                                        rule_mode):
+                                        rule_mode=rule_mode):
         existing = deduplicated_rules.get(key)
-        # The WHOLE PAIR wins or loses: a strictly shorter target brings its own source
-        # spelling with it, so every emitted rule is a (source, target) that was
-        # certified together -- never a cross of one rule's source with another's target.
-        if existing is None or len(pair[1]) < len(existing[1]):
+        # The WHOLE PAIR wins or loses: a target strictly below the kept one in the mode's
+        # ordering brings its own source spelling with it, so every emitted rule is a
+        # (source, target) that was certified together -- never a cross of one rule's source
+        # with another's target.
+        if existing is None or dedup_target_wins(engine, pair[1], existing[1], rule_mode):
             deduplicated_rules[key] = pair
 
     return list(deduplicated_rules.values())

@@ -37,7 +37,7 @@ __all__ = ['promote']
 
 
 def promote(rules, engine, *, run_positive_controls=True, verbose=False, progress=None,
-            rule_mode='default'):
+            rule_mode):
     """Assign each ``?``-sorted mined rule its strongest sound sort; prune derivable rules.
 
     ``rules``: iterable of (lhs, rhs) prefix-token sequences, all ``?``-sorted.
@@ -135,7 +135,7 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     # STAGE 5 -- the _->!->? ladder on the enriched lattice + moving-spike refusal.
     kept, report = _ladder.promote_rules(sorted_rules, engine,
                                          run_positive_controls=run_positive_controls,
-                                         progress=prog)
+                                         progress=prog, rule_mode=rule_mode)
     kept = list(kept) + [[list(l), list(r)] for l, r in ground]
     report = dict(report)
     prog.stage("sort promotion complete", final=len(kept), elapsed=prog.total_elapsed())

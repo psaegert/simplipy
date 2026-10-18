@@ -27,7 +27,7 @@ use memo::{BangCache, SimplifyCtx};
 
 pub use ac::AcForm;
 pub use ac::RuleMode;
-pub use miner::{ConfirmSet, MineRefusal, MineSpec};
+pub use miner::{ConfirmSet, MineRefusal, MineSpec, MinedRule};
 pub use prettify::{Pretty, PrettyForm};
 
 /// The work budget each search runs under when `simplify` is not given `work`

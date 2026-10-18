@@ -14,6 +14,9 @@ use crate::rules::CompiledRules;
 
 use super::Engine;
 
+/// One mined rule: (global source index, source, target).
+pub type MinedRule = (u64, Vec<String>, Vec<String>);
+
 /// What one mine mints FOR. Everything mode-dependent is derived from `mode`, once, here.
 ///
 /// THE MARK IS THE SERVE ANSWER (`Engine::mine_mark`): a mode's mine asks the engine that
@@ -112,6 +115,8 @@ pub enum MineRefusal {
     /// The rule states a law the engine performs itself (`ac::rules::engine_owned_law`,
     /// the load gate's one predicate).
     EngineOwnedLaw,
+    /// The judge loop refused this target for this source (its tier is not the mode's).
+    Excluded,
     /// Stage 2: the pair does not certify on the independent rows.
     Unconfirmed,
 }
@@ -125,6 +130,7 @@ impl MineRefusal {
             MineRefusal::Pole => super::refusals::Refusal::PoleClassChange.name(),
             MineRefusal::NotStructural => "not_structural",
             MineRefusal::EngineOwnedLaw => "engine-owned-law",
+            MineRefusal::Excluded => "excluded",
             MineRefusal::Unconfirmed => "unconfirmed",
         }
     }
@@ -139,6 +145,9 @@ pub(crate) struct Acceptor<'a> {
     mark: Mark,
     vars: &'a [String],
     confirm: Option<&'a ConfirmSet>,
+    /// Targets the judge loop refused for this source (`Refusal::Excluded`): the scan yields
+    /// to the next candidate, so another tier's pick can never shadow a licensed one.
+    excluded: &'a [Vec<String>],
 }
 
 impl<'a> Acceptor<'a> {
@@ -155,6 +164,7 @@ impl<'a> Acceptor<'a> {
         mark: Mark,
         vars: &'a [String],
         confirm: Option<&'a ConfirmSet>,
+        excluded: &'a [Vec<String>],
     ) -> Option<Self> {
         if mark.is_atomic() {
             return None;
@@ -166,6 +176,7 @@ impl<'a> Acceptor<'a> {
             mark,
             vars,
             confirm,
+            excluded,
         })
     }
 
@@ -189,6 +200,10 @@ impl<'a> Acceptor<'a> {
     /// changes a DEFINED extended-real value there (the a.e. pole-mirror family, otherwise
     /// gate-invisible).
     pub(crate) fn license(&self, t: &[String]) -> Result<(), MineRefusal> {
+        // The scan is deterministic, so an excluded pick recurs in exactly its spelling.
+        if self.excluded.iter().any(|e| e.as_slice() == t) {
+            return Err(MineRefusal::Excluded);
+        }
         if let Some(r) = super::refusals::mint_refusals(self.src, &self.mark.tokens, t, self.vars) {
             return Err(MineRefusal::Registry(r.name()));
         }
@@ -395,7 +410,7 @@ impl Engine {
         let mark = self
             .mine_mark(src, spec.mode)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
-        match Acceptor::new(self, spec, src, mark, lib.var_names(), confirm) {
+        match Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &[]) {
             None => Ok(None),
             Some(acc) => acc.scan(lib, max_target, seed),
         }
@@ -419,7 +434,7 @@ impl Engine {
         let mark = self
             .mine_mark(src, spec.mode)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
-        let Some(acc) = Acceptor::new(self, spec, src, mark, lib.var_names(), confirm) else {
+        let Some(acc) = Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &[]) else {
             return Ok(Some("atomic_mark"));
         };
         if let Err(r) = acc.license(hint) {
@@ -771,15 +786,26 @@ impl Engine {
         confirm: Option<&ConfirmSet>,
         seed: u64,
         index_offset: u64,
+        indices: Option<&[u64]>,
+        exclusions: &std::collections::HashMap<u64, Vec<Vec<String>>>,
         relaxed_kruskal: bool,
-    ) -> Vec<(Vec<String>, Vec<String>)> {
+    ) -> Vec<MinedRule> {
         // Publish the tier size so a driver polling `mine_progress()` sees within-tier progress
         // while this one blocking call runs.
         super::stats::mine_begin(sources.len() as u64);
+        let none: Vec<Vec<String>> = Vec::new();
         sources
             .par_iter()
             .enumerate()
-            .filter_map(|(idx, src)| {
+            .filter_map(|(k, src)| {
+                // The GLOBAL source index: it seeds the source and keys its exclusions, so a
+                // shard (`index_offset`) or a rescan (`indices`) draws exactly the seeds of a
+                // one-shot mine.
+                let idx = match indices {
+                    Some(ix) => ix[k],
+                    None => index_offset.wrapping_add(k as u64),
+                };
+                let excluded = exclusions.get(&idx).unwrap_or(&none);
                 // AC-JUDGED Kruskal prune: the arbiter is the engine that will SERVE the
                 // rules. A source the AC engine already strictly reduces -- by exact
                 // arithmetic, bag collection, or the rules mined so far -- is skipped
@@ -828,18 +854,13 @@ impl Engine {
                     } else {
                         // An atomic mark ends the search even under relaxed Kruskal
                         // (`Acceptor::new`).
-                        Acceptor::new(self, spec, src, mark, lib.var_names(), confirm).and_then(
-                            |acc| match acc.scan(
-                                lib,
-                                max_target,
-                                // the GLOBAL source index: a shard (`index_offset`) draws
-                                // exactly the seeds of a one-shot mine
-                                seed.wrapping_add(index_offset).wrapping_add(idx as u64),
-                            ) {
-                                Ok(Some(target)) => Some((src.clone(), target)),
-                                _ => None,
-                            },
-                        )
+                        Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, excluded)
+                            .and_then(|acc| {
+                                match acc.scan(lib, max_target, seed.wrapping_add(idx)) {
+                                    Ok(Some(target)) => Some((idx, src.clone(), target)),
+                                    _ => None,
+                                }
+                            })
                     }
                 };
                 super::stats::mine_tick(); // count the source whether or not it yielded a rule

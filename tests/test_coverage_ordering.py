@@ -59,7 +59,7 @@ class TestPruneStateCoverage:
         engine = SimpliPyEngine(operators=_PRUNE_OPS, rules=[rule])
         assert engine.simplify(["*", "(-1)", "sin", "x0"]) == ["sin", "neg", "x0"]
 
-        assert engine.prune_covered_rules() == 0
+        assert engine.prune_covered_rules(rule_mode='default') == 0
         assert engine.simplification_rules == [rule]
         # and the kept rule still fires on the serving engine after recompile
         assert engine.simplify(["abs", "neg", "x0"]) == ["abs", "x0"]
@@ -70,7 +70,7 @@ class TestPruneStateCoverage:
         order is state identity -- and must still be pruned."""
         engine = SimpliPyEngine(operators=_PRUNE_OPS,
                                 rules=[(("*", "1", "?0"), ("?0",))])
-        assert engine.prune_covered_rules() == 1
+        assert engine.prune_covered_rules(rule_mode='default') == 1
         assert engine.simplification_rules == []
         assert engine.simplify(["*", "1", "x0"]) == ["x0"]
 
@@ -91,7 +91,7 @@ class TestConstAbstractionFulfillment:
         literal fulfills (exceeds) the abstract promise: covered, pruned."""
         engine = SimpliPyEngine(operators=_PRUNE_OPS,
                                 rules=[(("*", "?0", "abs", "0"), ("<constant>",))])
-        assert engine.prune_covered_rules() == 1
+        assert engine.prune_covered_rules(rule_mode='default') == 1
         assert engine.simplification_rules == []
 
     def test_compound_constant_promise_fulfilled_by_ground_instance(self) -> None:
@@ -100,7 +100,7 @@ class TestConstAbstractionFulfillment:
         engine = SimpliPyEngine(
             operators=_PRUNE_OPS,
             rules=[(("*", "abs", "np.e", "?0"), ("*", "<constant>", "?0"))])
-        assert engine.prune_covered_rules() == 1
+        assert engine.prune_covered_rules(rule_mode='default') == 1
         assert engine.simplification_rules == []
 
     def test_constant_collapse_rule_survives(self) -> None:
@@ -115,7 +115,7 @@ class TestConstAbstractionFulfillment:
                          "arity": 1, "precedence": 3, "commutative": False}
         rule = (("acos", "cos", "<constant>"), ("<constant>",))
         engine = SimpliPyEngine(operators=ops, rules=[rule])
-        assert engine.prune_covered_rules() == 0
+        assert engine.prune_covered_rules(rule_mode='default') == 0
         assert engine.simplification_rules == [rule]
 
     def test_const_promise_rule_is_dead_weight_under_mu(self) -> None:
@@ -133,7 +133,7 @@ class TestConstAbstractionFulfillment:
                       "inverse": None, "arity": 2, "precedence": 3, "commutative": False}
         rule = (("exp", "*", "np.e", "?0"), ("pow", "<constant>", "?0"))
         engine = SimpliPyEngine(operators=ops, rules=[rule])
-        assert engine.prune_covered_rules() == 1
+        assert engine.prune_covered_rules(rule_mode='default') == 1
         assert engine.simplification_rules == []
 
 
@@ -144,7 +144,10 @@ class TestStrictKruskalSearchesRespells:
         searched, losing `1/exp(t) -> exp(-t)` to the enumeration alphabet (the
         respelled spelling speaks `inv`, which the ladder never enumerates). Under
         the serve ordering a respell is not a reduction: strict mode must search it
-        and mint the genuinely-below target `exp neg ?0` (complexity 3 -> 2)."""
+        and mint the genuinely-below target `exp neg ?0` (complexity 3 -> 2).
+
+        Asserted in `real`: f64's own numerics refuse the rule (at x0 = 733.55 the source
+        is 0 and the target the subnormal 2.6e-319), so the f64 file rightly lacks it."""
         (tmp_path / "rules.json").write_text(json.dumps([]))
         cfg = tmp_path / "config.yaml"
         import yaml
@@ -158,9 +161,12 @@ class TestStrictKruskalSearchesRespells:
             seed=7, relaxed_kruskal=False, verbose=False)
 
         # Each file is mined in its own mode: f64 refuses the rule (`exp(-t)` and `1/exp(t)`
-        # round differently near underflow), real and permissive mint it.
-        assert engine.simplify(["/", "1", "exp", "x0"], mode="permissive") == \
-            ["exp", "neg", "x0"], engine.permissive_simplification_rules
+        # round differently near underflow: at x0 = 733.55 the source is 0 and the target
+        # the subnormal 2.6e-319), real and permissive mint it.
+        for mode, rules in (('real', engine.real_simplification_rules),
+                            ('permissive', engine.permissive_simplification_rules)):
+            assert engine.simplify(["/", "1", "exp", "x0"], mode=mode) == \
+                ["exp", "neg", "x0"], (mode, rules)
 
 
 class TestProposalVerdictHonesty:

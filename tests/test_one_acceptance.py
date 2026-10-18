@@ -57,7 +57,8 @@ def _verdicts(eng, x, x_confirm, src, cand):
                                 rule_mode=MODE, **_confirm(x_confirm))
     hint_ok, why = core.judge_hint(list(src), list(cand), lib, rule_mode=MODE, **fit,
                                    **_confirm(x_confirm))
-    return scan == list(cand), mine == [(list(src), list(cand))], hint_ok, why
+    return (scan == list(cand), [(s, t) for _, s, t in mine] == [(list(src), list(cand))],
+            hint_ok, why)
 
 
 # (source, candidate, accepted, the hint arm's reason)

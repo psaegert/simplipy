@@ -221,7 +221,7 @@ class TestRecursionCapEveryEntry:
             lambda: core.interval_domain_extension_p(deep, [], ["x0"], []),
             lambda: core.convert_expression(deep),
             lambda: core.equivalent_no_const(deep, ["x0"], ["x0"], [1.0] * 8, 8),
-            lambda: core.find_rule(deep, len(deep), None, [["x0"]], ["x0"], [1.0] * 8, 8),
+            lambda: core.find_rule(deep, len(deep), None, [["x0"]], ["x0"], [1.0] * 8, 8, rule_mode="permissive"),
             lambda: core.find_rule_lib(deep, lib, rule_mode='default'),
             lambda: core.exist_constants_fit(deepc, ["x0"], [1.0] * 8, 8, [1.0] * 8),
             lambda: core.exist_constants_fit_linear(deepc, ["x0"], [1.0] * 8, 8, [1.0] * 8),

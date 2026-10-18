@@ -193,8 +193,10 @@ class TestExactCollapsesMint:
         # canonical key with the alphabet's `(-1)`).
         assert (('cos', 'np.pi'), ('-1',)) in rules, sorted(rules)
         assert (('log', 'np.e'), ('1',)) in rules, sorted(rules)
-        # `sin(np.pi) -> 0` is false in f64 (1.2246467991473532e-16), so the f64 mine, whose
-        # set the engine holds in its default slot, does not mint it; the real mine does.
+        # `sin(np.pi) -> 0` is exactly true and f64 computes 1.2246467991473532e-16: the judge
+        # files it `real`, so the f64 mine, whose set the engine holds in its default slot,
+        # leaves it to the modes that license it; the real mine mints it.
+        assert (('sin', 'np.pi'), ('0',)) not in rules, sorted(rules)
         real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
         assert (('sin', 'np.pi'), ('0',)) in real, sorted(real)
 
@@ -202,17 +204,17 @@ class TestExactCollapsesMint:
         # The owner's ask, end to end: cos(pi) simplifies to -1 (via the mined rule).
         assert mined.simplify(['cos', 'np.pi']) == ['-1']
         assert mined.simplify(['log', 'np.e']) == ['1']
-        # `sin(np.pi)` is the one of the three f64 does not realise, so it does not serve
-        # the default mode. Its presence in the MINE's output is what this test can speak
-        # to, and it is asserted from the mined rule set itself -- an earlier version
+        # `sin(np.pi)` is the one of the three f64 does not realise (f64 computes
+        # 1.2246467991473532e-16), so the f64 mine leaves it out and the real mine mints
+        # it: the mined engine serves the collapse in `real` and keeps f64's own value in
+        # the default mode. Asserted from the mined sets themselves -- an earlier version
         # installed the rule into `real` and then asserted that same rule fires, which
         # says nothing about the mine at all.
-        # Each mode is mined in its own mode, so the rule is minted by the real mine (f64
-        # computes 1.2246467991473532e-16) and the default set the engine holds, the f64
-        # mine's, does not serve it. Where the ROUTED artifact serves it is pinned in
-        # `TestGroundFoldLicence` against the shipped triple.
+        # Where the ROUTED artifact serves it is pinned in `TestGroundFoldLicence` against
+        # the shipped triple.
         real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
         assert (('sin', 'np.pi'), ('0',)) in real
+        assert mined.simplify(['sin', 'np.pi'], mode='real') == ['0']
         assert mined.simplify(['sin', 'np.pi']) == ['sin', 'np.pi']
         from simplipy.verify._contract import judge_rule
         assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'real'
@@ -250,7 +252,7 @@ class TestExactCollapsesMint:
         cground_kill = (('acos', 'pow', '<constant>', 'float("inf")'), ('<constant>',))
         f64_respell = (('+', '1', 'exp', '(-1)'), ('1.3678794411714423',))
         kept, report = promote(bare + controls + [judged_not_bypassed, cground_pass,
-                                                  cground_kill, f64_respell], eng)
+                                                  cground_kill, f64_respell], eng, rule_mode='default')
         kept_set = {(tuple(lhs), tuple(rhs)) for lhs, rhs in kept}
         for rule in bare + controls:
             assert rule in kept_set, (rule, sorted(kept_set))

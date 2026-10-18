@@ -477,7 +477,7 @@ class SimpliPyEngine:
         else:
             self._core = self._build_core(self._operators_config, [])
             self.simplification_rules = deduplicate_rules(
-                rules, dummy_variables=dummy_variables, engine=self)
+                rules, dummy_variables=dummy_variables, engine=self, rule_mode='default')
 
         # THE OTHER TWO MODES' SETS. Normalized to the same (tuple, tuple) shape as the
         # default list, and deliberately NOT deduplicated against it: each set is
@@ -886,7 +886,7 @@ class SimpliPyEngine:
                 m for m in _MODE_RULES_ATTR
                 if getattr(self, _MODE_RULES_ATTR[m]) is not None}
 
-    def prune_covered_rules(self, verbose: bool = False) -> int:
+    def prune_covered_rules(self, verbose: bool = False, *, rule_mode: str) -> int:
         """Remove rules that the remaining rules already cover behaviorally.
 
         A rule ``(lhs, rhs)`` is *covered* if the engine WITHOUT it still
@@ -932,6 +932,10 @@ class SimpliPyEngine:
         ----------
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
+        rule_mode : str
+            The mode whose own set is pruned (``'default'``, ``'real'``, ``'permissive'``).
+            Coverage is asked of that mode's engine: its serve answer (the miner's mark) and
+            its serve ordering, with the kept rules installed as its set.
 
         Returns
         -------
@@ -941,7 +945,8 @@ class SimpliPyEngine:
         from .progress import Progress
         prog = Progress(verbose, prefix='  [prune] ')
 
-        full = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.simplification_rules]
+        attr = 'simplification_rules' if rule_mode == 'default' else _MODE_RULES_ATTR[rule_mode]
+        full = [(tuple(lhs), tuple(rhs)) for lhs, rhs in (getattr(self, attr) or [])]
         if not full:
             return 0
 
@@ -962,11 +967,11 @@ class SimpliPyEngine:
             # (ac_judge/ac_ordered_below: the AC parser is the arbiter, no
             # config-vocabulary gate; an undecidable ordering raises.)
             def fulfilled(variant_lhs: list[str], variant_rhs: list[str]) -> bool:
-                probe_out = core.ac_judge(variant_lhs, 5)[2]
-                if not core.ac_ordered_below(list(variant_rhs), probe_out):
+                probe_out = core.mine_mark(variant_lhs, rule_mode=rule_mode)
+                if not core.ac_ordered_below_in(list(variant_rhs), probe_out, rule_mode=rule_mode):
                     return True
                 if '<constant>' in variant_rhs:
-                    promise = core.ac_judge(list(variant_rhs), 0)[2]
+                    promise = core.mine_mark(list(variant_rhs), rule_mode=rule_mode)
                     return _fulfills_constant_promise(promise, probe_out, arity)
                 return False
 
@@ -988,7 +993,17 @@ class SimpliPyEngine:
                 # is one AC judge per pending rule per coverage variant.
                 prog.stage(f'wave {wave_length} round {rounds}: rebuilding probe engine',
                            kept=len(kept), pending=len(pending))
-                core = self._build_core(self._operators_config, [rule for rule in full if rule in kept])
+                probe_set = [rule for rule in full if rule in kept]
+                if rule_mode == 'default':
+                    core = self._build_core(self._operators_config, probe_set,
+                                            self.real_simplification_rules,
+                                            self.permissive_simplification_rules)
+                else:
+                    core = self._build_core(
+                        self._operators_config, self.simplification_rules,
+                        probe_set if rule_mode == 'real' else self.real_simplification_rules,
+                        probe_set if rule_mode == 'permissive'
+                        else self.permissive_simplification_rules)
                 readd = [rule for rule in
                          prog.track(list(pending), f'  wave {wave_length} round {rounds}: coverage scan')
                          if not covered(core, *rule)]
@@ -1014,11 +1029,15 @@ class SimpliPyEngine:
                     pending = set()
                     break
 
-        self._replace_rules([rule for rule in full if rule in kept])
-        n_pruned = len(full) - len(self.simplification_rules)
+        remaining = [rule for rule in full if rule in kept]
+        if rule_mode == 'default':
+            self._replace_rules(remaining)
+        else:
+            setattr(self, attr, remaining)
+            self._replace_rules(self.simplification_rules)
+        n_pruned = len(full) - len(remaining)
         if verbose:
-            print(f'Pruned {n_pruned} covered rules '
-                  f'({len(self.simplification_rules)} rules remaining)')
+            print(f'Pruned {n_pruned} covered rules ({len(remaining)} rules remaining)')
         return n_pruned
 
     def resolve_constant_rules(self, verbose: bool = False) -> int:
