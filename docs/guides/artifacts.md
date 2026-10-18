@@ -101,6 +101,15 @@ artifact on 0.12 raises with `pin the legacy package to load it: pip install
 without a pin are classified by vocabulary: any retired hyper-operator token means
 generation 1, so already-published legacy artifacts refuse without republishing.
 
+Within a generation, canonical forms change between minor releases, and a rule file
+is minimal and correctly ordered only under the forms it was mined with. A config may
+therefore carry `requires_simplipy`, a PEP 440 specifier such as `">=0.15,<0.16"`: a
+version outside it refuses to load the artifact with `IncompatibleArtifactError` and
+names the pin to install. The miner records the specifier for the version that ran
+the mine (its minor series) in the provenance sidecar, and the published config
+carries it. A pre-release counts as the release it precedes, and a config without the
+key loads as before.
+
 For a fleet operator, `simplipy.compat.SUPPORTED_ENGINE_GENERATIONS` is the
 machine-readable statement of what this package loads, and
 `IncompatibleArtifactError` is the exception to catch to distinguish "wrong

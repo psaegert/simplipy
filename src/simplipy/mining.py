@@ -1218,6 +1218,7 @@ class RuleMiner:
         import platform
         import time as _time
         from simplipy import __version__ as _simplipy_version
+        from simplipy.compat import requires_simplipy_specifier
         try:
             from simplipy import _core as _core_mod
             _core_build = getattr(_core_mod, '__build__', None)
@@ -1259,6 +1260,9 @@ class RuleMiner:
             'created': _time.strftime('%Y-%m-%d %H:%M:%S %z'),
             'host': platform.node(),
             'simplipy_version': _simplipy_version,
+            # The versions that serve these rules (simplipy.compat): the published
+            # config carries this value as its `requires_simplipy` key.
+            'requires_simplipy': requires_simplipy_specifier(_simplipy_version),
             'core_build': _core_build,
             'environment': environment,
             'measure': self.engine._measure_fingerprint(),

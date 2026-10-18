@@ -362,6 +362,13 @@
   reader stays out of them. Measured when it landed: the infix spelling changes no token answer,
   and 57 of the infix answers for srbf's 6,531 ground truths and the 400-row corpus change (the
   entries above change token answers for their own reasons).
+- **An artifact names the versions that serve it.** A config may carry `requires_simplipy`, a
+  PEP 440 specifier; a simplipy version outside it refuses to load the artifact with
+  `IncompatibleArtifactError` and names the pin to install. The miner records the specifier for
+  its own version's minor series (`>=0.15,<0.16`) in the provenance sidecar, and
+  `simplipy.compat.requires_simplipy_specifier()` derives it. A pre-release counts as the release
+  it precedes; a config without the key loads as before. `packaging` is now a declared
+  dependency (it was already installed through `huggingface_hub`).
 
 ## 0.14.7 (2026-10-01)
 

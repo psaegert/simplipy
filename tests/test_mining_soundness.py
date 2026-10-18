@@ -620,6 +620,12 @@ class TestProvenance:
         assert side["progress"]["rules_total"] == len(
             json.load(open(out.replace(".json", "_permissive.json"))))
         assert side["simplipy_version"]
+        # The versions that serve the mined rules: the running version's minor series,
+        # and a config carrying it loads on the version that mined it.
+        from simplipy.compat import check_config, requires_simplipy_specifier
+        assert side["requires_simplipy"] == requires_simplipy_specifier(side["simplipy_version"])
+        check_config({"engine_generation": 2, "operators": _OPERATORS,
+                      "requires_simplipy": side["requires_simplipy"]}, source=str(cfg))
 
     def test_an_interrupted_mine_is_not_final(self, tmp_path, monkeypatch) -> None:
         """A SIGINT stops the climb after the running length. What is written then is a

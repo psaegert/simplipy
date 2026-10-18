@@ -32,9 +32,22 @@ legitimately hosts the retired vocabulary as an INPUT language (legacy spellings
 parse as sugar; no projection emits them). Asset MANAGEMENT (``install``/``list``/
 ``get_path``) is not gated either -- mirroring or inspecting a legacy artifact is
 fine; serving it is not.
+
+Within a generation the canonical forms still change between minor releases, and a
+rule file is minimal and correctly ordered only under the canonical forms it was
+mined with. A config therefore may also carry ``requires_simplipy``, a PEP 440
+specifier naming the simplipy versions that serve it. The miner derives it from the
+version that ran the mine (:func:`requires_simplipy_specifier`: that version's minor
+series, ``>=X.Y,<X.(Y+1)``) and records it in the provenance sidecar, and the
+published config carries it. A pre-release is judged as the release it precedes, so
+the development builds of a release serve the artifacts mined for it. A config
+without the key predates it and loads as before.
 """
 
 from typing import Any
+
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
 
 __all__ = [
     "ENGINE_GENERATION",
@@ -45,6 +58,7 @@ __all__ = [
     "infer_generation",
     "check_config",
     "check_asset_name",
+    "requires_simplipy_specifier",
 ]
 
 #: The generation of THIS package's engine.
@@ -115,6 +129,7 @@ def check_config(config: dict[str, Any], source: str) -> None:
     else:
         generation, evidence = infer_generation(operators), "carries"
     if generation in SUPPORTED_ENGINE_GENERATIONS:
+        _check_requires_simplipy(config, source)
         return
     if generation < ENGINE_GENERATION:
         retired = sorted(RETIRED_OPERATOR_TOKENS & set(operators))
@@ -129,6 +144,47 @@ def check_config(config: dict[str, Any], source: str) -> None:
         f"{source} {evidence} engine generation {generation}, newer than this package "
         f"(simplipy {_package_version()} serves generation(s) "
         f"{sorted(SUPPORTED_ENGINE_GENERATIONS)}): upgrade simplipy to load it.")
+
+
+def requires_simplipy_specifier(version: str | None = None) -> str:
+    """The ``requires_simplipy`` specifier for rules mined by simplipy ``version``.
+
+    The minor series of that version, ``>=X.Y,<X.(Y+1)``; ``version`` defaults to the
+    running package. ``0.15.0.dev2`` and ``0.15.3`` both give ``>=0.15,<0.16``.
+    """
+    release = Version(version if version is not None else _package_version()).release
+    major, minor = release[0], (release[1] if len(release) > 1 else 0)
+    return f">={major}.{minor},<{major}.{minor + 1}"
+
+
+def _check_requires_simplipy(config: dict[str, Any], source: str) -> None:
+    """Refuse a config whose ``requires_simplipy`` excludes this package's version.
+
+    An absent key is a config published before the key existed and is not checked.
+    A pre-release is judged as the release it precedes (``0.15.0.dev2`` as ``0.15.0``).
+    """
+    declared = config.get("requires_simplipy")
+    if declared is None:
+        return
+    try:
+        if not isinstance(declared, str):
+            raise InvalidSpecifier(repr(declared))
+        specifier = SpecifierSet(declared)
+    except InvalidSpecifier:
+        raise IncompatibleArtifactError(
+            f"{source}: malformed requires_simplipy {declared!r} "
+            f"(expected a PEP 440 specifier such as '>=0.15,<0.16')") from None
+    running = _package_version()
+    try:
+        release: Version | None = Version(Version(running).base_version)
+    except InvalidVersion:
+        release = None
+    if release is not None and specifier.contains(release):
+        return
+    raise IncompatibleArtifactError(
+        f"{source} requires simplipy {declared}, and this is simplipy {running}: its "
+        f"rules were mined under another version's canonical forms. Install a version "
+        f"that serves it: pip install \"simplipy{declared}\"")
 
 
 def check_asset_name(name: str) -> None:
