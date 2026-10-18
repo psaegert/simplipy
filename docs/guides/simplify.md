@@ -118,27 +118,27 @@ every machine and under any load. A search that spends its budget returns its be
 `simplipy.DEFAULT_WORK = 10_000` units (a few tens of milliseconds per search); `f64` and `real`
 run without a budget by default. `work=None` lifts it. With these defaults no call on the simplify
 inputs of flash-ansr's T8.1 draws, srbf's ground truths or its model predictions takes more than
-1 s in any mode, and under 1% take more than 0.1 s (0.14.7: up to 18.9% and 1.56%, `permissive` on
+1 s in any mode, and under 1% take more than 0.1 s (0.14.7: up to 18.2% and 1.52%, `permissive` on
 the predictions).
 
 A cap counts every candidate tried, refused ones included, over the whole expression, so
 the cap a search needs grows with the expression: one of srbf's model predictions needs 8
 candidates to reach its uncapped answer, a sum of two copies of it 13, of three 19 and of
-eight 39, so no fixed cap is enough. Capped at 4, the old default, 2,680 of srbf's 125,127 model
-predictions change on a second call in `f64` (2,677 to a cheaper form; `real` 2,682), because the
+eight 39, so no fixed cap is enough. Capped at 4, the old default, 2,872 of srbf's 125,127 model
+predictions change on a second call in `f64` (2,870 to a cheaper form; `real` 3,070), because the
 first call stopped between two improvements. Uncapped, none does in `f64` or `real`, on any of
-the three sets. On the predictions in `f64` no answer is costlier than at cap 4 and 2,893 are
+the three sets. On the predictions in `f64` no answer is costlier than at cap 4 and 3,103 are
 cheaper. The search runs in two phases. For its first 8 candidates it is the capped default's
 breadth-first search: every candidate of every accepted state, against the best so far; on
-srbf's predictions that alone gives the final answer on 124,572 of the 125,127 in `f64` and
-`real`. If it has not settled by then, it steps from the best answer to the first of its
-candidates that is cheaper, resuming where the last improvement happened, until a whole round
-of the best answer's candidates finds nothing; on the other 555 that saves a median of 58
-bits. A breadth-first search re-tries every candidate of every accepted state, which on a
+srbf's predictions that alone gives the final answer on 124,541 of the 125,127 in `f64`
+(124,515 in `real`). If it has not settled by then, it steps from the best answer to the first of
+its candidates that is cheaper, resuming where the last improvement happened, until a whole round
+of the best answer's candidates finds nothing; on the other 586 in `f64` that saves a median of
+56 bits. A breadth-first search re-tries every candidate of every accepted state, which on a
 large sum of terms that each need several expansions grows with the square of the number of
-terms; on 16 copies of one prediction the two-phase search takes seven to eight times as long as
-`effort=4`, for an answer a third of the price. On srbf's predictions it takes 7% (`f64`) and 8%
-(`real`) more time than `effort=4`. Every internal caller that passes no
+terms; on 16 copies of one prediction the two-phase search takes about six times as long as
+`effort=4`, for an answer a third of the price. On srbf's predictions it takes 8% more time than
+`effort=4` in `f64` and `real`. Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
@@ -153,14 +153,14 @@ as read. So its answer never prices above the input, above its answer with the s
 above its answer at a smaller `effort`, among calls with the same `work`; on flash-ansr's T8.1
 draws, srbf's ground truths and its predictions none does (efforts checked: 0, 1, 4 and the
 default). Under a work budget the literal-fold continuations run without the search. A second
-call can still change the answer, through another arm or a search the budget stopped: 151 of the
-129,490 T8.1 answers and 1,458 of srbf's 125,127 predictions change on a second call.
+call can still change the answer, through another arm or a search the budget stopped: 148 of the
+129,490 T8.1 answers and 1,946 of srbf's 125,127 predictions change on a second call.
 
 What the search buys, on the 129,490 simplify inputs of flash-ansr's T8.1 training draws
 (output price over input price, `complexity(.., mode=m)`): in `f64` it moves the mean ratio from 0.979
-with the search off to 0.976 and lifts the strictly simplified answers from 5.7% to 8.9%, for
-about 25% more median time per call; in `permissive` from 0.960 to 0.955
-and from 22.6% to 28.6%, for about 46% more.
+with the search off to 0.972 and lifts the strictly simplified answers from 5.7% to 13.5%, for
+about 30% more median time per call; in `permissive` from 0.961 to 0.950
+and from 21.2% to 33.9%, for about 64% more.
 
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly

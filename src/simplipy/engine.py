@@ -245,7 +245,7 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: ``None``: the search runs until a round finds nothing, so a second call returns the
 #: answer unchanged (in ``permissive`` its work budget can stop a search, see
 #: ``DEFAULT_WORK``). The previous default, 4, stops searches between
-#: two improvements: on srbf's 125,127 model predictions 2,680 answers change on a second
+#: two improvements: on srbf's 125,127 model predictions 2,872 answers change on a second
 #: call in f64 at cap 4 (none uncapped).
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.

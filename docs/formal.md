@@ -205,7 +205,8 @@ canonicity is at stake.
 Signs in a product trade legally across ODD carriers — a bare mixed-sign `Add` factor,
 $\mathrm{Pow}(S, n)$ for odd integer $n \ge 3$, $\mathrm{rootn}(S, m)$ for odd
 $m \ge 3$, and the eight odd functions — because $f(-S) = -f(S)$ is total on those
-carriers (negative odd exponents are NOT carriers: the pole trilemma). The
+carriers — and negative odd powers of them, as members of a class that trades its sign as a
+whole (the pole convention below). The
 sign-placement owner (`ac::expr::sign_place`, shared by `mul()`'s final assembly and
 `term_join`'s negative joins so the priced spelling is always the built spelling)
 materializes every reachable placement and keeps the $\mu$-argmin. Beyond six sign-trade sites
@@ -230,12 +231,9 @@ orientation: the positive integer mass $p$, the negative integer mass $n$ (a fra
 gives its integer part, toward zero, to $p$ or $n$: $S^{5/2} = S^2 S^{1/2}$) and the fixed
 factors (fractional remainders, symbolic powers, totals beyond $2^{100}$). All of $p$ may move to
 the other orientation, an odd amount with a sign to the bag's host (the coefficient, or a bare
-infinity or a bare Const that carries it); the even part of $n$ moves freely; in a sound context
-an orientation with odd $n$ keeps one $B^{-1}$, whose move would flip the sign of the infinity
-at its pole (the class decision never conflates $S^{-n}$ and $-(-S)^{-n}$; the canonical
-orientation of a lone sum still can, as in 0.14.7: `1/(1 - x1 - x2)` is `-1/(x1 + x2 - 1)`),
-while `permissive`, which reads a function up to its values at a zero, moves it too; fractional
-and symbolic parts never move.
+infinity or a bare Const that carries it); the even part of $n$ moves freely, and an odd $n$
+moves with its class as a whole under the pole convention below; fractional and symbolic parts
+never move.
 Every placement, including how a side's mass splits between its integer and its fractional
 powers, is priced as the whole product, and the cheapest wins, an exact tie going to a
 non-negative coefficient and then the structurally smaller product, as in `sign_place`. The
@@ -265,11 +263,44 @@ infinities normalize positive, orientations are then free), else a bare-infinity
 factor carries the sign itself, else an absorbing sum takes it member-wise, else the
 rational coefficient. Sums under the absorption owners (Const-bearing, absorbing-member,
 or holding a bare-infinity term) are never trade sites — absorption owns their signs.
-At the one boundary where a licensed a.e. rewrite meets a refused carrier —
-distributing $\mathrm{Pow}(\mathrm{Mul}, n)$ for negative odd $n$ — a negative bag
-coefficient pre-folds into the first trade site before distribution, so the
-pole-different spellings $(S)^{-n}$ and $-(-S)^{-n}$ are chosen entry-independently
-and never conflated.
+Distributing $\mathrm{Pow}(\mathrm{Mul}, n)$ for negative odd $n$, a negative bag coefficient
+pre-folds into the first trade site before distribution, so the spellings $(S)^{-n}$ and
+$-(-S)^{-n}$ are chosen entry-independently.
+
+**Convention (poles are read by their limits).** Where the two sides of a pole disagree, the
+value there is not part of the function (`1/(x1 - 3)` at `x1 = 3`); where they agree, the answer
+has that limit. A *class* is the set of factors of a product that are odd in one sum $S$, read
+compositionally (`zero_read`): $S$, $-S$ and $cS$ for a constant $c \neq 0$ (sums equal up to a
+constant factor and to factors every term shares are one class, keyed by the primitive part, an
+odd function of a negated argument read as the negated term); the parity of a product is the
+product of its factors' parities; an odd function or odd root of an odd argument is odd; an even
+function or an even integer power is even; a sum has a parity only if all its terms share it.
+A class is written in one orientation with its sign in the coefficient, in every mode, and is a
+sign-trade site only as a whole, so a single member never flips: `-1/(x1 - 3)` and `1/(3 - x1)`
+are one answer, and `1/((x1 - 3)*(3 - x1))` is `-1/(x1 - 3)^2`. At the zero of $S$ each member's
+float value is read from its parts (an exactly cancelling sum evaluates to $+0$); a placement is a
+candidate only if the product's value at the zero is its limit, so an even product with an odd
+count of members whose zero sign differs is refused (`zero_off`) and no sign moves through a pole
+whose two sides agree. Where a member's value at the zero cannot be read and it is not regular
+there (a log, a fractional or symbolic power, an odd root of a factor of unknown sign) and the
+product has a pole over $S$, the class keeps the orientation it was written with, and so does
+every factor holding the class that may vanish there (`class_pinned`); a lossy context keeps no
+value at a point and pins nothing. A sign never moves where the class's zero set may hold a
+region (`zero_set_null`, decided once per base and call). Like terms collect up to sign (`add()`
+keys a term by its classes in one orientation), and a pattern variable that occurs twice binds a
+class up to sign (in every mode for `_`, `!` and `$`, where they bind a class; for `?` only where
+it binds any subtree, in `permissive`), the matcher retrying in one orientation only after a
+binding was refused by its own negation; the factoring stage takes a factor shared up to sign the
+same way. So `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and
+`x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`. Residuals [EMPIRICAL]: two spellings of one product
+can keep different orientations where a pinned class meets its pole; one class split across the
+terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite;
+where two singularities meet, the float value can differ from the joint limit (most such points
+have none); polynomial factors are not classes (`9 - x1^2` does not hold `3 - x1`), and a sum that
+vanishes at a class's zero only through a term that vanishes faster there
+(`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is a class of its own, so its sign can move alone; and the
+evaluator's one zero under an odd root (`rootn(-0, n) = +0`, while
+`sinh(-0) = -0`) can flip the infinity of a product whose sign moves under both.
 
 **Convention (factored vs. flat scaling, finite and infinite alike).** Content extraction
 is deliberately restricted to the unanimity case (it must never lengthen a term), so a
@@ -609,8 +640,8 @@ and are refused again. Two further premises: the step cap does not bind (a cappe
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
 valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
-srbf's 125,127 model predictions change on a second call 2,680 times in `f64` at cap 4, the former
-default, 2,677 of them to a cheaper form (`real` 2,682); uncapped, never, in `f64` and `real`, on these and on
+srbf's 125,127 model predictions change on a second call 2,872 times in `f64` at cap 4, the former
+default, 2,870 of them to a cheaper form (`real` 3,070); uncapped, never, in `f64` and `real`, on these and on
 srbf's ground truths and the simplify inputs of flash-ansr's T8.1 draws]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
@@ -631,24 +662,26 @@ search at the same place in both runs), so its candidates, its winner and that w
 continuation (the same walk cut short again) are among the uncapped run's; the answer is the
 cheapest of a superset. $\square$ Its winner is a valley of its own arm only: the re-run's other
 arms, started from the winner, can descend further, and a search the work budget stopped can
-continue, so L6 does not cover the selection [EMPIRICAL: 151 second-call changes on flash-ansr's
-129,490 T8.1 simplify inputs, 1,458 on srbf's 125,127 predictions; the three bounds hold on every input of
+continue, so L6 does not cover the selection [EMPIRICAL: 148 second-call changes on flash-ansr's
+129,490 T8.1 simplify inputs, 1,946 on srbf's 125,127 predictions; the three bounds hold on every input of
 both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
-permutation gate (0 violations / 400 canonical corpus expressions at head). One registered
-residual class: the I3 residuals above. Re-bracketings of a product reach one representative:
+permutation gate (0 violations / 400 canonical corpus expressions at head). Two registered
+residual classes: the I3 residuals above, and products with a class pinned at its pole (§3),
+whose spellings can keep different orientations. Elsewhere re-bracketings of a product reach one
+representative:
 the parse builds a product once from all of its members and `mul()` decides its opposite classes
 from their exponent totals, a function of the multiset of members (§3). On 1,653 generated
 products over opposite sums, odd functions and odd roots, each in up to eleven spellings (four
 bracketings and the tagged bag for all; two division spellings, the inverse of a product, a
 chain of divisions and the tagged bag with `<div>` where the product has a divisor; a negation
-for 72), one `permissive` product reaches two
-answers, of equal value (0.14.7: 616 in `f64` and `real`, 687 in `permissive`); on the route fuzz
-of 150 products none depends on the nesting in any mode, with the search off or at the default
-(0.14.7: 87, 87 and 82). Where the certificate refuses to split an inverse over a product (a
+for 72), two products in `f64` and `real` (each with a class pinned at its pole, §3) and one in
+`permissive` reach two answers, of equal value (0.14.7: 616 in `f64` and `real`, 687 in
+`permissive`); on the route fuzz of 150 products none depends on the nesting in any mode, with the
+search off or at the default (0.14.7 with the search off: 87, 87 and 82). Where the certificate refuses to split an inverse over a product (a
 factor that vanishes on a region, such as `abs(x2) - x2`), `1/(a*b)` and `1/a*1/b` are different
 functions and keep different answers. (The scale gates held 0 idempotence and 0 permutation
 failures when last run, on the 128-bit engine.)
