@@ -178,6 +178,8 @@ class TestExplicitConstants:
         # evaluator); together they make divergent surfaces impossible to reintroduce.
         import math
 
+        import numpy as np
+
         from simplipy import operators as ops
 
         def tok(v: float) -> str:
@@ -185,9 +187,23 @@ class TestExplicitConstants:
                 return 'float("inf")' if v > 0 else 'float("-inf")'
             return repr(v)
 
-        for x in (-8.0, -2.0, -0.5, 0.0, 0.5, 2.0, 8.0, float("inf"), float("-inf")):
+        def agree(want: float, got: float) -> bool:
+            # `-0.0 == 0.0`: a zero (and so the infinity a negative index makes of it) agrees
+            # only with the zero of its sign, so equal values must also share their sign bit.
+            if math.isnan(want) or math.isnan(got):
+                return math.isnan(want) and math.isnan(got)
+            if want == got:
+                return math.copysign(1.0, want) == math.copysign(1.0, got)
+            return (math.isfinite(want) and math.isfinite(got)
+                    and abs(want - got) <= 1e-12 * max(abs(want), abs(got)))
+
+        for x in (-8.0, -2.0, -0.5, -0.0, 0.0, 0.5, 2.0, 8.0, float("inf"), float("-inf")):
             for n in (-4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 7):
                 want = float(ops.rootn(x, float(n)))
+                # the fold prints its result as a token, which spells either zero `0`, so the
+                # sign is compared on the batch evaluator (the same kernel, read as floats)
+                got = engine._core.evaluate_batch(["rootn", "x0", str(n)], ["x0"], [x], 1, [])[0]
+                assert agree(want, got), f"rootn({x}, {n}): realization {want}, engine {got}"
                 folded = engine._core.evaluate_constant_subtree(
                     ["rootn", tok(x), str(n)])
                 assert folded is not None, (x, n)
@@ -195,10 +211,13 @@ class TestExplicitConstants:
                        "float(\"-inf\")": float("-inf"),
                        "float(\"nan\")": float("nan")}.get(folded)
                 got = float(folded) if got is None else got
-                agree = (math.isnan(want) and math.isnan(got)) or want == got or (
-                    math.isfinite(want) and math.isfinite(got)
-                    and abs(want - got) <= 1e-12 * max(abs(want), abs(got)))
-                assert agree, f"rootn({x}, {n}): realization {want}, engine {got}"
+                assert agree(abs(want) if want == 0 else want, got), \
+                    f"rootn({x}, {n}): realization {want}, fold {got}"
+        # IEEE-754 rootn at a zero, stated: an odd index keeps its sign, an even one gives +0
+        for n, at_negative_zero in ((3, -0.0), (1, -0.0), (-3, float("-inf")), (-1, float("-inf")),
+                                    (2, 0.0), (-2, float("inf"))):
+            assert agree(float(ops.rootn(-0.0, float(n))), at_negative_zero), n
+            assert agree(float(ops.rootn(np.array([-0.0]), float(n))[0]), at_negative_zero), n
 
     def test_fractional_power_of_negative_zero_is_unsigned(self, engine: SimpliPyEngine) -> None:
         # A finite non-integer exponent has no odd part to carry a sign: pow(-0, y) is +0
@@ -225,6 +244,20 @@ class TestExplicitConstants:
             by_pow = engine.as_callable(['inv', 'pow', 'neg', 'x1', '/', '1', '2'], ['x1'])(x)
             by_root = engine.as_callable(['inv', 'rootn', 'neg', 'x1', '2'], ['x1'])(x)
         assert by_pow.tolist() == by_root.tolist() == [math.inf]
+
+    def test_abs_of_negative_zero_is_unsigned(self, engine: SimpliPyEngine) -> None:
+        # abs is even: |-0| is +0 on scalars as on arrays, so its inverse is +inf on every path.
+        import math
+
+        import numpy as np
+
+        from simplipy import operators as ops
+
+        assert math.copysign(1.0, ops.abs(-0.0)) == 1.0
+        assert math.copysign(1.0, ops.abs(np.array([-0.0]))[0]) == 1.0
+        f = engine.as_callable(['inv', 'abs', 'x0'], ['x0'])
+        with np.errstate(divide='ignore'):
+            assert f(-0.0) == f(np.array([-0.0]))[0] == math.inf
 
     def test_str_input_returns_pretty_infix(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify("x1 * 2 + x1 * 3") == "5*x1"

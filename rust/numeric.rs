@@ -351,9 +351,10 @@ fn op_div(x: f64, y: f64) -> f64 {
 }
 
 /// IEEE-754 `rootn(x, n)`, honest for every integer index:
-/// odd index = the signed root (total on R); even = the principal root (NaN on negatives,
-/// identical to `pow(x, 1/n)`); n == 1 = the identity; n < 0 = the reciprocal of the
-/// positive-index root; n == 0 or a non-integer index = NaN (invalid operation).
+/// odd index = the signed root (total on R, `-0` at `-0`); even = the principal root (NaN on
+/// negatives, `+0` at either zero, identical to `pow(x, 1/n)`); n == 1 = the identity; n < 0 =
+/// the reciprocal of the positive-index root; n == 0 or a non-integer index = NaN (invalid
+/// operation).
 /// One semantics, five surfaces: this table, `operators.py::rootn`, `interval.rs`, and
 /// both `hiprec.rs` evaluators -- pinned against each other by the parity tests.
 fn rootn_f64(x: f64, n: f64) -> f64 {
@@ -379,14 +380,11 @@ fn rootn_f64(x: f64, n: f64) -> f64 {
     }
 }
 
-/// The real odd root (`rootn`'s odd arm; the retired `pow1_3`/`pow1_5` spellings):
-/// `x<0 -> -(-x)**r` else `x**r`.
+/// The real odd root (`rootn`'s odd arm; the retired `pow1_3`/`pow1_5` spellings): `|x|**r`
+/// carrying the sign of `x`, the sign of zero included (`rootn(-0, 3) = -0`, as IEEE-754 `rootn`
+/// and every other odd function give).
 fn real_odd_root(x: f64, r: f64) -> f64 {
-    if x < 0.0 {
-        -cpow(-x, r)
-    } else {
-        cpow(x, r)
-    }
+    cpow(x.abs(), r).copysign(x)
 }
 
 /// CPython-exact `str(float)` as the result formatter uses it:
@@ -563,10 +561,33 @@ mod aligned_pow_tests {
         // IEEE-definitional nan-pow cells (ratified):
         assert_eq!(p(1.0, f64::NAN), 1.0);
         assert_eq!(p(f64::NAN, 0.0), 1.0);
-        // one-zero: -0.0 is not a negative base
-        assert_eq!(p(-0.0, 0.5), 0.0);
+        // -0.0 is not a negative base, and a fractional power has no odd part to sign: +0
+        assert_eq!(p(-0.0, 0.5).to_bits(), 0.0f64.to_bits());
         // odd real roots stay sign-folded and defined:
         let r3 = unary_fn("pow1_3").unwrap();
         assert_eq!(r3(-8.0), -2.0);
+    }
+
+    /// IEEE-754 `rootn` at a zero: an odd index keeps the sign of zero (and a negative odd index
+    /// turns it into the infinity of that sign), an even index gives `+0` (`+inf`) at either zero.
+    /// Compared by bits, since `-0.0 == 0.0`.
+    #[test]
+    fn rootn_keeps_the_sign_of_zero_under_an_odd_index() {
+        let r = binary_fn("rootn").unwrap();
+        let bits = |v: f64| v.to_bits();
+        for (n, at_neg, at_pos) in [
+            (1.0, -0.0, 0.0),
+            (3.0, -0.0, 0.0),
+            (5.0, -0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            (4.0, 0.0, 0.0),
+            (-1.0, f64::NEG_INFINITY, f64::INFINITY),
+            (-3.0, f64::NEG_INFINITY, f64::INFINITY),
+            (-2.0, f64::INFINITY, f64::INFINITY),
+        ] {
+            assert_eq!(bits(r(-0.0, n)), bits(at_neg), "rootn(-0, {n})");
+            assert_eq!(bits(r(0.0, n)), bits(at_pos), "rootn(+0, {n})");
+        }
+        assert_eq!(bits(unary_fn("pow1_3").unwrap()(-0.0)), bits(-0.0));
     }
 }

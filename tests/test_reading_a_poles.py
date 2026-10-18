@@ -133,8 +133,9 @@ def test_the_up_to_sign_retry_keeps_a_class_whole(eng, src):
         assert f_ans(3.0, 1.5) == math.inf, ' '.join(ans)
 
 
-# The source's value at x1 = 3 is its limit there (one-sided where the source is defined on one side only); the
-# answer keeps it.
+# The answer's value at x1 = 3 is the source's limit there (one-sided where the source is defined on one side only).
+# The source's own value there need not be: `-(3 - x1)` is -0 at its zero but positive beside it, so
+# `1/(cbrt(-2 (x1 - 3)) * -(3 - x1))` is +inf at x1 = 3 where its limit is -inf.
 #   * A sum that holds the class is no regular factor at its zero: the class's own sum under a square root, or
 #     `S - S^3`, vanishes there, so the class keeps the input's orientation, and so does every site holding it.
 #   * A class is a zero set: `tanh(2 (3 - x1))` is built over `6 - 2 x1`, a multiple of `x1 - 3`, and `2 x1 - 6`
@@ -153,19 +154,33 @@ def test_the_value_at_the_zero_of_a_class_is_kept(eng, mode, src):
     f_src = eng.as_callable(t, ['x1', 'x2'])
     f_ans = eng.as_callable(ans, ['x1', 'x2'])
     with np.errstate(all='ignore'):
-        at = f_src(3.0, 1.5)
-        assert math.isinf(at)
-        assert f_ans(3.0, 1.5) == at, ' '.join(ans)
+        beside = [v for v in (f_src(3.0 - 1e-9, 1.5), f_src(3.0 + 1e-9, 1.5)) if not math.isnan(v)]
+        assert beside and all(abs(v) > 1e6 for v in beside)
+        assert len({math.copysign(1.0, v) for v in beside}) == 1  # one-sided, or two sides that agree
+        limit = math.copysign(math.inf, beside[0])
+        assert f_ans(3.0, 1.5) == limit, ' '.join(ans)
 
 
-@pytest.mark.xfail(reason='the evaluator reads rootn(-0, 3) as +0 (IEEE rootn gives -0), so a nested product that '
-                          'moves -0 under the odd root flips the infinity; pre-existing in ae54819', strict=False)
-@pytest.mark.parametrize('mode', ('f64', 'real'))
-def test_a_nested_product_keeps_the_sign_of_zero_under_an_odd_root(eng, mode):
-    src = 'inv * rootn * - 3 x1 x2 3 sinh * x2 - 3 x1'.split()
-    ans = list(eng.simplify(list(src), mode=mode))
+# An odd root keeps the sign of zero, as IEEE-754 `rootn` and every odd function do, so a canonical form that moves a
+# negation under the root (`rootn(-x2*(x1 - 3), 3)` for `rootn((3 - x1)*x2, 3)`) keeps the infinity at the class's
+# zero beside an odd function of the class, a polynomial factor holding it, or a shared-factor multiple of it.
+SIGN_OF_ZERO_UNDER_AN_ODD_ROOT = ['inv * rootn * - 3 x1 x2 3 sinh * x2 - 3 x1',      # 1/(cbrt((3-x1)*x2)*sinh(x2*(3-x1)))
+                                  'inv * rootn * x2 - 3 x1 3 - 9 pow x1 2',          # 1/(cbrt(x2*(3-x1))*(9-x1^2))
+                                  'inv * rootn * - 3 x1 x2 3 - * 3 x2 * x1 x2']      # 1/(cbrt((3-x1)*x2)*(3*x2-x1*x2))
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('src', SIGN_OF_ZERO_UNDER_AN_ODD_ROOT)
+def test_a_nested_product_keeps_the_sign_of_zero_under_an_odd_root(eng, mode, src):
+    t = src.split()
+    ans = list(eng.simplify(list(t), mode=mode))
+    f_src = eng.as_callable(t, ['x1', 'x2'])
+    f_ans = eng.as_callable(ans, ['x1', 'x2'])
     with np.errstate(all='ignore'):
-        assert eng.as_callable(ans, ['x1', 'x2'])(3.0, 1.5) == eng.as_callable(src, ['x1', 'x2'])(3.0, 1.5)
+        for x2 in (0.7, 1.5):
+            assert f_src(3.0, x2) == math.inf  # the limit from both sides
+            assert f_ans(3.0, x2) == math.inf, ' '.join(ans)
+            assert f_ans(np.array([3.0]), np.array([x2]))[0] == math.inf, ' '.join(ans)
 
 
 @pytest.mark.parametrize('mode', MODES)

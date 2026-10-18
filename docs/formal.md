@@ -282,7 +282,7 @@ float value is read from its parts (an exactly cancelling sum evaluates to $+0$)
 candidate only if the product's value at the zero is its limit, so an even product with an odd
 count of members whose zero sign differs is refused (`zero_off`) and no sign moves through a pole
 whose two sides agree. Where a member's value at the zero cannot be read and it is not regular
-there (a log, a fractional or symbolic power, an odd root of a factor of unknown sign) and the
+there (a log, a fractional or symbolic power) and the
 product has a pole over $S$, the class keeps the orientation it was written with, and so does
 every factor holding the class that may vanish there (`class_pinned`); a lossy context keeps no
 value at a point and pins nothing. A sign never moves where the class's zero set may hold a
@@ -298,9 +298,9 @@ terms of a sum with a dominant even term can give NaN at its zero where the limi
 where two singularities meet, the float value can differ from the joint limit (most such points
 have none); polynomial factors are not classes (`9 - x1^2` does not hold `3 - x1`), and a sum that
 vanishes at a class's zero only through a term that vanishes faster there
-(`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is a class of its own, so its sign can move alone; and the
-evaluator's one zero under an odd root (`rootn(-0, n) = +0`, while
-`sinh(-0) = -0`) can flip the infinity of a product whose sign moves under both.
+(`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is a class of its own, so its sign can move alone. An odd
+root keeps the sign of zero like every odd function (IEEE-754 `rootn(-0, n) = -0` for odd `n`), so
+it reads at the zero as its radicand does.
 
 **Convention (factored vs. flat scaling, finite and infinite alike).** Content extraction
 is deliberately restricted to the unanimity case (it must never lengthen a term), so a

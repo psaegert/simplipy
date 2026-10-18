@@ -5229,10 +5229,9 @@ enum Parity {
 /// the zero differs from its sign beside the zero on the side where the oriented sum is positive;
 /// and that sign beside the zero (negative?). The sum spelled in its other orientation is `+0` at
 /// its zero but negative beside it; a product counts its members (a literal or a factor free of
-/// `S` signs both alike); an odd power and an odd function keep the sign of zero; an odd root reads
-/// `-0` as `+0` (`rootn`), so it differs where its radicand is negative beside the zero; an even
-/// power or an even function differs nowhere. `None` where that is not read (a factor of unknown
-/// sign under an odd root, a sum that holds `S` among other terms, any other head).
+/// `S` signs both alike); an odd power, an odd function and an odd root keep the sign of zero; an
+/// even power or an even function differs nowhere. `None` where that is not read (a sum that holds
+/// `S` among other terms or times a factor its terms share, `3 x2 - x1 x2`, any other head).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ZeroRead {
     parity: Parity,
@@ -5381,7 +5380,7 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
                 Free if odd_index => free(ra.below),
                 Free => free(Some(false)),
                 Unknown => unread,
-                p if odd_index => read(p, ra.below, ra.below),
+                _ if odd_index => ra,
                 Even => even,
                 _ => unread,
             }
@@ -5415,8 +5414,8 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
 /// READING A AT THE ZERO OF A CLASS: a sign moves through a pole over a sum `S` only where the
 /// answer's value at the zero of `S` is read, and there it must be the limit. Where a factor's
 /// value there is not read -- neither even nor odd in `S` (a log of it, an even root or a
-/// fractional power of it) or of unread sign at the zero (an odd root of a product with a factor
-/// of unknown sign), and not regular there (`regular_at_zero`) -- and the product has a pole over
+/// fractional power of it) or of unread sign at the zero (a sum of `S` and an odd function of
+/// it), and not regular there (`regular_at_zero`) -- and the product has a pole over
 /// `S`, the class keeps the input's orientation (`log(S)/S` keeps `S`, the sign of its pole's
 /// infinity being the limit's from the side `log` is defined on). Without a pole the orientation
 /// moves no infinity. A lossy context keeps no value at a pole, so it pins nothing. The sign

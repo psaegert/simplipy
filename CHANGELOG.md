@@ -35,8 +35,8 @@
   at `x1 = 3` like its limit (0.14.7 and the input give `+inf` there), and
   `1/(-(x1 - 3)*(2*x1 - 6))` keeps `-inf` (0.14.7: `1/(x1 - 3)/(6 - 2*x1)`, `+inf`). A class
   trades its sign only as a whole, so no sign moves through a pole whose two sides agree; where a
-  member's value at the zero cannot be read (a log, a fractional power, an odd root of a factor
-  of unknown sign), the class keeps the orientation it was written with. Like terms collect up to
+  member's value at the zero cannot be read (a log, a fractional power), the class keeps the
+  orientation it was written with. Like terms collect up to
   sign and a pattern variable that occurs twice matches a sum or its negation:
   `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and `x1 + sin(x3 - x2) - sin(x3 - x2)`
   is `x1` (0.14.7 keeps the first as written and gives `x1 + sin(x2 - x3) + sin(x3 - x2)` for
@@ -50,9 +50,16 @@
   polynomial ones (`9 - x1^2` is not seen to hold `3 - x1`), and a sum that vanishes at a class's
   zero only through a term that vanishes faster there (`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is
   read as a class of its own, so its sign can move alone and flip the infinity at that zero (also
-  in 0.14.7); and the evaluator reads
-  `rootn(-0, n)` as `+0` but `sinh(-0)` as `-0`, so a product whose sign moves under both can
-  flip the infinity at their common zero (also in 0.14.7).
+  in 0.14.7).
+- **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
+  `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
+  `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
+  evaluator and in the high-precision judge; `rootn` also takes torch tensors. A canonical form
+  that moves a negation under an odd root therefore keeps the infinity beside an odd factor of the
+  same zero: `1/(cbrt((3 - x1)*x2)*sinh(x2*(3 - x1)))`, `1/(cbrt(x2*(3 - x1))*(9 - x1^2))` and
+  `1/(cbrt((3 - x1)*x2)*(3*x2 - x1*x2))` are `+inf` at `x1 = 3`, like their inputs and their
+  limits, in every mode (0.14.7 gives `-inf` for the first). The scalar `abs(-0.0)` is `+0.0`, as on
+  arrays, so `1/abs(x)` is `+inf` at `-0.0` on every input path.
 - **The search factors shared content.** After its expansions the search factors what the terms
   of a sum share where that is cheaper, a bare term matching as `1*term`: `x2 + x2*x3` is
   `x2*(x3 + 1)`, so `sin(x1)*sin(rootn(sin(x1), 2))/(x1*sin(x1) + sin(x1))` is

@@ -98,8 +98,8 @@ def abs(x: float) -> float:
     if isinstance(x, complex):
         # Handle complex numbers
         return (x.real ** 2 + x.imag ** 2) ** 0.5
-    # Handle scalar case
-    return x if x >= 0 else -x  # Ensure non-negative result
+    # Handle scalar case: the magnitude, an unsigned zero at zero (abs(-0.0) = +0.0), as on arrays
+    return np.abs(x)
 
 
 def sin(x: float) -> float:
@@ -446,11 +446,24 @@ def _neginf_nonint_pow_mask(x: 'np.ndarray | float', y: 'np.ndarray | float') ->
     return np.isneginf(np.asarray(x, dtype=float)) & np.isfinite(yf) & (np.mod(yf, 1.0) != 0.0)
 
 
+def _rootn_table(xp: ModuleType, x, n):  # type: ignore[no-untyped-def]
+    """`rootn`'s table over one array namespace (``numpy`` or ``torch``), for arrays `x`, `n`."""
+    k = xp.where((n == xp.floor(n)) & xp.isfinite(n) & (n != 0), xp.abs(n), math.nan)  # |index|, NaN if invalid
+    mag = xp.abs(x) ** (1.0 / k)
+    odd = xp.remainder(k, 2) == 1
+    root = xp.where(odd, xp.copysign(mag, x), xp.where(x < 0, math.nan, mag))  # odd: signed, even: principal
+    root = xp.where(k == 1, x, root)                                           # unit index: identity, exactly
+    out = xp.where(n < 0, 1.0 / root, root)                                    # negative index: reciprocal
+    return xp.where(xp.isnan(k), math.nan, out)
+
+
 def rootn(x: float, n: float) -> float:
     """Return the real n-th root of x: IEEE-754 rootn, honest for EVERY integer index.
 
-    * n odd:  the signed root, total on R (``rootn(-8, 3) = -2``);
-    * n even: the principal root, NaN on negatives (identical to ``pow(x, 1/n)``);
+    * n odd:  the signed root, total on R (``rootn(-8, 3) = -2``) and odd at zero as
+      everywhere else (``rootn(-0, 3) = -0``, so ``rootn(-0, -3) = -inf``);
+    * n even: the principal root, NaN on negatives (identical to ``pow(x, 1/n)``),
+      ``+0`` at either zero;
     * n == 1: the identity; n negative: ``1 / rootn(x, -n)``; n == 0 or a non-integer
       index: NaN (invalid operation).
 
@@ -458,20 +471,25 @@ def rootn(x: float, n: float) -> float:
     both ``hiprec.rs`` evaluators implement the same table, pinned against each other by
     the cross-evaluator parity tests.
     """
-    n_arr = np.asarray(n, dtype=float)
-    is_int = (n_arr == np.floor(n_arr)) & np.isfinite(n_arr)
+    global _torch_module, _torch_checked
+    if type(x).__module__ == 'torch' and type(x).__name__ == 'Tensor':
+        if not _torch_checked:
+            try:
+                import torch  # type:ignore
+                _torch_module = torch
+            except ImportError:
+                _torch_module = None
+            _torch_checked = True
+
+        if _torch_module is None:
+            raise ImportError("PyTorch is required to process torch tensors")
+
+        # Handle torch tensors
+        xt = x if x.is_floating_point() else x.to(_torch_module.get_default_dtype())  # type: ignore[attr-defined]
+        nt = _torch_module.as_tensor(n, dtype=xt.dtype, device=xt.device)  # type: ignore[union-attr]
+        return _rootn_table(_torch_module, xt, nt)
     with np.errstate(invalid='ignore', divide='ignore'):
-        xa = np.asarray(x, dtype=float)
-        k = np.where(is_int & (n_arr != 0), np.abs(n_arr), np.nan)  # |index|, NaN if invalid
-        r = 1.0 / k
-        odd = np.mod(k, 2) == 1
-        mag = np.abs(xa) ** r
-        signed = np.where(xa < 0, -mag, mag)                    # odd: sign-preserving
-        principal = np.where(xa < 0, np.nan, mag)               # even: NaN on negatives
-        root = np.where(odd, signed, principal)
-        root = np.where(k == 1, xa, root)                       # unit index: identity, exactly
-        out = np.where(n_arr < 0, 1.0 / root, root)             # negative index: reciprocal
-        out = np.where(np.isnan(k), np.nan, out)
+        out = _rootn_table(np, np.asarray(x, dtype=float), np.asarray(n, dtype=float))
     if isinstance(x, np.ndarray) or isinstance(n, np.ndarray):
         return out
     return float(out)

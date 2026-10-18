@@ -1139,7 +1139,7 @@ fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<
         "/" => Some(ct_div(a, b, p)),
         "pow" => ct_pow(a, b, ctx),
         // `rootn(x, n)`: IEEE-754 rootn, honest for every integer index.
-        "rootn" => Some(rootn_hiprec(a, b, p, &mut ctx.cc)),
+        "rootn" => Some(rootn_hiprec(a, b, p, &mut ctx.cc, ct_div)),
         _ => return None,
     };
     Some(v)
@@ -1178,18 +1178,28 @@ fn integer_index(b: &BigFloat, p: usize) -> Option<i64> {
 }
 
 /// IEEE-754 `rootn(x, n)`, honest for every integer index:
-/// odd index = the signed root, even = the principal root (NaN on negatives), n == 1 =
-/// the identity, n < 0 = the reciprocal, n == 0 or non-integer = NaN. One semantics,
-/// five surfaces (see `operators.py::rootn` and `numeric.rs::rootn_f64`).
-fn rootn_hiprec(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFloat {
+/// odd index = the signed root (odd at zero too: the root of `-0` is `-0`), even = the
+/// principal root (NaN on negatives, `+0` at either zero), n == 1 = the identity, n < 0 =
+/// the reciprocal under the calling evaluator's own division `div` (the contract's one
+/// zero, or IEEE's signed one), n == 0 or non-integer = NaN. One semantics, five surfaces
+/// (see `operators.py::rootn` and `numeric.rs::rootn_f64`).
+fn rootn_hiprec(
+    a: &BigFloat,
+    b: &BigFloat,
+    p: usize,
+    cc: &mut Consts,
+    div: fn(&BigFloat, &BigFloat, usize) -> BigFloat,
+) -> BigFloat {
     let Some(n) = integer_index(b, p) else {
         return NAN;
     };
     let k = n.unsigned_abs();
     let root = if a.is_nan() {
         NAN
-    } else if k == 1 || a.is_zero() {
-        a.clone() // index 1 is the identity; and the root of 0 is 0 for every index magnitude
+    } else if k == 1 || (a.is_zero() && k % 2 == 1) {
+        a.clone() // index 1 is the identity, and an odd root keeps the sign of zero
+    } else if a.is_zero() {
+        small_int(0, p) // an even root of either zero is +0
     } else if a.is_inf() {
         if !a.is_negative() || k % 2 == 1 {
             a.clone() // +inf always, -inf under odd roots: fixed points
@@ -1208,7 +1218,7 @@ fn rootn_hiprec(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFlo
         if root.is_nan() {
             return NAN;
         }
-        ct_div(&one(p), &root, p)
+        div(&one(p), &root, p)
     } else {
         root
     }
@@ -1874,6 +1884,30 @@ fn apply_unary(name: &str, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<Bi
     Some(v)
 }
 
+/// IEEE `x / y`: a zero divisor gives the signed infinity (the ZERO's sign participates) and
+/// an infinite one the signed zero (astro-float's is unsigned); `0/0` and `inf/inf` are NaN.
+fn ieee_div(a: &BigFloat, b: &BigFloat, p: usize) -> BigFloat {
+    let negative = a.is_negative() != b.is_negative();
+    if b.is_zero() {
+        if a.is_zero() {
+            NAN
+        } else if negative {
+            INF_NEG
+        } else {
+            INF_POS
+        }
+    } else if b.is_inf() && !a.is_inf() && !a.is_nan() {
+        let zero = small_int(0, p);
+        if negative {
+            zero.neg()
+        } else {
+            zero
+        }
+    } else {
+        a.div(b, p, RM)
+    }
+}
+
 fn apply_binary(
     name: &str,
     a: &BigFloat,
@@ -1888,23 +1922,7 @@ fn apply_binary(
         "+" => a.add(b, p, RM),
         "-" => a.sub(b, p, RM),
         "*" => a.mul(b, p, RM),
-        // IEEE `x / y`: zero divisor -> signed inf (the ZERO's sign participates); 0/0 -> nan.
-        "/" => {
-            if b.is_zero() {
-                if a.is_zero() {
-                    NAN
-                } else {
-                    let neg = a.is_negative() != b.is_negative();
-                    if neg {
-                        INF_NEG
-                    } else {
-                        INF_POS
-                    }
-                }
-            } else {
-                a.div(b, p, RM)
-            }
-        }
+        "/" => ieee_div(a, b, p),
         // C pow: negative base with a non-integer exponent -> NaN; 0^negative -> +inf;
         // 0^0 -> 1 (C99). Everything else goes through `pow_pos_base` (exp(b*ln(a)) at
         // explicit precision) -- NOT astro-float's pow, whose internal correct-rounding
@@ -1939,7 +1957,7 @@ fn apply_binary(
             }
         }
         // `rootn(x, n)`: IEEE-754 rootn, same table as the ct_binary arm.
-        "rootn" => rootn_hiprec(a, b, p, cc),
+        "rootn" => rootn_hiprec(a, b, p, cc, ieee_div),
         _ => return None,
     };
     Some(v)
@@ -1967,10 +1985,11 @@ mod tests {
         let p = 96;
         let mut cc = Consts::new().unwrap();
         let f64_rootn = crate::numeric::binary_fn("rootn").expect("f64 arm exists");
-        let xs: [f64; 10] = [
+        let xs: [f64; 11] = [
             -8.0,
             -2.0,
             -0.5,
+            -0.0,
             0.0,
             0.5,
             2.0,
@@ -1995,6 +2014,10 @@ mod tests {
             if got.is_inf() {
                 return false;
             }
+            if want == 0.0 {
+                // `-0.0 == 0.0`: a zero agrees only with the zero of its sign
+                return got.is_zero() && want.is_sign_negative() == got.is_negative();
+            }
             let w = bf(want, p);
             let diff = got.sub(&w, p, RM).abs();
             let tol = bf(want.abs().max(1e-300) * 1e-12, p);
@@ -2003,7 +2026,13 @@ mod tests {
         for &x in &xs {
             for &n in &ns {
                 let want = f64_rootn(x, n);
-                let got = rootn_hiprec(&bf(x, p), &bf(n, p), p, &mut cc);
+                // `from_f64` reads either zero as `+0`: a `-0` input is the negated zero
+                let lifted = if x == 0.0 && x.is_sign_negative() {
+                    bf(0.0, p).neg()
+                } else {
+                    bf(x, p)
+                };
+                let got = rootn_hiprec(&lifted, &bf(n, p), p, &mut cc, ieee_div);
                 assert!(
                     agree(want, &got, p),
                     "rootn({x}, {n}): f64 gives {want}, hiprec disagrees"
