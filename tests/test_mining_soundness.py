@@ -768,7 +768,7 @@ class TestCertifyRules:
 
     def test_certifies_true_identity_rejects_false_and_verifies_hint(self, engine) -> None:
         proposals = [
-            ["neg", "tanh", "neg", "x0"],                            # -tanh(-a) = tanh a
+            ["exp", "neg", "x0"],                                    # exp(-a) = 1/exp(a)
             ["+", "exp", "x0", "cosh", "x1"],                        # no shorter equivalent -> reject
             ["*", "exp", "x0", "*", "exp", "x1", "exp", "x2"],       # minimal form is 6 tokens
             ["log", "*", "exp", "x0", "exp", "x1"],                  # log(e^a e^b) -> a+b: TRUE, unrealised
@@ -776,7 +776,7 @@ class TestCertifyRules:
         hints = [None, None, ["exp", "+", "x0", "+", "x1", "x2"], None]
         out = engine.certify_rules(proposals, hints, dummy_variables=3, X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
-        assert by_src[tuple(proposals[0])] == (("tanh", "x0"), "minimal")
+        assert by_src[tuple(proposals[0])] == (("inv", "exp", "x0"), "minimal")
         assert tuple(proposals[1]) not in by_src
         assert by_src[tuple(proposals[2])] == (("exp", "+", "x0", "+", "x1", "x2"), "verified")
         # `log(e^a e^b) -> a+b` is exactly true on R and NOT realised by the shipped f64
@@ -817,18 +817,19 @@ class TestCertifyRules:
         the same call must still certify: the impostor's absence is then the GATE's
         verdict, not an upstream refusal."""
         out = engine.certify_rules(
-            [["tanh", "exp", "np.e"], ["neg", "tanh", "neg", "x0"]],
+            [["tanh", "exp", "np.e"], ["exp", "neg", "x0"]],
             [["1"], None],
             dummy_variables=2, extra_internal_terms=["np.e"], X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
         # The control must be a true identity the deployed engine ALSO performs, or its
         # own refusal would mask the gate's verdict. `log(e^a e^b) -> a+b` used to sit
         # here and no longer qualifies: true on R, but ENGINE-MISALIGN past exp's
-        # overflow (F95). `-tanh(-a) = tanh a` is true and exactly realised -- tanh is
-        # odd in f64 -- and a rule's to perform: the construction keeps `-tanh(-a)`, while
-        # it files `(tanh -a)^2` as `(tanh a)^2` itself, a source certification skips.
-        assert by_src.get(("neg", "tanh", "neg", "x0")) \
-            == (("tanh", "x0"), "minimal"), "control identity failed upstream"
+        # overflow (F95). `-tanh(-a) = tanh a` followed it until the sign of an odd function
+        # became the construction's own decision (a source certification skips).
+        # `exp(-a) = 1/exp(a)` is true, certified, and a rule's to perform: the two cost the
+        # same and the construction keeps either spelling.
+        assert by_src.get(("exp", "neg", "x0")) \
+            == (("inv", "exp", "x0"), "minimal"), "control identity failed upstream"
         assert ("tanh", "exp", "np.e") not in by_src, \
             f"a symbolically-KILLed pair was certified: {out}"
 

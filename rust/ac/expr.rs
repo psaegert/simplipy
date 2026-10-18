@@ -1499,15 +1499,17 @@ impl<'a> Cx<'a> {
                 self.sign_blind_rep(b).map(|s| pow(s, (**ex).clone(), self))
             }
             // A product's sign is erased here too, so each of its sign-trade sites takes its
-            // cheaper spelling whatever sign that leaves: `|333 atan(u - 0.66)^5|` is
-            // `|333 atan(0.66 - u)^5|`, a sign bit cheaper, where the product alone keeps its
-            // coefficient positive on the tie (a sign bit for nothing).
+            // cheaper spelling whatever sign that leaves, and on a tie the one with fewer signs
+            // (`tie_cmp`): `|333 atan(u - 0.66)^5|` is `|333 atan(0.66 - u)^5|`, a sign bit
+            // cheaper, where the product alone keeps its coefficient positive on the tie (a sign
+            // bit for nothing), and `cos(x1*rootn(-x2*x3, 3))` is `cos(x1*rootn(x2*x3, 3))`.
             Ex::Mul(v) => {
                 let mut out = v.clone();
                 let mut moved = false;
                 for f in out.iter_mut() {
                     if let Some(nf) = sign_trade_flip(f, self) {
-                        if complexity(&nf, self.view) < complexity(f, self.view) {
+                        let (mn, mf) = (complexity(&nf, self.view), complexity(f, self.view));
+                        if mn < mf || (mn == mf && tie_cmp(&nf, f, self.view) == Ordering::Less) {
                             *f = nf;
                             moved = true;
                         }
@@ -1839,32 +1841,17 @@ fn term_split(e: Ex, view: &TokenView) -> (Rat, Ex) {
             }
             return false;
         }
-        // An odd function or odd root of a negative literal multiple: the multiple's sign.
-        if odd_of_literal_multiple(e, view).is_some_and(|r| r.is_negative()) {
-            if let Ex::Fun(_, args) = e {
-                if let Ex::Mul(v) = &mut args[0] {
-                    let Ex::Num(r) = &v[0] else { return false };
-                    if let Some(p) = r.checked_neg() {
-                        v[0] = Ex::Num(p);
-                        return true;
-                    }
+        // An odd head of a negative literal multiple: the multiple's sign (`positive_head`).
+        match odd_of_literal_multiple(e, view) {
+            Some(r) if r.is_negative() => match positive_head(e, view) {
+                Some(p) => {
+                    *e = p;
+                    true
                 }
-            }
-            return false;
+                None => false,
+            },
+            _ => false,
         }
-        if let Ex::Fun(f, args) = e {
-            if args.len() == 1 && odd_fun(view, *f) {
-                if let Ex::Num(r) = &args[0] {
-                    if r.is_negative() {
-                        if let Some(p) = r.checked_neg() {
-                            *e = Ex::Fun(*f, vec![Ex::Num(p)]);
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        false
     }
     let (c, key) = match e {
         Ex::Mul(v) => match v.first() {
@@ -2135,7 +2122,7 @@ fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
             let Some(ClassBase {
                 arg: ClassArg::Sum(ts),
                 ..
-            }) = class_base(b, cx)
+            }) = class_base(b, cx.view)
             else {
                 return None;
             };
@@ -2163,7 +2150,7 @@ fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
             }
         }
         Ex::Fun(fk, args) => {
-            let ClassBase { head: Some(_), arg } = class_base(b, cx)? else {
+            let ClassBase { head: Some(_), arg } = class_base(b, cx.view)? else {
                 return None;
             };
             let (a, s) = match (orient_base(&args[0], cx, turns), arg) {
@@ -2238,7 +2225,7 @@ fn carries_class(f: &Ex, cx: &Cx) -> bool {
     match f {
         Ex::Pow(b, q) => matches!(&**q, Ex::Num(r) if r.is_integer()) && carries_class(b, cx),
         Ex::Mul(fs) => fs.iter().any(|g| carries_class(g, cx)),
-        f => class_base(f, cx).is_some(),
+        f => class_base(f, cx.view).is_some(),
     }
 }
 
@@ -2250,7 +2237,7 @@ fn carried_classes(f: &Ex, cx: &Cx, out: &mut Vec<Ex>) {
             carried_classes(b, cx, out)
         }
         Ex::Mul(fs) => fs.iter().for_each(|g| carried_classes(g, cx, out)),
-        f => match class_base(f, cx).map(|c| c.arg) {
+        f => match class_base(f, cx.view).map(|c| c.arg) {
             Some(ClassArg::Sum(ts)) => {
                 if let Some((k, _, _)) = class_of(ts, cx) {
                     if !out.contains(&k) {
@@ -2291,7 +2278,7 @@ fn positive_multiple(a: &Ex) -> Option<Ex> {
 /// A term with each odd head of a negative literal multiple (possibly under an integer power)
 /// turned positive (`positive_head`), the signs moved into the term's coefficient. Raw.
 fn odd_signs_out(t: &Ex, cx: &Cx) -> Ex {
-    let flip_fun = |f: &Ex| positive_head(f, cx);
+    let flip_fun = |f: &Ex| positive_head(f, cx.view);
     let (mut c, factors): (Rat, Vec<Ex>) = match t {
         Ex::Mul(fs) => match fs.first() {
             Some(Ex::Num(r)) => (r.clone(), fs[1..].to_vec()),
@@ -2450,37 +2437,19 @@ pub(crate) fn odd_fun(view: &TokenView, f: Tok) -> bool {
     ODD.iter().any(|s| view.tok_is(f, s))
 }
 
-/// The literal of an odd function or odd root of a literal multiple: `f(c * u..)` with `c` a
-/// literal other than 0, 1 and -1, `f` odd (`odd_fun`) or `rootn` of an odd index of at least 3;
-/// never `f(-S)` for a sum `S`. Such a function owns an adjacent sign, as an odd function of a
-/// literal does (`-1 * sin(2 x)` is `sin(-2 x)`, `-5 * rootn(3 x, 5)` is `5 * rootn(-3 x, 5)`):
-/// `f(-c u) = -f(c u)` exactly, so the sign moves between the coefficient and the literal, and one
-/// owner (`sign_trade_flip`) prices both spellings. Otherwise a sum holding `rootn(-c u, 5)` would
-/// be priced in its other orientation as `-rootn(-c u, 5)`, the sign left outside, and keep the
-/// dearer orientation. A negation (`c = -1`) is none: the sign-pull rules keep `f(-u)` with the
-/// sign inside. An odd function of a negated sum is none either: it and the function of the sum
-/// are one class, which a product holding both decides (`collect_opposite_sums`).
-fn odd_of_literal_multiple<'a>(e: &'a Ex, view: &TokenView) -> Option<&'a Rat> {
-    let Ex::Fun(f, args) = e else { return None };
-    let odd = (args.len() == 1 && odd_fun(view, *f))
-        || (args.len() == 2
-            && view.tok_is(*f, "rootn")
-            && matches!(&args[1], Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less));
-    if !odd {
-        return None;
-    }
-    match &args[0] {
-        // A negated sum is not one: an odd function of a sum and of its negation are one class
-        // the product decides (`collect_opposite_sums`).
-        Ex::Mul(v)
-            if v.len() == 2 && matches!(v[1], Ex::Add(_)) && v[0] == Ex::Num(Rat::NEG_ONE) =>
-        {
-            None
-        }
-        Ex::Mul(v) => match v.first() {
-            Some(Ex::Num(r)) if !r.is_zero() && !r.is_one() && *r != Rat::NEG_ONE => Some(r),
-            _ => None,
-        },
+/// The literal of an odd head of a literal multiple (`class_base`'s `{B, -B}` over a multiple):
+/// `f(c u)` with `f` odd (`odd_fun`) or `rootn` of an odd index of at least 3, `c` the multiple's
+/// literal (`multiple_literal`: 1 for a bare `u`, -1 for a negation). Such a head is a sign-trade
+/// site: `f(-c u) = -f(c u)` exactly, so the sign moves between the product's coefficient and the
+/// argument, and one owner (`sign_trade_flip`, `sign_place`) prices both spellings, the tie going
+/// by the one sign key (`sign_key`). An odd head of a sum is a site of its own kind (its sum
+/// flips).
+fn odd_of_literal_multiple(e: &Ex, view: &TokenView) -> Option<Rat> {
+    match class_base(e, view)? {
+        ClassBase {
+            head: Some(_),
+            arg: ClassArg::Multiple(m),
+        } => multiple_literal(m),
         _ => None,
     }
 }
@@ -2493,7 +2462,7 @@ fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
     let may_be_site = |f: &Ex| match f {
         Ex::Add(_) => true,
         Ex::Pow(b, _) => matches!(**b, Ex::Add(_) | Ex::Fun(..)),
-        Ex::Fun(_, args) => matches!(args.first(), Some(Ex::Add(_) | Ex::Num(_) | Ex::Mul(_))),
+        Ex::Fun(_, args) => !args.is_empty(),
         _ => false,
     };
     match key {
@@ -3421,9 +3390,9 @@ fn divide_terms(terms: &[Ex], u: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
 /// `Const` terms are sign-free (negation re-fits, `term_join` absorbs the sign) and compare
 /// equal at their positions; infinities carry their sign. `false` (keep the original
 /// orientation, extraction-free) on any negation overflow.
-/// What decides an EXACT mu tie between the two orientations (owner ruling A,
-/// 2026-08-08): at a SIGN-TRADE site one spelling is distinguished -- bare / positive
-/// coefficient -- and it wins the tie, so `Keep` (the current spelling is the
+/// What decides an EXACT mu tie between the two orientations that the sign key (`sign_key`)
+/// leaves tied: at a SIGN-TRADE site one spelling is distinguished -- bare / positive
+/// coefficient -- and it wins, so `Keep` (the current spelling is the
 /// distinguished one) and `Flip` (the flipped spelling is) resolve structurally. `Lex`
 /// survives ONLY for free-orientation sites (even carriers, wrapper delta 0), where
 /// both spellings are bare and no structural member is distinguished -- there the
@@ -3465,7 +3434,31 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper_sign_delta: i128, tie: Tie, cx
     if delta != 0 {
         return delta < 0;
     }
-    // EXACT mu tie -> the caller's structural policy (owner ruling A). Only `Lex` --
+    // EXACT mu tie -> the one sign key (`sign_key`): fewer signs, then outer ones. The flipped
+    // spelling carries the wrapper's sign (`-1 x Add` for a content-1 sum, `-g x Add` beside a
+    // current `g x Add`), except at the free-orientation sites (`Lex`: an even power's base),
+    // where neither spelling has one.
+    let terms_key = |ts: &[Ex], depth: u32| {
+        ts.iter()
+            .map(|t| sign_key(t, cx.view))
+            .fold((0u32, 0u32), |a, (c, s)| (a.0 + c, a.1 + s + c * depth))
+    };
+    let (current, flip) = match tie {
+        Tie::Lex => (terms_key(terms, 1), terms_key(&flipped, 1)),
+        _ => {
+            let depth = if wrapper_sign_delta == mu_mul() as i128 {
+                1
+            } else {
+                2
+            };
+            let (c, s) = terms_key(&flipped, 2);
+            (terms_key(terms, depth), (c + 1, s + 1))
+        }
+    };
+    if current != flip {
+        return flip < current;
+    }
+    // Equal signs too -> the caller's structural policy (owner ruling A). Only `Lex` --
     // the free-orientation sites, where neither spelling is structurally
     // distinguished -- still runs the historical rule: compare the sorted coefficient
     // sequences lexicographically and prefer the larger. Total and a function of the
@@ -4329,10 +4322,8 @@ fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
     // spelling and prices it with the real mu -- so the priced spelling IS the built
     // spelling (the row-120 law: any gap between the two re-opens construction-history
     // dependence), and the decision is a function of the ORBIT, not of the entry
-    // spelling. Ties: the positive-coefficient spelling wins (ruling A -- a leading minus
-    // is only ever minted when strictly cheaper, and what the user typed survives
-    // whenever prices tie); residual equal-mu ties fall to a fixed order that is a
-    // function of the orbit. A negate_term overflow
+    // spelling. Ties go to the sign key (`sign_key`: fewest signs, then the outer ones);
+    // residual ties fall to a fixed order that is a function of the orbit. A negate_term overflow
     // refusal keeps the entry spelling, whose display is injective. This arm
     // SUBSUMES the former lone `-1 x Add` distribution arm (its case is n=1 with
     // out.len() == 1; the mu comparison and the A-tie give the identical decision).
@@ -4417,8 +4408,7 @@ enum HostKey {
 /// between the integer power and the fractional powers of its sign) is priced as the whole
 /// product it builds -- each class collected under the context's own licences, the rest of the
 /// bag beside them, the sign placed by `finish_product` -- and the cheapest wins; a price tie
-/// goes by `sign_place`'s own order (a non-negative coefficient, then the structurally smaller
-/// product). The classes are decided together while their placements combine to at most
+/// goes by `sign_place`'s own order (the sign key, then the structurally smaller product). The classes are decided together while their placements combine to at most
 /// `JOINT_LIMIT` products, priced in the order of a lower bound on their prices, else one at a
 /// time, from a start the tables decide, until none moves; a class with a large total offers its
 /// two extreme placements and the one it holds. A product about to be inverted is built without
@@ -4556,13 +4546,8 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
     // Cheaper than `(q, m)`: the price, then `sign_place`'s own tie order (a non-negative
     // coefficient, then the structurally smaller product), so a product the sign owner alone
     // would build from either spelling is the one chosen.
-    let negative = |p: &Ex| match p {
-        Ex::Num(r) => r.is_negative(),
-        Ex::Mul(v) => v.iter().any(|f| matches!(f, Ex::Num(r) if r.is_negative())),
-        _ => false,
-    };
     let better = |mu: u64, p: &Ex, q: &Ex, m: u64| {
-        mu < m || (mu == m && (negative(p), cmp_ex(p, q, cx.view)) < (negative(q), Ordering::Equal))
+        mu < m || (mu == m && tie_cmp(p, q, cx.view) == Ordering::Less)
     };
     // A lower bound on a candidate's price, from its factors alone: `complexity` prices a product
     // as its node, its members and its coefficient, and the sign placement can only choose each
@@ -4895,7 +4880,7 @@ impl<'a> ClassArg<'a> {
     }
 }
 
-fn class_base<'a>(b: &'a Ex, cx: &Cx) -> Option<ClassBase<'a>> {
+fn class_base<'a>(b: &'a Ex, view: &TokenView) -> Option<ClassBase<'a>> {
     let sum = |ts: &'a [Ex]| {
         (!ts.iter()
             .any(|t| t.contains_const() || t.contains_infinity() || term_absorbs_negation(t)))
@@ -4908,9 +4893,9 @@ fn class_base<'a>(b: &'a Ex, cx: &Cx) -> Option<ClassBase<'a>> {
         }),
         Ex::Fun(op, a) => {
             let index = match a.as_slice() {
-                [_] if odd_fun(cx.view, *op) => None,
+                [_] if odd_fun(view, *op) => None,
                 [_, k]
-                    if cx.view.tok_is(*op, "rootn")
+                    if view.tok_is(*op, "rootn")
                         && matches!(k, Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less) =>
                 {
                     Some(k)
@@ -4933,6 +4918,52 @@ fn class_base<'a>(b: &'a Ex, cx: &Cx) -> Option<ClassBase<'a>> {
     }
 }
 
+/// THE SIGN TIE KEY (one key after the price, for every placement tie: the sign trade, the product
+/// table, the reduction ordering): fewest signs, then outermost, then the structural order
+/// (`tie_cmp`). A sign is a negative number -- a product's or a sum term's negative coefficient (a
+/// negation is the coefficient -1) or a negative literal argument. A literal exponent is not a
+/// sign (a negative one is a reciprocal, written as a division), nor is an infinity's sign, which
+/// is its value (`-inf` and `log(0)` are one constant, not a placement). A sign inside a ground
+/// argument of a function (no variable, wildcard or `<constant>`) belongs to that constant and is
+/// not counted, so a constant keeps its sign on its literal (`sin(-2)` stays, `-sin(2)` is filed
+/// as `sin(-2)`). The key is the number of the counted signs and the sum of their depths (the
+/// root at depth 0): fewer, then outer.
+pub(crate) fn sign_key(e: &Ex, view: &TokenView) -> (u32, u32) {
+    fn walk(e: &Ex, depth: u32, view: &TokenView, acc: &mut (u32, u32)) {
+        match e {
+            Ex::Num(r) if r.is_negative() => {
+                acc.0 += 1;
+                acc.1 += depth;
+            }
+            Ex::Add(v) | Ex::Mul(v) => v.iter().for_each(|x| walk(x, depth + 1, view, acc)),
+            Ex::Pow(b, q) => {
+                walk(b, depth + 1, view, acc);
+                if !matches!(**q, Ex::Num(_)) {
+                    walk(q, depth + 1, view, acc);
+                }
+            }
+            Ex::Fun(_, args) => {
+                for a in args {
+                    if a.has_measure_space(view) || a.contains_wildcard(view) {
+                        walk(a, depth + 1, view, acc);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut acc = (0, 0);
+    walk(e, 0, view, &mut acc);
+    acc
+}
+
+/// The order of two spellings of an equal price (`sign_key`, then `cmp_ex`).
+pub(crate) fn tie_cmp(a: &Ex, b: &Ex, view: &TokenView) -> Ordering {
+    sign_key(a, view)
+        .cmp(&sign_key(b, view))
+        .then_with(|| cmp_ex(a, b, view))
+}
+
 /// The literal of a literal multiple `c u`: `c`, 1 for a bare `u`; `None` for a sum, a zero, and an
 /// argument holding a `Const` or an infinity, whose signs have their own owners.
 fn multiple_literal(m: &Ex) -> Option<Rat> {
@@ -4952,11 +4983,11 @@ fn multiple_literal(m: &Ex) -> Option<Rat> {
 
 /// `b` over the positive literal of its class's argument, where `b` is an odd head over a literal
 /// multiple with a negative literal (`sin(-2 x1)` is `-sin(2 x1)`); raw.
-fn positive_head(b: &Ex, cx: &Cx) -> Option<Ex> {
+fn positive_head(b: &Ex, view: &TokenView) -> Option<Ex> {
     let ClassBase {
         head: Some(_),
         arg: ClassArg::Multiple(m),
-    } = class_base(b, cx)?
+    } = class_base(b, view)?
     else {
         return None;
     };
@@ -4985,7 +5016,7 @@ fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
         }
         other => (other, Some(Rat::ONE)),
     };
-    let ClassBase { head, arg } = class_base(base, cx)?;
+    let ClassBase { head, arg } = class_base(base, cx.view)?;
     Some(ClassRead {
         head,
         terms: arg.terms(),
@@ -5003,12 +5034,12 @@ fn site_multiple(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     let ClassBase {
         head: Some(_),
         arg: ClassArg::Multiple(arg),
-    } = class_base(m, cx)?
+    } = class_base(m, cx.view)?
     else {
         return None;
     };
     if multiple_literal(arg)?.is_negative() {
-        Some((positive_head(m, cx)?, true))
+        Some((positive_head(m, cx.view)?, true))
     } else {
         Some((m.clone(), false))
     }
@@ -6246,13 +6277,8 @@ fn opposite_terms(x: &Ex, y: &Ex, view: &TokenView) -> bool {
             }
             // An odd function of a literal carries its sign inside (`sin(-2)`): only
             // `term_split`'s sign-normalized keys can match then.
-            let literal_odd = |k: &[Ex]| {
-                k.iter().any(|f| {
-                    matches!(f, Ex::Fun(op, a)
-                        if a.len() == 1 && matches!(a[0], Ex::Num(_)) && odd_fun(view, *op))
-                        || odd_of_literal_multiple(f, view).is_some()
-                })
-            };
+            let literal_odd =
+                |k: &[Ex]| k.iter().any(|f| odd_of_literal_multiple(f, view).is_some());
             if !literal_odd(kx) && !literal_odd(ky) {
                 return false;
             }
@@ -6639,6 +6665,8 @@ struct SiteOption {
     cost: u64,
     odd: bool,
     key: Vec<Ex>,
+    /// The signs of its sites as they then stand (`sign_key`, summed).
+    signs: (u32, u32),
 }
 
 impl SignOrbit<'_> {
@@ -6757,11 +6785,16 @@ impl SignOrbit<'_> {
                             .map(|(bit, _)| state(*bit, flips.contains(bit)).clone())
                             .collect();
                         key.sort_by(|a, b| cmp_ex(a, b, view));
+                        let signs = key
+                            .iter()
+                            .map(|f| sign_key(f, view))
+                            .fold((0, 0), |a, k| (a.0 + k.0, a.1 + k.1));
                         Some(SiteOption {
                             odd: flips.len() % 2 == 1,
                             flips,
                             cost,
                             key,
+                            signs,
                         })
                     })
                     .collect()
@@ -6880,6 +6913,7 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
             cost: 0,
             odd: false,
             key: Vec::new(),
+            signs: (0, 0),
         }];
         for &g in gs {
             opts = opts
@@ -6895,6 +6929,7 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
                             cost: a.cost.saturating_add(b.cost),
                             odd: a.odd ^ b.odd,
                             key,
+                            signs: (a.signs.0 + b.signs.0, a.signs.1 + b.signs.1),
                         }
                     })
                 })
@@ -6913,8 +6948,8 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
             return None;
         }
         opts.sort_by(|a, b| {
-            a.cost
-                .cmp(&b.cost)
+            (a.cost, a.signs)
+                .cmp(&(b.cost, b.signs))
                 .then_with(|| cmp_vec(&a.key, &b.key, view))
         });
         let rank = gs
@@ -6933,12 +6968,18 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
     // structurally smallest).
     let best: Vec<&SiteOption> = decided.iter().map(|(_, opts)| &opts[0]).collect();
     let parity = best.iter().fold(false, |p, opt| p ^ opt.odd);
-    let switches: Vec<(u64, usize, &SiteOption)> = decided
+    type Delta = (u64, i64, i64);
+    let switches: Vec<(Delta, usize, &SiteOption)> = decided
         .iter()
         .enumerate()
         .filter_map(|(i, (_, opts))| {
             let other = opts.iter().find(|opt| opt.odd != opts[0].odd)?;
-            Some((other.cost - opts[0].cost, i, other))
+            let delta = (
+                other.cost - opts[0].cost,
+                i64::from(other.signs.0) - i64::from(opts[0].signs.0),
+                i64::from(other.signs.1) - i64::from(opts[0].signs.1),
+            );
+            Some((delta, i, other))
         })
         .collect();
     let least = switches.iter().map(|(delta, _, _)| *delta).min();
@@ -6951,7 +6992,7 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
         }
         o.candidate(&flipped, cx)
     };
-    let mut chosen: Option<(u64, bool, Ex)> = None;
+    let mut chosen: Option<(u64, Ex)> = None;
     for target in [false, true] {
         let built = if target == parity {
             build(&best)
@@ -6964,25 +7005,23 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
                     pick[*i] = other;
                     build(&pick)
                 })
-                .min_by(|a, b| cmp_ex(&a.0, &b.0, view))
+                .min_by(|a, b| tie_cmp(&a.0, &b.0, view))
         };
-        let Some((cand, negative)) = built else {
+        let Some((cand, _)) = built else {
             continue;
         };
         let mu = complexity(&cand, view);
         let better = match &chosen {
             None => true,
-            Some((bmu, bneg, bex)) => {
-                (mu, negative) < (*bmu, *bneg)
-                    || ((mu, negative) == (*bmu, *bneg)
-                        && cmp_ex(&cand, bex, view) == Ordering::Less)
+            Some((bmu, bex)) => {
+                mu < *bmu || (mu == *bmu && tie_cmp(&cand, bex, view) == Ordering::Less)
             }
         };
         if better {
-            chosen = Some((mu, negative, cand));
+            chosen = Some((mu, cand));
         }
     }
-    chosen.map(|(_, _, e)| e)
+    chosen.map(|(_, e)| e)
 }
 
 /// The debug build's cross-check of `sign_place_groups`: the cheapest price over every
@@ -7194,12 +7233,14 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
         Ex::Pow(b, e) if odd_power(e) => {
             let flipped = match &**b {
                 Ex::Add(ts) => flip_sum(ts).map(|s| Ex::Pow(Box::new(Ex::Add(s)), e.clone())),
-                // An odd power of an odd carrier over a sum (an odd function or an odd root of it)
-                // is one too: `f(-S)^n = -f(S)^n`; so is a positive odd power of one over a literal
-                // multiple or a negation.
+                // An odd power of an odd head of a negatable argument (`class_base`) is one too:
+                // `f(-u)^n = -f(u)^n`, for a negative `n` as for a positive one. A constant
+                // argument keeps its sign on its literal under a power (`1/tanh(-2)`), as the
+                // sign key files it.
                 Ex::Fun(_, args)
-                    if matches!(args.first(), Some(Ex::Add(_)))
-                        || (matches!(args.first(), Some(Ex::Mul(_))) && odd_int_ge3(e)) =>
+                    if args.first().is_some_and(|a| {
+                        a.has_measure_space(cx.view) || a.contains_wildcard(cx.view)
+                    }) =>
                 {
                     sign_trade_flip(b, cx).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
                 }
@@ -7237,8 +7278,7 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
                 let flipped = fun(*op, vec![Ex::Num(r.checked_neg()?)], cx);
                 matches!(flipped, Ex::Fun(..)).then_some(flipped)
             }
-            Ex::Mul(_) => literal_multiple_flip(f, cx),
-            _ => None,
+            _ => literal_multiple_flip(f, cx),
         },
         Ex::Fun(..) => literal_multiple_flip(f, cx),
         _ => None,
@@ -7252,16 +7292,20 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
 fn literal_multiple_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
     let c = odd_of_literal_multiple(f, cx.view)?;
     let Ex::Fun(op, args) = f else { return None };
-    let Ex::Mul(v) = &args[0] else { return None };
-    let mut items = Vec::with_capacity(v.len());
-    items.push(Ex::Num(c.checked_neg()?));
-    items.extend(v[1..].iter().cloned());
+    let mut items = vec![Ex::Num(c.checked_neg()?)];
+    match &args[0] {
+        Ex::Num(_) => {}
+        Ex::Mul(v) if matches!(v.first(), Some(Ex::Num(_))) => items.extend(v[1..].iter().cloned()),
+        u => items.push(u.clone()),
+    }
     let mut flipped_args = args.clone();
     flipped_args[0] = mul(items, cx);
     let flipped = fun(*op, flipped_args, cx);
-    odd_of_literal_multiple(&flipped, cx.view)
-        .is_some()
-        .then_some(flipped)
+    matches!(
+        class_base(&flipped, cx.view),
+        Some(ClassBase { head: Some(_), .. })
+    )
+    .then_some(flipped)
 }
 
 // F72 (2026-08-09): the residual equal-mu same-coefficient-sign tie in the
@@ -8177,7 +8221,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         // And over a negative literal multiple, the positive one: `sin(-2 x1)^2` is
         // `sin(2 x1)^2`, as the class {sin(2 x1), sin(-2 x1)} is written (`collect_opposite_sums`).
         if r.is_even_integer() && !r.is_zero() {
-            if let Some(Ex::Fun(fk, fa)) = positive_head(&base, cx) {
+            if let Some(Ex::Fun(fk, fa)) = positive_head(&base, cx.view) {
                 return pow(fun(fk, fa, cx), exp, cx);
             }
         }
@@ -8701,7 +8745,30 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     if args.len() == 1 && cx.view.tok_is(op, "abs") && cx.certainly_nonneg(&args[0]) {
         return args.into_iter().next().unwrap();
     }
-    Ex::Fun(op, args)
+    // THE SIGN OF AN ODD HEAD (the one tie key, `sign_key`): `f(-u)` and `-f(u)` are one value
+    // for an odd head of a negatable argument (`class_base`); the cheaper spelling stands, and on
+    // an equal price the sign stands outside (fewer signs, then the outer one). A product the head
+    // stands in decides again over all its members (`sign_place`). A constant argument keeps its
+    // sign on its literal (`sin(-2)`).
+    let head = Ex::Fun(op, args);
+    if let (Some(r), Ex::Fun(_, a)) = (odd_of_literal_multiple(&head, cx.view), &head) {
+        if r.is_negative() && (a[0].has_measure_space(cx.view) || a[0].contains_wildcard(cx.view)) {
+            if let Some(p) = positive_head(&head, cx.view) {
+                let mut v = vec![Ex::Num(Rat::NEG_ONE), p];
+                v.sort_by(|x, y| mul_factor_cmp(x, y, cx.view));
+                let outside = Ex::Mul(v);
+                let (inside_mu, outside_mu) =
+                    (complexity(&head, cx.view), complexity(&outside, cx.view));
+                if outside_mu < inside_mu
+                    || (outside_mu == inside_mu
+                        && tie_cmp(&outside, &head, cx.view) == Ordering::Less)
+                {
+                    return outside;
+                }
+            }
+        }
+    }
+    head
 }
 
 /// Full recursive re-canonicalization: rebuild `e` bottom-up through the canonical

@@ -1068,9 +1068,9 @@ impl Engine {
     /// Why NOT the public conversion API (`to_prefix`/`to_tagged`, i.e.
     /// `ac_simplify_proj(.., 0, ..)`): that runs the REWRITE PASS under the LOADED RULESET
     /// and the full certificate-carrying context. Measured, 2026-08-18: on an engine
-    /// holding acj-4-3, `to_prefix(["*","(-1)","asin","_0"])` returns `asin neg _0` --
-    /// that rule's own RHS -- while on a RULES-LESS engine over the same vocabulary it
-    /// returns `neg asin _0`. The two engines differ only in their rules, so the collapse
+    /// holding acj-4, `to_prefix(["sinh","asinh","_0"])` returns `_0` -- that rule's own
+    /// RHS -- while on a RULES-LESS engine over the same vocabulary it returns
+    /// `sinh asinh _0`. The two engines differ only in their rules, so the collapse
     /// is the rule firing, not a canon difference. A key computed that way would key a
     /// rule on its own target *while deduplicating the very artifact that causes the
     /// collapse* -- circular. This key is a pure function of the operator table: same
@@ -1768,8 +1768,8 @@ mod tests {
     /// `ac_canonical_key` must be the BARE-context canonical serialization -- literally
     /// what `AcRules::translate` builds for a rule side -- and NOT what the public
     /// `to_prefix`/`to_tagged` return: those run the rewrite pass under the LOADED
-    /// RULESET, and on this very asset `to_prefix(["*","(-1)","asin","_0"])` is already
-    /// `asin neg _0`, that rule's own RHS. The key must not depend on the ruleset it is
+    /// RULESET, and on this very asset `to_prefix(["sinh","asinh","_0"])` is already
+    /// `_0`, that rule's own RHS. The key must not depend on the ruleset it is
     /// used to deduplicate.
     #[test]
     fn ac_canonical_key_is_the_bare_translate_form() {
@@ -1785,18 +1785,18 @@ mod tests {
         );
         // ... and it is NOT the RHS: no rule fires into the key, so the LHS survives as a
         // pattern, exactly as it does at load.
-        assert_ne!(k(&["*", "(-1)", "asin", "_0"]), k(&["asin", "neg", "_0"]));
+        assert_ne!(k(&["sinh", "asinh", "_0"]), k(&["_0"]));
         // The public conversion, on this asset, DOES land on the RHS -- the wrinkle this
         // key exists to avoid (the rule fires; see the doc comment on `ac_canonical_key`).
         assert_eq!(
             e.ac_simplify_proj(
-                &t(&["*", "(-1)", "asin", "_0"]),
+                &t(&["sinh", "asinh", "_0"]),
                 1,
                 RuleMode::Default,
                 super::AcForm::Explicit
             )
             .unwrap(),
-            t(&["asin", "neg", "_0"])
+            t(&["_0"])
         );
     }
 
@@ -1868,12 +1868,13 @@ mod tests {
     // (`constructor_cannot_reach_the_probes`). That property is what makes them
     // witnesses: which FILE holds a rule is then observable in `ac_simplify` itself and
     // not merely in a count. Rules the constructors already realize (`abs asinh exp _0`
-    // is one: `exp` is positive, so the `abs` folds) fire in every mode whatever the
+    // is one: `exp` is positive, so the `abs` folds; a sign moved through an odd
+    // function is another, which the sign trade owns) fire in every mode whatever the
     // rule sets say, and would make every assertion here pass vacuously.
-    const P_ALL: (&[&str], &[&str]) = (&["*", "(-1)", "asin", "_0"], &["asin", "neg", "_0"]);
-    const P_DEFAULT: (&[&str], &[&str]) = (&["*", "(-1)", "asinh", "_0"], &["asinh", "neg", "_0"]);
-    const P_REAL: (&[&str], &[&str]) = (&["*", "(-1)", "atan", "_0"], &["atan", "neg", "_0"]);
-    const P_CORPUS: (&[&str], &[&str]) = (&["*", "(-1)", "tan", "_0"], &["tan", "neg", "_0"]);
+    const P_ALL: (&[&str], &[&str]) = (&["sin", "acos", "_0"], &["cos", "asin", "_0"]);
+    const P_DEFAULT: (&[&str], &[&str]) = (&["sinh", "abs", "_0"], &["abs", "sinh", "_0"]);
+    const P_REAL: (&[&str], &[&str]) = (&["tanh", "asinh", "_0"], &["sin", "atan", "_0"]);
+    const P_CORPUS: (&[&str], &[&str]) = (&["tanh", "abs", "_0"], &["abs", "tanh", "_0"]);
 
     /// The probe rule's LHS/RHS with `_0` instantiated at `x0`.
     fn probe(r: (&[&str], &[&str])) -> (Vec<String>, Vec<String>) {
@@ -2820,11 +2821,12 @@ mod tests {
             t(&["<mul>", "2", "x1", "<div>", "x2", "x3", "</mul>"])
         );
         // Standalone unary spellings: `neg` in a function argument, `inv` for a lone
-        // reciprocal; both parse back (liberal input).
+        // reciprocal; both parse back (liberal input). A negation leaves an odd function
+        // on an equal price (fewest signs, then the outermost).
         assert_eq!(
             e.ac_simplify(&t(&["tan", "neg", "x0"]), 48, RuleMode::Default)
                 .unwrap(),
-            t(&["tan", "neg", "x0"])
+            t(&["neg", "tan", "x0"])
         );
         assert_eq!(
             e.ac_simplify(&t(&["inv", "x0"]), 48, RuleMode::Default)
@@ -3492,7 +3494,8 @@ mod tests {
             t(&["/", "neg", "inv", "-", "x1", "5", "2"]),
             "traded sign distributes"
         );
-        // Zero-free co-factors (exp of a finite arg) have no exceptional point.
+        // Zero-free co-factors (exp of a finite arg) have no exceptional point. (`1/exp(x1)` and
+        // `exp(-x1)` cost the same; the one with fewer signs is the answer.)
         assert_eq!(
             e.ac_simplify_proj(
                 &t(&["inv", "*", "-3", "exp", "x1"]),
@@ -3501,7 +3504,7 @@ mod tests {
                 crate::engine::AcForm::Explicit
             )
             .unwrap(),
-            t(&["/", "neg", "exp", "neg", "x1", "3"]),
+            t(&["/", "neg", "inv", "exp", "x1", "3"]),
             "zero-free bag distributes"
         );
         // End-to-end: a reciprocal under `exp` distributes too (`exp(-3/x0)` is 0 at x0 = 0 in

@@ -27,6 +27,8 @@ _PRUNE_OPS = {
     "neg": {"realization": "simplipy.operators.neg", "alias": [], "inverse": "neg", "arity": 1, "precedence": 2.5, "commutative": False},
     "abs": {"realization": "np.abs", "alias": [], "inverse": None, "arity": 1, "precedence": 3, "commutative": False},
     "sin": {"realization": "np.sin", "alias": [], "inverse": "asin", "arity": 1, "precedence": 3, "commutative": False},
+    "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
+    "inv": {"realization": "simplipy.operators.inv", "alias": ["inverse"], "inverse": "inv", "arity": 1, "precedence": 4, "commutative": False},
 }
 
 _STRICT_OPS = {
@@ -53,11 +55,13 @@ class TestPruneStateCoverage:
         `prune_covered_rules` was right to prune it and the test was asserting a
         premise the engine had outgrown -- "nothing else performs the rewrite" is the
         load-bearing clause, and it stopped being true. The successor is the same KIND
-        of fact (sign placement, free under mu) still owned by a rule: the canon pulls
-        a sign INTO an odd function, `-sin(x) -> sin(-x)`, at 24,000 either way."""
-        rule = (("*", "(-1)", "sin", "?0"), ("sin", "neg", "?0"))
+        of fact (sign placement, free under mu) still owned by a rule. The sign at an odd
+        function became the canon's own decision too; the successor is `exp(-x) -> 1/exp(x)`,
+        15,000 either way, which the sign key orders (fewer signs) and no constructor
+        performs."""
+        rule = (("exp", "neg", "?0"), ("inv", "exp", "?0"))
         engine = SimpliPyEngine(operators=_PRUNE_OPS, rules=[rule])
-        assert engine.simplify(["*", "(-1)", "sin", "x0"]) == ["sin", "neg", "x0"]
+        assert engine.simplify(["exp", "neg", "x0"]) == ["inv", "exp", "x0"]
 
         assert engine.prune_covered_rules(rule_mode='default') == 0
         assert engine.simplification_rules == [rule]

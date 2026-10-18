@@ -311,7 +311,7 @@ def test_a_tagged_answer_without_a_bag_reads_back_as_itself(eng):
     ('<mul> -1 <div> x1 </mul>', '<mul> -1 <div> x1 </mul>'),
     ('<mul> -1 x3 <div> pow x1 2 x3 </mul>', '<mul> -1 <div> pow x1 2 </mul>'),
     ('<mul> x1 <div> pow x1 3 </mul>', 'inv pow x1 2'),
-    ('<mul> -1 sin x1 </mul>', 'sin neg x1'),
+    ('<mul> -1 sin x1 </mul>', 'neg sin x1'),
 ])
 def test_tagged_spellings_that_read_back(eng, src, expected):
     for effort in (0, None):

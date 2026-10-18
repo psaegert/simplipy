@@ -37,7 +37,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::tokens::{Tok, TokenView};
 
 use super::convert::from_prefix;
-use super::expr::{add, canon, cmp_ex, complexity, mul, orient_term_classes, Cx, Ex};
+use super::expr::{add, canon, complexity, mul, orient_term_classes, tie_cmp, Cx, Ex};
 use super::matcher::{match_bag_each_cls, matches_each, substitute, BagKind, Binds, MCx};
 use super::rat::Rat;
 
@@ -708,7 +708,7 @@ pub fn ordered_below(a: &Ex, b: &Ex, view: &TokenView) -> bool {
     match complexity(a, view).cmp(&complexity(b, view)) {
         std::cmp::Ordering::Less => true,
         std::cmp::Ordering::Greater => false,
-        std::cmp::Ordering::Equal => cmp_ex(a, b, view) == std::cmp::Ordering::Less,
+        std::cmp::Ordering::Equal => tie_cmp(a, b, view) == std::cmp::Ordering::Less,
     }
 }
 
@@ -723,7 +723,7 @@ fn oriented_mu(next: &Ex, node_mu: u64, node: &Ex, p: &PassCtx) -> bool {
     match complexity(next, p.cx.view).cmp(&node_mu) {
         std::cmp::Ordering::Less => true,
         std::cmp::Ordering::Greater => false,
-        std::cmp::Ordering::Equal => cmp_ex(next, node, p.cx.view) == std::cmp::Ordering::Less,
+        std::cmp::Ordering::Equal => tie_cmp(next, node, p.cx.view) == std::cmp::Ordering::Less,
     }
 }
 

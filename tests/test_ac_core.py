@@ -124,7 +124,7 @@ class TestExplicitConstants:
             == ["<mul>", "2", "x1", "<div>", "x2", "x3", "</mul>"]
         # `neg`/`inv` are the sanctioned STANDALONE unary spellings (function arguments,
         # lone reciprocals); inside bags the sections own all inverses.
-        assert engine.simplify(["tan", "neg", "x0"]) == ["tan", "neg", "x0"]
+        assert engine.simplify(["log", "neg", "x0"]) == ["log", "neg", "x0"]
         assert engine.simplify(["inv", "x0"]) == ["inv", "x0"]
         # The parser is liberal: in-bag `neg` on input maps to the section spelling
         # (constant-like terms sort LAST: x2 + 2.3, the polynomial convention).
@@ -1288,10 +1288,10 @@ class TestConstSumSignAbsorption:
     def test_mixed_sum_sign_lands_on_nonconst_term(self, engine: SimpliPyEngine) -> None:
         out = engine.simplify(engine.to_tagged(
             ['neg', '+', '*', '<constant>', 'x4', 'tanh', 'x1']))
-        # The Const term refits sign-free; tanh carries the sign (pushed inside by the
-        # odd-function sign-pull rule).
-        assert out == ['<add>', 'tanh', 'neg', 'x1',
-                       '<mul>', '<constant>', 'x4', '</mul>', '</add>'], out
+        # The Const term refits sign-free; tanh carries the sign, outside on the tie (fewest
+        # signs, then outermost).
+        assert out == ['<add>', '<mul>', '<constant>', 'x4', '</mul>',
+                       '<sub>', 'tanh', 'x1', '</add>'], out
         assert engine.simplify(list(out)) == out
 
     def test_bag_coefficient_parking_is_stable(self, engine: SimpliPyEngine) -> None:

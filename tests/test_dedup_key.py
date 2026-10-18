@@ -32,6 +32,7 @@ def vocab_engine() -> SimpliPyEngine:
 # The specimen the form audit measured: one pattern, two AC spellings, one RHS.
 ASIN_A = (('*', '(-1)', 'asin', '_0'), ('asin', 'neg', '_0'))
 ASIN_B = (('*', 'asin', '_0', '(-1)'), ('asin', 'neg', '_0'))
+LOG_A = (('*', '5', 'log', '_0'), ('log', 'pow', '_0', '5'))
 
 
 def test_ac_equivalent_spellings_collapse(vocab_engine):
@@ -76,25 +77,27 @@ def test_the_key_is_not_the_conversion_api(vocab_engine):
     reaching for them -- fails here.
     """
     require_or_skip(acj_rules_path(), 'acj-4-3 asset not staged')
+    # The specimen is a rule of the asset whose two sides are two states (the audit's own
+    # specimen, `-asin(t) -> asin(-t)`, moves a sign the canonical form now places itself).
     loaded = SimpliPyEngine.from_config(acj_config_path())
 
     # 1. Conversion is PURE: same answer with a full artifact loaded and with none,
     #    and that answer is the input's own spelling -- no rule fired.
-    assert loaded.to_prefix(list(ASIN_A[0])) == list(ASIN_A[0])
-    assert vocab_engine.to_prefix(list(ASIN_A[0])) == loaded.to_prefix(list(ASIN_A[0]))
+    assert loaded.to_prefix(list(LOG_A[0])) == list(LOG_A[0])
+    assert vocab_engine.to_prefix(list(LOG_A[0])) == loaded.to_prefix(list(LOG_A[0]))
 
     # 2. The rule itself is untouched -- it fires where rules are supposed to fire.
-    assert loaded.simplify(list(ASIN_A[0])) == list(ASIN_A[1])
+    assert loaded.simplify(list(LOG_A[0])) == list(LOG_A[1])
 
     # 3. The key is bare-context and artifact-independent.
-    key = [['neg', 'asin', '_0']]
-    assert loaded._core.ac_canonical_keys([list(ASIN_A[0])], rule_mode="default") == key
-    assert vocab_engine._core.ac_canonical_keys([list(ASIN_A[0])], rule_mode="default") == key
+    key = [['<mul>', '5', 'log', '_0', '</mul>']]
+    assert loaded._core.ac_canonical_keys([list(LOG_A[0])], rule_mode="default") == key
+    assert vocab_engine._core.ac_canonical_keys([list(LOG_A[0])], rule_mode="default") == key
 
     # 4. ... so the rule survives dedup with two DISTINCT sides, on either engine.
     for engine in (vocab_engine, loaded):
-        out = deduplicate_rules([ASIN_A], dummy_variables=[], engine=engine, rule_mode='default')
-        assert out == [ASIN_A]
+        out = deduplicate_rules([LOG_A], dummy_variables=[], engine=engine, rule_mode='default')
+        assert out == [LOG_A]
         assert out[0][0] != out[0][1]
 
 

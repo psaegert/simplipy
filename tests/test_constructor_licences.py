@@ -89,8 +89,9 @@ class TestPowDistributionLicence:
         assert eng.simplify('pow / * -1 x0 3 -1'.split()) == out
         assert eng.simplify('inv * -3 pow x0 2'.split()) == eng.simplify('neg / 1 * 3 pow x0 2'.split())
         # provably nonvanishing factors have no pole: distribution stays licensed
+        # (`1/exp(x1)` and `exp(-x1)` cost the same, and the first has fewer signs.)
         lo = check(eng, 'pow * -3 exp x1 -1'.split())
-        assert lo.count('inv') + lo.count('/') + lo.count('<div>') <= 1
+        assert lo == eng.simplify('neg / inv exp x1 3'.split()), lo
         assert eng.simplify('pow / neg x0 3 -1'.split(), mode=Mode.permissive) == \
             eng.simplify('/ -3 x0'.split(), mode=Mode.permissive)
 
@@ -854,7 +855,8 @@ class TestHalfPeriodShift:
         # left `sin(pi - t)` at the uncollapsible `neg sin neg t`. An argument already CARRYING
         # a negative annihilates the sign, so this must land on `sin t` with no rule involved.
         assert bare.simplify(['sin', '-', 'np.pi', 'x0']) == ['sin', 'x0']
-        assert bare.simplify(['tan', '-', 'np.pi', 'x0']) == ['tan', 'neg', 'x0']
+        # tan(pi - t) = tan(-t), and the sign of an odd function stands outside on the tie.
+        assert bare.simplify(['tan', '-', 'np.pi', 'x0']) == ['neg', 'tan', 'x0']
         assert bare.simplify(['cos', '-', 'np.pi', 'x0']) == ['neg', 'cos', 'x0']
 
     def test_a_coefficient_other_than_plus_minus_one_does_NOT_strip(self, bare) -> None:

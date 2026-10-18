@@ -40,17 +40,18 @@ from simplipy.verify import default_corpus
 
 MODES = ('default', 'real', 'permissive')
 
-# Four PROBE RULES taken verbatim from the shipped acj-4-3 artifact, each of which the
-# canonical CONSTRUCTORS cannot reach unaided. That property is what makes them
+# Four PROBE RULES, each of which the canonical CONSTRUCTORS cannot reach unaided (a sign
+# moved into or out of an odd function is the constructors' own decision, so no probe moves
+# one). That property is what makes them
 # witnesses: which FILE holds a rule is then observable in `simplify` itself, not merely
 # in a count. A rule the constructors already realize (`abs asinh exp _0` is one -- `exp`
 # is positive, so the `abs` folds) fires in every mode whatever the rule sets say, and
 # would make every assertion here pass vacuously. `test_probes_need_a_rule_to_fire` is
 # the control that keeps this suite honest.
-P_ALL = [['*', '(-1)', 'asin', '_0'], ['asin', 'neg', '_0']]
-P_DEFAULT = [['*', '(-1)', 'asinh', '_0'], ['asinh', 'neg', '_0']]
-P_REAL = [['*', '(-1)', 'atan', '_0'], ['atan', 'neg', '_0']]
-P_CORPUS = [['*', '(-1)', 'tan', '_0'], ['tan', 'neg', '_0']]
+P_ALL = [['sin', 'acos', '_0'], ['cos', 'asin', '_0']]
+P_DEFAULT = [['sinh', 'abs', '_0'], ['abs', 'sinh', '_0']]
+P_REAL = [['tanh', 'asinh', '_0'], ['sin', 'atan', '_0']]
+P_CORPUS = [['tanh', 'abs', '_0'], ['abs', 'tanh', '_0']]
 
 
 def instantiate(rule: list) -> tuple[list[str], list[str]]:

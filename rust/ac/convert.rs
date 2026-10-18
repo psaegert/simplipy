@@ -1632,8 +1632,8 @@ fn holds_inf_reciprocal(e: &Ex) -> bool {
 /// Display-only odd-literal sign hoist (owner ruling 2026-08-08): inside a printed sum,
 /// a term whose magnitude is an odd function of a NEGATIVE literal moves that sign out to
 /// the joiner (`- sin(-2)` becomes `+ sin(2)`), so no printed sum ever carries a double
-/// negation. Literal arguments only: a non-literal argument's sign is structure, not a
-/// spelling choice.
+/// negation. Literal arguments only: the canonical form keeps a constant's sign on its literal
+/// (`x1 + sin(-2)`, the sign key) and places every other argument's sign itself.
 fn odd_literal_hoist(neg: bool, mag: Ex, cx: &Cx) -> (bool, Ex) {
     if let Ex::Fun(f, args) = &mag {
         if args.len() == 1 && cx.is_odd_fun(*f) {
