@@ -97,12 +97,15 @@ node — and recollecting after, so the chain above, which only ever takes desce
 steps, never finds that valley. The search budget exists for exactly this class.
 
 With a budget, the chain first runs unchanged to its fixpoint. An exploration
-phase then proposes expansion moves the descent refuses — distributing a product over
-its sums, expanding an integer power of a sum — runs every candidate through the same
-certified constructors and the same descent loop, and replaces the incumbent only when
-the candidate's endpoint lands strictly below it in the engine's one reduction
-ordering. Acceptance is that ordering test and nothing else; no new measure or
-tolerance enters.
+phase then proposes the moves of the distributive law the descent refuses — distributing a
+product over its sums (or one factor into a sum factor, or the other factors over one term of
+it), expanding an integer power of a sum, and factoring what some terms of a sum share out of
+exactly those terms — runs every candidate through the same certified constructors and the
+same descent loop, and replaces the incumbent only when the candidate's endpoint lands
+strictly below it in the engine's one reduction ordering. Acceptance is that ordering test
+and nothing else; no new measure or tolerance enters. No rule states the law: factoring has
+several answers (`x1*x2 + x1*x3 + x2*x4` factors two ways) and which one pays depends on the
+whole expression, so the search owns it, in every mode alike, and `effort=0` does not factor.
 
 The budget is the `effort` parameter. The default, `effort=None`
 (`simplipy.DEFAULT_EFFORT`), searches until a round finds nothing, so a second call
@@ -122,23 +125,17 @@ inputs of flash-ansr's T8.1 draws, srbf's ground truths or its model predictions
 the predictions).
 
 A cap counts every candidate tried, refused ones included, over the whole expression, so
-the cap a search needs grows with the expression: one of srbf's model predictions needs 8
-candidates to reach its uncapped answer, a sum of two copies of it 13, of three 19 and of
-eight 39, so no fixed cap is enough. Capped at 4, the old default, 2,872 of srbf's 125,127 model
-predictions change on a second call in `f64` (2,870 to a cheaper form; `real` 3,070), because the
-first call stopped between two improvements. Uncapped, none does in `f64` or `real`, on any of
-the three sets. On the predictions in `f64` no answer is costlier than at cap 4 and 3,103 are
-cheaper. The search runs in two phases. For its first 8 candidates it is the capped default's
-breadth-first search: every candidate of every accepted state, against the best so far; on
-srbf's predictions that alone gives the final answer on 124,541 of the 125,127 in `f64`
-(124,515 in `real`). If it has not settled by then, it steps from the best answer to the first of
-its candidates that is cheaper, resuming where the last improvement happened, until a whole round
-of the best answer's candidates finds nothing; on the other 586 in `f64` that saves a median of
-56 bits. A breadth-first search re-tries every candidate of every accepted state, which on a
-large sum of terms that each need several expansions grows with the square of the number of
-terms; on 16 copies of one prediction the two-phase search takes about six times as long as
-`effort=4`, for an answer a third of the price. On srbf's predictions it takes 8% more time than
-`effort=4` in `f64` and `real`. Every internal caller that passes no
+the cap a search needs grows with the expression: one of srbf's model predictions needs 5
+candidates to reach its uncapped answer, a sum of two copies of it 10 and of six 30, so no fixed
+cap is enough. Capped at 4, the old default, 1,632 of srbf's 125,127 model predictions change on
+a second call in `f64` and in `real`, every one to a cheaper form, because the first call stopped
+between two improvements. Uncapped, none does in `f64` or `real`, on any of the three sets. On
+the predictions no answer is costlier than at cap 4 and 1,633 are cheaper. The search is one
+walk: it rebuilds each candidate of the current answer into the whole expression it makes,
+tries them cheapest first, steps to the first whose descent ends cheaper than the current
+answer, and stops when a whole round finds nothing; `effort=k` is the first `k` descents of that
+walk. On srbf's predictions it spends 15% more matcher steps and constructor calls than
+`effort=4` in `f64` (16% in `real`). Every internal caller that passes no
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
