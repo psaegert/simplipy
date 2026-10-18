@@ -2185,8 +2185,7 @@ class SimpliPyEngine:
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             certified: bool = True,
-            mode: Mode | str = Mode.f64,
-            canon: str = 'mode') -> int:
+            mode: Mode | str = Mode.f64) -> int:
         """The SEMANTIC COMPLEXITY of an expression in a mode: its price as that mode reads it.
 
         Each mode reads an expression into its own canonical form, because the modes accept
@@ -2199,12 +2198,9 @@ class SimpliPyEngine:
         simplify chain runs on), with the one codebook (the unified measure mu). It is the
         measure :meth:`simplify` descends in that mode, so for every mode
         ``complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)``. Prices in
-        different modes price different readings and are not comparable across modes.
-
-        ``canon='default'`` (deprecated) keeps the mode's parse but canonicalizes and prices
-        in ``f64``'s canon, as ``complexity()`` did before 0.15.0: identical for
-        ``mode='f64'``, and a ``FutureWarning`` for ``real`` and ``permissive``, whose own
-        answers it can price above their inputs.
+        different modes price different readings and are not comparable across modes;
+        :func:`simplipy.mining.cross_mode_complexity` prices answers of every mode on one
+        shared scale.
 
         With ``certified=False`` the expression is priced on the bare
         (certificate-less, fail-closed) canonicalization instead: still invariant
@@ -2230,20 +2226,9 @@ class SimpliPyEngine:
         # and the same reader half of the install fairness gate.
         self._ensure_mode_loaded(rule_mode)
         self._await_no_pending_push()
-        canon = str(canon).strip().lower()
-        if canon not in ('default', 'mode'):
-            raise ValueError(
-                f"unknown canon {canon!r}: expected 'mode' (the mode's own reading, the default) "
-                f"or 'default' (deprecated: the mode's parse priced in f64's canon)")
-        if canon == 'default' and rule_mode != _RULE_MODE[Mode.f64]:
-            warnings.warn(
-                "complexity(..., canon='default') prices a real or permissive expression in "
-                "f64's canon; complexity() now prices each mode in its own reading (the "
-                "default, canon='mode'), and canon='default' will be removed.",
-                FutureWarning, stacklevel=2)
         if certified:
-            return self._core.ac_complexity_certified(tokens, rule_mode, canon)
-        return self._core.ac_complexity(tokens, rule_mode, canon)
+            return self._core.ac_complexity_certified(tokens, rule_mode, 'mode')
+        return self._core.ac_complexity(tokens, rule_mode, 'mode')
 
     def _denormalize(
             self,

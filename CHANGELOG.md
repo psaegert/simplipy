@@ -149,8 +149,7 @@
   sets above, no answer of any mode prices above its input), and prices of different modes are not
   comparable. Before, `complexity()` read every expression the `f64` way, under which a `real` or
   `permissive` answer could price above its input although its own mode made it cheaper. `f64` is
-  unchanged; `canon='default'` (the mode's parse, priced in `f64`'s canon) is deprecated and warns in
-  `real` and `permissive`.
+  unchanged.
 - **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now `None`
   (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round of
   expansions finds nothing cheaper, so a second call has nothing left to continue. A cap counts
@@ -372,6 +371,16 @@
   `simplipy.compat.requires_simplipy_specifier()` derives it. A pre-release counts as the release
   it precedes; a config without the key loads as before. `packaging` is now a declared
   dependency (it was already installed through `huggingface_hub`).
+
+### Removed
+
+- **`complexity(..., canon=)`.** `complexity()` prices each mode in its own reading, and the
+  keyword that priced a mode's parse in `f64`'s canon is gone (passing it raises `TypeError`). To
+  compare answers of different modes on one scale, use `simplipy.mining.cross_mode_complexity`.
+- **`explicit_constant_placeholders(..., convert_numbers_to_constant=)`.** The helper renames
+  placeholder slots and never numerals; which literals become fittable constants is decided
+  upstream with `simplipy.masking`. Passing the keyword raises `TypeError`; drop it (every
+  `convert_numbers_to_constant=False` call keeps its behaviour).
 
 ## 0.14.7 (2026-10-01)
 

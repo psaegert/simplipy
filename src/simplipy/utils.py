@@ -10,7 +10,6 @@ generic nested-container utilities.
 import re
 import time
 import math
-import warnings
 import itertools
 from collections import Counter
 from types import CodeType
@@ -304,7 +303,7 @@ def apply_variable_mapping(prefix_expression: list[str], variable_mapping: dict[
     return list(map(lambda token: variable_mapping.get(token, token), prefix_expression))
 
 
-def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False, *, convert_numbers_to_constant: bool) -> tuple[list[str], list[str]]:
+def explicit_constant_placeholders(prefix_expression: list[str], constants: list[str] | None = None, inplace: bool = False) -> tuple[list[str], list[str]]:
     """Rename abstract-constant slots to explicit identifiers (``C_0``, ``C_1``, ...).
 
     A purely MECHANICAL code-generation step: every placeholder slot -- ``"<constant>"``
@@ -323,14 +322,6 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     inplace : bool, optional
         If ``True``, modifies the input list; otherwise, works on a shallow copy.
         Defaults to ``False``.
-    convert_numbers_to_constant : bool, optional
-        Deprecated. When ``True``, digit-only numeric tokens are ALSO converted into
-        fittable constants -- a masking decision smuggled into a mechanical helper, and
-        an incoherent one (``3`` converts, ``-3``/``2.0``/``3.14`` do not; a ``pow``
-        exponent's integrality controls the DOMAIN, so converting it silently changes
-        semantics). Kept accepted through this release so pinned consumers keep
-        working; decide abstraction upstream with ``simplipy.masking`` instead.
-        Defaults to ``False`` (it defaulted to ``True`` before 0.13.0).
 
     Returns
     -------
@@ -341,20 +332,12 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     Examples
     --------
     >>> expr = ['*', '<constant>', '+', 'x', '2']
-    >>> explicit_constant_placeholders(expr, convert_numbers_to_constant=False)
+    >>> explicit_constant_placeholders(expr)
     (['*', 'C_0', '+', 'x', '2'], ['C_0'])
 
-    >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'],
-    ...                                convert_numbers_to_constant=False)
+    >>> explicit_constant_placeholders(['+', 'C_3', '<constant>'], constants=['K'])
     (['+', 'K', 'C_0'], ['K', 'C_0'])
     """
-    if convert_numbers_to_constant:
-        warnings.warn(
-            "explicit_constant_placeholders(convert_numbers_to_constant=True) is "
-            "deprecated: which literals become fittable constants is a masking-policy "
-            "decision -- apply simplipy.masking upstream and let this helper only "
-            "rename explicit placeholder slots.",
-            DeprecationWarning, stacklevel=2)
 
     if inplace:
         modified_prefix_expression = prefix_expression
@@ -370,7 +353,7 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
         # C_i re-numbering is part of the MECHANICAL contract and is unconditional; the
         # deprecated flag only gates the numeral conversion. (Before 0.13.0 the flag
         # gated BOTH, conflating codegen renaming with a masking decision.)
-        if is_constant_placeholder(token) or (convert_numbers_to_constant and token.isnumeric()):
+        if is_constant_placeholder(token):
             if provided_index < len(provided_constants):
                 constant_name = provided_constants[provided_index]
                 provided_index += 1

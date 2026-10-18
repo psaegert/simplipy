@@ -495,8 +495,8 @@ class TestTheFloorIsMirroredAcrossTheI128Boundary:
 class TestOneMeasurePerMode:
     """`complexity(e, mode=m)` prices `e` as mode `m` reads it: each mode reads an expression into
     its own canonical form, because the modes accept different simplifications as true, and that
-    form is what `simplify(.., mode=m)` descends. `canon='default'` (deprecated) is the f64 reading
-    whatever the mode, as `complexity()` priced before 0.15.0."""
+    form is what `simplify(.., mode=m)` descends. Answers of different modes are compared on one
+    shared scale, `simplipy.mining.cross_mode_complexity`."""
 
     SPECIMENS = [
         ['*', '2', 'x0'],
@@ -505,20 +505,19 @@ class TestOneMeasurePerMode:
         ['rootn', 'x0', '3'],
     ]
 
-    def test_the_default_reading_is_the_mode_own(self, eng):
+    def test_the_reading_is_the_mode_own(self, eng):
         for e in self.SPECIMENS:
-            for mode in ('f64', 'real', 'permissive'):
-                assert eng.complexity(e, mode=mode) == eng.complexity(e, mode=mode, canon='mode'), (e, mode)
+            for mode, rule_mode in (('f64', 'default'), ('real', 'real'), ('permissive', 'permissive')):
+                assert eng.complexity(e, mode=mode) == \
+                    eng._core.ac_complexity_certified(e, rule_mode, 'mode'), (e, mode)
                 assert eng.complexity(e, certified=False, mode=mode) == \
-                    eng.complexity(e, certified=False, mode=mode, canon='mode'), (e, mode)
+                    eng._core.ac_complexity(e, rule_mode, 'mode'), (e, mode)
 
     def test_f64_is_unchanged(self, eng):
-        # f64's own reading IS the former public yardstick: no number moves, and no warning.
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter('error')
-            for e in self.SPECIMENS:
-                assert eng.complexity(e) == eng.complexity(e, mode='f64', canon='default'), e
+        # f64's own reading IS the cross-mode yardstick for an f64 answer: no number moves.
+        from simplipy.mining import cross_mode_complexity
+        for e in self.SPECIMENS:
+            assert eng.complexity(e) == cross_mode_complexity(eng, e, 'f64'), e
 
     def test_the_modes_read_one_expression_differently(self, eng):
         # The float evaluator reads exp(5132.3) as inf, so f64 folds 1/exp(5132.3) to 0; real
@@ -527,8 +526,8 @@ class TestOneMeasurePerMode:
         assert eng.complexity(e, mode='f64') == eng.complexity(['x0'], mode='f64')
         assert eng.complexity(e, mode='real') > eng.complexity(['x0'], mode='real')
         e = ['inv', 'log', '1.60604019536491']
-        with pytest.warns(FutureWarning, match="canon='default'"):
-            assert eng.complexity(e, mode='real') != eng.complexity(e, mode='real', canon='default')
+        from simplipy.mining import cross_mode_complexity
+        assert eng.complexity(e, mode='real') != cross_mode_complexity(eng, e, 'real')
 
     def test_simplify_never_prices_above_its_input_in_its_mode(self, eng):
         from simplipy.engine import Mode
@@ -545,9 +544,10 @@ class TestOneMeasurePerMode:
                 out = list(eng.simplify(list(expr), mode=mode))
                 assert eng.complexity(out, mode=mode) <= eng.complexity(list(expr), mode=mode), (expr, mode)
 
-    def test_an_unknown_canon_is_refused(self, eng):
-        with pytest.raises(ValueError, match='canon'):
-            eng.complexity(['x0'], canon='certified')
+    def test_the_canon_keyword_is_removed(self, eng):
+        for canon in ('default', 'mode'):
+            with pytest.raises(TypeError, match='canon'):
+                eng.complexity(['x0'], canon=canon)
 
 
 class TestFingerprintAndArtifactLoad:

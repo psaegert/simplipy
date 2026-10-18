@@ -47,10 +47,8 @@ Removed in 0.14.0:
   finite-by-doctrine `<constant>` for `inf`/`nan`/`1_000` (now a loud
   `ValueError`) and walked past `np.pi`/`np.e` and the exact fraction `1/3`
   (now masked). Pass `collect=False` for the positional 1:1 substitution the
-  helper approximated. Unaffected and unchanged: the
-  `explicit_constant_placeholders(convert_numbers_to_constant=)` keyword and
-  `read_infix(..., mask_numbers=True)`, which share the name but not the
-  surface.
+  helper approximated. Unaffected: `read_infix(..., mask_numbers=True)`,
+  which shares the name but not the surface.
 
 No deprecations are currently running. 0.14.0 retires every alias that was
 outstanding, so a retired name raises rather than warning:
@@ -71,8 +69,12 @@ outstanding, so a retired name raises rather than warning:
 modes are an axis, not rungs of one ordering, and comparing them is a category error
 rather than a question with a wrong answer.
 
-Still supported and unchanged: `explicit_constant_placeholders(convert_numbers_to_constant=)`
-remains keyword-only and required, so every call site states its intent.
+Removed in 0.15.0, again without an alias cycle:
+
+| removed in 0.15.0 | replacement |
+|---|---|
+| `complexity(..., canon=)` | `complexity(e, mode=m)` prices in mode `m`'s own reading; `simplipy.mining.cross_mode_complexity` compares answers across modes |
+| `explicit_constant_placeholders(..., convert_numbers_to_constant=)` | drop the keyword; decide which literals are fittable with `simplipy.masking` |
 
 Behaviour changes in 0.14.0 that are **not** deprecations, because no name changed:
 

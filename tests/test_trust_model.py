@@ -226,7 +226,7 @@ class TestDeployedEvaluationPath:
                 continue
             simplified = engine.simplify(list(row))
             with_placeholders, constants = explicit_constant_placeholders(
-                simplified, convert_numbers_to_constant=False)
+                simplified)
             infix = engine.prefix_to_infix(with_placeholders, realization=True)
             function = engine.code_to_lambda(codify(infix, variables + constants))
             function(*[0.7] * (len(variables) + len(constants)))  # a NameError here is the regression
