@@ -11,6 +11,7 @@ vocabulary -- their spellings are handled at the conversion boundary, never real
 The functions handle singular inputs (such as division by zero) by returning signed
 infinities or NaN rather than raising, and operate on both scalars and array-likes.
 """
+import builtins
 import math
 from typing import Iterable
 from types import ModuleType
@@ -98,8 +99,9 @@ def abs(x: float) -> float:
     if isinstance(x, complex):
         # Handle complex numbers
         return (x.real ** 2 + x.imag ** 2) ** 0.5
-    # Handle scalar case: the magnitude, an unsigned zero at zero (abs(-0.0) = +0.0), as on arrays
-    return np.abs(x)
+    # Handle scalar case: the magnitude in the operand's own type, an unsigned zero at zero
+    # (abs(-0.0) = +0.0), as on arrays
+    return builtins.abs(x)
 
 
 def sin(x: float) -> float:

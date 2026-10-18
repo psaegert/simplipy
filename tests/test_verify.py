@@ -1420,3 +1420,17 @@ class TestTheGateAgreesWithTheRouterAndTheClock:
         monkeypatch.setattr(_gate, 'judge_rule', hung)
         code = _gate.sweep([(['neg', 'neg', '?0'], ['?0'])])
         assert code != 0, "fail-closed: a rule that times out twice is held out"
+
+
+def test_the_legacy_odd_roots_judge_like_rootn() -> None:
+    # The deployed lane's retired `pow1_3`/`pow1_5` are the odd roots `rootn(x, 3)`/`rootn(x, 5)`, the sign of zero
+    # included (IEEE-754 rootn: the root of -0 is -0), so a legacy rule is judged on the semantics `rootn` has.
+    from simplipy.verify._contract import DEP_OPS
+
+    for legacy, index in (('pow1_3', 3.0), ('pow1_5', 5.0)):
+        for x in (-8.0, -0.0, 0.0, 32.0, -math.inf, math.inf):
+            got, want = DEP_OPS[legacy](x), DEP_OPS['rootn'](x, index)
+            assert math.isclose(got, want, rel_tol=1e-15) or got == want, (legacy, x, got, want)
+            assert math.copysign(1.0, got) == math.copysign(1.0, want), (legacy, x, got, want)
+        assert math.isnan(DEP_OPS[legacy](math.nan))
+        assert math.copysign(1.0, DEP_OPS[legacy](-0.0)) == -1.0, legacy

@@ -255,6 +255,9 @@ class TestExplicitConstants:
 
         assert math.copysign(1.0, ops.abs(-0.0)) == 1.0
         assert math.copysign(1.0, ops.abs(np.array([-0.0]))[0]) == 1.0
+        # a scalar keeps its own type: an int stays an int, a float a float
+        assert type(ops.abs(-3)) is int and ops.abs(-3) == 3
+        assert type(ops.abs(-2.5)) is float and ops.abs(-2.5) == 2.5
         f = engine.as_callable(['inv', 'abs', 'x0'], ['x0'])
         with np.errstate(divide='ignore'):
             assert f(-0.0) == f(np.array([-0.0]))[0] == math.inf

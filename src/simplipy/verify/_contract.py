@@ -618,11 +618,12 @@ def _legacy_even_root(p):
 
 
 def _legacy_odd_root(p):
-    # pre-0.12 pow1_3/pow1_5: the real-valued (sign-preserving) root
+    # pre-0.12 pow1_3/pow1_5: the real-valued odd root, which carries the sign of its operand,
+    # the sign of zero included (IEEE-754 rootn, as `rootn` itself)
     def g(a):
         a = np.asarray(a, dtype=F)
         with np.errstate(invalid='ignore'):
-            return F(np.where(a < 0, -(-a) ** F(p), a ** F(p)))
+            return F(np.copysign(np.abs(a) ** F(p), a))
     return g
 
 
