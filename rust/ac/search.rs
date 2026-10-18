@@ -274,10 +274,34 @@ fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
 fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec<Ex>) {
     match e {
         // DISTRIBUTE (the row-156 move): fully distribute a Mul bag over its Add
-        // children.
+        // children; and, the reverse of FACTOR on some of a sum's terms, one factor into one
+        // sum factor, the other factors left outside (`x2*sqrt(x1)*(sqrt(x1) - x3)` is
+        // `x2*(x1 - x3*sqrt(x1))`).
         Ex::Mul(v) => {
             if let Some(cand) = distribute_product(v, cx) {
                 out.push(cand);
+            }
+            if v.len() > 2 {
+                for (si, s) in v.iter().enumerate() {
+                    if !matches!(s, Ex::Add(_)) {
+                        continue;
+                    }
+                    for (fi, f) in v.iter().enumerate() {
+                        if matches!(f, Ex::Add(_)) {
+                            continue;
+                        }
+                        if let Some(inner) = distribute_product(&[f.clone(), s.clone()], cx) {
+                            let mut rest: Vec<Ex> = v
+                                .iter()
+                                .enumerate()
+                                .filter(|&(k, _)| k != si && k != fi)
+                                .map(|(_, x)| x.clone())
+                                .collect();
+                            rest.push(inner);
+                            out.push(mul(rest, cx));
+                        }
+                    }
+                }
             }
         }
         // POW-EXPAND: `(sum)^n` for small integer n, expanded through the same
@@ -405,10 +429,14 @@ fn factor_moves(terms: &[Ex], cx: &Cx, near: &[&Ex], power: Option<&Rat>) -> Vec
 /// some of its terms replaced by their content `c` times the sum of their quotients, returned with
 /// `c`. Every way the engine factors is here, once: the search proposes these moves
 /// ([`factor_moves`], with the licences in `licensed`), and the rule load refuses a rule that
-/// states one of them ([`is_factoring`], with no licence), since the search owns the law.
+/// states one of them ([`is_factoring`], with the licence read off the pattern), since the
+/// search owns the law.
 ///
-/// * SHARED BASES -- for every base two or more terms share, those terms factored by everything
-///   they share, each base at its least exponent (`x1*x2 + x1*x3 + x4` is `x4 + x1*(x2 + x3)`).
+/// * SHARED FACTORS -- a group of terms is factored by everything its terms all share, each base
+///   at its least exponent (`x1*x2 + x1*x3 + x4` is `x4 + x1*(x2 + x3)`). The groups: the terms
+///   holding a base, for every base two or more terms share; every two terms that share a base;
+///   and every term holding all the two share, each base at an exponent at least theirs (so
+///   `x8 + x3*x8 + 1/x8^3` proposes `x8*(x3 + 1) + 1/x8^3`, not only `(x8^4*(x3 + 1) + 1)/x8^3`).
 ///   A bare term is its own product with the unit coefficient ([`term_factors`]):
 ///   `x2*x3 + x2` is `x2*(x3 + 1)`. A base counts up to sign, as a repeated wildcard binds a
 ///   class up to sign: where a base of one term meets in another its negation through a class's
@@ -470,6 +498,47 @@ pub(crate) fn factorings(terms: &[Ex], cx: &Cx, licensed: &dyn Fn(&Ex) -> bool) 
             }
             if members.len() >= 2 && !groups.iter().any(|g| g.0 == members && g.1 == signed) {
                 groups.push((members, signed));
+            }
+        }
+    }
+    // Every two terms that share a base, and every term holding all the two share (each base at
+    // an exponent at least the least of theirs).
+    let splits: Vec<SplitTerm> = terms.iter().map(term_factors).collect();
+    for (i, (_, fi)) in splits.iter().enumerate() {
+        for (j, (_, fj)) in splits[i + 1..].iter().enumerate() {
+            let content: Vec<(&Ex, &Rat)> = fi
+                .iter()
+                .filter_map(|(b, r)| {
+                    let (_, s) = fj.iter().find(|(c, _)| c == b)?;
+                    Some((
+                        b,
+                        if s.cmp_exact(r) == std::cmp::Ordering::Less {
+                            s
+                        } else {
+                            r
+                        },
+                    ))
+                })
+                .collect();
+            if content.is_empty() {
+                continue;
+            }
+            let members: Vec<usize> = (0..terms.len())
+                .filter(|&k| {
+                    content.iter().all(|&(b, e)| {
+                        splits[k]
+                            .1
+                            .iter()
+                            .any(|(c, s)| c == b && s.cmp_exact(e) != std::cmp::Ordering::Less)
+                    })
+                })
+                .collect();
+            if !groups.iter().any(|g| g.0 == members && !g.1) {
+                groups.push((members, false));
+            }
+            let pair = vec![i, i + 1 + j];
+            if !groups.iter().any(|g| g.0 == pair && !g.1) {
+                groups.push((pair, false));
             }
         }
     }
