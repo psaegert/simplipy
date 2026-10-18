@@ -114,8 +114,10 @@ def test_wildcard_sorts_and_indices_stay_distinct(vocab_engine):
 def test_shortest_target_still_wins_and_keeps_its_own_pair(vocab_engine):
     """The fold is unchanged apart from the key: the strictly shorter target wins, and
     the winning SOURCE is that target's own source spelling."""
-    long_ = (('*', '(-1)', 'asin', '_0'), ('*', '(-1)', 'asin', '_0'))
-    short = (('*', 'asin', '_0', '(-1)'), ('asin', 'neg', '_0'))
+    # (A sign moved at an odd function is no longer a lower target: both spellings are one
+    # canonical state.)
+    long_ = (('*', '5', 'log', '_0'), ('*', '5', 'log', '_0'))
+    short = (('*', 'log', '_0', '5'), ('log', 'pow', '_0', '5'))
     assert deduplicate_rules([long_, short], dummy_variables=[], engine=vocab_engine, rule_mode='default') == [short]
     assert deduplicate_rules([short, long_], dummy_variables=[], engine=vocab_engine, rule_mode='default') == [short]
 

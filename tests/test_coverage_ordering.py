@@ -143,15 +143,13 @@ class TestConstAbstractionFulfillment:
 
 class TestStrictKruskalSearchesRespells:
     def test_respelled_source_is_mined_in_strict_mode(self, tmp_path) -> None:
-        """`/ 1 exp ?0` canon-respells to `inv exp ?0` (4 -> 3 tokens, SAME state).
+        """`/ 1 exp neg ?0` canon-respells to `inv exp neg ?0` (5 -> 4 tokens, SAME state).
         The old strict-mode skip read the token shrink as "already reduced" and never
-        searched, losing `1/exp(t) -> exp(-t)` to the enumeration alphabet (the
-        respelled spelling speaks `inv`, which the ladder never enumerates). Under
-        the serve ordering a respell is not a reduction: strict mode must search it
-        and mint the genuinely-below target `exp neg ?0` (complexity 3 -> 2).
-
-        Asserted in `real`: f64's own numerics refuse the rule (at x0 = 733.55 the source
-        is 0 and the target the subnormal 2.6e-319), so the f64 file rightly lacks it."""
+        searched, losing `1/exp(-t) -> exp(t)` to the enumeration alphabet (the respelled
+        spelling speaks `inv`, which the ladder never enumerates). Under the serve ordering a
+        respell is not a reduction: strict mode must search it and mint the genuinely-below
+        target `exp ?0`. (The witness was `/ 1 exp ?0 -> exp neg ?0` until the sign key made
+        `1/exp(t)` itself the answer of that tie.)"""
         (tmp_path / "rules.json").write_text(json.dumps([]))
         cfg = tmp_path / "config.yaml"
         import yaml
@@ -159,18 +157,16 @@ class TestStrictKruskalSearchesRespells:
         engine = SimpliPyEngine.from_config(str(cfg))
 
         engine.find_rules(
-            max_source_pattern_length=4, max_target_pattern_length=3,
+            max_source_pattern_length=5, max_target_pattern_length=3,
             dummy_variables=1, extra_internal_terms=["1"], X=256,
             constants_fit_challenges=2, constants_fit_retries=2,
             seed=7, relaxed_kruskal=False, verbose=False)
 
-        # Each file is mined in its own mode: f64 refuses the rule (`exp(-t)` and `1/exp(t)`
-        # round differently near underflow: at x0 = 733.55 the source is 0 and the target
-        # the subnormal 2.6e-319), real and permissive mint it.
+        # Each file is mined in its own mode.
         for mode, rules in (('real', engine.real_simplification_rules),
                             ('permissive', engine.permissive_simplification_rules)):
-            assert engine.simplify(["/", "1", "exp", "x0"], mode=mode) == \
-                ["exp", "neg", "x0"], (mode, rules)
+            assert engine.simplify(["/", "1", "exp", "neg", "x0"], mode=mode) == \
+                ["exp", "x0"], (mode, rules)
 
 
 class TestProposalVerdictHonesty:

@@ -28,7 +28,7 @@ descent, differing exactly at w=1 (-inf vs +inf under one-zero).
 import pytest
 
 from simplipy import SimpliPyEngine
-from conftest import acj_config_path
+from conftest import ACJ4_INTERIM_REVERSED, ACJ4_INTERIM_SUBSUMED, acj_config_path
 
 NEG = {"realization": "simplipy.operators.neg", "alias": [], "inverse": None,
        "arity": 1, "precedence": 2.5, "commutative": False}
@@ -94,7 +94,10 @@ class TestLoadConsumer:
         # READ IN THE CANON IT WAS CERTIFIED IN (the legacy one: the file is a pre-0.15 mine),
         # nothing is subsumed: pristine (5347, 0, 0, 9) again. (Read in f64's folded canon,
         # `atanh pow (-10) (-9) -> -1e-09` was subsumed: (5346, 1, 0, 9).)
-        assert (kept, subsumed, dropped, twins) == (5347, 0, 0, 9)
+        # INTERIM (2026-10-18), until the re-mine restores (5347, 0, 0, 9): the sign key
+        # refuses the rows pinned in conftest.
+        assert (subsumed, dropped) == (len(ACJ4_INTERIM_SUBSUMED), len(ACJ4_INTERIM_REVERSED))
+        assert (kept, subsumed, dropped, twins) == (5304, 16, 28, 10)
 
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads

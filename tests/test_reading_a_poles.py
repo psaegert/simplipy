@@ -229,13 +229,8 @@ def test_a_nested_product_keeps_the_sign_of_zero_under_an_odd_root(eng, mode, sr
 
 @pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('fn', ['sin', 'atan'])
-def test_an_odd_function_of_a_negation_reads_as_the_negated_term(eng, mode, fn, request):
+def test_an_odd_function_of_a_negation_reads_as_the_negated_term(eng, mode, fn):
     # `x1 + sin(-x1)` is `x1 - sin(x1)`: one class with `sin(x1) - x1`, so their product is minus a square.
-    if mode == 'permissive':
-        # Permissive's one walk (0.15) no longer borrows f64's answer: its reading spells
-        # `x1 - sin(x1)` as `x1 + sin(-x1)` and does not read the product of the two as one
-        # class. Sign placement is the sign round's (D1).
-        request.applymarker(pytest.mark.xfail(strict=True, reason='permissive sign placement (D1)'))
     src = f'* - {fn} x1 x1 + x1 {fn} neg x1'.split()
     want = list(eng.simplify(f'neg pow - x1 {fn} x1 2'.split(), mode=mode))
     assert list(eng.simplify(src, mode=mode)) == want

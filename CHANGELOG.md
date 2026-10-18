@@ -694,7 +694,8 @@ model predictions.
 - **`verify-mine` passes nothing vacuously.** New gates `sidecar` (a final, uninterrupted mine
   of the mode asked) and `rules` (the file is not empty); `fingerprint` fails on a probe the
   record lacks (an empty record) and on a record of another mode. The `engine_owned_law` gate
-  does not yet catch a sign pull (`neg sin _0 -> sin neg _0`); that waits for the sign rule.
+  catches a sign pull (`neg sin _0 -> sin neg _0`): the core places that sign itself, so both
+  sides are one canonical state.
 - **`requires_simplipy`**: an empty specifier is malformed, and an exact pin of a pre-release
   (`==0.15.0.dev2`) admits that pre-release. Other specifiers still judge a pre-release as the
   release it precedes.

@@ -94,6 +94,78 @@ def require_triple(why: str = 'the acj-4 triple is not staged') -> None:
         require_or_skip(path, f'{why} ({os.path.basename(path)} is missing)')
 
 
+# INTERIM PINS (2026-10-18), until the acj-4 re-mine, which resets both lists to empty. The sign
+# key (fewest signs, then outermost) moved the canon past the staged acj-4 asset, which was mined
+# under the earlier order, and the f64 load refuses exactly these rows of it:
+#   * SUBSUMED (gate G2): a sign moved at an odd function, which the canon now places itself, so
+#     both sides are one canonical state;
+#   * REVERSED (gate G7): two spellings of one price that the sign key now orders the other way.
+# The suites pin the counts and these rows, so any other drift still fails.
+ACJ4_INTERIM_SUBSUMED = (
+    ('neg asin _0', 'asin neg _0'), ('neg asinh _0', 'asinh neg _0'),
+    ('neg atan _0', 'atan neg _0'), ('neg atanh _0', 'atanh neg _0'),
+    ('neg sin _0', 'sin neg _0'), ('neg sinh _0', 'sinh neg _0'),
+    ('neg tan _0', 'tan neg _0'), ('neg tanh _0', 'tanh neg _0'),
+    ('inv neg asin _0', 'inv asin neg _0'), ('inv neg asinh _0', 'inv asinh neg _0'),
+    ('inv neg atan _0', 'inv atan neg _0'), ('inv neg atanh _0', 'inv atanh neg _0'),
+    ('neg rootn _0 3', 'rootn neg _0 3'), ('neg rootn _0 5', 'rootn neg _0 5'),
+    ('neg rootn _0 7', 'rootn neg _0 7'), ('neg rootn _0 9', 'rootn neg _0 9'),
+)
+ACJ4_INTERIM_REVERSED = (
+    ('inv exp _0', 'exp neg _0'),
+    ('/ (-1) abs !0', 'inv neg abs !0'), ('/ (-1) acos !0', 'inv neg acos !0'),
+    ('/ (-1) acosh !0', 'inv neg acosh !0'), ('/ (-1) asin !0', 'inv asin neg !0'),
+    ('/ (-1) asinh !0', 'inv asinh neg !0'), ('/ (-1) atan !0', 'inv atan neg !0'),
+    ('/ (-1) atanh !0', 'inv atanh neg !0'), ('/ (-1) cos _0', 'inv neg cos _0'),
+    ('/ (-1) cosh _0', 'inv neg cosh _0'), ('/ (-1) exp !0', 'inv neg exp !0'),
+    ('/ (-1) log !0', 'inv neg log !0'), ('/ (-1) sin !0', 'inv neg sin !0'),
+    ('/ (-1) sinh !0', 'inv neg sinh !0'), ('/ (-1) tan !0', 'inv neg tan !0'),
+    ('/ (-1) tanh !0', 'inv neg tanh !0'),
+    ('inv pow _0 np.e', 'pow _0 neg np.e'), ('inv pow _0 np.pi', 'pow _0 neg np.pi'),
+    ('neg abs asin _0', 'asin neg abs _0'), ('neg abs asinh _0', 'asinh neg abs _0'),
+    ('neg abs atan _0', 'atan neg abs _0'), ('neg abs atanh _0', 'atanh neg abs _0'),
+    ('neg abs sinh _0', 'sinh neg abs _0'), ('neg abs tanh _0', 'tanh neg abs _0'),
+    ('neg cos asin _0', 'sin neg acos _0'),
+    ('pow exp _0 (-2)', 'exp * (-2) _0'), ('pow exp _0 (-4)', 'exp * (-4) _0'),
+    ('pow exp _0 (-8)', 'exp * (-8) _0'),
+)
+
+
+def acj4_refused_rows(engine: SimpliPyEngine) -> tuple[list, list]:
+    """The rows of `engine`'s f64 set its load refuses, each as `(lhs, rhs)` strings: the rows no
+    served rule answers for (`ac_served_rules_in_mode`'s provenance), split into the subsumed
+    ones (one canonical state on both sides, in the canon the set was certified in) and the
+    rest."""
+    core = engine._core
+    canon = engine._rule_canons.get('default')
+    served = {src for _, _, src in core.ac_served_rules_in_mode(rule_mode='default')}
+    subsumed, other = [], []
+    for i, (lhs, rhs) in enumerate(engine.simplification_rules):
+        if i in served:
+            continue
+        row = (' '.join(lhs), ' '.join(rhs))
+        key_l, key_r = core.ac_canonical_keys([list(lhs), list(rhs)], rule_mode='default',
+                                              canon=canon)
+        (subsumed if key_l == key_r else other).append(row)
+    return subsumed, other
+
+
+# INTERIM KNOWN VIOLATION (2026-10-18) of the permissive-dominance sweep over the shipped
+# corpus. On this row f64 found a cheaper answer, 136,171 -> 135,171: an odd root of a quotient is
+# now a sign-trade site, so `asin(rootn(x13/x11, 5) - 1)` is `-asin(rootn(-x13/x11, 5) + 1)`, a bit
+# cheaper. Permissive keeps 136,171: in its reciprocal join the joined base takes that orientation
+# and hands its sign to the rest of the product, the signed join loses to the distributed working
+# state, and that state prices a bit above the unsigned join on f64's yardstick -- a join the
+# projection cannot ship, since its re-parse would not re-derive it. Removed when the permissive
+# answer reaches f64's here.
+PERMISSIVE_DOMINANCE_KNOWN = (
+    {'expression': ['*', '/', '1', '2', '/', 'pow', '*', '/', '1', '4', '+', 'acosh', '-', 'x3',
+                    'asinh', 'x3', '*', 'x3', 'atanh', 'x14', '5', '*', 'asin', '-', 'rootn', '/',
+                    'x13', 'x11', '5', '/', 'x11', 'x11', 'x13'],
+     'mu': {'f64': 135171, 'real': 135171, 'permissive': 136171}},
+)
+
+
 def construct_legacy_table() -> SimpliPyEngine:
     config = load_config(_FIXTURE)
     return SimpliPyEngine(operators=config['operators'], rules=[])

@@ -169,9 +169,11 @@ DIVISORS = [
 def test_a_divisor_product_is_decided_with_its_quotient(eng, mode, effort, a, b, request):
     if mode == 'permissive' and a == '/ 1 * - - 1 x1 x2 pow - - 1 x1 x2 / 1 3':
         # Permissive's one walk (0.15) no longer borrows f64's answer: its reading orients the
-        # integer reciprocal's base (`-(x1 + x2 - 1)`) and keeps the sign inside the cube
-        # root's, so the two bases do not merge. Sign placement is the sign round's (D1).
-        request.applymarker(pytest.mark.xfail(strict=True, reason='permissive sign placement (D1)'))
+        # integer reciprocal's base (`x1 + x2 - 1`, the sign outside) and keeps the sign inside
+        # the cube root's, so the two bases do not merge. Not a tie the sign key decides: the
+        # merged answer, f64's, is 22.7 bits cheaper.
+        request.applymarker(pytest.mark.xfail(
+            strict=True, reason='permissive keeps the reciprocal and the cube root apart'))
     x = list(eng.simplify(a.split(), mode=mode, effort=effort))
     y = list(eng.simplify(b.split(), mode=mode, effort=effort))
     assert eng.to_prefix(x) == eng.to_prefix(y)

@@ -19,7 +19,8 @@ from fractions import Fraction
 import pytest
 
 from simplipy import Mode, SimpliPyEngine
-from conftest import acj_asset_dir, acj_config_path
+from conftest import (ACJ4_INTERIM_REVERSED, ACJ4_INTERIM_SUBSUMED, acj4_refused_rows, acj_asset_dir,
+                      acj_config_path)
 
 HYPER_PREFIXES = ("mult", "div")
 
@@ -581,9 +582,11 @@ class TestContracts:
         # 1,049 rows whose pattern an earlier row already owns never reach translate.
         # `subsumed` is what this test pins, and it is unmoved at 0.)
         # The shipped file is a pre-0.15 mine, read in the canon it was certified in (the
-        # legacy one): nothing is subsumed. (Read in f64's folded canon, `atanh pow (-10)
-        # (-9) -> -1e-09` was.)
-        assert subsumed == 0, f"the shipped file must translate loss-free; got {subsumed}"
+        # legacy one). (Read in f64's folded canon, `atanh pow (-10) (-9) -> -1e-09` was
+        # subsumed.) INTERIM (2026-10-18, conftest.ACJ4_INTERIM_SUBSUMED): the sign key made
+        # these rows one canonical state; the re-mine resets this to 0.
+        assert subsumed == len(ACJ4_INTERIM_SUBSUMED), \
+            f"the shipped file must translate loss-free but for the interim rows; got {subsumed}"
 
 
 class TestMatcherAssignmentCompleteness:
@@ -1392,9 +1395,17 @@ class TestC36DropCensus:
                               if k not in ('arithmetic-subsumed', 'registry-pole-class-change')), \
             'census must reconcile with the aggregate counter'
 
-    def test_clean_artifact_census_is_empty(self, engine: SimpliPyEngine) -> None:
-        # read in the canon it was certified in (see test_translation_audit_surface)
-        assert engine._core.ac_rules_drop_census(rule_mode="default") == {}
+    def test_artifact_census_is_the_interim_lag(self, engine: SimpliPyEngine) -> None:
+        # A clean artifact's census is empty (read in the canon it was certified in, see
+        # test_translation_audit_surface). INTERIM (2026-10-18): exactly the rows the sign key
+        # moved past the staged asset (conftest), by count and by rule; the re-mine restores
+        # `{}`.
+        assert engine._core.ac_rules_drop_census(rule_mode="default") == {
+            'arithmetic-subsumed': len(ACJ4_INTERIM_SUBSUMED),
+            'not-ordered-below': len(ACJ4_INTERIM_REVERSED)}
+        subsumed, reversed_ = acj4_refused_rows(engine)
+        assert subsumed == list(ACJ4_INTERIM_SUBSUMED)
+        assert reversed_ == list(ACJ4_INTERIM_REVERSED)
 
 
 class TestSuppressedProbeAndShadowCensus:

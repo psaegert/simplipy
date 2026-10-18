@@ -119,15 +119,15 @@ class TestTheServedSetIsWhatGetsJudged:
 
     def test_served_set_is_the_artifact_plus_exactly_the_twins(self) -> None:
         e = SimpliPyEngine.from_config(acj_config_path())
-        kept, _, _, twins = e._core.ac_rules_info_in_mode(rule_mode='default')
+        kept, subsumed, dropped, twins = e._core.ac_rules_info_in_mode(rule_mode='default')
         served = e._core.ac_served_rules_in_mode(rule_mode='default')
         # RELATIONSHIPS, not absolute counts. The served total moves with any change to
         # the constructor -- the inverse-pair band alone took it 5553 -> 5558 by
         # declining folds it cannot reproduce -- and a literal here would pin the test
         # to one combination of branches. What must hold is that the served set is the
         # artifact plus exactly the twins, whatever those totals happen to be.
-        _, subsumed, dropped, _ = e._core.ac_rules_info_in_mode(rule_mode='default')
         assert len(served) == kept
+        # every row serves but those the load refuses (none on a mint-clean artifact)
         assert len(served) - (len(e.simplification_rules) - subsumed - dropped) == twins
         assert twins > 0, 'no twins minted: this test would hold vacuously'
 
