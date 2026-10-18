@@ -303,8 +303,8 @@ once per base and call). Like terms collect up to sign (`add()`
 keys a term by its classes in one orientation), and a pattern variable that occurs twice binds a
 class up to sign (in every mode for `_`, `!` and `$`, where they bind a class; for `?` only where
 it binds any subtree, in `permissive`), the matcher retrying in one orientation only after a
-binding was refused by its own negation; the factoring stage takes a factor shared up to sign the
-same way. So `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and
+binding was refused by its own negation; the search's FACTOR move (§4) takes a factor shared up
+to sign the same way. So `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and
 `x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`. Residuals [EMPIRICAL]: where a member's value at the
 zero is not read, the class's cheapest orientation can leave that value off the limit (a sum holding
 the class among terms free of it, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))` is `+inf` at `x1 = 3` where
@@ -332,7 +332,7 @@ sorted wildcard leaves (sorts `_`, `!`, `$`, `?` bind under certificate side con
 see the matcher). Rules come from a mined asset in raw prefix form and pass through
 **translation** (`AcRules::translate`), which parses both sides with the *same* boundary
 converter as subjects, canonicalizes them with a bare (certificate-free) context, and
-applies seven load-time gates:
+applies eight load-time gates:
 
 | Gate | Drops / normalizes | Why |
 |---|---|---|
@@ -343,8 +343,9 @@ applies seven load-time gates:
 | G5 | exact inverse of an earlier rule | ping-pong fuel |
 | G6 | RHS wildcards not bound by the **canonical** LHS | an unbound wildcard would panic substitution at rewrite time; canon can erase LHS wildcards, so the raw check is insufficient |
 | G7 | $\mathrm{nf}(\rho) \not<_o \mathrm{nf}(\ell)$ (disoriented patterns) | keep every loaded rule aligned with the ordering the pass fires under (§5) |
+| G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node |
 
-All seven are counted; asset `acj-4` (5,338 rows, all reaching
+All eight are counted; asset `acj-4` (5,338 rows, all reaching
 translation, mined under $\mu$ itself on the deployed literal alphabet) loses **zero**
 rules and gains nine orientation twins, serving 5,347
 [EMPIRICAL — re-verified on every load, since translation runs the gates each time; a
@@ -387,6 +388,29 @@ fully admits].
 
 Acceptance is checked on the *instantiated, renormalized* result at the actual node —
 never predicted from the pattern (see §5 for why prediction is impossible).
+
+**The search (exploration phase, `effort`).** After the chain's fixpoint, the search proposes
+moves the step relation refuses, because they ascend at their node: the distributive law, in
+both directions and on sub-multisets, owned by the engine and not by any rule (G8).
+**DISTRIBUTE** multiplies a product out over its sum factors, moves one factor into one sum
+factor, or the other factors over one term of a sum factor (and **POW-EXPAND** expands an
+integer power of a sum); **FACTOR**, at a sum, takes what a group of its terms share out of
+exactly those terms, by everything they share, and leaves the other terms. The groups are the
+terms holding a base two or more terms share (as spelled, or up to a class's orientation, §3),
+every two terms sharing a base, and every term holding all that two share; a bare term is its own
+product with the unit coefficient, and a term $c \cdot S \cdot q$ whose sum factor $S$, or $-S$,
+stands spread among the other terms factors as $S \cdot (c q \pm 1)$. Each
+move carries its licence (every piece finite a.e., so the identity cannot meet $\infty - \infty$;
+no `<constant>` duplicated or merged). A candidate is the move at one place with its ancestors
+rebuilt through the constructors, so it is the **whole state**; it is descended by the step
+relation to its fixpoint and accepted **iff** that endpoint is strictly below the current state
+in $<_o$ — the one acceptance for every move kind. A round tries the current state's candidates
+cheapest rebuilt state first (ties in pre-order), steps to the first accepted one and starts
+again there; a round that accepts nothing ends the search. `effort=k` is the first $k$ descents
+of this walk, and `effort=0` is the chain alone (rules and constructors), which does not factor.
+Whole-state acceptance is what the law needs: factoring is not confluent (`x1*x2 + x1*x3 + x2*x4`
+has two factorings, and which pays is decided by the merges it enables in the enclosing product),
+so it is not a rule, whose acceptance is local to its node.
 
 ## 5. The reduction ordering
 
@@ -660,8 +684,8 @@ and are refused again. Two further premises: the step cap does not bind (a cappe
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
 valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
-srbf's 125,127 model predictions change on a second call 2,872 times in `f64` at cap 4, the former
-default, 2,870 of them to a cheaper form (`real` 3,070); uncapped, never, in `f64` and `real`, on these and on
+srbf's 125,127 model predictions change on a second call 1,632 times in `f64` at cap 4, the former
+default, every one to a cheaper form (`real` the same); uncapped, never, in `f64` and `real`, on these and on
 srbf's ground truths and the simplify inputs of flash-ansr's T8.1 draws]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.

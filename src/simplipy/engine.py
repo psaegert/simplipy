@@ -231,7 +231,7 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: ``None``: the search runs until a round finds nothing, so a second call returns the
 #: answer unchanged (in ``permissive`` its work budget can stop a search, see
 #: ``DEFAULT_WORK``). The previous default, 4, stops searches between
-#: two improvements: on srbf's 125,127 model predictions 2,872 answers change on a second
+#: two improvements: on srbf's 125,127 model predictions 1,632 answers change on a second
 #: call in f64 at cap 4 (none uncapped).
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
@@ -1952,17 +1952,19 @@ class SimpliPyEngine:
 
         effort : int or None, optional
             The SEARCH BUDGET: after the chain reaches its fixpoint, an
-            exploration phase proposes expansion moves the strict descent refuses
-            (distributing a product over its sums, expanding an integer power of a
-            sum), runs each candidate through the same certified constructors and the
-            same descent loop, and replaces the result only when the candidate's
-            endpoint lands STRICTLY below it in the serve-time reduction ordering.
+            exploration phase proposes the moves of the distributive law the strict
+            descent refuses (distributing a product over its sums, expanding an integer
+            power of a sum, factoring what terms of a sum share), runs each candidate
+            through the same certified constructors and the same descent loop, cheapest
+            first, and replaces the result only when the candidate's endpoint lands
+            STRICTLY below it in the serve-time reduction ordering.
             ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
             nothing, so a second call returns the answer unchanged (up to the residual
             classes in ``docs/formal.md``, I3 and L6, and in ``permissive`` a search its
             work budget stopped); an int caps each search at that many candidate descents
             (``permissive`` runs several per call), after which a second call can continue
-            it; ``0`` never enters the phase and is byte-identical to the plain chain.
+            it; ``0`` never enters the phase and is byte-identical to the plain chain
+            (rules and constructors), which does not factor.
             Every guarantee survives any budget: soundness (same certificates), never-worse
             (strictly-below acceptance; in ``permissive`` its selection too, never above its
             input, its search-off answer or its answer at a smaller ``effort``, among calls

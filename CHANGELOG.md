@@ -75,13 +75,32 @@
   `1/(cbrt((3 - x1)*x2)*(3*x2 - x1*x2))` are `+inf` at `x1 = 3`, like their inputs and their
   limits, in every mode (0.14.7 gives `-inf` for the first). The scalar `abs(-0.0)` is `+0.0`, as on
   arrays, so `1/abs(x)` is `+inf` at `-0.0` on every input path.
-- **The search factors shared content.** After its expansions the search factors what the terms
-  of a sum share where that is cheaper, a bare term matching as `1*term`: `x2 + x2*x3` is
-  `x2*(x3 + 1)`, so `sin(x1)*sin(rootn(sin(x1), 2))/(x1*sin(x1) + sin(x1))` is
-  `sin(rootn(sin(x1), 2))/(x1 + 1)` (0.14.7:
-  `sin(x1)*sin(rootn(sin(x1), 2))/(sin(x1) + x1*sin(x1))`). Factoring a sum under a division
-  takes the licence distributing the division needs, so in `f64` and `real` a sum that vanishes
-  on a region keeps its spelling.
+- **The search owns the distributive law, in every mode alike.** Factoring and distributing are
+  moves of the search, accepted only where the whole expression ends cheaper, and no rule states
+  them. FACTOR takes what some terms of a sum share out of exactly those terms, a bare term being
+  its own product with 1, and a term holding a sum whose terms, or their negations, stand beside
+  it factors through that sum; DISTRIBUTE also moves one factor into a sum factor, or the other
+  factors over one term of it. So `x1*x2 + x1*x3 + x4` is `x4 + x1*(x2 + x3)`,
+  `x2*x3 + x2 + x3 + 1` is `(x2 + 1)*(x3 + 1)`, `sin(x1)*x2 + sin(x1)*x3 + x4` is
+  `x4 + sin(x1)*(x2 + x3)`, `x3 - x2 + (x2 - x3)*x4` is `(x2 - x3)*(x4 - 1)` and
+  `(x1 + x2 + x3)/x2` is `(x1 + x3)/x2 + 1`, in `f64`, `real` and `permissive`, and
+  `sin(x1)*sin(rootn(sin(x1), 2))/(x1*sin(x1) + sin(x1))` is `sin(rootn(sin(x1), 2))/(x1 + 1)`
+  (0.14.7: `sin(x1)*sin(rootn(sin(x1), 2))/(sin(x1) + x1*sin(x1))`). On 400 random sums of 2 to
+  5 monomials, which mean the same in every mode, the three modes give one answer for each. The
+  rule load refuses a rule that one factoring turns from its left side into its right, judged by
+  that law and not by spelling: the `real` and `permissive` files serve four common-factor rules
+  and `<constant>*x - x -> <constant>*x` less. Factoring a sum under a division takes the
+  licence distributing the division needs, so in `f64` and `real` a sum that vanishes on a region
+  keeps its spelling. Against the factoring this replaces, at the default effort, answers are
+  cheaper on 653 of srbf's 6,531 ground truths in `f64`, 576 in `real` and 559 in `permissive`,
+  none costlier in `f64` and `real`; on its 125,127 predictions 33,401 are cheaper and 76
+  costlier in `f64` (`real`: 33,194 and 149), and on flash-ansr's 129,490 T8.1 inputs 21,403
+  and 25 (`real`: 19,047 and 78). In `permissive` 133 ground truths are costlier: its search
+  accepts what is cheaper in its working form, which can print dearer. No answer changes on a
+  second call in `f64` or `real`. The search does more work for it: in `f64` 56% more matcher
+  steps and constructor calls on the ground truths, 48% on the predictions and 138% on the T8.1
+  inputs (`real`: 8%, 15% and 73% more). `effort=0`, the chain alone, no longer factors in
+  `real` and `permissive`.
 - **A fractional power of `-0` is `+0`.** The evaluator computed `(-0)^(1/2)` with numpy's
   `sqrt(-0) = -0`, so `1/x^(1/2)` was `-inf` at `x = -0` and `+inf` at `x = 0`; it now follows
   IEEE `pow` (`+0`, and `+inf` for a negative exponent) on numpy arrays, torch tensors and plain
@@ -177,26 +196,24 @@
   (`simplipy.DEFAULT_EFFORT`; it was 4): the exploration phase stops when a whole round of
   expansions finds nothing cheaper, so a second call has nothing left to continue. A cap counts
   every candidate tried over the whole expression, refused ones included, so the cap a search
-  needs grows with the expression (one srbf prediction needs 8 candidates, a sum of 2 copies of it
-  13, of 3 copies 19 and of 8 copies 39). Capped at 4 in this release, 2,872 of srbf's 125,127
-  model predictions change on a second call in `f64` (2,870 to a cheaper form; `real` 3,070).
-  Uncapped, none does in `f64` and `real` (with the canonical forms that read back as themselves,
-  above). On the predictions in `f64` no answer is costlier than at cap 4, and 3,103 are
-  cheaper. `permissive` bounds each search with its work
-  budget by default (above). The search tries the capped default's breadth-first order for its
-  first 8 candidates (on srbf's predictions that alone gives the final answer on 124,541 of
-  125,127 in `f64` and 124,515 in `real`) and then steps to the first cheaper candidate of the
-  best answer until a whole round finds nothing; on 16 copies of one prediction it takes about six
-  times as long as `effort=4`, for an answer a third of the price. Each candidate's whole state is
-  rebuilt only when it is tried and is no longer re-canonicalized in full before its descent. On
-  srbf's predictions the uncapped search takes 8% more time than `effort=4` in `f64` and `real`. Every
+  needs grows with the expression (one srbf prediction needs 5 candidates, a sum of 2 copies of it
+  10 and of 6 copies 30). Capped at 4 in this release, 1,632 of srbf's 125,127 model predictions
+  change on a second call in `f64` and in `real`. Uncapped, none does in `f64` and `real` (with
+  the canonical forms that read back as themselves, above). On the predictions no answer is
+  costlier than at cap 4, and 1,633 are cheaper, in `f64` and in `real`. `permissive` bounds each
+  search with its work budget by default (above). The search is one walk: it tries the current
+  answer's candidates cheapest whole expression first, steps to the first that ends cheaper, and
+  stops when a whole round finds nothing. Each candidate's whole state is rebuilt through the
+  canonical constructors and is not re-canonicalized in full before its descent. On srbf's
+  predictions the uncapped search spends 15% more matcher steps and constructor calls than
+  `effort=4` in `f64` (16% in `real`). Every
   internal caller that passes no `effort` (normalization, masking, mining, the verification
   monitor, the promotion refund) follows the default. `effort=k` caps each search at `k`
-  candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), tried in the
-  previous breadth-first order up to 8; `effort=0` never enters the search, so the search change
+  candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), the first `k`
+  of that one walk; `effort=0` never enters the search, so the search change
   leaves its answers byte-identical (the float cap below changes some: 269 of srbf's 125,127
-  predictions in `f64`, 11,175 in `permissive`; so do permissive's selection and the canonical-form
-  fixes above). Code that
+  predictions in `f64`, 11,175 in `permissive`; so do permissive's selection, the canonical-form
+  fixes above and, in `real` and `permissive`, the refused common-factor rules). Code that
   compares `DEFAULT_EFFORT` with an int now sees `None`.
 - **Faster products.** Building a product decides where its sign goes by pricing every
   orientation of its sign-carrying factors. It now negates each such factor once instead of once
