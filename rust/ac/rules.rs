@@ -252,12 +252,45 @@ fn leaf_count(e: &Ex, tok: Tok) -> usize {
     }
 }
 
+/// The context a rule side of `mode` is READ in: that mode's fold discipline and number
+/// semantics, without certificates. A mode's rules are read the way the mode reads its
+/// inputs, so an f64 pattern carrying a ground subtree f64 folds is folded here too and can
+/// match; the miner keys its classes and reads its sources in the same context.
+///
+/// A PATTERN IS NOT ITS INSTANCES. What the mode's canon does to a ground subtree it does
+/// to every instance, so folds apply. A licence that passes a gate uncertified does not:
+/// permissive cancels `/ $0 $0` on the pattern, but its instance `inf / inf` is NaN, and the
+/// rule `/ $0 $0 -> 1` is the sentinel doctrine that defines that instance. So permissive's
+/// rule sides are read with certified licences (its fold discipline is the bare one).
+pub(crate) fn rule_cx<'a>(view: &'a TokenView<'a>, mode: crate::engine::RuleMode) -> Cx<'a> {
+    let mut cx = Cx::bare(view);
+    if !mode.wildcard_all() {
+        cx.mode = mode;
+    }
+    cx.fold_f64 = Cx::folds_for(mode);
+    cx
+}
+
+/// THE ENGINE-OWNED LAW (gate G8), one definition for the rule load and the miner: does the
+/// rule `lhs -> rhs` (canonical sides) state a law the engine itself performs? Today that is
+/// the distributive law as the search applies it (one FACTOR move, `search::is_factoring`).
+/// The load drops such a rule ("engine-owned-law"); the miner refuses to mint it
+/// (`Engine::law_instance`, the miner's acceptance).
+pub(crate) fn engine_owned_law(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
+    super::search::is_factoring(lhs, rhs, cx)
+}
+
 impl AcRules {
-    /// Translate a compiled ruleset's raw (asset-order) rules. `view` must be a table-backed
+    /// Translate a compiled ruleset's raw (asset-order) rules, read in `mode`'s context
+    /// ([`rule_cx`]). `view` must be a table-backed
     /// view; translation is read-only on the token side (parse + canon mint no tokens), so the
     /// resulting `Ex`s hold table ids only and are safe to store per-Engine.
-    pub fn translate(raw: &[(Vec<Tok>, Vec<Tok>)], view: &TokenView) -> AcRules {
-        let cx = Cx::bare(view);
+    pub fn translate(
+        raw: &[(Vec<Tok>, Vec<Tok>)],
+        view: &TokenView,
+        mode: crate::engine::RuleMode,
+    ) -> AcRules {
+        let cx = rule_cx(view, mode);
         let mut out = AcRules::default();
         // Inverse-pair guard: the asset contains BOTH directions of some length-neutral
         // canonicalizations (`* float("inf") !0 <-> / float("inf") !0`), which root at
@@ -340,7 +373,7 @@ impl AcRules {
             // under whole-state acceptance; in the chain the rule would take the first factoring
             // that lowers its own node, undo the search's DISTRIBUTE candidates, and pre-empt
             // the other factorings and the merges they enable.
-            if super::search::is_factoring(&lhs, &rhs, &cx) {
+            if engine_owned_law(&lhs, &rhs, &cx) {
                 out.note_drop("engine-owned-law");
                 continue;
             }

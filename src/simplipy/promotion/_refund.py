@@ -34,14 +34,15 @@ the rule order are those of the reference loop, byte for byte.
 """
 import re
 
-from ..engine import DEFAULT_EFFORT, SimpliPyEngine, _TAGGED_DIALECT_TOKENS
+from ..engine import (_CORE_SERIALIZATION_ARITIES, _TAGGED_DIALECT_TOKENS, DEFAULT_EFFORT,
+                      SimpliPyEngine)
 from ..progress import Progress
 from ..utils import _dedup_keyed_rules
 
 Q = re.compile(r'^\?(\d+)$')
 
 
-def refund(rules, operators, promote_set, progress=None):
+def refund(rules, operators, promote_set, progress=None, rule_mode='default'):
     """Apply ?->_ for rules in ``promote_set``, then prune the derivable instances.
 
     ``rules``: iterable of (lhs, rhs) token sequences (all ?-sorted from the mine).
@@ -51,6 +52,8 @@ def refund(rules, operators, promote_set, progress=None):
     to upgrade to the `_` subtree sort. Returns the kept, sorted-and-pruned rules.
     ``progress``: an optional :class:`~simplipy.progress.Progress` reporter; the
     derivability probe reports done/total every 500 probes through it.
+    ``rule_mode``: the mode the rules serve in; "derivable" is asked of that mode's engine
+    (its reading, its folds), with the rules installed as its set.
     """
     OPS = operators
     rules = [(tuple(l), tuple(r)) for l, r in rules]
@@ -81,7 +84,9 @@ def refund(rules, operators, promote_set, progress=None):
         tree, j = sub(0)
         assert j == len(ts)
         return tree
-    ar_map = {}
+    # The core serialization language (`inv`, `neg`, `pow`, ...) is the mine's own: a source
+    # is the mode's canonical projection, which speaks it whatever the config declares.
+    ar_map = dict(_CORE_SERIALIZATION_ARITIES)
     for name, props in OPS.items():
         ar_map[name] = 2 if props.get('arity', 1) == 2 else 1
 
@@ -160,6 +165,10 @@ def refund(rules, operators, promote_set, progress=None):
                 live.append(pair)
         prog.stage('stage 4/5 probe engine build', live=len(live), candidates=n_probes)
         engine = SimpliPyEngine(operators=OPS, rules=[[list(l), list(r)] for l, r in live])
+        if rule_mode != 'default':
+            # The mode serves the SAME deduplicated list, so its rows are the default rows.
+            engine._core.set_mode_rules(
+                rule_mode, [(list(l), list(r)) for l, r in engine.simplification_rules])
         keyed = _dedup_keyed_rules(live, [f'x{k}' for k in range(100)], engine)
         buckets = {}
         for p, (key, _) in enumerate(keyed):
@@ -183,7 +192,7 @@ def refund(rules, operators, promote_set, progress=None):
             # rather than trust a stale replica (each probe then runs the reference
             # construction itself).
             return {'broken': True, 'engine': engine, 'rebuild': False}
-        census = engine._core.ac_shadow_census()
+        census = engine._core.ac_shadow_census(rule_mode=rule_mode)
         owner_map, owner_regular = {}, {}
         for victim, owner, was_twin, kind in census:
             owner_map.setdefault(owner, []).append(victim)
@@ -238,8 +247,17 @@ def refund(rules, operators, promote_set, progress=None):
             rest = [[list(l), list(r)] for j, (l, r) in enumerate(current)
                     if j != i and (l, r) not in pruned_set]
             e2 = SimpliPyEngine(operators=OPS, rules=rest)
+            if rule_mode != 'default':
+                e2._core.set_mode_rules(
+                    rule_mode, [(list(l), list(r)) for l, r in e2.simplification_rules])
             try:
-                got = list(e2.simplify(fresh(lhs)))
+                if rule_mode == 'default':
+                    got = list(e2.simplify(fresh(lhs)))
+                else:
+                    probe = fresh(lhs)
+                    form = 'tagged' if _TAGGED_DIALECT_TOKENS.intersection(probe) else 'explicit'
+                    got = list(e2._core.ac_simplify_suppressed(
+                        probe, 48, form, DEFAULT_EFFORT, [], rule_mode=rule_mode))
             except Exception:
                 keep.append((lhs, rhs))
                 continue
@@ -248,7 +266,7 @@ def refund(rules, operators, promote_set, progress=None):
             form = 'tagged' if _TAGGED_DIALECT_TOKENS.intersection(probe) else 'explicit'
             try:
                 got = list(state['engine']._core.ac_simplify_suppressed(
-                    probe, 48, form, DEFAULT_EFFORT, sorted(suppress)))
+                    probe, 48, form, DEFAULT_EFFORT, sorted(suppress), rule_mode=rule_mode))
             except Exception:
                 keep.append((lhs, rhs))
                 continue

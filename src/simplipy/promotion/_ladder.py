@@ -807,7 +807,7 @@ def promote_rules(rules, engine, *, seed=SEED, run_positive_controls=True, progr
     # seed guards exactly as before).
     def ac_key(sides):
         return [(True, tuple(k)) if k is not None else (False, tuple(s))
-                for k, s in zip(engine._core.ac_canonical_keys([list(s) for s in sides]),
+                for k, s in zip(engine._core.ac_canonical_keys([list(s) for s in sides], rule_mode='default'),
                                 sides)]
 
     lhs_seen = set(ac_key([l for l, _ in kept]))

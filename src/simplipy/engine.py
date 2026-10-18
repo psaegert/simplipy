@@ -38,10 +38,12 @@ try:
     # hard error at engine construction.
     from simplipy._core import Engine as _RustEngine  # type: ignore[attr-defined]
     from simplipy._core import core_serialization_ops as _core_serialization_ops  # type: ignore[attr-defined]
+    from simplipy._core import DEFAULT_WORK as _CORE_DEFAULT_WORK  # type: ignore[attr-defined]
     _CORE_IMPORT_ERROR: Exception | None = None
 except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
     _RustEngine = None  # type: ignore[assignment, misc]
     _core_serialization_ops = None  # type: ignore[assignment]
+    _CORE_DEFAULT_WORK = None
     _CORE_IMPORT_ERROR = _exc
 
 
@@ -243,7 +245,8 @@ DEFAULT_EFFORT: int | None = None
 #: search that spends it stops as if its descent cap had bound and returns its best answer so far.
 #: ``work=None`` lifts the bound: the search runs until a round finds nothing, the default of
 #: ``f64`` and ``real``, which stay fast without one.
-DEFAULT_WORK: int | None = 10_000
+#: The compiled core declares it (the miner's permissive marks run under the same budget).
+DEFAULT_WORK: int | None = _CORE_DEFAULT_WORK
 
 
 #: Leaves that denote a VALUE rather than a free variable.

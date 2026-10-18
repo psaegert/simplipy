@@ -126,8 +126,9 @@ class TestTheServedSetIsWhatGetsJudged:
         # declining folds it cannot reproduce -- and a literal here would pin the test
         # to one combination of branches. What must hold is that the served set is the
         # artifact plus exactly the twins, whatever those totals happen to be.
+        _, subsumed, dropped, _ = e._core.ac_rules_info()
         assert len(served) == kept
-        assert len(served) - len(e.simplification_rules) == twins
+        assert len(served) - (len(e.simplification_rules) - subsumed - dropped) == twins
         assert twins > 0, 'no twins minted: this test would hold vacuously'
 
     def test_every_served_entry_names_the_artifact_rule_it_answers_for(self) -> None:
@@ -193,7 +194,7 @@ class TestFactoringIsASearchMove:
         # One FACTOR move turns each left side into its right side: the search owns that, so the
         # load refuses both rules, and the search factors what they did.
         e = make_engine(COMMON_FACTOR)
-        assert e._core.ac_rules_drop_census().get("engine-owned-law") == len(COMMON_FACTOR)
+        assert e._core.ac_rules_drop_census(rule_mode="default").get("engine-owned-law") == len(COMMON_FACTOR)
         assert e._core.ac_served_rules() == []
         for src, factored in ((["+", "*", "x1", "x2", "*", "x3", "x2"], ["*", "+", "x1", "x3", "x2"]),
                               (["-", "*", "x1", "x2", "*", "x3", "x2"], ["*", "-", "x1", "x3", "x2"])):
@@ -203,7 +204,7 @@ class TestFactoringIsASearchMove:
         # `_` binds any subtree, including one that is not finite a.e., where the search does not
         # factor (its licence): such a rule states more than the search does, so it is served.
         e = make_engine([[["+", "*", "_0", "_1", "*", "_2", "_1"], ["*", "+", "_0", "_2", "_1"]]])
-        assert "engine-owned-law" not in e._core.ac_rules_drop_census()
+        assert "engine-owned-law" not in e._core.ac_rules_drop_census(rule_mode="default")
         assert len(e._core.ac_served_rules()) >= 1
 
     def test_a_repeated_wildcard_binds_a_class_up_to_sign(self) -> None:

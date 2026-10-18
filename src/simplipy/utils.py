@@ -534,8 +534,10 @@ def _dedup_keyed_rules(
         dummy_variables: list[str],
         engine: Any,
         variable_prefix: str = '?',
-        verbose: bool = False) -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
-    """The variable-remapped rules paired with their dedup keys, in input order.
+        verbose: bool = False,
+        rule_mode: str = 'default') -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
+    """The variable-remapped rules paired with their dedup keys, in input order. The key is
+    the canonical form as ``rule_mode`` reads a rule side (its parse and canon).
 
     ONE key, every consumer: :func:`deduplicate_rules` folds this list, and the mine's
     per-proposal duplicate accounting folds it identically. A second copy of the keying
@@ -559,7 +561,7 @@ def _dedup_keyed_rules(
     # THE KEY IS THE INTERNAL FORM, not the spelling (owner ruling 2026-08-18). Batched
     # through the core in ONE call: a ruleset is keyed side-by-side and a per-rule call
     # would re-pay the token-overlay setup for every entry.
-    keys = engine._core.ac_canonical_keys([list(source) for source, _ in remapped])
+    keys = engine._core.ac_canonical_keys([list(source) for source, _ in remapped], rule_mode=rule_mode)
     out: list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]] = []
     for key, pair in zip(keys, remapped):
         # A side the AC parser refuses keeps its SPELLING as the key: the loader drops
@@ -569,7 +571,7 @@ def _dedup_keyed_rules(
     return out
 
 
-def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any, rule_mode: str = 'default') -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     """Deduplicate a list of simplification rules by canonicalizing variables.
 
     This function processes a list of (source, target) simplification rules. It
@@ -614,7 +616,8 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
         The deduplicated and optimized list of simplification rules.
     """
     deduplicated_rules: dict[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]] = {}
-    for key, pair in _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose):
+    for key, pair in _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose,
+                                        rule_mode):
         existing = deduplicated_rules.get(key)
         # The WHOLE PAIR wins or loses: a strictly shorter target brings its own source
         # spelling with it, so every emitted rule is a (source, target) that was

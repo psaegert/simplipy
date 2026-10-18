@@ -195,11 +195,23 @@ impl Engine {
         raw: &[(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)],
         mode: RuleMode,
     ) -> AcRules {
+        let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
+        let view = TokenView::new(&self.tokens, &overlay);
+        self.translate_in(raw, &view, mode)
+    }
+
+    /// [`Engine::translate_rules`] over a caller's view (the preview interns its rules into
+    /// a call's overlay): the registry's pole filter, `AcRules::translate` in `mode`'s
+    /// context, the provenance lift.
+    fn translate_in(
+        &self,
+        raw: &[(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)],
+        view: &TokenView,
+        mode: RuleMode,
+    ) -> AcRules {
         // A mode's rules are read in that mode's number domain (design 2c), whichever run
         // first asks for them (translation is lazy and may start inside another mode's run).
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
-        let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
-        let view = TokenView::new(&self.tokens, &overlay);
         let is_wildcard = |s: &str| {
             s.len() >= 2
                 && (s.starts_with('_') || s.starts_with('!') || s.starts_with('?'))
@@ -227,7 +239,7 @@ impl Engine {
             kept.push((l.clone(), r.clone()));
             kept_idx.push(i);
         }
-        let mut r = AcRules::translate(&kept, &view);
+        let mut r = AcRules::translate(&kept, view, mode);
         r.n_registry_dropped = n_registry_dropped;
         for s in r.src.iter_mut() {
             *s = kept_idx[*s];
@@ -318,8 +330,8 @@ impl Engine {
     /// C36: the per-reason drop census -- every non-kept disposition of the loaded
     /// asset's rules, named: the six translate-time reasons, the registry refusal,
     /// and the arithmetic subsumption count, as (reason, count) pairs.
-    pub fn ac_rules_drop_census(&self) -> Vec<(String, usize)> {
-        let r = self.ac_rules();
+    pub fn ac_rules_drop_census(&self, mode: RuleMode) -> Vec<(String, usize)> {
+        let r = self.ac_rules_for(mode);
         let mut out: Vec<(String, usize)> = r
             .drop_census
             .iter()
@@ -340,8 +352,8 @@ impl Engine {
     /// The SHADOW CENSUS (`AcRules::shadow_census`): every translate-time skip caused by
     /// cross-rule state, as `(victim_row, owner_row, owner_was_twin, kind)` -- the rows
     /// whose removal would resurrect another rewrite. Forces the lazy translation.
-    pub fn ac_shadow_census(&self) -> Vec<(usize, usize, bool, String)> {
-        self.ac_rules()
+    pub fn ac_shadow_census(&self, mode: RuleMode) -> Vec<(usize, usize, bool, String)> {
+        self.ac_rules_for(mode)
             .shadow_census
             .iter()
             .map(|&(victim, owner, was_twin, kind)| (victim, owner, was_twin, kind.to_string()))
@@ -789,17 +801,18 @@ impl Engine {
         form: AcForm,
         explore_budget: usize,
         suppressed: &FxHashSet<usize>,
+        mode: RuleMode,
     ) -> Option<Vec<String>> {
         let (ctx, best) = self.ac_simplify_ex_fold_sup(
             tokens,
             max_passes,
-            RuleMode::Default,
+            mode,
             explore_budget,
-            Cx::folds_for(RuleMode::Default),
+            Cx::folds_for(mode),
             Some(suppressed),
             None,
         );
-        self.project(ctx, best, form, RuleMode::Default)
+        self.project(ctx, best, form, mode)
     }
 
     /// The PRETTY INFIX rendering of the simplified expression: `x8 + 1.2*x3`, `-x0/3`,
@@ -961,10 +974,10 @@ impl Engine {
         out
     }
 
-    pub fn ac_canonical_key(&self, tokens: &[String]) -> Option<Vec<String>> {
+    pub fn ac_canonical_key(&self, tokens: &[String], mode: RuleMode) -> Option<Vec<String>> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         Some(
-            self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx)
+            self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx, mode)
                 .pop()??,
         )
     }
@@ -972,24 +985,122 @@ impl Engine {
     /// [`Engine::ac_canonical_key`] over a BATCH, sharing one context (and therefore one
     /// token overlay) across the whole list -- a ruleset is keyed side-by-side, and a
     /// per-expression context would re-pay the overlay setup 2x per rule.
-    pub fn ac_canonical_keys(&self, exprs: &[Vec<String>]) -> Vec<Option<Vec<String>>> {
+    pub fn ac_canonical_keys(
+        &self,
+        exprs: &[Vec<String>],
+        mode: RuleMode,
+    ) -> Vec<Option<Vec<String>>> {
         let ctx = SimplifyCtx::new(self.tokens.len());
-        self.ac_canonical_keys_in(exprs, &ctx)
+        self.ac_canonical_keys_in(exprs, &ctx, mode)
+    }
+
+    /// The canonical state of `tokens` as `mode` READS a rule side or a mine source
+    /// (`ac::rules::rule_cx`: the mode's parse and canon, no certificates), with its
+    /// explicit projection (the representative the miner certifies and writes) and its
+    /// tagged key (the dedup key). One reading for the loader, the keys and the sources.
+    pub fn ac_mode_projection(
+        &self,
+        tokens: &[String],
+        mode: RuleMode,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        let toks = self.intern_seq(tokens, &ctx);
+        let view = self.view(&ctx);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let cx = crate::ac::rules::rule_cx(&view, mode);
+        let e = canon(from_prefix(&toks, &cx)?, &cx);
+        let bare = Cx::bare(&view);
+        let explicit = to_prefix(&e, &bare);
+        let key = to_prefix_tagged(&e, &bare);
+        Some((
+            self.resolve_seq(&explicit, &ctx),
+            self.resolve_seq(&key, &ctx),
+        ))
+    }
+
+    /// Does the rule `lhs -> rhs` state something the engine itself performs, read in
+    /// `mode`? `"canon"`: both sides are one canonical state (a respelling). The name of
+    /// the engine-owned law (`ac::rules::engine_owned_law`, the load gate's one predicate):
+    /// the rule states it. `None`: neither. Sides speak the rule language (wildcards).
+    pub fn law_instance(
+        &self,
+        lhs: &[String],
+        rhs: &[String],
+        mode: RuleMode,
+    ) -> Option<Option<&'static str>> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        let (lt, rt) = (self.intern_seq(lhs, &ctx), self.intern_seq(rhs, &ctx));
+        let view = self.view(&ctx);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let cx = crate::ac::rules::rule_cx(&view, mode);
+        let l = canon(from_prefix(&lt, &cx)?, &cx);
+        let r = canon(from_prefix(&rt, &cx)?, &cx);
+        Some(if l == r {
+            Some("canon")
+        } else if crate::ac::rules::engine_owned_law(&l, &r, &cx) {
+            Some("engine-owned-law")
+        } else {
+            None
+        })
+    }
+
+    /// The rules `mode` would SERVE from `raw`, without installing them: the load path
+    /// (`translate_rules`) on a call's overlay, in the explicit projection, `source`
+    /// indexing `raw`. Orientation twins included, refused rules absent.
+    pub fn ac_translate_preview(
+        &self,
+        raw: &[(Vec<String>, Vec<String>)],
+        mode: RuleMode,
+    ) -> Vec<ServedRule> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        let toks: Vec<_> = raw
+            .iter()
+            .map(|(l, r)| (self.intern_seq(l, &ctx), self.intern_seq(r, &ctx)))
+            .collect();
+        let view = self.view(&ctx);
+        let rules = self.translate_in(&toks, &view, mode);
+        let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        rules
+            .rules
+            .iter()
+            .zip(rules.src.iter())
+            .map(|(rule, &src)| {
+                (
+                    self.resolve_seq(&to_prefix(&rule.lhs, &bare), &ctx),
+                    self.resolve_seq(&to_prefix(&rule.rhs, &bare), &ctx),
+                    src,
+                )
+            })
+            .collect()
+    }
+
+    /// The serve ordering in `mode`: is `a` strictly below `b` when both are read in the
+    /// mode's SERVING context, certificates on (`certified_reading`), exactly as the
+    /// rewrite pass orders a rule's firing? `None` on malformed input.
+    pub fn ac_ordered_below_in(&self, a: &[String], b: &[String], mode: RuleMode) -> Option<bool> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        let (ea, _) = self.certified_reading(a, mode, mode, &ctx)?;
+        let (eb, _) = self.certified_reading(b, mode, mode, &ctx)?;
+        let view = self.view(&ctx);
+        Some(crate::ac::rules::ordered_below(&ea, &eb, &view))
     }
 
     fn ac_canonical_keys_in(
         &self,
         exprs: &[Vec<String>],
         ctx: &SimplifyCtx,
+        mode: RuleMode,
     ) -> Vec<Option<Vec<String>>> {
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         exprs
             .iter()
             .map(|tokens| {
                 let toks = self.intern_seq(tokens, ctx);
                 let view = self.view(ctx);
-                let bare = Cx::bare(&view);
+                let bare = crate::ac::rules::rule_cx(&view, mode);
                 let e = canon(from_prefix(&toks, &bare)?, &bare);
-                let key = to_prefix_tagged(&e, &bare);
+                let key = to_prefix_tagged(&e, &Cx::bare(&view));
                 // INJECTIVITY, asserted where it is cheapest to check. The key is a KEY
                 // only if the projection is FAITHFUL on canonical states: if two distinct
                 // states could share one serialization, dedup would silently merge two
@@ -2030,7 +2141,10 @@ mod tests {
     #[test]
     fn ac_canonical_key_is_the_bare_translate_form() {
         let Some(e) = engine() else { return };
-        let k = |toks: &[&str]| e.ac_canonical_key(&t(toks)).expect("parses");
+        let k = |toks: &[&str]| {
+            e.ac_canonical_key(&t(toks), RuleMode::Default)
+                .expect("parses")
+        };
         // The two AC spellings of one pattern share a key.
         assert_eq!(
             k(&["*", "(-1)", "asin", "_0"]),
@@ -2059,7 +2173,10 @@ mod tests {
     #[test]
     fn ac_canonical_key_separates_wildcard_sorts_and_indices() {
         let Some(e) = engine() else { return };
-        let k = |toks: &[&str]| e.ac_canonical_key(&t(toks)).expect("parses");
+        let k = |toks: &[&str]| {
+            e.ac_canonical_key(&t(toks), RuleMode::Default)
+                .expect("parses")
+        };
         let sorts = ["_0", "?0", "!0", "$0"];
         for (i, a) in sorts.iter().enumerate() {
             for b in &sorts[i + 1..] {
@@ -2090,9 +2207,14 @@ mod tests {
             vec!["+", "<constant>", "*", "<constant>", "x0"],
             vec!["/", "float(\"inf\")", "!0"],
         ] {
-            let k1 = e.ac_canonical_key(&t(&toks)).expect("parses");
+            let k1 = e
+                .ac_canonical_key(&t(&toks), RuleMode::Default)
+                .expect("parses");
             let k2 = e
-                .ac_canonical_key(&k1.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                .ac_canonical_key(
+                    &k1.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                    RuleMode::Default,
+                )
                 .expect("key re-parses");
             assert_eq!(k1, k2, "{toks:?}");
         }
@@ -2890,9 +3012,13 @@ mod tests {
         // to its PRISTINE form after the B5+B19 interim (6649/30/0, discharged). If
         // either count moves off 0 again, the published asset lags the engine:
         // REPUBLISH, do not re-pin.
+        // Read in f64's own reading (its fold on), exactly ONE row of the published f64
+        // file states what the f64 constructor performs: `atanh pow (-10) (-9) -> -1e-09`.
+        // The per-mode re-mine does not mint it; until that asset is republished the count
+        // is 1. Any other value means the canon moved past the asset -- republish.
         assert_eq!(
-            subsumed, 0,
-            "published asset (2026-08-15 re-mine) is mint-pristine against this engine; \
+            subsumed, 1,
+            "published asset vs f64's reading: one known f64-folded row; any other \
              subsumption means the canon moved past it -- republish, do not re-pin"
         );
         let _ = twins;

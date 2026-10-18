@@ -19,8 +19,9 @@ from conftest import acj_config_path
 
 VARS = ['x0', 'x1']
 SEED = 11
-# The mode the one mine of today's driver accepts for (the union of the three files).
-MODE = 'permissive'
+# The channels are compared in `real`: its serve answer leaves the specials and `log 1`
+# standing (permissive absorbs and folds them), so every acceptance entry gets to speak.
+MODE = 'real'
 
 
 @pytest.fixture(scope='module')
@@ -63,7 +64,8 @@ def _verdicts(eng, x, x_confirm, src, cand):
 PAIRS = [
     # accepted: a true rule strictly below the engine's mark
     (('/', 'sin', 'x0', 'cos', 'x0'), ('tan', 'x0'), True, 'accepted'),
-    (('log', 'exp', '+', 'x0', 'x1'), ('+', 'x0', 'x1'), True, 'accepted'),
+    # true, but permissive's own serve answer already performs it (the mark is the target)
+    (('log', 'exp', '+', 'x0', 'x1'), ('+', 'x0', 'x1'), False, 'not_below'),
     # numerically false
     (('sin', 'x0'), ('x0',), False, 'uncertified'),
     # true but not strictly below the mark (the engine already collects the bag)
@@ -152,17 +154,20 @@ class TestZeroIsZero:
 
 @pytest.mark.parametrize('mode', ['default', 'real'])
 def test_resolution_and_the_pair_judgment_agree(eng, rows, mode):
-    """One numeric verdict for "this target equals this source": the library scan resolves
-    `<constant>` for `atanh tanh 8` to the literal `8`, and ships it iff `judge_pair` accepts
-    `atanh tanh 8 -> 8` on the same rows. f64 computes 7.99999999997 (refused); the value is
-    8 (real accepts)."""
-    x, _ = rows
+    """One numeric verdict for "this target equals this source": the scan resolves
+    `<constant>` in `+ x0 <constant>` for `x0 + atanh(tanh 8)` to the literal `8`, and ships
+    `+ x0 8` iff `judge_pair` accepts that pair on the same rows. f64 computes
+    atanh(tanh 8) = 8 - 1.0e-10, which fails the relative bar where |x0 + 8| < 10 (refused);
+    the value is 8, and with those rows a minority real re-judges them (accepts). Judged
+    without the mint acceptance (`find_rule`), whose serve mark would fold the ground part."""
+    n = 64
+    x0 = [100.0 + i for i in range(n - 8)] + [0.0, 0.5, 1.0, -1.0, 2.0, -2.0, 0.25, 3.0]
+    x = np.array([[v, 1.0] for v in x0])
     core = eng._core
-    src = ['atanh', 'tanh', '8']
-    lib = core.build_candidate_library([['<constant>']], VARS, x.flatten(order='C').tolist(),
-                                       x.shape[0], rule_mode=mode)
-    scan = core.find_rule_lib(src, lib, challenges=16, retries=16, seed=SEED, rtol=1e-11,
-                              atol=1e-12, rule_mode=mode)
-    ok, _ = _judge(eng, x, src, ['8'], mode=mode)
-    assert (scan == ['8']) == ok
+    src = ['+', 'x0', 'atanh', 'tanh', '8']
+    scan = core.find_rule(src, len(src), None, [['+', 'x0', '<constant>']], VARS,
+                          x.flatten(order='C').tolist(), n, 16, 16, SEED, 1e-11,
+                          1e-12, None, rule_mode=mode)
+    ok, _ = _judge(eng, x, src, ['+', 'x0', '8'], mode=mode)
+    assert (scan == ['+', 'x0', '8']) == ok, scan
     assert ok == (mode == 'real')

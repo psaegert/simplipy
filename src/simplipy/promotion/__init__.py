@@ -36,7 +36,8 @@ from . import _f64_eval, _pointwise, _const_bearing, _overturn, _refund, _ladder
 __all__ = ['promote']
 
 
-def promote(rules, engine, *, run_positive_controls=True, verbose=False, progress=None):
+def promote(rules, engine, *, run_positive_controls=True, verbose=False, progress=None,
+            rule_mode='default'):
     """Assign each ``?``-sorted mined rule its strongest sound sort; prune derivable rules.
 
     ``rules``: iterable of (lhs, rhs) prefix-token sequences, all ``?``-sorted.
@@ -45,6 +46,8 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     reporter (see :mod:`simplipy.progress`). Promotion is the longest single-threaded stage
     of a mine and scales worse than linearly in the rule count, so it reports by default
     whenever the mine is verbose.
+    ``rule_mode`` is the mode the rules serve in: the derivability refund asks that mode's
+    engine.
     Returns ``(kept_rules, report)`` where ``kept_rules`` is a list of ``[lhs, rhs]`` lists.
     """
     from ..progress import Progress
@@ -125,7 +128,8 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     promote_set = {(tuple(l), tuple(r)) for l, r, *_ in pw['PROMOTE']} \
         | {(tuple(l), tuple(r)) for l, r, *_ in cb['PROMOTE']}
     prog.stage("stage 4/5 derivability refund", candidates=len(rules), promoted=len(promote_set))
-    sorted_rules = _refund.refund(rules, engine._operators_config, promote_set, progress=prog)
+    sorted_rules = _refund.refund(rules, engine._operators_config, promote_set, progress=prog,
+                                  rule_mode=rule_mode)
     prog.stage("stage 4/5 derivability refund: done", kept=len(sorted_rules))
 
     # STAGE 5 -- the _->!->? ladder on the enriched lattice + moving-spike refusal.

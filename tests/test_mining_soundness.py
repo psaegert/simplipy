@@ -442,7 +442,9 @@ class TestExtensionMeasureGate:
         # `-tanh(-x) = tanh(x)`: the outer sign is a bag coefficient rather than an even
         # FUNCTION, so the parity arm (which only plants sign-blindness at an even head)
         # does not reach it.
-        assert (("neg", "tanh", "neg", "?0"), ("tanh", "?0")) in rules, sorted(rules)
+        # Since the marks are the serve answer, `-tanh(-x)` reads as `tanh(x)` in the
+        # mode's own canon and mints nothing; the tripwire is that the mine minted at all.
+        assert rules, 'the mine minted nothing: every assertion below would hold vacuously'
         # the gate: no shipped LHS applies rootn with an operator-headed (expression)
         # index -- literal-index rootn is AC-native and never reaches the rule table
         arity = {name: spec["arity"] for name, spec in _ROOTN_OPERATORS.items()}
@@ -601,8 +603,9 @@ class TestProvenance:
         assert side["universe"]["3"]["coverage"] == 1.0
         assert side["universe"]["2"]["coverage"] == 1.0
         assert side["progress"]["final"] is True
-        assert side["progress"]["rules_total"] == len(
-            json.load(open(out.replace(".json", "_permissive.json"))))
+        # One mine per file: this sidecar records the f64 file's own mine.
+        assert side["mode"] == "f64"
+        assert side["progress"]["rules_total"] == len(json.load(open(out)))
         assert side["simplipy_version"]
         # The versions that serve the mined rules: the running version's minor series,
         # and a config carrying it loads on the version that mined it.
@@ -1124,12 +1127,9 @@ class TestProposalChannel:
         # carried there. So the honest check is that every engine rule is either in the
         # file or preempted in that mode -- never silently missing. (This replaced a
         # comparison against the retired `corpus == f64 UNION real` identity.)
-        from simplipy.mining import _preempted_by
-        saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(out.replace('.json', '_permissive.json')))}
-        saved |= {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules
-                  if _preempted_by(eng, lhs, rhs, 'permissive')}
-        assert rules == saved, "the artifact must contain the merged (mined + certified) ruleset"
+        # The engine ends holding the files it wrote: its default set IS the f64 file.
+        saved = {tuple(tuple(side) for side in rule) for rule in json.load(open(out))}
+        assert rules == saved, "the engine must hold the f64 file it wrote"
         assert sidecar["proposals"]["outcomes"] == {
             "certified": 1, "already_covered": 0, "rejected": 1, "duplicate": 1,
             "certified_then_dropped": 0}
@@ -1279,44 +1279,18 @@ class TestProposalTargetAllowance:
                               "arity": 2, "precedence": 3, "commutative": False}}
 
     def test_distribute_family_five_token_target_certifies_past_the_bound(self, tmp_path) -> None:
-        """`x0*x1 + x0*x2 -> x0*(x1+x2)`: a 7-token source with a 5-token hinted target
-        certifies through a ``max_target_pattern_length: 3`` mine (the bound caps the
-        candidate search, never the hint), because the target strictly descends the
-        serve ordering. The certified rule joins the ruleset and the artifact; the serving
-        engine refuses it at load, because it states the distributive law, which the search
-        owns, and the search reduces the source."""
+        """`x0*x1 + x0*x2 -> x0*(x1+x2)`: the distributive law, which the search owns. The
+        mark is the serve answer, so it is already the factored state: the proposal is
+        covered in every mode and nothing mints -- the length cap was never the bar."""
         src = ["+", "*", "x0", "x1", "*", "x0", "x2"]
         tgt = ["*", "x0", "+", "x1", "x2"]
         eng, sidecar, out = self._mine(
             str(tmp_path), [{"source": src, "target": tgt}], dummy_variables=3)
         assert sidecar["proposals"]["outcomes"] == {
-            "certified": 1, "already_covered": 0, "rejected": 0, "duplicate": 0,
+            "certified": 0, "already_covered": 1, "rejected": 0, "duplicate": 0,
             "certified_then_dropped": 0}
-        assert sidecar["proposals"]["trail"][-1] == {
-            "source": src, "target": tgt, "verdict": "certified", "stage": "accepted",
-            "certificate": "verified"}
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules}
-        assert (("+", "*", "?0", "?1", "*", "?0", "?2"), ("*", "?0", "+", "?1", "?2")) in rules
-        # The corpus file is PRUNED: a rule corpus's own constructor performs is not
-        # carried there. So the honest check is that every engine rule is either in the
-        # file or preempted in that mode -- never silently missing. (This replaced a
-        # comparison against the retired `corpus == f64 UNION real` identity.)
-        from simplipy.mining import _preempted_by
-        saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(out.replace('.json', '_permissive.json')))}
-        saved |= {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules
-                  if _preempted_by(eng, lhs, rhs, 'permissive')}
-        # A rule translation refuses (here the distributive law, the search's) is served
-        # nowhere, so it is routed to no file -- counted in the drop census, never silent.
-        assert eng._core is not None
-        served = {i for _, _, i in eng._core.ac_served_rules()}
-        refused = {(tuple(lhs), tuple(rhs)) for i, (lhs, rhs) in enumerate(eng.simplification_rules)
-                   if i not in served}
-        assert (("+", "*", "?0", "?1", "*", "?0", "?2"), ("*", "?0", "+", "?1", "?2")) in refused
-        assert eng._core.ac_rules_drop_census().get("engine-owned-law", 0) >= 1
-        assert rules == saved | refused, "the artifact must carry the merged ruleset"
-        # The allowance is real at serve time: the engine's answer for the source sits
-        # strictly below it in the ordering (the search factors it).
+        assert (("+", "*", "?0", "?1", "*", "?0", "?2"), ("*", "?0", "+", "?1", "?2")) not in rules
         endpoint = eng.simplify(list(src))
         assert eng._core.ac_ordered_below(endpoint, src), \
             "the engine must reduce the source at serve time"
@@ -1733,29 +1707,32 @@ class TestProposalHintLengthAllowance:
 
         eng, sidecar, artifact = self._mine(
             str(tmp_path / "mine"), [{"source": self.SIN_SRC, "target": self.SIN_TGT}])
-        assert sidecar["proposals"]["trail"][-1] == {
+        # Each file is mined in its own mode. In f64, `1 - cos(2*x0)` loses its value to
+        # cancellation near 0, so the f64 mine refuses the pair; the real file's mine
+        # certifies the hint, and that file carries the rule.
+        real = artifact.replace('.json', '_real.json')
+        with open(real + '.provenance.json') as fh:
+            real_side = json.load(fh)
+        assert real_side["proposals"]["trail"][-1] == {
             "source": self.SIN_SRC, "target": self.SIN_TGT, "verdict": "certified",
             "stage": "accepted", "certificate": "verified"}
-        rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules}
+        saved = {tuple(tuple(side) for side in rule) for rule in json.load(open(real))}
         assert (("-", "1", "cos", "*", "2", "?0"),
-                ("*", "2", "pow", "sin", "?0", "2")) in rules
-        saved = {tuple(tuple(side) for side in rule)
-                 for rule in json.load(open(artifact.replace('.json', '_permissive.json')))}
-        assert rules == saved, "the artifact must carry the merged ruleset"
+                ("*", "2", "pow", "sin", "?0", "2")) in saved
         # SERVE. `simplify` is DIALECT-PRESERVING (owner-ruled): it answers in the
         # dialect it was handed, and SIN_SRC is explicit binary prefix, so the answer is
         # too -- `to_tagged` is the separate step for the bag spelling. `ac_judge`'s
         # endpoint is the same state in the mine's binary alphabet. Before the merge both
         # are the source itself -- the rule is what moves them.
-        assert eng.simplify(list(self.SIN_SRC)) \
+        # It serves from the file that carries it: real.
+        assert eng.simplify(list(self.SIN_SRC), mode='real') \
             == ["*", "2", "pow", "sin", "x0", "2"], \
             "the certified rule does not fire at serve time"
-        assert eng.to_tagged(eng.simplify(list(self.SIN_SRC))) \
+        assert eng.to_tagged(eng.simplify(list(self.SIN_SRC), mode='real')) \
             == ["<mul>", "2", "pow", "sin", "x0", "2", "</mul>"], \
             "the bag spelling must still be one conversion away"
         assert eng._core is not None
-        _, _, endpoint = eng._core.ac_judge(list(self.SIN_SRC), 48)
-        assert endpoint == self.SIN_TGT
+        assert eng._core.mine_mark(list(self.SIN_SRC), rule_mode='real') == self.SIN_TGT
 
     def test_ascending_sibling_is_refused_by_the_ordering_gate(self, tmp_path) -> None:
         """(b) `1 + cos(2*x0) = 2*cos(x0)^2` is refused BEFORE and AFTER -- but the
@@ -1940,14 +1917,13 @@ class TestCertifiedThenDropped:
                        dummy_variables=1, extra_internal_terms=["0", "1", "<constant>"],
                        X=256, seed=7, verbose=False, output_file=out, proposals=proposals,
                        **{"promote_sorts": False, **kwargs})
-        with open(out + ".provenance.json") as fh:
+        # ONE MINE PER FILE: the census reconciles a file against its OWN mine, recorded in
+        # that file's sidecar. The real file is the one these fixtures' identities (true on
+        # R, not f64-realised) belong to.
+        real = out.replace('.json', '_real.json')
+        with open(real + ".provenance.json") as fh:
             sidecar = json.load(fh)
-        # THE ARTIFACT IS A TRIPLE. `mined.json` is the f64 set alone, so a rule routed
-        # to `real` (true on R, not f64-realised) is absent from it while being perfectly
-        # present in the mine's output. For census reconciliation -- "did this certified
-        # pair survive, or must it name its drop?" -- the honest denominator is the
-        # CORPUS set, which is exactly f64 UNION real.
-        with open(out.replace('.json', '_permissive.json')) as fh:
+        with open(real) as fh:
             artifact = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(fh)]
         return eng, sidecar, artifact
 
@@ -2172,7 +2148,9 @@ class TestTripleRouting:
         # artifact predates the triple" -- which stopped being true when the asset became
         # one, and a `<=` bound passes any under-population. The identity that holds under
         # the per-mode prune is: what a file omits, that mode's own constructor performs.
-        assert len(triple['permissive']) + len(rejected) + meta['preempted']['permissive'] == served
+        # ... or what that mode's own reading of the rule never serves (`dead`).
+        assert (len(triple['permissive']) + len(rejected) + meta['preempted']['permissive']
+                + meta['dead']['permissive']) == served
         assert len(triple['f64']) + meta['preempted']['f64'] <= served
         assert len(triple['real']) + meta['preempted']['real'] <= served
         assert 0 < len(triple['f64']) and 0 < len(triple['real'])
@@ -2208,7 +2186,6 @@ class TestTheGateRoutesInsteadOfDeleting:
 
         f64 = json.load(open(out))
         real = json.load(open(str(tmp_path / 'mined_real.json')))
-        corpus = json.load(open(str(tmp_path / 'mined_permissive.json')))
 
         def keys(rs):
             return {(tuple(lhs), tuple(rhs)) for lhs, rhs in rs}
@@ -2229,18 +2206,22 @@ class TestTheGateRoutesInsteadOfDeleting:
         # licenses them, and absent from the one that does not. (An earlier version of
         # this test asserted only the absence, on the strength of a comment claiming they
         # were gone from all three files -- which was false.)
-        kept = [p for p in pairs if (tuple(p[0]), tuple(p[1])) in keys(real)]
-        assert kept, f'no inverse pair survived into rules_real: {sorted(keys(real))[:4]}'
-        for lhs, rhs in kept:
-            assert (tuple(lhs), tuple(rhs)) in keys(corpus), lhs
+        # ONE MINE PER FILE: real's constructor performs the inverse pairs itself (its serve
+        # answer for `atanh(tanh(x0))` is `x0`), so its mine mints none of them, and the
+        # f64 file, whose mode does not realise them, carries none either.
+        for lhs, rhs in pairs:
+            spelled = [('x0' if t == '?0' else t) for t in lhs]
+            assert engine._core.mine_mark(spelled, rule_mode='real') == \
+                [('x0' if t == '?0' else t) for t in rhs], lhs
             assert (tuple(lhs), tuple(rhs)) not in keys(f64), \
                 f'{" ".join(lhs)} is NOT f64-realised and must not be in the f64 set'
-
-        # the carve-out is visible in the sidecar, never silent
-        prov = json.load(open(out + '.provenance.json'))
-        assert prov['triple']['counts'] == {'f64': len(f64), 'real': len(real),
-                                            'permissive': len(corpus)}
-        assert prov['symbolic_gate']['routed_to_tier'].get('real')
+            assert (tuple(lhs), tuple(rhs)) not in keys(real), lhs
+        # each file's sidecar records its own mine
+        for path, mode in ((out, 'f64'), (str(tmp_path / 'mined_real.json'), 'real'),
+                           (str(tmp_path / 'mined_permissive.json'), 'permissive')):
+            prov = json.load(open(path + '.provenance.json'))
+            assert prov['mode'] == mode
+            assert prov['triple']['counts'][mode] == len(json.load(open(path)))
 
     def test_the_unjudgeable_buckets_still_fail_closed(self) -> None:
         """Relaxing the gate must not relax it for verdicts that carry no tier at all.
@@ -2282,9 +2263,11 @@ class TestCertifyRulesRoutesLikeTheMine:
         engine = self._bare(tmp_path)
         out = engine.certify_rules([['atanh', 'tanh', 'x0'], ['log', 'exp', 'x0']],
                                    dummy_variables=1, X=256, verbose=False)
-        survived = {(tuple(r[0]), tuple(r[1])) for r in out}
-        assert (('atanh', 'tanh', 'x0'), ('x0',)) in survived
-        assert (('log', 'exp', 'x0'), ('x0',)) in survived
+        # certify_rules judges in permissive, whose serve answer already performs both
+        # inverse pairs: there is nothing to certify, and nothing is deleted either.
+        assert out == []
+        for src in (['atanh', 'tanh', 'x0'], ['log', 'exp', 'x0']):
+            assert engine._core.mine_mark(src, rule_mode='permissive') == ['x0']
 
     def test_a_reject_tier_proposal_is_still_deleted(self, tmp_path) -> None:
         """The relaxation is exactly one step wide. `sin t -> t` is false on R AND not
@@ -2324,7 +2307,7 @@ class TestTheUntestedBranchesOfTheRouter:
         # present even when empty: a key that appears only on failure cannot be audited
         assert 'rejected' in prov['triple']
         assert isinstance(prov['triple']['rejected'], list)
-        assert set(prov['triple']['files']) == {'f64', 'real', 'permissive'}
+        assert prov['triple']['files'] == {'f64': 'mined.json'}
 
     def test_the_licence_is_judged_on_the_WRITTEN_spelling_not_the_served_canon(self) -> None:
         """Task #83. The writer serializes `engine.simplification_rules` verbatim, so
@@ -2349,6 +2332,9 @@ class TestTheUntestedBranchesOfTheRouter:
         class FakeCore:
             def ac_served_rules(self):
                 return [(served_respelling[0], served_respelling[1], 0)]
+
+            def ac_translate_preview(self, rules, rule_mode):
+                return self.ac_served_rules()
 
         class FakeEngine:
             simplification_rules = [file_rule, unserved]
@@ -2630,7 +2616,9 @@ class TestCanonicalSourceClassCertification:
         # At least one length must actually collapse, or the dedup is untested here.
         assert any(v["classes"] < v["enumerated"] for v in census.values()), census
         for v in census.values():
-            assert 0 < v["classes"] <= v["enumerated"]
+            # an atom has nothing below it, so it is no source: length 1 has none
+            assert 0 <= v["classes"] <= v["enumerated"]
+        assert census["3"]["classes"] > 0
 
     def test_a_skipped_spelling_is_still_served(self, engine) -> None:
         """The whole licence for skipping: same key => the loader builds the same pattern,
@@ -2655,7 +2643,7 @@ class TestCanonicalSourceClassCertification:
                     grown += [[op] + a + b for a in exprs for b in exprs if len(a) + len(b) <= 2]
             exprs = [e for e in exprs + grown if len(e) <= 3]
         classes: dict[tuple, list[list[str]]] = {}
-        for e, k in zip(exprs, core.ac_canonical_keys([list(e) for e in exprs])):
+        for e, k in zip(exprs, core.ac_canonical_keys([list(e) for e in exprs], rule_mode="default")):
             if k is not None:
                 classes.setdefault(tuple(k), []).append(e)
         multi = {k: v for k, v in classes.items() if len(v) > 1}

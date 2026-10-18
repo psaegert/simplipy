@@ -81,23 +81,13 @@ fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine
     }
 }
 
-/// The mine canon's wire spelling, checked against the mode it is used with.
-fn parse_mine_canon(canon: &str, mode: engine::RuleMode) -> PyResult<engine::MineCanon> {
-    let c = engine::MineCanon::parse(canon).ok_or_else(|| {
-        PyValueError::new_err(format!("unknown canon {canon:?}: expected 'legacy'"))
-    })?;
-    c.check(mode).map_err(PyValueError::new_err)?;
-    Ok(c)
-}
-
-/// The `MineSpec` of one scan call: the mode and canon must be the ones the library was
+/// The `MineSpec` of one scan call: the mode must be the one the library was
 /// priced in, and the evidence floor defaults to 1/8 of the library's rows (never 0: an
 /// explicit 0 would silently disable the evidence gate, D3 / H-038).
 #[allow(clippy::too_many_arguments)]
 fn mine_spec(
     library: &PyCandidateLibrary,
     rule_mode: &str,
-    canon: &str,
     rtol: f64,
     atol: f64,
     min_informative: Option<usize>,
@@ -105,16 +95,14 @@ fn mine_spec(
     retries: usize,
 ) -> PyResult<engine::MineSpec> {
     let mode = parse_rule_mode(rule_mode)?;
-    let canon = parse_mine_canon(canon, mode)?;
-    if (mode, canon) != (library.mode, library.canon) {
+    if mode != library.mode {
         return Err(PyValueError::new_err(format!(
-            "the library was priced for rule_mode {:?} / canon {:?}, not {mode:?} / {canon:?}",
-            library.mode, library.canon
+            "the library was priced for rule_mode {:?}, not {mode:?}",
+            library.mode
         )));
     }
     Ok(engine::MineSpec {
         mode,
-        canon,
         rtol,
         atol,
         min_informative: min_informative.unwrap_or(library.inner.n_rows() / 8).max(1),
@@ -453,9 +441,8 @@ fn pushed_rules_digest(rules: &[(Vec<String>, Vec<String>)]) -> u64 {
 #[pyclass(name = "CandidateLibrary", module = "simplipy._core")]
 struct PyCandidateLibrary {
     inner: worker::CandidateLibrary,
-    /// The mode and canon the library's mu tiers were priced in.
+    /// The mode the library's mu tiers and classes were priced in.
     mode: engine::RuleMode,
-    canon: engine::MineCanon,
 }
 
 #[pymethods]
@@ -582,7 +569,8 @@ impl PyEngine {
     /// an empty `suppressed_rows` is byte-identical to `ac_simplify_in_mode` at
     /// `rule_mode="default"`.
     /// `explore_budget` reads as in `ac_simplify_in_mode` ([`explore_budget_of`]).
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), suppressed_rows=vec![]))]
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), suppressed_rows=vec![], rule_mode="default"))]
+    #[allow(clippy::too_many_arguments)]
     fn ac_simplify_suppressed(
         &self,
         py: Python<'_>,
@@ -591,8 +579,10 @@ impl PyEngine {
         form: &str,
         explore_budget: Option<usize>,
         suppressed_rows: Vec<usize>,
+        rule_mode: &str,
     ) -> PyResult<Py<PyList>> {
         let explore_budget = explore_budget_of(explore_budget);
+        let mode = parse_rule_mode(rule_mode)?;
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
@@ -607,6 +597,7 @@ impl PyEngine {
                     form,
                     explore_budget,
                     &suppressed,
+                    mode,
                 )
             })
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
@@ -747,15 +738,89 @@ impl PyEngine {
         Ok(py.detach(|| self.inner.ac_node_census(&exprs)))
     }
 
+    #[pyo3(signature = (exprs, *, rule_mode))]
     fn ac_canonical_keys(
         &self,
         py: Python<'_>,
         exprs: Vec<Vec<String>>,
+        rule_mode: &str,
     ) -> PyResult<Vec<Option<Vec<String>>>> {
         for e in &exprs {
             ensure_tokens_are_tokens(e)?;
         }
-        Ok(py.detach(|| self.inner.ac_canonical_keys(&exprs)))
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner.ac_canonical_keys(&exprs, mode)))
+    }
+
+    /// OFFLINE miner: the MARK a mine of `rule_mode` sets for `source` -- the mode's serve
+    /// answer (`simplify(source, mode)` at the default effort and work budget, with the
+    /// mode's rules installed) in the explicit projection (`Engine::mine_mark`).
+    #[pyo3(signature = (source, *, rule_mode))]
+    fn mine_mark(
+        &self,
+        py: Python<'_>,
+        source: Vec<String>,
+        rule_mode: &str,
+    ) -> PyResult<Vec<String>> {
+        ensure_tokens_are_tokens(&source)?;
+        let mode = parse_rule_mode(rule_mode)?;
+        py.detach(|| self.inner.mine_mark(&source, mode))
+            .map(|m| m.tokens().to_vec())
+            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+    }
+
+    /// OFFLINE miner: one length's SOURCES in `rule_mode` -- each enumerated spelling's
+    /// canonical projection as the mode reads it, one per class, atomic ones dropped
+    /// (`Engine::mine_sources`).
+    #[pyo3(signature = (enumerated, *, rule_mode))]
+    fn mine_sources(
+        &self,
+        py: Python<'_>,
+        enumerated: Vec<Vec<String>>,
+        rule_mode: &str,
+    ) -> PyResult<Vec<Vec<String>>> {
+        for e in &enumerated {
+            ensure_tokens_are_tokens(e)?;
+        }
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner.mine_sources(&enumerated, mode)))
+    }
+
+    /// The rules `rule_mode` would serve from `rules` without installing them: the load
+    /// path in that mode's reading, as `(lhs, rhs, source_index)` in the explicit
+    /// projection (orientation twins included, refused rules absent).
+    #[pyo3(signature = (rules, *, rule_mode))]
+    fn ac_translate_preview(
+        &self,
+        py: Python<'_>,
+        rules: Vec<(Vec<String>, Vec<String>)>,
+        rule_mode: &str,
+    ) -> PyResult<Vec<ServedRule>> {
+        for (l, r) in &rules {
+            ensure_tokens_are_tokens(l)?;
+            ensure_tokens_are_tokens(r)?;
+        }
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner.ac_translate_preview(&rules, mode)))
+    }
+
+    /// Does the rule `lhs -> rhs` state something the engine performs itself, read in
+    /// `rule_mode`? `"canon"` (one canonical state), `"engine-owned-law"` (the load gate's
+    /// predicate), or None. The miner refuses to mint the law by this same function.
+    #[pyo3(signature = (lhs, rhs, *, rule_mode))]
+    fn law_instance(
+        &self,
+        py: Python<'_>,
+        lhs: Vec<String>,
+        rhs: Vec<String>,
+        rule_mode: &str,
+    ) -> PyResult<Option<String>> {
+        ensure_tokens_are_tokens(&lhs)?;
+        ensure_tokens_are_tokens(&rhs)?;
+        let mode = parse_rule_mode(rule_mode)?;
+        py.detach(|| self.inner.law_instance(&lhs, &rhs, mode))
+            .map(|v| v.map(str::to_string))
+            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
     #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
@@ -860,12 +925,15 @@ impl PyEngine {
 
     /// C36: the per-reason rule-drop census as a dict -- what happened to every
     /// non-kept rule of the loaded asset, by name.
+    #[pyo3(signature = (*, rule_mode))]
     fn ac_rules_drop_census(
         &self,
         py: Python<'_>,
+        rule_mode: &str,
     ) -> PyResult<std::collections::HashMap<String, usize>> {
+        let mode = parse_rule_mode(rule_mode)?;
         Ok(py
-            .detach(|| self.inner.ac_rules_drop_census())
+            .detach(|| self.inner.ac_rules_drop_census(mode))
             .into_iter()
             .collect())
     }
@@ -880,8 +948,14 @@ impl PyEngine {
     /// cannot reproduce -- a consumer that needs "the engine without rule i" consults
     /// this census to learn for which rows suppression alone is not a rebuild. Forces
     /// the lazy translation.
-    fn ac_shadow_census(&self, py: Python<'_>) -> PyResult<Vec<(usize, usize, bool, String)>> {
-        Ok(py.detach(|| self.inner.ac_shadow_census()))
+    #[pyo3(signature = (*, rule_mode))]
+    fn ac_shadow_census(
+        &self,
+        py: Python<'_>,
+        rule_mode: &str,
+    ) -> PyResult<Vec<(usize, usize, bool, String)>> {
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner.ac_shadow_census(mode)))
     }
 
     /// The licence registry for one would-be rule (C1.20), as a PROBE: the mint channels
@@ -1352,7 +1426,7 @@ impl PyEngine {
     /// short-circuit + candidate scan (no-constant test / constant fit) + selection. Returns
     /// the chosen target token list, or None. `candidates` = the candidate library (expressions
     /// up to max_target); for the resident path see `build_candidate_library`/`find_rule_lib`.
-    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None))]
+    #[pyo3(signature = (source, simplified_length, max_target, candidates, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode="permissive"))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule(
         &self,
@@ -1370,6 +1444,7 @@ impl PyEngine {
         rtol: f64,
         atol: f64,
         min_informative: Option<usize>,
+        rule_mode: &str,
     ) -> PyResult<Option<Vec<String>>> {
         ensure_tokens_are_tokens(&source)?;
         for c in &candidates {
@@ -1378,8 +1453,9 @@ impl PyEngine {
         // Universal floor: an EXPLICIT 0 would silently disable the evidence gate, and no
         // gate is switched off by a bare numeric argument.
         let mi = min_informative.unwrap_or(n_rows / 8).max(1);
+        let rescue = !matches!(parse_rule_mode(rule_mode)?, engine::RuleMode::Default);
         py.detach(|| {
-            self.inner.find_rule(
+            self.inner.find_rule_in(
                 &source,
                 simplified_length,
                 max_target,
@@ -1393,6 +1469,7 @@ impl PyEngine {
                 rtol,
                 atol,
                 mi,
+                rescue,
             )
         })
         .map_err(PyValueError::new_err)
@@ -1403,10 +1480,10 @@ impl PyEngine {
     /// `find_rule_lib` / `mine_one_length`. Var-free candidates of length >= 2 are dropped
     /// unconditionally -- the library mirrors the emit guard; see
     /// `worker::CandidateLibrary::build`. `rule_mode` is required: the library's mu tiers are
-    /// priced in the mine's own measure, and the handle remembers which, so a scan under
-    /// another mode is refused rather than run on a mismatched bound. `canon="legacy"` is
-    /// 0.14's mark (Default mode only) until the per-mode marks land.
-    #[pyo3(signature = (candidates, var_names, x_flat, n_rows, *, rule_mode, canon="legacy"))]
+    /// priced in the mine's own measure and its classes keyed in the mode's reading, and the
+    /// handle remembers the mode, so a scan under another mode is refused rather than run on
+    /// a mismatched bound.
+    #[pyo3(signature = (candidates, var_names, x_flat, n_rows, *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn build_candidate_library(
         &self,
@@ -1416,26 +1493,18 @@ impl PyEngine {
         x_flat: Vec<f64>,
         n_rows: usize,
         rule_mode: &str,
-        canon: &str,
     ) -> PyResult<PyCandidateLibrary> {
         for c in &candidates {
             ensure_tokens_are_tokens(c)?;
         }
         let mode = parse_rule_mode(rule_mode)?;
-        let canon = parse_mine_canon(canon, mode)?;
         let inner = py
             .detach(|| {
-                self.inner.build_candidate_library(
-                    &candidates,
-                    &var_names,
-                    &x_flat,
-                    n_rows,
-                    mode,
-                    canon,
-                )
+                self.inner
+                    .build_candidate_library(&candidates, &var_names, &x_flat, n_rows, mode)
             })
             .map_err(PyValueError::new_err)?;
-        Ok(PyCandidateLibrary { inner, mode, canon })
+        Ok(PyCandidateLibrary { inner, mode })
     }
 
     /// OFFLINE miner: the library scan for ONE source (the proposals' channel), over a
@@ -1446,7 +1515,7 @@ impl PyEngine {
     /// mark mints nothing. With `confirm_x` (row-major, `confirm_rows` rows), every numeric
     /// pick must also certify on those rows (stage 2, at a per-pair seed off `confirm_seed`),
     /// and an unconfirmed pick yields to the next candidate.
-    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, canon="legacy", confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
+    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule_lib(
         &self,
@@ -1461,7 +1530,6 @@ impl PyEngine {
         atol: f64,
         min_informative: Option<usize>,
         rule_mode: &str,
-        canon: &str,
         confirm_x: Option<Vec<f64>>,
         confirm_rows: usize,
         confirm_min_informative: Option<usize>,
@@ -1471,7 +1539,6 @@ impl PyEngine {
         let spec = mine_spec(
             &library,
             rule_mode,
-            canon,
             rtol,
             atol,
             min_informative,
@@ -1497,7 +1564,7 @@ impl PyEngine {
     /// acceptance: the licences against the engine's mark, `judge_pair` on the library's
     /// rows at the source's scan `seed`, then stage 2 on `confirm_x` when given. Returns
     /// `(accepted, reason)`; `reason` is `"accepted"` or the first refusal's name.
-    #[pyo3(signature = (source, hint, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, canon="legacy", confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
+    #[pyo3(signature = (source, hint, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn judge_hint(
         &self,
@@ -1512,7 +1579,6 @@ impl PyEngine {
         atol: f64,
         min_informative: Option<usize>,
         rule_mode: &str,
-        canon: &str,
         confirm_x: Option<Vec<f64>>,
         confirm_rows: usize,
         confirm_min_informative: Option<usize>,
@@ -1523,7 +1589,6 @@ impl PyEngine {
         let spec = mine_spec(
             &library,
             rule_mode,
-            canon,
             rtol,
             atol,
             min_informative,
@@ -1556,7 +1621,7 @@ impl PyEngine {
     /// `(accepted, reason)`, with `reason` `"accepted"`, `"uncertified"`,
     /// `"wildcard_multiplicity"` or `"respelled"` (the scan would emit a different
     /// spelling, e.g. a literal resolution). Stage 2 and the hint arms run this.
-    #[pyo3(signature = (source, target, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, canon="legacy"))]
+    #[pyo3(signature = (source, target, var_names, x_flat, n_rows, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn judge_pair(
         &self,
@@ -1573,15 +1638,12 @@ impl PyEngine {
         atol: f64,
         min_informative: Option<usize>,
         rule_mode: &str,
-        canon: &str,
     ) -> PyResult<(bool, String)> {
         ensure_tokens_are_tokens(&source)?;
         ensure_tokens_are_tokens(&target)?;
         let mode = parse_rule_mode(rule_mode)?;
-        let canon = parse_mine_canon(canon, mode)?;
         let spec = engine::MineSpec {
             mode,
-            canon,
             rtol,
             atol,
             min_informative: min_informative.unwrap_or(n_rows / 8).max(1),
@@ -1669,7 +1731,7 @@ impl PyEngine {
     /// shorten, with the bound tightened to the simplified length (targets must beat what
     /// `simplify` already reaches); `False` skips them (strict Kruskal). See
     /// `Engine::mine_one_length`.
-    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, canon="legacy", confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
+    #[pyo3(signature = (sources, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, relaxed_kruskal=true, *, rule_mode, index_offset=0, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn mine_one_length(
         &self,
@@ -1685,7 +1747,7 @@ impl PyEngine {
         min_informative: Option<usize>,
         relaxed_kruskal: bool,
         rule_mode: &str,
-        canon: &str,
+        index_offset: u64,
         confirm_x: Option<Vec<f64>>,
         confirm_rows: usize,
         confirm_min_informative: Option<usize>,
@@ -1697,7 +1759,6 @@ impl PyEngine {
         let spec = mine_spec(
             &library,
             rule_mode,
-            canon,
             rtol,
             atol,
             min_informative,
@@ -1720,6 +1781,7 @@ impl PyEngine {
                 &spec,
                 confirm.as_ref(),
                 seed,
+                index_offset,
                 relaxed_kruskal,
             )
         }))
@@ -1807,6 +1869,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCandidateLibrary>()?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
+    m.add("DEFAULT_WORK", engine::DEFAULT_WORK)?;
     m.add(
         "ARTIFACT_ENV_SWITCHES",
         env_switches::ARTIFACT_ENV_SWITCHES.to_vec(),

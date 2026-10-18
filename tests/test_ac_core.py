@@ -582,7 +582,10 @@ class TestContracts:
         # the shipped f64 file is 5,319 rows and reports kept = 5327 -- the
         # 1,049 rows whose pattern an earlier row already owns never reach translate.
         # `subsumed` is what this test pins, and it is unmoved at 0.)
-        assert subsumed == 0, f"republished artifact must be mint-time clean; got {subsumed}"
+        # Read in f64's own reading (fold on), one row of the shipped f64 file states what
+        # the f64 constructor performs: `atanh pow (-10) (-9) -> -1e-09`. It is subsumed at
+        # load; a mine in f64's reading no longer mints it.
+        assert subsumed == 1, f"one f64-folded row expected; got {subsumed}"
 
 
 class TestMatcherAssignmentCompleteness:
@@ -1380,7 +1383,7 @@ class TestC36DropCensus:
                'sin': {'realization': 'np.sin', 'alias': [], 'inverse': None,
                        'arity': 1, 'precedence': 3, 'commutative': False}}
         engine = SimpliPyEngine(operators=ops, rules=list(rules))
-        census = engine._core.ac_rules_drop_census()
+        census = engine._core.ac_rules_drop_census(rule_mode="default")
         assert census.get('const-count-increase') == 1, census
         assert census.get('catch-all-lhs') == 1, census
         assert census.get('unbound-rhs-wildcard') == 1, census
@@ -1392,7 +1395,8 @@ class TestC36DropCensus:
             'census must reconcile with the aggregate counter'
 
     def test_clean_artifact_census_is_empty(self, engine: SimpliPyEngine) -> None:
-        assert engine._core.ac_rules_drop_census() == {}
+        # the one row f64's reading folds (see test_translation_audit_surface)
+        assert engine._core.ac_rules_drop_census(rule_mode="default") == {'arithmetic-subsumed': 1}
 
 
 class TestSuppressedProbeAndShadowCensus:
@@ -1422,7 +1426,7 @@ class TestSuppressedProbeAndShadowCensus:
             (["atan", "asinh", "abs", "?0"], ["abs", "atan", "asinh", "?0"]),
         ]
         full = SimpliPyEngine(operators=ops, rules=list(rules))
-        assert full._core.ac_shadow_census() == []  # no cross-rule state: suppression is exact
+        assert full._core.ac_shadow_census(rule_mode="default") == []  # no cross-rule state: suppression is exact
         probe = ["atan", "asinh", "abs", "x0"]
         for i in range(len(rules)):
             without = SimpliPyEngine(
@@ -1440,7 +1444,7 @@ class TestSuppressedProbeAndShadowCensus:
             (["-", "?1", "acosh", "atanh", "?0"], ["-", "?1", "?0"]),
         ]
         e = SimpliPyEngine(operators=ops, rules=list(sib))
-        assert e._core.ac_shadow_census() == [
+        assert e._core.ac_shadow_census(rule_mode="default") == [
             (0, 1, False, "twin-shadow"), (1, 0, False, "twin-shadow")]
 
     def test_refund_prunes_exactly_one_of_a_mutually_derivable_pair(

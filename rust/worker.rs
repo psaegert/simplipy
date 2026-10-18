@@ -2257,6 +2257,7 @@ pub fn find_rule(
     rtol: f64,
     atol: f64,
     min_informative: usize,
+    rescue: bool,
 ) -> Result<Option<Vec<String>>, String> {
     // Per-call path: no engine here to score mu, so the library is unscored and the legacy
     // token bound stands (`max_mu = None`). The MINE goes through the resident-library path.
@@ -2275,7 +2276,7 @@ pub fn find_rule(
         rtol,
         atol,
         min_informative,
-        true,
+        rescue,
         None,
         None,
         None,

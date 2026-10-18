@@ -10,6 +10,7 @@ exactly what this header warns about.)
 from typing import Any, Literal
 
 __build__: str
+DEFAULT_WORK: int
 ARTIFACT_ENV_SWITCHES: list[str]
 
 class CandidateLibrary:
@@ -47,6 +48,7 @@ class Engine:
         form: Literal["tagged", "explicit"] = ...,
         explore_budget: int | None = ...,  # None: until a round finds nothing
         suppressed_rows: list[int] = ...,
+        rule_mode: str = ...,
     ) -> list[str]: ...
     def ac_simplify_infix(
         self,
@@ -75,8 +77,14 @@ class Engine:
         self, tokens: list[str], max_passes: int
     ) -> tuple[int, int, list[str]]: ...
     def ac_canonical_keys(
-        self, exprs: list[list[str]]
+        self, exprs: list[list[str]], *, rule_mode: str
     ) -> list[list[str] | None]: ...
+    def mine_sources(self, enumerated: list[list[str]], *, rule_mode: str) -> list[list[str]]: ...
+    def mine_mark(self, source: list[str], *, rule_mode: str) -> list[str]: ...
+    def ac_translate_preview(
+        self, rules: list[tuple[list[str], list[str]]], *, rule_mode: str
+    ) -> list[tuple[list[str], list[str], int]]: ...
+    def law_instance(self, lhs: list[str], rhs: list[str], *, rule_mode: str) -> str | None: ...
     def ac_complexity(self, tokens: list[str], rule_mode: Literal["default", "real", "permissive"] = ..., canon: Literal["default", "mode"] = ...) -> int: ...
     def ac_complexity_certified(self, tokens: list[str], rule_mode: Literal["default", "real", "permissive"] = ..., canon: Literal["default", "mode"] = ...) -> int: ...
     def ac_rules_info(self) -> tuple[int, int, int, int]: ...
@@ -89,12 +97,12 @@ class Engine:
     #: (lhs, rhs, source_index) per SERVED rule -- the matcher's own set, including the
     #: orientation twins minted at load, which no artifact row corresponds to.
     def ac_served_rules(self) -> list[tuple[list[str], list[str], int]]: ...
-    def ac_rules_drop_census(self) -> dict[str, int]: ...
+    def ac_rules_drop_census(self, *, rule_mode: str) -> dict[str, int]: ...
     #: The shadow census: every translate-time skip caused by cross-rule state, as
     #: (victim_row, owner_row, owner_was_twin, kind) -- kind is "inverse",
     #: "twin-shadow" or "twin-inverse". Removing an owner row resurrects its victims'
     #: entries; see `ac_simplify_suppressed`.
-    def ac_shadow_census(self) -> list[tuple[int, int, bool, str]]: ...
+    def ac_shadow_census(self, *, rule_mode: str) -> list[tuple[int, int, bool, str]]: ...
     def ac_odd_neg_carriers(
         self, tokens: list[str], max_passes: int
     ) -> list[tuple[list[str], str, bool, bool, list[tuple[list[str], bool, bool]]]]: ...
@@ -193,7 +201,6 @@ class Engine:
         n_rows: int,
         *,
         rule_mode: str,
-        canon: str = ...,
     ) -> CandidateLibrary: ...
     def find_rule_lib(
         self,
@@ -208,7 +215,6 @@ class Engine:
         min_informative: int | None = ...,
         *,
         rule_mode: str,
-        canon: str = ...,
         confirm_x: list[float] | None = ...,
         confirm_rows: int = ...,
         confirm_min_informative: int | None = ...,
@@ -227,7 +233,6 @@ class Engine:
         min_informative: int | None = ...,
         *,
         rule_mode: str,
-        canon: str = ...,
         confirm_x: list[float] | None = ...,
         confirm_rows: int = ...,
         confirm_min_informative: int | None = ...,
@@ -248,7 +253,6 @@ class Engine:
         min_informative: int | None = ...,
         *,
         rule_mode: str,
-        canon: str = ...,
     ) -> tuple[bool, str]: ...
     def set_rules(self, rules: list[tuple[list[str], list[str]]]) -> None: ...
     def set_mode_rules(
@@ -269,7 +273,7 @@ class Engine:
         relaxed_kruskal: bool = ...,
         *,
         rule_mode: str,
-        canon: str = ...,
+        index_offset: int = ...,
         confirm_x: list[float] | None = ...,
         confirm_rows: int = ...,
         confirm_min_informative: int | None = ...,

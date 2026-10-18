@@ -25,6 +25,7 @@ from typing import Any
 from copy import deepcopy
 
 import numpy as np
+import copy
 import json
 
 from simplipy.utils import (
@@ -181,11 +182,13 @@ def _load_proposals(
     return entries, record
 
 
-#: The rule mode the mine accepts for. One mine still writes all three files, routed by the
-#: judge's tier afterwards, so it accepts for their union: permissive's acceptance (f64
-#: agreement, or agreement re-judged at high precision). The core's ``canon='legacy'`` (its
-#: default) keeps 0.14's mark under every mode: the Default rule set, folds off, effort 0.
-_MINE_RULE_MODE = 'permissive'
+#: ONE MINE PER FILE: each file is mined in its own mode -- the mode's serve answer is the
+#: mark, its canon reads the sources, its numerics accept -- in this order, so the
+#: permissive mine reads the finished f64 set as serving does. (rule mode, file key)
+_MINE_MODES = (('default', 'f64'), ('real', 'real'), ('permissive', 'permissive'))
+
+#: The mode `certify_rules` judges a proposal in: the union of the three files' acceptance.
+_CERTIFY_RULE_MODE = 'permissive'
 
 
 #: Which modes a judged tier licenses a rule to serve in. `permissive` is DERIVED (a rule
@@ -304,7 +307,13 @@ def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]
     source = engine.simplification_rules
     report = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs in source])
     detail = report['detail'] if isinstance(report, dict) else report
-    served_srcs = {src for _, _, src in engine._core.ac_served_rules()}
+    # EXISTENCE PER MODE: each file is read in its own mode, so a rule exists for a mode iff
+    # that mode's load would serve it (`cos 0 -> 1` is dead in f64, whose reading folds the
+    # LHS, and alive in real).
+    pairs = [(list(lhs), list(rhs)) for lhs, rhs in source]
+    served_in = {m: {src for _, _, src in engine._core.ac_translate_preview(pairs, rule_mode=rm)}
+                 for rm, m in _MINE_MODES}
+    served_srcs = set().union(*served_in.values())
 
     allowed: dict[int, frozenset] = {}
     tiers: dict[int, set] = {}
@@ -325,6 +334,7 @@ def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]
     triple: dict[str, list] = {'f64': [], 'real': [], 'permissive': []}
     rejected: list = []
     preempted: dict[str, int] = {'f64': 0, 'real': 0, 'permissive': 0}
+    dead: dict[str, int] = {'f64': 0, 'real': 0, 'permissive': 0}
     for i, (lhs, rhs) in enumerate(engine.simplification_rules):
         # A rule with no served entry cannot fire at all, so it is licensed nowhere. This
         # is the load-minted-twins lesson in the other direction: never infer a licence
@@ -336,6 +346,9 @@ def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]
             continue
         for m in ('f64', 'real', 'permissive'):
             if m != 'permissive' and m not in modes:
+                continue
+            if i not in served_in[m]:
+                dead[m] += 1  # this mode's reading never serves it
                 continue
             # PER-MODE PRUNE. A mode's file carries only what that mode can actually
             # serve. Folding is mode-dependent, so a rule can be load-bearing in `real`
@@ -355,7 +368,7 @@ def _route_triple(engine: Any, verbose: bool = False) -> tuple[dict, list, dict]
         print(f'Triple: f64={len(triple["f64"])} real={len(triple["real"])} '
               f'permissive={len(triple["permissive"])} rejected={len(rejected)}')
     return triple, rejected, {'tiers': {i: sorted(t) for i, t in tiers.items()},
-                              'preempted': preempted}
+                              'preempted': preempted, 'dead': dead}
 
 
 def _assert_triple_invariants(triple: dict, rejected: list, mined: list,
@@ -491,7 +504,8 @@ class RuleMiner:
 
     def _certify_one(self, source: tuple[str, ...], hint: Any, library: Any, vocabulary: set,
                      max_target_pattern_length: int | None, fit: dict[str, Any], seed: int,
-                     confirm: dict[str, Any]) -> tuple[list[str] | None, str | None, str | None]:
+                     confirm: dict[str, Any],
+                     rule_mode: str) -> tuple[list[str] | None, str | None, str | None]:
         """THE certification chain for one proposed source, shared by :meth:`certify_rules`
         and the proposal channel of :meth:`find_rules`.
 
@@ -509,7 +523,7 @@ class RuleMiner:
         core = self.engine._core
         assert core is not None
         target = core.find_rule_lib(list(source), library, max_target_pattern_length, seed=seed,
-                                    rule_mode=_MINE_RULE_MODE, **fit, **confirm)
+                                    rule_mode=rule_mode, **fit, **confirm)
         if target is not None:
             return list(target), 'minimal', None
         if hint is None:
@@ -518,7 +532,7 @@ class RuleMiner:
         if not _tokens_in_vocabulary(hint, vocabulary) or not self.engine.is_valid(hint):
             return None, None, 'vocabulary'
         ok, why = core.judge_hint(list(source), hint, library, seed=seed,
-                                  rule_mode=_MINE_RULE_MODE, **fit, **confirm)
+                                  rule_mode=rule_mode, **fit, **confirm)
         return (hint, 'verified', None) if ok else (None, None, why)
 
     def _mine_tier_with_progress(self, length: int, n_sources: int, mine_call: Callable, verbose: bool) -> Any:
@@ -614,8 +628,14 @@ class RuleMiner:
             leaf_nodes: list[str] | None = None,
             promote_sorts: bool = True,
             symbolic_gate: bool = True,
-            snapshot_at: dict[int, str] | None = None) -> None:
-        """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``).
+            snapshot_at: dict[int, str] | None = None,
+            rule_mode: str = 'default',
+            initial_rules: list | None = None,
+            finals: dict[str, list] | None = None) -> None:
+        """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``), for
+        ONE file: ``rule_mode`` is the mode the file serves, and its mine runs in that mode
+        throughout (marks, sources, library, acceptance, the rules installed so far). The
+        file's rules are written and recorded in ``finals[rule_mode]``.
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
         length (shortest first), each source is Kruskal-pruned against the rules found so
@@ -663,14 +683,19 @@ class RuleMiner:
         ]
         library = self.engine._core.build_candidate_library(
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0],
-            rule_mode=_MINE_RULE_MODE)
+            rule_mode=rule_mode)
+        file_mode = dict(_MINE_MODES)[rule_mode]
+        out_file = None if output_file is None else _triple_paths(output_file)[file_mode]
+        if verbose:
+            print(f'=== mining the {file_mode} file (rule mode {rule_mode})')
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates'
                   f' ({library.n_filtered:,} var-free filtered)')
 
         # Existing rules (empty after reset_rules=True) join the Kruskal pruning and the
         # final deduplicated set, like the pure-Python path.
-        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
+        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in (
+            initial_rules if initial_rules is not None else self.engine.simplification_rules)]
 
         # --- The post-pass: what turns a raw mined rule set into a CELL ARTIFACT ---
         # A closure, because the ladder runs it MORE THAN ONCE. A (7,4) climb passes through
@@ -711,7 +736,7 @@ class RuleMiner:
                     leaf_nodes if leaf_nodes is not None else list(dummy_variables),
                     dummy_variables, X_data, X_confirm, max_target_pattern_length,
                     constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    min_informative, mine_seed, confirm_seed, verbose)
+                    min_informative, mine_seed, confirm_seed, verbose, rule_mode)
                 if prov is not None and 'proposals' in prov:
                     prov['proposals']['outcomes'] = outcomes
                     # The per-candidate verdict trail travels WITH the artifact: an aggregate
@@ -856,7 +881,7 @@ class RuleMiner:
             if promote_sorts and not interrupted():
                 from .promotion import promote
                 kept, promotion_report = promote(self.engine.simplification_rules, self.engine,
-                                                 verbose=verbose)
+                                                 verbose=verbose, rule_mode=rule_mode)
                 self.engine._replace_rules(kept)
                 # F94: the ladder's own per-rule verdict lists name the reason a pair
                 # left here (`killed_q` -- unsound at the `?` sort, `unsupported`, ...);
@@ -913,7 +938,8 @@ class RuleMiner:
                 # the `_f64` marker before naming the siblings. Configs name their rule
                 # files explicitly, so artifacts published as `rules.json` load unchanged.
                 _triple, _rejected, _route_meta = _route_triple(self.engine, verbose=verbose)
-                _paths = _triple_paths(out_path)
+                # THIS mine's file only: the other two are mined in their own modes.
+                _paths = {file_mode: _triple_paths(out_path)[file_mode]}
                 for _mode, _path in _paths.items():
                     with open(_path, 'w') as file:
                         json.dump(_triple[_mode], file, indent=4)
@@ -921,6 +947,7 @@ class RuleMiner:
                     # The REJECTS are recorded, never silently absent (owner ruling): a
                     # rule the mine found and then licensed nowhere is evidence, and the
                     # drop census is where it lives.
+                    prov['mode'] = file_mode
                     prov['triple'] = {
                         'counts': {m: len(rs) for m, rs in _triple.items()},
                         'rejected': sorted(_rejected),
@@ -949,7 +976,9 @@ class RuleMiner:
                         _path,
                         None if prov is None else dict(
                             prov, measure=self.engine._measure_fingerprint(_mode)),
-                        _triple['permissive'], final=_complete, interrupted=not _complete)
+                        _triple[_mode], final=_complete, interrupted=not _complete)
+            if out_path is not None and finals is not None and out_path == output_file:
+                finals[rule_mode] = [(tuple(lhs), tuple(rhs)) for lhs, rhs in _triple[file_mode]]
             return [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
 
         snapshot_at = dict(snapshot_at or {})
@@ -981,7 +1010,8 @@ class RuleMiner:
         for length in sorted(k for k in list(expressions_of_length) if k <= max_source_pattern_length):
             if interrupted():
                 break
-            self.engine._core.set_rules([(list(lhs), list(rhs)) for lhs, rhs in rules])
+            # The mark is this mode's serve answer under ITS rules so far.
+            self.engine._core.set_mode_rules(rule_mode, [(list(lhs), list(rhs)) for lhs, rhs in rules])
             # CERTIFY THE CANONICAL REPRESENTATIVE ONLY (owner ruling, re-mine 2026-08-20).
             #
             # Certification runs in f64 on whichever spelling was enumerated, and AC says all
@@ -997,19 +1027,10 @@ class RuleMiner:
             # builds the same internal pattern from them, so a skipped spelling is served by
             # the representative's rule rather than going unserved. An unparseable source has
             # no class and is mined on its own.
+            # The mode's CANONICAL PROJECTION of each class is its source (one per class,
+            # atomic ones dropped): what is certified is what is written.
             _raw_sources = [list(expression) for expression in sorted(expressions_of_length[length])]
-            _keys = self.engine._core.ac_canonical_keys(_raw_sources)
-            _seen: set[tuple[str, ...]] = set()
-            sources = []
-            for _src, _key in zip(_raw_sources, _keys):
-                if _key is None:
-                    sources.append(_src)
-                    continue
-                _k = tuple(_key)
-                if _k in _seen:
-                    continue
-                _seen.add(_k)
-                sources.append(_src)
+            sources = self.engine._core.mine_sources(_raw_sources, rule_mode=rule_mode)
             n_ac_classed = len(_raw_sources) - len(sources)
             if verbose and n_ac_classed:
                 print(f'Length {length}: {len(_raw_sources):,} sources -> {len(sources):,} AC classes '
@@ -1018,12 +1039,10 @@ class RuleMiner:
                                              'classes': len(sources)}
             if provenance is not None:
                 provenance['ac_classes'] = {str(k): v for k, v in ac_classes_per_length.items()}
-            del _raw_sources, _keys, _seen
+            del _raw_sources
             n_sources = len(sources)
-            # Release this length's source UNIVERSE as soon as it has been linearised: at the
-            # top lengths that set of tuples is the largest object in the process (length 5
-            # alone is ~7e6 expressions) and nothing reads it again -- the candidate library
-            # was built up front, above, and holds its own copy on the Rust side.
+            # Release this length's source UNIVERSE as soon as it has been linearised (the
+            # caller passes each mode its own view of the universe).
             del expressions_of_length[length]
             # Per-length seed block: lengths are spaced by 2^40 (far above any per-length
             # source count) so the per-source streams (seed + index) never collide.
@@ -1036,18 +1055,18 @@ class RuleMiner:
                     sources, library, max_target_pattern_length,
                     constants_fit_challenges, constants_fit_retries,
                     mine_seed + (length << 40), rtol, atol, min_informative,
-                    relaxed_kruskal, rule_mode=_MINE_RULE_MODE, **confirm_kwargs),
+                    relaxed_kruskal, rule_mode=rule_mode, **confirm_kwargs),
                 verbose)
             if found:
                 rules = deduplicate_rules(
                     rules + [(tuple(lhs), tuple(rhs)) for lhs, rhs in found],
-                    dummy_variables, verbose=verbose, engine=self.engine)
+                    dummy_variables, verbose=verbose, engine=self.engine, rule_mode=rule_mode)
             if verbose:
                 print(f'Length {length}: {n_sources:,} sources, {len(found):,} new rules, {len(rules):,} total')
-            if output_file is not None:
-                with open(output_file, 'w') as file:
+            if out_file is not None:
+                with open(out_file, 'w') as file:
                     json.dump(rules, file, indent=4)
-                self._write_provenance(output_file, provenance, rules, completed_length=length)
+                self._write_provenance(out_file, provenance, rules, completed_length=length)
             # LADDER SNAPSHOT: finishing this length also finishes the shorter cell
             # (length, max_target_pattern_length) of the same ladder. Emit it as a completed
             # artifact, then restore the RAW state and keep climbing -- the taller cell must
@@ -1383,7 +1402,7 @@ class RuleMiner:
                       for expression in sorted(expressions[length])]
         library = self.engine._core.build_candidate_library(
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(),
-            X_data.shape[0], rule_mode=_MINE_RULE_MODE)
+            X_data.shape[0], rule_mode=_CERTIFY_RULE_MODE)
         if verbose:
             print(f'Candidate library: {library.n_candidates:,} candidates '
                   f'({library.n_filtered:,} var-free filtered)')
@@ -1404,7 +1423,8 @@ class RuleMiner:
                 source, hint, library, vocabulary, max_target_pattern_length, fit,
                 mine_seed + (len(source) << 40) + index,
                 self._confirm_kwargs(X_confirm, X_data, min_informative,
-                                     confirm_seed + (len(source) << 40) + index))
+                                     confirm_seed + (len(source) << 40) + index),
+                _CERTIFY_RULE_MODE)
             if target is None:
                 continue
             certified.append((source, tuple(target), certificate))
@@ -1461,7 +1481,8 @@ class RuleMiner:
             min_informative: int,
             mine_seed: int,
             confirm_seed: int,
-            verbose: bool) -> tuple[dict[str, int], list[dict[str, Any]]]:
+            verbose: bool,
+            rule_mode: str = 'default') -> tuple[dict[str, int], list[dict[str, Any]]]:
         """The proposal channel of :meth:`find_rules`: certify externally proposed rules
         against the just-mined rule state and merge the survivors.
 
@@ -1544,23 +1565,21 @@ class RuleMiner:
             # scan, so 'already_covered' below is a SEARCH-VERIFIED
             # verdict ("the engine reduces it and nothing expressible beats its
             # result"), not a guess from a spelling shrink.
-            _, _, ac_out = self.engine._core.ac_judge(list(source), 48)
-            # "The engine already reduces it" is judged in the serve ordering (ONE
-            # coverage ordering, everywhere): the walk strictly descends, or the
-            # result is atomic (nothing mintable sits strictly below a single-token
-            # state -- canon-owned collapses like `+ x0 0` land here). A respell --
-            # same state, shorter spelling -- is neither: if the search also comes
-            # back empty-handed, the honest verdict below is 'rejected', never a
-            # coverage claim nothing backs.
-            engine_reduces = (len(ac_out) == 1
-                              or self.engine._core.ac_ordered_below(ac_out, list(source)))
+            # "The engine already reduces it" is asked of the mode the file serves: its
+            # serve answer (the mine's mark) is an atom, or a different state from that
+            # mode's own reading of the source (the serve walk only descends). A respell
+            # is the same state: if the search also comes back empty-handed, the honest
+            # verdict below is 'rejected', never a coverage claim nothing backs.
+            mark = self.engine._core.mine_mark(list(source), rule_mode=rule_mode)
+            reading = self.engine._core.mine_sources([list(source)], rule_mode=rule_mode)
+            engine_reduces = len(mark) == 1 or not reading or reading[0] != list(mark)
             # Content-derived per-proposal seed offset (blake2b, not hash(): PYTHONHASHSEED
             # randomises str hashing per process).
             offset = int.from_bytes(
                 hashlib.blake2b(' '.join(source).encode(), digest_size=7).digest(), 'little')
             target, certificate, refusal = self._certify_one(
                 source, hint, library, vocabulary, max_target_pattern_length, fit,
-                mine_seed + offset, confirm)
+                mine_seed + offset, confirm, rule_mode)
             if target is None:
                 if refusal == 'unconfirmed':
                     counts['rejected'] += 1
@@ -1582,12 +1601,14 @@ class RuleMiner:
         # pair that would not change the merged set is a 'duplicate', not a 'certified'.
         before = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
         seen: dict[tuple, int] = {}
-        for key, (_, canon_target) in _dedup_keyed_rules(before, dummy_variables, self.engine):
+        for key, (_, canon_target) in _dedup_keyed_rules(before, dummy_variables, self.engine,
+                                                         rule_mode=rule_mode):
             if key not in seen or len(canon_target) < seen[key]:
                 seen[key] = len(canon_target)
         for idx, (key, (_, canon_target)) in zip(
                 certified_trail_idx,
-                _dedup_keyed_rules(certified_pairs, dummy_variables, self.engine)):
+                _dedup_keyed_rules(certified_pairs, dummy_variables, self.engine,
+                                   rule_mode=rule_mode)):
             if key in seen and len(canon_target) >= seen[key]:
                 counts['duplicate'] += 1
                 trail[idx].update(verdict='duplicate', stage='merge')
@@ -1598,7 +1619,7 @@ class RuleMiner:
             # The SAME merge path as mined rules: shortest target per canonical source.
             self.engine._replace_rules(deduplicate_rules(
                 before + certified_pairs, dummy_variables, verbose=verbose,
-                engine=self.engine))
+                engine=self.engine, rule_mode=rule_mode))
         if verbose:
             print(f"Proposals: {len(proposal_entries)} processed -> "
                   f"{counts['certified']} certified, {counts['already_covered']} already covered, "
@@ -1900,32 +1921,48 @@ class RuleMiner:
             old_handler = signal.signal(signal.SIGINT, signal_handler)
             handler_installed = True
         try:
-            self._find_rules_native(
-                expressions_of_length,
-                max_source_pattern_length,
-                max_target_pattern_length,
-                dummy_variables,
-                X_data,
-                constants_fit_challenges,
-                constants_fit_retries,
-                output_file,
-                prune,
-                verbose,
-                lambda: interrupted,
-                rtol=rtol,
-                atol=atol,
-                min_informative=min_informative,
-                mine_seed=mine_seed,
-                confirm_seed=confirm_seed,
-                X_confirm=X_confirm,
-                relaxed_kruskal=relaxed_kruskal,
-                provenance=provenance,
-                proposal_entries=proposal_entries,
-                leaf_nodes=leaf_nodes,
-                promote_sorts=promote_sorts,
-                symbolic_gate=symbolic_gate,
-                snapshot_at=snapshot_at,
-            )
+            initial_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
+            finals: dict[str, list] = {}
+            for rule_mode, _file_mode in _MINE_MODES:
+                if interrupted:
+                    break
+                # Each mode after f64 mines against the finished f64 set in the default slot, as
+                # its file is served beside it.
+                self.engine._replace_rules(finals.get('default', initial_rules))
+                self._find_rules_native(
+                    dict(expressions_of_length),
+                    max_source_pattern_length,
+                    max_target_pattern_length,
+                    dummy_variables,
+                    X_data,
+                    constants_fit_challenges,
+                    constants_fit_retries,
+                    output_file,
+                    prune,
+                    verbose,
+                    lambda: interrupted,
+                    rtol=rtol,
+                    atol=atol,
+                    min_informative=min_informative,
+                    mine_seed=mine_seed,
+                    confirm_seed=confirm_seed,
+                    X_confirm=X_confirm,
+                    relaxed_kruskal=relaxed_kruskal,
+                    provenance=copy.deepcopy(provenance),
+                    proposal_entries=proposal_entries,
+                    leaf_nodes=leaf_nodes,
+                    promote_sorts=promote_sorts,
+                    symbolic_gate=symbolic_gate,
+                    snapshot_at=snapshot_at,
+                    rule_mode=rule_mode,
+                    initial_rules=initial_rules,
+                    finals=finals,
+                )
+            # The engine ends holding the three files it wrote, as it would load them.
+            if 'default' in finals:
+                self.engine.real_simplification_rules = finals.get('real')
+                self.engine.permissive_simplification_rules = finals.get('permissive')
+                self.engine._replace_rules(finals['default'])
         finally:
             if handler_installed:
                 signal.signal(signal.SIGINT, old_handler)

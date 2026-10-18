@@ -14,36 +14,11 @@ use crate::rules::CompiledRules;
 
 use super::Engine;
 
-/// The canonical form a mine's MARK is computed in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MineCanon {
-    /// 0.14's mark, kept until the per-mode marks land: the Default rule set, the
-    /// transcendental fold OFF, the search off (effort 0), f64 numbers -- one hybrid canon
-    /// that no mode serves. The mark and its prices are the same under every mode; the
-    /// mode decides the numeric acceptance (`MineSpec::rescue`).
-    Legacy,
-}
-
-impl MineCanon {
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "legacy" => Some(MineCanon::Legacy),
-            _ => None,
-        }
-    }
-
-    /// Whether this canon is defined for `mode`. A pair it is not defined for is an
-    /// error at the boundary, never a silent fallback to Default. The legacy mark is
-    /// mode-free, so it is defined for every mode.
-    pub fn check(self, mode: RuleMode) -> Result<(), String> {
-        match (self, mode) {
-            (MineCanon::Legacy, _) => Ok(()),
-        }
-    }
-}
-
-/// What one mine mints FOR. Everything mode-dependent is derived from `mode` and `canon`,
-/// once, here.
+/// What one mine mints FOR. Everything mode-dependent is derived from `mode`, once, here.
+///
+/// THE MARK IS THE SERVE ANSWER (`Engine::mine_mark`): a mode's mine asks the engine that
+/// will serve its file, `simplify(s, mode)` exactly as a user calls it -- the mode's canon,
+/// folds and number domain, its rules so far, the default effort and work budget.
 ///
 /// THE NUMERIC ACCEPTANCE PER MODE (`rescue`). A const-free pair agrees relatively,
 /// `|s - c| <= rtol*|c|`, so zero agrees only with zero; a FITTED constant keeps the
@@ -55,7 +30,6 @@ impl MineCanon {
 #[derive(Clone, Copy, Debug)]
 pub struct MineSpec {
     pub mode: RuleMode,
-    pub canon: MineCanon,
     pub rtol: f64,
     pub atol: f64,
     pub min_informative: usize,
@@ -68,6 +42,12 @@ impl MineSpec {
     pub fn rescue(&self) -> bool {
         !matches!(self.mode, RuleMode::Default)
     }
+}
+
+/// The work budget `simplify` runs a mode's searches under by default: the shared
+/// `DEFAULT_WORK` in permissive, none in f64 and real.
+pub fn serve_work(mode: RuleMode) -> Option<u64> {
+    matches!(mode, RuleMode::Permissive).then_some(super::DEFAULT_WORK)
 }
 
 /// The engine's own answer for a source: the bar every target must beat. `mu` is `None`
@@ -129,6 +109,9 @@ pub enum MineRefusal {
     Pole,
     /// A resolved literal that does not strictly descend or only respells the mark.
     NotStructural,
+    /// The rule states a law the engine performs itself (`ac::rules::engine_owned_law`,
+    /// the load gate's one predicate).
+    EngineOwnedLaw,
     /// Stage 2: the pair does not certify on the independent rows.
     Unconfirmed,
 }
@@ -141,6 +124,7 @@ impl MineRefusal {
             MineRefusal::Undecided => "undecided",
             MineRefusal::Pole => super::refusals::Refusal::PoleClassChange.name(),
             MineRefusal::NotStructural => "not_structural",
+            MineRefusal::EngineOwnedLaw => "engine-owned-law",
             MineRefusal::Unconfirmed => "unconfirmed",
         }
     }
@@ -208,7 +192,10 @@ impl<'a> Acceptor<'a> {
         if let Some(r) = super::refusals::mint_refusals(self.src, &self.mark.tokens, t, self.vars) {
             return Err(MineRefusal::Registry(r.name()));
         }
-        match self.eng.ac_ordered_below(t, &self.mark.tokens) {
+        match self
+            .eng
+            .ac_ordered_below_in(t, &self.mark.tokens, self.spec.mode)
+        {
             Some(true) => {}
             Some(false) => return Err(MineRefusal::NotBelow),
             None => {
@@ -225,6 +212,24 @@ impl<'a> Acceptor<'a> {
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Err(MineRefusal::Undecided);
             }
+        }
+        // The law, not a spelling: a mined variable reads as a `?` wildcard (a finite real,
+        // what the mine's rows bind), so the predicate the rule load applies to the written
+        // rule decides here on the same pattern.
+        let pattern = |e: &[String]| -> Vec<String> {
+            e.iter()
+                .map(|tok| match self.vars.iter().position(|v| v == tok) {
+                    Some(i) => format!("?{i}"),
+                    None => tok.clone(),
+                })
+                .collect()
+        };
+        if self
+            .eng
+            .law_instance(&pattern(self.src), &pattern(t), self.spec.mode)
+            == Some(Some("engine-owned-law"))
+        {
+            return Err(MineRefusal::EngineOwnedLaw);
         }
         if super::refusals::pole_refusal(self.src, t, &self.eng.operators, self.vars).is_some() {
             super::stats::REGISTRY_POLE_REFUSALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -277,7 +282,7 @@ impl<'a> Acceptor<'a> {
     /// symbols, so strict descent refuses it from every spelling; the standing falsifier
     /// is `tests/test_special_constants.py` (no special-bearing rule with a rounded RHS).
     pub(crate) fn accept_resolved(&self, t: &[String]) -> Result<(), MineRefusal> {
-        let tc = self.eng.mine_price(t, self.spec.mode, self.spec.canon);
+        let tc = self.eng.mine_price(t, self.spec.mode);
         let descends = matches!((tc, self.mark.mu), (Some(tc), Some(mc)) if tc < mc);
         if descends
             && !self
@@ -332,35 +337,47 @@ impl<'a> Acceptor<'a> {
 }
 
 impl Engine {
-    /// The MARK for a source under `spec`: the engine's own answer, priced. `None` on
-    /// malformed input (the AC parser is the arbiter).
-    pub fn mine_mark(&self, src: &[String], spec: &MineSpec) -> Option<Mark> {
-        match spec.canon {
-            MineCanon::Legacy => {
-                // The Default rule set, UNFOLDED, effort 0: the hybrid canon 0.14 mined in.
-                let tokens = self.ac_simplify_proj_fold(
-                    src,
-                    48,
-                    RuleMode::Default,
-                    crate::engine::AcForm::Explicit,
-                    false,
-                )?;
-                let mu = self.mine_price(&tokens, spec.mode, spec.canon);
-                Some(Mark { tokens, mu })
-            }
-        }
+    /// The MARK for a source in `mode`: the engine's own SERVE answer, priced -- the
+    /// entry `simplify(s, mode)` takes (`effort=None`, the mode's default work budget),
+    /// with the mode's rules installed so far. `None` on malformed input.
+    pub fn mine_mark(&self, src: &[String], mode: RuleMode) -> Option<Mark> {
+        let tokens = {
+            let _work = crate::ac::work::search_budget_scope(serve_work(mode));
+            self.ac_explore_proj(src, 48, mode, crate::engine::AcForm::Explicit, usize::MAX)?
+        };
+        let mu = self.mine_price(&tokens, mode);
+        Some(Mark { tokens, mu })
     }
 
-    /// The measure a mine prices marks, candidates and resolved literals in: one measure,
-    /// so the scan bound, the library tiers and the strict-descent bar agree.
-    pub fn mine_price(&self, tokens: &[String], mode: RuleMode, canon: MineCanon) -> Option<u64> {
-        match canon {
-            // The bare context of the Default reading (0.14), whatever the mode.
-            MineCanon::Legacy => {
-                let _ = mode;
-                self.ac_complexity(tokens, RuleMode::Default, RuleMode::Default)
+    /// The measure a mine prices marks, candidates and resolved literals in: the mode's own
+    /// certified reading (what `complexity(e, mode)` prices and the mode's simplify
+    /// descends), so the scan bound, the library tiers and the strict-descent bar agree.
+    pub fn mine_price(&self, tokens: &[String], mode: RuleMode) -> Option<u64> {
+        self.ac_complexity_certified(tokens, mode, mode)
+    }
+
+    /// THE SOURCES of one length in `mode`: each enumerated spelling's canonical
+    /// projection as the mode reads it (`ac_mode_projection`), one per class (the first
+    /// enumerated), atomic projections dropped (nothing mintable sits below an atom). What
+    /// is certified is what is written. An unparseable spelling is kept as it is.
+    pub fn mine_sources(&self, enumerated: &[Vec<String>], mode: RuleMode) -> Vec<Vec<String>> {
+        let projected: Vec<Option<(Vec<String>, Vec<String>)>> = enumerated
+            .par_iter()
+            .map(|e| self.ac_mode_projection(e, mode))
+            .collect();
+        let mut seen: std::collections::HashSet<Vec<String>> = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for (e, p) in enumerated.iter().zip(projected) {
+            match p {
+                None => out.push(e.clone()),
+                Some((explicit, key)) => {
+                    if explicit.len() > 1 && seen.insert(key) {
+                        out.push(explicit);
+                    }
+                }
             }
         }
+        out
     }
 
     /// The library scan for ONE source (the proposals' channel): the mark is computed
@@ -376,7 +393,7 @@ impl Engine {
         seed: u64,
     ) -> Result<Option<Vec<String>>, String> {
         let mark = self
-            .mine_mark(src, spec)
+            .mine_mark(src, spec.mode)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
         match Acceptor::new(self, spec, src, mark, lib.var_names(), confirm) {
             None => Ok(None),
@@ -400,7 +417,7 @@ impl Engine {
         seed: u64,
     ) -> Result<Option<&'static str>, String> {
         let mark = self
-            .mine_mark(src, spec)
+            .mine_mark(src, spec.mode)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
         let Some(acc) = Acceptor::new(self, spec, src, mark, lib.var_names(), confirm) else {
             return Ok(Some("atomic_mark"));
@@ -521,6 +538,44 @@ impl Engine {
         atol: f64,
         min_informative: usize,
     ) -> Result<Option<Vec<String>>, String> {
+        self.find_rule_in(
+            source,
+            simplified_length,
+            max_target,
+            candidates,
+            var_names,
+            x_flat,
+            n_rows,
+            challenges,
+            retries,
+            seed,
+            rtol,
+            atol,
+            min_informative,
+            true,
+        )
+    }
+
+    /// [`Engine::find_rule`] with the numeric acceptance of a mode (`rescue`: high-precision
+    /// re-judging of near misses, every mode but f64; see `MineSpec::rescue`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn find_rule_in(
+        &self,
+        source: &[String],
+        simplified_length: usize,
+        max_target: Option<usize>,
+        candidates: &[Vec<String>],
+        var_names: &[String],
+        x_flat: &[f64],
+        n_rows: usize,
+        challenges: usize,
+        retries: usize,
+        seed: u64,
+        rtol: f64,
+        atol: f64,
+        min_informative: usize,
+        rescue: bool,
+    ) -> Result<Option<Vec<String>>, String> {
         crate::worker::find_rule(
             &self.operators,
             source,
@@ -536,6 +591,7 @@ impl Engine {
             rtol,
             atol,
             min_informative,
+            rescue,
         )
     }
 
@@ -549,16 +605,14 @@ impl Engine {
         x_flat: &[f64],
         n_rows: usize,
         mode: RuleMode,
-        canon: MineCanon,
     ) -> Result<crate::worker::CandidateLibrary, String> {
-        canon.check(mode)?;
         // mu is scored HERE because it is an engine-level measure, and the library builder
         // only has the operator table. It is the measure the marks are priced in
         // (`mine_price`), so the scan bound compares like with like; it depends on no mined
         // rule, so scoring once at build time is stable for the whole mine.
         let mus: Vec<Option<u64>> = candidates
             .iter()
-            .map(|c| self.mine_price(c, mode, canon))
+            .map(|c| self.mine_price(c, mode))
             .collect();
         // THE AC-CLASS QUOTIENT (2026-08-22 audit §7.1). The enumeration spells one
         // canonical class many ways -- commutative orderings, odd-sign twins, inv/abs
@@ -586,7 +640,7 @@ impl Engine {
             (vars, n_const)
         };
         for (i, c) in candidates.iter().enumerate() {
-            let Some(k) = self.ac_canonical_key(c) else {
+            let Some(k) = self.ac_canonical_key(c, mode) else {
                 continue; // unkeyed spellings are never quotiented
             };
             let (vars, n_const) = sig(c);
@@ -603,7 +657,7 @@ impl Engine {
         let mut cands_q: Vec<Vec<String>> = Vec::with_capacity(candidates.len());
         let mut mus_q: Vec<Option<u64>> = Vec::with_capacity(candidates.len());
         for (i, c) in candidates.iter().enumerate() {
-            let keep = match self.ac_canonical_key(c) {
+            let keep = match self.ac_canonical_key(c, mode) {
                 None => true,
                 Some(k) => {
                     let (vars, n_const) = sig(c);
@@ -716,6 +770,7 @@ impl Engine {
         spec: &MineSpec,
         confirm: Option<&ConfirmSet>,
         seed: u64,
+        index_offset: u64,
         relaxed_kruskal: bool,
     ) -> Vec<(Vec<String>, Vec<String>)> {
         // Publish the tier size so a driver polling `mine_progress()` sees within-tier progress
@@ -737,9 +792,9 @@ impl Engine {
                     // `None` (the malformed-input signal at the API boundary) cannot occur
                     // here, and treating it as "already reduced" (source unchanged) keeps
                     // this site total without a panic path in the worker threads.
-                    let mark = self.mine_mark(src, spec).unwrap_or_else(|| Mark {
+                    let mark = self.mine_mark(src, spec.mode).unwrap_or_else(|| Mark {
                         tokens: src.to_vec(),
-                        mu: self.mine_price(src, spec.mode, spec.canon),
+                        mu: self.mine_price(src, spec.mode),
                     });
                     // "Already reduced" is judged in the serve-time reduction ordering
                     // (one coverage ordering, everywhere): the walk strictly descended,
@@ -750,7 +805,7 @@ impl Engine {
                     // arm that used to skip it lost e.g. the `1/exp(t) -> exp(-t)`
                     // family to the enumeration alphabet.
                     let reduced = mark.is_atomic()
-                        || match self.ac_ordered_below(mark.tokens(), src) {
+                        || match self.ac_ordered_below_in(mark.tokens(), src, spec.mode) {
                             Some(below) => below,
                             None => {
                                 // Both spellings are the engine's own language (the
@@ -774,7 +829,13 @@ impl Engine {
                         // An atomic mark ends the search even under relaxed Kruskal
                         // (`Acceptor::new`).
                         Acceptor::new(self, spec, src, mark, lib.var_names(), confirm).and_then(
-                            |acc| match acc.scan(lib, max_target, seed.wrapping_add(idx as u64)) {
+                            |acc| match acc.scan(
+                                lib,
+                                max_target,
+                                // the GLOBAL source index: a shard (`index_offset`) draws
+                                // exactly the seeds of a one-shot mine
+                                seed.wrapping_add(index_offset).wrapping_add(idx as u64),
+                            ) {
                                 Ok(Some(target)) => Some((src.clone(), target)),
                                 _ => None,
                             },

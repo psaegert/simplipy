@@ -88,8 +88,8 @@ def test_the_key_is_not_the_conversion_api(vocab_engine):
 
     # 3. The key is bare-context and artifact-independent.
     key = [['neg', 'asin', '_0']]
-    assert loaded._core.ac_canonical_keys([list(ASIN_A[0])]) == key
-    assert vocab_engine._core.ac_canonical_keys([list(ASIN_A[0])]) == key
+    assert loaded._core.ac_canonical_keys([list(ASIN_A[0])], rule_mode="default") == key
+    assert vocab_engine._core.ac_canonical_keys([list(ASIN_A[0])], rule_mode="default") == key
 
     # 4. ... so the rule survives dedup with two DISTINCT sides, on either engine.
     for engine in (vocab_engine, loaded):
@@ -171,15 +171,15 @@ def test_engine_construction_drops_ac_duplicates_of_the_shipped_artifact():
     pairs = _ac_respellings(engine, raw, 40)
     respelled = [new for _, new in pairs]
     # each respelling is an AC duplicate of its rule: one internal form, two spellings
-    assert engine._core.ac_canonical_keys([new[0] for new in respelled]) == \
-        engine._core.ac_canonical_keys([old[0] for old, _ in pairs])
+    assert engine._core.ac_canonical_keys([new[0] for new in respelled], rule_mode="default") == \
+        engine._core.ac_canonical_keys([old[0] for old, _ in pairs], rule_mode="default")
     dup_engine = SimpliPyEngine(operators=operators, rules=raw + respelled)
     served = {(tuple(lhs), tuple(rhs)) for lhs, rhs in dup_engine.simplification_rules}
     assert len(served) == len(engine.simplification_rules)
     dropped = {(tuple(a), tuple(b)) for a, b in raw + respelled} - served
     assert dropped == {(tuple(a), tuple(b)) for a, b in respelled}
     # No two SERVED rules share an internal form.
-    keys = dup_engine._core.ac_canonical_keys([list(lhs) for lhs, _ in served])
+    keys = dup_engine._core.ac_canonical_keys([list(lhs) for lhs, _ in served], rule_mode="default")
     assert len(keys) == len(set(map(tuple, keys)))
 
 
