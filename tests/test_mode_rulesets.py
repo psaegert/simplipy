@@ -65,6 +65,18 @@ def fires(engine: SimpliPyEngine, rule: list, mode: str) -> bool:
     return engine._core.ac_simplify_in_mode(lhs, 48, mode, 'explicit') == rhs
 
 
+#: The config keys that name a mode's own rule set. `rules_corpus` is the pre-rename
+#: spelling of `rules_permissive` that published artifacts still carry.
+MODE_SET_KEYS = ('rules_real', 'rules_permissive', 'rules_corpus')
+
+
+def without_mode_sets(config: dict) -> dict:
+    """The config with every mode-set key removed, under either spelling."""
+    for key in MODE_SET_KEYS:
+        config.pop(key, None)
+    return config
+
+
 def write_artifact(tmp_path, rules, *, real=None, corpus=None, declare=()) -> str:
     """A three-file artifact directory over the shipped operator table.
 
@@ -76,8 +88,7 @@ def write_artifact(tmp_path, rules, *, real=None, corpus=None, declare=()) -> st
     # The shipped config now NAMES all three, so copying it and only ever ADDING keys made
     # `declare=()` unbuildable -- the "declares neither" arm compared a declared artifact
     # with itself. Strip them first, so `declare` means what the docstring says.
-    config.pop('rules_real', None)
-    config.pop('rules_corpus', None)
+    without_mode_sets(config)
     config['rules'] = 'rules.json'
     json.dump(rules, open(os.path.join(tmp_path, 'rules.json'), 'w'))
     for name, content in (('real', real), ('permissive', corpus)):
@@ -110,9 +121,7 @@ def _default_only_config():
     test rather than quietly retargeting it at a triple."""
     import tempfile
     d = tempfile.mkdtemp()
-    cfg = yaml.safe_load(open(acj_config_path()))
-    cfg.pop('rules_real', None)
-    cfg.pop('rules_corpus', None)
+    cfg = without_mode_sets(yaml.safe_load(open(acj_config_path())))
     cfg['rules'] = 'rules.json'
     json.dump(json.load(open(acj_rules_path())), open(os.path.join(d, 'rules.json'), 'w'))
     yaml.safe_dump(cfg, open(os.path.join(d, 'config.yaml'), 'w'))
@@ -130,22 +139,23 @@ class TestAbsentFilesAreANoOp:
         exercised by the fixtures below instead -- and the shipped config must name all
         three, or `mode='real'` fails closed for every user."""
         require_or_skip(acj_config_path(), 'acj-4-3 config not staged')
-        base = acj_config_path().replace('config.yaml', '')
+        base = os.path.dirname(acj_config_path())
         config = yaml.safe_load(open(acj_config_path()))
-        assert config['rules'] == './rules.json'
+        # The permissive set is named under exactly one of its two spellings.
+        permissive_keys = [k for k in ('rules_permissive', 'rules_corpus') if config.get(k)]
+        assert len(permissive_keys) == 1, permissive_keys
+        named = {key: config[key] for key in ('rules', 'rules_real', *permissive_keys)}
         # THE CONFIG AND THE DIRECTORY MUST AGREE, in both directions. Naming a set it
         # does not ship makes `Mode.real` fail closed and `Mode.permissive` fall back
         # SILENTLY, and shipping a set it does not name makes that set dead weight no
-        # loader will ever read. Asserting the pair holds while the asset carries the f64
-        # third alone AND once the re-mine stages all three, which asserting three
-        # literal filenames did not.
-        for key, fname in (('rules_real', 'rules_real.json'),
-                           ('rules_corpus', 'rules_permissive.json')):
-            staged = os.path.exists(base + fname)
-            named = config.get(key) == f'./{fname}'
-            assert named == staged, (
-                f'{key}: named={named} staged={staged} -- the config and the shipped '
-                f'directory disagree')
+        # loader will ever read.
+        for key, declared in named.items():
+            assert os.path.isfile(os.path.join(base, declared)), (
+                f'{key} names {declared!r}, which the shipped directory does not carry')
+        on_disk = {f for f in os.listdir(base) if f.startswith('rules') and f.endswith('.json')
+                   and not f.endswith('.provenance.json')}
+        assert on_disk == {os.path.basename(declared) for declared in named.values()}, (
+            f'rule files on disk {sorted(on_disk)} vs named {named}')
 
     def test_every_mode_serves_the_default_set(self):
         """No set of its own means the DEFAULT set -- for every mode, counted and
@@ -159,9 +169,7 @@ class TestAbsentFilesAreANoOp:
         import json as _json
         import tempfile as _tempfile
         d = _tempfile.mkdtemp()
-        cfg = yaml.safe_load(open(acj_config_path()))
-        cfg.pop('rules_real', None)
-        cfg.pop('rules_corpus', None)
+        cfg = without_mode_sets(yaml.safe_load(open(acj_config_path())))
         cfg['rules'] = 'rules.json'
         _json.dump(_json.load(open(acj_rules_path())), open(os.path.join(d, 'rules.json'), 'w'))
         yaml.safe_dump(cfg, open(os.path.join(d, 'config.yaml'), 'w'))
