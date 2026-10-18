@@ -64,6 +64,16 @@ class Engine:
         explore_budget: int | None = ...,  # None: until a round finds nothing
         work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
     ) -> str: ...
+    def prettify(
+        self,
+        tokens: list[str],
+        digits: int = ...,
+        form: Literal["infix", "explicit", "tagged"] = ...,
+        rule_mode: Literal["default", "real", "permissive"] = ...,
+        resimplify: bool = ...,  # rule 11: simplify the display once and display that
+        explore_budget: int | None = ...,
+        work_budget: int | None = ...,
+    ) -> str | list[str]: ...
     def ac_simplify_explore(
         self,
         tokens: list[str],

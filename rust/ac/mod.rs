@@ -59,6 +59,7 @@
 pub mod convert;
 pub mod expr;
 pub mod matcher;
+pub mod prettify;
 pub mod rat;
 pub mod rules;
 pub mod search;

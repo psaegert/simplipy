@@ -10,6 +10,7 @@
 mod ac;
 mod memo;
 mod miner;
+mod prettify;
 pub mod refusals;
 pub mod stats;
 
@@ -27,6 +28,7 @@ use memo::{BangCache, SimplifyCtx};
 pub use ac::AcForm;
 pub use ac::RuleMode;
 pub use miner::{ConfirmSet, MineRefusal, MineSpec};
+pub use prettify::{Pretty, PrettyForm};
 
 /// The work budget of each search `simplify(.., mode='permissive')` runs when `work` is not
 /// given (`simplipy.DEFAULT_WORK` reads it from here). One step of the AC matcher or one

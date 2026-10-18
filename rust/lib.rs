@@ -823,6 +823,48 @@ impl PyEngine {
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
+    /// `prettify` (number plan phase 3): the DISPLAY of an expression's canonical state under
+    /// the digit budget `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`,
+    /// `"tagged"`). `resimplify` is rule 11: the display is simplified once in `rule_mode`
+    /// (search budget `explore_budget`, work budget `work_budget`, read as in
+    /// `ac_simplify_in_mode`) and that answer is displayed. Display only: nothing in the engine
+    /// calls this or reads what it returns.
+    #[pyo3(signature = (tokens, digits=3, form="infix", rule_mode="default", resimplify=true, explore_budget=None, work_budget=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn prettify(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<String>,
+        digits: usize,
+        form: &str,
+        rule_mode: &str,
+        resimplify: bool,
+        explore_budget: Option<usize>,
+        work_budget: Option<u64>,
+    ) -> PyResult<Py<PyAny>> {
+        let form = engine::PrettyForm::parse(form).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown form {form:?}: expected 'infix', 'explicit' or 'tagged'"
+            ))
+        })?;
+        let mode = parse_rule_mode(rule_mode)?;
+        if digits == 0 {
+            return Err(PyValueError::new_err("digits must be at least 1"));
+        }
+        ensure_ac_well_formed(&self.inner, &tokens)?;
+        let budget = resimplify.then(|| explore_budget_of(explore_budget));
+        let out = py
+            .detach(|| {
+                let _work = crate::ac::work::search_budget_scope(work_budget);
+                self.inner.ac_prettify(&tokens, digits, form, mode, budget)
+            })
+            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
+        Ok(match out {
+            engine::Pretty::Text(s) => pyo3::types::PyString::new(py, &s).into_any().unbind(),
+            engine::Pretty::Tokens(t) => PyList::new(py, t)?.into_any().unbind(),
+        })
+    }
+
     #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
     fn ac_complexity(
         &self,
