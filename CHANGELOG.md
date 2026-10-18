@@ -40,7 +40,8 @@
   `log(x1 - 3)/(3 - x1)`, `-log(x1 - 3)/(x1 - 3)` and `log(x1 - 3)*(3 - x1)/(x1 - 3)^2` are one
   answer, `-log(x1 - 3)/(x1 - 3)`, `+inf` at `x1 = 3` like the limit from `x1 > 3`, and
   `(3 - x1)^x4/(x1 - 3)` and `-(3 - x1)^x4/(3 - x1)` are `-(3 - x1)^x4/(3 - x1)`, `-inf` there like
-  the limit from `x1 < 3`. Like terms collect up to
+  the limit from `x1 < 3` (in `f64` and `real`; `permissive` keeps no value at a pole and gives
+  its cheapest orientation). Like terms collect up to
   sign and a pattern variable that occurs twice matches a sum or its negation:
   `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and `x1 + sin(x3 - x2) - sin(x3 - x2)`
   is `x1` (0.14.7 keeps the first as written and gives `x1 + sin(x2 - x3) + sin(x3 - x2)` for
@@ -107,15 +108,13 @@
   over opposite sums, odd functions and odd roots, each in up to eleven spellings (four
   bracketings and the tagged bag for all; two division spellings, the inverse of a product, a
   chain of divisions and the tagged bag with `<div>` where the product has a divisor; a negation
-  for 72), two products in `f64` and `real` (each with a class whose value at its zero cannot be
-  read, above) and one in `permissive` reach two answers, of equal value (0.14.7: 616 in `f64` and
-  `real`, 687 in `permissive`), and in `f64` and `real` none changes on a second call at the same
-  effort (in `permissive` one does, which a second call continues). In `f64` and `real` no answer
-  changes on a second call on any of the three sets (0.14.7: 59 and 57 T8.1 inputs, 4 ground
-  truths, 31 predictions). The
-  debug-build check that every intermediate state reads back as itself printed in a spelling no
-  caller receives; it now prints as the callers do and passes on all ground truths, predictions
-  and T8.1 inputs in every mode.
+  for 72), no product in `f64` and `real` and one in `permissive` reaches two answers (0.14.7: 616
+  in `f64` and `real`, 687 in `permissive`), and in `f64` and `real` none changes on a second call
+  at the same effort (in `permissive` one does, which a second call continues). In `f64` and
+  `real` no answer changes on a second call on any of the three sets (0.14.7: 59 and 57 T8.1
+  inputs, 4 ground truths, 31 predictions). The debug-build check that every intermediate state
+  reads back as itself printed in a spelling no caller receives; it now prints as the callers do
+  and passes on all ground truths, predictions and T8.1 inputs in every mode.
 - **A fitted constant beside a sum keeps its family.** A product of a sum and a sum holding
   `<constant>` let the constant's sum take the product's sign as if the constant absorbed it:
   `(x2 - x1)*(x1 - <constant>)` became `(x1 + <constant>)*(x1 - x2)`, which no value of the
