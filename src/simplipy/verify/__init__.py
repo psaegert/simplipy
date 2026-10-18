@@ -155,7 +155,11 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
 
     The property it stood proxy for is behavioural: **permissive is at least as capable as
     either other mode**. Pass ``engine_config`` (and optionally ``corpus_rows``) to check
-    it -- the report then carries ``permissive_dominance``. Without an engine there is nothing
+    it -- the report then carries ``permissive_dominance``. The check runs on an engine
+    built from the config's operators and the three rule sets given here, never the rule
+    files the config names, and prices every answer by
+    :func:`simplipy.mining.cross_mode_complexity`. A row on which a mode raises is a
+    violation, reported with its error. Without an engine there is nothing
     sound to say about the relationship between the files, and ``relationships`` stays
     empty rather than asserting something false.
 
@@ -197,8 +201,13 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
             dominance = {'checked': False, 'reason': reason}
         else:
             from ..engine import SimpliPyEngine
+            from ..io import load_config
             from ..mining import assert_permissive_dominates
-            engine = SimpliPyEngine.from_config(engine_config)
+            # The SUBJECT is the triple passed in, not the files the config names: the
+            # config contributes its operators (the deployed semantics) and nothing else.
+            engine = SimpliPyEngine(operators=load_config(engine_config)['operators'],
+                                    rules=_load(f64_rules), rules_real=_load(real_rules),
+                                    rules_permissive=_load(permissive_rules))
             violations = assert_permissive_dominates(engine, rows)
             dominance = {'checked': True, 'violations': violations}
             if violations:

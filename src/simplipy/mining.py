@@ -2049,28 +2049,45 @@ class RuleMiner:
             _MINE_LOCK.release()
 
 
+def cross_mode_complexity(engine: Any, tokens: Any, mode: Any) -> int:
+    """THE CROSS-MODE YARDSTICK: the price of an answer of ``mode`` on a scale shared by
+    all three modes.
+
+    Each mode's own :meth:`~simplipy.SimpliPyEngine.complexity` prices that mode's
+    reading, so prices in different modes are not comparable. Answers of different modes
+    are compared in one declared reading instead: the answer is parsed as its own mode
+    reads it and priced, certified, in f64's canon. This is the one use of the core's
+    f64-canon pricing.
+    """
+    from .engine import _RULE_MODE, _coerce_mode
+    return int(engine._core.ac_complexity_certified(
+        list(tokens), _RULE_MODE[_coerce_mode(mode)], 'default'))
+
+
 def assert_permissive_dominates(engine: Any, expressions: Any) -> list:
-    """`corpus` must be at least as capable as `f64` and as `real`, on every expression.
+    """`permissive` must be at least as capable as `f64` and as `real`, on every expression.
 
     THE REPLACEMENT for `rules_permissive == rules_f64 UNION rules_real`, which was retired
-    once folding made the three modes live in different canonical worlds (owner ruling
-    2026-08-20). That set identity was a proxy for this, and a bad one: it measured
-    spelling overlap, so it read `acos 1 -> 0` as "missing from corpus" when corpus
-    performs it -- and performs all 15 such rules -- through its own constructor.
+    once folding made the three modes live in different canonical worlds. That set
+    identity was a proxy for this, and a bad one: it measured spelling overlap, so it read
+    `acos 1 -> 0` as "missing from permissive" when permissive performs it -- and performs
+    all 15 such rules -- through its own constructor.
 
     Stated as behaviour it is checkable and it is what anyone actually wants: for every
-    expression, corpus's endpoint costs no more under the serve ordering than either
-    other mode's. Returns the counterexamples, empty when the property holds.
+    expression, permissive's answer costs no more than either other mode's, all three
+    priced by :func:`cross_mode_complexity`. Returns the violations, empty when the
+    property holds. A row on which a mode raises or an answer cannot be priced is a
+    violation too, reported with its error: a crash never reads as dominance.
     """
     from .engine import Mode
-    bad = []
+    modes = (Mode.f64, Mode.real, Mode.permissive)
+    bad: list[dict[str, Any]] = []
     for expr in expressions:
         try:
-            mu = {m: engine._core.ac_complexity(engine.simplify(list(expr), mode=m))
-                  for m in (Mode.f64, Mode.real, Mode.permissive)}
-        except Exception:
-            continue
-        if None in mu.values():
+            mu = {m: cross_mode_complexity(engine, engine.simplify(list(expr), mode=m), m)
+                  for m in modes}
+        except Exception as error:  # reported as a violation below, never skipped
+            bad.append({'expression': list(expr), 'error': f'{type(error).__name__}: {error}'})
             continue
         if mu[Mode.permissive] > min(mu[Mode.f64], mu[Mode.real]):
             bad.append({'expression': list(expr),

@@ -2497,8 +2497,8 @@ class TestThePerModePrune:
         assert engine.simplify(['1e-08']) == engine.simplify(['0.00000001'])
 
 
-class TestCorpusDominanceReplacesTheSetInvariant:
-    """`rules_corpus == rules_f64 UNION rules_real` was retired: once folding is
+class TestPermissiveDominanceReplacesTheSetInvariant:
+    """`rules_permissive == rules_f64 UNION rules_real` was retired: once folding is
     mode-dependent the three modes live in different canonical worlds, so set overlap
     measures SPELLING, not capability. This is the property it stood proxy for."""
 
@@ -2507,9 +2507,9 @@ class TestCorpusDominanceReplacesTheSetInvariant:
         from simplipy.mining import assert_permissive_dominates
         require_or_skip(acj_config_path(), 'needs the acj-4-3 asset')
         from conftest import require_triple_or_skip
-        require_triple_or_skip('needs the shipped corpus set')
-        # NOT wiped: the shipped artifact's own 5,471-rule real set is the thing corpus
-        # has to dominate. Emptying it first made the check trivial.
+        require_triple_or_skip('needs the shipped permissive set')
+        # NOT wiped: the shipped artifact's own real set is the thing permissive has to
+        # dominate. Emptying it first made the check trivial.
         engine = SimpliPyEngine.from_config(acj_config_path())
         assert engine._core.mode_rules_len('real') is not None
         rows = json.load(open(os.path.join(
@@ -2519,8 +2519,8 @@ class TestCorpusDominanceReplacesTheSetInvariant:
 
     def test_it_CAN_fail(self) -> None:
         """An invariant that cannot fail proves nothing -- three tautologies shipped in
-        this work before being caught. Cripple corpus to real's semantics and the check
-        must report it."""
+        this work before being caught. Cripple permissive to real's semantics and the
+        check must report it."""
         from simplipy import Mode
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import assert_permissive_dominates
@@ -2528,7 +2528,7 @@ class TestCorpusDominanceReplacesTheSetInvariant:
         engine = SimpliPyEngine.from_config(acj_config_path())
         engine._core.set_mode_rules('real', [])
 
-        class CorpusCrippled:
+        class PermissiveCrippled:
             def __init__(self, e):
                 self._e, self._core = e, e._core
 
@@ -2538,7 +2538,50 @@ class TestCorpusDominanceReplacesTheSetInvariant:
         rows = json.load(open(os.path.join(
             os.path.dirname(acj_config_path()), '..', '..', '..',
             'benchmarks', 'corpus', 'raw_skeletons_nv.json')))[:120]
-        assert assert_permissive_dominates(CorpusCrippled(engine), rows) != []
+        assert assert_permissive_dominates(PermissiveCrippled(engine), rows) != []
+
+    def test_a_row_that_raises_is_a_reported_violation(self) -> None:
+        """Fail-closed: a mode that raises on a row makes that row a violation carrying
+        the error. Skipping it would let a crash read as dominance."""
+        from simplipy import Mode
+        from conftest import acj_config_path, require_or_skip
+        from simplipy.mining import assert_permissive_dominates
+        require_or_skip(acj_config_path(), 'needs the acj-4 asset')
+        engine = SimpliPyEngine.from_config(acj_config_path())
+
+        class PermissiveRaises:
+            def __init__(self, e):
+                self._e, self._core = e, e._core
+
+            def simplify(self, expr, mode=None):
+                if mode is Mode.permissive and expr == ['sin', 'x1']:
+                    raise RuntimeError('permissive crashed')
+                return self._e.simplify(expr, mode=mode)
+
+        rows = [['sin', 'x1'], ['+', 'x1', '1']]
+        assert assert_permissive_dominates(engine, rows) == []
+        assert assert_permissive_dominates(PermissiveRaises(engine), rows) == [
+            {'expression': ['sin', 'x1'], 'error': 'RuntimeError: permissive crashed'}]
+        # an answer the yardstick cannot price is reported the same way
+        [unpriced] = assert_permissive_dominates(engine, [['nosuchop', 'x1']])
+        assert unpriced['expression'] == ['nosuchop', 'x1']
+        assert unpriced['error'].startswith('ValueError'), unpriced
+
+    def test_the_yardstick_is_f64s_certified_canon(self) -> None:
+        """One declared cross-mode scale: each answer parsed by its own mode and priced,
+        certified, in f64's canon. Where a mode's own reading prices an answer
+        differently, the yardstick does not follow it."""
+        from conftest import acj_config_path, require_or_skip
+        from simplipy.mining import cross_mode_complexity
+        require_or_skip(acj_config_path(), 'needs the acj-4 asset')
+        engine = SimpliPyEngine.from_config(acj_config_path())
+        e = ['+', '*', 'asin', '1e-08', 'x1', 'asin', '1e-08']
+        assert engine.complexity(e, mode='real') == 38340      # real's own reading
+        assert engine.complexity(e, mode='f64') == 19170
+        for mode in ('f64', 'real', 'permissive'):
+            assert cross_mode_complexity(engine, e, mode) == 19170, mode
+        assert cross_mode_complexity(engine, e, 'real') == \
+            engine._core.ac_complexity_certified(e, 'real', 'default')
 
 
 class TestThePruneIsInstanceSafe:

@@ -612,16 +612,16 @@ class TestCleanlinessIsPerMode:
             verify_ruleset([self.CORE], mode='banana')
 
     def test_a_triple_is_verified_as_ONE_artifact(self) -> None:
-        """Three per-file sweeps, and NOT the retired set identity. `corpus == f64 UNION
-        real` was dropped once folding became mode-dependent: each file omits what its own
-        constructor performs, so set overlap measures spelling. On the shipped artifact the
-        union exceeds the corpus file by 362 rules and corpus performs every one -- the
+        """Three per-file sweeps, and NOT the retired set identity. `permissive == f64
+        UNION real` was dropped once folding became mode-dependent: each file omits what its
+        own constructor performs, so set overlap measures spelling. On the shipped artifact
+        the union exceeds the permissive file by 362 rules and permissive performs every one -- the
         identity would call a correct artifact dirty."""
         from simplipy.verify import verify_triple
         good = verify_triple([self.CORE], [self.CORE, self.REAL], [self.CORE, self.REAL])
         assert good['is_clean'] is True and good['relationships'] == []
 
-        # a corpus file SMALLER than the union is now legitimate, not a defect
+        # a permissive file SMALLER than the union is now legitimate, not a defect
         pruned = verify_triple([self.CORE], [self.CORE, self.REAL], [self.CORE])
         assert pruned['is_clean'] is True, pruned['relationships']
         assert pruned['relationships'] == []
@@ -686,6 +686,22 @@ class TestCleanlinessIsPerMode:
                                corpus_rows=[['sin', 'x1'], ['+', 'x1', '1']])
         assert report['permissive_dominance'] == {'checked': True, 'violations': []}
         assert report['is_clean'] is True
+
+    def test_dominance_is_checked_on_the_triple_given(self) -> None:
+        """The subject is the three rule sets passed in, not the files the config names:
+        the config contributes its operators and nothing else. A real set holding a rule
+        the permissive set lacks (`sin x0 -> x0`, judged unsound, but dominance is about
+        capability) out-simplifies permissive on `sin(x0)`, and the check must see it --
+        the config's own files never carry that rule."""
+        from conftest import acj_config_path, require_or_skip
+        require_or_skip(acj_config_path(), 'needs the acj-4 config for its operators')
+        from simplipy.verify import verify_triple
+        report = verify_triple([self.CORE], [self.REJECT], [self.CORE],
+                               engine_config=acj_config_path(),
+                               corpus_rows=[['sin', 'x0'], ['+', 'x1', '1']])
+        assert report['permissive_dominance'] == {'checked': True, 'violations': [
+            {'expression': ['sin', 'x0'], 'mu': {'f64': 12000, 'real': 6000, 'permissive': 12000}}]}
+        assert report['is_clean'] is False
 
 
 class TestOperandScaledPrecision:
