@@ -264,8 +264,8 @@ class TestShippingArtifact:
         """The other half of the split, kept as its own test so that shipping the f64
         set WITHOUT a triple reports honestly: the census above still runs and passes,
         and this one skips for want of a subject rather than dragging the pair down."""
-        from conftest import require_triple_or_skip
-        require_triple_or_skip()
+        from conftest import require_triple
+        require_triple()
         real_path = ACJ_RULES.replace('rules.json', 'rules_real.json')
         real_rules = json.load(open(real_path))
         real_keys = {(tuple(a), tuple(b)) for a, b in real_rules}
@@ -634,12 +634,12 @@ class TestCleanlinessIsPerMode:
         """The regression that made this necessary: `verify_triple` kept enforcing the
         retired union identity after the miner stopped, so the documented artifact gate
         reported the 0.14.0 artifact as dirty while every per-file sweep was clean."""
-        from conftest import acj_config_path, acj_corpus_rules_path, require_triple_or_skip
+        from conftest import acj_config_path, acj_corpus_rules_path, require_triple
         from simplipy.verify import verify_triple
         base = acj_config_path().replace('config.yaml', '')
         # the TRIPLE is the subject, so guard on the triple and not merely on the config:
         # the f64 set ships on its own while the real/permissive sets are re-mined
-        require_triple_or_skip('needs the shipped acj-4-3 triple')
+        require_triple('needs the shipped acj-4-3 triple')
         # the third file keeps its published name on pre-rename artifacts; the
         # conftest helper resolves whichever spelling the cell actually ships
         report = verify_triple(base + 'rules.json', base + 'rules_real.json',
@@ -680,8 +680,8 @@ class TestCleanlinessIsPerMode:
         """The positive half of the contract: with rows given, the report says the sweep
         ran (`checked: True`) and carries the violation list -- empty on a dominating
         artifact, so a real pass is now spelled differently from a skipped check."""
-        from conftest import acj_config_path, require_triple_or_skip
-        require_triple_or_skip('the dominance sweep simplifies in all three modes')
+        from conftest import acj_config_path, require_triple
+        require_triple('the dominance sweep simplifies in all three modes')
         from simplipy.verify import verify_triple
         report = verify_triple([self.CORE], [self.CORE], [self.CORE],
                                engine_config=acj_config_path(),

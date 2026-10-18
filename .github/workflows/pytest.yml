@@ -70,8 +70,8 @@ jobs:
           print("staged legacy 4-3 ->", os.path.join(cache, info["directory"]))
           PY
 
-      # The engine suites load the SERVED acj-4 asset from the cache, exactly like a
-      # user install (the tree carries no artifact copy).
+      # The engine suites load the acj-4 cell the tree carries under assets/engines/, and
+      # the staged cache copy where the tree has none (tests/conftest.py, acj_asset_dir).
       - name: Stage the acj-4 and acj-4-3 engine assets (the asset-gated suites load them)
         run: |
           python - <<'PY'
@@ -86,12 +86,9 @@ jobs:
               print("staged", name, "->", os.path.join(cache, info["directory"]))
           PY
 
-      # REQUIRE_ASSETS: the asset-gated python tests (the staged acj-4 engine and the
-      # staged legacy refusal input above) must FAIL loudly if the assets vanish, never
-      # silently skip. The triple-gated tests key on SIMPLIPY_TEST_REQUIRE_TRIPLE
-      # instead (set it in the job that validates a triple-shipping build): the cell
-      # ships its f64 third alone while the real/corpus sets are re-mined, and those
-      # tests self-activate the moment the two files land beside it.
+      # REQUIRE_ASSETS: the asset-gated python tests (the acj-4 triple and the staged
+      # legacy refusal input above) must FAIL loudly if an asset vanishes, never
+      # silently skip.
       - name: Run tests
         run: pytest tests
         env:

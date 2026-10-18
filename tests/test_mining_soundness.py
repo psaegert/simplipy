@@ -2507,8 +2507,8 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import assert_permissive_dominates
         require_or_skip(acj_config_path(), 'needs the acj-4-3 asset')
-        from conftest import require_triple_or_skip
-        require_triple_or_skip('needs the shipped permissive set')
+        from conftest import require_triple
+        require_triple('needs the shipped permissive set')
         # NOT wiped: the shipped artifact's own real set is the thing permissive has to
         # dominate. Emptying it first made the check trivial.
         engine = SimpliPyEngine.from_config(acj_config_path())
