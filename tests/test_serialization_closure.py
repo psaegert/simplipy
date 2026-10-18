@@ -426,6 +426,26 @@ class TestProvenanceRecordsTheMeasure:
         from simplipy.engine import ARTIFACT_ENV_SWITCHES
         assert 'SIMPLIPY_TAGGED_FRACTION_MAX' in ARTIFACT_ENV_SWITCHES
 
+    def test_the_registry_is_what_the_core_reads(self) -> None:
+        """The core declares the artifact-affecting switches and reads each through that
+        declaration; every other `SIMPLIPY_*` variable it reads by name is a diagnostic
+        trace or the test-asset switch. A new switch read as a bare literal fails here
+        until it is declared."""
+        import os
+        import re
+        from simplipy.engine import ARTIFACT_ENV_SWITCHES
+        rust = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'rust')
+        sources = [open(os.path.join(root, name)).read()
+                   for root, _, names in os.walk(rust) for name in names if name.endswith('.rs')]
+        literal = {m for src in sources for m in re.findall(r'env::var(?:_os)?\(\s*"(SIMPLIPY_\w+)"', src)}
+        assert literal == {'SIMPLIPY_AC_TRACE', 'SIMPLIPY_AC_MEMO_TRACE', 'SIMPLIPY_GATE_TRACE',
+                           'SIMPLIPY_BATTERY_TRACE', 'SIMPLIPY_TEST_REQUIRE_ASSETS'}
+        assert ARTIFACT_ENV_SWITCHES == (
+            'SIMPLIPY_IVL_NODE_BUDGET', 'SIMPLIPY_HIPREC_FRAC', 'SIMPLIPY_TAGGED_FRACTION_MAX')
+        declared = {m for src in sources
+                    for m in re.findall(r'env::var\(\s*crate::env_switches::(\w+)\)', src)}
+        assert declared == {'IVL_NODE_BUDGET', 'HIPREC_FRAC', 'TAGGED_FRACTION_MAX'}
+
 
 class TestCoreTableHasOneSource:
     """C1.10: the core serialization language was declared in FIVE hand-maintained places.

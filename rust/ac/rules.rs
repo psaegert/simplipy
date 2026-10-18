@@ -789,14 +789,6 @@ fn memo_log(what: &str, e: &Ex) {
 
 /// Try every applicable rule at this node (asset order, sig-prefiltered). On a bag fire the
 /// remainder joins the substituted RHS in a fresh canonical bag.
-/// Kill switch for the exact-dispatch map (`SIMPLIPY_EXACT_INDEX=0` restores the full
-/// linear bucket scan) -- an A/B and rollback lever, not a semantic knob: both paths are
-/// behavior-identical by the `exact_map` soundness argument.
-fn exact_index_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_EXACT_INDEX").as_deref() != Ok("0"))
-}
-
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     // Past an armed work ceiling no rule is tried: the descent in progress settles quickly
     // and the search discards it (`ac::search::explore`).
@@ -820,7 +812,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
     const EMPTY: &[usize] = &[];
     let (exact_hits, scan): (&[usize], &[usize]) = match e {
         Ex::Add(_) | Ex::Mul(_) => (EMPTY, p.rules.bucket_for(e)),
-        _ if exact_index_enabled() => {
+        _ => {
             let bucket = p.rules.bucket_for(e);
             let end = match e {
                 Ex::Pow(..) => p.rules.pow_exact_end,
@@ -834,7 +826,6 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
             };
             (hits, &bucket[end..])
         }
-        _ => (EMPTY, p.rules.bucket_for(e)),
     };
     // The subject bag's equality classes, computed by the first rule whose match needs them.
     let bag_cls: std::cell::OnceCell<Vec<usize>> = std::cell::OnceCell::new();
@@ -981,11 +972,11 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     "AC fire rule#{ri}: lhs={:?} rhs={:?}\n  subject={e:?}\n  ->={next:?}",
                     rule.lhs, rule.rhs
                 );
-                debug_assert!(
-                    no_nested_bags(&next),
-                    "NESTED BAG after rule#{ri}: {next:?}"
-                );
             }
+            debug_assert!(
+                no_nested_bags(&next),
+                "NESTED BAG after rule#{ri}: {next:?}"
+            );
             return Some(next);
         }
     }

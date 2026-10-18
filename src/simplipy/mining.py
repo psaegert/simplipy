@@ -43,31 +43,18 @@ if TYPE_CHECKING:
 __all__ = ['RuleMiner']
 
 
-# THE ARTIFACT-AFFECTING SWITCH REGISTRY (H-042, doctrine-propagation sweep D4).
-# Every environment switch that can change a MINED ARTIFACT or a CERTIFICATION VERDICT,
-# in ONE place: the mine's provenance writer records every SET entry verbatim
-# (`soundness.env_overrides`), so a switch added here is recorded automatically.
-# Adding an artifact-affecting switch ANYWHERE (a rust OnceLock or a python read)
-# without listing it here violates the kill-switch recording doctrine: a mine run
-# under a non-default instrument must say so in its own sidecar. Pure observability
-# switches (the *_TRACE family, SIMPLIPY_MINE_PROGRESS_INTERVAL) do NOT belong here.
-# Caveat: the rust side reads its switches ONCE per process (OnceLock at first use),
-# so the record is faithful unless the caller mutates os.environ between first engine
-# use and the mine -- do not do that.
-ARTIFACT_ENV_SWITCHES = (
-    'SIMPLIPY_IVL_GATE',          # interval domain gate layer (recorded as bool too)
-    'SIMPLIPY_IVL_CLASS',         # interval value-class layer (bool too)
-    'SIMPLIPY_IVL_REACH',         # interval reachability layer (bool too)
-    'SIMPLIPY_SPECIAL_BATTERY',   # special-point battery layer (bool too)
-    'SIMPLIPY_IVL_NODE_BUDGET',   # interval node-budget override (raw too)
-    'SIMPLIPY_AC_ABSORB_FIRST',   # bag-match attempt order (serve outputs + mined rules)
-    'SIMPLIPY_MU_SYM',            # mu symbol unit (the reduction ordering itself)
-    'SIMPLIPY_MU_FREE',           # mu <constant> cost (the ordering)
-    'SIMPLIPY_ZERO_SIGN',         # miner sign-combo grid (reference/repro)
-    'SIMPLIPY_POLE_GRID',         # miner magnitude-grid ablation
-    'SIMPLIPY_HIPREC_FRAC',       # hiprec near-miss escalation gate (calibration)
-    'SIMPLIPY_TAGGED_FRACTION_MAX',  # tagged structural-fraction bound: changes MINED output
-)
+# THE ARTIFACT-AFFECTING SWITCH REGISTRY: every environment variable that can change a
+# mined artifact, a certification verdict or a served answer. The core declares the list
+# (`rust/env_switches.rs`, the constants its read sites use), so it cannot drift from what
+# is read. The mine's provenance writer records every SET entry verbatim
+# (`soundness.env_overrides`). The core reads its switches ONCE per process (at first
+# use), so the record is faithful unless the caller mutates os.environ between first
+# engine use and the mine.
+try:
+    from simplipy._core import ARTIFACT_ENV_SWITCHES as _CORE_ENV_SWITCHES  # type: ignore[attr-defined]
+except ImportError:  # no extension: engine construction raises with the reason anyway
+    _CORE_ENV_SWITCHES = []
+ARTIFACT_ENV_SWITCHES: tuple[str, ...] = tuple(_CORE_ENV_SWITCHES)
 
 _CONSTLIKE_LEAVES = {'<constant>', 'np.e', 'np.pi',
                      'float("inf")', 'float("-inf")', 'float("nan")'}
@@ -974,21 +961,13 @@ class RuleMiner:
 
         snapshot_at = dict(snapshot_at or {})
 
-        # SOUNDNESS PROVENANCE, first half (audit Tier-1 #4): the four default-ON
-        # soundness kill-switches (ablation/repro escape hatches; `<var>=0` disables a
-        # LAYER) ship recorded in the artifact -- a mine run with a layer off must say
-        # so -- plus the node-budget override if any. Recorded up front so interrupted
-        # mines carry it; the switch semantics mirror the rust side exactly
-        # (on unless the variable is literally "0").
+        # SOUNDNESS PROVENANCE, first half: the node-budget override, if any, and every
+        # set artifact-affecting switch. Recorded up front so interrupted mines carry it.
         _ivl_baseline = (self.engine._core.interval_horizon_misses(),
                          self.engine._core.interval_node_budget_misses(),
                          self.engine._core.interval_unanalyzable_misses())
         if provenance is not None:
             provenance['soundness'] = {
-                'kill_switches': {
-                    var: os.environ.get(var) != '0'
-                    for var in ('SIMPLIPY_IVL_GATE', 'SIMPLIPY_IVL_CLASS',
-                                'SIMPLIPY_IVL_REACH', 'SIMPLIPY_SPECIAL_BATTERY')},
                 'node_budget_env': os.environ.get('SIMPLIPY_IVL_NODE_BUDGET'),
                 # EVERY set entry of the artifact-affecting switch registry, raw (H-042):
                 # a default run records {}, any override is visible verbatim.

@@ -257,6 +257,7 @@ mod battery;
 
 mod convert;
 pub mod engine;
+mod env_switches;
 mod eval;
 mod fit;
 mod forms;
@@ -1695,5 +1696,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCandidateLibrary>()?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
+    m.add(
+        "ARTIFACT_ENV_SWITCHES",
+        env_switches::ARTIFACT_ENV_SWITCHES.to_vec(),
+    )?;
     Ok(())
 }

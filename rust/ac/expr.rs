@@ -169,26 +169,11 @@ impl Ex {
 /// The symbol UNIT, in BITS: what one grammar symbol costs at the ratified 1/8 pin, and
 /// the scale every entry of the symbol table below is expressed against. Since 2026-08-21
 /// no node is priced at the bare unit except an unclassified function head -- the table
-/// holds the per-kind entries, and this is what they are read AGAINST.
-/// 8 by default; `SIMPLIPY_MU_SYM` overrides it, read
-/// ONCE per process -- the pre-registered P-R3 sensitivity axis is this
-/// symbol-vs-bits RATIO (literal costs are absolute bits and do not scale), and the axis
-/// survives the table unchanged because the whole table scales with the unit.
-/// Production never sets the variable; it exists for the sensitivity mine only.
-// ARTIFACT-AFFECTING switch (and mu_free below): listed in
-// engine.py::ARTIFACT_ENV_SWITCHES (H-042).
-fn mu_sym_unit() -> u64 {
-    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SIMPLIPY_MU_SYM")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(8)
-    })
-}
+/// holds the per-kind entries, and this is what they are read AGAINST. Literal costs are
+/// absolute bits and do not scale with it.
+const MU_SYM_UNIT: u64 = 8;
 
-/// A symbol-table entry, in MILLI-BITS: `bits` read at the ratified 8-bit unit, scaled
-/// by whatever unit this process runs at.
+/// A symbol-table entry, in MILLI-BITS: `bits` read at the ratified 8-bit unit.
 ///
 /// EXACT in integer arithmetic at every unit -- `MU_MILLI / 8 = 125` divides evenly, so
 /// no entry ever rounds. That is not cosmetic: the reduction ordering's well-foundedness
@@ -196,7 +181,7 @@ fn mu_sym_unit() -> u64 {
 /// fresh termination argument.
 #[inline]
 fn sym_bits(bits: u64) -> u64 {
-    bits * (MU_MILLI / 8) * mu_sym_unit()
+    bits * (MU_MILLI / 8) * MU_SYM_UNIT
 }
 
 /// The mu SYMBOL TABLE (round-1, 2026-08-21), in BITS at the 8-bit unit.
@@ -231,9 +216,7 @@ fn sym_bits(bits: u64) -> u64 {
 /// and `np.e` now beats `exp 1` on COST rather than on the canonical tie-break, which is
 /// what the fold filter's correctness had been resting on.
 ///
-/// Entries are bits AT THE 8-BIT UNIT and scale with it, so the pre-registered P-R3
-/// sensitivity axis is exactly what it was: `SIMPLIPY_MU_SYM=16` doubles every entry
-/// while literal costs stay absolute bits.
+/// Entries are bits AT THE 8-BIT UNIT, while literal costs stay absolute bits.
 const MU_BITS_LEAF: u64 = 6;
 const MU_BITS_ADD: u64 = 3;
 const MU_BITS_MUL: u64 = 3;
@@ -351,17 +334,9 @@ fn mu_fun_bits(name: &str) -> u64 {
 /// construction guarantees.
 pub const MU_FREE_WORST_CASE_F64: u64 = 67 * MU_MILLI;
 
-/// `<constant>`, the priciest atom. `SIMPLIPY_MU_FREE` (read in BITS) overrides explicitly, for
-/// deployments whose fitted constants live in a narrower range than the whole f64 line.
-pub fn mu_free() -> u64 {
-    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SIMPLIPY_MU_FREE")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(|bits| bits * MU_MILLI) // read in BITS, like `SIMPLIPY_MU_SYM`
-            .unwrap_or(MU_FREE_WORST_CASE_F64)
-    })
+/// `<constant>`, the priciest atom: the worst case over every fittable f64.
+pub const fn mu_free() -> u64 {
+    MU_FREE_WORST_CASE_F64
 }
 
 /// Milli-bits per bit. The whole measure is carried in MILLI-BITS so that a literal's

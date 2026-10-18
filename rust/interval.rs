@@ -2528,7 +2528,7 @@ const DEFAULT_NODES_BUDGET: u32 = 400_000;
 fn max_nodes_budget() -> u32 {
     static B: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *B.get_or_init(|| {
-        std::env::var("SIMPLIPY_IVL_NODE_BUDGET")
+        std::env::var(crate::env_switches::IVL_NODE_BUDGET)
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_NODES_BUDGET)

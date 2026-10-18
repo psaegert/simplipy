@@ -67,16 +67,6 @@ fn is_variable_leaf(e: &Ex, view: &TokenView) -> bool {
     matches!(e, Ex::Leaf(t) if view.sigil(*t) == 0)
 }
 
-/// A/B diagnostic: with `SIMPLIPY_AC_ABSORB_FIRST=1` an unbound trailing wildcard prefers
-/// ABSORBING the whole remaining sub-bag over binding single elements (maximal-binding-first
-/// instead of the spec'd minimal-binding-first). Both orders are total and deterministic;
-/// this flag exists to MEASURE the preference on the corpus rather than argue about it.
-fn absorb_first() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    // ARTIFACT-AFFECTING switch: listed in engine.py::ARTIFACT_ENV_SWITCHES (H-042).
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_AC_ABSORB_FIRST").as_deref() == Ok("1"))
-}
-
 /// May a wildcard of this sort bind this subject? (The certificates run EAGERLY at bind time --
 /// unlike the old matcher's post-walk pass -- because bag backtracking must be able to retry a
 /// different assignment after a certificate refusal. The per-engine certificate caches keep the
@@ -459,7 +449,7 @@ fn try_assign(
         } else {
             // Unbound wildcard: the spec'd order is each single element (canonical order)
             // first, then absorption of the whole remaining sub-bag as the last alternative
-            // (minimal-binding-first). `SIMPLIPY_AC_ABSORB_FIRST=1` measures the reverse.
+            // (minimal-binding-first).
             let try_singles = |used: &mut Vec<bool>,
                                binds: &mut Binds,
                                k: &mut dyn FnMut(&mut Binds, &[bool]) -> bool|
@@ -538,15 +528,9 @@ fn try_assign(
                 binds.remove(&pk);
                 false
             };
-            // The arms differ in ATTEMPT ORDER only -- but order is semantic here: both
-            // calls short-circuit and mutate the search state, so the first strategy tried
-            // decides which assignment the continuation sees first (the absorb-first
-            // heuristic). `match` spells that out where clippy reads `if a {x||y} else
-            // {y||x}` as duplicate blocks.
-            match absorb_first() {
-                true => try_absorb(used, binds, &mut *k) || try_singles(used, binds, &mut *k),
-                false => try_singles(used, binds, &mut *k) || try_absorb(used, binds, &mut *k),
-            }
+            // Order is semantic: both calls short-circuit and mutate the search state, so
+            // the strategy tried first decides which assignment the continuation sees first.
+            try_singles(used, binds, &mut *k) || try_absorb(used, binds, &mut *k)
         }
     } else {
         // Structured pattern element: enumerate subject elements AND, per element, every

@@ -512,42 +512,20 @@ class TestFoldFilter:
         assert engine._core.exist_constants_fit_linear(
             ["<constant>"], ["x0"], [float(r) for r in range(n)], n, y_bad.tolist(),
             1e-9, 1e-12) is not True
-        # (2) END-TO-END: the exact divergence case. Crafted X (63 rows
-        # x0 = -1, one row x0 = +1); source exp(1) + 2.4e-9*x0 evaluates to the skewed y.
-        # The filtered and unfiltered scans must AGREE whatever else gates the match.
+        # (2) END-TO-END: the exact divergence case. Crafted X (63 rows x0 = -1, one row
+        # x0 = +1); the source exp(1) + 2.4e-9*tanh(1000*x0) evaluates to the skewed y there,
+        # and stays inside the same +-2.4e-9 everywhere else, so the special-point battery's
+        # probes (which reach |x| = pi) see a near-constant source too.
         x_flat = [-1.0] * (n - 1) + [1.0]
-        src = ["+", "exp", "1", "*", "2.4e-9", "x0"]
+        src = ["+", "exp", "1", "*", "2.4e-9", "tanh", "*", "1000", "x0"]
         cands = [["<constant>"], ["x0"], ["exp", "1"]]
         # `exp 1` is dropped from the library (var-free composite); the exact
         # interval-intersection `<constant>` decision must carry the match alone.
         lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n)
         assert lib.n_filtered == 1
-        # The band-edge match itself is asserted with the special-point battery OFF (own
-        # subprocess: the switch is a process-lifetime OnceLock). The battery's fixed
-        # probe points (|x| up to pi) amplify the crafted 2.4e-9-per-x skew past the
-        # acceptance band (a 7.2e-9 real change at x = +-3): a value-soundness
-        # rejection orthogonal to the dominance property under test.
-        import subprocess
-        import sys
-        prog = (
-            "import json, sys;"
-            "from simplipy import SimpliPyEngine;"
-            "eng = SimpliPyEngine.from_config(sys.argv[1]);"
-            f"x_flat = {x_flat!r}; n = {n};"
-            f"cands = {cands!r};"
-            "lib = eng._core.build_candidate_library(cands, ['x0'], x_flat, n)\n"
-            f"out = eng._core.find_rule_lib({src!r}, {len(src)}, 2, lib,"
-            " challenges=16, retries=16, seed=7, rtol=1e-9, atol=1e-12)\n"
-            "assert out is not None, 'the feasible near-constant source must match'\n"
-        )
-        (tmp_path / "rules.json").write_text(json.dumps([]))
-        cfg = tmp_path / "config.yaml"
-        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
-        res = subprocess.run(
-            [sys.executable, "-c", prog, str(cfg)],
-            env={**os.environ, "SIMPLIPY_SPECIAL_BATTERY": "0", "OMP_NUM_THREADS": "1"},
-            capture_output=True, text=True)
-        assert res.returncode == 0, res.stderr
+        out = engine._core.find_rule_lib(src, len(src), 2, lib, challenges=16, retries=16,
+                                         seed=7, rtol=1e-9, atol=1e-12)
+        assert out is not None, 'the feasible near-constant source must match'
 
     def test_the_mine_never_ships_a_var_free_composite_rhs(self, tmp_path) -> None:
         """The end-to-end form of the invariant. The old parity gate A/B-ran the mine
@@ -662,11 +640,11 @@ class TestProvenance:
         assert side["progress"]["last_completed_source_length"] == 1
 
     def test_sidecar_records_soundness_state(self, tmp_path) -> None:
-        """The mine's SOUNDNESS PROVENANCE (audit Tier-1 #4): the four default-ON
-        kill-switches ship recorded (a mine run with a soundness layer disabled must
-        say so in its artifact), and the three interval fail-closed miss counters are
-        read after the mine instead of assumed zero -- the exposure is a NUMBER in the
-        sidecar, not a hope."""
+        """The mine's SOUNDNESS PROVENANCE: the artifact-affecting switches set during
+        the mine (none, by default) are recorded verbatim, and the three interval
+        fail-closed miss counters are read after the mine instead of assumed zero -- the
+        exposure is a NUMBER in the sidecar, not a hope. The soundness layers have no
+        switch: there is nothing to record about them being off."""
         (tmp_path / "rules.json").write_text(json.dumps([]))
         cfg = tmp_path / "config.yaml"
         cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json"}))
@@ -677,9 +655,8 @@ class TestProvenance:
                        verbose=False, output_file=out, promote_sorts=False)
         side = json.load(open(out + ".provenance.json"))
         sound = side["soundness"]
-        assert sound["kill_switches"] == {
-            "SIMPLIPY_IVL_GATE": True, "SIMPLIPY_IVL_CLASS": True,
-            "SIMPLIPY_IVL_REACH": True, "SIMPLIPY_SPECIAL_BATTERY": True}
+        assert "kill_switches" not in sound
+        assert sound["env_overrides"] == {}
         assert sound["node_budget_env"] is None  # default budget, no override
         undecided = sound["interval_undecided"]
         assert set(undecided) == {"horizon", "node_budget", "unanalyzable"}

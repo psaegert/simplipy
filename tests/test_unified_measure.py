@@ -67,7 +67,7 @@ from conftest import acj_config_path
 MILLI = 1000
 # The SYMBOL TABLE (2026-08-21), mirroring rust/ac/expr.rs's `MU_BITS_*`. There is no
 # single "one grammar symbol" price any more; 8 survives only as the UNIT the table is
-# read against (`SIMPLIPY_MU_SYM`) and as the price of a head the table does not name.
+# read against and as the price of a head the table does not name.
 MU_LEAF = 6 * MILLI
 MU_ADD = 3 * MILLI
 MU_MUL = 3 * MILLI

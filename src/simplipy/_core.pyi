@@ -10,6 +10,7 @@ exactly what this header warns about.)
 from typing import Any, Literal
 
 __build__: str
+ARTIFACT_ENV_SWITCHES: list[str]
 
 class CandidateLibrary:
     @property

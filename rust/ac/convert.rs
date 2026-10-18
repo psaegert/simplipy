@@ -1321,7 +1321,7 @@ fn num_token(r: &Rat) -> String {
 fn tagged_fraction_bound() -> i128 {
     static BOUND: OnceLock<i128> = OnceLock::new();
     *BOUND.get_or_init(|| {
-        std::env::var("SIMPLIPY_TAGGED_FRACTION_MAX")
+        std::env::var(crate::env_switches::TAGGED_FRACTION_MAX)
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(10)

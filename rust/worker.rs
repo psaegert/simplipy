@@ -46,16 +46,9 @@ pub fn violates_wildcard_multiplicity(lhs: &[String], rhs: &[String]) -> bool {
 /// power laws that fail only at the measure-zero point C=0. By the measure-zero principle no
 /// special constant value gets weight (neither 0, the additive neutral, nor C=1, the
 /// multiplicative one). Sign coverage `{-1,+1}` is kept (continuous, not an atom):
-/// `sqrt`/`log`/`pow` need both signs of C tested for domain reasons. Env
-/// `SIMPLIPY_ZERO_SIGN=1` restores the old `{-1,0,1}` grid (reference/repro only).
-// ARTIFACT-AFFECTING switch: listed in engine.py::ARTIFACT_ENV_SWITCHES (H-042).
+/// `sqrt`/`log`/`pow` need both signs of C tested for domain reasons.
 fn sign_combos(n: usize) -> Vec<Vec<f64>> {
-    static WITH_ZERO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let signs: &[f64] = if *WITH_ZERO.get_or_init(|| std::env::var("SIMPLIPY_ZERO_SIGN").is_ok()) {
-        &[-1.0, 0.0, 1.0]
-    } else {
-        &[-1.0, 1.0]
-    };
+    let signs: &[f64] = &[-1.0, 1.0];
     let mut out = vec![Vec::new()];
     for _ in 0..n {
         let mut next = Vec::with_capacity(out.len() * signs.len());
@@ -106,15 +99,9 @@ const POLE_GRID: [f64; 26] = [
 /// step-function artifacts (`pow(asin(C), inf) -> 0`, and its multi-constant scalings
 /// `* C1 pow(asin(C2), inf) -> 0`, which random sampling lands in only ~2%/draw). Fully-random
 /// rounds are appended for off-grid decorrelation and joint coverage.
-// ARTIFACT-AFFECTING switch (SIMPLIPY_POLE_GRID): listed in
-// engine.py::ARTIFACT_ENV_SWITCHES (H-042).
 fn source_const_magnitudes(rng: &mut Rng, n_const: usize, challenges: usize) -> Vec<Vec<f64>> {
     let mut out: Vec<Vec<f64>> = Vec::new();
-    // A/B kill-switch (`SIMPLIPY_POLE_GRID=0`): random draws only, no grid sweep. Ablation only.
-    static GRID_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let grid_on =
-        *GRID_ON.get_or_init(|| std::env::var("SIMPLIPY_POLE_GRID").as_deref() != Ok("0"));
-    for j in 0..(if grid_on { n_const } else { 0 }) {
+    for j in 0..n_const {
         for &m in POLE_GRID.iter() {
             let mut v: Vec<f64> = (0..n_const).map(|_| rng.const_magnitude()).collect();
             v[j] = m;
@@ -455,35 +442,6 @@ fn gate_trace() -> Option<&'static String> {
     static T: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     T.get_or_init(|| std::env::var("SIMPLIPY_GATE_TRACE").ok())
         .as_ref()
-}
-
-/// A/B kill-switch for the interval domain-preservation gate (`SIMPLIPY_IVL_GATE=0` disables it).
-/// Ablation/repro only -- the gate is ON by default and is a soundness requirement, not a knob.
-fn ivl_gate_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_IVL_GATE").as_deref() != Ok("0"))
-}
-
-/// A/B kill-switch for the exact interval classifier in the all-constant short-circuit
-/// (`SIMPLIPY_IVL_CLASS=0` disables it, leaving const-bearing sources to the candidate scan).
-fn ivl_class_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_IVL_CLASS").as_deref() != Ok("0"))
-}
-
-/// A/B kill-switch for the interval REACHABILITY gate (`SIMPLIPY_IVL_REACH=0` disables it).
-/// Independent of `SIMPLIPY_IVL_CLASS` so the grid-retirement factorial can vary one at a time.
-fn ivl_reach_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_IVL_REACH").as_deref() != Ok("0"))
-}
-
-/// A/B kill-switch for the special-point battery phase (`SIMPLIPY_SPECIAL_BATTERY=0`
-/// disables it). Ablation/repro only -- like the interval gate, it is a soundness layer,
-/// not a knob (see `rust/battery.rs`).
-fn special_battery_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("SIMPLIPY_SPECIAL_BATTERY").as_deref() != Ok("0"))
 }
 
 /// WITNESS SNAPPING (see `battery::snap_candidates`): the shipped rule's
@@ -863,14 +821,39 @@ fn equivalent_no_const(
     }
     // SPECIAL-POINT PHASE (see `rust/battery.rs`). PARITY: identical to the
     // const-free arm of `candidate_matches` -- the two entry points must never diverge.
-    if special_battery_on() {
-        let used = crate::battery::used_variables(source_tokens, var_names);
-        let battery = crate::battery::SpecialBattery::build(var_names.len(), &used);
-        for params in &instances {
+    let used = crate::battery::used_variables(source_tokens, var_names);
+    let battery = crate::battery::SpecialBattery::build(var_names.len(), &used);
+    for params in &instances {
+        if !battery_rows_ok(
+            source,
+            source_tokens,
+            params,
+            candidate,
+            cand_tokens,
+            &[],
+            battery.as_ref(),
+            ops,
+            var_names,
+            rtol,
+            atol,
+        ) {
+            return false;
+        }
+    }
+    // the special source-constant sweep (skip semantics: an instance where the
+    // source is nowhere finite binds nothing; a binding instance is judged at the
+    // CONTRACT points only -- the sweep never binds generic X rows)
+    if n_src_const == 1 {
+        for &s in crate::battery::SPECIAL_CONSTS.iter() {
+            let sp = vec![s];
+            let y_s = source.eval_columns(x_cols, &sp, n_rows);
+            if crate::eval::count_finite(&y_s) == 0 {
+                continue;
+            }
             if !battery_rows_ok(
                 source,
                 source_tokens,
-                params,
+                &sp,
                 candidate,
                 cand_tokens,
                 &[],
@@ -881,33 +864,6 @@ fn equivalent_no_const(
                 atol,
             ) {
                 return false;
-            }
-        }
-        // the special source-constant sweep (skip semantics: an instance where the
-        // source is nowhere finite binds nothing; a binding instance is judged at the
-        // CONTRACT points only -- the sweep never binds generic X rows)
-        if n_src_const == 1 {
-            for &s in crate::battery::SPECIAL_CONSTS.iter() {
-                let sp = vec![s];
-                let y_s = source.eval_columns(x_cols, &sp, n_rows);
-                if crate::eval::count_finite(&y_s) == 0 {
-                    continue;
-                }
-                if !battery_rows_ok(
-                    source,
-                    source_tokens,
-                    &sp,
-                    candidate,
-                    cand_tokens,
-                    &[],
-                    battery.as_ref(),
-                    ops,
-                    var_names,
-                    rtol,
-                    atol,
-                ) {
-                    return false;
-                }
             }
         }
     }
@@ -1259,90 +1215,78 @@ fn candidate_matches(
             // counters (`interval_horizon_misses`, `interval_node_budget_misses`) count
             // fail-closed REJECTIONS; a large per-stratum delta in a mine is the flag to
             // raise `SIMPLIPY_IVL_NODE_BUDGET` / R_MAX for that stratum and re-run it.
-            if ivl_gate_on() {
-                let (gh_r, gh_d, gh_decidable) = crate::interval::gate_horizon(
+            let (gh_r, gh_d, gh_decidable) =
+                crate::interval::gate_horizon(source, inst_params, &cand.tokens, cand_params, ops);
+            let verdict = if gh_decidable {
+                crate::interval::domain_extension_p_at(
                     source,
                     inst_params,
                     &cand.tokens,
                     cand_params,
                     ops,
-                );
-                let verdict = if gh_decidable {
-                    crate::interval::domain_extension_p_at(
-                        source,
-                        inst_params,
-                        &cand.tokens,
-                        cand_params,
-                        ops,
-                        gh_r,
-                        gh_d,
-                    )
-                } else {
-                    None
-                };
-                let reject = match verdict {
-                    // Undecided (horizon or budget): cannot certify "no extension" -- reject.
-                    None => true,
-                    // A proven positive-measure extension fires the gate ...
-                    // ... unless the rule keeps a DEAD source dead. ONE clause, stated once:
-                    //
-                    //   fire  <=>  extension  AND NOT (source dead AND target dead)
-                    //
-                    // where "dead" = defined on no positive-measure set at these constants. A
-                    // dead source has no generic graph to preserve, and an existential witness
-                    // that is ITSELF dead buys the rule no capacity the source lacked --
-                    // `sqrt(C^x)` at C<0 is NaN a.e. (finite only on the even integers), and the
-                    // fit's `C' = -sqrt(2)` is equally NaN a.e., so nothing was invented. But
-                    // resurrecting a dead source into a LIVE target injects fittable capacity
-                    // from nothing, and that is the artifact.
-                    //
-                    // This REPLACES two ad-hoc carve-outs. The first was
-                    // `cand_params.is_empty()`, justified as "a const-free candidate has no
-                    // witness to be arbitrary" and as what "keeps the f64 SATURATION artifacts
-                    // out". It does not: the verdict it produces depends on the target's
-                    // SPELLING, not its mathematics. `acosh(|tanh x|) -> 0` was rejected while
-                    // `acosh(|tanh x|) -> <constant>` was ACCEPTED at the identical witness
-                    // width, and `select_best` prefers fewest constants -- so the miner reached
-                    // for the rejected form, was refused, and mined the surviving one instead.
-                    // Deadness is a property of the FUNCTION at its constants, so it cannot be
-                    // dodged by respelling: a fitted `<constant>` binds to a finite real and is
-                    // therefore LIVE, exactly like the literal `0` it was standing in for.
-                    //
-                    // Deadness must be PROVEN (`Some(0.0)` = a COMPLETED search found no
-                    // support). An unresolved deadness search (`None`) is treated as live:
-                    // letting it read "dead" widened the accept exemption, the
-                    // anti-conservative direction.
-                    Some(w) if w > 0.0 => {
-                        !(crate::interval::defined_measure_p_at(
-                            source,
-                            inst_params,
+                    gh_r,
+                    gh_d,
+                )
+            } else {
+                None
+            };
+            let reject = match verdict {
+                // Undecided (horizon or budget): cannot certify "no extension" -- reject.
+                None => true,
+                // A proven positive-measure extension fires the gate ...
+                // ... unless the rule keeps a DEAD source dead. ONE clause, stated once:
+                //
+                //   fire  <=>  extension  AND NOT (source dead AND target dead)
+                //
+                // where "dead" = defined on no positive-measure set at these constants. A
+                // dead source has no generic graph to preserve, and an existential witness
+                // that is ITSELF dead buys the rule no capacity the source lacked --
+                // `sqrt(C^x)` at C<0 is NaN a.e. (finite only on the even integers), and the
+                // fit's `C' = -sqrt(2)` is equally NaN a.e., so nothing was invented. But
+                // resurrecting a dead source into a LIVE target injects fittable capacity
+                // from nothing, and that is the artifact.
+                //
+                // This REPLACES two ad-hoc carve-outs. The first was
+                // `cand_params.is_empty()`, justified as "a const-free candidate has no
+                // witness to be arbitrary" and as what "keeps the f64 SATURATION artifacts
+                // out". It does not: the verdict it produces depends on the target's
+                // SPELLING, not its mathematics. `acosh(|tanh x|) -> 0` was rejected while
+                // `acosh(|tanh x|) -> <constant>` was ACCEPTED at the identical witness
+                // width, and `select_best` prefers fewest constants -- so the miner reached
+                // for the rejected form, was refused, and mined the surviving one instead.
+                // Deadness is a property of the FUNCTION at its constants, so it cannot be
+                // dodged by respelling: a fitted `<constant>` binds to a finite real and is
+                // therefore LIVE, exactly like the literal `0` it was standing in for.
+                //
+                // Deadness must be PROVEN (`Some(0.0)` = a COMPLETED search found no
+                // support). An unresolved deadness search (`None`) is treated as live:
+                // letting it read "dead" widened the accept exemption, the
+                // anti-conservative direction.
+                Some(w) if w > 0.0 => {
+                    !(crate::interval::defined_measure_p_at(source, inst_params, ops, gh_r, gh_d)
+                        == Some(0.0)
+                        && crate::interval::defined_measure_p_at(
+                            &cand.tokens,
+                            cand_params,
                             ops,
                             gh_r,
                             gh_d,
-                        ) == Some(0.0)
-                            && crate::interval::defined_measure_p_at(
-                                &cand.tokens,
-                                cand_params,
-                                ops,
-                                gh_r,
-                                gh_d,
-                            ) == Some(0.0))
-                    }
-                    // Completed search, no extension: the gate passes.
-                    Some(_) => false,
-                };
-                if reject {
-                    if let Some(t) = gate_trace() {
-                        if source.join(" ").starts_with(t.as_str()) {
-                            eprintln!(
-                                "GATE-REJECT src=[{}] src_c={:?} cand=[{}] cand_c={:?} width={:?} src_measure={:?}",
-                                source.join(" "), inst_params, cand.tokens.join(" "), cand_params,
-                                verdict,
-                                crate::interval::defined_measure_p_at(source, inst_params, ops, gh_r, gh_d));
-                        }
-                    }
-                    return None;
+                        ) == Some(0.0))
                 }
+                // Completed search, no extension: the gate passes.
+                Some(_) => false,
+            };
+            if reject {
+                if let Some(t) = gate_trace() {
+                    if source.join(" ").starts_with(t.as_str()) {
+                        eprintln!(
+                            "GATE-REJECT src=[{}] src_c={:?} cand=[{}] cand_c={:?} width={:?} src_measure={:?}",
+                            source.join(" "), inst_params, cand.tokens.join(" "), cand_params,
+                            verdict,
+                            crate::interval::defined_measure_p_at(source, inst_params, ops, gh_r, gh_d));
+                    }
+                }
+                return None;
             }
         }
         for (e, v) in evidence.iter_mut().zip(y) {
@@ -1355,18 +1299,88 @@ fn candidate_matches(
     }
     // SPECIAL-POINT PHASE (see `rust/battery.rs`): runs only for candidates
     // that certified everything above, so its cost is per accepted (source, candidate) pair.
-    if special_battery_on() {
-        // 1. Contract points at every certified instance's witness. A vacuous instance pins
-        //    no target function and is skipped, exactly like the domain gate above.
-        for (inst_params, fitted) in &certified {
-            let Some(cand_params) = fitted else { continue };
+    // 1. Contract points at every certified instance's witness. A vacuous instance pins
+    //    no target function and is skipped, exactly like the domain gate above.
+    for (inst_params, fitted) in &certified {
+        let Some(cand_params) = fitted else { continue };
+        if !battery_rows_ok(
+            src_tape,
+            source,
+            inst_params,
+            &cand.tape,
+            &cand.tokens,
+            cand_params,
+            battery,
+            ops,
+            var_names,
+            rtol,
+            atol,
+        ) {
+            return None;
+        }
+    }
+    // 2. The special source-constant battery: a pattern-bound source constant reaches
+    //    0, pi/2, ... in deployment. Skip semantics: an instance with a nowhere-finite
+    //    source, or (const-bearing arm) no fittable witness, binds nothing; a binding
+    //    instance must agree at the contract points. Scoped to single-constant sources
+    //    -- multi-constant shapes have no ratified special-constant semantics beyond
+    //    one constant.
+    let n_src_const = y_src.first().map(|(p, _)| p.len()).unwrap_or(0);
+    if n_src_const == 1 {
+        for (k, &s) in crate::battery::SPECIAL_CONSTS.iter().enumerate() {
+            let sp = vec![s];
+            let y_s = src_tape.eval_columns(cols, &sp, n_rows);
+            if crate::eval::count_finite(&y_s) == 0 {
+                continue;
+            }
+            let cp: Option<Vec<f64>> = if cand.n_const == 0 {
+                // const-free target: judged at the contract points below (the
+                // source-constant sweep never binds generic X rows)
+                Some(Vec::new())
+            } else {
+                // existence is only generically binding: an unfittable special instance
+                // is SKIPPED, a fitted one binds below
+                let sseed = Rng::new(
+                    fit_seed ^ cand.hash ^ (0xC0DEu64 + k as u64).wrapping_mul(SEED_GOLDEN),
+                )
+                .next_u64();
+                match crate::fit::exist_constants_fit_prepared(
+                    &cand.tape,
+                    cand.linearity,
+                    cols,
+                    n_rows,
+                    &y_s,
+                    rtol,
+                    atol,
+                    retries,
+                    sseed,
+                    cand.loglin.as_ref().map(|(f, t)| (*f, t)),
+                ) {
+                    crate::fit::FitVerdict::Pass(Some(c)) => Some(adopt_snapped_witness(
+                        &cand.tape,
+                        &cand.tokens,
+                        source,
+                        &sp,
+                        ops,
+                        var_names,
+                        cols,
+                        n_rows,
+                        &y_s,
+                        c,
+                        rtol,
+                        atol,
+                    )),
+                    _ => None,
+                }
+            };
+            let Some(cp) = cp else { continue };
             if !battery_rows_ok(
                 src_tape,
                 source,
-                inst_params,
+                &sp,
                 &cand.tape,
                 &cand.tokens,
-                cand_params,
+                &cp,
                 battery,
                 ops,
                 var_names,
@@ -1374,78 +1388,6 @@ fn candidate_matches(
                 atol,
             ) {
                 return None;
-            }
-        }
-        // 2. The special source-constant battery: a pattern-bound source constant reaches
-        //    0, pi/2, ... in deployment. Skip semantics: an instance with a nowhere-finite
-        //    source, or (const-bearing arm) no fittable witness, binds nothing; a binding
-        //    instance must agree at the contract points. Scoped to single-constant sources
-        //    -- multi-constant shapes have no ratified special-constant semantics beyond
-        //    one constant.
-        let n_src_const = y_src.first().map(|(p, _)| p.len()).unwrap_or(0);
-        if n_src_const == 1 {
-            for (k, &s) in crate::battery::SPECIAL_CONSTS.iter().enumerate() {
-                let sp = vec![s];
-                let y_s = src_tape.eval_columns(cols, &sp, n_rows);
-                if crate::eval::count_finite(&y_s) == 0 {
-                    continue;
-                }
-                let cp: Option<Vec<f64>> = if cand.n_const == 0 {
-                    // const-free target: judged at the contract points below (the
-                    // source-constant sweep never binds generic X rows)
-                    Some(Vec::new())
-                } else {
-                    // existence is only generically binding: an unfittable special instance
-                    // is SKIPPED, a fitted one binds below
-                    let sseed = Rng::new(
-                        fit_seed ^ cand.hash ^ (0xC0DEu64 + k as u64).wrapping_mul(SEED_GOLDEN),
-                    )
-                    .next_u64();
-                    match crate::fit::exist_constants_fit_prepared(
-                        &cand.tape,
-                        cand.linearity,
-                        cols,
-                        n_rows,
-                        &y_s,
-                        rtol,
-                        atol,
-                        retries,
-                        sseed,
-                        cand.loglin.as_ref().map(|(f, t)| (*f, t)),
-                    ) {
-                        crate::fit::FitVerdict::Pass(Some(c)) => Some(adopt_snapped_witness(
-                            &cand.tape,
-                            &cand.tokens,
-                            source,
-                            &sp,
-                            ops,
-                            var_names,
-                            cols,
-                            n_rows,
-                            &y_s,
-                            c,
-                            rtol,
-                            atol,
-                        )),
-                        _ => None,
-                    }
-                };
-                let Some(cp) = cp else { continue };
-                if !battery_rows_ok(
-                    src_tape,
-                    source,
-                    &sp,
-                    &cand.tape,
-                    &cand.tokens,
-                    &cp,
-                    battery,
-                    ops,
-                    var_names,
-                    rtol,
-                    atol,
-                ) {
-                    return None;
-                }
             }
         }
     }
@@ -1863,11 +1805,7 @@ pub fn find_rule_with_lib(
         // rows extend); all-NaN -> nan (`* <constant> acos(np.e)`); a.e. +-inf -> that inf literal
         // (`inv(pow(0, exp C))` = +inf everywhere); a mixed pole -> fall through to the candidate
         // scan. The sampled classifier this replaces could only ever be as good as its grid.
-        match if ivl_class_on() {
-            crate::interval::value_class(source, ops)
-        } else {
-            None
-        } {
+        match crate::interval::value_class(source, ops) {
             // The Finite -> `<constant>` arm is gated on SPECIAL-FREE sources (stage-1
             // Const-absorption licence at the channel, owner 2026-08-01): a special
             // vanishing into a fitted constant is the absorption the policy forbids, for
@@ -1949,7 +1887,7 @@ pub fn find_rule_with_lib(
     // interval engine is validated on, and exactly the family the sampled POLE_GRID exists for
     // (`pow(asin(C/2), inf) -> 0`, whose +inf band a fixed grid can straddle and miss).
     // Computed ONCE per source, outside the scan.
-    let src_reach = if ivl_reach_on() && !source.iter().any(|t| lib.var_names.contains(t)) {
+    let src_reach = if !source.iter().any(|t| lib.var_names.contains(t)) {
         crate::interval::value_set(source, ops, &crate::interval::Vs::reals())
     } else {
         None

@@ -67,12 +67,10 @@ const RM: RoundingMode = RoundingMode::ToEven;
 /// Experiment override: env `SIMPLIPY_HIPREC_FRAC` (calibration only, not a config surface).
 const NEAR_MISS_FRAC: f64 = 0.5;
 
-// ARTIFACT-AFFECTING switch (SIMPLIPY_HIPREC_FRAC): listed in
-// engine.py::ARTIFACT_ENV_SWITCHES (H-042).
 fn near_miss_frac() -> f64 {
     static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("SIMPLIPY_HIPREC_FRAC")
+        std::env::var(crate::env_switches::HIPREC_FRAC)
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(NEAR_MISS_FRAC)
