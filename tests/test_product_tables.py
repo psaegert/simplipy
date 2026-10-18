@@ -119,9 +119,12 @@ def test_equal_tables_give_one_answer(eng, mode, effort, a, b):
 
 
 # At the zero of a class's sum a negative odd power is an infinity whose sign the orientation decides; a negative
-# even power is `+inf` either way. The answer keeps every finite value; at an infinity it has the limit where the
-# source's two sides agree (reading A: the class is written in one orientation, so `x2/((3 - x1)(x1 - 3))` is
-# `-x2/(x1 - 3)^2`, whose infinity at x1 = 3 is the limit's), and a pole whose sides disagree is not compared.
+# even power is `+inf` either way. The answer keeps every finite value; at a pole it has the limit where the source's
+# two sides agree, or where the source is defined on one side only, that side's (reading A: the class is written in
+# one orientation, so `x2/((3 - x1)(x1 - 3))` is `-x2/(x1 - 3)^2`, whose infinity at x1 = 3 is the limit's), and a
+# pole whose sides disagree is not compared. Where the source itself is NaN at a pole (an infinite member beside a
+# vanishing one, `1/(3 - x1) * (x1 - 3)^-2 * (x1 - 3)^(1/2)`), its value there is no claim, but its limit still is.
+VANISHING = '<mul> inv ' + R + ' inv pow ' + R + ' 2 pow ' + RN + ' 0.5 pow ' + RN + ' 4 </mul>'
 POLES = [
     '<mul> inv pow ' + S + ' 3 inv pow ' + N + ' 2 </mul>',
     '<mul> inv ' + S + ' inv pow ' + N + ' 2 pow ' + N + ' 0.5 </mul>',
@@ -131,8 +134,8 @@ POLES = [
     '<mul> pow ' + N + ' -2.5 ' + S + ' </mul>',
     '<mul> pow ' + N + ' 2.5 inv ' + S + ' inv pow ' + S + ' 2 </mul>',
     # `cbrt(x2 - exp(x1))^-1 * cbrt(x2 - exp(x1))^-2` collects to `1/(x2 - exp(x1))`, outside the class whose table
-    # counts those members: it is counted once
-    '<mul> inv ' + R + ' inv pow ' + R + ' 2 pow ' + RN + ' 0.5 pow ' + RN + ' 4 </mul>',
+    # counts those members: it is counted once (the product vanishes at its zero, which is no pole)
+    VANISHING,
     # a divisor that is a product joins the product its quotient builds: each member keeps its own pole
     '/ x2 * - 3 x1 - x1 3',
     '/ x2 * sin - 3 x1 sin - x1 3',
@@ -224,9 +227,10 @@ def test_a_constant_sum_takes_the_sign_into_its_terms(eng, mode, effort, src, ex
 @pytest.mark.parametrize('src', POLES)
 def test_the_answer_keeps_every_value_at_the_zeros(eng, mode, src):
     k = np.array([-2.0, -0.5, 0.0, 0.5, 2.0])
-    xs = [np.concatenate([np.full_like(k, 3.0), k, k + 0.25]),          # 3 - x1 = 0
-          np.concatenate([k, k, np.full_like(k, 0.5)]),                # x1 - x2 = 0, x2 - 1/2 = 0
-          np.concatenate([k, np.full_like(k, 0.5), k])]
+    e = np.log(np.array([0.5, 1.0, 2.0]))
+    xs = [np.concatenate([np.full_like(k, 3.0), k, k + 0.25, e]),       # 3 - x1 = 0
+          np.concatenate([k, k, np.full_like(k, 0.5), np.exp(e)]),     # x1 - x2 = 0, x2 - 1/2 = 0, x2 - exp(x1) = 0
+          np.concatenate([k, np.full_like(k, 0.5), k, e])]
     answer = list(eng.simplify(src.split(), mode=mode))
 
     def values(tokens):
@@ -241,19 +245,25 @@ def test_the_answer_keeps_every_value_at_the_zeros(eng, mode, src):
     assert np.allclose(before[finite], after[finite], rtol=1e-9, atol=1e-12), (before, after, answer)
     f_src = eng.as_callable(src.split(), ['x1', 'x2', 'x3'])
     dirs = np.random.default_rng(7).normal(size=(12, 3))
-    for i in np.flatnonzero(np.isinf(before)):
+    poles = 0
+    for i in np.flatnonzero(np.isinf(before) | np.isinf(after)):
         pt = np.array([x[i] for x in xs])
-        near = np.array([pt + h * d for d in dirs for h in (1e-7, -1e-7)])
+        near = np.array([pt + h * d for d in dirs for h in (1e-12, -1e-12)])
         with np.errstate(all='ignore'):
             v = np.asarray(f_src(*near.T), dtype=float) * np.ones(len(near))
-        if (np.abs(v) > 1e5).all() and len(set(np.sign(v))) == 1:
+        v = v[~np.isnan(v)]  # a side where the source is undefined has no limit to keep
+        large = len(v) > 0 and (np.abs(v) > 1e5).all()
+        poles += large
+        if large and len(set(np.sign(v))) == 1:
             assert after[i] == np.sign(v[0]) * np.inf, (pt, before[i], after[i], answer)
-        elif not (np.abs(v) > 1e5).all():
-            assert after[i] == before[i], (pt, before[i], after[i], answer)
-        else:
+        elif large:
             # the two sides disagree in sign: the value there is not part of the
             # function, but the answer keeps the pole
             assert np.isinf(after[i]), (pt, before[i], after[i], answer)
+        elif np.isinf(before[i]):
+            assert after[i] == before[i], (pt, before[i], after[i], answer)
+    # the pole half ran: the grid reaches the case's pole
+    assert poles > 0 or src == VANISHING, (src, answer)
     assert list(eng.simplify(answer, mode=mode)) == answer
 
 
