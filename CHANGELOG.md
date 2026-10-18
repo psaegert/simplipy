@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`prettify()` writes an expression for a reader.** `simplify` keeps every number exact;
+  `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or
+  explicit or tagged tokens. A fraction that fits the digit budget stays a fraction (`x1/4.2`,
+  `22*x1/7`), any other number is its float64 in shortest form (`9.765625e-4*x1`,
+  `2.1458314277221002*x1` for a 33-digit literal), pi is factored out as the literal
+  `3.141592653589793` where the rest fits (`1/(2*3.141592653589793)`), functions of numbers that
+  are all floats fold, and even roots read `rootn(x, n)`. The display is simplified once more
+  and redisplayed, so displaying the simplified display gives the display back: on the release
+  corpus, srbf's 6,531 ground truths, 1,000 of its predictions and 3,000 fuzz rows, in all three
+  forms. Nothing inside SimpliPy calls it; see the guide "Displaying expressions".
 - **Fast in every mode.** Against 0.14.7, on the 129,490 simplify inputs of flash-ansr's T8.1
   training draws, srbf's 6,531 ground truths and its 125,127 model predictions (both versions side
   by side on one machine under other load), in every mode: under 1% of calls take more than 0.1 s

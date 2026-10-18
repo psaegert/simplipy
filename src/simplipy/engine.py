@@ -2137,6 +2137,88 @@ class SimpliPyEngine:
         out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort, work)
         return self._denormalize(out, expression)
 
+    def prettify(
+            self,
+            expression: str | list[str] | tuple[str, ...] | np.ndarray,
+            *,
+            digits: int = 3,
+            form: str | None = None,
+            mode: Mode | str = Mode.f64) -> str | list[str]:
+        """Write an expression for a READER: numbers rounded to a digit budget, the state untouched.
+
+        :meth:`simplify` returns the canonical form, whose numbers are exact
+        (``2.14583142772210003669120562399025*x1`` stays as long as it was given). ``prettify``
+        is the display of that form: it decides how each number is WRITTEN and leaves the
+        structure as it is. Nothing inside SimpliPy calls it or reads what it returns, so
+        call it where people read expressions, on the answer of :meth:`simplify`::
+
+            engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
+            # '2.1458314277221002*x1'
+            engine.prettify(engine.simplify('x1*5/21'))        # 'x1/4.2'
+            engine.prettify(engine.simplify('1/(2*3.141592653589793)'))
+            # '1/(2*3.141592653589793)'
+
+        The rules, at the digit budget ``D = digits`` (every digit a spelling writes counts,
+        a numerator of 1 included: ``1/12`` counts 3):
+
+        * A fraction that fits ``D`` is written as a fraction: the shortest of ``p/q`` and
+          the integers over a decimal (``5/21`` is ``1/4.2``, ``22/7`` stays ``22/7``,
+          ``x1/2`` stays ``x1/2``).
+        * Otherwise the value is the float64 nearest to it, in its shortest form, as a
+          multiplier (``x1/1024`` is ``9.765625e-4*x1``). A value a hair from a short
+          number shows as that number (``1.000000000000000000003*x1`` is ``x1``).
+        * pi is the literal ``3.141592653589793``: a value that is a fitting fraction times
+          or over it is written with the literal factored out (``3*x0^2/(20*3.141592653589793*x1*x2)``).
+        * A float whose reciprocal float64 holds as written stays a divisor where the
+          denominator has another factor; a bare ``x1/0.225147640565301`` is
+          ``4.441529999999994*x1``.
+        * A function of numbers folds to one float only when every number inside would
+          itself be a float (``sin(sin(9463/890))`` is ``-0.8045036621463277``, ``sin(2)``
+          stays). Nothing folds or combines to inf, 0 or a subnormal.
+        * Exponents follow the same rules; ``x^(1/n)`` and ``x^(-1/n)`` are written
+          ``rootn(x, n)`` and ``1/rootn(x, n)`` for even ``n``.
+        * Scientific notation from ``1e6`` and below ``1e-3``.
+        * The display is simplified once more (in ``mode``) and that answer is displayed,
+          so displaying the simplified display gives the display back.
+
+        Parameters
+        ----------
+        expression : str | list[str] | tuple[str, ...] | np.ndarray
+            Infix text, or explicit or tagged prefix tokens (as :meth:`simplify` reads them).
+            Its canonical state is displayed; pass the answer of :meth:`simplify`.
+        digits : int, optional
+            The digit budget ``D`` (default 3).
+        form : str, optional
+            ``'infix'``, ``'explicit'`` or ``'tagged'``; by default the input's dialect, as
+            :meth:`simplify` answers.
+        mode : Mode | str, optional
+            The mode whose numbers are read and whose rules the extra simplification uses
+            (default ``f64``; the display rules are designed for it).
+
+        Returns
+        -------
+        str | list[str]
+            Infix text for ``form='infix'``, else a token list.
+        """
+        if isinstance(digits, bool) or not isinstance(digits, (int, np.integer)):
+            raise TypeError(f"digits must be an int >= 1, not {type(digits).__name__} ({digits!r})")
+        if digits < 1:
+            raise ValueError(f"digits must be at least 1, got {digits}")
+        mode = _coerce_mode(mode)
+        if mode is not Mode.f64:
+            self._ensure_mode_loaded(_RULE_MODE[mode])
+        self._await_no_pending_push()
+        if mode is Mode.real and self._core.mode_rules_len('real') is None:
+            raise ValueError("mode='real' needs a ruleset mined for it, and this artifact has none")
+        in_form, tokens = self._conversion_input(expression)
+        target = form or ('infix' if in_form == 'infix' else 'tagged' if in_form == 'tagged' else 'explicit')
+        if target not in ('infix', 'explicit', 'tagged'):
+            raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
+        if not tokens:
+            return '' if target == 'infix' else []
+        work = DEFAULT_WORK if mode is Mode.permissive else None
+        return self._core.prettify(tokens, int(digits), target, _RULE_MODE[mode], True, DEFAULT_EFFORT, work)
+
     def complexity(
             self,
             expression: str | list[str] | tuple[str, ...] | np.ndarray,

@@ -21,7 +21,7 @@ import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FILES = ['README.md', 'docs/index.md', 'docs/rules.md',
-         'docs/getting-started.md', 'docs/guides/simplify.md',
+         'docs/getting-started.md', 'docs/guides/simplify.md', 'docs/guides/prettify.md',
          'docs/guides/artifacts.md', 'docs/guides/masking.md',
          'docs/guides/trust.md', 'docs/guides/verify.md']
 
