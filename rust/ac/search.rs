@@ -90,18 +90,7 @@ const POW_EXPAND_CAP: i128 = 6;
 /// is tried first, and one whose payoff appears only in its descent (a rule that fires on the
 /// factored sum) is still tried. `budget` counts descents: `effort=k` is the first `k` of them.
 ///
-/// `trace`, when given, receives every state the search accepts, in order, with the number
-/// of descents spent when it was accepted (the starting fixpoint is not recorded). A run
-/// under a smaller budget is the same walk cut short, so a run capped at `k` ends on the
-/// last of these with at most `k` descents (or on the fixpoint): `permissive` uses this to
-/// make more budget never end costlier.
-pub fn explore(
-    fix: Ex,
-    pass: &PassCtx,
-    max_passes: usize,
-    budget: usize,
-    trace: Option<&mut Vec<(usize, Ex)>>,
-) -> Ex {
+pub fn explore(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
     if budget == 0 {
         return fix;
     }
@@ -109,10 +98,9 @@ pub fn explore(
     // matcher steps and constructor calls -- and stops when they are spent, exactly as when the
     // descent cap binds: it returns the best state so far. A descent the ceiling cut short is
     // never accepted. The units are a function of the walk alone, so the cut falls at the same
-    // place under every `budget`: a run capped at `k` descents is still the same walk cut short,
-    // and permissive's selection keeps its three bounds (docs/formal.md).
+    // place under every `budget`: a run capped at `k` descents is still the same walk cut short.
     let _ceiling = super::work::limit(super::work::search_budget());
-    search(fix, pass, max_passes, budget, trace)
+    search(fix, pass, max_passes, budget)
 }
 
 /// The descent of a candidate to its fixpoint under `pass` (or the `max_passes` truncation
@@ -136,13 +124,7 @@ fn descend(mut cur: Ex, pass: &PassCtx, max_passes: usize) -> Ex {
 type Site = (Vec<usize>, Ex);
 
 /// The search of [`explore`]. Returns the best state.
-fn search(
-    fix: Ex,
-    pass: &PassCtx,
-    max_passes: usize,
-    budget: usize,
-    mut trace: Option<&mut Vec<(usize, Ex)>>,
-) -> Ex {
+fn search(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
     let view = pass.cx.view;
     let mut best = fix;
     let mut spent = 0usize;
@@ -176,12 +158,7 @@ fn search(
             }
         }
         match accepted {
-            Some(cur) => {
-                if let Some(t) = trace.as_deref_mut() {
-                    t.push((spent, cur.clone()));
-                }
-                best = cur;
-            }
+            Some(cur) => best = cur,
             None => return best,
         }
     }

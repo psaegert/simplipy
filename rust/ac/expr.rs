@@ -1100,13 +1100,11 @@ pub struct Cx<'a> {
     /// so the mode stays the single representation.
     pub mode: RuleMode,
     /// Whether the constructor may fold a ground transcendental to its f64 value.
-    /// DERIVED from the mode (`f64` only) by `Cx::for_mode`, and set explicitly in
-    /// exactly one place: permissive runs the whole pipeline TWICE, once with each
-    /// discipline, and keeps the cheaper endpoint. That is the only way permissive can have
-    /// both -- `atanh(tanh 30) -> 30`, which needs the fold OFF so the inverse-pair
-    /// collapse survives, AND `asin(1e-8) -> 1e-8`, which needs it ON. Folding is
-    /// bottom-up, so no ordering inside a node can deliver both: `tanh 30` becomes `1`
-    /// before `atanh` ever sees it. Selection between two finished endpoints can.
+    /// DERIVED from the mode (`f64` only) by `Cx::folds_for`; the miner sets it explicitly
+    /// (it canonicalises unfolded). Permissive never folds at construction: folding is
+    /// bottom-up, so `tanh 30` would become `1` before `atanh` sees it. Its ground fold is a
+    /// step of the pass instead, tried after the rules at each node (`Engine::ground_fold`),
+    /// which gives it both `atanh(tanh 30) -> 30` and `asin(1e-8) -> 1e-8`.
     pub fold_f64: bool,
     /// SENTINEL EXPIRY (H-015 class (a), 2026-08-04): lossy parse deliberately keeps
     /// `inv(inf)`-class reciprocals unfolded so the mul bag can find their `$`-cancel
@@ -1122,9 +1120,9 @@ pub struct Cx<'a> {
 }
 
 impl<'a> Cx<'a> {
-    /// THE DERIVATION of `fold_f64` from a mode: only `f64` folds transcendentals.
-    /// `real` cannot (the result is not representable -- `tan(1)` is irrational and no
-    /// literal spells it), and `permissive` gets both disciplines by running twice.
+    /// THE DERIVATION of `fold_f64` from a mode: only `f64` folds transcendentals at
+    /// construction. `real` cannot (the result is not representable -- `tan(1)` is
+    /// irrational and no literal spells it), and `permissive` folds in its pass instead.
     #[inline]
     pub fn folds_for(mode: RuleMode) -> bool {
         matches!(mode, RuleMode::Default)
@@ -2513,6 +2511,13 @@ fn unit_join_trades(key: &Ex, cx: &Cx) -> bool {
 }
 
 fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
+    // The coefficient LANDS on its key here (permissive's ρ, [`land`]); a literal key is a
+    // product of literals, which `mul` keeps exact.
+    let c = if matches!(key, Ex::Num(_)) {
+        c
+    } else {
+        land(c, cx)
+    };
     // An ODD function of a LITERAL argument owns any adjacent SIGN (owner ruling
     // 2026-08-08; I4): `-1 * sin(2)` joins as `sin(-2)`, and `-5 * sin(2)` as
     // `5 * sin(-2)`. HOISTED (audit B5+B19): the fusion is no longer a private arm
@@ -3214,6 +3219,9 @@ pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     if has_const {
         out.push(Ex::Const);
     } else if !acc.is_zero() {
+        // The constant term LANDS beside other terms here (permissive's ρ, [`land`]); a sum
+        // of literals alone stays exact.
+        let acc = if out.is_empty() { acc } else { land(acc, cx) };
         out.push(Ex::Num(acc));
     }
 
@@ -4162,6 +4170,11 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
 /// collected factor list (bare `Const` and infinities included). `collect_opposite_sums` prices
 /// its candidates through it, so a priced product is exactly the product built.
 fn finish_product(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
+    // The coefficient LANDS beside the other factors here (permissive's ρ, [`land`]); a
+    // product of literals alone stays exact.
+    if !out.is_empty() {
+        coeff = land(coeff, cx);
+    }
     // CANONICAL SIGN ORIENTATION for `Mul[-1, Add[S]]` (H-014 root cause, 2026-08-03):
     // the orientation of a sum class {S, -S} is owned by `flipped_orientation_wins`, but
     // two assembly paths could ship the LOSING orientation wrapped in a -1 coefficient:
@@ -7708,6 +7721,13 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
 pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // A literal base or exponent beside a non-literal one LANDS here (permissive's ρ,
+    // [`land`]); a power of two literals folds exactly or stays as written.
+    let (base, exp) = if matches!(base, Ex::Num(_)) != matches!(exp, Ex::Num(_)) {
+        (land_operand(base, cx), land_operand(exp, cx))
+    } else {
+        (base, exp)
+    };
     if let Ex::Num(e) = &exp {
         if e.is_zero() {
             return Ex::Num(Rat::ONE);
@@ -8199,9 +8219,9 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
     // reads a WRITTEN atanh(1) as a limit and yields inf. In f64 that inf is CORRECT --
     // np.arctanh(np.tanh(30.0)) really is inf -- but corpus is the beautification path,
     // and turning a finite, mathematically-true 30 into a non-finite token is the exact
-    // defect class that put a guard into flash-ansr. Corpus gets both disciplines through
-    // the two-candidate selection at the simplify entry instead, which lets it keep 30
-    // AND fold where real cannot.
+    // defect class that put a guard into flash-ansr. Permissive folds in its pass instead
+    // (`Engine::ground_fold`, after the rules at each node), which lets it keep 30 AND fold
+    // where real cannot.
     if !cx.fold_f64 {
         return None;
     }
@@ -8250,11 +8270,10 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
 /// `2e29/426738538271436458205631863649` (196.8 bits) becomes `0.46867105279529636`
 /// (57.1 bits); `1/2`, `15/37` and `4366/8875` stay, their fractions being cheaper than
 /// any 17-digit float; a literal that already IS a shortest f64 spelling is its own fold
-/// and never moves, so the drawn constants of a training stream are untouched. The
-/// STRICT inequality is what makes the re-simplification loop at the permissive entry
-/// (`Engine::ac_simplify_ex_explore`) terminate: the exact price descends by at least one
-/// milli-bit per round. Values whose shortest spelling leaves `i128` refuse (fail-closed,
-/// exactly as `f64_fold`); non-finite values never fold.
+/// and never moves, so the drawn constants of a training stream are untouched, and the fold
+/// is idempotent. It is applied where a literal lands ([`land`]). Values whose shortest
+/// spelling leaves `i128` refuse (fail-closed, exactly as `f64_fold`); non-finite values
+/// never fold.
 pub fn lossy_literal(r: &Rat) -> Option<Rat> {
     let y = r.to_f64_nearest();
     if !y.is_finite() {
@@ -8268,141 +8287,56 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
     (mu_rat_exact(&snapped) < mu_rat_exact(r)).then_some(snapped)
 }
 
-/// `Some(e')` with every literal `lossy_literal` folds replaced and every GROUND arithmetic
-/// subtree the exact fold refused evaluated in f64, `None` when nothing moves. A pure tree
-/// map: the caller re-canonicalizes (a moved literal can re-fold with its neighbours -- an
-/// i128-overflow PARTITION bag (F73) whose members now fit).
+/// ρ, PERMISSIVE'S ONE ROUNDING (0.15 rebuild, owner ruling P2: a literal is rounded once,
+/// when it becomes part of the expression, not at every operation). Arithmetic BETWEEN
+/// literals stays exact -- an all-literal node folds exactly, as in every mode -- and a literal
+/// is moved by [`lossy_literal`] at the one place it LANDS as an operand of a composite node:
+/// a sum's constant term or a term's coefficient (`add`, `term_join`), a product's coefficient
+/// (`finish_product`), a power's literal base or exponent beside a non-literal one (`pow`), a
+/// function's argument (`fun`), and the root of a state (the walk, [`land_root`]). So
+/// `3*(1/3 + 1e-20)` folds exactly to `1 + 3e-20` and rounds once, to `1`; rounding inside
+/// each operation would give `0.9999999999999999`.
 ///
-/// The ground fold is the second half of the same licence. An all-literal `Add` / `Mul` /
-/// `Pow` survives the exact chain only because its exact value left `i128`
-/// (`74.22 - 92.13 * pow(9.44, 4)`: the power alone is 64 digits), so the strict tiers keep
-/// the whole subtree, four operators whose value is one number. Permissive evaluates it in
-/// f64 (children first, so a partition folds member by member) and keeps the literal when
-/// mu prices it below the literals it replaces -- the operator's own symbol cost is not even
-/// counted, so the gate is conservative. Non-finite values refuse; function applications
-/// stay with `f64_fold`'s own gate.
-pub fn snap_lossy_literals(e: &Ex) -> Option<Ex> {
-    fn ground_fold(e: Ex, moved: &mut bool) -> Ex {
-        let lits: Option<Vec<Rat>> = match &e {
-            Ex::Add(v) | Ex::Mul(v) => v
-                .iter()
-                .map(|x| {
-                    if let Ex::Num(r) = x {
-                        Some(r.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            Ex::Pow(b, x) => match (&**b, &**x) {
-                (Ex::Num(rb), Ex::Num(rx)) => Some(vec![rb.clone(), rx.clone()]),
-                _ => None,
-            },
-            _ => None,
-        };
-        let Some(lits) = lits else { return e };
-        if lits.len() < 2 {
-            return e;
-        }
-        let vals: Vec<f64> = lits.iter().map(|r| r.to_f64_nearest()).collect();
-        let y = match &e {
-            Ex::Add(_) => vals.iter().sum::<f64>(),
-            Ex::Mul(_) => vals.iter().product::<f64>(),
-            Ex::Pow(..) => vals[0].powf(vals[1]),
-            _ => return e,
-        };
-        if !y.is_finite() {
-            return e;
-        }
-        let Some(folded) = Rat::parse_decimal(&format!("{y:?}")) else {
-            return e;
-        };
-        let before: u64 = lits.iter().map(mu_rat_exact).sum();
-        if mu_rat_exact(&folded) < before {
-            *moved = true;
-            Ex::Num(folded)
-        } else {
-            e
-        }
+/// ρ is the identity outside permissive, idempotent (a moved literal is a shortest float
+/// spelling, which [`lossy_literal`] never moves), and mu-neutral: the float cap prices a
+/// literal and its float alike ([`mu_rat`]), so the reduction ordering, termination and every
+/// descent argument are unchanged, and every state the walk holds prints the codeword it is
+/// priced at. It moves a value by at most half an ulp, inside permissive's licence; it never
+/// creates an infinity or a zero (non-finite values refuse, a normal value's float is normal).
+#[inline]
+pub fn land(r: Rat, cx: &Cx) -> Rat {
+    if !cx.lossy() {
+        return r;
     }
-    fn walk(e: &Ex, moved: &mut bool) -> Ex {
-        match e {
-            Ex::Num(r) => match lossy_literal(r) {
-                Some(s) => {
-                    *moved = true;
-                    Ex::Num(s)
-                }
-                None => Ex::Num(r.clone()),
-            },
-            Ex::Add(v) => ground_fold(Ex::Add(v.iter().map(|x| walk(x, moved)).collect()), moved),
-            Ex::Mul(v) => ground_fold(Ex::Mul(v.iter().map(|x| walk(x, moved)).collect()), moved),
-            Ex::Pow(b, x) => ground_fold(
-                Ex::Pow(Box::new(walk(b, moved)), Box::new(walk(x, moved))),
-                moved,
-            ),
-            Ex::Fun(f, v) => Ex::Fun(*f, v.iter().map(|x| walk(x, moved)).collect()),
-            leaf => leaf.clone(),
-        }
+    match lossy_literal(&r) {
+        Some(s) => s,
+        None => r,
     }
-    let mut moved = false;
-    let out = walk(e, &mut moved);
-    moved.then_some(out)
 }
 
-/// [`snap_lossy_literals`] for the literals that PRINT a number beyond float precision only
-/// (more than 17 significant digits in the decimal, the numerator or the denominator the token
-/// printer writes for it -- for a product's coefficient moved behind the divide, its
-/// reciprocal's): each moves to the float nearest to it, as [`lossy_literal`] moves it. No
-/// ground fold, and a literal printed short stays (the quotient `1/25.06292563505454`, printed
-/// as a division by that decimal): either can price above the state it came from.
-pub fn snap_long_literals(e: &Ex) -> Option<Ex> {
-    fn num(r: &Rat, printed: &Rat, moved: &mut bool) -> Ex {
-        match lossy_literal(r).filter(|_| prints_long(printed)) {
-            Some(s) => {
-                *moved = true;
-                Ex::Num(s)
-            }
-            None => Ex::Num(r.clone()),
-        }
+/// [`land`] on a literal operand; any other operand is returned as it is.
+#[inline]
+fn land_operand(e: Ex, cx: &Cx) -> Ex {
+    match e {
+        Ex::Num(r) => Ex::Num(land(r, cx)),
+        e => e,
     }
-    fn walk(e: &Ex, moved: &mut bool) -> Ex {
-        match e {
-            Ex::Num(r) => num(r, r, moved),
-            Ex::Add(v) => Ex::Add(v.iter().map(|x| walk(x, moved)).collect()),
-            Ex::Mul(v) => Ex::Mul(
-                v.iter()
-                    .map(|x| match x {
-                        Ex::Num(r) => num(r, &super::convert::printed_coefficient(r, v), moved),
-                        _ => walk(x, moved),
-                    })
-                    .collect(),
-            ),
-            Ex::Pow(b, x) => Ex::Pow(Box::new(walk(b, moved)), Box::new(walk(x, moved))),
-            Ex::Fun(f, v) => Ex::Fun(*f, v.iter().map(|x| walk(x, moved)).collect()),
-            leaf => leaf.clone(),
-        }
-    }
-    let mut moved = false;
-    let out = walk(e, &mut moved);
-    moved.then_some(out)
 }
 
-/// Whether the exact spelling of `r` carries more than 17 significant digits: its decimal's
-/// mantissa where that spelling wins, else its numerator's or denominator's.
-fn prints_long(r: &Rat) -> bool {
-    let long = |r: &Rat| {
-        r.decimal_parts()
-            .is_some_and(|d| d.mantissa.digits().len() > 17)
-    };
-    if !r.is_integer() && decimal_spelling_wins(r) {
-        return long(r);
-    }
-    long(&r.numer()) || long(&r.denom())
+/// [`land`] at the root of a state: a state that is one literal is that literal landed.
+pub fn land_root(e: Ex, cx: &Cx) -> Ex {
+    land_operand(e, cx)
 }
 
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // A literal argument LANDS here (permissive's ρ, [`land`]).
+    let args: Vec<Ex> = if cx.lossy() {
+        args.into_iter().map(|a| land_operand(a, cx)).collect()
+    } else {
+        args
+    };
     if let Some(folded) = f64_fold(op, &args, cx) {
         return folded;
     }
@@ -9951,64 +9885,5 @@ mod tests {
             assert_eq!(in_f64, in_exact, "{r:?}");
             assert!(in_f64 <= mu_rat_exact(r), "{r:?}");
         }
-    }
-
-    /// The long-literal snap moves a literal printed beyond float precision (a decimal, or a
-    /// fraction with a long numerator or denominator) to the float nearest to it, and keeps a
-    /// quotient printed short, which the full snap moves too.
-    #[test]
-    fn snap_long_literals_moves_only_long_prints() {
-        with_view(|view| {
-            // the permissive chain's own (f64) number domain, and the exact one
-            for f64_numbers in [true, false] {
-                let _domain = crate::ac::rat::number_domain(f64_numbers);
-                let long = Rat::parse_decimal("0.29691830596424839286351539224825775976423047785")
-                    .unwrap();
-                let monster = Rat::from_big(
-                    "200000000000000000000000000000".parse().unwrap(),
-                    "426738538271436458205631863649".parse().unwrap(),
-                )
-                .unwrap();
-                let quotient = Rat::parse_decimal("25.06292563505454")
-                    .unwrap()
-                    .checked_inv()
-                    .unwrap();
-                let nearest = |r: &Rat| Rat::shortest_reading_as(r.to_f64_nearest()).unwrap();
-                let e = Ex::Add(vec![
-                    Ex::Num(long.clone()),
-                    Ex::Num(monster.clone()),
-                    Ex::Num(quotient.clone()),
-                ]);
-                assert_eq!(
-                    snap_long_literals(&e),
-                    Some(Ex::Add(vec![
-                        Ex::Num(nearest(&long)),
-                        Ex::Num(nearest(&monster)),
-                        Ex::Num(quotient.clone()),
-                    ]))
-                );
-                assert_eq!(
-                    snap_lossy_literals(&Ex::Num(quotient.clone())),
-                    Some(Ex::Num(nearest(&quotient)))
-                );
-                assert_eq!(snap_long_literals(&Ex::Num(quotient)), None);
-                // A coefficient the printer moves behind the divide prints its reciprocal:
-                // 95367431640625/1000000000003 * x0 prints `/ x0 0.01048576000003145728`, and
-                // 298023223876953125/123456791 * x0 prints `/ x0 0.0000000004142522498547712`.
-                let hidden = Rat::new(95367431640625, 1000000000003).unwrap();
-                let shown = Rat::new(298023223876953125, 123456791).unwrap();
-                let product = |r: &Rat| Ex::Mul(vec![Ex::Num(r.clone()), x(view)]);
-                assert_eq!(
-                    snap_long_literals(&product(&hidden)),
-                    Some(product(&nearest(&hidden)))
-                );
-                assert_eq!(snap_long_literals(&Ex::Num(hidden)), None);
-                assert_eq!(snap_long_literals(&product(&shown)), None);
-                assert_eq!(
-                    snap_long_literals(&Ex::Num(shown.clone())),
-                    Some(Ex::Num(nearest(&shown)))
-                );
-            }
-        });
     }
 }
