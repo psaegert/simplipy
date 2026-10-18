@@ -477,14 +477,27 @@ def rootn(x: float, n: float) -> float:
     return float(out)
 
 
+def _nonint_exponent(y: 'np.ndarray | float') -> 'np.ndarray':
+    """Cells whose exponent is a finite non-integer."""
+    yf = np.asarray(y, dtype=float)
+    return np.isfinite(yf) & (np.mod(yf, 1.0) != 0.0)
+
+
 def pow(x: float, y: float) -> float:
     """Return x raised to the power of y, element-wise (NaN at -inf base with finite
-    non-integer exponent: contract-aligned real semantics)."""
+    non-integer exponent: contract-aligned real semantics).
+
+    A zero base under a finite non-integer exponent gives +0 (or +inf for a negative
+    exponent) whatever the zero's sign, as IEEE-754 ``pow`` does: a fractional power
+    has no odd part to carry a sign. numpy's ``power`` computes an
+    exponent of 1/2 as ``sqrt``, which keeps the sign of -0, so the base's zero is
+    unsigned first; integer exponents keep IEEE's signed results (``pow(-0, 3) = -0``)."""
     global _torch_module, _torch_checked
     if isinstance(x, np.ndarray) or isinstance(y, np.ndarray):
         # Handle numpy arrays
         with np.errstate(invalid='ignore'):
-            return np.where(_neginf_nonint_pow_mask(x, y), np.nan, np.power(x, y))
+            base = np.where((np.asarray(x) == 0) & _nonint_exponent(y), 0.0, x)
+            return np.where(_neginf_nonint_pow_mask(x, y), np.nan, np.power(base, y))
     if type(x).__module__ == 'torch' and type(x).__name__ == 'Tensor':
         if not _torch_checked:
             try:
@@ -498,7 +511,9 @@ def pow(x: float, y: float) -> float:
             raise ImportError("PyTorch is required to process torch tensors")
 
         # Handle torch tensors
-        return _torch_module.pow(x, y)
+        yt = _torch_module.as_tensor(y, dtype=x.dtype, device=x.device)  # type: ignore[attr-defined]
+        nonint = _torch_module.isfinite(yt) & (yt != _torch_module.floor(yt))
+        return _torch_module.pow(_torch_module.where((x == 0) & nonint, _torch_module.zeros_like(x), x), y)
     # Handle scalar case
     with np.errstate(invalid='ignore'):
         if isinstance(x, int):
@@ -507,4 +522,6 @@ def pow(x: float, y: float) -> float:
             y = float(y)
         if bool(_neginf_nonint_pow_mask(x, y)):
             return float('nan')
+        if x == 0 and bool(_nonint_exponent(y)):
+            x = 0.0
         return np.power(x, y)  # Use numpy for scalar power calculation

@@ -14,6 +14,8 @@ These are the PRODUCT gates for the AC core:
   was a permanent xfail until both left the tree together) holds BY CONSTRUCTION here.
 """
 
+from fractions import Fraction
+
 import pytest
 
 from simplipy import Mode, SimpliPyEngine
@@ -197,6 +199,32 @@ class TestExplicitConstants:
                     math.isfinite(want) and math.isfinite(got)
                     and abs(want - got) <= 1e-12 * max(abs(want), abs(got)))
                 assert agree, f"rootn({x}, {n}): realization {want}, engine {got}"
+
+    def test_fractional_power_of_negative_zero_is_unsigned(self, engine: SimpliPyEngine) -> None:
+        # A finite non-integer exponent has no odd part to carry a sign: pow(-0, y) is +0
+        # (y > 0) or +inf (y < 0), as IEEE-754 pow and rootn give, on every input path.
+        # Integer exponents keep IEEE's signed zeros. The two spellings of a square root
+        # therefore agree at -0, so respelling one as the other cannot flip a pole.
+        import math
+
+        import numpy as np
+
+        from simplipy import operators as ops
+
+        for y in (0.5, 1.5, 1 / 3, 2.5):
+            for got in (ops.pow(-0.0, y), ops.pow(np.array([-0.0]), y)[0]):
+                assert got == 0.0 and math.copysign(1.0, got) == 1.0, (y, got)
+        for y in (-0.5, -1.5):
+            assert ops.pow(-0.0, y) == math.inf
+            assert ops.pow(np.array([-0.0]), y)[0] == math.inf
+        assert math.copysign(1.0, ops.pow(-0.0, 3.0)) == -1.0
+        assert ops.pow(-0.0, -1.0) == -math.inf
+        assert ops.pow(np.array([-0.0, 4.0]), 0.5).tolist() == [0.0, 2.0]
+        x = np.array([0.0])
+        with np.errstate(divide='ignore'):
+            by_pow = engine.as_callable(['inv', 'pow', 'neg', 'x1', '/', '1', '2'], ['x1'])(x)
+            by_root = engine.as_callable(['inv', 'rootn', 'neg', 'x1', '2'], ['x1'])(x)
+        assert by_pow.tolist() == by_root.tolist() == [math.inf]
 
     def test_str_input_returns_pretty_infix(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify("x1 * 2 + x1 * 3") == "5*x1"
@@ -462,8 +490,17 @@ class TestContracts:
         # literal), and the shape is again unmoved. 94969 -> 93724 at the ONE-BIT LITERAL
         # FLOOR (owner 2026-08-22): the small exponents stop being clamped together. The
         # endpoint shape is unmoved a third time.
-        assert engine.complexity(out_a) == 93724
-        assert "pow" in out_a and any("6449537531992260" in t for t in out_a), out_a
+        # 93724 -> 142374 at PHASE 2c (exact numbers to 1,100 bits): the factored `pow c 2`
+        # existed only because the square's denominator 10^68 overflowed 128 bits. The exact
+        # square now fits, the constructor folds it as it always folded within 128 bits, and
+        # `pow` distributes the square over the product, so 2*c^2 materialises as one
+        # 34-digit coefficient -- dearer under mu than the factored power was.
+        # 142374 -> 82142 under the float cap: the 34-digit coefficient costs what its
+        # float's shortest decimal costs. The endpoint shape is unmoved.
+        assert engine.complexity(out_a) == 82142
+        coeff = 2 * Fraction('6.4495375319922606e-18') ** 2
+        assert out_a[0] == '*' and Fraction(out_a[1]) == coeff, out_a
+        assert out_a[2:] == ['pow', 'sinh', 'x2', '2'], out_a
         assert engine.simplify(out_a) == out_a  # and the healed form is a fixpoint
 
     def test_infinity_sum_sign_families_converge_flat(self, engine: SimpliPyEngine) -> None:

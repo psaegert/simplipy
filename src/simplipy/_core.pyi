@@ -33,7 +33,8 @@ class Engine:
         max_passes: int = ...,
         rule_mode: Literal["default", "real", "permissive"] = ...,
         form: Literal["tagged", "explicit"] = ...,
-        explore_budget: int = ...,
+        explore_budget: int | None = ...,  # None: until a round finds nothing
+        work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
     ) -> list[str]: ...
     #: DEFAULT-mode simplify with artifact rows (and their minted orientation twins)
     #: suppressed at the matcher's fire site -- behaviorally the engine built without
@@ -43,7 +44,7 @@ class Engine:
         tokens: list[str],
         max_passes: int = ...,
         form: Literal["tagged", "explicit"] = ...,
-        explore_budget: int = ...,
+        explore_budget: int | None = ...,  # None: until a round finds nothing
         suppressed_rows: list[int] = ...,
     ) -> list[str]: ...
     def ac_simplify_infix(
@@ -57,7 +58,8 @@ class Engine:
         tokens: list[str],
         max_passes: int = ...,
         rule_mode: Literal["default", "real", "permissive"] = ...,
-        explore_budget: int = ...,
+        explore_budget: int | None = ...,  # None: until a round finds nothing
+        work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
     ) -> str: ...
     def ac_simplify_explore(
         self,

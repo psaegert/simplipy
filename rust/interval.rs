@@ -2265,10 +2265,19 @@ fn leaf_vs(t: &str, doms: &[Vs], params: &[f64], k: &mut usize) -> Option<Vs> {
                 // Beyond f64 RANGE: |denoted| > f64::MAX (the round-to-nearest overflow
                 // threshold sits above f64::MAX, so the closed lower bound is sound and
                 // merely loose).
+                // In the f64 number domain the deployed evaluator READS such a literal as
+                // +-inf (design 2c, review M4), so the infinity joins the set; the exact domain
+                // keeps the finite denotation alone.
                 Some(Boundary::Overflow) if v > 0.0 => {
-                    return Vs::interval(f64::MAX, INF, false, true)
+                    let mut vs = Vs::interval(f64::MAX, INF, false, true);
+                    vs.pinf = crate::ac::rat::f64_numbers();
+                    return vs;
                 }
-                Some(Boundary::Overflow) => return Vs::interval(-INF, -f64::MAX, true, false),
+                Some(Boundary::Overflow) => {
+                    let mut vs = Vs::interval(-INF, -f64::MAX, true, false);
+                    vs.ninf = crate::ac::rat::f64_numbers();
+                    return vs;
+                }
                 // Below the subnormal floor: 0 < |denoted| <= the smallest positive
                 // subnormal (again sound-and-loose: underflow to zero requires strictly
                 // less than half of it).

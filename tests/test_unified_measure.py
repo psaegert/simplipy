@@ -302,19 +302,35 @@ class TestB22AstronomicSaturation:
 
 
 class TestT7Termination:
-    """The dense-literal chain ascends: Mul[3/2^k, x] grows in mu with k, so the
-    chain cannot be a reduction sequence (the audit's O1 hang class)."""
+    """The dense-literal chain Mul[3/2^k, x] (the audit's O1 hang class). It ascends in mu
+    while 3/2^k's exact spelling is no longer than its float's shortest decimal; from there
+    the float cap holds its price at that decimal's. The chain stays finite (the
+    1,100-bit cap bounds k, docs/formal.md L5), and a rewrite cannot walk it: a step keeps
+    the term's value, and changing the literal alone changes it."""
 
-    def test_dyadic_chain_strictly_ascends(self, eng):
-        prev = None
-        for k in range(1, 61):
+    def test_dyadic_chain_ascends_until_the_float_cap(self, eng):
+        def exact_and_cap(k):
             frac = Fraction(3, 2 ** k)
-            tok = f'{frac.numerator}/{frac.denominator}'
-            m = c(eng, ['*', tok, 'x0'])
-            assert m == MU_MUL + mu_lit(frac) + MU_LEAF
-            if prev is not None:
-                assert m > prev, (k, m, prev)
-            prev = m
+            return mu_lit(frac), mu_lit(Fraction(repr(float(frac))))
+
+        prices = {}
+        for k in range(1, 121):
+            exact, cap = exact_and_cap(k)
+            prices[k] = c(eng, ['*', f'3/{2 ** k}', 'x0'])
+            assert prices[k] == MU_MUL + min(exact, cap) + MU_LEAF, k
+        # The cap sets in where the exact spelling outgrows the float's shortest decimal
+        # (15 to 17 digits, so the onset flickers for a few steps) ...
+        first = next(k for k in prices if exact_and_cap(k)[0] > exact_and_cap(k)[1])
+        assert 40 < first < 70, first
+        # ... below it the chain ascends strictly, and well past it every member is capped.
+        assert all(prices[k] < prices[k + 1] for k in range(1, first - 1))
+        assert all(exact_and_cap(k)[0] > exact_and_cap(k)[1] for k in range(70, 121))
+
+    def test_dyadic_chain_members_settle(self, eng):
+        for k in range(1, 400, 9):
+            t = ['*', f'3/{2 ** k}', 'x0']
+            once = eng.simplify(t)
+            assert eng.simplify(once) == once, k
 
 
 class TestMuGovernedFold:

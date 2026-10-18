@@ -251,20 +251,16 @@ class TestCertificateCompletenessTowers:
         out = check(eng, '/ x8 / x8 - pow x8 2 x8'.split())
         assert out == eng.simplify('- pow x8 2 x8'.split()), f'tower kept: {out}'
 
-    def test_pow5_reciprocal_pair_kept_sound_cancels_lossy(self, eng):
-        # row-56488 fragment: x5^5/(-0.0009765625*x5^5*(x3-exp x10)^-5). Until F83
-        # the x5^5 pair cancelled here in SOUND mode -- but that cancel is an a.e.
-        # REPAIR: the source is NaN at x5 = 0 (0/0), the cancelled form finite. F83
-        # (owner-ruled NARROW 2026-08-11: an odd negative power refuses to
-        # distribute over a product carrying a magnitude negative coefficient,
-        # |c| != 1, when a factor may vanish; the pure-sign c = -1 residue stays
-        # priced by SS9.8.4) closes the distribution route that exposed the
-        # reciprocal factor, so sound mode keeps the pair, value-identical to the
-        # source everywhere (judge OK via check). The repair is not lost: LOSSY is
-        # licensed for a.e. changes, still distributes, and the cancel fires there.
+    def test_pow5_reciprocal_pair_cancels_in_every_mode(self, eng):
+        # x5^5/(-0.0009765625*x5^5*(x3-exp x10)^-5). An odd negative power does not distribute over a product
+        # carrying a negative magnitude coefficient where a factor may vanish -- but the lone (x3 - exp x10)^-5 has
+        # a two-signed pole, so it takes the coefficient's sign (reading A: the sign of that pole's infinity is no
+        # value the answer keeps), the coefficient is positive, and the inverse distributes. The x5^5 pair then
+        # cancels in sound mode too: the source is 0/0 at x5 = 0, a hole whose limit from both sides is the
+        # cancelled form's value there, and reading A compares a singular point by its limit (judge OK via check).
         src = '/ pow x5 5 * -0.0009765625 * pow x5 5 pow - x3 exp x10 -5'.split()
         out = check(eng, src)
-        assert 'x5' in out, f'pair unexpectedly cancelled in sound mode: {out}'
+        assert out == eng.simplify('* -1024 pow - x3 exp x10 5'.split()), f'{out}'
         lossy = eng.simplify(list(src), mode=Mode.permissive)
         assert 'x5' not in lossy, f'lossy cancel lost: {lossy}'
         assert lossy == eng.simplify('* -1024 pow - x3 exp x10 5'.split(),

@@ -136,10 +136,12 @@ def _exact(t):
     """
     t = t.strip()
     mantissa, _, exponent = t.lower().partition('e')
-    if (sum(c.isdigit() for c in mantissa) > 4300
-            or len(exponent.lstrip('+-').lstrip('0')) > 5 or (exponent and abs(int(exponent)) > 4000)):
+    digits = exponent.lstrip('+-').lstrip('0')
+    if sum(c.isdigit() for c in mantissa) > 4300 or len(digits) > 5 or int(digits or '0') > 4000:
         raise UnsupportedToken(f'literal too large to read exactly: {t[:40]!r}...')
-    return Fraction(t)
+    # built from the stripped exponent: `Fraction` itself reads a zero-padded one through int()
+    scale = Fraction(10) ** int(digits or '0')
+    return Fraction(mantissa) / scale if exponent.startswith('-') else Fraction(mantissa) * scale
 
 
 def literal_value(t):

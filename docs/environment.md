@@ -36,7 +36,7 @@ an artifact mined under a non-default instrument says so itself.
 | `SIMPLIPY_ZERO_SIGN` | miner sign-combo grid |
 | `SIMPLIPY_POLE_GRID` | miner magnitude-grid ablation |
 | `SIMPLIPY_HIPREC_FRAC` | high-precision near-miss escalation gate |
-| `SIMPLIPY_TAGGED_FRACTION_MAX` | tagged structural-fraction bound (changes mined output) |
+| `SIMPLIPY_TAGGED_FRACTION_MAX` | largest numerator and denominator (magnitude) of a decimal the tagged form spells as a bag (every fraction is one); changes mined output |
 
 These exist for instrumentation and reproduction studies. Do not set them in
 production: they change what the engine mines or certifies, and an artifact

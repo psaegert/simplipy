@@ -71,12 +71,14 @@ class TestDivisorSideSpelling:
         check(eng, ['*', '1/3', 'x0'], ['/', 'x0', '3'])
 
     def test_tie_stays_coefficient_side(self, eng):
-        # len("22/7") == len("7/22"): ties keep the coefficient in the numerator.
-        check(eng, ['*', '22/7', 'x0'], ['<mul>', '22/7', 'x0', '</mul>'])
+        # len("22/7") == len("7/22"): no move to the divisor side; the tagged form writes no
+        # one-token fraction (owner 2026-10-10), so the coefficient splits into the bag.
+        check(eng, ['*', '22/7', 'x0'], ['<mul>', '22', 'x0', '<div>', '7', '</mul>'])
 
     def test_longer_reciprocal_decimal_stays(self, eng):
-        # 1/(1024/3) = 0.0029296875 spells LONGER than 1024/3: no move.
-        check(eng, ['*', '1024/3', 'x0'], ['<mul>', '1024/3', 'x0', '</mul>'])
+        # 1/(1024/3) = 0.0029296875 spells LONGER than 1024/3: no move to the divisor side, and
+        # the fraction splits into the bag (no one-token fraction in the tagged form).
+        check(eng, ['*', '1024/3', 'x0'], ['<mul>', '1024', 'x0', '<div>', '3', '</mul>'])
 
     def test_exact_decimal_never_moves(self, eng):
         # RENAMED IN SPIRIT 2026-08-07 (owner-ratified argmin, §10.10(1); audit F31/F33):
