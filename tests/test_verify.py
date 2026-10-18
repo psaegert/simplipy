@@ -433,20 +433,19 @@ class TestTheRealisationAxis:
             got = judge_rule(list(lhs), list(rhs))
             assert got['tier'] == want, f'{" ".join(lhs)} -> {" ".join(rhs)}: {got}'
 
-    def test_a_TOLERATED_rule_the_engine_contradicts_is_real_not_f64(self) -> None:
-        """`_tier` filed contract-accepted-but-unrealised under `f64`, which is backwards
-        in both directions at once: it put the rule in the one mode whose authority
-        CONTRADICTS it, and removed it from the mode that honours it.
+    def test_a_TOLERATED_rule_that_fills_f64_nan_holes_on_a_null_set_is_core(self) -> None:
+        """One f64 standard: the f64 constructors fill a NaN hole on a null set (`x1/x1`
+        is `1`), so the judge files a rule that does only that as realised in f64.
 
         `/ $0 $0 -> 1` is true off the null set {0}, which is what TOLERATED means; f64
-        answers nan at 0 AND at both infinities, so it is not realised. True and not
-        realised is `real`. Six acj-4-3 rules land here, so the arm was live, not
-        theoretical -- at the re-mine they would have been written into rules_f64.json."""
+        answers nan at 0 and at both infinities, holes the rewrite fills at exactly the
+        events the contract tolerated. A disagreement of any other kind keeps a TOLERATED
+        rule `real` (the table below)."""
         from simplipy.verify._contract import _tier, judge_rule
         got = judge_rule(['/', '$0', '$0'], ['1'])
         assert got['verdict'] == 'TOLERATED'
-        assert got['realised'] is False
-        assert got['tier'] == 'real'
+        assert got['realised'] is True
+        assert got['tier'] == 'core'
         # the whole table, so a future edit has to move a documented cell on purpose
         # `None` files as `real` too since the 2026-08-20 ruling: absent deployed
         # evidence cannot support a claim of f64 soundness.

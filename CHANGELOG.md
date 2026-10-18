@@ -116,6 +116,11 @@
 - **`pi^C` is a fitted constant.** `pow(np.pi, <constant>)` simplifies to `<constant>`, as
   `pow(2, <constant>)`, `pow(np.e, <constant>)` and `exp(<constant>)` do: every positive base
   gives the same family of values, which the fitted constant represents.
+- **One f64 standard for the rule judge and the constructors.** The f64 constructors fill a NaN
+  hole on a null set (`x1/x1` is `1`), and the rule judge now files a rule that does only that,
+  at points the contract tolerates as null events, as realised in f64: `/ $0 $0 -> 1` is `core`
+  (served in every mode), not `real`. A NaN hole on positive measure, or at a point the contract
+  does not tolerate, still keeps a rule out of f64.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for

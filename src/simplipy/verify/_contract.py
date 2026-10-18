@@ -1645,17 +1645,15 @@ def _tier(verdict, realised):
     if verdict in ('CERTIFIED', 'TOLERATED'):
         # `real`, NOT `f64`. The contract accepting a rule means it is TRUE; `realised is
         # False` means the deployed evaluator disagrees. "True, not realised" is the `real`
-        # row of the table above, and filing it as `f64` was wrong in both directions at
-        # once -- it put the rule in the one mode whose authority CONTRADICTS it and
-        # removed it from the mode that honours it. Reachable, and measured: 6 rules of
-        # acj-4-3 land here, all TOLERATED, e.g. `/ $0 $0 -> 1` (true off the null set
-        # {0}, and f64 answers nan at 0 and at both infinities).
-        # `core` now requires realised to be TRUE, not merely "not False" (owner ruling,
-        # 2026-08-20). `None` means the deployed lane never got an observation at all --
-        # ABSENT EVIDENCE -- and that cannot support a claim of f64 soundness. 102
-        # acj-4-3 rules take this path, dominated by the symbolic-cancellation snap
-        # family: `sin(np.pi) -> 0` is exactly true in mathematics while f64 computes
-        # 1.2246467991473532e-16, so serving it in f64 mode CHANGES the answer.
+        # row of the table above, and filing it as `f64` would put the rule in the one mode
+        # whose authority contradicts it and remove it from the mode that honours it.
+        # `core` requires realised to be TRUE, not merely "not False": `None` means the
+        # deployed lane never got an observation at all, and absent evidence cannot support
+        # a claim of f64 soundness (`sin(np.pi) -> 0` is exactly true while f64 computes
+        # 1.2246467991473532e-16, so serving it in f64 mode changes the answer).
+        # A TOLERATED rule that only fills f64's NaN holes at the contract's own null events
+        # arrives realised (`judge_rule`'s `fills_nan`): f64 takes the same reading as the
+        # constructors, which fill a NaN hole on a null set (`x1/x1` is `1`).
         return 'core' if realised is True else 'real'
     if verdict == 'ENGINE-MISALIGN':
         return 'real'
@@ -1993,7 +1991,14 @@ def judge_rule(lhs, rhs, deployed_check=True):
     finally:
         mp.dps = old
 
+    # ONE f64 STANDARD: the constructors fill a NaN hole on a null set (`x1/x1` is `1` in
+    # f64), so a TOLERATED rule whose every deployed disagreement is such a fill -- the left
+    # side NaN where the right side has a value (`EXT`), at a point the contract itself
+    # tolerated as a null event -- is realised in f64 as well. A NaN hole on positive
+    # measure, or one the contract does not tolerate (an overflow), is not.
     _realised = (not dep_bad) if dep_seen[0] else None
+    tolerated_points = [p for _, p, _ in tolerated]
+    fills_nan = bool(dep_bad) and all(k == 'EXT' and p in tolerated_points for k, p in dep_bad)
 
     if a_kills:
         return {'verdict': 'KILL', 'clause': 'a-real-change', 'points': a_kills[:3],
@@ -2028,6 +2033,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
                 'realised': _realised, 'tier': _tier('ENGINE-MISALIGN', _realised)}
     if tolerated:
         kinds = sorted({v for v, _, _ in tolerated})
+        _realised = True if fills_nan else _realised
         return {'verdict': 'TOLERATED', 'classes': kinds,
                 'saturation_probed': saturation_probed,
             'realised': _realised, 'tier': _tier('TOLERATED', _realised),
