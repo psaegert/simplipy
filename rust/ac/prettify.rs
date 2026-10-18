@@ -18,15 +18,17 @@
 //!    or `c * pi` has a fraction spelling that fits `D` (pi's digits not counted), the value is
 //!    written with the literal factored out (`1/(2*3.141592653589793)`).
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
-//!    joins an existing denominator (`x/(0.25*sin(x))`); only a bare `x/float` becomes a
-//!    multiplier.
+//!    joins an existing denominator (`x1/(243*x2)`); only a bare `x/float` becomes a
+//!    multiplier (`x1/243` is `0.00411522633744856*x1`).
 //! 6. **Functions of numbers** fold to one float only when every number inside would itself
 //!    be written as a float (`sin(sin(9463/890))` folds, `sin(2)` stays). The fold evaluates
 //!    with the deployed evaluator's kernels (`numeric::unary_fn` / `binary_fn`).
 //! 7. **Exponents** are numbers like any other.
 //! 8. **Even roots**: `x^(1/n)` is `rootn(x, n)` and `x^(-1/n)` is `1/rootn(x, n)` for even `n`.
-//! 9. **Layout**: one coefficient in front, the denominator grouped (`x0^2/(x1*x2)`),
-//!    scientific notation from 10^6 and below 10^-3 with a lowercase `e`.
+//! 9. **Layout**: one coefficient in front, the denominator grouped (`x0^2/(x1*x2)`) where the
+//!    group re-reads into the state's own reciprocals (numbers, variables, their powers and
+//!    roots); any other divisor keeps its own slash, as the state keeps it. Scientific notation
+//!    from 10^6 and below 10^-3 with a lowercase `e`.
 //! 10. **Range**: nothing folds or combines to inf, 0 or a subnormal.
 //!
 //! Rule 11 (re-simplify the display once and redo it) needs the rule set, so it lives with the
@@ -309,39 +311,27 @@ impl<'a, 'v> Display<'a, 'v> {
         (Spelling::Float(text), s)
     }
 
-    /// Rule 4: `a` with the literal pi factored out, when the rest has a fraction that fits.
+    /// Rule 4: `a` with the literal pi factored out, when the rest has a fraction that fits:
+    /// `a / pi` in front of the literal, or `a * pi` over it, whichever writes fewer digits.
     fn pi_fit(&self, a: &Rat, unit_free: bool) -> Option<Spelling> {
         let pi = pi_value();
-        let over = a
-            .checked_mul(&pi.checked_inv()?)
-            .and_then(|r| fraction_fit(&r, self.digits, unit_free));
-        let times = a
-            .checked_mul(pi)
-            .and_then(|r| fraction_fit(&r, self.digits, unit_free));
-        let wrap = |f: &Fraction| f.spelling();
+        let fit = |r: Option<Rat>| r.and_then(|r| fraction_fit(&r, self.digits, unit_free));
+        let over = fit(pi.checked_inv().and_then(|inv| a.checked_mul(&inv)));
+        let times = fit(a.checked_mul(pi));
+        let unit = |f: &Fraction| {
+            let (num, den) = f.spelling();
+            (num.filter(|n| n != "1"), den)
+        };
         match (over, times) {
-            (Some(o), Some(t)) if o.digits < t.digits => {
-                let (num, den) = wrap(&o);
-                Some(Spelling::PiNum {
-                    num: num.filter(|n| n != "1"),
-                    den,
-                })
+            (Some(o), t) if t.as_ref().is_none_or(|t| o.digits < t.digits) => {
+                let (num, den) = unit(&o);
+                Some(Spelling::PiNum { num, den })
             }
             (_, Some(t)) => {
-                let (num, den) = wrap(&t);
-                Some(Spelling::PiDen {
-                    num: num.filter(|n| n != "1"),
-                    den,
-                })
+                let (num, den) = unit(&t);
+                Some(Spelling::PiDen { num, den })
             }
-            (Some(o), None) => {
-                let (num, den) = wrap(&o);
-                Some(Spelling::PiNum {
-                    num: num.filter(|n| n != "1"),
-                    den,
-                })
-            }
-            (None, None) => None,
+            _ => None,
         }
     }
 
@@ -579,7 +569,7 @@ impl<'a, 'v> Display<'a, 'v> {
             } else if let Some(x) = self.fold(t) {
                 numbers.push(x);
             } else {
-                terms.push(split_neg(self.node(t)));
+                terms.push(odd_literal_hoist(split_neg(self.node(t)), self.cx));
             }
         }
         let constants: Vec<Rat> = match combine(&numbers, Rat::checked_add) {
@@ -710,6 +700,19 @@ fn combine(numbers: &[Rat], op: fn(&Rat, &Rat) -> Option<Rat>) -> Option<Rat> {
         return None;
     }
     Some(acc)
+}
+
+/// The canonical infix's sign hoist for a sum term (owner ruling 2026-08-08): an odd function
+/// of a negative literal gives its sign to the joiner (`x1 - sin(2)`, not `x1 + sin(-2)`).
+fn odd_literal_hoist((neg, node): (bool, Node), cx: &Cx) -> (bool, Node) {
+    if let Node::Call(f, args) = &node {
+        if let [Node::Neg(inner)] = args.as_slice() {
+            if matches!(**inner, Node::Num(_)) && cx.is_odd_fun(cx.view.intern(f)) {
+                return (!neg, Node::Call(f.clone(), vec![(**inner).clone()]));
+            }
+        }
+    }
+    (neg, node)
 }
 
 /// `-node`, with the sign placed where each node keeps it.

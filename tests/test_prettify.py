@@ -111,6 +111,19 @@ def test_functions_of_numbers_fold_only_when_every_number_is_a_float(eng):
     assert show(eng, 'sin(2) + x1') == 'x1 + sin(2)'
     assert show(eng, 'x1*sin(9463/890)') == '-0.9348393354311442*x1'
     assert show(eng, 'x1 + sin(9463/890)') == 'x1 - 0.9348393354311442'
+    # an odd function of a negative literal gives its sign to the joiner, as in `simplify`'s text
+    assert show(eng, 'x1 + sin(-2)') == 'x1 - sin(2)'
+
+
+def test_divisors(eng):
+    """Rule 5 and the grouping: a float whose reciprocal float64 holds as written stays a divisor
+    beside another divisor; numbers, variables and their powers group; any other divisor keeps
+    its own slash, as the state keeps it."""
+    assert show(eng, 'x1/243/x2') == 'x1/(243*x2)'
+    assert show(eng, 'x1/243') == '0.00411522633744856*x1'
+    assert show(eng, 'x0/(x1^2*x2)') == 'x0/(x1^2*x2)'
+    assert show(eng, 'x0/(cos(x1)*x2)') == 'x0/x2/cos(x1)'
+    assert show(eng, '1/x1^(1/2)/sin(1/x1)') == '1/rootn(x1, 2)/sin(1/x1)'
 
 
 # ---------------------------------------------------------------- P1 and P2
