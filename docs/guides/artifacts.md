@@ -59,8 +59,11 @@ fixed probe battery evaluated through the deployed folding path, so two sidecars
 comparable-or-not by inspection), the soundness state at mine
 time (certificate kill-switch states, every artifact-affecting environment override
 recorded verbatim, and the interval layer's fail-closed miss counters), and the
-measure fingerprint (the μ constants and probe values with a digest) — so artifacts
-mined under different orderings are distinguishable from provenance alone.
+measure fingerprint (the μ constants and the probe values, priced in the file's own mode,
+with a digest) — so artifacts mined under different orderings are distinguishable from
+provenance alone. Each of the three rule files has its own sidecar. Loading reads every
+sidecar present and warns, naming the probes, when a recorded probe now prices
+differently; a probe added after the file was mined is not recorded and not a mismatch.
 
 ## Identity
 

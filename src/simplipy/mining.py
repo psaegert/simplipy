@@ -964,8 +964,15 @@ class RuleMiner:
                 # the symbolic gate and sort promotion above were skipped. The sidecar must
                 # say so (it used to say `final: True` for exactly this partial triple).
                 _complete = not interrupted()
-                self._write_provenance(out_path, prov, _triple['permissive'], final=_complete,
-                                       interrupted=not _complete)
+                # One sidecar per rule file, so the loader can check each file it serves.
+                # They share the mine's record; each carries the measure fingerprint in
+                # its own mode's reading.
+                for _mode, _path in _paths.items():
+                    self._write_provenance(
+                        _path,
+                        None if prov is None else dict(
+                            prov, measure=self.engine._measure_fingerprint(_mode)),
+                        _triple['permissive'], final=_complete, interrupted=not _complete)
             return [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
 
         snapshot_at = dict(snapshot_at or {})

@@ -484,21 +484,23 @@ class TestTheMeasureFingerprintReadsTheWholeMeasure:
         Checked structurally rather than by value: two kinds can price the same (an `Add`
         and a `Mul` of two leaves both cost 15,000 today) and still need separate probes,
         because a change to ONE of them must move the digest."""
-        probes = {t[0]: list(t) for t in type(referee)._MEASURE_PROBES}
+        probes = [list(t) for t in type(referee)._MEASURE_PROBES]
         kinds = {
             'leaf': ['x0'], 'Add': ['+', 'x0', 'x1'], 'Mul': ['*', 'x0', 'x1'],
             'Pow': ['pow', 'x0', '2'], 'Pi': ['np.pi'], 'E': ['np.e'],
             'elementary head': ['sin', 'x0'], 'transcendental head': ['asin', 'x0'],
             'infinity': ['float("inf")'], 'free constant': ['<constant>'],
         }
-        missing = [k for k, toks in kinds.items() if toks not in probes.values()]
+        missing = [k for k, toks in kinds.items() if toks not in probes]
         assert not missing, f'no fingerprint probe exercises: {missing}'
 
-    def test_the_probes_have_distinct_heads(self, referee) -> None:
-        """The digest keys on the FIRST token, so two probes sharing a head would
-        silently collapse into one entry."""
-        heads = [t[0] for t in type(referee)._MEASURE_PROBES]
-        assert len(heads) == len(set(heads)), heads
+    def test_every_probe_is_its_own_entry(self, referee) -> None:
+        """Probes are keyed by their whole spelling, so probes that share a head (`pow
+        x0 2` and `pow pow x0 2 0.5`) are separate entries and none collapses."""
+        probes = type(referee)._MEASURE_PROBES
+        fp = referee._measure_fingerprint()
+        assert list(fp['probes']) == [' '.join(t) for t in probes]
+        assert len(fp['probes']) == len(probes)
 
     def test_the_digest_moves_when_a_probe_moves(self, referee) -> None:
         """The digest is a hash of the probe readings, so a changed reading must change
@@ -508,6 +510,6 @@ class TestTheMeasureFingerprintReadsTheWholeMeasure:
         fp = referee._measure_fingerprint()
         assert fp['digest'] == hashlib.sha256(
             repr(sorted(fp['probes'].items())).encode()).hexdigest()[:16]
-        tampered = dict(fp['probes'], **{'pow': (fp['probes']['pow'] or 0) + 1000})
+        tampered = dict(fp['probes'], **{'pow x0 2': (fp['probes']['pow x0 2'] or 0) + 1000})
         assert hashlib.sha256(
             repr(sorted(tampered.items())).encode()).hexdigest()[:16] != fp['digest']

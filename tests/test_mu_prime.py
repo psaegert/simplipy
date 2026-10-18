@@ -51,17 +51,13 @@ MU_FREE_PRIME = 67 * MILLI   # the re-derived c_free' (TestCfreePrimeDerivation 
 #: mismatch test can differ FROM.
 ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 
-#: The digest the SHIPPED triple was mined under, read from its provenance sidecar. The
-#: symbol table (2026-08-21) changed the measure, so the engine no longer computes this
-#: and D25/R6 warns at load -- correctly, and until the re-mine under the new measure
-#: replaces the artifact. `test_acj_load_warns_until_the_remine` below pins that the
-#: warning is EXACTLY this one and nothing else, which is the only shape of allowance
-#: that cannot swallow a genuine mismatch (the last blanket one nearly did).
-ACJ_SHIPPED_DIGEST = '32302640b359a348'
-
-#: The digest the engine computes under the float cap (with its probe). The published
-#: rulesets were mined under ACJ_SHIPPED_DIGEST, so loading them warns until the re-mine.
-CURRENT_DIGEST = '9a89036bd9cd33f3'
+#: The probes the shipped acj-4 cell's sidecar does not record: the float cap's probe and
+#: the compound reading probes were added to the battery after it was mined. Unrecorded
+#: is not moved, so loading the cell is silent; `test_acj_load_compares_what_was_recorded`
+#: pins exactly this set, so a re-mine that records them fails there and is noticed.
+ACJ_UNRECORDED_PROBES = [
+    '0.0766541268471677307861497420516056347394916180597539647375669841',
+    'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1']
 
 
 def L(n) -> int:
@@ -577,37 +573,59 @@ class TestFingerprintAndArtifactLoad:
             # the float cap: 64 digits cost their float's shortest decimal,
             # 0.07665412684716773 (selector + L(7665412684716773) + L(17))
             '0.0766541268471677307861497420516056347394916180597539647375669841': mu_prime_expected(Fraction('0.07665412684716773')),
-            # the symbol table, one probe per entry (2026-08-21). Add and Mul price the
-            # same here and still need separate probes: a change to ONE of them has to
-            # move the digest.
+            # the symbol table, one probe per entry. Add and Mul price the same here and
+            # still need separate probes: a change to ONE of them has to move a probe.
             'x0': MU_LEAF,                    # 6
-            '+': 3 * MILLI + 2 * MU_LEAF,     # Add 3
-            '*': 3 * MILLI + 2 * MU_LEAF,     # Mul 3
-            'pow': 3 * MILLI + MU_LEAF + 2585,        # Pow 3 + leaf + cost(2)
+            '+ x0 x1': 3 * MILLI + 2 * MU_LEAF,     # Add 3
+            '* x0 x1': 3 * MILLI + 2 * MU_LEAF,     # Mul 3
+            'pow x0 2': 3 * MILLI + MU_LEAF + 2585,        # Pow 3 + leaf + cost(2)
             'np.pi': 4 * MILLI, 'np.e': 4 * MILLI,
-            'sin': 6 * MILLI + MU_LEAF,       # elementary head
-            'asin': 8 * MILLI + MU_LEAF,      # transcendental head
+            'sin x0': 6 * MILLI + MU_LEAF,       # elementary head
+            'asin x0': 8 * MILLI + MU_LEAF,      # transcendental head
             'float("inf")': 8 * MILLI,
+            # the readings, in f64's: (x0^2)^(1/2) stays a power of a power, asin(1e-08)
+            # is its float 1e-08, 1/exp(5132.3) is 0, and x0 cancels from x0/(x0*x1)
+            'pow pow x0 2 0.5': 20170,
+            'asin 1e-08': 5170,
+            '* inv exp 5132.3 x0': 2 * MILLI,
+            '/ x0 * x0 x1': 9 * MILLI,
         }
+        assert fp['mode'] == 'f64'
         assert fp['digest'] != ACJ_MINED_DIGEST
 
-    def test_acj_load_warns_until_the_remine(self):
-        """D25, on the real asset, under the float cap: EXACTLY ONE fingerprint warning, naming
-        the digest the served cell was mined under and the one the engine computes now.
+    def test_each_mode_prices_the_readings_in_its_own(self, eng):
+        """The compound probes are priced in each mode's reading, so a change to one
+        mode's canonical forms moves that mode's fingerprint (measured values)."""
+        compound = ('pow x0 2', 'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1')
+        readings = {m: {k: eng._measure_fingerprint(m)['probes'][k] for k in compound}
+                    for m in ('f64', 'real', 'permissive')}
+        assert readings['f64'] == {'pow x0 2': 11585, 'pow pow x0 2 0.5': 20170, 'asin 1e-08': 5170,
+                                   '* inv exp 5132.3 x0': 2000, '/ x0 * x0 x1': 9000}
+        # real: asin(1e-08) is not its float, 1/exp(5132.3) is not 0
+        assert readings['real'] == dict(readings['f64'], **{'asin 1e-08': 13170,
+                                                            '* inv exp 5132.3 x0': 33647})
+        # permissive also reads (x0^2)^(1/2) as x0
+        assert readings['permissive'] == dict(readings['real'], **{'pow pow x0 2 0.5': 6000})
+        for m in ('f64', 'real', 'permissive'):
+            assert eng._measure_fingerprint(m)['mode'] == m
 
-        Both digests are pinned verbatim, so any other measure change -- or a re-mine that
-        leaves this allowance in place -- fails here instead of sliding through as a
-        tolerated warning. After the re-mine under the float cap this becomes the empty-list
-        state again (`test_acj_load_is_fingerprint_clean`)."""
+    def test_acj_load_compares_what_was_recorded(self):
+        """On the real asset: every probe its sidecar records still prices as recorded, so
+        loading it is silent; the probes added after it was mined are unrecorded, which
+        is not a mismatch. Both halves are pinned, so a measure change that moves a
+        recorded probe, or a re-mine that records the rest, fails here."""
+        import json
         import warnings as _w
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter('always')
             engine = SimpliPyEngine.from_config(acj_config_path())
-        mismatch = [str(x.message) for x in caught
-                    if 'measure fingerprint mismatch' in str(x.message)]
-        assert len(mismatch) == 1, mismatch
-        assert ACJ_SHIPPED_DIGEST in mismatch[0] and CURRENT_DIGEST in mismatch[0], mismatch
-        assert engine._measure_fingerprint()['digest'] == CURRENT_DIGEST
+        assert [str(x.message) for x in caught if 'measure fingerprint' in str(x.message)] == []
+        with open(acj_config_path().replace('config.yaml', 'rules.json.provenance.json')) as f:
+            recorded = json.load(f)['measure']
+        assert 'mode' not in recorded  # the earlier layout: f64, keyed by first token
+        moved, unrecorded = engine._measure_drift(recorded)
+        assert moved == {}
+        assert unrecorded == ACJ_UNRECORDED_PROBES
         out = engine.simplify(engine.to_prefix(['+', 'x0', 'x0']))
         assert list(out) == ['*', '2', 'x0']
 

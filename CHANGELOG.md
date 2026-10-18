@@ -201,8 +201,11 @@
   long exact coefficients, so they print 25% longer (all answers 7%). In `permissive`, whose
   literal fold keeps such numbers short, the changed answers print shorter: 34% of srbf's
   predictions change and print 7% shorter, and 2.6% of the T8.1 training draws, 4% shorter. The
-  measure fingerprint gains a probe and moves, so loading a ruleset mined under the previous
-  measure (the published ones included) warns until it is re-mined.
+  measure fingerprint gains a probe for the cap, and compound probes priced in each mode's own
+  reading. Every rule file gets its own provenance sidecar, and loading compares each sidecar
+  present probe by probe: it warns, naming the probes, when a recorded probe now prices
+  differently, and a probe the sidecar does not record is not a mismatch. The published
+  rulesets record no probe that moved, so they load without a warning.
 - **Exact numbers beyond 128 bits.** A literal is an exact rational whose numerator and
   denominator have at most 1,100 bits each (every float64's shortest spelling fits); before, a
   number left the exact form at 128 bits and became an opaque symbol. Literal arithmetic now folds

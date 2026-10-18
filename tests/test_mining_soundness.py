@@ -626,6 +626,11 @@ class TestProvenance:
         assert side["requires_simplipy"] == requires_simplipy_specifier(side["simplipy_version"])
         check_config({"engine_generation": 2, "operators": _OPERATORS,
                       "requires_simplipy": side["requires_simplipy"]}, source=str(cfg))
+        # One sidecar per rule file, each with the measure in its own mode's reading.
+        for mode, path in (("f64", out), ("real", out.replace(".json", "_real.json")),
+                           ("permissive", out.replace(".json", "_permissive.json"))):
+            measure = json.load(open(path + ".provenance.json"))["measure"]
+            assert measure == eng._measure_fingerprint(mode), mode
 
     def test_an_interrupted_mine_is_not_final(self, tmp_path, monkeypatch) -> None:
         """A SIGINT stops the climb after the running length. What is written then is a
@@ -1515,38 +1520,91 @@ class TestMineSingleFlight:
         engine_mod._MINE_LOCK.release()
 
 
-class TestD25MeasureFingerprintAtLoad:
-    """D25 (R6's warn-on-mismatch half): the sidecar records the measure fingerprint
-    but nothing ever READ it back -- recording-without-reading is the inert-control
-    pattern (R2.2 confirmed write-only at HEAD). A ruleset mined under one measure
-    served silently under another is exactly what the fingerprint exists to catch;
-    the load path now compares digests and warns loudly on mismatch."""
+class TestMeasureFingerprintAtLoad:
+    """Each rule file's sidecar records what the measure charged on the fingerprint probes
+    when it was mined. The loader reads every sidecar present and warns, naming the
+    probes, when a recorded probe now prices differently; a probe the record does not
+    hold is unrecorded, not moved."""
 
-    def _asset(self, tmp_path, digest):
-        (tmp_path / "rules.json").write_text(json.dumps([]))
-        (tmp_path / "rules.json.provenance.json").write_text(json.dumps(
-            {"measure": {"digest": digest}}))
+    _FILES = {"f64": "rules.json", "real": "rules_real.json", "permissive": "rules_permissive.json"}
+
+    def _asset(self, tmp_path, measures):
+        """A triple of empty rule files; `measures` maps a mode to its sidecar's record."""
+        for mode, name in self._FILES.items():
+            (tmp_path / name).write_text(json.dumps([]))
+            if mode in measures:
+                (tmp_path / (name + ".provenance.json")).write_text(
+                    json.dumps({"measure": measures[mode]}))
         cfg = tmp_path / "config.yaml"
-        cfg.write_text(yaml.safe_dump({"engine_generation": 2, "operators": _OPERATORS,
-                                       "rules": "rules.json"}))
+        cfg.write_text(yaml.safe_dump({
+            "engine_generation": 2, "operators": _OPERATORS, "rules": "rules.json",
+            "rules_real": "rules_real.json", "rules_permissive": "rules_permissive.json"}))
         return str(cfg)
 
-    def test_mismatch_warns(self, tmp_path) -> None:
-        with pytest.warns(UserWarning, match="measure fingerprint"):
-            SimpliPyEngine.from_config(self._asset(tmp_path, "0" * 16))
-
-    def test_match_stays_silent(self, tmp_path) -> None:
+    def _load(self, path):
         import warnings as _w
-        probe = SimpliPyEngine.from_config(self._asset(tmp_path, "0" * 16))
-        good = probe._measure_fingerprint()["digest"]
-        # Scoped to THIS test's subject, the fingerprint. The fixture's ruleset is
-        # deliberately empty (`rules.json` == []), which since the rules-less-state
-        # ruling legitimately warns on its own account; a blanket "no UserWarning"
-        # assertion here would be asserting something this test never meant.
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always", UserWarning)
-            SimpliPyEngine.from_config(self._asset(tmp_path, good))
-        assert not [w for w in caught if "measure fingerprint" in str(w.message)]
+            engine = SimpliPyEngine.from_config(path)
+        # Scoped to the fingerprint: the fixture's empty rule files warn on their own.
+        return engine, [str(w.message) for w in caught if "measure fingerprint" in str(w.message)]
+
+    def _own(self, tmp_path):
+        engine, _ = self._load(self._asset(tmp_path / "own", {}))
+        return {m: engine._measure_fingerprint(m) for m in self._FILES}
+
+    def test_own_records_stay_silent(self, tmp_path) -> None:
+        (tmp_path / "own").mkdir()
+        _, warned = self._load(self._asset(tmp_path, self._own(tmp_path)))
+        assert warned == []
+
+    @pytest.mark.parametrize("mode", ["f64", "real", "permissive"])
+    def test_a_moved_probe_warns_and_is_named(self, tmp_path, mode) -> None:
+        (tmp_path / "own").mkdir()
+        records = self._own(tmp_path)
+        records[mode]["probes"]["asin 1e-08"] += 1000
+        _, warned = self._load(self._asset(tmp_path, records))
+        assert len(warned) == 1, warned
+        recorded = records[mode]["probes"]["asin 1e-08"]
+        assert self._FILES[mode] in warned[0] and f"mode '{mode}'" in warned[0]
+        assert f"'asin 1e-08': {recorded} -> {recorded - 1000}" in warned[0]
+        assert "D25" not in warned[0] and "R6" not in warned[0]
+
+    def test_each_record_is_compared_in_its_own_mode(self, tmp_path) -> None:
+        # f64's record put beside the permissive file still names f64, so it is compared
+        # in f64's reading and stays silent: like is compared with like.
+        (tmp_path / "own").mkdir()
+        records = self._own(tmp_path)
+        assert records["f64"]["probes"]["asin 1e-08"] != records["permissive"]["probes"]["asin 1e-08"]
+        _, warned = self._load(self._asset(tmp_path, {"permissive": records["f64"]}))
+        assert warned == []
+        # without its mode the permissive record would read as the earlier f64 layout
+        # and its readings would differ
+        legacy = {k: v for k, v in records["permissive"].items() if k != "mode"}
+        _, warned = self._load(self._asset(tmp_path, {"permissive": legacy}))
+        assert len(warned) == 1 and "'asin 1e-08'" in warned[0], warned
+
+    def test_an_unrecorded_probe_is_not_a_mismatch(self, tmp_path) -> None:
+        (tmp_path / "own").mkdir()
+        records = self._own(tmp_path)
+        del records["real"]["probes"]["asin 1e-08"]
+        engine, warned = self._load(self._asset(tmp_path, records))
+        assert warned == []
+        assert engine._measure_drift(records["real"]) == ({}, ["asin 1e-08"])
+
+    def test_an_earlier_layout_is_compared_by_its_first_token_keys(self, tmp_path) -> None:
+        # The sidecars published before per-mode fingerprints: no mode, f64's reading,
+        # each probe keyed by its first token.
+        (tmp_path / "own").mkdir()
+        f64 = self._own(tmp_path)["f64"]["probes"]
+        legacy = {"x0": f64["x0"], "+": f64["+ x0 x1"], "asin": f64["asin x0"], "1/2": f64["1/2"]}
+        engine, warned = self._load(self._asset(tmp_path, {"f64": {"probes": legacy}}))
+        assert warned == []
+        moved, unrecorded = engine._measure_drift({"probes": legacy})
+        assert moved == {} and "asin x0" not in unrecorded and "* x0 x1" in unrecorded
+        legacy["asin"] += 1
+        _, warned = self._load(self._asset(tmp_path, {"f64": {"probes": legacy}}))
+        assert len(warned) == 1 and "'asin x0'" in warned[0], warned
 
 
 class TestMissed003SingleFlightPreservesRules:

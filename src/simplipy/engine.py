@@ -328,6 +328,27 @@ class Mode(Enum, metaclass=_ModeMeta):
 #: ``rules_f64.json`` file; ``rules.json`` in pre-rename artifacts).
 _RULE_MODE: dict[Mode, str] = {Mode.f64: 'default', Mode.real: 'real', Mode.permissive: 'permissive'}
 
+
+def _coerce_mode(mode: 'Mode | str') -> Mode:
+    """A :class:`Mode` member, or its name in any case; anything else raises.
+
+    A string must coerce rather than compare unequal to the enum, and a bare int must
+    not bind: only members and their names select a mode.
+    """
+    if isinstance(mode, Mode):
+        return mode
+    if isinstance(mode, str):
+        match = {m.name.lower(): m for m in Mode}.get(mode.strip().lower())
+        if match is None:
+            raise ValueError(
+                f"unknown mode {mode!r}: expected one of "
+                f"{[m.name for m in Mode]} (or a simplipy.Mode)")
+        return match
+    raise TypeError(
+        f"mode must be a simplipy.Mode or one of "
+        f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
+
+
 #: The wrapper attribute carrying each NON-DEFAULT rule mode's own set -- the two sets
 #: the lazy machinery (``modes=...`` at construction, :meth:`SimpliPyEngine.unload_mode`)
 #: can defer and drop. The default (f64) set is deliberately absent from this map: it is
@@ -863,17 +884,7 @@ class SimpliPyEngine:
             The mode to unload, as a :class:`Mode` member or its name
             (``'real'``, ``'permissive'``). ``Mode.f64`` raises ``ValueError``.
         """
-        if isinstance(mode, str):
-            match = {m.name.lower(): m for m in Mode}.get(mode.strip().lower())
-            if match is None:
-                raise ValueError(
-                    f"unknown mode {mode!r}: expected one of "
-                    f"{[m.name for m in Mode]} (or a simplipy.Mode)")
-            mode = match
-        elif not isinstance(mode, Mode):
-            raise TypeError(
-                f"mode must be a simplipy.Mode or one of "
-                f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
+        mode = _coerce_mode(mode)
         if mode is Mode.f64:
             raise ValueError(
                 "the default (f64) rule set cannot be unloaded: it is the core's "
@@ -1284,29 +1295,14 @@ class SimpliPyEngine:
                 f"canonical form, but no simplification rule can ever fire.",
                 UserWarning)
         # (The compiled core self-attaches in __init__ from the SAME in-memory state.)
-        # D25 (R6's warn-on-mismatch half): the provenance sidecar records the measure
-        # fingerprint the ruleset was MINED under, and until this check nothing ever
-        # read it back -- recording-without-reading is the inert-control pattern. A
-        # ruleset served under a different measure than it was mined with is exactly
-        # what the fingerprint exists to catch; warn loudly, do not refuse (the rules
-        # stay sound -- their MINIMALITY claims are what the measure change voids).
-        if rules_path is not None:
-            sidecar_path = rules_path + '.provenance.json'
-            if os.path.exists(sidecar_path):
-                try:
-                    with open(sidecar_path, 'r') as f:
-                        recorded = json.load(f).get('measure', {}).get('digest')
-                except (OSError, ValueError):
-                    recorded = None
-                if recorded is not None:
-                    current = engine._measure_fingerprint()['digest']
-                    if recorded != current:
-                        warnings.warn(
-                            f"measure fingerprint mismatch: the ruleset at '{rules_path}' was "
-                            f"mined under measure digest {recorded} but this engine computes "
-                            f"{current}. The rules stay sound, but their minimality/ordering "
-                            f"claims were certified under a different measure (D25/R6).",
-                            UserWarning)
+        # THE MEASURE CHECK. Each rule file's provenance sidecar records what the measure
+        # charged on the fingerprint probes when the file was mined. A ruleset served
+        # under a different measure stays sound, but its minimality and ordering were
+        # decided under the other one, so a probe that moved warns (it never refuses).
+        # Every sidecar present is read, one per rule file, each compared probe by probe.
+        for checked_path in [rules_path, *mode_sources.values()]:
+            if checked_path is not None:
+                engine._warn_on_measure_drift(checked_path)
         return engine
 
     @classmethod
@@ -2119,28 +2115,7 @@ class SimpliPyEngine:
                 raise ValueError(f"work must be non-negative, got {work}")
             if work > 2 ** 64 - 1:
                 work = None  # beyond the counter's range no budget binds
-        # A STRING mode must coerce, never silently compare unequal to the enum:
-        # `mode='lossy'` used to run the default because `'lossy' == Mode.LOSSY` was False
-        # (audit Tier-2, 2026-08-03). Accept the enum, its names (any case), and its
-        # integer values; everything else raises.
-        if isinstance(mode, str):
-            key = mode.strip().lower()
-            # Match on the member NAME case-insensitively: the documented spellings are
-            # lower-case (`'f64'`), and the old code upper-cased before lookup, so a
-            # bare `.upper()` would now miss every one of them.
-            match = {m.name.lower(): m for m in Mode}.get(key)
-            if match is None:
-                raise ValueError(
-                    f"unknown mode {mode!r}: expected one of "
-                    f"{[m.name for m in Mode]} (or a simplipy.Mode)") from None
-            mode = match
-        elif not isinstance(mode, Mode):
-            # api-1/fmux-mode-1: a bare int (or numpy float) used to COERCE -- mode=3
-            # from a JSON config silently selected LOSSY, the rung that trades
-            # soundness for recall. Only Mode members and the documented names bind.
-            raise TypeError(
-                f"mode must be a simplipy.Mode or one of "
-                f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
+        mode = _coerce_mode(mode)
 
         if work == 'default':
             work = DEFAULT_WORK if mode is Mode.permissive else None
@@ -2249,8 +2224,7 @@ class SimpliPyEngine:
             tokens = expression.tolist()
         else:
             tokens = list(expression)
-        rule_mode = _RULE_MODE[mode if isinstance(mode, Mode)
-                               else {m.name.lower(): m for m in Mode}[str(mode).strip().lower()]]
+        rule_mode = _RULE_MODE[_coerce_mode(mode)]
         # LAZY MODES (task #88): same first-use hook as `simplify` -- the mode
         # argument reaches the core below, so a deferred set must be built first --
         # and the same reader half of the install fairness gate.
@@ -2319,12 +2293,8 @@ class SimpliPyEngine:
         # it reads as, so a decimal carrying more than float precision costs that decimal. Every
         # probe above is its own float's shortest decimal (or cheaper), so none of them moved.
         ('0.0766541268471677307861497420516056347394916180597539647375669841',),
-        # the SYMBOL TABLE, one probe per entry (2026-08-21). Before these, six of the
-        # nine entries were invisible to the fingerprint: changing `Pow` from 4 bits to
-        # 3 left the digest at `355f6ba90801f603`, so an artifact mined under one table
-        # was indistinguishable from one mined under another -- which is the exact
-        # failure this fingerprint exists to prevent. Keyed on the first token, so each
-        # probe needs a distinct head.
+        # the SYMBOL TABLE, one probe per entry. Without these, six of the nine entries
+        # were invisible to the fingerprint: changing `Pow` from 4 bits to 3 moved no probe.
         ('x0',),                    # leaf
         ('+', 'x0', 'x1'),          # Add
         ('*', 'x0', 'x1'),          # Mul
@@ -2333,10 +2303,23 @@ class SimpliPyEngine:
         ('sin', 'x0'),              # an elementary head
         ('asin', 'x0'),             # a transcendental head
         ('float("inf")',),          # the infinities
+        # THE READINGS: compound probes whose price depends on how a mode reads them, so
+        # a change to a mode's canonical forms moves its fingerprint. Each mode prices
+        # every probe in its own reading; the comments give where the readings differ.
+        ('pow', 'pow', 'x0', '2', '0.5'),        # (x0^2)^(1/2): x0 only in permissive
+        ('asin', '1e-08'),                       # its float is 1e-08 in f64 only
+        ('*', 'inv', 'exp', '5132.3', 'x0'),     # 1/exp(5132.3) is 0 in f64 only
+        ('/', 'x0', '*', 'x0', 'x1'),            # a shared factor cancels in every mode
     )
 
-    def _measure_fingerprint(self) -> dict:
-        """A fingerprint of the REDUCTION MEASURE, for the provenance sidecar.
+    #: The sidecars published before per-mode fingerprints key each probe by its FIRST
+    #: token and price it in f64's reading. These are the compound probes of that
+    #: battery; every other legacy key is the probe's whole spelling.
+    _LEGACY_PROBE_KEYS: dict[str, str] = {
+        '+': '+ x0 x1', '*': '* x0 x1', 'pow': 'pow x0 2', 'sin': 'sin x0', 'asin': 'asin x0'}
+
+    def _measure_fingerprint(self, mode: 'Mode | str' = Mode.f64) -> dict:
+        """A fingerprint of the REDUCTION MEASURE in ``mode``, for the provenance sidecar.
 
         Without it an artifact mined under one measure is indistinguishable from one mined
         under another: the sidecar records the version, the build and the parameters, and
@@ -2349,16 +2332,26 @@ class SimpliPyEngine:
         actually charges on probes chosen to separate the changes it has undergone. Any
         change to `L`, to the fraction/decimal codes, to `mu_free`, or to ANY ENTRY OF THE
         SYMBOL TABLE moves at least one entry -- the last clause is why there is one probe
-        per table entry rather than the single bare symbol this used to carry.
+        per table entry rather than the single bare symbol this used to carry. The compound
+        probes are priced in ``mode``'s own reading, so a change to that mode's canonical
+        forms moves them too.
+
+        Probes are keyed by their whole token spelling. The price is the certified one
+        :meth:`complexity` returns, read from the core directly: the measure and the
+        readings belong to the constructor, not to a rule set, so fingerprinting a mode
+        never builds that mode's deferred rules.
         """
+        mode = _coerce_mode(mode)
         probes: dict[str, int | None] = {}
         for tokens in self._MEASURE_PROBES:
             try:
-                probes[tokens[0]] = int(self.complexity(list(tokens)))
-            except Exception:  # a config that cannot express a probe records it as absent
-                probes[tokens[0]] = None
+                probes[' '.join(tokens)] = int(
+                    self._core.ac_complexity_certified(list(tokens), _RULE_MODE[mode], 'mode'))
+            except ValueError:  # a config that cannot express a probe records it as absent
+                probes[' '.join(tokens)] = None
         return {
             'unit': 'milli-bits',
+            'mode': mode.name,
             # `mu_sym` is the historical key and stays, for sidecars already published;
             # what it holds is the LEAF entry, which is what a bare symbol costs.
             'mu_sym': probes.get('x0'),
@@ -2368,6 +2361,52 @@ class SimpliPyEngine:
             'digest': hashlib.sha256(
                 repr(sorted(probes.items())).encode()).hexdigest()[:16],
         }
+
+    def _measure_drift(self, recorded: dict) -> tuple[dict[str, tuple[int | None, int | None]], list[str]]:
+        """Compare a sidecar's ``measure`` record with what this engine charges now.
+
+        Returns ``(moved, unrecorded)``: ``moved`` maps each probe the record holds whose
+        price differs to ``(recorded, now)``, and ``unrecorded`` lists the probes the
+        record does not hold. A probe added to the battery after the record was written
+        is unrecorded, not moved. The record is compared in the mode it names; a record
+        without a mode is the earlier layout (f64's reading, probes keyed by their first
+        token), compared through :attr:`_LEGACY_PROBE_KEYS`.
+        """
+        held = recorded.get('probes') or {}
+        if 'mode' in recorded:
+            mode = _coerce_mode(recorded['mode'])
+        else:
+            mode = Mode.f64
+            held = {self._LEGACY_PROBE_KEYS.get(key, key): value for key, value in held.items()}
+        current = self._measure_fingerprint(mode)['probes']
+        moved = {key: (held[key], now) for key, now in current.items()
+                 if key in held and held[key] != now}
+        unrecorded = [key for key in current if key not in held]
+        return moved, unrecorded
+
+    def _warn_on_measure_drift(self, rules_path: str) -> None:
+        """Warn when the sidecar beside ``rules_path`` records a probe the measure now prices
+        differently. No sidecar, or one without a measure record, has nothing to compare."""
+        sidecar_path = rules_path + '.provenance.json'
+        if not os.path.exists(sidecar_path):
+            return
+        try:
+            with open(sidecar_path, 'r') as f:
+                recorded = json.load(f).get('measure')
+        except (OSError, ValueError):
+            return
+        if not isinstance(recorded, dict):
+            return
+        moved, _ = self._measure_drift(recorded)
+        if moved:
+            mode = recorded.get('mode', Mode.f64.name)
+            detail = '; '.join(f'{probe!r}: {old} -> {now}' for probe, (old, now) in moved.items())
+            warnings.warn(
+                f"measure fingerprint mismatch: the rules at '{rules_path}' were mined under "
+                f"a measure that priced {len(moved)} probe(s) differently in mode {mode!r} "
+                f"(recorded -> now, in milli-bits: {detail}). The rules stay sound, but their "
+                f"minimality and ordering were decided under the other measure.",
+                UserWarning)
 
     # The libm probe battery (R5, audit L9): expressions whose folded values are
     # decided by the SYSTEM libm the deployed folder calls -- the C symbols bound in
