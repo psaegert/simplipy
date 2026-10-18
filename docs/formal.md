@@ -209,14 +209,18 @@ carriers — and negative odd powers of them, as members of a class that trades 
 whole (the pole convention below). The
 sign-placement owner (`ac::expr::sign_place`, shared by `mul()`'s final assembly and
 `term_join`'s negative joins so the priced spelling is always the built spelling)
-materializes every reachable placement and keeps the $\mu$-argmin. Beyond six sign-trade sites
-it finds the argmin without materializing the orbit: a placement's price is the sum of per-site
-prices, coupled only by the parity of the flips, so the cheapest placement is each site's
-cheaper orientation, with the one site whose switch costs least switched where the parity
-differs; its exact ties resolve by an order that is a function of the orbit, never of the entry
-spelling. It skips a placement in which a flipped factor lands on the base another factor is
-collected under (an even root counts as a power of its radicand); beyond six sites such a
-possible collision, or a negation overflow, keeps the entry placement.
+keeps the $\mu$-argmin of every reachable placement, for any number of sites, without
+materializing the orbit (`sign_place_groups`): each class flips as a whole and prices as the sum
+of its members, a placement's price is the sum of its classes' prices, coupled only by the parity
+of the flips (the sign the carrier takes), so the cheapest placement of either sign is each
+class's cheaper orientation, with the one class whose switch costs least switched where the
+parity differs, and the cheaper of the two is built and priced exactly. A zero check (the pole
+convention below) restricts the orientations of the classes it counts, which are decided
+together where one check counts several. An orientation in which a flipped factor lands on the
+base another factor is collected under (an even root counts as a power of its radicand) is no
+candidate. Exact ties go to a non-negative coefficient and then follow an order that is a
+function of the orbit, never of the entry spelling. The debug build checks the price against
+the enumeration of every placement on orbits of up to six classes.
 
 **Convention (opposite classes, one table per product).** A sum $S$ and its negation are one
 base up to a sign, and so are $f(S)$ and $f(-S)$ for an odd function $f$ and

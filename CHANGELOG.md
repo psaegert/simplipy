@@ -86,7 +86,9 @@
 - **Answers read back as themselves, whatever the brackets.** Three canonical forms depended on
   the route that built them, so an answer could change on a second call: a product with more than
   six factors whose sign can move kept the orientation it arrived in (the cheapest orientation is
-  now found exactly for any number of them), two sums that are each other's negation stayed apart
+  now found exactly for any number of them, one closed form over whole classes with the values
+  kept at their zeros: `(x2 - x1)*sin(x1 - x2)*(x3 - x4)*...*(x13 - x14)` and its mirror are one
+  answer), two sums that are each other's negation stayed apart
   where they met in one product, and a term whose coefficient became 1 kept its factors' signs. A
   product is now built once from all of its factors, however brackets, `/`, `neg` or the tagged
   `<mul>`/`<div>` spell it, and each class of factors over a sum and its negation, or over an odd

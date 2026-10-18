@@ -402,3 +402,25 @@ def test_an_odd_function_of_a_literal_multiple_is_a_class(eng, mode, spellings, 
     assert len(answers) == 1, answers
     if expected is not None:
         assert answers == {expected}
+
+
+# ONE ALGORITHM FOR ANY NUMBER OF CLASSES: a class of several members, a class collected from a
+# literal multiple, and a value kept at a class's zero are decided alike beside six or more other
+# sums, so mirrored spellings get one answer.
+def _prod(*fs):
+    return ['*'] * (len(fs) - 1) + ' '.join(fs).split()
+
+
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+@pytest.mark.parametrize('pair', [
+    (_prod('- x2 x1', 'sin - x1 x2', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
+     _prod('- x1 x2', 'sin - x2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)])),
+    (_prod('neg sin * 2 x1', 'sin * -2 x1', *[f'- x{i} x{i + 1}' for i in range(3, 15, 2)]),
+     _prod('sin * 2 x1', 'sin * -2 x1', '- x4 x3', *[f'- x{i} x{i + 1}' for i in range(5, 15, 2)])),
+    (_prod('/ log - x1 3 - 3 x1', *[f'- x{i} x{i + 1}' for i in range(3, 17, 2)]),
+     _prod('neg / log - x1 3 - x1 3', *[f'- x{i} x{i + 1}' for i in range(3, 17, 2)])),
+])
+def test_wide_products_get_one_answer(eng, mode, pair):
+    a, b = (list(eng.simplify(list(t), mode=mode)) for t in pair)
+    assert a == b
+    assert list(eng.simplify(a, mode=mode)) == a
