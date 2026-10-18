@@ -19,7 +19,7 @@ from typing import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 from copy import deepcopy
-from enum import Enum, EnumMeta
+from enum import Enum
 
 import numpy as np
 import json
@@ -80,11 +80,6 @@ def _coverage_variants(
 # The core serialization language's arities (config-independent built-ins): the
 # canonical explicit projection emits these regardless of the config vocabulary,
 # so any walk over projection output needs them alongside `operator_arity`.
-# One mine per process, enforced (hardening H-002/H-008, 2026-08-03): the interval
-# soundness counters the provenance sidecar reads are PROCESS-GLOBAL, so a second
-# concurrent mine would cross-contaminate both sidecars' per-mine deltas -- and would
-# only contend for the cores the first mine already saturates. Serve traffic is safe
-# alongside a mine (measured: `simplify` never touches the counters).
 
 
 #: Arities of the CORE SERIALIZATION LANGUAGE, read from the engine's own table rather
@@ -98,11 +93,6 @@ def _coverage_variants(
 _CORE_SERIALIZATION_ARITIES = (
     {tok: spec['arity'] for tok, spec in _core_serialization_ops().items()}
     if _core_serialization_ops is not None else {})
-# Constlike LEAF spellings a `<constant>` promise-slot may bind: named constants and
-# the poles/nan, plus (checked separately) any numeric literal. NEVER a compound
-# variable-free subtree: collapsing `acos(cos(C))` to one Const leaf is a strict
-# serve-ordering descent (real rule content), while renaming a LEAF constant to
-# `<constant>` is a complexity tie (pure abstraction -- masking's job, downstream).
 
 
 # The bag delimiters and inverse-section markers of the TAGGED serialization --
@@ -110,10 +100,6 @@ _CORE_SERIALIZATION_ARITIES = (
 # entry points (`is_valid`, `prefix_to_infix`) do not read this form; they use this set
 # to NAME the dialect in their diagnostics instead of failing with a bare arity error (B1).
 _TAGGED_DIALECT_TOKENS = frozenset({'<add>', '</add>', '<mul>', '</mul>', '<sub>', '<div>'})
-
-#: The EXACT migration for each deprecated `simplify(form=...)` value: convert first,
-#: then simplify. Measured byte-identical to the parameter on every corpus row.
-_FORM_RECIPE = {'tagged': 'to_tagged', 'explicit': 'to_prefix', 'infix': 'to_infix'}
 
 #: (C1.18) Every key an operator spec must carry. `precedence` is deliberately NOT
 #: required: non-core operators render as function calls, which never consult it; a
@@ -260,28 +246,11 @@ DEFAULT_EFFORT: int | None = None
 DEFAULT_WORK: int | None = 10_000
 
 
-class _ModeMeta(EnumMeta):
-    """Serves the retired ``SOUND``/``LOSSY`` spellings with a deprecation notice.
-
-    They are resolved HERE rather than declared as enum aliases in the body, because a
-    body alias (``SOUND = 'f64'``) is indistinguishable from the member it aliases and
-    could never warn. ``__getattr__`` runs only when normal lookup fails, so live
-    members never take this path.
-    """
-
-
 #: Leaves that denote a VALUE rather than a free variable.
 _SPECIAL_LEAVES = {'np.pi', 'np.e', 'float("inf")', 'float("-inf")', 'float("nan")'}
 
 
-_MODE_RENAME_WHY = (
-    "`SOUND` claimed one notion of soundness where there are two incomparable ones: "
-    "`f64` is sound as the deployed f64 evaluator computes, `real` is sound as "
-    "mathematics defines, and neither implies the other"
-)
-
-
-class Mode(Enum, metaclass=_ModeMeta):
+class Mode(Enum):
     """Which soundness the simplification preserves. An AXIS, not an ordering.
 
     The old ``Mode`` was an ``IntEnum`` on the premise that soundness is ordinal --
@@ -309,11 +278,11 @@ class Mode(Enum, metaclass=_ModeMeta):
     Each mode names ONE DISTINCT, COMPLETE rule set -- ``rules_f64.json`` /
     ``rules_real.json`` / ``rules_permissive.json`` (artifacts published before the
     0.14.0 naming rulings call the f64 file ``rules.json`` and the permissive file
-    ``rules_permissive.json``; configs name their files, so they load unchanged) -- so
+    ``rules_corpus.json``; configs name their files, so they load unchanged) -- so
     selecting a mode selects a file, and what is loaded IS what is served with nothing
     unioned at serve time.
 
-    ``SOUND`` and ``LOSSY`` still resolve, with a ``DeprecationWarning``, to ``f64`` and
+    The names ``SOUND`` and ``LOSSY`` were removed in 0.14.0; use ``f64`` and
     ``permissive``.
     """
 
@@ -358,10 +327,6 @@ _MODE_RULES_ATTR: dict[str, str] = {
     'real': 'real_simplification_rules',
     'permissive': 'permissive_simplification_rules',
 }
-
-#: The retired STRING spellings, accepted by ``simplify(mode=...)`` with a notice. Kept
-#: beside ``_ModeMeta._DEPRECATED`` deliberately: the enum path and the string path are
-#: two doors onto the same rename and must not drift.
 
 
 class SimpliPyEngine:
@@ -1490,7 +1455,7 @@ class SimpliPyEngine:
                   f'tagged-serialization sequence (carries {sorted(tagged)}). Every '
                   f'section must open and close in order and every operator must get '
                   f"its operands; re-project a valid expression with "
-                  f"simplify(expr, form='explicit') or to_tagged(expr).")
+                  f"to_prefix(expr) or to_tagged(expr).")
             return
         if len(prefix_expression) > 1 and prefix_expression[0] not in self.operator_arity:
             print(f'Invalid expression {prefix_expression}: Variable must be leaf node')
@@ -1520,9 +1485,9 @@ class SimpliPyEngine:
         tokens : list[str]
             The prefix expression to render.
         power : {'func', '**'}, optional
-            Controls how power operators are emitted. ``'func'`` keeps canonical
-            engine names such as ``pow3(x)``, while ``'**'`` renders Python-style
-            exponentiation.
+            Controls how power operators are emitted. ``'func'`` keeps the engine's
+            function spelling, ``pow(x, 3)``, while ``'**'`` renders Python-style
+            exponentiation, ``x ** 3``.
         realization : bool, optional
             If True, operator tokens are replaced with their runtime
             realizations (for example, ``'sin'`` becomes ``'np.sin'``), so the
@@ -1537,19 +1502,16 @@ class SimpliPyEngine:
         ------
         ValueError
             If the provided tokens do not form a well-formed prefix expression --
-            including the TAGGED serialization (``simplify``'s default token output),
-            which this converter does not read: render the canonical state with
-            ``simplify(expr, form='infix')``, or request the binary-chain form with
-            ``simplify(expr, form='explicit')``.
+            including the TAGGED serialization, which this converter does not read:
+            convert it with :meth:`to_infix`, or to the binary prefix with
+            :meth:`to_prefix`.
         """
         tagged = _TAGGED_DIALECT_TOKENS.intersection(tokens)
         if tagged:
             raise ValueError(
                 f"prefix_to_infix reads the explicit binary-prefix dialect, but the input "
-                f"carries tagged-serialization tokens {sorted(tagged)} (simplify's default "
-                f"token output). Render the canonical state directly with "
-                f"simplify(expr, form='infix'), or request the binary-chain form with "
-                f"simplify(expr, form='explicit').")
+                f"carries tagged-serialization tokens {sorted(tagged)}. Convert it with "
+                f"to_infix(expr), or to the binary prefix with to_prefix(expr).")
         return self._core.prefix_to_infix(list(tokens), power, realization)
 
     def infix_to_prefix(self, infix_expression: str) -> list[str]:
@@ -1583,13 +1545,9 @@ class SimpliPyEngine:
     def convert_expression(self, prefix_expr: list[str]) -> list[str]:
         """Normalizes an expression into the engine's standard internal format.
 
-        This method performs several key conversions:
-        1.  Converts standard binary operators like `**` into the engine's
-            unary power operators (e.g., `pow2`, `pow1_3`).
-        2.  Combines chained power operators (e.g., `pow2(pow3(x))` becomes
-            `pow6(x)`).
-        3.  Handles unary negation, applying it directly to numbers where
-            possible.
+        It resolves operator aliases, spells ``**`` as the engine's ``pow``
+        (``** x0 2`` becomes ``pow x0 2``), and applies a unary negation of a numeric
+        literal to the literal (``neg 3`` becomes ``-3``).
 
         Parameters
         ----------
@@ -1651,8 +1609,7 @@ class SimpliPyEngine:
         product inside such an argument (``sin 2x0``: ``sin(2*x0)`` or ``sin(2)*x0``?).
 
         Mechanically it is :meth:`infix_to_prefix` plus optional
-        ``convert_expression`` normalization, with a ``remove_pow1`` cleanup that
-        drops redundant ``pow1_1`` occurrences.
+        :meth:`convert_expression` normalization.
 
         Parameters
         ----------
@@ -1660,7 +1617,7 @@ class SimpliPyEngine:
             The mathematical expression in infix notation.
         convert_expression : bool, optional
             If True, the expression is normalized using `convert_expression`
-            (``**`` becomes the engine's power operators). Defaults to True.
+            (``**`` becomes the engine's ``pow``). Defaults to True.
         mask_numbers : bool, optional
             If True, all numerical literals in the expression are replaced
             with a generic '<constant>' token. Defaults to False.
@@ -1668,11 +1625,26 @@ class SimpliPyEngine:
         Returns
         -------
         list[str]
-            The processed prefix expression after conversion, masking (if
-            enabled), and `remove_pow1` cleanup.
+            The processed prefix expression after conversion and masking (if
+            enabled).
         """
 
         return self._core.parse(infix_expression, convert_expression, mask_numbers)
+
+    def _read_infix_strict(self, text: str) -> list[str]:
+        """Read infix text for an entry point that knows only declared operators.
+
+        A call of a name this engine declares no operator for (``sqrt(x1)``) is refused,
+        naming it; :meth:`read_infix` is the tolerant reader that keeps such a call as a
+        symbol followed by its argument.
+        """
+        unknown = self._core.undeclared_calls(text)
+        if unknown:
+            names = ', '.join(repr(name) for name in unknown)
+            raise ValueError(
+                f"unknown function{'s' if len(unknown) > 1 else ''} {names} in {text!r}: "
+                f"this engine declares no operator by that name")
+        return self._core.parse(text, True, False)
 
     def _conversion_input(
             self, expression: str | list[str] | tuple[str, ...] | np.ndarray
@@ -1686,7 +1658,7 @@ class SimpliPyEngine:
         through the one arbiter, the syntactic parser in ``rust/forms.rs``.
         """
         if isinstance(expression, str):
-            return 'infix', self._core.parse(expression, True, False)
+            return 'infix', self._read_infix_strict(expression)
         if isinstance(expression, np.ndarray):
             if expression.ndim != 1:
                 raise ValueError('conversion expects a one-dimensional numpy array of tokens')
@@ -1739,15 +1711,15 @@ class SimpliPyEngine:
         non-finite guard into flash-ansr; refusing is the safe direction and the caller
         can still evaluate the expression themselves.
 
-        NEVER called by :meth:`simplify`, in any mode. Returns the input's own dialect
-        unless ``form`` says otherwise, exactly as :meth:`simplify` does.
+        NEVER called by :meth:`simplify`, in any mode. Returns the input's dialect (infix
+        text for a ``str``, otherwise the tagged or binary-prefix tokens it was given)
+        unless ``form`` names another: ``'tagged'``, ``'explicit'`` or ``'infix'``.
         """
         in_form, tokens = self._conversion_input(expression)
         if not tokens:
             return '' if in_form == 'infix' else []
-        prefix = (self._core.to_prefix_syntactic(tokens) if in_form == 'tagged'
-                  else self._core.parse(expression, True, False) if in_form == 'infix'
-                  else tokens)
+        # an infix `str` was already read (strictly) by `_conversion_input`
+        prefix = self._core.to_prefix_syntactic(tokens) if in_form == 'tagged' else tokens
         self._core.check_form(prefix)
 
         arity = self.operator_arity
@@ -1935,7 +1907,7 @@ class SimpliPyEngine:
                 f'callable, not {type(policy).__name__}')
         if isinstance(expression, str):
             return self.to_infix(
-                _masking.mask(self._core.parse(expression, True, False), self, policy_fn,
+                _masking.mask(self._read_infix_strict(expression), self, policy_fn,
                               collect=collect))
         if isinstance(expression, list):
             return _masking.mask(expression, self, policy_fn, collect=collect)
@@ -1954,9 +1926,8 @@ class SimpliPyEngine:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
         The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
-        coefficients composed explicitly (``* 7 x``, ``pow x 3``) instead of the hyper-operator
-        vocabulary (``mult2..5``, ``div2..5``, ``pow2..5``, ``pow1_2/1_4``; the real odd roots
-        ``pow1_3``/``pow1_5`` remain genuine operators). Rules are widened to SUB-MULTISET
+        coefficients composed explicitly (``* 7 x``, ``pow x 3``, ``rootn x 3``) instead of the
+        retired hyper-operator vocabulary. Rules are widened to SUB-MULTISET
         matching with the unmatched remainder preserved, so a rule fires wherever the algebra
         permits, regardless of operand order or bracketing -- both axes of the binary engine's
         commutative-order invariance defect are removed at the representation level, and the
@@ -1994,48 +1965,6 @@ class SimpliPyEngine:
             finitely many passes) rather than a tuning knob. ``max_passes=0`` is treated as
             1: at least one pass always runs.
 
-            * ``'tagged'`` -- the STRICT prefix form, the AC engine's native serialization
-              (default for token inputs): n-ary bags are delimited (``<add> ... </add>``,
-              ``<mul> ... </mul>``) and carry their group inverse as a SECTION -- terms
-              after ``<sub>`` subtract, factors after ``<div>`` divide, so
-              ``(2*x1)/(x2*x3)`` is ``<mul> 2 x1 <div> x2 x3 </mul>``. ``pow`` and the
-              unary functions stay plain prefix; ``neg``/``inv`` exist only as the
-              standalone unary spellings (``tan neg x0``, ``inv x0``) -- inside bags the
-              sections own all inverses. Integers are one token (``7``), every fraction is a
-              bag (``<mul> 1 <div> 3 </mul>``), and so is a small decimal (``0.2`` is
-              ``<mul> 1 <div> 5 </mul>``); other decimals are one token. So a tagged answer
-              that holds a fraction always carries a bag and reads back as tagged. Tagged
-              output is accepted back as input (one shared, liberal parser).
-            * ``'infix'`` -- the PRETTY human-readable rendering (default for ``str``
-              inputs; always returns ``str``): ``x8 + 1.2*x3``, ``-x0/3``, ``(x0 + 1)^2``.
-              Round-trips: feeding the rendering back as a ``str`` input reaches the same
-              canonical state. The bare names ``pi``, ``e``, ``inf`` and ``nan`` are
-              RESERVED constant spellings of the infix language (the renderer emits them
-              for the canonical constants, so the parser reads them back as constants,
-              never as variables).
-            * ``'explicit'`` -- the binary-chain form (``* 6 x``, ``- a b``, literal
-              coefficients only -- the hyper-operator vocabulary is deleted). This is
-              the project's INTERNAL dialect, not a recommended consumer format:
-              rule artifacts are stored in it, the miner's enumeration universe and
-              the certificate tapes are defined on it, and it stays available here
-              for debugging and compatibility. ``'tagged'`` and ``'infix'`` are the
-              public output forms. Sign placement follows the same doctrine as the
-              tagged form: a sign lives in the numeric coefficient literal whenever
-              one is emitted (``* -2 x``), additive term signs are structural
-              (binary ``-``), and ``neg`` spells only the pure sign (``neg x0``,
-              ``neg * np.pi x0``).
-
-            Only the infix answer is SPELLED FOR A READER: outside exponents, a value with
-            no finite decimal whose numerator has a factor 2 or 5 is written as an integer
-            over a decimal where that is shorter (``1/6.283185307179586``, not
-            ``500000000000000/3141592653589793``); ``1/3`` stays ``1/3``. It re-reads to
-            the same state, and :meth:`complexity` does not change. The token answers keep
-            the engine's own
-            spelling, because tokens are what gets read back -- by the engine's
-            certificates, served rules and miner, and by callers that mask or key on them
-            -- and a spelling chosen for a reader must not move any of those. To read a
-            token answer, convert it: ``simplify(to_infix(tokens))``.
-
         effort : int or None, optional
             The SEARCH BUDGET: after the chain reaches its fixpoint, an
             exploration phase proposes expansion moves the strict descent refuses
@@ -2066,7 +1995,49 @@ class SimpliPyEngine:
         Returns
         -------
         str | list[str] | tuple[str, ...] | np.ndarray
-            The simplified expression, in the same format as the input.
+            The simplified expression, in the same container and dialect as the input: a
+            ``str`` answers in infix, a token sequence carrying a bag delimiter in the tagged
+            form, and any other token sequence in the explicit binary prefix.
+
+            * tagged -- the STRICT prefix form, the AC engine's native serialization: n-ary bags are delimited (``<add> ... </add>``,
+              ``<mul> ... </mul>``) and carry their group inverse as a SECTION -- terms
+              after ``<sub>`` subtract, factors after ``<div>`` divide, so
+              ``(2*x1)/(x2*x3)`` is ``<mul> 2 x1 <div> x2 x3 </mul>``. ``pow`` and the
+              unary functions stay plain prefix; ``neg``/``inv`` exist only as the
+              standalone unary spellings (``tan neg x0``, ``inv x0``) -- inside bags the
+              sections own all inverses. Integers are one token (``7``), every fraction is a
+              bag (``<mul> 1 <div> 3 </mul>``), and so is a small decimal (``0.2`` is
+              ``<mul> 1 <div> 5 </mul>``); other decimals are one token. So a tagged answer
+              that holds a fraction always carries a bag and reads back as tagged. Tagged
+              output is accepted back as input (one shared, liberal parser).
+            * infix -- the PRETTY human-readable rendering, a ``str``: ``x8 + 1.2*x3``, ``-x0/3``, ``(x0 + 1)^2``.
+              Round-trips: feeding the rendering back as a ``str`` input reaches the same
+              canonical state. The bare names ``pi``, ``e``, ``inf`` and ``nan`` are
+              RESERVED constant spellings of the infix language (the renderer emits them
+              for the canonical constants, so the parser reads them back as constants,
+              never as variables).
+            * explicit -- the binary-chain form (``* 6 x``, ``- a b``, literal
+              coefficients only -- the hyper-operator vocabulary is deleted). This is
+              the project's INTERNAL dialect, not a recommended consumer format:
+              rule artifacts are stored in it, the miner's enumeration universe and
+              the certificate tapes are defined on it, and it stays available here
+              for debugging and compatibility. Tagged and infix are the public output
+              forms. Sign placement follows the same doctrine as the
+              tagged form: a sign lives in the numeric coefficient literal whenever
+              one is emitted (``* -2 x``), additive term signs are structural
+              (binary ``-``), and ``neg`` spells only the pure sign (``neg x0``,
+              ``neg * np.pi x0``).
+
+            Only the infix answer is SPELLED FOR A READER: outside exponents, a value with
+            no finite decimal whose numerator has a factor 2 or 5 is written as an integer
+            over a decimal where that is shorter (``1/6.283185307179586``, not
+            ``500000000000000/3141592653589793``); ``1/3`` stays ``1/3``. It re-reads to
+            the same state, and :meth:`complexity` does not change. The token answers keep
+            the engine's own
+            spelling, because tokens are what gets read back -- by the engine's
+            certificates, served rules and miner, and by callers that mask or key on them
+            -- and a spelling chosen for a reader must not move any of those. To read a
+            token answer, convert it: ``simplify(to_infix(tokens))``.
 
         Raises
         ------
@@ -2131,7 +2102,7 @@ class SimpliPyEngine:
         self._await_no_pending_push()
 
         if isinstance(expression, str):
-            tokens = self._core.parse(expression, True, False)
+            tokens = self._read_infix_strict(expression)
         elif isinstance(expression, np.ndarray):
             _validate_ndarray_input(expression)
             tokens = expression.tolist()
@@ -2174,11 +2145,6 @@ class SimpliPyEngine:
             return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort, work)
 
         out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort, work)
-
-        if isinstance(expression, str):
-            # The old infix converter cannot render the tagged form; a str input asking for
-            # a token form gets the token list.
-            return out
         return self._denormalize(out, expression)
 
     def complexity(
@@ -2215,7 +2181,7 @@ class SimpliPyEngine:
         description length on the exact value, symbols pay one symbol unit.
         """
         if isinstance(expression, str):
-            tokens = self._core.parse(expression, True, False)
+            tokens = self._read_infix_strict(expression)
         elif isinstance(expression, np.ndarray):
             tokens = expression.tolist()
         else:
@@ -2233,11 +2199,10 @@ class SimpliPyEngine:
     def _denormalize(
             self,
             out: list[str],
-            expression: str | list[str] | tuple[str, ...] | np.ndarray,
-    ) -> str | list[str] | tuple[str, ...] | np.ndarray:
-        """Map a core prefix-token result back to the input's type (``simplify``'s tail)."""
-        if isinstance(expression, str):
-            return self._core.prefix_to_infix(out, '**', False)
+            expression: list[str] | tuple[str, ...] | np.ndarray,
+    ) -> list[str] | tuple[str, ...] | np.ndarray:
+        """Map a core token result back to a token input's container (``simplify``'s tail;
+        a ``str`` input answers in infix before reaching it)."""
         if isinstance(expression, np.ndarray):
             # Re-infer the string WIDTH from the result, keeping only the input dtype KIND: a fold
             # can emit a token wider than any input token (e.g. `1/0 -> float("inf")`), and a fixed

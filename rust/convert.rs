@@ -665,6 +665,23 @@ fn is_ident_start(token: &str) -> bool {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
 }
 
+/// The names this infix text calls -- a name directly before `(` -- that the engine declares
+/// no operator for, in order of first appearance: `sqrt(x1^2) + foo(x2)` calls `sqrt` and
+/// `foo`. The tolerant reader (`parse`) keeps such a call as a bare symbol followed by its
+/// argument, which reads back as no expression; the strict entry points refuse it by name.
+pub fn undeclared_calls(infix_expression: &str, ops: &Operators) -> Vec<String> {
+    let tokens = tokenize_infix(infix_expression);
+    let mut out: Vec<String> = Vec::new();
+    for pair in tokens.windows(2) {
+        let (name, next) = (&pair[0].text, &pair[1].text);
+        let declared = ops.operator_aliases.contains_key(name) || ops.arity_of(name).is_some();
+        if next == "(" && is_ident_start(name) && !declared && !out.contains(name) {
+            out.push(name.clone());
+        }
+    }
+    out
+}
+
 /// A function without parentheses (`sin x0`) waiting on the stack is marked with this prefix.
 const APP_MARK: char = '\u{1}';
 /// It binds looser than powers (`sin x0^2` is `sin(x0^2)`) and tighter than unary minus,

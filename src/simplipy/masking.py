@@ -102,10 +102,7 @@ from simplipy.utils import is_numeric_string, reserved_numeric_spelling
 if TYPE_CHECKING:
     from simplipy.engine import SimpliPyEngine
 
-# The DECLARED surface. `mask_values_keep_structure` is deliberately absent: it is a
-# deprecated spelling of `mask_fittable`, still reachable (with a warning) through the
-# module, but no longer advertised or bound by `import *`. The typing
-# helpers this module imports were never part of the surface either.
+# The DECLARED surface. The typing helpers this module imports are not part of it.
 __all__ = ["Role", "literal_sites", "mask", "mask_all", "mask_fittable"]
 
 

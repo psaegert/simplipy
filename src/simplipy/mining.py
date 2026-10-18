@@ -394,17 +394,14 @@ def _assert_triple_invariants(triple: dict, rejected: list, mined: list,
     #
     # What every set here must still satisfy: a rule may only appear where its tier
     # licenses it, MINUS what that mode's constructor already performs.
-    # UNCONDITIONAL. This was gated on `preempted is not None`, which is only supplied by
-    # the production path, so every direct call skipped the one invariant that replaced
-    # the two retired ones. The check needs `allowed`, which is always passed.
-    if True:
-        for m, ks in (('f64', f64), ('real', real)):
-            licensed = {(tuple(lhs), tuple(rhs)) for i, (lhs, rhs) in enumerate(mined)
-                        if m in allowed.get(i, frozenset())}
-            if not ks <= licensed:
-                raise AssertionError(
-                    f'triple invariant broken: {len(ks - licensed)} rules in rules_{m} '
-                    f'are not licensed for that mode')
+    # UNCONDITIONAL: every call checks it, the production path and direct calls alike.
+    for m, ks in (('f64', f64), ('real', real)):
+        licensed = {(tuple(lhs), tuple(rhs)) for i, (lhs, rhs) in enumerate(mined)
+                    if m in allowed.get(i, frozenset())}
+        if not ks <= licensed:
+            raise AssertionError(
+                f'triple invariant broken: {len(ks - licensed)} rules in rules_{m} '
+                f'are not licensed for that mode')
     if permissive & rej:
         raise AssertionError(
             f'triple invariant 3 broken: {len(permissive & rej)} rules are BOTH served and '

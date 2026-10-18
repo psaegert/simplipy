@@ -333,6 +333,11 @@ impl Engine {
         crate::convert::parse(infix_expression, &self.operators, convert, mask_numbers)
     }
 
+    /// `undeclared_calls`: the names the infix text calls that no operator declares.
+    pub fn undeclared_calls(&self, infix_expression: &str) -> Vec<String> {
+        crate::convert::undeclared_calls(infix_expression, &self.operators)
+    }
+
     /// `operators_to_realizations`: map each operator NAME to its
     /// realization (`sin` -> `simplipy.operators.sin`, `+` -> `+`); non-operator tokens are kept.
     pub fn operators_to_realizations(&self, expression: &[String]) -> Vec<String> {

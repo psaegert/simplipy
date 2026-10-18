@@ -1954,26 +1954,21 @@ struct Cand {
 const LITERAL_FOLD_ROUNDS: usize = 4;
 
 /// THE ENGINE'S RULE MODE -- three inhabitants, one distinct COMPLETE rule set each
-/// (`rules.json`, `rules_real.json`, `rules_permissive.json`). This is the internal
-/// selection key; the Python-facing `simplipy.Mode` is still `SOUND`/`LOSSY` and maps
-/// onto it at exactly ONE place per boundary (`rust/lib.rs`'s
-/// `RuleMode::from_wildcard_all`, and `SimpliPyEngine.simplify`), so the coming
-/// `Mode` -> `f64`/`real`/`permissive` change is a RENAME of that map, not a rebuild of the
-/// plumbing underneath it.
+/// (`rules_f64.json`, `rules_real.json`, `rules_permissive.json`). This is the internal
+/// selection key; the Python-facing `simplipy.Mode` maps onto it at exactly ONE place
+/// (`_RULE_MODE` in `engine.py`, read back by `parse_rule_mode` in `rust/lib.rs`).
 ///
 /// ```text
-///     Default  today's `Mode.SOUND`   -- rules.json, the shipped f64 set
-///     Real     not yet reachable from `simplipy.Mode` (deliberately: renaming `Mode` is
-///              a separate step) -- rules_real.json
-///     Corpus   today's `Mode.LOSSY`   -- rules_permissive.json, training-corpus canonicalisation
+///     Default     `Mode.f64`        -- rules_f64.json, the deployed f64 set
+///     Real        `Mode.real`       -- rules_real.json, sound as mathematics defines
+///     Permissive  `Mode.permissive` -- rules_permissive.json, training-corpus canonicalisation
 /// ```
 ///
 /// `wildcard_all` (the blanket-placeholder RECALL switch) is a FUNCTION of the mode, not
 /// a second parameter beside it: one value states both which set serves and which search
-/// semantics run, so the two can never be set inconsistently. `Real` takes the SOUND
-/// search semantics -- it differs from `Default` in WHICH RULES ARE CERTIFIED, which is
-/// the axis this ruleset ladder is about, not in how placeholders bind. The `Mode` rename
-/// must ratify that pairing explicitly; it is the one policy choice baked in here.
+/// semantics run, so the two can never be set inconsistently. `Real` takes `Default`'s
+/// search semantics -- it differs from `Default` in WHICH RULES ARE CERTIFIED, not in how
+/// placeholders bind.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum RuleMode {
     Default,

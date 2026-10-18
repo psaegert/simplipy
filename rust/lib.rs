@@ -66,9 +66,10 @@ fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
 
 /// The complexity instruments' canon selector: `"mode"` routes the canon through the
 /// requested rule mode itself -- that mode's own reading, the measure its simplify descends
-/// (what `complexity()` prices); `"default"` pins the canon to the sound default -- the
-/// mode's parse, priced in f64's canon (the deprecated `canon='default'`). Two spellings only, so
-/// the knob cannot silently become a third pricing.
+/// (what `complexity()` prices); `"default"` pins the canon to the f64 default -- the
+/// mode's parse, priced in f64's canon (the cross-mode yardstick,
+/// `simplipy.mining.cross_mode_complexity`). Two spellings only, so the knob cannot silently
+/// become a third pricing.
 fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine::RuleMode> {
     match canon {
         "default" => Ok(engine::RuleMode::Default),
@@ -954,6 +955,12 @@ impl PyEngine {
             })
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
+    }
+
+    /// The names the infix text calls (a name directly before `(`) that this engine
+    /// declares no operator for, in order of first appearance.
+    fn undeclared_calls(&self, infix_expression: &str) -> Vec<String> {
+        self.inner.undeclared_calls(infix_expression)
     }
 
     /// `operators_to_realizations`.

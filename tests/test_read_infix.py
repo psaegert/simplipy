@@ -49,6 +49,19 @@ class TestTheContractTheNameStates:
             with pytest.raises(ValueError):
                 convert('sqrt(x0)')
 
+    def test_the_strict_entries_name_the_unknown_function(
+            self, engine: SimpliPyEngine) -> None:
+        """The refusal names the call it cannot read, in every strict entry that reads
+        infix -- not a generic "malformed prefix expression" about text that is infix."""
+        for entry in (engine.simplify, engine.complexity, engine.to_prefix, engine.to_tagged,
+                      engine.to_infix, engine.evaluate_constants):
+            with pytest.raises(ValueError, match=r"unknown function 'sqrt' in 'sqrt\(x1\^2\)'"):
+                entry('sqrt(x1^2)')
+        with pytest.raises(ValueError, match=r"unknown functions 'foo', 'x1' in"):
+            engine.simplify('foo(x2) + x1(x3) + foo(1)')
+        # declared names, aliases and plain products are not calls of unknown functions
+        assert engine._core.undeclared_calls('sin(x1) + pow(x1, 2) + 2(x1 + 1) + (x1)(x2)') == []
+
     def test_preserves_spelling_does_not_canonicalise(
             self, engine: SimpliPyEngine) -> None:
         """The contrast the docstring is required to state, verbatim.
