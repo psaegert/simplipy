@@ -2428,9 +2428,10 @@ fn carried_classes(f: &Ex, cx: &Cx, out: &mut Vec<Ex>) {
                 .iter()
                 .any(|t| t.contains_const() || t.contains_infinity())
             {
-                let k = orient_base(f, cx).map_or_else(|| f.clone(), |(o, _)| o);
-                if !out.contains(&k) {
-                    out.push(k);
+                if let Some((k, _, _)) = class_of(ts, cx) {
+                    if !out.contains(&k) {
+                        out.push(k);
+                    }
                 }
             }
         }
@@ -5421,11 +5422,130 @@ fn site_class(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
         },
         _ => return None,
     };
-    let sum = Ex::Add(terms.clone());
-    Some(match orient_base(&sum, cx) {
-        Some((o, _)) => (o, true),
-        None => (sum, false),
-    })
+    class_of(terms, cx).map(|(k, negative, _)| (k, negative))
+}
+
+/// THE CLASS OF A SUM IS ITS ZERO SET: sums equal up to a nonzero constant factor are one class
+/// (`6 - 2 x1` is `x1 - 3`'s, `3 - x1` too), and so are sums equal up to a factor every term
+/// shares (`3 x2 - x1 x2` is `x2 (3 - x1)`, a member of that class). Its key is the sum's primitive
+/// part -- the shared factors divided out, then every term's coefficient divided by the leading
+/// term's (the first by the order of the terms' non-numeric parts, a constant term never leading)
+/// -- and the sum is that factor times the key: `true` where the constant is negative (the sum is
+/// negative where the key is positive), and whether a shared factor was divided out (its sign is
+/// not read). `None` where the sum holds a constant or an infinity, or a division overflows.
+fn class_of(ts: &[Ex], cx: &Cx) -> Option<(Ex, bool, bool)> {
+    if ts
+        .iter()
+        .any(|t| t.contains_const() || t.contains_infinity())
+    {
+        return None;
+    }
+    let mut parts: Vec<(Rat, Ex)> = ts
+        .iter()
+        .map(|t| match t {
+            Ex::Num(r) => (r.clone(), Ex::Num(Rat::ONE)),
+            // Each term read as the orientation reads it (`odd_signs_out`, as `orient_base` and
+            // `up_to_sign_key` do): an odd function of a negated argument is the negated term.
+            t => term_split(odd_signs_out(t, cx), cx.view),
+        })
+        .collect();
+    // The factors every term shares, divided out.
+    let factors = |k: &Ex| -> Vec<Ex> {
+        match k {
+            Ex::Mul(v) => v.clone(),
+            Ex::Num(_) => Vec::new(),
+            k => vec![k.clone()],
+        }
+    };
+    let mut shared: Vec<Ex> = factors(&parts[0].1);
+    for (_, k) in &parts[1..] {
+        let fs = factors(k);
+        shared.retain(|f| fs.contains(f));
+    }
+    let scaled = !shared.is_empty();
+    if scaled {
+        for (_, k) in parts.iter_mut() {
+            let mut fs = factors(k);
+            for f in &shared {
+                if let Some(i) = fs.iter().position(|g| g == f) {
+                    fs.remove(i);
+                }
+            }
+            *k = match fs.len() {
+                0 => Ex::Num(Rat::ONE),
+                1 => fs.pop().expect("one factor"),
+                _ => Ex::Mul(fs),
+            };
+        }
+    }
+    parts.sort_by(|a, b| cmp_ex(&a.1, &b.1, cx.view));
+    let lead = parts
+        .iter()
+        .find(|(c, k)| !matches!(k, Ex::Num(_)) && !c.is_zero())?
+        .0
+        .clone();
+    let inv = lead.checked_inv()?;
+    let mut key = Vec::with_capacity(parts.len());
+    for (c, k) in parts {
+        let q = c.checked_mul(&inv)?;
+        key.push(match k {
+            Ex::Num(_) => Ex::Num(q),
+            k if q.is_one() => k,
+            k => Ex::Mul(vec![Ex::Num(q), k]),
+        });
+    }
+    Some((Ex::Add(key), lead.is_negative(), scaled))
+}
+
+/// A hash of a sum's terms as `class_of` reads them: the factors every term shares left out, and
+/// literals and signs ignored (`shape_sig`), so that two sums of one class always hash alike.
+fn class_shape(ts: &[Ex]) -> u64 {
+    let factors = |t: &Ex| -> Vec<u64> {
+        match t {
+            Ex::Num(_) => Vec::new(),
+            Ex::Mul(v) => v
+                .iter()
+                .filter(|f| !matches!(f, Ex::Num(_)))
+                .map(shape_sig)
+                .collect(),
+            t => vec![shape_sig(t)],
+        }
+    };
+    let per: Vec<Vec<u64>> = ts.iter().map(factors).collect();
+    let mut shared: Vec<u64> = per.first().cloned().unwrap_or_default();
+    for fs in &per[1..] {
+        shared.retain(|f| fs.contains(f));
+    }
+    let mut sig = 0u64;
+    for mut fs in per {
+        for f in &shared {
+            if let Some(i) = fs.iter().position(|g| g == f) {
+                fs.remove(i);
+            }
+        }
+        let term = fs.iter().fold(0x9e37_79b9u64, |a, f| a.wrapping_add(*f));
+        sig = sig.wrapping_add(term.wrapping_mul(0x0100_0000_01b3));
+    }
+    sig
+}
+
+/// A hash of a sum's shape blind to its literals and signs (`class_of` reads alike over a sum and
+/// its constant multiples): two sums of one class always hash alike.
+fn shape_sig(e: &Ex) -> u64 {
+    use std::hash::{Hash, Hasher};
+    fn one<T: Hash>(t: &T) -> u64 {
+        let mut h = rustc_hash::FxHasher::default();
+        t.hash(&mut h);
+        h.finish()
+    }
+    match e {
+        Ex::Num(_) => 0,
+        Ex::Add(v) | Ex::Mul(v) => v.iter().map(shape_sig).fold(0, u64::wrapping_add),
+        Ex::Fun(op, args) => args.iter().map(shape_sig).fold(one(op), u64::wrapping_add),
+        Ex::Pow(b, q) => shape_sig(b).wrapping_add(shape_sig(q)).wrapping_mul(31),
+        Ex::Leaf(t) => one(t),
+        other => one(&std::mem::discriminant(other)),
+    }
 }
 
 /// How a factor reads in a class `S` (a sum in its one orientation): free of it, even (alike over
@@ -5483,7 +5603,7 @@ fn zero_read(e: &Ex, class: &Ex, cx: &Cx) -> ZeroRead {
     if let Some(hit) = hit {
         return hit;
     }
-    let r = read_walk(e, class, cts.len(), negation_key(cts), cx);
+    let r = read_walk(e, class, cts.len(), class_shape(cts), cx);
     READ_MEMO.with(|m| {
         if let Some(t) = m.borrow_mut().as_mut() {
             t.entry(view)
@@ -5516,13 +5636,12 @@ fn read_walk(e: &Ex, class: &Ex, n: usize, nk: u64, cx: &Cx) -> ZeroRead {
     match e {
         Ex::Num(r) => free(Some(r.is_negative())),
         Ex::Add(ts) => {
-            if ts.len() == n && negation_key(ts) == nk {
-                match orient_base(e, cx) {
-                    Some((o, flipped)) if o == *class => {
-                        return read(Odd, Some(flipped), Some(flipped));
+            if ts.len() == n && class_shape(ts) == nk {
+                if let Some((k, negative, scaled)) = class_of(ts, cx) {
+                    if k == *class {
+                        let sign = (!scaled).then_some(negative);
+                        return read(Odd, sign, sign);
                     }
-                    None if e == class => return read(Odd, Some(false), Some(false)),
-                    _ => {}
                 }
             }
             let (mut odd, mut even_t, mut free_t) = (false, false, false);
@@ -5694,8 +5813,8 @@ fn pole_at_zero(e: &Ex, class: &Ex, cx: &Cx) -> bool {
 /// Whether `e` is regular at the zero of a class `S`: continuous through it, built from `S` by
 /// sums, products, non-negative integer powers, odd roots and functions defined on the whole line
 /// (`exp`, `sin`, `cos`, `sinh`, `cosh`, `tanh`, `atan`, `asinh`, `abs`), and away from zero there
-/// (a sum with a term free of `S`, an exponential or a cosine), so that its value there is finite,
-/// nonzero and the same in both orientations of `S`.
+/// (an exponential or a cosine of such, or a factor free of `S`), so that its value there is
+/// finite, nonzero and the same in both orientations of `S`.
 fn regular_at_zero(e: &Ex, class: &Ex, cx: &Cx) -> bool {
     fn whole(e: &Ex, class: &Ex, cx: &Cx) -> bool {
         if parity_in(e, class, cx) == Parity::Free {
@@ -5726,10 +5845,10 @@ fn regular_at_zero(e: &Ex, class: &Ex, cx: &Cx) -> bool {
         }
     }
     match e {
-        Ex::Add(v) => {
-            v.iter().all(|x| whole(x, class, cx))
-                && v.iter().any(|x| parity_in(x, class, cx) == Parity::Free)
-        }
+        // A sum that holds the class -- the class's own sum, one of its multiples, or a sum among
+        // whose terms it sits (`S - S^3`) -- may vanish at the zero: it is regular there only
+        // where it reads free of the class.
+        Ex::Add(_) => parity_in(e, class, cx) == Parity::Free,
         Ex::Mul(v) => v.iter().all(|x| regular_at_zero(x, class, cx)),
         Ex::Pow(b, q) => matches!(&**q, Ex::Num(_)) && regular_at_zero(b, class, cx),
         Ex::Fun(op, args)
@@ -6413,8 +6532,9 @@ fn same_collection_base(f: &Ex, g: &Ex, cx: &Cx) -> bool {
 
 /// Does the sum a site is built over occur again in the product, up to its orientation: as
 /// another site's sum or inside any factor? Only then are its classes read (`sign_place`). One
-/// pass over the product's sums with a sign-blind hash of their leaves (`leaf_sig`'s); a hash
-/// that merely collides only costs the full reading.
+/// pass over the product's sums with a hash of their shapes blind to literals and signs
+/// (`shape_sig`'s), so a sum meets its constant multiples too; a hash that merely collides only
+/// costs the full reading.
 fn classes_meet(out: &[Ex], site_flips: &[(usize, Ex)]) -> bool {
     fn one<T: std::hash::Hash>(t: &T) -> u64 {
         use std::hash::Hasher;
@@ -6424,9 +6544,10 @@ fn classes_meet(out: &[Ex], site_flips: &[(usize, Ex)]) -> bool {
     }
     fn walk(e: &Ex, sums: &mut Vec<(usize, u64)>) -> u64 {
         match e {
+            Ex::Num(_) => 0,
             Ex::Add(v) => {
                 let s = v.iter().map(|x| walk(x, sums)).fold(0, u64::wrapping_add);
-                sums.push((v.len(), s));
+                sums.push((v.len(), class_shape(v)));
                 s
             }
             Ex::Mul(v) => v.iter().map(|x| walk(x, sums)).fold(0, u64::wrapping_add),
@@ -6435,7 +6556,8 @@ fn classes_meet(out: &[Ex], site_flips: &[(usize, Ex)]) -> bool {
                 .map(|x| walk(x, sums))
                 .fold(one(op), u64::wrapping_add),
             Ex::Pow(b, q) => walk(b, sums).wrapping_add(walk(q, sums)).wrapping_mul(31),
-            other => leaf_sig(other),
+            Ex::Leaf(t) => one(t),
+            other => one(&std::mem::discriminant(other)),
         }
     }
     let class_sites = site_flips
@@ -6473,8 +6595,7 @@ fn classes_meet(out: &[Ex], site_flips: &[(usize, Ex)]) -> bool {
     }
     site_flips.iter().any(|(pos, _)| {
         site_sum_terms(&out[*pos]).is_some_and(|ts| {
-            let mut scratch = Vec::new();
-            let sig = walk(&Ex::Add(ts.to_vec()), &mut scratch);
+            let sig = class_shape(ts);
             sums.iter().filter(|&&x| x == (ts.len(), sig)).count() >= 2
         })
     })
@@ -6635,16 +6756,22 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
             .iter()
             .filter_map(|(k, _)| k.as_ref().filter(|k| class_pinned(&out, k, cx)).cloned())
             .collect();
-        if groups
-            .iter()
-            .any(|(k, _)| k.as_ref().is_some_and(|k| pinned.contains(k)))
-        {
+        if !pinned.is_empty() {
+            // Every site that holds a pinned class keeps its spelling too: a sum among whose terms
+            // the class sits (`S - S^3`) vanishes at its zero as well, and its flip would move the
+            // sign of the infinity there just as the class's own sites would.
+            let holds = |pos: usize| {
+                pinned
+                    .iter()
+                    .any(|k| parity_in(&out[pos], k, cx) != Parity::Free)
+            };
             // The sites left keep their order in `site_flips`, so a site's new bit is its rank
             // among them.
             let mut free: Vec<usize> = groups
                 .iter()
                 .filter(|(k, _)| !k.as_ref().is_some_and(|k| pinned.contains(k)))
                 .flat_map(|(_, m)| m.iter().map(|(bit, _)| *bit))
+                .filter(|bit| !holds(site_flips[*bit].0))
                 .collect();
             free.sort_unstable();
             let renumber = |bit: usize| free.iter().position(|&b| b == bit);
@@ -6652,12 +6779,13 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
                 .into_iter()
                 .filter(|(k, _)| !k.as_ref().is_some_and(|k| pinned.contains(k)))
                 .map(|(k, m)| {
-                    let m = m
+                    let m: Vec<(usize, bool)> = m
                         .into_iter()
                         .filter_map(|(bit, other)| renumber(bit).map(|b| (b, other)))
                         .collect();
                     (k, m)
                 })
+                .filter(|(_, m)| !m.is_empty())
                 .collect();
             site_flips = site_flips
                 .into_iter()
