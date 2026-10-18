@@ -140,10 +140,12 @@ def test_the_up_to_sign_retry_keeps_a_class_whole(eng, src):
 #     `S - S^3`, vanishes there, so the class keeps the input's orientation, and so does every site holding it.
 #   * A class is a zero set: `tanh(2 (3 - x1))` is built over `6 - 2 x1`, a multiple of `x1 - 3`, and `2 x1 - 6`
 #     beside `x1 - 3` is one class with it.
+#   * An odd root reads like an odd function, also over a factor of unknown sign: `1/(cbrt(x2 (x1 - 3)) (3 - x1))`
+#     is `-1/(cbrt(x2 (x1 - 3)) (x1 - 3))`, -inf at x1 = 3 like its limit.
 CLASS_AT_ITS_ZERO = ['inv * pow - 3 x1 / 1 2 sin - 3 x1', 'inv * rootn - 3 x1 2 tanh - 3 x1',
                      'inv * - - x1 3 pow - x1 3 3 * -1 - x1 3', 'inv * tanh * 2 - 3 x1 * -1 - 3 x1',
                      'inv * rootn * - x1 3 -2 3 * -1 - 3 x1', 'inv * * -1 - x1 3 - * 2 x1 6',
-                     'inv * - - x1 3 pow - x1 3 3 - * x2 x1 * 3 x2']
+                     'inv * - - x1 3 pow - x1 3 3 - * x2 x1 * 3 x2', 'inv * rootn * x2 - x1 3 3 - 3 x1']
 
 
 @pytest.mark.parametrize('mode', ('f64', 'real'))
