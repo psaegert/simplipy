@@ -4488,7 +4488,7 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         }
         classes.push(Class::new(&read));
     }
-    for c in classes.iter_mut() {
+    for c in classes.iter_mut().filter(|c| !c.multiple()) {
         c.kept = class_of(&c.sums[0], cx)
             .map(|(k, _, _)| k)
             .filter(|k| zero_limit(&raw, k, cx).is_some());
@@ -4507,8 +4507,16 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         );
         (t.sides[0].p > 0 && t.sides[0].n < 0 || t.splits_mass(0, cx)) && c.complete(cx)
     });
+    // Each class written over its first sum: the structurally smaller one, or for a literal
+    // multiple the positive one (as an even power of it files, `pow`).
     for c in classes.iter_mut() {
-        if cmp_vec(&c.sums[1], &c.sums[0], cx.view) == Ordering::Less {
+        let first = if c.multiple() {
+            matches!(&c.sums[1][..], [Ex::Num(r)] if !r.is_negative())
+                || matches!(&c.sums[1][..], [Ex::Mul(v)] if matches!(v.first(), Some(Ex::Num(r)) if !r.is_negative()))
+        } else {
+            cmp_vec(&c.sums[1], &c.sums[0], cx.view) == Ordering::Less
+        };
+        if first {
             c.sums.swap(0, 1);
         }
     }
@@ -4865,31 +4873,45 @@ fn holds_joinable_roots(v: &[Ex], cx: &Cx) -> bool {
 }
 
 /// How a factor reads as a member of a class {B, -B} (`collect_opposite_sums`): the head of `B`
-/// (`None` for the sum itself, else the odd function and an odd root's index), the sum's terms,
-/// and the factor's exponent over `B` (`None` when it is symbolic). Only a sum the sign may
-/// pass through is a class base: a `Const`-bearing, negation-absorbing or bare-infinity sum has
-/// its own owners.
+/// (`None` for the sum itself, else the odd function and an odd root's index), the terms of its
+/// argument, and the factor's exponent over `B` (`None` when it is symbolic). The argument is a
+/// sum, or under a head a literal multiple (`sin(2 x1)` and `sin(-2 x1)`, `sin(2)` and `sin(-2)`),
+/// read as a sum of one term. Only an argument the sign may pass through is a class's: a
+/// `Const`-bearing, negation-absorbing or bare-infinity sum has its own owners.
 struct ClassRead<'a> {
     head: Option<(Tok, Option<&'a Ex>)>,
     terms: &'a [Ex],
     exp: Option<Rat>,
 }
 
+/// A literal multiple: a nonzero literal, or a product led by a literal other than 0, 1 and -1
+/// (`odd_of_literal_multiple`'s argument).
+fn is_literal_multiple(m: &Ex) -> bool {
+    match m {
+        Ex::Num(r) => !r.is_zero(),
+        Ex::Mul(v) => {
+            matches!(v.first(), Some(Ex::Num(r)) if !r.is_zero() && !r.is_one() && *r != Rat::NEG_ONE)
+        }
+        _ => false,
+    }
+}
+
 fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
     type Head<'a> = Option<(Tok, Option<&'a Ex>)>;
     fn base_read<'a>(b: &'a Ex, cx: &Cx) -> Option<(Head<'a>, &'a [Ex])> {
         let odd_index = |k: &Ex| matches!(k, Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less);
+        let arg = |a: &'a Ex| match a {
+            Ex::Add(ts) => Some(ts.as_slice()),
+            m if is_literal_multiple(m) => Some(std::slice::from_ref(m)),
+            _ => None,
+        };
         match b {
             Ex::Add(ts) => Some((None, ts)),
-            Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => match &a[0] {
-                Ex::Add(ts) => Some((Some((*op, None)), ts)),
-                _ => None,
-            },
+            Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => {
+                Some((Some((*op, None)), arg(&a[0])?))
+            }
             Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") && odd_index(&a[1]) => {
-                match &a[0] {
-                    Ex::Add(ts) => Some((Some((*op, Some(&a[1]))), ts)),
-                    _ => None,
-                }
+                Some((Some((*op, Some(&a[1]))), arg(&a[0])?))
             }
             _ => None,
         }
@@ -4919,10 +4941,32 @@ fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
     tradeable.then_some(ClassRead { head, terms, exp })
 }
 
+/// The class of a sign-trade site over a literal multiple (`class_read`'s {B, -B}): `B`, the
+/// head over the multiple with its literal made positive, and whether the site spells `-B`.
+fn site_multiple(f: &Ex) -> Option<(Ex, bool)> {
+    let m = match f {
+        Ex::Pow(b, q) if matches!(&**q, Ex::Num(_)) => &**b,
+        _ => f,
+    };
+    let Ex::Fun(op, a) = m else { return None };
+    let (positive, negative) = match a.first()? {
+        Ex::Num(r) if !r.is_zero() => (Ex::Num(r.abs()), r.is_negative()),
+        Ex::Mul(v) if is_literal_multiple(&a[0]) => {
+            let Ex::Num(r) = &v[0] else { return None };
+            let mut k = v.clone();
+            k[0] = Ex::Num(r.abs());
+            (Ex::Mul(k), r.is_negative())
+        }
+        _ => return None,
+    };
+    let mut args = a.clone();
+    args[0] = positive;
+    Some((Ex::Fun(*op, args), negative))
+}
+
 /// The class a sign-trade site is built over: the sum under the site's head (the sum itself, an
 /// odd function or odd root of it, or a power of any of these) in its one orientation, and whether
-/// the site spells it in the other one. `None` where the site is over no sum (an odd function of
-/// a literal multiple): it is a class of its own.
+/// the site spells it in the other one. `None` where the site is over no sum.
 fn site_class(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     let m = match f {
         Ex::Pow(b, q) if matches!(&**q, Ex::Num(_)) => &**b,
@@ -5499,16 +5543,29 @@ impl<'a> Class<'a> {
         }
     }
 
+    /// Is the class's argument a literal multiple (a sum of one term under a head)?
+    fn multiple(&self) -> bool {
+        self.head.is_some() && self.sums[0].len() == 1 && !matches!(self.sums[0][0], Ex::Add(_))
+    }
+
     /// The second sum of a class whose factors all arrived over the first: its flip, where the
-    /// sign may pass through it (`sign_trade_flip`).
+    /// sign may pass through it (`sign_trade_flip`; for a literal multiple, its head's).
     fn complete(&mut self, cx: &Cx) -> bool {
         let first = &self.sums[0];
-        let flip = self
-            .flip
-            .get_or_init(|| match sign_trade_flip(&Ex::Add(first.clone()), cx) {
+        let multiple = self.multiple();
+        let base = self.base(0);
+        let flip = self.flip.get_or_init(|| {
+            if multiple {
+                return match sign_trade_flip(&base, cx) {
+                    Some(Ex::Fun(_, a)) if is_literal_multiple(&a[0]) => Some(vec![a[0].clone()]),
+                    _ => None,
+                };
+            }
+            match sign_trade_flip(&Ex::Add(first.clone()), cx) {
                 Some(Ex::Add(f)) => Some(f),
                 _ => None,
-            });
+            }
+        });
         match flip.clone() {
             Some(f) => {
                 self.sums[1] = f;
@@ -5550,9 +5607,12 @@ impl<'a> Class<'a> {
         None
     }
 
-    /// The base over one side's sum.
+    /// The base over one side's sum (a literal multiple as itself).
     fn base(&self, side: usize) -> Ex {
-        let sum = Ex::Add(self.sums[side].clone());
+        let sum = match self.sums[side].as_slice() {
+            [m] if self.head.is_some() && is_literal_multiple(m) => m.clone(),
+            ts => Ex::Add(ts.to_vec()),
+        };
         match &self.head {
             None => sum,
             Some((op, None)) => Ex::Fun(*op, vec![sum]),
@@ -6337,10 +6397,10 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
         // orientation for the whole group; the sites spelled against it flip.
         let mut groups: Vec<ClassGroup> = Vec::new();
         for (bit, (pos, _)) in site_flips.iter().enumerate() {
-            let class = if meets {
-                site_class(&out[*pos], cx)
-            } else {
-                None
+            let class = match site_multiple(&out[*pos]) {
+                Some(c) => Some(c),
+                None if meets => site_class(&out[*pos], cx),
+                None => None,
             };
             let joined = class.as_ref().and_then(|(key, flipped)| {
                 groups
@@ -8096,6 +8156,20 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                         return pow(Ex::Fun(*op, args), exp, cx);
                     }
                 }
+            }
+        }
+        // And over a negative literal multiple, the positive one: `sin(-2 x1)^2` is
+        // `sin(2 x1)^2`, as the class {sin(2 x1), sin(-2 x1)} is written (`collect_opposite_sums`).
+        let negative = match &args[0] {
+            Ex::Num(c) => c.is_negative(),
+            m => {
+                is_literal_multiple(m)
+                    && matches!(m, Ex::Mul(v) if matches!(v.first(), Some(Ex::Num(c)) if c.is_negative()))
+            }
+        };
+        if odd && negative && r.is_even_integer() && !r.is_zero() {
+            if let Some(flipped) = sign_trade_flip(&base, cx) {
+                return pow(flipped, exp, cx);
             }
         }
     }

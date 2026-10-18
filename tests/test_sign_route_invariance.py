@@ -386,3 +386,19 @@ def test_a_bracketed_product_collects_as_the_flat_one(eng, mode, bag):
             answer = list(eng.simplify(tokens, mode=mode))
             assert eng.complexity(answer, mode=mode) == price, (tokens, answer, flat)
             assert list(eng.simplify(answer, mode=mode)) == answer
+
+
+# AN ODD FUNCTION OF A LITERAL MULTIPLE AND OF ITS NEGATION ARE ONE CLASS {B, -B}, as an odd function of a
+# sum and of its negation are: the product collects them, written over the positive literal.
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('spellings, expected', [
+    (['/ sin * 2 x1 sin * -2 x1', '/ sin * -2 x1 sin * 2 x1', '/ rootn * 2 x1 3 rootn * -2 x1 3'], '-1'),
+    (['* sin 2 sin -2', 'neg pow sin 2 2', 'neg pow sin -2 2'], None),
+    (['* sin * 2 x1 sin * -2 x1', 'neg pow sin * 2 x1 2', 'neg pow sin * -2 x1 2'], None),
+    (['* * x2 tan * 3 x1 tan * -3 x1', 'neg * x2 pow tan * 3 x1 2'], None),
+])
+def test_an_odd_function_of_a_literal_multiple_is_a_class(eng, mode, spellings, expected):
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert len(answers) == 1, answers
+    if expected is not None:
+        assert answers == {expected}

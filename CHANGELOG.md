@@ -44,7 +44,11 @@
   sign and a pattern variable that occurs twice matches a sum or its negation:
   `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and `x1 + sin(x3 - x2) - sin(x3 - x2)`
   is `x1` (0.14.7 keeps the first as written and gives `x1 + sin(x2 - x3) + sin(x3 - x2)` for
-  the second). An odd negative power distributes over a negative coefficient as over a positive
+  the second). An odd function or odd root of a literal multiple and of its negation are one class
+  as well: `sin(2*x1)/sin(-2*x1)` is `-1`, and `sin(2*x1)*sin(-2*x1)` and `sin(2)*sin(-2)` are
+  `-sin(2*x1)^2` and `-sin(2)^2`, the answers of `-sin(2*x1)^2` and `-sin(2)^2`; an even power over
+  a negative literal files the positive one (`sin(-2*x1)^2` is `sin(2*x1)^2`).
+  An odd negative power distributes over a negative coefficient as over a positive
   one, since signed zeros carry the sign through: `1/(-3*x1^2)` and `-1/(3*x1^2)` are one
   answer, `-1/3/x1^2`, and `1/(-x1/3)` is `-3/x1`, all `-inf` at the zero like their inputs.
   Where two singularities meet, the float value at that point is the one the
