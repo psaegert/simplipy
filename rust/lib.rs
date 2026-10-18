@@ -940,28 +940,25 @@ impl PyEngine {
     }
 
     /// `parse`. `convert_expression`/`mask_numbers` match the Python
-    /// defaults (True/False). Closes the `simplify(str)` + canonicalization path.
-    #[pyo3(signature = (infix_expression, convert_expression=true, mask_numbers=false))]
+    /// defaults (True/False). Closes the `simplify(str)` + canonicalization path. `strict`
+    /// refuses a call of a name no operator declares, naming it (every entry that knows only
+    /// declared operators reads this way); the tolerant default is `read_infix`'s reading.
+    #[pyo3(signature = (infix_expression, convert_expression=true, mask_numbers=false, strict=false))]
     fn parse(
         &self,
         py: Python<'_>,
         infix_expression: &str,
         convert_expression: bool,
         mask_numbers: bool,
+        strict: bool,
     ) -> PyResult<Py<PyList>> {
         let out = py
             .detach(|| {
                 self.inner
-                    .parse(infix_expression, convert_expression, mask_numbers)
+                    .parse(infix_expression, convert_expression, mask_numbers, strict)
             })
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
-    }
-
-    /// The names the infix text calls (a name directly before `(`) that this engine
-    /// declares no operator for, in order of first appearance.
-    fn undeclared_calls(&self, infix_expression: &str) -> Vec<String> {
-        self.inner.undeclared_calls(infix_expression)
     }
 
     /// `operators_to_realizations`.

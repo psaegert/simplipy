@@ -307,7 +307,7 @@ impl Engine {
     /// shunting-yard. Degenerate inputs give degenerate lists (matching Python); `Err` only
     /// for two operands separated by whitespace alone (`x0 x1`).
     pub fn infix_to_prefix(&self, infix_expression: &str) -> Result<Vec<String>, String> {
-        crate::convert::infix_to_prefix(infix_expression, &self.operators)
+        crate::convert::infix_to_prefix(infix_expression, &self.operators, false)
     }
 
     /// `convert_expression`: normalize into the engine's internal form. `Err` mirrors a Python
@@ -324,18 +324,21 @@ impl Engine {
 
     /// `parse`: infix string -> standardized prefix expression
     /// (infix_to_prefix -> convert_expression -> numbers_to_constant -> remove_pow1).
+    /// `strict` refuses a call of a name no operator declares.
     pub fn parse(
         &self,
         infix_expression: &str,
         convert: bool,
         mask_numbers: bool,
+        strict: bool,
     ) -> Result<Vec<String>, String> {
-        crate::convert::parse(infix_expression, &self.operators, convert, mask_numbers)
-    }
-
-    /// `undeclared_calls`: the names the infix text calls that no operator declares.
-    pub fn undeclared_calls(&self, infix_expression: &str) -> Vec<String> {
-        crate::convert::undeclared_calls(infix_expression, &self.operators)
+        crate::convert::parse(
+            infix_expression,
+            &self.operators,
+            convert,
+            mask_numbers,
+            strict,
+        )
     }
 
     /// `operators_to_realizations`: map each operator NAME to its

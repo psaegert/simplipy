@@ -391,6 +391,11 @@
   `SIMPLIPY_TAGGED_FRACTION_MAX`) and is declared by the compiled core, which reads them. The
   sort promotion no longer reads the unprefixed `N_PTS` and `THRESH` at import.
 
+### Changed
+
+- **`complexity(mode=...)` refuses an unknown mode with `ValueError`**, as `simplify` does (it raised `KeyError`).
+- **Infix text calling an undeclared function is refused by name** (`unknown function 'sqrt' in 'sqrt(x1^2)'`) in `simplify`, `complexity`, `evaluate_constants`, `mask` and the conversions, instead of "invalid or malformed prefix expression"; `read_infix` still keeps such a call as written.
+
 ## 0.14.7 (2026-10-01)
 
 - **A floating-point warning inside an expression is a warning again.** An expression's inline

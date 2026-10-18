@@ -665,21 +665,33 @@ fn is_ident_start(token: &str) -> bool {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
 }
 
-/// The names this infix text calls -- a name directly before `(` -- that the engine declares
-/// no operator for, in order of first appearance: `sqrt(x1^2) + foo(x2)` calls `sqrt` and
-/// `foo`. The tolerant reader (`parse`) keeps such a call as a bare symbol followed by its
-/// argument, which reads back as no expression; the strict entry points refuse it by name.
-pub fn undeclared_calls(infix_expression: &str, ops: &Operators) -> Vec<String> {
-    let tokens = tokenize_infix(infix_expression);
-    let mut out: Vec<String> = Vec::new();
+/// THE STRICT READING: refuse a call -- a name directly before `(` -- of a name the engine
+/// declares no operator for, naming every such name in order of first appearance
+/// (`sqrt(x1^2) + foo(x2)` calls `sqrt` and `foo`). The tolerant reading keeps such a call as
+/// a bare symbol followed by its argument, which is no expression the engine can read.
+fn refuse_undeclared_calls(
+    tokens: &[Token],
+    infix_expression: &str,
+    ops: &Operators,
+) -> Result<(), String> {
+    let mut unknown: Vec<&str> = Vec::new();
     for pair in tokens.windows(2) {
-        let (name, next) = (&pair[0].text, &pair[1].text);
+        let (name, next) = (pair[0].text.as_str(), pair[1].text.as_str());
         let declared = ops.operator_aliases.contains_key(name) || ops.arity_of(name).is_some();
-        if next == "(" && is_ident_start(name) && !declared && !out.contains(name) {
-            out.push(name.clone());
+        if next == "(" && is_ident_start(name) && !declared && !unknown.contains(&name) {
+            unknown.push(name);
         }
     }
-    out
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<String> = unknown.iter().map(|n| format!("'{n}'")).collect();
+    Err(format!(
+        "unknown function{} {} in '{infix_expression}': this engine declares no operator by \
+         that name",
+        if unknown.len() > 1 { "s" } else { "" },
+        names.join(", ")
+    ))
 }
 
 /// A function without parentheses (`sin x0`) waiting on the stack is marked with this prefix.
@@ -698,11 +710,18 @@ fn unmark(s: String) -> String {
 /// `infix_to_prefix`: a RIGHT-to-LEFT shunting-yard. Malformed inputs produce
 /// structurally-degenerate prefix lists, matching Python; the one error is two operands that
 /// only whitespace separates (`x0 x1`, `2 3`; see `insert_implicit_products`).
-pub fn infix_to_prefix(infix_expression: &str, ops: &Operators) -> Result<Vec<String>, String> {
+/// With `strict`, a call of an undeclared name is refused (`refuse_undeclared_calls`).
+pub fn infix_to_prefix(
+    infix_expression: &str,
+    ops: &Operators,
+    strict: bool,
+) -> Result<Vec<String>, String> {
+    let tokens = tokenize_infix(infix_expression);
+    if strict {
+        refuse_undeclared_calls(&tokens, infix_expression, ops)?;
+    }
     let (mut tokens, mut apps): (Vec<String>, Vec<bool>) =
-        insert_implicit_products(tokenize_infix(infix_expression), ops)?
-            .into_iter()
-            .unzip();
+        insert_implicit_products(tokens, ops)?.into_iter().unzip();
     tokens.reverse(); // right-to-left parse
     apps.reverse();
 
@@ -1301,14 +1320,16 @@ fn build_chain(ops_list: &[String], current_operand: Ir) -> Ir {
 /// `parse`: `infix_to_prefix` -> (if `convert`) `convert_expression`
 /// -> (if `mask_numbers`) `numbers_to_constant` -> ALWAYS `remove_pow1`. The high-level entry that
 /// closes `simplify(str)` and the flash-ansr canonicalization path. `Err` propagates a
-/// `convert_expression` raise.
+/// `convert_expression` raise. `strict` refuses a call of an undeclared name (the reading of
+/// every entry that knows only declared operators); without it the call is kept as written.
 pub fn parse(
     infix_expression: &str,
     ops: &Operators,
     convert: bool,
     mask_numbers: bool,
+    strict: bool,
 ) -> Result<Vec<String>, String> {
-    let parsed = infix_to_prefix(infix_expression, ops)?;
+    let parsed = infix_to_prefix(infix_expression, ops, strict)?;
     // H-043/D4: the tokenize + shunting stages above are iterative, but
     // `convert_expression` below recurses (its IR flatten) -- cap the TOKENIZED length
     // exactly like the token-list boundary caps its input, or a deep infix string
@@ -1592,7 +1613,7 @@ mod tests {
         // round-trip identity (parse half; paired with the paren-keeping render).
         let pre = v(&["*", "a", "*", "b", "c"]);
         let inf = e.prefix_to_infix(&pre, Power::StarStar, false).unwrap();
-        assert_eq!(e.parse(&inf, false, false).unwrap(), pre);
+        assert_eq!(e.parse(&inf, false, false, false).unwrap(), pre);
     }
 
     /// RESERVED CONSTANT NAMES of the infix language (emit-parse closure): the pretty
@@ -1639,12 +1660,26 @@ mod tests {
             );
         }
         let ops = Operators::from_specs(order, specs);
-        let p = |s: &str| super::parse(s, &ops, true, false).unwrap();
+        let p = |s: &str| super::parse(s, &ops, true, false, true).unwrap();
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         assert_eq!(p("x0^2"), v(&["pow", "x0", "2"]));
         assert_eq!(p("x0^0.5"), v(&["pow", "x0", "0.5"]));
         assert_eq!(p("x0^(-0.5)"), v(&["pow", "x0", "-0.5"]));
         assert_eq!(p("x0^2.0"), v(&["pow", "x0", "2.0"]));
+        // the strict reading refuses a call of an undeclared name, naming it; the tolerant
+        // reading keeps it as written
+        assert_eq!(
+            super::parse("sqrt(x0^2)", &ops, true, false, true),
+            Err(
+                "unknown function 'sqrt' in 'sqrt(x0^2)': this engine declares no operator \
+                 by that name"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            super::parse("sqrt(x0)", &ops, true, false, false).unwrap(),
+            v(&["sqrt", "x0"])
+        );
     }
 
     fn conv(e: &Engine, toks: &[&str]) -> Result<Vec<String>, String> {
@@ -1768,7 +1803,7 @@ mod tests {
     fn parse_traps() {
         let Some(e) = engine() else { return };
         let v = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
-        let p = |s: &str, c: bool, m: bool| e.parse(s, c, m).unwrap();
+        let p = |s: &str, c: bool, m: bool| e.parse(s, c, m, false).unwrap();
         // default (convert=True, mask=False): integer power + negative exponent -> inv,
         // the reciprocal. (Until the 9.10 fix the reader bound the exponent's minus
         // OUTSIDE the power, this pinned `x1 ** -2` to neg(pow2(x1)) = -(x1^2), and the

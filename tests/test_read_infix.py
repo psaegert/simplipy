@@ -59,8 +59,14 @@ class TestTheContractTheNameStates:
                 entry('sqrt(x1^2)')
         with pytest.raises(ValueError, match=r"unknown functions 'foo', 'x1' in"):
             engine.simplify('foo(x2) + x1(x3) + foo(1)')
-        # declared names, aliases and plain products are not calls of unknown functions
-        assert engine._core.undeclared_calls('sin(x1) + pow(x1, 2) + 2(x1 + 1) + (x1)(x2)') == []
+        with pytest.raises(ValueError, match=r"unknown function 'sqrt' in"):
+            engine.mask('sqrt(x1) + 2')
+        # declared names, aliases and plain products are not calls of unknown functions:
+        # the strict reading of such text is the tolerant one
+        text = 'sin(x1) + pow(x1, 2) + 2(x1 + 1) + (x1)(x2)'
+        assert engine._core.parse(text, strict=True) == engine.read_infix(text)
+        # the tolerant reader keeps the call as written
+        assert engine._core.parse('sqrt(x1)', strict=False) == ['sqrt', 'x1']
 
     def test_preserves_spelling_does_not_canonicalise(
             self, engine: SimpliPyEngine) -> None:

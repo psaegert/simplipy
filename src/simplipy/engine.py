@@ -1631,21 +1631,6 @@ class SimpliPyEngine:
 
         return self._core.parse(infix_expression, convert_expression, mask_numbers)
 
-    def _read_infix_strict(self, text: str) -> list[str]:
-        """Read infix text for an entry point that knows only declared operators.
-
-        A call of a name this engine declares no operator for (``sqrt(x1)``) is refused,
-        naming it; :meth:`read_infix` is the tolerant reader that keeps such a call as a
-        symbol followed by its argument.
-        """
-        unknown = self._core.undeclared_calls(text)
-        if unknown:
-            names = ', '.join(repr(name) for name in unknown)
-            raise ValueError(
-                f"unknown function{'s' if len(unknown) > 1 else ''} {names} in {text!r}: "
-                f"this engine declares no operator by that name")
-        return self._core.parse(text, True, False)
-
     def _conversion_input(
             self, expression: str | list[str] | tuple[str, ...] | np.ndarray
     ) -> tuple[str, list[str]]:
@@ -1658,7 +1643,7 @@ class SimpliPyEngine:
         through the one arbiter, the syntactic parser in ``rust/forms.rs``.
         """
         if isinstance(expression, str):
-            return 'infix', self._read_infix_strict(expression)
+            return 'infix', self._core.parse(expression, strict=True)
         if isinstance(expression, np.ndarray):
             if expression.ndim != 1:
                 raise ValueError('conversion expects a one-dimensional numpy array of tokens')
@@ -1907,7 +1892,7 @@ class SimpliPyEngine:
                 f'callable, not {type(policy).__name__}')
         if isinstance(expression, str):
             return self.to_infix(
-                _masking.mask(self._read_infix_strict(expression), self, policy_fn,
+                _masking.mask(self._core.parse(expression, strict=True), self, policy_fn,
                               collect=collect))
         if isinstance(expression, list):
             return _masking.mask(expression, self, policy_fn, collect=collect)
@@ -2102,7 +2087,7 @@ class SimpliPyEngine:
         self._await_no_pending_push()
 
         if isinstance(expression, str):
-            tokens = self._read_infix_strict(expression)
+            tokens = self._core.parse(expression, strict=True)
         elif isinstance(expression, np.ndarray):
             _validate_ndarray_input(expression)
             tokens = expression.tolist()
@@ -2181,7 +2166,7 @@ class SimpliPyEngine:
         description length on the exact value, symbols pay one symbol unit.
         """
         if isinstance(expression, str):
-            tokens = self._read_infix_strict(expression)
+            tokens = self._core.parse(expression, strict=True)
         elif isinstance(expression, np.ndarray):
             tokens = expression.tolist()
         else:
