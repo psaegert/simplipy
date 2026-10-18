@@ -15,12 +15,11 @@
 //! `None` and the caller keeps the symbolic form instead of folding -- refusing to compute is
 //! always sound here, computing wrongly never is.
 //!
-//! `WIDE_RESULTS` is on (phase 2c): an operation whose result leaves the small form computes it
-//! in the big form, and the result stands if it is REPRESENTABLE in the current number domain
-//! (`number_domain`): within the cap in the exact domain (`real` mode), and in the f64 domain
-//! (every other mode) only when the deployed float64 evaluator reads it within one rounding and
-//! every printed spelling of it reads back as itself. Every refusal keeps the symbolic form, as
-//! a 128-bit overflow always did.
+//! An operation whose result leaves the small form computes it in the big form, and the result
+//! stands if it is REPRESENTABLE in the current number domain (`number_domain`): within the cap in
+//! the exact domain (`real` mode), and in the f64 domain (every other mode) only when the deployed
+//! float64 evaluator reads it within one rounding and every printed spelling of it reads back as
+//! itself. Every refusal keeps the symbolic form.
 
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -35,10 +34,6 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 /// float64 is an exact fraction within it (the largest double is below 2^1024, the smallest
 /// subnormal is 2^-1074), and srbf's largest number needs 375 bits (plan §2).
 pub const CAP_BITS: u64 = 1100;
-
-/// Whether a result of small operands that leaves the small form is computed in the big form
-/// (phase 2c) or refused, as before phase 2 (phase 2a).
-pub(crate) const WIDE_RESULTS: bool = true;
 
 thread_local! {
     /// The current thread's number domain: f64 (`true`, the default and every mode but `real`)
@@ -461,7 +456,7 @@ impl Rat {
                 let b = p2.checked_mul(q1)?;
                 Rat::new(a.checked_add(b)?, q1.checked_mul(q2)?)
             })();
-            if small.is_some() || !WIDE_RESULTS {
+            if small.is_some() {
                 return small;
             }
         }
@@ -501,7 +496,7 @@ impl Rat {
                 let q = (q1 / g2).checked_mul(q2 / g1)?;
                 Rat::new(p, q)
             })();
-            if small.is_some() || !WIDE_RESULTS {
+            if small.is_some() {
                 return small;
             }
         }
@@ -596,7 +591,7 @@ impl Rat {
                 }
                 Some(acc)
             })();
-            if small.is_some() || !WIDE_RESULTS {
+            if small.is_some() {
                 return small;
             }
         }
@@ -839,11 +834,7 @@ impl Rat {
             Some(scaled)
         })();
         let Some(scaled) = scaled else {
-            return if WIDE_RESULTS {
-                big_exact_decimal(&BigInt::from(p), &BigInt::from(q))
-            } else {
-                None
-            };
+            return big_exact_decimal(&BigInt::from(p), &BigInt::from(q));
         };
         Some(place_point(p < 0, scaled.to_string(), k as usize))
     }
@@ -891,7 +882,7 @@ impl Rat {
         }
         let shift = exp as i64 - frac_part.len() as i64;
         let small = parse_decimal_small(sign, int_part, frac_part, shift);
-        if small.is_some() || !WIDE_RESULTS {
+        if small.is_some() {
             return small;
         }
         parse_decimal_big(sign < 0, int_part, frac_part, shift)
@@ -1873,25 +1864,17 @@ mod tests {
         assert!(!token_denotes_integer("2.5", 2.0));
     }
 
-    /// The 2a switch: a result of small operands that leaves the small form refuses while
-    /// `WIDE_RESULTS` is off (byte identity with the 128-bit engine) and is computed exactly once
-    /// it is on (phase 2c).
+    /// A result of small operands that leaves the small form is computed exactly in the big form.
     #[test]
-    fn a_small_overflow_follows_the_switch() {
+    fn a_small_overflow_is_computed_in_the_big_form() {
         let big = Rat::int(i128::MAX / 2 + 1); // doubled: 2^127, one beyond i128
         let sum = big.checked_add(&big);
         let product = big.checked_mul(&Rat::int(4));
         let tiny = Rat::new(1, i128::MAX / 3).unwrap();
         let tiny_sq = tiny.checked_mul(&tiny);
-        if WIDE_RESULTS {
-            assert_eq!(sum.unwrap().small_parts(), None);
-            assert_eq!(product.unwrap().small_parts(), None);
-            assert_eq!(tiny_sq.unwrap().small_parts(), None);
-        } else {
-            assert_eq!(sum, None);
-            assert_eq!(product, None);
-            assert_eq!(tiny_sq, None);
-        }
+        assert_eq!(sum.unwrap().small_parts(), None);
+        assert_eq!(product.unwrap().small_parts(), None);
+        assert_eq!(tiny_sq.unwrap().small_parts(), None);
     }
 
     /// The power size bound never overflows: with `b - 1 = 255` and `n = (2^64 - 1) / 255`,

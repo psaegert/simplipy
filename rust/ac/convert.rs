@@ -1027,11 +1027,6 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
     emit_tagged_at(e, cx, out, false);
 }
 
-/// Is a negated divisor spelled as a bag at every depth, `<mul> -1 <div> B </mul>` as `-c/B` is for
-/// every other `c`? Else only as a whole answer that holds no other bag (`emit_tagged_at`), and
-/// `neg` inside one, which spells no literal.
-const NEGATED_DIVISOR_IS_A_BAG: bool = false;
-
 /// `top`: `e` is the whole answer and its spelling holds no other bag, so a bag here decides the
 /// notation a second call reads (`to_prefix_tagged`).
 fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
@@ -1112,7 +1107,7 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                         let divisor = matches!(&v[1], Ex::Pow(b, ex)
                             if matches!(&**ex, Ex::Num(q) if q.is_negative())
                                 && !matches!(&**b, Ex::Num(z) if z.is_zero()));
-                        if !((top || NEGATED_DIVISOR_IS_A_BAG) && divisor) {
+                        if !(top && divisor) {
                             out.push(view.intern("neg"));
                             emit_tagged(&v[1], cx, out);
                             return;
