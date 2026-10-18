@@ -57,7 +57,7 @@ sidecar records how the ruleset came to be: the mine parameters, the core build 
 platform, libc, numpy/scipy/mpmath versions, and a `libm_fingerprint` — a digest of a
 fixed probe battery evaluated through the deployed folding path, so two sidecars are
 comparable-or-not by inspection), the soundness state at mine
-time (certificate kill-switch states, every artifact-affecting environment override
+time (every artifact-affecting environment override
 recorded verbatim, and the interval layer's fail-closed miss counters), and the
 measure fingerprint (the μ constants and the probe values, priced in the file's own mode,
 with a digest) — so artifacts mined under different orderings are distinguishable from

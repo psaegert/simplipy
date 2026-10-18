@@ -1059,9 +1059,8 @@ impl PyEngine {
         min_informative: Option<usize>,
         seed: u64,
     ) -> PyResult<bool> {
-        // Universal floor (D3, extends H-038): an EXPLICIT 0 would silently disable the
-        // evidence gate, and gate-disabling must ride a RECORDED channel (the provenance
-        // kill-switches), never a bare numeric argument. Defaults were floored by d2db5dd.
+        // Universal floor: an EXPLICIT 0 would silently disable the evidence gate, and no
+        // gate is switched off by a bare numeric argument.
         ensure_tokens_are_tokens(&source)?;
         ensure_tokens_are_tokens(&candidate)?;
         let mi = min_informative.unwrap_or(n_rows / 8).max(1);
@@ -1316,9 +1315,8 @@ impl PyEngine {
         for c in &candidates {
             ensure_tokens_are_tokens(c)?;
         }
-        // Universal floor (D3, extends H-038): an EXPLICIT 0 would silently disable the
-        // evidence gate, and gate-disabling must ride a RECORDED channel (the provenance
-        // kill-switches), never a bare numeric argument. Defaults were floored by d2db5dd.
+        // Universal floor: an EXPLICIT 0 would silently disable the evidence gate, and no
+        // gate is switched off by a bare numeric argument.
         let mi = min_informative.unwrap_or(n_rows / 8).max(1);
         py.detach(|| {
             self.inner.find_rule(

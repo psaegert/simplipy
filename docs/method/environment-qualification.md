@@ -34,8 +34,8 @@ recording, alongside the mine parameters and the core build stamp:
   separately-linked libm, so the fingerprint measures the code path that
   actually minted the artifact. Two sidecars are comparable-or-not by
   inspecting one field.
-- **The soundness state**: certificate kill-switch states, every
-  artifact-affecting environment override recorded verbatim
+- **The soundness state**: every artifact-affecting environment override
+  recorded verbatim
   (see [environment variables](../environment.md)), and the interval
   layer's fail-closed miss counters.
 - **The measure fingerprint**: the μ constants and probe values with a
