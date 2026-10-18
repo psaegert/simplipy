@@ -425,15 +425,16 @@
   placeholder slots and never numerals; which literals become fittable constants is decided
   upstream with `simplipy.masking`. Passing the keyword raises `TypeError`; drop it (every
   `convert_numbers_to_constant=False` call keeps its behaviour).
-- **Ten environment switches.** `SIMPLIPY_AC_ABSORB_FIRST`, `SIMPLIPY_MU_SYM`,
+- **Eleven environment switches.** `SIMPLIPY_AC_ABSORB_FIRST`, `SIMPLIPY_MU_SYM`,
   `SIMPLIPY_MU_FREE`, `SIMPLIPY_IVL_GATE`, `SIMPLIPY_IVL_CLASS`, `SIMPLIPY_IVL_REACH`,
-  `SIMPLIPY_SPECIAL_BATTERY`, `SIMPLIPY_POLE_GRID`, `SIMPLIPY_ZERO_SIGN` and
-  `SIMPLIPY_EXACT_INDEX` are no longer read; the engine always behaves as with each unset.
-  None of the four soundness layers of the miner can be switched off, so the provenance sidecar
-  no longer records `soundness.kill_switches`. `simplipy.engine.ARTIFACT_ENV_SWITCHES` now
-  lists the three switches that remain (`SIMPLIPY_IVL_NODE_BUDGET`, `SIMPLIPY_HIPREC_FRAC`,
-  `SIMPLIPY_TAGGED_FRACTION_MAX`) and is declared by the compiled core, which reads them. The
-  sort promotion no longer reads the unprefixed `N_PTS` and `THRESH` at import.
+  `SIMPLIPY_SPECIAL_BATTERY`, `SIMPLIPY_POLE_GRID`, `SIMPLIPY_ZERO_SIGN`,
+  `SIMPLIPY_EXACT_INDEX` and `SIMPLIPY_HIPREC_FRAC` are no longer read; the engine always
+  behaves as with each unset. None of the four soundness layers of the miner can be switched
+  off, so the provenance sidecar no longer records `soundness.kill_switches`.
+  `simplipy.engine.ARTIFACT_ENV_SWITCHES` now lists the two switches that remain
+  (`SIMPLIPY_IVL_NODE_BUDGET`, `SIMPLIPY_TAGGED_FRACTION_MAX`) and is declared by the compiled
+  core, which reads them. The sort promotion no longer reads the unprefixed `N_PTS` and
+  `THRESH` at import.
 
 ### Changed
 

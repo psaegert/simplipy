@@ -8,10 +8,8 @@
 
 /// The interval layer's subdivision node budget (`interval::max_nodes_budget`).
 pub const IVL_NODE_BUDGET: &str = "SIMPLIPY_IVL_NODE_BUDGET";
-/// The high-precision near-miss escalation fraction (`hiprec::near_miss_frac`).
-pub const HIPREC_FRAC: &str = "SIMPLIPY_HIPREC_FRAC";
 /// The largest decimal the tagged form spells as a fraction bag (`ac::convert`).
 pub const TAGGED_FRACTION_MAX: &str = "SIMPLIPY_TAGGED_FRACTION_MAX";
 
 /// Every artifact-affecting switch, in one list.
-pub const ARTIFACT_ENV_SWITCHES: [&str; 3] = [IVL_NODE_BUDGET, HIPREC_FRAC, TAGGED_FRACTION_MAX];
+pub const ARTIFACT_ENV_SWITCHES: [&str; 2] = [IVL_NODE_BUDGET, TAGGED_FRACTION_MAX];

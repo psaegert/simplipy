@@ -440,11 +440,10 @@ class TestProvenanceRecordsTheMeasure:
         literal = {m for src in sources for m in re.findall(r'env::var(?:_os)?\(\s*"(SIMPLIPY_\w+)"', src)}
         assert literal == {'SIMPLIPY_AC_TRACE', 'SIMPLIPY_AC_MEMO_TRACE', 'SIMPLIPY_GATE_TRACE',
                            'SIMPLIPY_BATTERY_TRACE', 'SIMPLIPY_TEST_REQUIRE_ASSETS'}
-        assert ARTIFACT_ENV_SWITCHES == (
-            'SIMPLIPY_IVL_NODE_BUDGET', 'SIMPLIPY_HIPREC_FRAC', 'SIMPLIPY_TAGGED_FRACTION_MAX')
+        assert ARTIFACT_ENV_SWITCHES == ('SIMPLIPY_IVL_NODE_BUDGET', 'SIMPLIPY_TAGGED_FRACTION_MAX')
         declared = {m for src in sources
                     for m in re.findall(r'env::var\(\s*crate::env_switches::(\w+)\)', src)}
-        assert declared == {'IVL_NODE_BUDGET', 'HIPREC_FRAC', 'TAGGED_FRACTION_MAX'}
+        assert declared == {'IVL_NODE_BUDGET', 'TAGGED_FRACTION_MAX'}
 
 
 class TestCoreTableHasOneSource:

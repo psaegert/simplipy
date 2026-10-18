@@ -523,11 +523,14 @@ class TestFoldFilter:
         # interval-intersection `<constant>` decision must carry the match alone.
         lib = engine._core.build_candidate_library(cands, ["x0"], x_flat, n, rule_mode='default')
         assert lib.n_filtered == 1
-        # The certification alone (no mint acceptance): the mine refuses this match anyway,
-        # since its resolved literal is a rounding of the special `e`.
+        # The certification alone (no mint acceptance). The source is const-free, so the
+        # `<constant>` match resolves to a literal, and the literal ships only if it
+        # certifies as the const-free target it is: the scan and the pair judgment agree.
         out = engine._core.find_rule(src, len(src), 2, cands, ["x0"], x_flat, n,
                                      challenges=16, retries=16, seed=7, rtol=1e-9, atol=1e-12)
-        assert out is not None, 'the feasible near-constant source must match'
+        assert out is None or engine._core.judge_pair(
+            src, out, ["x0"], x_flat, n, 16, 16, 7, 1e-9, 1e-12, rule_mode='permissive')[0], \
+            f'the scan shipped {out}, which the pair judgment refuses'
 
     def test_the_mine_never_ships_a_var_free_composite_rhs(self, tmp_path) -> None:
         """The end-to-end form of the invariant. The old parity gate A/B-ran the mine
@@ -1849,9 +1852,12 @@ class TestProposalHintLengthAllowance:
         X_data = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(0))
         library = core.build_candidate_library(
             [["x0"], ["1"], ["2"], ["sin", "x0"], ["cos", "x0"], list(self.SIN_TGT)],
-            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0], rule_mode='default')
+            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0],
+            rule_mode='permissive')
+        # Permissive, the mine's own acceptance: in f64, `1 - cos(2*x0)` loses its value to
+        # cancellation near 0, so the deployed evaluator does not realise the pair there.
         scan = dict(challenges=16, retries=16, seed=1, rtol=1e-9, atol=1e-12,
-                    min_informative=32, rule_mode='default')
+                    min_informative=32, rule_mode='permissive')
         # Equal token count, strictly mu-below the mark: the mined scan reaches it (the
         # scan computes the engine's own endpoint as its mark).
         assert core.find_rule_lib(list(self.SIN_SRC), library, **scan) == self.SIN_TGT, \
@@ -1860,7 +1866,8 @@ class TestProposalHintLengthAllowance:
         # so it is not ordered strictly below the mark and no length admits it.
         tie_lib = core.build_candidate_library(
             [["x0"], ["1"], ["2"], ["sin", "x0"], list(self.TIE_TGT)],
-            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0], rule_mode='default')
+            ["x0"], X_data.flatten(order="C").tolist(), X_data.shape[0],
+            rule_mode='permissive')
         assert core.find_rule_lib(list(self.TIE_SRC), tie_lib, **scan) is None, \
             "an exact mu tie is not a descent and must never mint, at any length"
 

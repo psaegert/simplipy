@@ -64,18 +64,12 @@ const RM: RoundingMode = RoundingMode::ToEven;
 /// sized for the 1024-row mine X wrongly rejected true rules on the 2048-row confirm X).
 /// Wide misses (plateau falsities) fail by huge margins, exceed the gate, and never escalate.
 /// The escalation cost stays bounded: only near-miss instances escalate at all.
-/// Experiment override: env `SIMPLIPY_HIPREC_FRAC` (calibration only, not a config surface).
+///
+/// The gate counts EVALUATION POINTS: every row where the source is defined (finite or
+/// infinite) is a point of the denominator, and a failing infinite row is a failing point
+/// like a finite one. A pair with no variable has ONE point however many rows repeat it;
+/// "at most half the points, rounded up" then escalates it, at the cost of one row.
 const NEAR_MISS_FRAC: f64 = 0.5;
-
-fn near_miss_frac() -> f64 {
-    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var(crate::env_switches::HIPREC_FRAC)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(NEAR_MISS_FRAC)
-    })
-}
 
 /// Verdict of one row at one precision. `Extend` = source nonfinite (domain-extendable),
 /// exactly `allclose_extends`' semantics lifted to `p` bits.
@@ -86,16 +80,21 @@ enum RowVerdict {
     Fail,
 }
 
-/// Finite `s ~= c` within (rtol, atol) at `p` bits.
-fn cmp_finite(s: &BigFloat, c: &BigFloat, rtol: f64, atol: f64, p: usize) -> RowVerdict {
+/// Finite `s ~= c` within `atol + rtol*|c|` at `p` bits -- the f64 row predicate of
+/// `eval::allclose_extends`, lifted (the candidate is the reference). A `Fail` carries the
+/// residual `|s - c|`, which `judge_row_confirmed` compares across precisions.
+fn cmp_finite(s: &BigFloat, c: &BigFloat, rtol: f64, atol: f64, p: usize) -> Judged {
     let diff = s.sub(c, p, RM).abs();
     let tol =
-        BigFloat::from_f64(atol, p).add(&BigFloat::from_f64(rtol, p).mul(&s.abs(), p, RM), p, RM);
+        BigFloat::from_f64(atol, p).add(&BigFloat::from_f64(rtol, p).mul(&c.abs(), p, RM), p, RM);
     match diff.cmp(&tol) {
-        Some(ord) if ord <= 0 => RowVerdict::Pass,
-        _ => RowVerdict::Fail,
+        Some(ord) if ord <= 0 => (RowVerdict::Pass, None),
+        _ => (RowVerdict::Fail, Some(diff)),
     }
 }
+
+/// A row verdict at one precision, with the residual of a failed finite comparison.
+type Judged = (RowVerdict, Option<BigFloat>);
 
 /// `BigFloat` has no `is_finite`; a value is finite when it is neither inf nor NaN.
 fn is_fin(x: &BigFloat) -> bool {
@@ -128,7 +127,7 @@ fn judge_row(
     atol: f64,
     p: usize,
     cc: &mut Consts,
-) -> Option<RowVerdict> {
+) -> Option<Judged> {
     // DEPLOYMENT-FAITHFUL: the extend/pole decision keys on the f64 value (numpy = the DEPLOYED
     // evaluator), NOT the astro-float value. astro-float diverges from numpy on quirk domains --
     // `(-inf)^non-integer` is NaN in astro-float (complex-undefined) but +inf in numpy -- and
@@ -137,7 +136,7 @@ fn judge_row(
     // f64 value makes soundness FRAC-independent: escalation can only REFINE a numpy-inf that is a
     // saturation artifact, never reinterpret a numpy-defined value.
     if f64_src.is_nan() {
-        return Some(RowVerdict::Extend); // numpy-undefined -> domain-extendable (`x/x -> 1`)
+        return Some((RowVerdict::Extend, None)); // numpy-undefined -> domain-extendable (`x/x -> 1`)
     }
     if f64_src.is_infinite() {
         // numpy sees inf. Climb the ladder: a SATURATION artifact resolves to a finite true value
@@ -154,7 +153,7 @@ fn judge_row(
                 return Some(if is_fin(&c_hi) {
                     cmp_finite(&s_hi, &c_hi, rtol, atol, pp)
                 } else {
-                    RowVerdict::Fail
+                    (RowVerdict::Fail, None)
                 });
             }
             if s_hi.is_nan() {
@@ -164,19 +163,20 @@ fn judge_row(
         }
         // pole / numpy-quirk inf: the candidate must reproduce the DEPLOYMENT infinity (same sign)
         return Some(if f64_cand == f64_src {
-            RowVerdict::Pass
+            (RowVerdict::Pass, None)
         } else {
-            RowVerdict::Fail
+            (RowVerdict::Fail, None)
         });
     }
     // numpy-finite source: high-precision comparison of the near-miss row
     let s = eval_prefix(source, ops, var_names, x_cols, src_params, row, p, cc)?;
     if !is_fin(&s) {
-        return Some(RowVerdict::Fail); // astro-float diverges from a finite numpy value -> keep the fail
+        // astro-float diverges from a finite numpy value -> keep the fail
+        return Some((RowVerdict::Fail, None));
     }
     let c = eval_prefix(candidate, ops, var_names, x_cols, cand_params, row, p, cc)?;
     if !is_fin(&c) {
-        return Some(RowVerdict::Fail); // replacement non-finite where the source is finite
+        return Some((RowVerdict::Fail, None)); // replacement non-finite where the source is finite
     }
     Some(cmp_finite(&s, &c, rtol, atol, p))
 }
@@ -184,6 +184,14 @@ fn judge_row(
 /// Judge row `r` with the precision-stability rule: a `P`-bit FAIL only counts once the
 /// row ALSO fails at `2*P` bits (each precision has its own saturation cliff; a
 /// disagreement is treated as non-refuting). `None` propagates (caller keeps its verdict).
+///
+/// WHAT ZERO MEANS at high precision. A true identity whose values are zero (`sin(pi) ->
+/// 0`, pi rendered at the working precision) leaves a residual of rounding residue, about
+/// `2^-P` at `P` bits and `2^-2P` at `2P` bits: no relative band admits it at either
+/// precision, yet it is exactly 0. A FALSE zero (`exp(sinh(-5)) -> 0`, value 5.9e-33)
+/// leaves the same residual at every precision. So a row that fails at both precisions
+/// passes iff its residual COLLAPSES as the precision doubles: it shrinks by at least
+/// `2^(P/2)`, the precision-stability discriminator the symbolic judge applies.
 #[allow(clippy::too_many_arguments)]
 fn judge_row_confirmed(
     source: &[String],
@@ -200,7 +208,7 @@ fn judge_row_confirmed(
     atol: f64,
     cc: &mut Consts,
 ) -> Option<RowVerdict> {
-    let v = judge_row(
+    let (v, d_p) = judge_row(
         source,
         src_params,
         candidate,
@@ -235,8 +243,23 @@ fn judge_row_confirmed(
         2 * P,
         cc,
     ) {
-        Some(RowVerdict::Fail) | None => Some(RowVerdict::Fail),
-        Some(other) => Some(other), // P-bit cliff artifact: the higher precision decides
+        Some((RowVerdict::Fail, Some(d_2p))) => {
+            let collapsed = d_p.is_some_and(|d_p| {
+                let bound = d_p.mul(
+                    &BigFloat::from_f64(2f64.powi(-((P / 2) as i32)), 2 * P),
+                    2 * P,
+                    RM,
+                );
+                matches!(d_2p.cmp(&bound), Some(ord) if ord <= 0)
+            });
+            Some(if collapsed {
+                RowVerdict::Pass
+            } else {
+                RowVerdict::Fail
+            })
+        }
+        Some((RowVerdict::Fail, None)) | None => Some(RowVerdict::Fail),
+        Some((other, _)) => Some(other), // P-bit cliff artifact: the higher precision decides
     }
 }
 
@@ -245,7 +268,8 @@ fn judge_row_confirmed(
 /// candidate carries `cand_params` (empty for the const-free arm; the f64-FITTED constants
 /// for the fit arm's `FitVerdict::NearMiss`). Returns `true` iff every f64-failing binding
 /// row passes at `P` bits. Never called on an f64 accept; a `false` leaves the f64 verdict
-/// unchanged.
+/// unchanged. `atol` is the absolute band of a FITTED constant (the fit arm); a const-free
+/// pair passes 0, because its agreement is relative (see `worker::candidate_matches`).
 #[allow(clippy::too_many_arguments)]
 pub fn rescue(
     y_src: &[f64],
@@ -260,6 +284,10 @@ pub fn rescue(
     rtol: f64,
     atol: f64,
 ) -> bool {
+    // The binding POINTS: every row where the source is defined. A source-inf row the
+    // candidate does not already reproduce fails and is escalated: the P_INF re-judge inside
+    // `judge_row` decides pole (stays inf -> must-match -> Fail) vs saturation (resolves
+    // finite -> compare). It is a point of the denominator as much as of the numerator.
     let mut binding = 0usize;
     let mut failing: Vec<usize> = Vec::new();
     for (r, &s) in y_src.iter().enumerate() {
@@ -267,22 +295,28 @@ pub fn rescue(
         if s.is_nan() {
             continue; // undefined -> extendable, not evidence
         }
-        if s.is_infinite() {
-            // A source-inf row where the candidate does not already reproduce the same inf is a
-            // FAILING row -- escalate. The P_INF re-judge inside `judge_row` then decides pole
-            // (stays inf -> must-match -> Fail) vs saturation (resolves finite -> compare). Not
-            // counted as finite binding evidence.
-            if c != s {
-                failing.push(r);
-            }
-            continue;
-        }
         binding += 1;
-        if !c.is_finite() || (s - c).abs() > atol + rtol * s.abs() {
+        let fails = if s.is_infinite() {
+            c != s
+        } else {
+            // the row predicate of `eval::allclose_extends` (candidate as reference)
+            !c.is_finite() || (s - c).abs() > atol + rtol * c.abs()
+        };
+        if fails {
             failing.push(r);
         }
     }
-    if failing.is_empty() || (failing.len() as f64) > near_miss_frac() * (binding as f64) {
+    // A pair with no variable evaluates to the same value on every row: one point.
+    let one_point = !source
+        .iter()
+        .chain(candidate.iter())
+        .any(|t| var_names.contains(t));
+    if one_point {
+        failing.truncate(1);
+        binding = binding.min(1);
+    }
+    let gate = (NEAR_MISS_FRAC * binding as f64).ceil() as usize;
+    if failing.is_empty() || failing.len() > gate {
         return false; // not a near miss (or nothing to rescue): keep the f64 verdict
     }
     let mut cc = match Consts::new() {
@@ -2156,6 +2190,36 @@ mod tests {
             1e-12,
         );
         assert!(ok);
+    }
+
+    /// The near-miss gate counts POINTS: a source-inf row is a point of the denominator as
+    /// much as of the numerator. Three saturated rows out of seven defined ones are a near
+    /// miss (counted against the four finite rows alone they were not), and the ladder
+    /// resolves each to its finite value.
+    #[test]
+    fn inf_rows_count_in_the_denominator() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let xs: Vec<f64> = vec![0.5, 1.0, -1.5, 2.0, 25.0, 30.0, -40.0];
+        let cols = vec![xs.clone()];
+        let y_src: Vec<f64> = xs.iter().map(|&x| x.tanh().atanh()).collect();
+        assert_eq!(y_src.iter().filter(|v| v.is_infinite()).count(), 3);
+        let ok = rescue(
+            &y_src,
+            &xs,
+            &s(&["atanh", "tanh", "x0"]),
+            &[],
+            &s(&["x0"]),
+            &[],
+            ops,
+            &["x0".to_string()],
+            &cols,
+            1e-9,
+            0.0,
+        );
+        assert!(ok, "3 failing points of 7 is a near miss");
     }
 
     /// Wide-miss candidates are never escalated (cost + correctness guard).

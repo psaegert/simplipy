@@ -18,8 +18,9 @@ use super::Engine;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MineCanon {
     /// 0.14's mark, kept until the per-mode marks land: the Default rule set, the
-    /// transcendental fold OFF, the search off (effort 0), f64 numbers. It is one hybrid
-    /// canon that no mode serves, so it is defined for `RuleMode::Default` only.
+    /// transcendental fold OFF, the search off (effort 0), f64 numbers -- one hybrid canon
+    /// that no mode serves. The mark and its prices are the same under every mode; the
+    /// mode decides the numeric acceptance (`MineSpec::rescue`).
     Legacy,
 }
 
@@ -32,20 +33,25 @@ impl MineCanon {
     }
 
     /// Whether this canon is defined for `mode`. A pair it is not defined for is an
-    /// error at the boundary, never a silent fallback to Default.
+    /// error at the boundary, never a silent fallback to Default. The legacy mark is
+    /// mode-free, so it is defined for every mode.
     pub fn check(self, mode: RuleMode) -> Result<(), String> {
         match (self, mode) {
-            (MineCanon::Legacy, RuleMode::Default) => Ok(()),
-            (MineCanon::Legacy, _) => Err(format!(
-                "canon 'legacy' is 0.14's Default-mode mark and is not defined for \
-                 rule_mode {mode:?}"
-            )),
+            (MineCanon::Legacy, _) => Ok(()),
         }
     }
 }
 
 /// What one mine mints FOR. Everything mode-dependent is derived from `mode` and `canon`,
 /// once, here.
+///
+/// THE NUMERIC ACCEPTANCE PER MODE (`rescue`). A const-free pair agrees relatively,
+/// `|s - c| <= rtol*|c|`, so zero agrees only with zero; a FITTED constant keeps the
+/// absolute band `atol + rtol*|c|`, the error of its f64 solve (`worker::candidate_matches`).
+/// - `Default` (f64): the deployed evaluator's values decide; nothing is re-judged.
+/// - `Real`, `Permissive`: f64 is a pre-filter; a near miss is re-judged at high precision
+///   (`hiprec::rescue`), where a zero is a residual that collapses as the precision
+///   doubles. Permissive accepts the union, which is real's acceptance.
 #[derive(Clone, Copy, Debug)]
 pub struct MineSpec {
     pub mode: RuleMode,
@@ -55,6 +61,13 @@ pub struct MineSpec {
     pub min_informative: usize,
     pub challenges: usize,
     pub retries: usize,
+}
+
+impl MineSpec {
+    /// Whether a near miss is re-judged at high precision: every mode but f64.
+    pub fn rescue(&self) -> bool {
+        !matches!(self.mode, RuleMode::Default)
+    }
 }
 
 /// The engine's own answer for a source: the bar every target must beat. `mu` is `None`
@@ -241,6 +254,7 @@ impl<'a> Acceptor<'a> {
             self.spec.rtol,
             self.spec.atol,
             c.min_informative,
+            self.spec.rescue(),
         );
         match verdict {
             Ok(None) => Ok(()),
@@ -309,6 +323,7 @@ impl<'a> Acceptor<'a> {
             spec.rtol,
             spec.atol,
             spec.min_informative,
+            spec.rescue(),
             Some(&license),
             Some(&confirm),
             Some(&accept_resolved),
@@ -340,9 +355,9 @@ impl Engine {
     /// so the scan bound, the library tiers and the strict-descent bar agree.
     pub fn mine_price(&self, tokens: &[String], mode: RuleMode, canon: MineCanon) -> Option<u64> {
         match canon {
-            // The bare context of the Default reading (0.14).
+            // The bare context of the Default reading (0.14), whatever the mode.
             MineCanon::Legacy => {
-                debug_assert_eq!(mode, RuleMode::Default);
+                let _ = mode;
                 self.ac_complexity(tokens, RuleMode::Default, RuleMode::Default)
             }
         }
@@ -406,6 +421,7 @@ impl Engine {
             spec.rtol,
             spec.atol,
             spec.min_informative,
+            spec.rescue(),
         )? {
             return Ok(Some(why));
         }
@@ -438,6 +454,7 @@ impl Engine {
             spec.rtol,
             spec.atol,
             spec.min_informative,
+            spec.rescue(),
         )
     }
 

@@ -28,7 +28,6 @@ so itself.
 | Switch | What it changes |
 |---|---|
 | `SIMPLIPY_IVL_NODE_BUDGET` | the interval layer's node budget, and so which candidates the miner can decide |
-| `SIMPLIPY_HIPREC_FRAC` | the high-precision near-miss escalation gate of the miner |
 | `SIMPLIPY_TAGGED_FRACTION_MAX` | largest numerator and denominator (magnitude) of a decimal the tagged form spells as a bag (every fraction is one); changes tagged answers and mined output |
 
 These exist for instrumentation and reproduction studies. Do not set them in

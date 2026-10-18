@@ -471,6 +471,7 @@ fn adopt_snapped_witness(
     fitted: Vec<f64>,
     rtol: f64,
     atol: f64,
+    rescue: bool,
 ) -> Vec<f64> {
     let Some(snapped) = crate::battery::snap_candidates(&fitted) else {
         return fitted;
@@ -490,19 +491,20 @@ fn adopt_snapped_witness(
         })
         .collect();
     let ok = allclose_extends(&y_adj, &y_fit, rtol, atol)
-        || crate::hiprec::rescue(
-            &y_adj,
-            &y_fit,
-            source_tokens,
-            src_params,
-            cand_tokens,
-            &snapped,
-            ops,
-            var_names,
-            cols,
-            rtol,
-            atol,
-        );
+        || (rescue
+            && crate::hiprec::rescue(
+                &y_adj,
+                &y_fit,
+                source_tokens,
+                src_params,
+                cand_tokens,
+                &snapped,
+                ops,
+                var_names,
+                cols,
+                rtol,
+                atol,
+            ));
     if ok {
         snapped
     } else {
@@ -791,7 +793,8 @@ fn equivalent_no_const(
             // rows may be domain-EXTENDED by the candidate (x/x -> 1). a = source, b = candidate.
             // Inf rows are must-match at f64; the near-miss rescue then re-judges the
             // failing rows by escalation (saturation inf resolves finite, a true pole stays).
-            if !allclose_extends(&y, &y_cand, rtol, atol)
+            // A const-free pair agrees RELATIVELY (see `candidate_matches`): no absolute band.
+            if !allclose_extends(&y, &y_cand, rtol, 0.0)
                 && !crate::hiprec::rescue(
                     &y,
                     &y_cand,
@@ -803,7 +806,7 @@ fn equivalent_no_const(
                     var_names,
                     x_cols,
                     rtol,
-                    atol,
+                    0.0,
                 )
             {
                 return false;
@@ -1096,6 +1099,7 @@ fn candidate_matches(
     atol: f64,
     min_informative: usize,
     fit_seed: u64,
+    rescue: bool,
 ) -> Option<Option<Vec<f64>>> {
     // Fast NECESSARY-condition gate, const-free arm (see `equivalent_no_const`): every
     // evidence row needs the candidate finite on it, so finite_y bounds the UNIQUE evidence.
@@ -1113,25 +1117,36 @@ fn candidate_matches(
         // The domain gate needs `c` to bind the candidate's `<constant>` leaves.
         let ok: Option<Option<Vec<f64>>> = if cand.n_const == 0 {
             // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
-            // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate. f64 is a
-            // PRE-FILTER: a near-miss reject is re-judged at high precision on exactly the
-            // failing rows (`hiprec::rescue`) so that true identities
-            // whose f64 round-trip loses precision -- atanh(tanh(x)) -> x -- still certify.
+            // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate.
+            //
+            // A CONST-FREE PAIR AGREES RELATIVELY: `|s - c| <= rtol*|c|`, so zero agrees only
+            // with zero. There is no absolute band here: the pair has no fitted constant
+            // whose solve error it would absorb, and a band lets any value smaller than it
+            // equal 0 (`exp(sinh(-5)) -> 0` is false by 5.9e-33 and passed `atol` = 1e-12).
+            // - f64 (no rescue): the deployed evaluator's values decide. `exp(sinh(-10))` is
+            //   exactly 0.0 in f64, so `-> 0` holds there; `sin(np.pi)` is 1.2e-16, so `-> 0`
+            //   does not.
+            // - real and permissive (rescue): f64 is a PRE-FILTER, and a near-miss reject is
+            //   re-judged at high precision on exactly the failing rows (`hiprec::rescue`),
+            //   where a zero is a residual that collapses as the precision doubles. True
+            //   identities whose f64 evaluation loses precision -- atanh(tanh(x)) -> x,
+            //   sin(np.pi) -> 0 -- certify; a value that only looks like zero does not.
             let y_cand = cand.y_const_free.as_ref().unwrap();
-            let hit = allclose_extends(y, y_cand, rtol, atol)
-                || crate::hiprec::rescue(
-                    y,
-                    y_cand,
-                    source,
-                    inst_params,
-                    &cand.tokens,
-                    &[],
-                    ops,
-                    var_names,
-                    cols,
-                    rtol,
-                    atol,
-                );
+            let hit = allclose_extends(y, y_cand, rtol, 0.0)
+                || (rescue
+                    && crate::hiprec::rescue(
+                        y,
+                        y_cand,
+                        source,
+                        inst_params,
+                        &cand.tokens,
+                        &[],
+                        ops,
+                        var_names,
+                        cols,
+                        rtol,
+                        0.0,
+                    ));
             // A const-free candidate binds nothing, so even a vacuous match has a determined
             // (empty) witness and the gate applies exactly.
             if hit {
@@ -1166,6 +1181,8 @@ fn candidate_matches(
             ) {
                 crate::fit::FitVerdict::Pass(c) => Some(c),
                 crate::fit::FitVerdict::Fail => None,
+                // f64 never escalates: the deployed evaluator's values decide.
+                crate::fit::FitVerdict::NearMiss(_) if !rescue => None,
                 // FIT-ARM ESCALATION: a true constant-bearing rule whose SOURCE
                 // f64 evaluation is corrupted on a few rows (atanh(tanh(C*x)) -> C*x) fails
                 // the fit with CONTAMINATED constants (the corrupted rows pull the least
@@ -1240,6 +1257,7 @@ fn candidate_matches(
                     c,
                     rtol,
                     atol,
+                    rescue,
                 )
             }
         });
@@ -1418,6 +1436,7 @@ fn candidate_matches(
                         c,
                         rtol,
                         atol,
+                        rescue,
                     )),
                     _ => None,
                 }
@@ -1709,6 +1728,7 @@ fn certify_candidate(
     atol: f64,
     min_informative: usize,
     seed: u64,
+    rescue: bool,
     accept_resolved: Option<AcceptFn<'_>>,
 ) -> Option<Certified> {
     let source = sc.source;
@@ -1748,6 +1768,7 @@ fn certify_candidate(
         atol,
         min_informative,
         seed,
+        rescue,
     )?;
     // (the domain gate runs INSIDE `candidate_matches`, per instance, where the
     // source's drawn constants and the fit's chosen constants are both in scope)
@@ -1776,6 +1797,33 @@ fn certify_candidate(
         let resolved = resolved.filter(|t| match accept_resolved {
             Some(f) => f(t),
             None => true,
+        });
+        // ONE VERDICT FOR "THIS TARGET EQUALS THIS SOURCE". The fit certified the slot at
+        // its fitted f64 value; the rule ships the RESOLVED literal, a const-free target.
+        // It is certified as one, by the same const-free check `judge_pair` runs, so a
+        // resolution can never ship a literal the pair judgment refuses (`atanh tanh 8`:
+        // the fit absorbs f64's 7.99999999997, the literal `8` is f64-false and true).
+        let resolved = resolved.filter(|t| {
+            CandEntry::compile(t, ops, var_names, cols, n_rows, u64::MAX).is_ok_and(|entry| {
+                candidate_matches(
+                    &sc.y,
+                    &entry,
+                    source,
+                    &sc.tape,
+                    sc.battery.as_ref(),
+                    ops,
+                    var_names,
+                    cols,
+                    n_rows,
+                    retries,
+                    rtol,
+                    atol,
+                    min_informative,
+                    seed,
+                    rescue,
+                )
+                .is_some()
+            })
         });
         match resolved {
             Some(t) => t,
@@ -1912,6 +1960,7 @@ pub fn find_rule_with_lib(
     rtol: f64,
     atol: f64,
     min_informative: usize,
+    rescue: bool,
     accept: Option<AcceptFn<'_>>,
     confirm: Option<AcceptFn<'_>>,
     accept_resolved: Option<AcceptFn<'_>>,
@@ -2139,6 +2188,7 @@ pub fn find_rule_with_lib(
                 atol,
                 min_informative,
                 seed,
+                rescue,
                 accept_resolved,
             ) else {
                 continue;
@@ -2225,6 +2275,7 @@ pub fn find_rule(
         rtol,
         atol,
         min_informative,
+        true,
         None,
         None,
         None,
@@ -2254,6 +2305,7 @@ pub fn judge_pair(
     rtol: f64,
     atol: f64,
     min_informative: usize,
+    rescue: bool,
 ) -> Result<Option<&'static str>, String> {
     let sc = SourceCtx::new(ops, source, var_names, cols, n_rows, challenges, seed)?;
     let cand = CandEntry::compile(target, ops, var_names, cols, n_rows, u64::MAX)?;
@@ -2269,6 +2321,7 @@ pub fn judge_pair(
         atol,
         min_informative,
         seed,
+        rescue,
         None,
     ) else {
         return Ok(Some("uncertified"));
@@ -2628,6 +2681,7 @@ mod tests {
                 1e-9,
                 1e-12,
                 16,
+                true,
                 None,
                 None,
                 None,
@@ -2745,6 +2799,7 @@ mod tests {
             1e-9,
             1e-12,
             16,
+            true,
             None,
             None,
             None,
@@ -2767,6 +2822,7 @@ mod tests {
             1e-9,
             1e-12,
             16,
+            true,
             Some(&not_star_head),
             None,
             None,
@@ -2804,6 +2860,7 @@ mod tests {
                 1e-9,
                 1e-12,
                 16,
+                true,
                 None,
                 Some(confirm),
                 None,
@@ -2878,6 +2935,7 @@ mod tests {
             vec![-0.999_999_999_997_003_7],
             1e-9,
             1e-12,
+            true,
         );
         assert_eq!(a, vec![-1.0]);
         // y genuinely x^2.9999997: within snap range of 3 but pow(x, 3) misses by ~1e-7
@@ -2896,6 +2954,7 @@ mod tests {
             vec![2.999_999_7],
             1e-9,
             1e-12,
+            true,
         );
         assert_eq!(b, vec![2.999_999_7]);
     }

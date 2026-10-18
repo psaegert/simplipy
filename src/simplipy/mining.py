@@ -181,9 +181,11 @@ def _load_proposals(
     return entries, record
 
 
-#: The rule mode the mine's marks are computed in. The core's ``canon='legacy'`` (its
-#: default) is 0.14's hybrid mark: the Default rule set, folds off, effort 0, f64 numbers.
-_MINE_RULE_MODE = 'default'
+#: The rule mode the mine accepts for. One mine still writes all three files, routed by the
+#: judge's tier afterwards, so it accepts for their union: permissive's acceptance (f64
+#: agreement, or agreement re-judged at high precision). The core's ``canon='legacy'`` (its
+#: default) keeps 0.14's mark under every mode: the Default rule set, folds off, effort 0.
+_MINE_RULE_MODE = 'permissive'
 
 
 #: Which modes a judged tier licenses a rule to serve in. `permissive` is DERIVED (a rule
