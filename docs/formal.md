@@ -113,12 +113,12 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
   product's coefficient slot and an odd function's literal argument is decided by ONE
-  shared pricing orbit on every construction route (the sign-trade owner): $\mu$ picks the cheaper spelling, exact ties resolve to the
-  non-negative coefficient. So $-1 \cdot \sin(2)$ files as $\sin(-2)$ (the product
+  shared pricing orbit on every construction route (the sign-trade owner): $\mu$ picks the cheaper spelling, an exact tie goes
+  to the sign key (§3), which leaves a constant's sign on its literal. So $-1 \cdot \sin(2)$ files as $\sin(-2)$ (the product
   node itself dissolves) and $-5 \cdot \sin(2)$ as $5 \cdot \sin(-2)$ — while a
   magnitude-1 coefficient beside *other* factors keeps the sign, because it rides
   $\mu$-free where the literal's sign bit would cost ($-1 \cdot x_0 \cdot \sin(2)$ is
-  canonical as spelled). <!-- pending: the sign-tie rule is being changed; rewrite after it lands (this sentence and the "written over the positive literal" class text in §3 disagree about sin(-2) vs sin(2)) -->
+  canonical as spelled).
   **An EVEN index is canonical**: `rootn(t, 2)` and `rootn(t, 4)` are normal forms, not reducible ones --
   `rootn` is the canonical spelling of a principal even root and $\mu$ ties it with
   $\mathrm{Pow}(t, 1/k)$, so neither orientation is forced.
@@ -214,8 +214,8 @@ parity differs, and the cheaper of the two is built and priced exactly. A zero c
 convention below) restricts the orientations of the classes it counts, which are decided
 together where one check counts several. An orientation in which a flipped factor lands on the
 base another factor is collected under (an even root counts as a power of its radicand) is no
-candidate. Exact ties go to a non-negative coefficient and then follow an order that is a
-function of the orbit, never of the entry spelling. <!-- pending: the sign-tie rule is being changed; rewrite after it lands --> The debug build checks the price against
+candidate. Exact ties go to the sign key (below) and then to the structural order, both
+functions of the orbit, never of the entry spelling. The debug build checks the price against
 the enumeration of every placement on orbits of up to six classes.
 
 **Convention (opposite classes, one table per product).** A sum $S$ and its negation are one
@@ -235,8 +235,8 @@ infinity or a bare Const that carries it); the even part of $n$ moves freely, an
 moves with its class as a whole under the pole convention below; fractional and symbolic parts
 never move.
 Every placement, including how a side's mass splits between its integer and its fractional
-powers, is priced as the whole product, and the cheapest wins, an exact tie going to a
-non-negative coefficient and then the structurally smaller product, as in `sign_place`. <!-- pending: the sign-tie rule is being changed; rewrite after it lands --> The
+powers, is priced as the whole product, and the cheapest wins, an exact tie going to the sign
+key and then the structurally smaller product, as in `sign_place`. The
 classes are decided together while their placements combine to at most 4,096 products (priced
 in the order of a lower bound on their prices), else one at a time until none moves. The
 decision is a function of the multiset of members, so the product does not depend on how its
@@ -248,22 +248,33 @@ the same tables and rule and differs only in the collections it may license. A c
 definition (`class_base`), which the tables, the like terms, the sign trade and the search's shared
 factors all read: a sum, or an odd function or odd root (of an odd index of at least 3) of a
 negatable argument, a sum or a literal multiple `c u` (a bare `u` is `1 u`, a negation `-1 u`).
-So an odd function of a literal multiple and of its negation are one class, written over the
-positive literal <!-- pending: the sign-tie rule is being changed; rewrite after it lands (I4 files -sin(2) as sin(-2)) -->: `sin(2*x1)/sin(-2*x1)` and `sin(x1)/sin(-x1)` are `-1`,
-`sin(2*x1)*sin(-2*x1)` is `-sin(2*x1)^2`, and an even power of one over a negative literal files
+So an odd function of a literal multiple is a sign-trade site wherever it stands, alone as in a
+product (`sin(-x1)` is `-sin(x1)`, `x2*sin(-x1)` is `-x2*sin(x1)`), and an odd function of a
+literal multiple and of its negation are one class: `sin(2*x1)/sin(-2*x1)` and
+`sin(x1)/sin(-x1)` are `-1`, `sin(2*x1)*sin(-2*x1)` is `-sin(2*x1)^2`, and an even power of one over a negative literal files
 the positive one (`sin(-2*x1)^2` is `sin(2*x1)^2`); `x2*atan(-2*x1)` and `-x2*atan(2*x1)` are
 one answer, so their sum is `0`, and `x3*sin(x1) - sin(x1)` is `sin(x1)*(x3 - 1)`. A join whose
 coefficient becomes 1 re-places its key's
-signs (`term_join`). The decision is three-tier:
+signs (`term_join`). The decision is two-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
-2. an exact $\mu$ tie at a SIGN-TRADE site goes to the structurally distinguished
-   member — the positive-coefficient / bare spelling ("what you typed survives; a
-   leading minus is only ever minted when strictly cheaper");
-3. the sorted-coefficient lexicographic comparison applies ONLY at
-   free-orientation sites (even carriers: even integer powers and the even functions
-   `abs`/`cos`/`cosh`, whose argument orientation is value-free), where neither
-   spelling is structurally distinguished.
+2. an exact $\mu$ tie goes to the sign key, and a tie in that to the structural order `cmp_ex`.
+
+**Convention (the sign key: fewest signs, then outermost).** A *sign* is a negative number of
+the canonical form: a negative coefficient of a product or of a sum's term (a negation is the
+coefficient $-1$) or a negative literal argument. A literal exponent is not a sign (a negative one
+is a reciprocal, printed as a division), nor is the sign of an infinity, which is its value
+($-\infty$ and `log(0)` are one constant, not two placements). A sign inside a *ground* argument of a
+function (one without a variable, a pattern variable or $\diamond$) belongs to that constant and
+is not counted, so a constant keeps its sign on its literal: `-sin(2)` is `sin(-2)` and
+`x1 - sin(2)` is the state `x1 + sin(-2)`. The sign key of a form is the number of its signs,
+then the sum of their depths (the root at depth 0). Wherever two spellings cost the same $\mu$ --
+a sign-trade site, the product table, a sum's orientation, and the reduction ordering (§5), so
+the rule load's gate G7 too -- the one with fewer signs wins, then the one whose signs stand
+further out, then `cmp_ex`: `sin(-x1)` is `-sin(x1)`, `x1 + sin(-x1)` is `x1 - sin(x1)`, and
+`-sin(x1 - x2)` is `sin(x2 - x1)` (one sign, not two). A rule whose two sides differ only in
+where the core places a sign has one canonical state on both sides and is refused at load as
+subsumed (G2).
 
 The toggle rides the bag's SIGN CARRIER, mirroring the absorption arms: a Const
 carrier dominates (the forall-exists refit eats every sign — coefficient and bare
@@ -473,7 +484,7 @@ so it is not a rule, whose acceptance is local to its node.
 
 ## 5. The reduction ordering
 
-$$ a <_o b \iff \big(\mu(a), a\big) <_{\mathrm{lex}} \big(\mu(b), b\big) $$
+$$ a <_o b \iff \big(\mu(a), \sigma(a), a\big) <_{\mathrm{lex}} \big(\mu(b), \sigma(b), b\big) $$
 
 where $\mu$ is the **unified simplicity measure** (`ac::expr::complexity` — description
 length under an exactness-respecting cost model). The integer carrier is the
@@ -535,12 +546,13 @@ exact argmax — analytically $L(m) < 56.48$ and $|k| \leq 343$ put the supremum
 $64.92$ — and the supremum is scoped to the f64 range on purpose: $\diamond$ stands
 for a value a fit will supply, and dominating exactly those is what the construction
 guarantees (a beyond-f64 literal can price below it — $\mu(10^{-400}) = 10.647$
-via its scientific codeword — and nothing rests on outpricing those). Final ties are broken
-by the canonical total order `cmp_ex` (rank, then structural lexicographic comparison,
-with *exact* rational comparison — the 256-bit `cmp_exact`). There is no separate
-literal-size tier: $\mu$'s literal component carries its content up to float precision
-(the float cap below), and the 1,100-bit cap keeps the literals finite (L5), so the ordering
-is a pair, not a triple.
+via its scientific codeword — and nothing rests on outpricing those). An exact $\mu$ tie goes
+to the sign key $\sigma$ (§3: the number of signs, then the sum of their depths, compared as a
+pair: fewest signs, then outermost), and a tie in both to the canonical total order `cmp_ex`
+(rank, then structural lexicographic comparison, with *exact* rational comparison — the 256-bit
+`cmp_exact`). There is no separate literal-size tier: $\mu$'s literal component carries its
+content up to float precision (the float cap below), and the 1,100-bit cap keeps the literals
+finite (L5).
 
 **The float cap.** The evaluator reads every literal as its nearest float64, so a literal's
 price is capped at that float's shortest round-trip decimal $d(v)$ (at most 17 significant
@@ -584,6 +596,7 @@ were not scanned].
   structural induction; antisymmetry holds because normalized `Rat`s are equal iff
   identical and interned tokens are equal iff their strings are; exactness of the literal
   comparison is oracle-tested against an independent Euclidean-descent comparator].
+- $\sigma$ takes values in $\mathbb{N}^2$, ordered lexicographically [BY CONSTRUCTION].
 - Hence $<_o$ is a strict total order on $T_{\mathrm{can}}$ [THEOREM, given the above].
 
 **Lemma L5 (finite level sets)** [THEOREM]. For every $\mu_0$, only finitely many
@@ -605,7 +618,7 @@ $\square$
 **Theorem T-wf ($<_o$ is well-founded)** [THEOREM]. There is no infinite strictly
 $<_o$-descending sequence. *Proof.* Along such a sequence $\mu$ is non-increasing, so
 eventually constant; the tail then lives in one finite level set (L5) and descends the
-strict total order `cmp_ex`, so it is finite. $\square$
+strict total order $(\sigma, \texttt{cmp\_ex})$ on it, so it is finite. $\square$
 
 A dense-literal chain ascends while its literals carry no more than float precision: the
 chain $\mathrm{Mul}[3/2^k, x]$ grows strictly in $\mu$ with $k$ up to $k = 55$; at $k = 56$
@@ -616,8 +629,8 @@ bounded by the 1,100-bit cap, and T-wf holds through L5 — and a rewrite cannot
 anyway: every step preserves the term's value, and changing one literal alone changes it
 (pinned in `tests/test_unified_measure.py`: the chain ascends up to the float cap's onset, and
 simplifying the chain's members settles and re-reads to itself). A pure re-sort or re-orientation preserves
-$\mu$ (the leaf multiset and shape are unchanged) and is decided by `cmp_ex`, exactly
-as before.
+$\mu$ (the leaf multiset and shape are unchanged) and is decided by the sign key, then
+`cmp_ex`, exactly as before.
 
 **Why numeric-string leaves are priced.** The numeric fold interns its result as a
 token; a term can therefore carry literals that exist only as opaque numeric *strings*
@@ -629,8 +642,8 @@ ordering at the number/leaf boundary, and license deep-magnitude roundings;
 **The property that fails, and why it matters.** $<_o$ is **not** closed under
 substitution or context: $\mu$ is *not additive* (coefficients and exponents carry
 positional costs), and every fire renormalizes. Example: the hypothetical rule
-$\mathrm{Pow}(\_0, 2) \to \mathrm{Mul}[2, \_0]$ ties on patterns ($\mu = 11.585$ both,
-decided by `cmp_ex`), but the instance $\_0 \mapsto 5$ folds both sides to literals
+$\mathrm{Pow}(\_0, 2) \to \mathrm{Mul}[2, \_0]$ ties on patterns ($\mu = 11.585$ both, no
+signs, decided by `cmp_ex`), but the instance $\_0 \mapsto 5$ folds both sides to literals
 ($25$ at $\mu = 5.7$, $10$ at $\mu = 3$) whose comparison the pattern cannot see. This is why orientation is enforced **per
 instance at the fire site** (the `oriented` gate), and why G7's static pattern check is an
 *alignment* gate, not the termination mechanism. It also means the published system's
@@ -691,7 +704,7 @@ expressions biased toward coefficient/exponent cost shifts and i128-boundary lit
 Tie **fires**: none occurred (0). Tie **rebuilds**: 169 calls (0.3%), every one on a
 fuzz input carrying overflow-magnitude literals, at most 4 per call, none from the
 mined corpus. Because literals pay their bits in $\mu$'s first component, equal-$\mu$
-level sets are finite (L5) and every tie is decided by `cmp_ex`; pure re-sorts — the
+level sets are finite (L5) and every tie is decided by the sign key and `cmp_ex`; pure re-sorts — the
 observed benign tie class — preserve $\mu$ and descend the canonical order.
 
 **Soundness of refusal** [BY CONSTRUCTION]. Every state in the chain is a sound form of
@@ -837,7 +850,7 @@ well-foundedness would need re-establishing for the new order.
 | If you change… | You must re-establish… |
 |---|---|
 | the rule asset | nothing — the translation gates re-vet on every load (drops are counted by reason, visible in `ac_rules_info_in_mode` and `ac_rules_drop_census`) |
-| the $\mu$ weight table or `cmp_ex` | T-wf (well-foundedness of the new pair — L5's finite-level-set argument must survive, including the numeric-string-leaf clause); G7 re-vets every asset on load; re-run the corpus gates AND the unit-sensitivity grid: the *reachable* normal forms change |
+| the $\mu$ weight table, the sign key or `cmp_ex` | T-wf (well-foundedness of the new triple — L5's finite-level-set argument must survive, including the numeric-string-leaf clause); G7 re-vets every asset on load; re-run the corpus gates AND the unit-sensitivity grid: the *reachable* normal forms change |
 | a constructor (`add`/`mul`/`pow`/`fun`) | L1 (check any new self-call has a decreasing measure), I1–I4; the fold needs no descent premise (it is `oriented`-gated at the pass); then the corpus gates |
 | the matcher | the step-relation definition of §4 (binding soundness); L2 is unaffected (orientation checks the result, not the match) |
 | `rewrite_pass` control flow | L2 (every state change gated), L3 (no ungated mutation path), memo semantics (§6 L6 caveat) |

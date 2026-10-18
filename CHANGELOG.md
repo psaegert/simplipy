@@ -206,6 +206,19 @@ model predictions.
   zero only through a term that vanishes faster there (`(3 - x1) + x2*exp(-1/(x1 - 3)^2)`) is
   read as a class of its own, so its sign can move alone and flip the infinity at that zero (also
   in 0.14.7).
+- **Fewest signs, then outermost.** Where two spellings cost the same, the answer is the one with
+  fewer signs, then the one whose signs stand further out, wherever such a tie is decided: the sign
+  placement, the product table, a sum's orientation and the order the rules are loaded and fired
+  under. A sign is a negative coefficient (a negation is `-1`) or a negative literal argument; an
+  exponent and an infinity carry none, and a sign inside a function's constant argument belongs to
+  that constant. An odd function of a literal multiple, a bare or negated argument included, trades
+  its sign wherever it stands, alone too. So `sin(-x1)` is `-sin(x1)`, `x1 + sin(-x1)` is
+  `x1 - sin(x1)` and `-sin(x1 - x2)` is `sin(x2 - x1)`, while `-sin(2)` is `sin(-2)`; and where
+  the trade is cheaper it is taken: `x2*sin(-x1)` is `-x2*sin(x1)`, 3 bits cheaper. On srbf's
+  ground truths, every spelling that writes an odd function `f(u)` as `-f(-u)` gets the
+  original's answer (2,660 such spellings of 1,780 ground truths, in every mode). Mined rules that
+  only move a sign at an odd function have one canonical state on both sides and are refused at
+  load as subsumed.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
