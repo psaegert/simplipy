@@ -323,7 +323,10 @@ class TestCorpusGate:
         # some terms of a sum share out of exactly those terms, DISTRIBUTE also works on one
         # factor or one term of a sum factor, and every candidate is tried cheapest rebuilt state
         # first in one search: 50 walk rows move, every one to a cheaper answer.
-        assert walk['complexity_out'] == 55815451, walk['complexity_out']
+        # ONE CLASS READING: 55,815,451 -> 55,812,451. An odd function of a negated argument is a
+        # class member like one of a sum, so an even power over it files the positive argument:
+        # row 397's `sinh(sinh(-x15))^2` is `sinh(sinh(x15))^2` (-3,000).
+        assert walk['complexity_out'] == 55812451, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

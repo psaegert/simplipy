@@ -2124,20 +2124,23 @@ fn orient_factor(f: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
     Some((g, flipped && odd))
 }
 
-/// A sum, an odd function of one or an odd root of one, in its class's orientation, and whether
-/// it flipped (each is odd in its sum, so a flip moves a sign out); `None` where it already has
-/// it. The sum's terms are read with every odd function of a negative literal multiple turned
-/// positive (`sin(-x1)` as `-sin(x1)`), so that a sum and its negation spell their terms alike.
-/// The class's orientation is the structurally smaller one, or as `turns` gives it.
+/// A class base (`class_base`: a sum, or an odd head of a negatable argument) in its class's
+/// orientation, and whether it flipped (each is odd in its argument, so a flip moves a sign out);
+/// `None` where it already has it. A sum's terms are read with every odd head of a negative literal
+/// multiple turned positive (`sin(-x1)` as `-sin(x1)`), so that a sum and its negation spell their
+/// terms alike; the sum's orientation is the structurally smaller one, or as `turns` gives it. An
+/// odd head's argument takes its own orientation where it holds a class (`sin(-(x1 (x1 - 3)))` is
+/// `-sin(x1 (x1 - 3))`), else its positive literal (`sin(-x1)` is `-sin(x1)`).
 fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
     match b {
-        Ex::Add(ts) => {
-            if ts
-                .iter()
-                .any(|t| t.contains_const() || t.contains_infinity())
-            {
+        Ex::Add(_) => {
+            let Some(ClassBase {
+                arg: ClassArg::Sum(ts),
+                ..
+            }) = class_base(b, cx)
+            else {
                 return None;
-            }
+            };
             let turn = if turns.is_empty() {
                 None
             } else {
@@ -2161,17 +2164,20 @@ fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
                 (pb != *b).then_some((pb, false))
             }
         }
-        Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-            let (a, s) = orient_base(&args[0], cx, turns)?;
-            Some((Ex::Fun(*fk, vec![a]), s))
-        }
-        Ex::Fun(fk, args)
-            if args.len() == 2
-                && cx.view.tok_is(*fk, "rootn")
-                && matches!(&args[1], Ex::Num(k) if k.is_odd_integer()) =>
-        {
-            let (a, s) = orient_base(&args[0], cx, turns)?;
-            Some((Ex::Fun(*fk, vec![a, args[1].clone()]), s))
+        Ex::Fun(fk, args) => {
+            let ClassBase { head: Some(_), arg } = class_base(b, cx)? else {
+                return None;
+            };
+            let (a, s) = match (orient_base(&args[0], cx, turns), arg) {
+                (Some(o), _) => o,
+                (None, ClassArg::Multiple(m)) if multiple_literal(m)?.is_negative() => {
+                    (positive_multiple(m)?, true)
+                }
+                _ => return None,
+            };
+            let mut v = args.clone();
+            v[0] = a;
+            Some((Ex::Fun(*fk, v), s))
         }
         // An integer power of a class carrier: odd powers move the sign out, even ones do not. A
         // negative power whose base's zero set may hold a region keeps its spelling
@@ -2228,60 +2234,35 @@ fn orient_base(b: &Ex, cx: &Cx, turns: &[(Ex, Turn)]) -> Option<(Ex, bool)> {
     }
 }
 
-/// Does `f` carry a class that `orient_base` reorients: a sum, or an odd function, odd root,
-/// integer power or product of a carrier?
+/// Does `f` carry a class that `orient_base` reorients: a class base (`class_base`), or an integer
+/// power or product of one?
 fn carries_class(f: &Ex, cx: &Cx) -> bool {
     match f {
-        Ex::Add(ts) => !ts
-            .iter()
-            .any(|t| t.contains_const() || t.contains_infinity()),
         Ex::Pow(b, q) => matches!(&**q, Ex::Num(r) if r.is_integer()) && carries_class(b, cx),
-        Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-            carries_class(&args[0], cx)
-        }
-        Ex::Fun(fk, args)
-            if args.len() == 2
-                && cx.view.tok_is(*fk, "rootn")
-                && matches!(&args[1], Ex::Num(k) if k.is_odd_integer()) =>
-        {
-            carries_class(&args[0], cx)
-        }
         Ex::Mul(fs) => fs.iter().any(|g| carries_class(g, cx)),
-        _ => false,
+        f => class_base(f, cx).is_some(),
     }
 }
 
-/// The classes `f` carries where `orient_base` reaches them (`carries_class`), each in its one
-/// orientation.
+/// The sums `f` carries as classes where `orient_base` reaches them (`carries_class`), each in its
+/// one orientation (`class_of`, the key a class's zero is read by).
 fn carried_classes(f: &Ex, cx: &Cx, out: &mut Vec<Ex>) {
     match f {
-        Ex::Add(ts) => {
-            if !ts
-                .iter()
-                .any(|t| t.contains_const() || t.contains_infinity())
-            {
+        Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_integer()) => {
+            carried_classes(b, cx, out)
+        }
+        Ex::Mul(fs) => fs.iter().for_each(|g| carried_classes(g, cx, out)),
+        f => match class_base(f, cx).map(|c| c.arg) {
+            Some(ClassArg::Sum(ts)) => {
                 if let Some((k, _, _)) = class_of(ts, cx) {
                     if !out.contains(&k) {
                         out.push(k);
                     }
                 }
             }
-        }
-        Ex::Pow(b, q) if matches!(&**q, Ex::Num(r) if r.is_integer()) => {
-            carried_classes(b, cx, out)
-        }
-        Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-            carried_classes(&args[0], cx, out)
-        }
-        Ex::Fun(fk, args)
-            if args.len() == 2
-                && cx.view.tok_is(*fk, "rootn")
-                && matches!(&args[1], Ex::Num(k) if k.is_odd_integer()) =>
-        {
-            carried_classes(&args[0], cx, out)
-        }
-        Ex::Mul(fs) => fs.iter().for_each(|g| carried_classes(g, cx, out)),
-        _ => {}
+            Some(ClassArg::Multiple(m)) => carried_classes(m, cx, out),
+            None => {}
+        },
     }
 }
 
@@ -2309,17 +2290,10 @@ fn positive_multiple(a: &Ex) -> Option<Ex> {
     }
 }
 
-/// A term with each odd function of a negative literal multiple (possibly under an integer
-/// power) turned positive, the signs moved into the term's coefficient. Raw.
+/// A term with each odd head of a negative literal multiple (possibly under an integer power)
+/// turned positive (`positive_head`), the signs moved into the term's coefficient. Raw.
 fn odd_signs_out(t: &Ex, cx: &Cx) -> Ex {
-    let flip_fun = |f: &Ex| -> Option<Ex> {
-        match f {
-            Ex::Fun(fk, args) if args.len() == 1 && odd_fun(cx.view, *fk) => {
-                Some(Ex::Fun(*fk, vec![positive_multiple(&args[0])?]))
-            }
-            _ => None,
-        }
-    };
+    let flip_fun = |f: &Ex| positive_head(f, cx);
     let (mut c, factors): (Rat, Vec<Ex>) = match t {
         Ex::Mul(fs) => match fs.first() {
             Some(Ex::Num(r)) => (r.clone(), fs[1..].to_vec()),
@@ -4505,8 +4479,10 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
     // multiple the positive one (as an even power of it files, `pow`).
     for c in classes.iter_mut() {
         let first = if c.multiple() {
-            matches!(&c.sums[1][..], [Ex::Num(r)] if !r.is_negative())
-                || matches!(&c.sums[1][..], [Ex::Mul(v)] if matches!(v.first(), Some(Ex::Num(r)) if !r.is_negative()))
+            c.sums[1]
+                .first()
+                .and_then(multiple_literal)
+                .is_some_and(|r| !r.is_negative())
         } else {
             cmp_vec(&c.sums[1], &c.sums[0], cx.view) == Ordering::Less
         };
@@ -4868,48 +4844,116 @@ fn holds_joinable_roots(v: &[Ex], cx: &Cx) -> bool {
 
 /// How a factor reads as a member of a class {B, -B} (`collect_opposite_sums`): the head of `B`
 /// (`None` for the sum itself, else the odd function and an odd root's index), the terms of its
-/// argument, and the factor's exponent over `B` (`None` when it is symbolic). The argument is a
-/// sum, or under a head a literal multiple (`sin(2 x1)` and `sin(-2 x1)`, `sin(2)` and `sin(-2)`),
-/// read as a sum of one term. Only an argument the sign may pass through is a class's: a
-/// `Const`-bearing, negation-absorbing or bare-infinity sum has its own owners.
+/// argument (`class_base`; a literal multiple is a sum of one term: `sin(2 x1)` and `sin(-2 x1)`,
+/// `sin(x1)` and `sin(-x1)`, `sin(2)` and `sin(-2)`), and the factor's exponent over `B` (`None`
+/// when it is symbolic).
 struct ClassRead<'a> {
     head: Option<(Tok, Option<&'a Ex>)>,
     terms: &'a [Ex],
     exp: Option<Rat>,
 }
 
-/// A literal multiple: a nonzero literal, or a product led by a literal other than 0, 1 and -1
-/// (`odd_of_literal_multiple`'s argument).
-fn is_literal_multiple(m: &Ex) -> bool {
-    match m {
-        Ex::Num(r) => !r.is_zero(),
-        Ex::Mul(v) => {
-            matches!(v.first(), Some(Ex::Num(r)) if !r.is_zero() && !r.is_one() && *r != Rat::NEG_ONE)
+/// THE CLASS READING, the one definition every owner asks (the product table `class_read`, the
+/// orientation of like terms and of shared factors `orient_base`, the sign trade's classes
+/// `site_multiple`, a term read up to sign `odd_signs_out`, and `pow`'s even powers). A class is a
+/// pair {B, -B}: a sum and its negation, or an odd head -- an odd function, or an odd root of an
+/// odd index of at least 3 -- of a negatable argument and of its negation. A negatable argument is
+/// a sum, or a literal multiple `c u` (`multiple_literal`: a bare `u` is `1 u`, a negation `-u` is
+/// `-1 u`, a literal is itself). A sum is one only where the sign may pass through it: a sum
+/// holding a `Const` or an infinity, or a term that absorbs a negation, has its own owners.
+struct ClassBase<'a> {
+    head: Option<(Tok, Option<&'a Ex>)>,
+    arg: ClassArg<'a>,
+}
+
+/// The argument of a class base: a sum's terms, or a literal multiple.
+enum ClassArg<'a> {
+    Sum(&'a [Ex]),
+    Multiple(&'a Ex),
+}
+
+impl<'a> ClassArg<'a> {
+    /// The argument as the terms of a sum (a literal multiple is a sum of one term).
+    fn terms(&self) -> &'a [Ex] {
+        match self {
+            ClassArg::Sum(ts) => ts,
+            ClassArg::Multiple(m) => std::slice::from_ref(*m),
         }
-        _ => false,
     }
 }
 
-fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
-    type Head<'a> = Option<(Tok, Option<&'a Ex>)>;
-    fn base_read<'a>(b: &'a Ex, cx: &Cx) -> Option<(Head<'a>, &'a [Ex])> {
-        let odd_index = |k: &Ex| matches!(k, Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less);
-        let arg = |a: &'a Ex| match a {
-            Ex::Add(ts) => Some(ts.as_slice()),
-            m if is_literal_multiple(m) => Some(std::slice::from_ref(m)),
-            _ => None,
-        };
-        match b {
-            Ex::Add(ts) => Some((None, ts)),
-            Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => {
-                Some((Some((*op, None)), arg(&a[0])?))
-            }
-            Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") && odd_index(&a[1]) => {
-                Some((Some((*op, Some(&a[1]))), arg(&a[0])?))
-            }
-            _ => None,
+fn class_base<'a>(b: &'a Ex, cx: &Cx) -> Option<ClassBase<'a>> {
+    let sum = |ts: &'a [Ex]| {
+        (!ts.iter()
+            .any(|t| t.contains_const() || t.contains_infinity() || term_absorbs_negation(t)))
+        .then_some(ClassArg::Sum(ts))
+    };
+    match b {
+        Ex::Add(ts) => Some(ClassBase {
+            head: None,
+            arg: sum(ts)?,
+        }),
+        Ex::Fun(op, a) => {
+            let index = match a.as_slice() {
+                [_] if odd_fun(cx.view, *op) => None,
+                [_, k]
+                    if cx.view.tok_is(*op, "rootn")
+                        && matches!(k, Ex::Num(k) if k.is_odd_integer() && k.cmp_int(3) != Ordering::Less) =>
+                {
+                    Some(k)
+                }
+                _ => return None,
+            };
+            let arg = match &a[0] {
+                Ex::Add(ts) => sum(ts)?,
+                m => {
+                    multiple_literal(m)?;
+                    ClassArg::Multiple(m)
+                }
+            };
+            Some(ClassBase {
+                head: Some((*op, index)),
+                arg,
+            })
         }
+        _ => None,
     }
+}
+
+/// The literal of a literal multiple `c u`: `c`, 1 for a bare `u`; `None` for a sum, a zero, and an
+/// argument holding a `Const` or an infinity, whose signs have their own owners.
+fn multiple_literal(m: &Ex) -> Option<Rat> {
+    if matches!(m, Ex::Add(_)) || m.contains_const() || m.contains_infinity() {
+        return None;
+    }
+    let c = match m {
+        Ex::Num(r) => r.clone(),
+        Ex::Mul(v) => match v.first() {
+            Some(Ex::Num(r)) => r.clone(),
+            _ => Rat::ONE,
+        },
+        _ => Rat::ONE,
+    };
+    (!c.is_zero()).then_some(c)
+}
+
+/// `b` over the positive literal of its class's argument, where `b` is an odd head over a literal
+/// multiple with a negative literal (`sin(-2 x1)` is `-sin(2 x1)`); raw.
+fn positive_head(b: &Ex, cx: &Cx) -> Option<Ex> {
+    let ClassBase {
+        head: Some(_),
+        arg: ClassArg::Multiple(m),
+    } = class_base(b, cx)?
+    else {
+        return None;
+    };
+    let Ex::Fun(op, a) = b else { return None };
+    let mut args = a.clone();
+    args[0] = positive_multiple(m)?;
+    Some(Ex::Fun(*op, args))
+}
+
+fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
     let (base, exp) = match f {
         Ex::Pow(b, e) => (
             &**b,
@@ -4928,34 +4972,33 @@ fn class_read<'a>(f: &'a Ex, cx: &Cx) -> Option<ClassRead<'a>> {
         }
         other => (other, Some(Rat::ONE)),
     };
-    let (head, terms) = base_read(base, cx)?;
-    let tradeable = !terms.iter().any(Ex::contains_const)
-        && !terms.iter().any(term_absorbs_negation)
-        && !terms.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf));
-    tradeable.then_some(ClassRead { head, terms, exp })
+    let ClassBase { head, arg } = class_base(base, cx)?;
+    Some(ClassRead {
+        head,
+        terms: arg.terms(),
+        exp,
+    })
 }
 
 /// The class of a sign-trade site over a literal multiple (`class_read`'s {B, -B}): `B`, the
 /// head over the multiple with its literal made positive, and whether the site spells `-B`.
-fn site_multiple(f: &Ex) -> Option<(Ex, bool)> {
+fn site_multiple(f: &Ex, cx: &Cx) -> Option<(Ex, bool)> {
     let m = match f {
         Ex::Pow(b, q) if matches!(&**q, Ex::Num(_)) => &**b,
         _ => f,
     };
-    let Ex::Fun(op, a) = m else { return None };
-    let (positive, negative) = match a.first()? {
-        Ex::Num(r) if !r.is_zero() => (Ex::Num(r.abs()), r.is_negative()),
-        Ex::Mul(v) if is_literal_multiple(&a[0]) => {
-            let Ex::Num(r) = &v[0] else { return None };
-            let mut k = v.clone();
-            k[0] = Ex::Num(r.abs());
-            (Ex::Mul(k), r.is_negative())
-        }
-        _ => return None,
+    let ClassBase {
+        head: Some(_),
+        arg: ClassArg::Multiple(arg),
+    } = class_base(m, cx)?
+    else {
+        return None;
     };
-    let mut args = a.clone();
-    args[0] = positive;
-    Some((Ex::Fun(*op, args), negative))
+    if multiple_literal(arg)?.is_negative() {
+        Some((positive_head(m, cx)?, true))
+    } else {
+        Some((m.clone(), false))
+    }
 }
 
 /// The class a sign-trade site is built over: the sum under the site's head (the sum itself, an
@@ -5579,10 +5622,13 @@ impl<'a> Class<'a> {
         let base = self.base(0);
         let flip = self.flip.get_or_init(|| {
             if multiple {
-                return match sign_trade_flip(&base, cx) {
-                    Some(Ex::Fun(_, a)) if is_literal_multiple(&a[0]) => Some(vec![a[0].clone()]),
-                    _ => None,
+                // The head's own flip where it is a sign-trade site (a literal folds through
+                // `fun()`), else the argument negated.
+                let negated = match sign_trade_flip(&base, cx) {
+                    Some(Ex::Fun(_, a)) => a[0].clone(),
+                    _ => negate_term(&first[0], cx)?,
                 };
+                return multiple_literal(&negated).map(|_| vec![negated]);
             }
             match sign_trade_flip(&Ex::Add(first.clone()), cx) {
                 Some(Ex::Add(f)) => Some(f),
@@ -5633,7 +5679,7 @@ impl<'a> Class<'a> {
     /// The base over one side's sum (a literal multiple as itself).
     fn base(&self, side: usize) -> Ex {
         let sum = match self.sums[side].as_slice() {
-            [m] if self.head.is_some() && is_literal_multiple(m) => m.clone(),
+            [m] if self.head.is_some() => m.clone(),
             ts => Ex::Add(ts.to_vec()),
         };
         match &self.head {
@@ -6414,7 +6460,7 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
         // orientation for the whole group; the sites spelled against it flip.
         let mut groups: Vec<ClassGroup> = Vec::new();
         for (bit, (pos, _)) in site_flips.iter().enumerate() {
-            let class = match site_multiple(&out[*pos]) {
+            let class = match site_multiple(&out[*pos], cx) {
                 Some(c) => Some(c),
                 None if meets => site_class(&out[*pos], cx),
                 None => None,
@@ -8110,16 +8156,9 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         }
         // And over a negative literal multiple, the positive one: `sin(-2 x1)^2` is
         // `sin(2 x1)^2`, as the class {sin(2 x1), sin(-2 x1)} is written (`collect_opposite_sums`).
-        let negative = match &args[0] {
-            Ex::Num(c) => c.is_negative(),
-            m => {
-                is_literal_multiple(m)
-                    && matches!(m, Ex::Mul(v) if matches!(v.first(), Some(Ex::Num(c)) if c.is_negative()))
-            }
-        };
-        if odd && negative && r.is_even_integer() && !r.is_zero() {
-            if let Some(flipped) = sign_trade_flip(&base, cx) {
-                return pow(flipped, exp, cx);
+        if r.is_even_integer() && !r.is_zero() {
+            if let Some(Ex::Fun(fk, fa)) = positive_head(&base, cx) {
+                return pow(fun(fk, fa, cx), exp, cx);
             }
         }
     }

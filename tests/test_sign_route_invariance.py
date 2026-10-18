@@ -389,13 +389,16 @@ def test_a_bracketed_product_collects_as_the_flat_one(eng, mode, bag):
 
 
 # AN ODD FUNCTION OF A LITERAL MULTIPLE AND OF ITS NEGATION ARE ONE CLASS {B, -B}, as an odd function of a
-# sum and of its negation are: the product collects them, written over the positive literal.
+# sum and of its negation are: the product collects them, written over the positive literal. A bare argument is a
+# multiple of 1 and a negation one of -1 (`sin(x1)` and `sin(-x1)`).
 @pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('spellings, expected', [
     (['/ sin * 2 x1 sin * -2 x1', '/ sin * -2 x1 sin * 2 x1', '/ rootn * 2 x1 3 rootn * -2 x1 3'], '-1'),
     (['* sin 2 sin -2', 'neg pow sin 2 2', 'neg pow sin -2 2'], None),
     (['* sin * 2 x1 sin * -2 x1', 'neg pow sin * 2 x1 2', 'neg pow sin * -2 x1 2'], None),
     (['* * x2 tan * 3 x1 tan * -3 x1', 'neg * x2 pow tan * 3 x1 2'], None),
+    (['/ sin x1 sin neg x1', '/ sin neg x1 sin x1', '/ rootn x1 3 rootn neg x1 3'], '-1'),
+    (['* sin x1 sin neg x1', 'neg pow sin x1 2', 'neg pow sin neg x1 2'], 'neg pow sin x1 2'),
 ])
 def test_an_odd_function_of_a_literal_multiple_is_a_class(eng, mode, spellings, expected):
     answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
@@ -424,3 +427,18 @@ def test_wide_products_get_one_answer(eng, mode, pair):
     a, b = (list(eng.simplify(list(t), mode=mode)) for t in pair)
     assert a == b
     assert list(eng.simplify(a, mode=mode)) == a
+
+
+# ONE CLASS READING FOR THE SHARED FACTOR AND THE LIKE TERM: a term over an odd function of a negated argument
+# shares that function with a term over its positive argument, up to sign, so the search factors it as it factors
+# an odd function of a sum and of its negation.
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('spellings, expected', [
+    (['- * x3 sin x1 sin x1', '+ * x3 sin x1 sin neg x1'], '* sin x1 - x3 1'),
+    (['- * x3 rootn x1 3 rootn x1 3', '+ * x3 rootn x1 3 rootn neg x1 3'], '* rootn x1 3 - x3 1'),
+    (['- * x3 sin - x1 x2 sin - x1 x2', '+ * x3 sin - x1 x2 sin - x2 x1'], '* sin - x1 x2 - x3 1'),
+    (['- * <constant> sin x1 sin x1', '+ * <constant> sin x1 sin neg x1'], '* <constant> sin x1'),
+])
+def test_a_shared_odd_function_is_read_up_to_sign(eng, mode, spellings, expected):
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert answers == {expected}

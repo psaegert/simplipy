@@ -247,12 +247,16 @@ decision is a function of the multiset of members, so the product does not depen
 factors were bracketed or ordered: `(x - a)*(a - x)` is `-(x - a)^2`, `(x - a)^2/(a - x)/(x - a)`
 is `-1`, and `tanh(x - a)*(tanh(x - a)*(-1))` is `-tanh(x - a)^2`, as written flat. The bare
 (certificate-free) context, such as the entry parse, the bare measure or a rule's sides, uses
-the same tables and rule and differs only in the collections it may license. An odd function or
-odd root of a literal multiple and of its negation are one class too, written over the positive
-literal (`class_read`): `sin(2*x1)/sin(-2*x1)` is `-1` and `sin(2*x1)*sin(-2*x1)` is
-`-sin(2*x1)^2`, and an even power of one over a negative literal files the positive one
-(`sin(-2*x1)^2` is `sin(2*x1)^2`); `x2*atan(-2*x1)` and `-x2*atan(2*x1)` are one answer, so
-their sum is `0`. A join whose coefficient becomes 1 re-places its key's
+the same tables and rule and differs only in the collections it may license. A class has one
+definition (`class_base`), which the tables, the like terms, the sign trade and the search's shared
+factors all read: a sum, or an odd function or odd root (of an odd index of at least 3) of a
+negatable argument, a sum or a literal multiple `c u` (a bare `u` is `1 u`, a negation `-1 u`).
+So an odd function of a literal multiple and of its negation are one class, written over the
+positive literal: `sin(2*x1)/sin(-2*x1)` and `sin(x1)/sin(-x1)` are `-1`,
+`sin(2*x1)*sin(-2*x1)` is `-sin(2*x1)^2`, and an even power of one over a negative literal files
+the positive one (`sin(-2*x1)^2` is `sin(2*x1)^2`); `x2*atan(-2*x1)` and `-x2*atan(2*x1)` are
+one answer, so their sum is `0`, and `x3*sin(x1) - sin(x1)` is `sin(x1)*(x3 - 1)`. A join whose
+coefficient becomes 1 re-places its key's
 signs (`term_join`). The decision is three-tier:
 
 1. $\mu$ decides where it can (strict argmin over the materialized orbit);
