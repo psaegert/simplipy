@@ -274,18 +274,20 @@ fn rebuild(e: &Ex, path: &[usize], moved: Ex, cx: &Cx) -> Ex {
 fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec<Ex>) {
     match e {
         // DISTRIBUTE (the row-156 move): fully distribute a Mul bag over its Add
-        // children; and, the reverse of FACTOR on some of a sum's terms, one factor into one
-        // sum factor, the other factors left outside (`x2*sqrt(x1)*(sqrt(x1) - x3)` is
-        // `x2*(x1 - x3*sqrt(x1))`).
+        // children; and on a sub-multiset, the reverse of FACTOR on some of a sum's terms: one
+        // factor into one sum factor, the other factors left outside
+        // (`x2*sqrt(x1)*(sqrt(x1) - x3)` is `x2*(x1 - x3*sqrt(x1))`), and the other factors over
+        // one term of a sum factor, the rest of the sum left inside (`(x1 + x2 + x3)/x2` is
+        // `(x1 + x3)/x2 + 1`).
         Ex::Mul(v) => {
             if let Some(cand) = distribute_product(v, cx) {
                 out.push(cand);
             }
-            if v.len() > 2 {
-                for (si, s) in v.iter().enumerate() {
-                    if !matches!(s, Ex::Add(_)) {
-                        continue;
-                    }
+            for (si, s) in v.iter().enumerate() {
+                let Ex::Add(ts) = s else {
+                    continue;
+                };
+                if v.len() > 2 {
                     for (fi, f) in v.iter().enumerate() {
                         if matches!(f, Ex::Add(_)) {
                             continue;
@@ -300,6 +302,32 @@ fn local_moves(e: &Ex, cx: &Cx, near: &[&Ex], power: Option<&Rat>, out: &mut Vec
                             rest.push(inner);
                             out.push(mul(rest, cx));
                         }
+                    }
+                }
+                // The other factors go into two terms, so DISTRIBUTE's licences: no
+                // `<constant>` among them, and every piece licensed.
+                let rest: Vec<Ex> = v
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| k != si)
+                    .map(|(_, x)| x.clone())
+                    .collect();
+                if ts.len() > 2
+                    && rest.iter().all(|f| !f.contains_const() && licensed(f, cx))
+                    && ts.iter().all(|t| licensed(t, cx))
+                {
+                    for (ti, t) in ts.iter().enumerate() {
+                        let left: Vec<Ex> = ts
+                            .iter()
+                            .enumerate()
+                            .filter(|&(k, _)| k != ti)
+                            .map(|(_, x)| x.clone())
+                            .collect();
+                        let mut a = rest.clone();
+                        a.push(add(left, cx));
+                        let mut b = rest.clone();
+                        b.push(t.clone());
+                        out.push(add(vec![mul(a, cx), mul(b, cx)], cx));
                     }
                 }
             }
@@ -393,14 +421,7 @@ fn factor_moves(terms: &[Ex], cx: &Cx, near: &[&Ex], power: Option<&Rat>) -> Vec
     if terms.len() > EXPAND_TERM_CAP {
         return Vec::new();
     }
-    let licensed = |f: &Ex| {
-        if f.contains_infinity() {
-            cx.fin_certified(f)
-        } else {
-            cx.fin_licensed(f)
-        }
-    };
-    let cands = factorings(terms, cx, &licensed);
+    let cands = factorings(terms, cx, &|f| licensed(f, cx));
     if cands.is_empty() {
         return Vec::new();
     }
@@ -710,6 +731,17 @@ fn factor_shared(terms: &[Ex], cx: &Cx, licensed: &dyn Fn(&Ex) -> bool) -> Optio
     Some((mul(vec![c.clone(), add(quotients, cx)], cx), c))
 }
 
+/// The licence of every move of the distributive law, on each piece the identity multiplies or
+/// collects (see [`distribute_product`]): finite a.e. (the `!` certificate, the lossy blanket in a
+/// lossy mode), and the sound certificate for a piece that spells an infinity.
+fn licensed(f: &Ex, cx: &Cx) -> bool {
+    if f.contains_infinity() {
+        cx.fin_certified(f)
+    } else {
+        cx.fin_licensed(f)
+    }
+}
+
 /// Fully distribute a product over its Add factors: the cartesian expansion
 /// `sum over picks of (rest * pick)`, built through the canonical constructors under
 /// the caller's certificate context (so licensed collections -- the recollect that
@@ -766,14 +798,9 @@ fn distribute_product(factors: &[Ex], cx: &Cx) -> Option<Ex> {
     // Finite-a.e. licences for the distribution identity itself; the lossy blanket does
     // not cover a piece that spells an infinity (see the doc above). Outside lossy mode
     // both branches are the same certificate, so the sound modes are unchanged.
-    let licensed = |f: &Ex| {
-        if f.contains_infinity() {
-            cx.fin_certified(f)
-        } else {
-            cx.fin_licensed(f)
-        }
-    };
-    if !rest.iter().all(licensed) || !adds.iter().all(|v| v.iter().all(licensed)) {
+    if !rest.iter().all(|f| licensed(f, cx))
+        || !adds.iter().all(|v| v.iter().all(|f| licensed(f, cx)))
+    {
         return None;
     }
     // The cartesian picks, in canonical bag order (deterministic).
