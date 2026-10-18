@@ -164,15 +164,14 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
     empty rather than asserting something false.
 
     ``permissive_dominance`` CONTRACT. ``None`` when ``engine_config`` is not given
-    (nothing was asked). When it IS given but the corpus resolves to 0 rows -- every
-    wheel install lacks ``benchmarks/corpus/raw_skeletons_nv.json``, so the default
-    corpus is empty outside a repository checkout -- the check CANNOT run and the report
-    says so explicitly: ``{'checked': False, 'reason': '<why>'}`` plus a ``UserWarning``,
-    NEVER an empty list. (It reported ``[]`` on 0 rows twice during the 0.14.0 release
-    verification, indistinguishable from a genuine zero-violation sweep.) When rows were
-    actually swept: ``{'checked': True, 'violations': [...]}``, dirty iff ``violations``
-    is non-empty. ``is_clean`` is NEVER affected by an unchecked dominance: unchecked
-    means unknown -- not passing, and not failing either.
+    (nothing was asked). The rows swept are ``corpus_rows``, or :func:`default_corpus`
+    (shipped with the package) when it is ``None``. When rows were swept:
+    ``{'checked': True, 'violations': [...]}``, dirty iff ``violations`` is non-empty.
+    An explicitly empty ``corpus_rows`` sweeps nothing, and the report says so:
+    ``{'checked': False, 'reason': '<why>'}`` plus a ``UserWarning``, never an empty
+    violation list, which would read as a zero-violation sweep. ``is_clean`` is not
+    affected by an unchecked dominance: unchecked means unknown -- not passing, and not
+    failing either.
 
     Returns ``{'is_clean', 'modes': {mode: report}, 'relationships': [...],
     'permissive_dominance': ... }``.
@@ -184,17 +183,11 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
     problems: list = []
     dominance: dict | None = None
     if engine_config is not None:
-        rows = corpus_rows if corpus_rows is not None else _default_corpus_rows()
+        rows = corpus_rows if corpus_rows is not None else default_corpus()
         if not rows:
-            # UNCHECKED IS NOT A PASS. Never report an empty violation list here: on a
-            # wheel install `_default_corpus_rows()` is always empty, and `[]` read as
-            # "zero violations" twice during the 0.14.0 release verification.
-            reason = ('corpus_rows was given but is empty'
-                      if corpus_rows is not None else
-                      'the default corpus resolved to 0 rows '
-                      '(benchmarks/corpus/raw_skeletons_nv.json exists only in a '
-                      'repository checkout, never in a wheel install); pass '
-                      'corpus_rows to run the check')
+            # UNCHECKED IS NOT A PASS: an empty violation list would read as "zero
+            # violations".
+            reason = 'corpus_rows was given but is empty'
             warnings.warn(
                 f'verify_triple: permissive dominance was NOT checked -- {reason}. '
                 'is_clean does not cover it.', UserWarning)
@@ -220,15 +213,17 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
             'permissive_dominance': dominance}
 
 
-def _default_corpus_rows() -> list:
-    """The repository's own corpus, when it is present; an empty list otherwise."""
-    import os
-    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = os.path.join(os.path.dirname(here), 'benchmarks', 'corpus',
-                        'raw_skeletons_nv.json')
-    if not os.path.exists(path):
-        return []
-    return json.load(open(path))
+def default_corpus() -> list[list[str]]:
+    """The release gate's expression corpus: 400 prefix-token expressions.
+
+    Shipped with the package (``simplipy/verify/data/raw_skeletons_nv.json``), so the
+    gate sweeps the same rows in a wheel install as in a checkout. :func:`verify_triple`
+    sweeps it when no ``corpus_rows`` are given, and the test suites read it from here.
+    """
+    from importlib.resources import files
+    rows: list[list[str]] = json.loads(
+        files(__name__).joinpath('data', 'raw_skeletons_nv.json').read_text(encoding='utf-8'))
+    return rows
 
 
 def monitor_ruleset(rules: list | str, engine_config: str, *, corpus_n: int = 6000,
@@ -256,5 +251,5 @@ def selftest() -> bool:
     return _gate.selftest() and _contract.selftest(verbose=False)
 
 
-__all__ = ['CONST_CHANNEL_DETAIL', 'FATAL_BUCKETS', 'MODE_TIERS', 'verify_rule',
+__all__ = ['CONST_CHANNEL_DETAIL', 'FATAL_BUCKETS', 'MODE_TIERS', 'default_corpus', 'verify_rule',
            'verify_ruleset', 'verify_triple', 'monitor_ruleset', 'selftest']

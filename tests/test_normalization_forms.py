@@ -29,18 +29,17 @@ silently fails to match explicit-era keys. So the CONTENT must be
 dialect-invariant: every input is canonicalised into the ONE internal AC state,
 masked there, and only then rendered back into the caller's dialect.
 """
-import json
 import os
 
 import numpy as np
 import pytest
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from simplipy.normalization import to_expression, to_skeleton
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 
 @pytest.fixture(scope="module")
@@ -171,10 +170,7 @@ class TestDialectInvariance:
         assert list(a) == list(b), f'{left} -> {a} vs {right} -> {b}'
 
     def test_the_corpus_agrees_across_dialects(self, engine: SimpliPyEngine) -> None:
-        if not os.path.exists(CORPUS):
-            pytest.skip('corpus not present')
-        with open(CORPUS) as fh:
-            corpus = json.load(fh)
+        corpus = default_corpus()
         disagreeing = []
         for tokens in corpus[:120]:
             prefix, tagged = engine.to_prefix(tokens), engine.to_tagged(tokens)

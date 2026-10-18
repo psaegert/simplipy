@@ -3985,7 +3985,7 @@ mod tests {
         let Some(e) = engine() else { return };
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/benchmarks/corpus/raw_skeletons_nv.json"
+            "/src/simplipy/verify/data/raw_skeletons_nv.json"
         );
         let corpus: Vec<Vec<String>> =
             serde_json::from_str(&std::fs::read_to_string(path).expect("corpus present"))
@@ -4038,7 +4038,7 @@ mod tests {
         let Some(e) = engine() else { return };
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/benchmarks/corpus/raw_skeletons_nv.json"
+            "/src/simplipy/verify/data/raw_skeletons_nv.json"
         );
         let corpus: Vec<Vec<String>> =
             serde_json::from_str(&std::fs::read_to_string(path).expect("corpus present"))
@@ -4154,7 +4154,7 @@ mod probe_stab {
         };
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/benchmarks/corpus/raw_skeletons_nv.json"
+            "/src/simplipy/verify/data/raw_skeletons_nv.json"
         );
         let corpus: Vec<Vec<String>> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();

@@ -80,6 +80,13 @@ report = verify_triple('rules.json', 'rules_real.json', 'rules_permissive.json')
 report['is_clean'], report['relationships']
 ```
 
+With `engine_config=` it also checks that `permissive` is at least as capable as
+either other mode on every expression of a corpus: `corpus_rows`, or by default the
+400-expression corpus that ships with the package (`simplipy.verify.default_corpus()`).
+The check runs on the config's operators and the three rule sets passed in, prices
+every mode's answer on one shared scale, and counts a row on which a mode raises as a
+violation.
+
 The same tier routing gates the miner's own output, so the two authorities cannot
 drift apart.
 

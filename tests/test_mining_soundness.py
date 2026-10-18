@@ -25,6 +25,7 @@ import pytest
 import yaml
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from simplipy.mining import RuleMiner
 from simplipy.utils import (compositions, count_expressions, enumerate_expressions, sample_expression,
                             violates_wildcard_multiplicity)
@@ -2512,9 +2513,7 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         # dominate. Emptying it first made the check trivial.
         engine = SimpliPyEngine.from_config(acj_config_path())
         assert engine._core.mode_rules_len('real') is not None
-        rows = json.load(open(os.path.join(
-            os.path.dirname(acj_config_path()), '..', '..', '..',
-            'benchmarks', 'corpus', 'raw_skeletons_nv.json')))[:120]
+        rows = default_corpus()[:120]
         assert assert_permissive_dominates(engine, rows) == []
 
     def test_it_CAN_fail(self) -> None:
@@ -2535,9 +2534,7 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
             def simplify(self, expr, mode=None):
                 return self._e.simplify(expr, mode=Mode.real if mode is Mode.permissive else mode)
 
-        rows = json.load(open(os.path.join(
-            os.path.dirname(acj_config_path()), '..', '..', '..',
-            'benchmarks', 'corpus', 'raw_skeletons_nv.json')))[:120]
+        rows = default_corpus()[:120]
         assert assert_permissive_dominates(PermissiveCrippled(engine), rows) != []
 
     def test_a_row_that_raises_is_a_reported_violation(self) -> None:

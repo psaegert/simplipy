@@ -7,21 +7,17 @@ returns the form it was handed.
 
 Every direction, every 2-cycle and every 3-cycle is asserted at the exact relation the
 design table claims, over the 400 raw (unsimplified) rows of
-`benchmarks/corpus/raw_skeletons_nv.json`. Where a relation is "up to X" the test
+`simplipy.verify.default_corpus()`. Where a relation is "up to X" the test
 re-normalises through the stated map and asserts equality -- no case is skipped.
 """
-import json
-import os
 
 import numpy as np
 import pytest
 
-from conftest import acj_config_path, require_or_skip
+from conftest import acj_config_path
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from simplipy.io import load_config
-
-CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
-                      'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 
 @pytest.fixture(scope="module")
@@ -37,8 +33,7 @@ def ruleless() -> SimpliPyEngine:
 
 @pytest.fixture(scope="module")
 def rows() -> list[list[str]]:
-    require_or_skip(CORPUS, 'the raw skeleton corpus is not in this checkout')
-    return [list(r) for r in json.load(open(CORPUS))]
+    return [list(r) for r in default_corpus()]
 
 
 @pytest.fixture(scope="module")

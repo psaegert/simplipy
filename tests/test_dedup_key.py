@@ -10,11 +10,11 @@ These observe from OUTSIDE: through `simplipy.utils.deduplicate_rules`, through
 """
 import json
 import yaml
-import os
 
 import pytest
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from simplipy.io import load_config
 from simplipy.utils import deduplicate_rules
 
@@ -173,10 +173,7 @@ def test_corpus_behaviour_is_unchanged_by_the_dedup():
     is byte-identical to the output of an engine whose rules were force-fed WITHOUT the
     AC collapse (the core keeps first-match-wins, so a duplicate can only ever lose)."""
     require_or_skip(acj_config_path(), 'acj-4-3 asset not staged')
-    corpus_path = os.path.join(os.path.dirname(__file__), '..', 'benchmarks',
-                               'corpus', 'raw_skeletons_nv.json')
-    require_or_skip(corpus_path, 'nv corpus not present')
-    corpus = json.load(open(corpus_path))
+    corpus = default_corpus()
     engine = SimpliPyEngine.from_config(acj_config_path())
     raw = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(open(acj_rules_path()))]
     undeduped = SimpliPyEngine(

@@ -72,7 +72,6 @@ judge pass over the masked rows returns 80/135 spurious convictions (measured
 2026-07-29). Masked-row numeric coverage needs the literal-provenance carve-out
 tracked on the monitor-polish ledger; until then their coverage here is structural.
 """
-import json
 import os
 import re
 
@@ -80,13 +79,13 @@ import numpy as np
 import pytest
 
 import simplipy
+from simplipy.verify import default_corpus
 from simplipy.engine import SimpliPyEngine
 from simplipy.verify._monitor import judge_pair
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 # Commutative-operand swap for the permutation check (the campaign harnesses' swapper).
 # The arity tables span the live 0.12 vocabulary AND the retired hyper-ops so the swap
@@ -151,9 +150,7 @@ def X():
 @pytest.fixture(scope='module')
 def walk(eng, X):
     """One pass over the corpus; every test below asserts a different invariant of it."""
-    from conftest import require_or_skip
-    require_or_skip(CORPUS, 'tracked corpus not present')
-    corpus = json.load(open(CORPUS))
+    corpus = default_corpus()
     r = {'n': len(corpus), 'errors': [], 'idem_rows': [], 'perm_rows': [],
          'complexity_in': 0, 'complexity_out': 0, 'screened': 0, 'flagged': []}
     for i, sk in enumerate(corpus):

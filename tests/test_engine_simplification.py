@@ -1067,14 +1067,9 @@ class TestB9MuGuarantee:
     check that the replaced claim really was false (some output IS token-longer)."""
 
     def test_mu_non_increase_and_idempotence_hold_400_of_400(self):
-        import json
-        import os
-        corpus_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                   'benchmarks', 'corpus', 'raw_skeletons_nv.json')
-        if not os.path.exists(corpus_path):
-            pytest.skip('reference corpus not present')
+        from simplipy.verify import default_corpus
         eng = SimpliPyEngine.from_config(acj_config_path())
-        corpus = json.load(open(corpus_path))
+        corpus = default_corpus()
         assert len(corpus) == 400
         token_longer = 0
         for expr in corpus:

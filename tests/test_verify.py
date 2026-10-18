@@ -647,32 +647,34 @@ class TestCleanlinessIsPerMode:
                                engine_config=acj_config_path())
         assert report['is_clean'] is True, report['relationships']
         assert all(r['is_clean'] for r in report['modes'].values())
-        # the repository checkout ships the corpus, so the sweep actually ran
+        # the package ships the corpus, so the sweep runs in any install
         assert report['permissive_dominance'] == {'checked': True, 'violations': []}
 
-    def test_an_empty_corpus_reports_UNCHECKED_never_a_clean_pass(self, monkeypatch) -> None:
-        """The 0.14.0 release-verification regression, twice: every wheel install lacks
-        benchmarks/corpus/raw_skeletons_nv.json, so `_default_corpus_rows()` resolved to
-        0 rows and `permissive_dominance` read `[]` -- indistinguishable from a genuine
-        zero-violation sweep. Unchecked must SAY unchecked, loudly, and must neither
-        pass nor fail `is_clean`."""
+    def test_an_empty_corpus_reports_UNCHECKED_never_a_clean_pass(self) -> None:
+        """An explicitly empty `corpus_rows` sweeps nothing. An empty violation list
+        would read as a genuine zero-violation sweep, so unchecked must SAY unchecked,
+        loudly, and must neither pass nor fail `is_clean`."""
         import simplipy.verify as V
-        monkeypatch.setattr(V, '_default_corpus_rows', lambda: [])
         with pytest.warns(UserWarning, match='NOT checked'):
             report = V.verify_triple([self.CORE], [self.CORE], [self.CORE],
-                                     engine_config='<never dereferenced on 0 rows>')
+                                     engine_config='<never dereferenced on 0 rows>',
+                                     corpus_rows=[])
         dom = report['permissive_dominance']
         assert not isinstance(dom, list), 'an empty list would read as a pass'
-        assert dom['checked'] is False
-        assert dom['reason']  # a non-empty why, naming the missing corpus
-        # unchecked is unknown: it must not dirty an otherwise clean triple ...
+        assert dom == {'checked': False, 'reason': 'corpus_rows was given but is empty'}
+        # unchecked is unknown: it must not dirty an otherwise clean triple
         assert report['is_clean'] is True and report['relationships'] == []
-        # ... and the same sentinel comes back for an explicitly empty corpus_rows
-        with pytest.warns(UserWarning, match='NOT checked'):
-            explicit = V.verify_triple([self.CORE], [self.CORE], [self.CORE],
-                                       engine_config='<never dereferenced>',
-                                       corpus_rows=[])
-        assert explicit['permissive_dominance']['checked'] is False
+
+    def test_the_default_corpus_ships_with_the_package(self) -> None:
+        """The gate's corpus is package data, so the default sweep runs wherever the
+        package is installed: 400 prefix-token rows, read from inside the package."""
+        import os
+        import simplipy.verify as V
+        rows = V.default_corpus()
+        assert len(rows) == 400
+        assert all(isinstance(r, list) and r and all(isinstance(t, str) for t in r) for r in rows)
+        data = os.path.join(os.path.dirname(V.__file__), 'data', 'raw_skeletons_nv.json')
+        assert os.path.isfile(data)
 
     def test_rows_actually_swept_report_checked_True(self) -> None:
         """The positive half of the contract: with rows given, the report says the sweep

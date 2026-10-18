@@ -28,14 +28,13 @@ smaller divergence class is documented at TestIntegerScientificCodeword.
 Oracle: dec_price() of the rescorer, ported exactly below (mantissa priced at the OLD
 integer price max(1 bit, L(m)), + round(1000*log2(1+e)), + sign).
 """
-import json
 import math
-import os
 from fractions import Fraction
 
 import pytest
 
 from simplipy.engine import SimpliPyEngine
+from simplipy.verify import default_corpus
 from conftest import acj_config_path
 
 MILLI = 1000
@@ -467,11 +466,7 @@ class TestNativeDescentNeverWorse:
     corpus, plus idempotence."""
 
     def test_400_skeleton_corpus(self, eng):
-        corpus_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                   'benchmarks', 'corpus', 'raw_skeletons_nv.json')
-        if not os.path.exists(corpus_path):
-            pytest.skip('reference corpus not present')
-        corpus = json.load(open(corpus_path))
+        corpus = default_corpus()
         assert len(corpus) == 400
         made_bigger = []
         for expr in corpus:

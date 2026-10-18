@@ -97,6 +97,60 @@ jobs:
         env:
           SIMPLIPY_TEST_REQUIRE_ASSETS: "1"
 
+  # THE RELEASE GATES ON THE BUILT WHEEL. The job above tests an editable install, which
+  # reads the package from src/ and so cannot see a file the wheel leaves out. This job
+  # builds the wheel, installs it into a fresh venv, and runs the release-gate suites
+  # from a directory holding only tests/ and assets/ (no src/), so the package under test
+  # is the wheel's. A packaging regression -- such as the gate's corpus missing from the
+  # wheel -- fails here.
+  wheel-gates:
+    name: Release gates on the built wheel
+    runs-on: ubuntu-latest
+    # A release build of the core plus the gate suites; the shipped-triple sweep alone
+    # takes about 5 minutes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build the wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip wheel --no-deps -w dist .
+          python -m zipfile -l dist/simplipy-*.whl | grep simplipy/verify/data/raw_skeletons_nv.json
+      - name: Install the wheel into a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/wheelenv"
+          "$RUNNER_TEMP/wheelenv/bin/pip" install dist/simplipy-*.whl pytest
+      - name: Stage the legacy 4-3 asset (the generation-gate refusal tests read it)
+        run: |
+          "$RUNNER_TEMP/wheelenv/bin/python" - <<'PY'
+          import json, os
+          from huggingface_hub import hf_hub_download
+          manifest = json.load(open(hf_hub_download("psaegert/simplipy-assets", "manifest.json", repo_type="dataset")))
+          info = manifest["4-3"]
+          cache = os.path.expanduser("~/.cache/simplipy")
+          for f in info["files"]:
+              hf_hub_download(repo_id=info["repo_id"], filename=f"{info['directory']}/{f}", repo_type="dataset", local_dir=cache)
+          PY
+      - name: Run the release-gate suites outside the source tree
+        run: |
+          OUTSIDE="$RUNNER_TEMP/outside"
+          mkdir -p "$OUTSIDE"
+          cp -r tests assets "$OUTSIDE/"
+          cd "$OUTSIDE"
+          "$RUNNER_TEMP/wheelenv/bin/python" -c "import simplipy, sys; print(simplipy.__file__); sys.exit('wheelenv' not in simplipy.__file__)"
+          "$RUNNER_TEMP/wheelenv/bin/python" -m pytest -p no:cacheprovider \
+            tests/test_verify.py tests/test_artifact_compat.py tests/test_mode_rulesets.py \
+            tests/test_rules_less_warning.py
+        env:
+          SIMPLIPY_TEST_REQUIRE_ASSETS: "1"
+
   rust-checks:
     name: Rust (fmt / clippy / test / deny)
     runs-on: ubuntu-latest

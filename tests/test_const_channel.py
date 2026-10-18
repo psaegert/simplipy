@@ -36,11 +36,11 @@ import os
 import pytest
 
 from simplipy import SimpliPyEngine
+from simplipy.verify import default_corpus
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 
 MUL = {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True}
 ADD = {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True}
@@ -187,8 +187,7 @@ class TestEndToEndInvariant:
         """The serve-side statement of the invariant, on the shipped pairing and the
         tracked 400-row corpus plus a Const-bearing battery, in both dialects."""
         engine = SimpliPyEngine.from_config(CONFIG)
-        with open(CORPUS) as fh:
-            corpus = json.load(fh)
+        corpus = default_corpus()
         extra = [['acos', 'cos', '<constant>'],
                  ['*', '<constant>', '<constant>'],
                  ['+', 'x0', '*', '<constant>', 'x1'],

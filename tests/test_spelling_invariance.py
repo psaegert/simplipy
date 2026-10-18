@@ -10,18 +10,17 @@ Pinned here: the infix text and the token answer are one state at one price on t
 corpus; the token answers and the mining judge keep the 0.14.7 spellings; and the source keeps
 the reader's rule inside the infix printer.
 """
-import json
 import os
 import re
 
 import pytest
 
 from simplipy.engine import SimpliPyEngine
+from simplipy.verify import default_corpus
 from conftest import acj_config_path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = acj_config_path()
-CORPUS = os.path.join(REPO, 'benchmarks', 'corpus', 'raw_skeletons_nv.json')
 PI = '3.141592653589793'
 
 
@@ -38,9 +37,7 @@ def tokens(eng, text):
 
 class TestOneStateTwoSpellings:
     def test_the_infix_text_reads_back_to_the_token_answer_at_the_same_price(self, eng):
-        from conftest import require_or_skip
-        require_or_skip(CORPUS, 'tracked corpus not present')
-        rows = json.load(open(CORPUS))
+        rows = default_corpus()
         for i, row in enumerate(rows):
             answer = list(eng.simplify(list(row)))
             text = eng.simplify(eng.to_infix(answer))

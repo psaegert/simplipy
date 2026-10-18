@@ -36,6 +36,7 @@ import yaml
 
 from conftest import acj_config_path, acj_rules_path, require_or_skip
 from simplipy import Mode, SimpliPyEngine
+from simplipy.verify import default_corpus
 
 MODES = ('default', 'real', 'permissive')
 
@@ -190,9 +191,7 @@ class TestAbsentFilesAreANoOp:
         because it was loading the shipped artifact, where `real` names its own 5,471-rule
         set and the comparison was meaningless in a second way.)"""
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
-        rows = json.load(open(os.path.join(
-            os.path.dirname(__file__), '..', 'benchmarks', 'corpus',
-            'raw_skeletons_nv.json')))
+        rows = default_corpus()
         # Built from a config with the optional keys POPPED, because the shipped artifact
         # now names all three and `real` there serves its own 5,471-rule set. Loading it
         # directly made this test assert `real == default` about an artifact where the two
@@ -223,9 +222,7 @@ class TestAbsentFilesAreANoOp:
         per-mode machinery cost hiding behind the declaration."""
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
         rules = json.load(open(acj_rules_path()))[:600]
-        rows = json.load(open(os.path.join(
-            os.path.dirname(__file__), '..', 'benchmarks', 'corpus',
-            'raw_skeletons_nv.json')))[:80]
+        rows = default_corpus()[:80]
         plain = SimpliPyEngine.from_config(write_artifact(tmp_path, rules=rules))
         declared_dir = tmp_path / 'declared'
         declared_dir.mkdir()
