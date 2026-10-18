@@ -1347,42 +1347,6 @@ impl<'a> Cx<'a> {
         matches!(e, Ex::Leaf(_) | Ex::Const | Ex::Num(_) | Ex::Pi | Ex::E)
     }
 
-    // (pub(crate) for the F80 E3 offline instrument `ac_odd_neg_carriers`, which
-    // re-asks the deployed pow-distribution licence per factor; no semantic change.)
-    /// Is `e` CERTAINLY without DEFINED zeros anywhere, syntactically? (F83, the
-    /// odd-negative distribution's negative-coefficient guard: it needs
-    /// zero-FREENESS, not zero-set-nullity -- the constructed exceptional point IS
-    /// the null set the a.e. licence tolerates.) Zeros can also arrive through
-    /// infinite arguments (`exp(-inf) = 0`; `pow(b, -q)` vanishes at b = +-inf),
-    /// so clauses with that route demand `certainly_finite` of the argument.
-    /// Conservative: `false` means "not certain", never "certainly vanishes".
-    pub(crate) fn certainly_nonvanishing(&self, e: &Ex) -> bool {
-        match e {
-            Ex::Num(r) => !r.is_zero(),
-            Ex::Pi | Ex::E => true,
-            Ex::Mul(v) => v.iter().all(|f| self.certainly_nonvanishing(f)),
-            Ex::Pow(b, q) => match &**q {
-                Ex::Num(r) if r.is_integer() && r.signum() > 0 => self.certainly_nonvanishing(b),
-                Ex::Num(r) if r.is_integer() && r.is_negative() => {
-                    // b^-n = 0 exactly where b = +-inf: demand finiteness too.
-                    self.certainly_nonvanishing(b) && self.certainly_finite(b)
-                }
-                _ => false,
-            },
-            Ex::Fun(f, v) => {
-                let s = self.view.resolve_owned(*f);
-                match s.as_str() {
-                    // cosh >= 1 on finite args, +inf at infinite ones: never 0.
-                    "cosh" => true,
-                    // exp(u) = 0 exactly at u = -inf: finite arguments only.
-                    "exp" => v.iter().all(|x| self.certainly_finite(x)),
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
     pub(crate) fn certainly_nonneg(&self, e: &Ex) -> bool {
         match e {
             Ex::Num(r) => !r.is_negative(),
@@ -7625,41 +7589,7 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     } else {
         v
     };
-    // F83 (owner-ruled F75 group D, 2026-08-11; extreme row 508487): a
-    // NEGATIVE rational coefficient that SURVIVED the F63 pre-fold (no
-    // sign-trade site in the bag) flips the pole sign at every zero of a
-    // co-factor: the source folds the product to THE unsigned zero first
-    // (`inv(0) = +inf`, contract §9.2/§9.8), while the distributed
-    // spelling ships `sign(c)·inf` -- a REAL value change at a constructed
-    // rational exceptional point, the class the licence registry (F66)
-    // refuses for mined rules, arrived at constructor level
-    // (`rootn(x0/(-3), -1) -> -3/x0`: exp of it turned 0.0 into +inf).
-    // Refuse the distribution unless every non-coefficient factor
-    // certainly never vanishes -- nonzero-a.e. is NOT enough here, the
-    // exceptional point IS the null set. Positive coefficients agree at
-    // the atom and stay licensed; traded signs (F63) stay licensed.
-    // SOUND MODE ONLY: lossy canonicalisation keeps its training
-    // semantics; the phase-2 sound re-canon applies the guard to every
-    // endpoint. Boundary note (owner-visible, audit F83): a negative
-    // VARIABLE co-factor at another factor's zero flips the same way,
-    // but that is not a CONSTRUCTED-rational exceptional point -- it
-    // stays under the standing a.e. doctrine.
-    // VARIANT MEASUREMENT (owner boundary question, 2026-08-11): the
-    // `*r != Rat::NEG_ONE` clause is the NARROW line -- pure-sign
-    // coefficients keep the standing §9.8.4-priced compression; only
-    // magnitude-carrying negative literals refuse. The BROAD line
-    // (every negative coefficient) is the same condition without it.
-    let neg_coeff_stuck = !cx.lossy()
-        && e.is_negative()
-        && !e.is_even_integer() // possibly odd: the f64 domain may not know
-        && !bag.iter().any(holds_infinity)
-        && bag
-            .iter()
-            .any(|f| matches!(f, Ex::Num(r) if r.is_negative() && *r != Rat::NEG_ONE))
-        && bag
-            .iter()
-            .any(|f| !matches!(f, Ex::Num(_)) && !cx.certainly_nonvanishing(f));
-    (!neg_coeff_stuck).then(|| bag.to_vec())
+    Some(bag.to_vec())
 }
 
 /// The canonical power constructor. Folds and gates:
@@ -9780,7 +9710,7 @@ mod tests {
     }
 
     /// Integers beyond 128 bits are integers (number plan phase 2). The map of the 128-bit
-    /// boundary found four sites that read "does not fit i128" as "is not an integer", each
+    /// boundary found the sites that read "does not fit i128" as "is not an integer", each
     /// unsound once such an integer reaches it. Real mode has the exact parity; the f64 domain
     /// knows no parity beyond 2^53 (phase 2c), and every site must then refuse as well.
     #[test]
@@ -9833,20 +9763,6 @@ mod tests {
                 &cx,
             );
             assert_ne!(through, wrong);
-
-            // 4. F83: (-2*x)^-(10^40+1) keeps the guard against distributing a negative
-            //    magnitude coefficient over a factor that may vanish.
-            let n = odd.checked_neg().unwrap();
-            let bag = mul(vec![Ex::int(-2), x(view)], &cx);
-            let kept = pow(bag, Ex::Num(n.clone()), &cx);
-            let distributed = mul(
-                vec![
-                    pow(Ex::int(-2), Ex::Num(n.clone()), &cx),
-                    pow(x(view), Ex::Num(n), &cx),
-                ],
-                &cx,
-            );
-            assert_ne!(kept, distributed);
         }
     }
 

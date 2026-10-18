@@ -79,27 +79,18 @@ class TestPowDistributionLicence:
         out = check(eng, 'inv neg x0'.split())
         assert out == ['/', '-1', 'x0']
 
-    def test_f83_odd_negative_power_magnitude_guard(self, eng):
-        # F83 (owner-ruled NARROW 2026-08-11): sound mode refuses distributing an
-        # odd negative power over a product with a MAGNITUDE-carrying negative
-        # coefficient (|c| != 1) when a non-Num factor may vanish -- the 508487
-        # conviction: at x0 = 0 the source 1/((-x0)/3) folds the product to the
-        # unsigned zero first, inv(0) = +inf, while the distributed -3/x0 lands on
-        # -inf; through the row's exp/pow that was a finite 0-vs-1 change. The
-        # pure-sign c = -1 case is SS9.8.4's own priced residue and stays licensed
-        # (test_generic_distribution_preserved pins it).
+    def test_odd_negative_power_distributes_over_a_negative_coefficient(self, eng):
+        # Under IEEE signed zeros the sign of a product of zeros is the product of their signs, so
+        # (c*x0)^-1 and c^-1 * x0^-1 agree at x0 = 0 (both -inf for c < 0): every spelling of the
+        # function gets the distributed answer.
         out = check(eng, 'pow / neg x0 3 -1'.split())
-        # The REFUSAL, stated against the distributed spelling F83 forbids. Comparing it
-        # to `inv / neg x0 3` compares two spellings of the SOURCE, which agree whether or
-        # not F83 exists -- the test stayed fully green with the guard removed.
-        assert out != eng.simplify('/ -3 x0'.split()), f'F83 did not refuse: {out}'
-        assert out == eng.simplify('inv / neg x0 3'.split()), f'{out}'
-        # arrival spellings of the kept atom converge on one canonical fixpoint
+        assert out == eng.simplify('/ -3 x0'.split()), f'{out}'
+        assert eng.simplify('inv / neg x0 3'.split()) == out
         assert eng.simplify('pow / * -1 x0 3 -1'.split()) == out
+        assert eng.simplify('inv * -3 pow x0 2'.split()) == eng.simplify('neg / 1 * 3 pow x0 2'.split())
         # provably nonvanishing factors have no pole: distribution stays licensed
         lo = check(eng, 'pow * -3 exp x1 -1'.split())
         assert lo.count('inv') + lo.count('/') + lo.count('<div>') <= 1
-        # LOSSY is licensed for a.e. changes and still distributes the magnitude
         assert eng.simplify('pow / neg x0 3 -1'.split(), mode=Mode.permissive) == \
             eng.simplify('/ -3 x0'.split(), mode=Mode.permissive)
 

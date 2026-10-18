@@ -3664,49 +3664,39 @@ mod tests {
         }
     }
 
-    /// F83 (owner-ruled F75 group D, 2026-08-11; extreme row 508487): a negative
-    /// rational coefficient surviving the F63 pre-fold flips the pole sign at every
-    /// co-factor zero (`inv(0·c) = +inf` vs `sign(c)·inf` distributed) -- the
-    /// RealChange-at-constructed-exceptional-point class the licence registry (F66)
-    /// refuses for mined rules, now guarded at the constructor. The guard demands a
-    /// certainly-NONVANISHING co-factor set (zero-freeness, not zero-set-nullity):
-    /// positive coefficients, traded signs (F63), and zero-free bags stay licensed.
+    /// An odd negative power distributes over a negative coefficient: under IEEE signed zeros the
+    /// sign of a product of zeros is the product of their signs, so `(c*f)^-n` and `c^-n * f^-n`
+    /// agree at every zero of `f` (both `-inf` for `1/(-x0/3)` at `x0 = 0`), and every spelling
+    /// of the function gets one answer.
     #[test]
-    fn f83_negative_coefficient_pole_guard() {
+    fn odd_negative_power_distributes_over_a_negative_coefficient() {
         let Some(e) = engine() else { return };
-        // The 508487 subterm keeps: inv((-x0)/3) preserves inv(0) = +inf at the
-        // atom (neg(0) = 0, the one unsigned zero) where -3/x0 shipped -inf.
-        let kept = e
-            .ac_simplify_proj(
-                &t(&["rootn", "/", "x0", "-3", "-1"]),
-                48,
-                RuleMode::Default,
-                crate::engine::AcForm::Explicit,
-            )
-            .unwrap();
-        assert_eq!(
-            kept,
-            t(&["inv", "/", "neg", "x0", "3"]),
-            "must refuse the distribution"
-        );
-        let again = e
-            .ac_simplify_proj(
-                &kept,
-                48,
-                RuleMode::Default,
-                crate::engine::AcForm::Explicit,
-            )
-            .unwrap();
-        assert_eq!(again, kept, "the kept carrier is a fixpoint");
-        // Positive coefficient: the atom agrees (+inf both ways) -- still licensed.
-        assert_eq!(
+        let explicit = |toks: &[&str]| {
             e.ac_simplify_proj(
-                &t(&["rootn", "/", "x0", "3", "-1"]),
+                &t(toks),
                 48,
                 RuleMode::Default,
-                crate::engine::AcForm::Explicit
+                crate::engine::AcForm::Explicit,
             )
-            .unwrap(),
+            .unwrap()
+        };
+        let one = explicit(&["/", "-3", "x0"]);
+        assert_eq!(one, t(&["/", "-3", "x0"]));
+        for spelling in [
+            &["rootn", "/", "x0", "-3", "-1"][..],
+            &["inv", "/", "neg", "x0", "3"],
+            &["pow", "/", "*", "-1", "x0", "3", "-1"],
+        ] {
+            assert_eq!(explicit(spelling), one, "{spelling:?}");
+        }
+        assert_eq!(
+            explicit(&["inv", "*", "-3", "pow", "x1", "2"]),
+            explicit(&["neg", "/", "1", "*", "3", "pow", "x1", "2"]),
+            "one answer for 1/(-3 x1^2) and -1/(3 x1^2)"
+        );
+        // Positive coefficient: distributes.
+        assert_eq!(
+            explicit(&["rootn", "/", "x0", "3", "-1"]),
             t(&["/", "3", "x0"]),
             "positive twin distributes"
         );
@@ -3736,7 +3726,8 @@ mod tests {
             t(&["/", "neg", "exp", "neg", "x1", "3"]),
             "zero-free bag distributes"
         );
-        // End-to-end, the full 508487 row: the exp argument keeps the reciprocal.
+        // End-to-end: a reciprocal under `exp` distributes too (`exp(-3/x0)` is 0 at x0 = 0 in
+        // every spelling).
         let row = t(&[
             "pow",
             "cos",
@@ -3770,13 +3761,11 @@ mod tests {
                 "x1",
                 "3",
                 "exp",
-                "inv",
                 "/",
-                "neg",
+                "-3",
                 "x0",
-                "3",
             ]),
-            "the 508487 row keeps its pole-faithful spelling"
+            "the reciprocal under exp distributes"
         );
     }
 

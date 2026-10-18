@@ -40,7 +40,10 @@
   sign and a pattern variable that occurs twice matches a sum or its negation:
   `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and `x1 + sin(x3 - x2) - sin(x3 - x2)`
   is `x1` (0.14.7 keeps the first as written and gives `x1 + sin(x2 - x3) + sin(x3 - x2)` for
-  the second). Where two singularities meet, the float value at that point is the one the
+  the second). An odd negative power distributes over a negative coefficient as over a positive
+  one, since signed zeros carry the sign through: `1/(-3*x1^2)` and `-1/(3*x1^2)` are one
+  answer, `-1/3/x1^2`, and `1/(-x1/3)` is `-3/x1`, all `-inf` at the zero like their inputs.
+  Where two singularities meet, the float value at that point is the one the
   canonical spelling gives (most such points have no limit at all).
   Known limits: where a member's value at the zero cannot be read, two spellings of one product
   can keep different orientations (a fractional or symbolic power of the class beside its pole);
