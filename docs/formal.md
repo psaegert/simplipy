@@ -415,7 +415,11 @@ floor (at one bit it binds only where a codeword could not be shorter anyway, an
 $\mu$ still tells $x^2$ from $x^3$); a value
 with no terminating decimal pays the rational codeword alone — still plus the
 selector, so every priced numeric leaf pays exactly one selector bit and the codebook
-is a genuine prefix code. A magnitude-$1$
+is a genuine prefix code. An integer, and a value whose decimal codeword is the cheaper
+one, prints from the same decomposition $\pm m \cdot 10^{k}$ (`Rat::decimal_parts`): positionally for
+$10^{-4} \leq |v| < 10^{16}$, and as `<m>e<exponent>` with one digit before the point
+outside that range where that is shorter (`1e-300`, `1e16`, `2.5e-21`; `0.001`, `1000` and
+`12345678901234567890` keep their digits). A magnitude-$1$
 coefficient or rational-exponent slot is a bare sign and costs $0$, every other such
 slot pays its literal cost; a numeric literal that is no number to the engine (beyond the
 cap, or in f64 mode not admissible) lives as a token string and pays the same two-codeword

@@ -26,9 +26,9 @@ use std::cmp::Ordering;
 
 use crate::tokens::{Tok, TokenView};
 
-use super::rat::Rat;
+use super::rat::{Mantissa, Rat};
 use num_bigint::BigUint;
-use num_traits::{One, ToPrimitive, Zero};
+use num_traits::ToPrimitive;
 
 /// An AC-core expression. Leaves carry interned [`Tok`] ids (variables `x0..`, wildcards
 /// `_0`/`?0`/`!0`/`$0`); everything numeric is EXACT ([`Rat`], or the symbolic
@@ -446,7 +446,8 @@ fn l_millibits_fixed(int_part: u64, mut x: u128) -> u64 {
 /// expansion (`q = 2^a * 5^b`, which includes every integer): the cost of the integer
 /// mantissa `m` of the SHORTEST exact decimal spelling `m * 10^k` and of the decimal
 /// exponent `k`, each priced by `l_millibits` -- the exponent is just another integer
-/// the spelling has to write down, `L(k) = log2(1 + |k|)`.
+/// the spelling has to write down, `L(k) = log2(1 + |k|)`. The pair is the value's one
+/// decimal decomposition ([`Rat::decimal_parts`]), the same the printer spells.
 ///
 /// For a non-integer, `k = -max(a, b)` and `m = |p| * 10^|k| / q` (for a REDUCED
 /// fraction `m` is never divisible by 10, so this IS the shortest spelling); for an
@@ -455,105 +456,19 @@ fn l_millibits_fixed(int_part: u64, mut x: u128) -> u64 {
 /// codeword `(1, 3)`; an integer with no trailing zeros has `k = 0`, where the
 /// codeword degenerates to the rational one and is refused as redundant).
 ///
-/// `None` when the value does not terminate in base ten, when the codeword would be
-/// degenerate (`k = 0`), or when the scaled mantissa leaves `i128`, in which case the
-/// decimal spelling is not available in range and the fraction code stands alone (the
-/// ratified i128-boundedness boundary; the beyond-`Rat` STRING pricer carries the same
-/// refusal, so the boundary cannot become an ordering cliff).
+/// `None` when the value does not terminate in base ten or when the codeword would be
+/// degenerate (`k = 0`, zero included).
 fn decimal_code(r: &Rat) -> Option<(u64, u64)> {
-    match r.small_parts() {
-        Some((p, q)) => match decimal_code_small(p, q) {
-            Ok(code) => code,
-            Err(()) => decimal_code_big(r),
-        },
-        None => decimal_code_big(r),
-    }
-}
-
-/// `decimal_code` in 128 bits: `Err` when the scaled mantissa leaves `i128` (the boundary
-/// phase 2c lifts), `Ok(None)` when there is no decimal codeword.
-#[allow(clippy::result_unit_err)]
-fn decimal_code_small(p: i128, q: i128) -> Result<Option<(u64, u64)>, ()> {
-    if q == 1 {
-        // Integer arm (D38): k = trailing base-ten zeros, m = the remaining digits.
-        let mut m = p.checked_abs().ok_or(())?;
-        if m == 0 {
-            return Ok(None);
-        }
-        let mut k = 0u32;
-        while m % 10 == 0 {
-            m /= 10;
-            k += 1;
-        }
-        if k == 0 {
-            return Ok(None);
-        }
-        return Ok(Some((
-            l_millibits(m.unsigned_abs()),
-            l_millibits(u128::from(k)),
-        )));
-    }
-    let (mut a, mut b) = (0u32, 0u32);
-    let mut rest = q;
-    while rest % 2 == 0 {
-        rest /= 2;
-        a += 1;
-    }
-    while rest % 5 == 0 {
-        rest /= 5;
-        b += 1;
-    }
-    if rest != 1 {
-        return Ok(None);
-    }
-    let k = a.max(b);
-    let mut m = p.checked_abs().ok_or(())?;
-    for _ in 0..(k - a) {
-        m = m.checked_mul(2).ok_or(())?;
-    }
-    for _ in 0..(k - b) {
-        m = m.checked_mul(5).ok_or(())?;
-    }
-    Ok(Some((
-        l_millibits(m.unsigned_abs()),
-        l_millibits(u128::from(k)),
-    )))
-}
-
-/// `decimal_code` in big integers.
-fn decimal_code_big(r: &Rat) -> Option<(u64, u64)> {
-    let (p, q) = r.big_parts();
-    let (ten, five) = (BigUint::from(10u32), BigUint::from(5u32));
-    let mut m = p.magnitude().clone();
-    if m.is_zero() {
+    let parts = r.decimal_parts()?;
+    if parts.exp == 0 {
         return None;
     }
-    if q.is_one() {
-        let mut k = 0u64;
-        while (&m % &ten).is_zero() {
-            m /= &ten;
-            k += 1;
-        }
-        if k == 0 {
-            return None;
-        }
-        return Some((l_millibits_big(&m), l_millibits(u128::from(k))));
-    }
-    let q = q.magnitude().clone();
-    let a = q.trailing_zeros().unwrap_or(0);
-    let mut rest = &q >> a;
-    let mut b = 0u64;
-    while (&rest % &five).is_zero() {
-        rest /= &five;
-        b += 1;
-    }
-    if !rest.is_one() {
-        return None;
-    }
-    let k = a.max(b);
-    m <<= k - a;
-    m *= num_traits::pow(five, (k - b) as usize);
-    Some((l_millibits_big(&m), l_millibits(u128::from(k))))
+    let m = match &parts.mantissa {
+        Mantissa::Small(m) if *m < u128::MAX => l_millibits(*m),
+        Mantissa::Small(m) => l_millibits_big(&BigUint::from(*m)),
+        Mantissa::Big(m) => l_millibits_big(m),
+    };
+    Some((m, l_millibits(u128::from(parts.exp.unsigned_abs()))))
 }
 
 /// Description length of the exact VALUE p/q (lowest terms), in MILLI-BITS and
@@ -744,9 +659,9 @@ fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
 /// falsifier suite's boundary pair) -- so the clause is defensive. Ties would also
 /// keep the powers of two (`1/2`, `5/8`) on the fraction side, exactly as before D38.
 ///
-/// Callers gate integers upstream (`is_integer()` prints the bare digit string, which
-/// is the rendering of BOTH an integer's codewords), so the integer arm of
-/// `decimal_code` never surfaces a scientific print: `1000` never prints `1e3`.
+/// Callers gate integers upstream: an integer prints its decimal spelling
+/// (`Rat::exact_decimal`, the rendering of BOTH an integer's codewords), positional in the
+/// ordinary range (`1000`, never `1e3`) and scientific beyond it where shorter (`1e300`).
 pub fn decimal_spelling_wins(r: &Rat) -> bool {
     let (fraction, decimal) = mu_rat_codeword_totals(r);
     decimal.is_some_and(|d| d < fraction)
@@ -8464,18 +8379,17 @@ pub fn snap_long_literals(e: &Ex) -> Option<Ex> {
     moved.then_some(out)
 }
 
-/// Whether the exact spelling of `r` carries a digit string of more than 17 significant
-/// digits: its decimal where that spelling wins, else its numerator or denominator.
+/// Whether the exact spelling of `r` carries more than 17 significant digits: its decimal's
+/// mantissa where that spelling wins, else its numerator's or denominator's.
 fn prints_long(r: &Rat) -> bool {
-    let long = |s: &str| {
-        let digits: String = s.chars().filter(char::is_ascii_digit).collect();
-        digits.trim_matches('0').len() > 17
+    let long = |r: &Rat| {
+        r.decimal_parts()
+            .is_some_and(|d| d.mantissa.digits().len() > 17)
     };
     if !r.is_integer() && decimal_spelling_wins(r) {
-        return r.exact_decimal().is_some_and(|d| long(&d));
+        return long(r);
     }
-    let (p, q) = r.big_parts();
-    long(&p.to_string()) || long(&q.to_string())
+    long(&r.numer()) || long(&r.denom())
 }
 
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {

@@ -975,8 +975,8 @@ class TestCorpusTakesTheBestOfBoth:
         """The other half: `real` leaves `asin(1e-8)` alone because no literal spells the
         true value, and the f64 endpoint is cheaper, so corpus takes it."""
         from simplipy import Mode
-        assert bare.simplify(['asin', '1e-08'], mode=Mode.real) == ['asin', '0.00000001']
-        assert bare.simplify(['asin', '1e-08'], mode=Mode.permissive) == ['0.00000001']
+        assert bare.simplify(['asin', '1e-08'], mode=Mode.real) == ['asin', '1e-8']
+        assert bare.simplify(['asin', '1e-08'], mode=Mode.permissive) == ['1e-8']
 
     def test_the_selection_is_STRICT_so_a_tie_goes_to_the_folded_form(self, bare) -> None:
         """POLICY, not derivation -- and it is enforced by the shape of the comparison

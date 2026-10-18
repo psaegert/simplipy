@@ -52,10 +52,10 @@ LEGAL_NUMERIC = [
     # explicit dialect's structural division (the tagged twin is `<mul> 1 <div> 2 </mul>`).
     (".5", ["/", "1", "2"]),
     ("5.", ["5"]),
-    ("1e-05", ["0.00001"]),
+    ("1e-05", ["1e-5"]),
     ("1e+5", ["100000"]),
     ("1E5", ["100000"]),
-    ("1e+16", ["10000000000000000"]),
+    ("1e+16", ["1e16"]),
 ]
 
 # Malformed numerals (B2): tokens that start like a number (a digit or `.`, after optional

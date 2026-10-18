@@ -209,14 +209,19 @@
   where it used to stay apart: `x1*1e-40*3` is one coefficient, `3e-40*x1 - x1*1e-40*3` is `0`,
   and the Larmor denominator `6*3.1415926535897*8.854e-12*(2.99792458e8)^3` is one number. A
   result beyond the cap keeps its pieces (`2^1100*x1` stays a power). Answers carry these numbers
-  exactly and in full, so a product or power of long constants can print as a number of hundreds
-  of digits, and a literal that used to come back as written now comes back as its digits
-  (`x1*1e-300`). The measure prices such a number at most like the float it reads as (above).
+  exactly, every significant digit included (`x1*1.602176634e-19*1.602176634e-19` is
+  `2.566969966535569956e-38*x1`). A number prints positionally from 0.0001 up to 10^16 and as
+  `<mantissa>e<exponent>` outside that range where that is shorter, Python's float notation
+  applied to exact values, in the list, tagged and text answers alike: `x1*1e-300` comes back as
+  written, `x1*1e-150*1e-150` as `1e-300*x1`, `x1*1e10*1e10` as `1e20*x1` and `x1*1e-5` as
+  `1e-5*x1` (0.14.7: `1e-150^2*x1`, `100000000000000000000*x1` and `0.00001*x1`), while `1000`,
+  `0.001` and `12345678901234567890` keep their digits. The measure prices such a number at most
+  like the float it reads as (above).
 - **f64 mode holds a number only where float64 can.** In `mode='f64'` (and `permissive`) a
   number's numerator and denominator must both be at most 2^1022, so the number and its reciprocal
   are normal float64 values; any other literal stays as written (`1e308`, `1e400`, the subnormal
   `5e-324`), as before. `real` mode holds everything within the cap: `x1 + 1e308 + 1e308` is
-  `x1 + 2000...0` (2e308 in full) there and `2*1e308 + x1` in f64 mode. Two more f64 readings follow the evaluator:
+  `x1 + 2e308` there and `2*1e308 + x1` in f64 mode. Two more f64 readings follow the evaluator:
   an integer beyond 2^53 has unknown parity (`(-1)^9007199254740993` stays, and `x1^(2^53)*x1`
   is not merged: the evaluator reads 2^53 + 1 as 2^53), and a literal the evaluator reads as inf
   or as 0 is neither certainly finite nor certainly nonzero (`0*1e400` and `1e400/1e400` stay;
@@ -226,7 +231,7 @@
   them fold, so each such group re-reads to itself where a fold is refused. The old one-pass fold left
   pieces the next call merged (also in 0.14.7: `10/((250000000/1571)/(pi*pi*x3))` with pi written
   out needed two calls). `<constant>` and the infinities absorb the pieces a refused fold keeps,
-  and a fraction beyond 128 bits stays together (one `p/q` numeral in the text answer,
+  and a fraction beyond 128 bits stays together (`p/q` in the text answer,
   `<mul> p <div> q </mul>` in the tagged list answer, its own `/ p q` in the explicit list answer)
   instead of being split across a product (the evaluator multiplied a 300-digit numerator in
   before dividing and overflowed).

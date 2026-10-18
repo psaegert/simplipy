@@ -79,10 +79,11 @@ class TestAdmissibleInF64Mode:
         assert simplify(engine, '* x1 1e400', mode) == ['*', '1e400', 'x1']
 
     def test_a_subnormal_is_a_number_in_real_mode_only(self, engine: SimpliPyEngine) -> None:
-        assert simplify(engine, '* x1 5e-324', 'f64') == ['*', '5e-324', 'x1']
-        out = simplify(engine, '* x1 5e-324', 'real')
-        assert out[0] == '*' and out[2] == 'x1' and out[1] != '5e-324', out   # a number, re-spelled
-        assert Fraction(out[1]) == Fraction(5, 10 ** 324)
+        # both modes print it as written; only `real` holds it as a number, so only `real` folds it
+        for mode in ('f64', 'real'):
+            assert simplify(engine, '* x1 5e-324', mode) == ['*', '5e-324', 'x1']
+        assert simplify(engine, '* x1 * 2 5e-324', 'f64') == ['*', '2', '*', '5e-324', 'x1']
+        assert simplify(engine, '* x1 * 2 5e-324', 'real') == ['*', '1e-323', 'x1']
 
     def test_a_numerator_beyond_dbl_max_does_not_fold_in_f64_mode(self, engine: SimpliPyEngine) -> None:
         prefix = f'* x1 * / {A} {B} / {A} {B}'

@@ -203,9 +203,9 @@ class TestEvaluateConstants:
         assert eng._core.mode_rules_len('real') is not None, 'the artifact must ship one'
         for mode in (Mode.f64, Mode.real, Mode.permissive):
             assert eng.simplify(['tan', '1'], mode=mode) == ['tan', '1'], mode
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.f64) == ['0.00000001']
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.permissive) == ['0.00000001']
-        assert eng.simplify(['asin', '1e-08'], mode=Mode.real) == ['asin', '0.00000001']
+        assert eng.simplify(['asin', '1e-08'], mode=Mode.f64) == ['1e-8']
+        assert eng.simplify(['asin', '1e-08'], mode=Mode.permissive) == ['1e-8']
+        assert eng.simplify(['asin', '1e-08'], mode=Mode.real) == ['asin', '1e-8']
 
     def test_a_fitted_constant_is_not_a_value(self, eng):
         """`<constant>` is a degree of freedom, so a subtree carrying one is not

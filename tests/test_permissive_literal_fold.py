@@ -57,7 +57,7 @@ def test_strict_tier_keeps_the_exact_fraction(engine):
     # The strict tier keeps the EXACT value, 2e29/426738538271436458205631863649, in the token
     # printer's own spelling (the reader's integer-over-decimal spelling is the infix text's,
     # test_ratio_spelling.py) -- not the permissive tier's float.
-    assert out == ["/", "200000000000000000000000000000", "426738538271436458205631863649"], out
+    assert out == ["/", "2e29", "426738538271436458205631863649"], out
     assert Fraction(out[1]) / Fraction(out[2]) == exact_value(MONSTER)
 
 
@@ -94,11 +94,12 @@ def test_fold_is_idempotent_and_descends_the_exact_price(engine):
 
 
 def test_huge_integer_folds_to_its_float_value(engine):
-    # A 30-digit integer product: the fold keeps an integer spelling (the emitter prints
-    # integers as digit strings) but the VALUE is the f64 nearest, priced by its scientific codeword.
+    # A 30-digit integer product: the fold takes the f64 nearest, an integer whose trailing zeros
+    # print in scientific notation (`7.572696344528648e29`), priced by its scientific codeword.
     out = prefix(engine, "757269634452864785310003246961 * 1", Mode.permissive)
-    assert len(out) == 1 and float(out[0]) == float(757269634452864785310003246961), out
-    assert int(out[0]) != 757269634452864785310003246961
+    assert out == ["7.572696344528648e29"], out
+    assert float(out[0]) == float(757269634452864785310003246961)
+    assert Fraction(out[0]) != 757269634452864785310003246961
 
 
 @pytest.mark.parametrize("expr", [

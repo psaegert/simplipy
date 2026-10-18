@@ -2535,10 +2535,9 @@ mod tests {
         assert_eq!(s(&["pow", "float(\"-inf\")", "-1e40"]), t(&["0"]));
         assert_eq!(s(&["pow", "float(\"-inf\")", "neg", "1e40"]), t(&["0"]));
         // Finite negative bases: finite class, REFUSE (the old path shipped nan).
-        // Phase 2c: 1e40 is the exact integer 10^40 and prints as its digits; 2^(10^40) is far
-        // over the cap and stays, while (-1)^(10^40) is exactly 1 in real mode.
-        let ten40 = "10000000000000000000000000000000000000000";
-        assert_eq!(s(&["pow", "(-2)", "1e40"]), t(&["pow", "-2", ten40]));
+        // Phase 2c: 1e40 is the exact integer 10^40 (printed `1e40`); 2^(10^40) is far over the
+        // cap and stays, while (-1)^(10^40) is exactly 1 in real mode.
+        assert_eq!(s(&["pow", "(-2)", "1e40"]), t(&["pow", "-2", "1e40"]));
         assert_eq!(s(&["pow", "(-1)", "1e40"]), t(&["1"]));
         // A ground COMPOSITE base classifying -inf takes the same arm.
         assert_eq!(s(&["pow", "log", "0", "1e40"]), t(&["float(\"inf\")"]));

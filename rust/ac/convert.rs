@@ -609,11 +609,12 @@ fn ratio_spelling(r: &Rat) -> Option<(Rat, Rat)> {
         return None;
     }
     let ds = d.exact_decimal()?;
-    let shorter = n.to_string().len() + ds.len() < p.to_string().len() + q.to_string().len();
+    let n = Rat::from_big(n, BigInt::one())?;
+    let shorter = n.numer_token().len() + ds.len() < r.numer_token().len() + r.denom_token().len();
     if !shorter {
         return None;
     }
-    Some((Rat::from_big(n, BigInt::one())?, d))
+    Some((n, d))
 }
 
 /// Divisor-side needs a PLAIN numerator factor to remain: a factor that is neither the
@@ -927,7 +928,7 @@ fn emit_bin_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let view = cx.view;
     if r.is_integer() {
-        out.push(view.intern(&r.numer_string()));
+        out.push(view.intern(&r.numer_token()));
         return;
     }
     if crate::ac::expr::decimal_spelling_wins(r) {
@@ -946,8 +947,8 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let slash = view.intern("/");
     if view.arity(slash).is_some() {
         out.push(slash);
-        out.push(view.intern(&r.numer_string()));
-        out.push(view.intern(&r.denom_string()));
+        out.push(view.intern(&r.numer_token()));
+        out.push(view.intern(&r.denom_token()));
     } else {
         out.push(view.intern(&num_token(r)));
     }
@@ -1017,9 +1018,9 @@ fn emit_rational_tagged(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     // the `<div>` member stays positive -- the H-020 invariant that a signed literal never
     // enters a divisor group.
     out.push(view.intern("<mul>"));
-    out.push(view.intern(&r.numer_string()));
+    out.push(view.intern(&r.numer_token()));
     out.push(view.intern("<div>"));
-    out.push(view.intern(&r.denom_string()));
+    out.push(view.intern(&r.denom_token()));
     out.push(view.intern("</mul>"));
 }
 
@@ -1300,10 +1301,12 @@ fn emit_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 /// than a separate heuristic: `1/2`, `1/4`, `5/8` keep the fraction (a power-of-two
 /// denominator always spells shorter as a fraction), while `1/5 -> 0.2`, `6/5 -> 1.2` and
 /// every power of ten take the decimal. The previous rule -- "exact decimal whenever one
-/// exists" -- printed `0.5` and `0.625`, i.e. the spelling mu prices HIGHER.
+/// exists" -- printed `0.5` and `0.625`, i.e. the spelling mu prices HIGHER. An integer or a
+/// decimal is spelled by [`Rat::exact_decimal`] (`1e300`, `1e-300`); a fraction's components
+/// keep their digits, the only `p/q` the numeral grammar reads.
 fn num_token(r: &Rat) -> String {
     if r.is_integer() {
-        return r.numer_string();
+        return r.numer_token();
     }
     if crate::ac::expr::decimal_spelling_wins(r) {
         if let Some(s) = r.exact_decimal() {
@@ -1365,13 +1368,18 @@ pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
     render(e, cx, 0)
 }
 
-/// A rational in the infix text. The text is re-read operator by operator, so the
-/// integer-over-decimal spelling (`ratio_spelling`) is safe here as `n/d`; the one-TOKEN
-/// `num_token` keeps `p/q`, the only fraction the leaf parser reads as one literal.
+/// A rational in the infix text. The text is re-read operator by operator, so a fraction is
+/// safe here as a division of two numbers: the integer-over-decimal spelling (`ratio_spelling`)
+/// as `n/d`, any other as `p/q` with each integer spelled like every decimal (`1e200/3`). The
+/// one-TOKEN `num_token` keeps the digits of `p/q`, the only fraction the leaf parser reads as
+/// one literal.
 fn infix_num(r: &Rat) -> String {
+    if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
+        return num_token(r);
+    }
     match ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
-        Some((n, ds)) => format!("{}/{}", n.numer_string(), ds),
-        None => num_token(r),
+        Some((n, ds)) => format!("{}/{}", n.numer_token(), ds),
+        None => format!("{}/{}", r.numer_token(), r.denom_token()),
     }
 }
 
@@ -1538,15 +1546,15 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                                     // denominator join, like a divisor-side reciprocal.
                                     Some((n, ds)) => {
                                         if !n.is_one() {
-                                            num_parts.insert(0, n.numer_string());
+                                            num_parts.insert(0, n.numer_token());
                                         }
                                         den_parts.insert(0, ds);
                                     }
                                     None => {
                                         if !r.numer().is_one() {
-                                            num_parts.insert(0, r.numer_string());
+                                            num_parts.insert(0, r.numer_token());
                                         }
-                                        den_parts.insert(0, r.denom_string());
+                                        den_parts.insert(0, r.denom_token());
                                     }
                                 },
                             }
@@ -2005,7 +2013,6 @@ mod tests {
         with_view(|view| {
             let cx = Cx::bare(view);
             let a = format!("1{}", "0".repeat(200));
-            let a3 = format!("{a}/3");
             let atom = |sign: i32| {
                 let p: num_bigint::BigInt = a.parse().unwrap();
                 Ex::Num(Rat::from_big(if sign < 0 { -p } else { p }, 3.into()).unwrap())
@@ -2036,13 +2043,13 @@ mod tests {
             let spelled: Vec<String> = strs(view, &explicit);
             assert_eq!(
                 spelled,
-                vec!["*", "/", a.as_str(), "3", "/", a.as_str(), "3"],
+                vec!["*", "/", "1e200", "3", "/", "1e200", "3"],
                 "explicit gathering resurfaced"
             );
 
             // INFIX: atoms render parenthesized so the textual chain cannot re-associate.
             let infix = to_infix_pretty(&state, &cx);
-            assert_eq!(infix, format!("({a3})*({a3})"));
+            assert_eq!(infix, "(1e200/3)*(1e200/3)");
 
             // The SIGNED partition keeps the sign in an atom (tagged/explicit) or
             // hoisted (infix) -- and still round-trips member-exact.
