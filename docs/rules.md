@@ -286,7 +286,7 @@ hints = [None, None, ["*", "4", "*", "x0", "x1"]]  # optional target suggestions
 extra_terms = ['<constant>', '0', '1', '(-1)', 'np.pi', 'np.e']  # target vocabulary
 certified = engine.certify_rules(proposals, hints,
                                  extra_internal_terms=extra_terms, verbose=True)
-# -> [(source, target, 'minimal' | 'verified'), ...]
+# certified: a list of (source, target, 'minimal' | 'verified') triples
 
 dummies = ["x0", "x1"]
 engine.simplification_rules = deduplicate_rules(

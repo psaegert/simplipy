@@ -242,11 +242,9 @@ from simplipy import Mode
 engine.simplify('exp(log(<constant>))', mode=Mode.f64)     # -> 'exp(log(<constant>))'
 engine.simplify('exp(log(<constant>))', mode=Mode.permissive)  # -> '<constant>'
 
-# sqrt(x^2) is |x| over the reals -- but rewriting to abs(x) is value-changing in f64
-# (sqrt(fl(x^2)) crosses ULP boundaries, and x^2 overflows to inf beyond ~1.3e154), so
-# the strict modes refuse, and the permissive mode takes the sign-ignoring algebraic
-# collapse instead:
-engine.simplify('rootn(x0^2, 2)')                          # -> unchanged
+# sqrt(x^2) is |x| over the reals; the permissive mode takes the sign-ignoring
+# algebraic collapse instead:
+engine.simplify('rootn(x0^2, 2)')                          # -> 'abs(x0)'
 engine.simplify('rootn(x0^2, 2)', mode=Mode.permissive)    # -> 'x0'
 
 # A finite-a.e. subtree (pole at a single measure-zero constant) folds in every mode:

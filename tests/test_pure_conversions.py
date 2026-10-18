@@ -269,13 +269,17 @@ class TestSimplifyPreservesTheDialect:
         assert engine.simplify(['+', 'x0', 'x0']) == ['*', '2', 'x0']
         assert engine.simplify(['<add>', 'x0', 'x0', '</add>']) == ['<mul>', '2', 'x0', '</mul>']
 
-    def test_convert_then_simplify_is_the_exact_recipe(self, engine, rows) -> None:
-        """The migration for `form=`: convert first, THEN simplify."""
+    def test_convert_then_simplify_reaches_one_canonical_state(self, engine, rows) -> None:
+        """Convert first, THEN simplify: whatever notation the input is converted to, the
+        answer is one canonical state -- read back as the explicit prefix, it simplifies to
+        the explicit answer (measured: 120 of 120 rows). The answers themselves are spelled
+        in their own notation, so they are not compared token for token."""
         for r in rows[:120]:
             r = list(r)
-            assert engine.simplify(engine.to_tagged(r)) == engine.simplify(engine.to_tagged(r))
-            assert engine.simplify(engine.to_infix(r)) == engine.simplify(engine.to_infix(r))
-            assert engine.simplify(engine.to_prefix(r)) == engine.simplify(engine.to_prefix(r))
+            reference = engine.simplify(engine.to_prefix(r))
+            for convert in (engine.to_tagged, engine.to_infix):
+                answer = engine.simplify(convert(r))
+                assert engine.simplify(engine.to_prefix(answer)) == reference, (r, convert.__name__)
 
 
 # ------------------------------------------------------------------- errors

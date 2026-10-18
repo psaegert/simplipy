@@ -137,48 +137,67 @@ def test_variable_remap_still_runs_before_the_key(vocab_engine):
     assert out == [(('+', '?0', '?1'), ('+', '?1', '?0'))]
 
 
+def _ac_respellings(engine: SimpliPyEngine, rules: list, n: int) -> list:
+    """`n` pairs `(rule, respelling)`: the respelling swaps the two operands of the rule's
+    root `+`/`*` -- the same pattern under AC, a different token sequence."""
+    arity = engine.operator_arity
+
+    def span(tokens: list, i: int) -> int:
+        j = i + 1
+        for _ in range(arity.get(tokens[i], 0)):
+            j = span(tokens, j)
+        return j
+
+    out = []
+    for lhs, rhs in rules:
+        if lhs[0] in ('+', '*'):
+            mid = span(lhs, 1)
+            swapped = [lhs[0]] + lhs[mid:] + lhs[1:mid]
+            if swapped != lhs:
+                out.append(([lhs, rhs], [swapped, rhs]))
+        if len(out) == n:
+            break
+    assert len(out) == n
+    return out
+
+
 def test_engine_construction_drops_ac_duplicates_of_the_shipped_artifact():
-    """The shipped artifacts carry AC-duplicate rows. Loading one must serve each
-    pattern ONCE -- and the served behaviour over the corpus must not move."""
+    """Loading a ruleset that carries AC duplicates serves each pattern ONCE, keeps the
+    first spelling, and drops exactly the respellings."""
     require_or_skip(acj_config_path(), 'acj-4-3 asset not staged')
     raw = json.load(open(acj_rules_path()))
-    engine = SimpliPyEngine.from_config(acj_config_path())
-    served = engine.simplification_rules
-    # THE LOADER, on a ruleset that actually carries duplicates. The shipped artifact
-    # stopped carrying them when the 0.14.0 mine started deduping, so asserting against
-    # it proved a property of the ARTIFACT and nothing about the collapse: `dropped` was
-    # empty and every check below held vacuously.
-    dup = raw + [raw[0], raw[1]]
-    dup_engine = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
-                                rules=dup)
-    assert len(dup_engine.simplification_rules) < len(dup), \
-        'the loader must collapse AC duplicates'
-    assert len(served) <= len(raw)
+    operators = yaml.safe_load(open(acj_config_path()))['operators']
+    engine = SimpliPyEngine(operators=operators, rules=raw)
+    pairs = _ac_respellings(engine, raw, 40)
+    respelled = [new for _, new in pairs]
+    # each respelling is an AC duplicate of its rule: one internal form, two spellings
+    assert engine._core.ac_canonical_keys([new[0] for new in respelled]) == \
+        engine._core.ac_canonical_keys([old[0] for old, _ in pairs])
+    dup_engine = SimpliPyEngine(operators=operators, rules=raw + respelled)
+    served = {(tuple(lhs), tuple(rhs)) for lhs, rhs in dup_engine.simplification_rules}
+    assert len(served) == len(engine.simplification_rules)
+    dropped = {(tuple(a), tuple(b)) for a, b in raw + respelled} - served
+    assert dropped == {(tuple(a), tuple(b)) for a, b in respelled}
     # No two SERVED rules share an internal form.
-    keys = engine._core.ac_canonical_keys([list(lhs) for lhs, _ in served])
+    keys = dup_engine._core.ac_canonical_keys([list(lhs) for lhs, _ in served])
     assert len(keys) == len(set(map(tuple, keys)))
-    # Every dropped row would be genuinely dead -- but the 0.14.0 mine emits none, so
-    # there is nothing to drop and the set is empty. Asserting it non-empty pinned a
-    # property of the OLD artifact, not of the loader.
-    dropped = {(tuple(a), tuple(b)) for a, b in raw}
-    dropped -= {(tuple(lhs), tuple(rhs)) for lhs, rhs in served}
-    assert not dropped or all(
-        engine._core.ac_canonical_keys([list(lhs)])[0]
-        in {tuple(k) for k in engine._core.ac_canonical_keys([list(x) for x, _ in served])}
-        for lhs, _ in list(dropped)[:20])
 
 
 def test_corpus_behaviour_is_unchanged_by_the_dedup():
-    """Behavioural neutrality, observed from outside: the corpus output of the engine
-    is byte-identical to the output of an engine whose rules were force-fed WITHOUT the
-    AC collapse (the core keeps first-match-wins, so a duplicate can only ever lose)."""
+    """Behavioural neutrality, observed from outside: on a ruleset carrying AC
+    respellings, the corpus output of the deduplicating loader is byte-identical to the
+    output of an engine whose rules were force-fed WITHOUT the AC collapse (the core
+    keeps first-match-wins, so a duplicate can only ever lose)."""
     require_or_skip(acj_config_path(), 'acj-4-3 asset not staged')
     corpus = default_corpus()
-    engine = SimpliPyEngine.from_config(acj_config_path())
-    raw = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(open(acj_rules_path()))]
-    undeduped = SimpliPyEngine(
-        operators=load_config(acj_config_path())['operators'], rules=[])
-    undeduped._replace_rules(raw)
-    assert len(undeduped.simplification_rules) == len(raw)
+    operators = load_config(acj_config_path())['operators']
+    raw = json.load(open(acj_rules_path()))
+    probe = SimpliPyEngine(operators=operators, rules=[])
+    rules = raw + [new for _, new in _ac_respellings(probe, raw, 40)]
+    deduped = SimpliPyEngine(operators=operators, rules=rules)
+    undeduped = SimpliPyEngine(operators=operators, rules=[])
+    undeduped._replace_rules([(tuple(lhs), tuple(rhs)) for lhs, rhs in rules])
+    assert len(undeduped.simplification_rules) == len(rules)
+    assert len(undeduped.simplification_rules) > len(deduped.simplification_rules)
     for expr in corpus:
-        assert engine.simplify(expr) == undeduped.simplify(expr)
+        assert deduped.simplify(expr) == undeduped.simplify(expr)
