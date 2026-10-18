@@ -705,7 +705,9 @@ fn licensed(f: &Ex, cx: &Cx) -> bool {
 ///
 /// * two reciprocal sums: `A^-1 * B^-1 -> (A*B)^-1`, with `A*B` distributed into one sum;
 /// * the coefficient into one reciprocal sum: `c * A^-1 -> (A/c)^-1`, with `1/c` distributed
-///   over `A`'s terms (`v1/(76.06*(82165.5 - 84.64*v1))` is `v1/(6249720.55 - 6438.02*v1)`).
+///   over `A`'s terms (`v1/(76.06*(82165.5 - 84.64*v1))` is `v1/(6249720.55 - 6438.02*v1)`);
+/// * any other factor into one reciprocal sum: `f * A^-1 -> (A/f)^-1`, with `1/f` distributed
+///   (`x7/(x7 - x5)` is `1/(1 - x5/x7)`).
 ///
 /// Both are identities wherever the pieces are finite, the licence `distribute_product`
 /// checks; the distributed sum is built by the same constructors, so its coefficients land
@@ -756,6 +758,19 @@ fn reciprocal_joins(v: &[Ex], cx: &Cx) -> Vec<Ex> {
                         out.push(joined(inside, &[ci, i]));
                     }
                 }
+            }
+        }
+    }
+    // Any other factor into one reciprocal sum: `f * A^-1 -> (A/f)^-1`
+    // (`x7/(x7 - x5)` is `1/(1 - x5/x7)`).
+    for (fi, f) in v.iter().enumerate() {
+        if matches!(f, Ex::Num(_) | Ex::Add(_)) || recips.contains(&fi) {
+            continue;
+        }
+        let f_inv = pow(f.clone(), Ex::Num(Rat::NEG_ONE), cx);
+        for &i in &recips {
+            if let Some(inside) = distribute_product(&[f_inv.clone(), base(i)], cx) {
+                out.push(joined(inside, &[fi, i]));
             }
         }
     }
