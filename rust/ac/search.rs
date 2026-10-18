@@ -244,6 +244,9 @@ fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
             if let Some(cand) = distribute_product(v, cx) {
                 out.push(cand);
             }
+            if cx.lossy() {
+                out.extend(reciprocal_joins(v, cx));
+            }
             for (si, s) in v.iter().enumerate() {
                 let Ex::Add(ts) = s else {
                     continue;
@@ -690,6 +693,73 @@ fn licensed(f: &Ex, cx: &Cx) -> bool {
     } else {
         cx.fin_licensed(f)
     }
+}
+
+/// RECIPROCAL JOIN (permissive): the product's reciprocal sums, joined and distributed inside.
+/// Permissive's `pow` distributes a reciprocal over a product unconditionally, so `c/(A*B)` is
+/// held as `c * A^-1 * B^-1`: no DISTRIBUTE can reach the product inside the reciprocal, and the
+/// coefficient can never merge into a sum it divides. The sound modes keep such a reciprocal
+/// joined where it is not certified to split, and their DISTRIBUTE expands inside it. This
+/// move gives permissive the same reach, as a candidate the search descends and keeps only when
+/// it lands strictly below (never a projection):
+///
+/// * two reciprocal sums: `A^-1 * B^-1 -> (A*B)^-1`, with `A*B` distributed into one sum;
+/// * the coefficient into one reciprocal sum: `c * A^-1 -> (A/c)^-1`, with `1/c` distributed
+///   over `A`'s terms (`v1/(76.06*(82165.5 - 84.64*v1))` is `v1/(6249720.55 - 6438.02*v1)`).
+///
+/// Both are identities wherever the pieces are finite, the licence `distribute_product`
+/// checks; the distributed sum is built by the same constructors, so its coefficients land
+/// once (`expr::land`).
+fn reciprocal_joins(v: &[Ex], cx: &Cx) -> Vec<Ex> {
+    let recips: Vec<usize> = v
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| match f {
+            Ex::Pow(b, x) => {
+                matches!(&**b, Ex::Add(_)) && matches!(&**x, Ex::Num(r) if *r == Rat::NEG_ONE)
+            }
+            _ => false,
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if recips.is_empty() {
+        return Vec::new();
+    }
+    let base = |i: usize| match &v[i] {
+        Ex::Pow(b, _) => (**b).clone(),
+        _ => unreachable!("a reciprocal sum"),
+    };
+    let joined = |inside: Ex, skip: &[usize]| {
+        let mut r: Vec<Ex> = v
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !skip.contains(k))
+            .map(|(_, x)| x.clone())
+            .collect();
+        r.push(pow(inside, Ex::Num(Rat::NEG_ONE), cx));
+        mul(r, cx)
+    };
+    let mut out = Vec::new();
+    for (a, &i) in recips.iter().enumerate() {
+        for &j in &recips[a + 1..] {
+            if let Some(inside) = distribute_product(&[base(i), base(j)], cx) {
+                out.push(joined(inside, &[i, j]));
+            }
+        }
+    }
+    if let Some(ci) = v.iter().position(|f| matches!(f, Ex::Num(_))) {
+        if let Ex::Num(c) = &v[ci] {
+            if let Some(inv) = c.checked_inv() {
+                for &i in &recips {
+                    let pieces = [Ex::Num(inv.clone()), base(i)];
+                    if let Some(inside) = distribute_product(&pieces, cx) {
+                        out.push(joined(inside, &[ci, i]));
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Fully distribute a product over its Add factors: the cartesian expansion
