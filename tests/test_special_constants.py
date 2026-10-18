@@ -314,17 +314,11 @@ class TestConstAbsorptionLicence:
             == ['<mul>', 'np.pi', 'x0', '</mul>']
 
     def test_special_base_pow_const(self, eng):
-        # pi^C keeps its structure: pow is not an absorption site -- the family's
-        # value set is (0, inf), not "anything", so the mask may not claim it.
-        out = eng.simplify(['pow', 'np.pi', '<constant>'])
-        assert out != ['<constant>'], 'pi^C absorbed the special'
-        assert 'np.pi' in out and '<constant>' in out
-        assert eng.simplify(list(out)) == out
-        # e^C is DIFFERENT by design: pow(e, t) == exp(t) is an EXACT identity that
-        # eliminates the special losslessly BEFORE any mask meets it, and the resulting
-        # `exp <constant>` collapses under the pre-existing special-free value-set
-        # absorption (same family as `sin <constant> -> <constant>`). The licence
-        # protects specials from ROUNDING and ABSORPTION, not from exact identities.
+        # pi^C absorbs to C as 2^C, e^C and exp(C) do: a special constant is a fixed
+        # positive real like a literal, so every positive base gives the same family of
+        # values, (0, inf), which the fitted constant represents.
+        check(eng, ['pow', 'np.pi', '<constant>'], ['<constant>'])
+        check(eng, ['pow', '2', '<constant>'], ['<constant>'])
         check(eng, ['pow', 'np.e', '<constant>'], ['<constant>'])
         check(eng, ['exp', '<constant>'], ['<constant>'])
 

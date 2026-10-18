@@ -113,6 +113,9 @@
   `(x2 - x1)*(x1 - <constant>)` became `(x1 + <constant>)*(x1 - x2)`, which no value of the
   constant makes equal to the input (also in 0.14.7). The sign now goes to the sum's other terms:
   `(x1 + <constant>)*(x2 - x1)`.
+- **`pi^C` is a fitted constant.** `pow(np.pi, <constant>)` simplifies to `<constant>`, as
+  `pow(2, <constant>)`, `pow(np.e, <constant>)` and `exp(<constant>)` do: every positive base
+  gives the same family of values, which the fitted constant represents.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
