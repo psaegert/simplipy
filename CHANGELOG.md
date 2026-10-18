@@ -19,16 +19,11 @@
   Total time falls by 22% (`f64`), 16% (`real`) and 20% (`permissive`) on the T8.1 inputs and by
   76%, 71% and 85% on the predictions; on the ground truths (about 2 s of calls per mode in
   `f64` and `real`) it is 4% lower in `f64`, 13% higher in `real` and equal in `permissive`.
-- **A work budget per search, the default in permissive.** `simplify()` takes `work`: the budget
-  of each search in deterministic units (one step of the matcher or one canonical-constructor
-  call), so a budget cuts the same walk at the same place on every machine and under any load. A
-  search that spends it returns its best answer so far. The default is
-  `simplipy.DEFAULT_WORK = 10_000` in `permissive` (a few tens of milliseconds per search) and no
-  budget in `f64` and `real`; `work=None` restores the search that runs until a round finds
-  nothing. Under a budget, permissive continues its literal fold without the search. Its three
-  bounds below hold among calls with the same `work`. A search the budget stopped, or another arm
-  started from the answer, can continue on a second call: in `permissive`, 1,946 of srbf's
-  predictions change on a second call (0.14.7: 137) and 148 of the T8.1 inputs (0.14.7: 306).
+- **An opt-in work budget for the search.** `simplify()` takes `work`: a budget for the search in
+  deterministic units (one step of the matcher or one canonical-constructor call), so a budget cuts
+  the same walk at the same place on every machine and under any load. A search that spends it
+  returns its best answer so far, and a budget never changes which algorithm runs. No mode has one
+  by default (`simplipy.DEFAULT_WORK` is `None`): the search runs until a round finds nothing.
 - **Faster canonical forms.** Placing the signs of a nested sum asked the same flip four times per
   nesting level, so an expression nested `d` deep cost `4^d` flips: even with the faster products
   below, `x1*(x1 + (N + 1)/x1)` nested 10 deep took 23.5 s in `f64` with the search off, and a
@@ -181,21 +176,30 @@
   (`<mul> -1 <div> x1 </mul>`, like `-2/x1`; 0.14.7 answered `neg inv x1`, which re-read as
   `/ -1 x1`), so every tagged answer reads back as itself. Explicit input is unchanged,
   `exp 1/2` included.
-- **Permissive never returns more than it was given.** `simplify(.., mode='permissive')` runs
-  three arms (its two fold disciplines and the `f64` chain) and used to choose between them by the
-  price of internal states it did not return: 0.14.7 returns 769 of the T8.1 inputs, 3,326 of srbf's
-  predictions and 12 of its ground truths costlier than they came in, in permissive's own measure.
-  It now returns the cheapest of its candidates, each priced as it is returned (what it prints,
-  re-read in permissive's own measure): every state its two fold disciplines can end on under some
-  budget, the `f64` arm's states finished in permissive where they read cheaper than permissive's
-  own fixpoints and the input, the literal-fold continuation of every capped run's winner that
-  carries long exact literals (and that winner with only the literals that print beyond float
-  precision moved to their floats), and the input as read. So its answer never prices above the
-  input, above its answer with the search off, or above its answer at a smaller `effort`; on the
-  three sets none does (efforts checked: 0, 1, 4 and the default). Against 0.14.7 in permissive's
-  own measure, 15,215 T8.1 answers get cheaper and 824 costlier, and 46,783 predictions cheaper and
-  6,412 costlier. 33 of the predictions' answers print a literal beyond float precision (0.14.7:
-  25); none prices above the same answer with those literals at their floats (15 below, 18 equal).
+- **Permissive is one walk.** `simplify(.., mode='permissive')` ran three arms (its two fold
+  disciplines and the `f64` chain) and chose between them by the price of internal states it did
+  not return: 0.14.7 returns 769 of the T8.1 inputs, 3,326 of srbf's predictions and 12 of its
+  ground truths costlier than they came in, in permissive's own measure. It now runs one walk, like
+  every mode: its chain, then the search, in its own canon and rules. Its constructors never fold a
+  transcendental, so a constructor identity sees the shape it reads (`atanh(tanh(30))` is `30`); its
+  ground fold is a step of the chain, tried after the rules at each node and kept only where it is
+  cheaper (`asin(1e-8)` is `1e-8`, `sqrt(exp(19.11787581094798))` is `14170.787488305119`); its
+  literals are exact and rounded once, where they land as an operand (`3*(1/3 + 1e-20)` is `1`, a
+  64-digit coefficient becomes its 17-digit float); and its search joins reciprocal sums (`c/(A*B)`,
+  held as `c * A^-1 * B^-1`, is also tried as `(A*B)^-1` and `(A/c)^-1` with the inside
+  distributed). So, as in every mode, its answer never prices above the input or above its answer
+  at a smaller `effort`, and a second call returns it unchanged: on srbf's 6,531 ground truths,
+  shard 0 of the T8.1 inputs (12,949) and of srbf's predictions (12,513) none prices above
+  its input and none changes on a second call. Against the three-arm selection it replaces, in
+  permissive's own measure, 323 ground truths get cheaper and 18 costlier, 790
+  T8.1 inputs and 54, and 5,368 predictions and 552; it spends
+  3.3, 2.6 and 2.9 times `f64`'s work units on these sets (the
+  selection: 8.2, 5.9 and 10.6). Where `f64`'s answer
+  prices below permissive's in permissive's reading (14, 49 and 399 rows), the
+  causes are a literal rounded twice (rounded where it landed, then combined again, so one ulp
+  off: on the predictions 454 answers print such a literal one digit longer and 634 one digit
+  shorter than the selection's single rounding), sign placement, `inf` beside a signed zero, and the
+  search's walk order.
 - **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:
   the modes accept different simplifications as true (`f64` follows the float evaluator, so
   `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not; `permissive` also what
@@ -214,19 +218,17 @@
   10 and of 6 copies 30). Capped at 4 in this release, 1,632 of srbf's 125,127 model predictions
   change on a second call in `f64` and in `real`. Uncapped, none does in `f64` and `real` (with
   the canonical forms that read back as themselves, above). On the predictions no answer is
-  costlier than at cap 4, and 1,633 are cheaper, in `f64` and in `real`. `permissive` bounds each
-  search with its work budget by default (above). The search is one walk: it tries the current
+  costlier than at cap 4, and 1,633 are cheaper, in `f64` and in `real`. The search is one walk: it tries the current
   answer's candidates cheapest whole expression first, steps to the first that ends cheaper, and
   stops when a whole round finds nothing. Each candidate's whole state is rebuilt through the
   canonical constructors and is not re-canonicalized in full before its descent. On srbf's
   predictions the uncapped search spends 15% more matcher steps and constructor calls than
   `effort=4` in `f64` (16% in `real`). Every
   internal caller that passes no `effort` (normalization, masking, mining, the verification
-  monitor, the promotion refund) follows the default. `effort=k` caps each search at `k`
-  candidates (`permissive` runs several per call; a cap beyond 2^63 - 1 is none), the first `k`
-  of that one walk; `effort=0` never enters the search, so the search change
+  monitor, the promotion refund) follows the default. `effort=k` caps the search at `k`
+  candidates (a cap beyond 2^63 - 1 is none), the first `k` of that one walk; `effort=0` never enters the search, so the search change
   leaves its answers byte-identical (the float cap below changes some: 269 of srbf's 125,127
-  predictions in `f64`, 11,175 in `permissive`; so do permissive's selection, the canonical-form
+  predictions in `f64`, 11,175 in `permissive`; so do permissive's one walk, the canonical-form
   fixes above and, in `real` and `permissive`, the refused common-factor rules). Code that
   compares `DEFAULT_EFFORT` with an int now sees `None`.
 - **Faster products.** Building a product decides where its sign goes by pricing every

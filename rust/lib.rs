@@ -614,8 +614,8 @@ impl PyEngine {
     /// effort=0 semantics). The public `effort=` API (D39 B7, wired 2026-08-24) rides
     /// the `_in_mode` entries' `explore_budget` parameter instead -- this bool-mode
     /// entry stays as the B1 scaffolding surface its falsifier suite drives. It opens no work
-    /// budget, so `permissive` here runs unbounded and continues its literal fold with the
-    /// search. Contracts (empty input, malformed input, forms) exactly as `ac_simplify`.
+    /// budget, so the search runs unbounded. Contracts (empty input, malformed input, forms)
+    /// exactly as `ac_simplify`.
     #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false, form="tagged", explore_budget=0))]
     fn ac_simplify_explore(
         &self,

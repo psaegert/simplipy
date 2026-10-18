@@ -10,7 +10,7 @@ exactly what this header warns about.)
 from typing import Any, Literal
 
 __build__: str
-DEFAULT_WORK: int
+DEFAULT_WORK: int | None
 ARTIFACT_ENV_SWITCHES: list[str]
 
 class CandidateLibrary:

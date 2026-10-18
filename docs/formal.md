@@ -108,9 +108,8 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   in tests). Uncapped (the default in
   f64 and real; L6), the exploration phase can reach states of the literal classes above that the
   chain alone never visits (for example an unmerged `3e-310` coefficient that re-reads in another
-  order; a `<constant>` absorbed on re-read). In `permissive` the selection among three arms adds
-  a class of its own (L6). A capped search, or one its work budget stops, can stop between two
-  improvements, which a second call continues.
+  order; a `<constant>` absorbed on re-read). A capped search, or one a work budget stops, can
+  stop between two improvements, which a second call continues.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
@@ -693,26 +692,18 @@ default, every one to a cheaper form (`real` the same); uncapped, never, in `f64
 srbf's ground truths and the simplify inputs of flash-ansr's T8.1 draws]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
-`permissive` returns the cheapest of its candidates, each priced by re-reading what it prints in
-`permissive`'s own measure: the states its two fold-discipline arms can end on under some
-budget (each search's trace, with the smallest budget reaching each state), the `f64` arm's
-states finished
-in `permissive` where they read below a budget-independent threshold (the cheapest of the
-`permissive` fixpoints and the input), the literal-fold continuation of the winner a run capped
-at each such budget would have (where it carries long exact literals; the winner with only its
-literals that print beyond float precision moved joins it), and the input as read. Under a work
-budget the continuations run without the search, so every continuation state is born at budget
-0. **Proposition (permissive selection)**
-[THEOREM, given the trace]: its answer prices at most its input, at most its search-off answer,
-and at most its answer under any smaller budget, among calls with the same work budget. *Proof.*
-The input is a candidate; a run capped at $k$ is the same walk cut short (a work budget cuts each
-search at the same place in both runs), so its candidates, its winner and that winner's
-continuation (the same walk cut short again) are among the uncapped run's; the answer is the
-cheapest of a superset. $\square$ Its winner is a valley of its own arm only: the re-run's other
-arms, started from the winner, can descend further, and a search the work budget stopped can
-continue, so L6 does not cover the selection [EMPIRICAL: 148 second-call changes on flash-ansr's
-129,490 T8.1 simplify inputs, 1,946 on srbf's 125,127 predictions; the three bounds hold on every input of
-both sets and srbf's ground truths, efforts checked 0, 1, 4 and the default].
+`permissive` is one walk too (0.15), so L3, L6 and the prefix argument for `effort` cover it as
+they cover every mode. Its two steps of its own are ordinary steps: the ground fold is the pass's
+fold (tried after the rules at a node, kept only when the result descends, so L3 holds), and the
+landing rounding ρ moves a literal to its float only where the float's shortest spelling is
+cheaper as an exact codeword, which the float cap prices alike (mu-neutral, so the descent
+arguments and T6 are unchanged; idempotent, since a float's shortest spelling is never moved). Its
+search move that joins reciprocal sums is a candidate like the others, accepted only strictly
+below. A literal rounded where it lands is exact from then on, so a later step that combines it
+rounds again: an answer's literal can sit one ulp from the correctly rounded value of the input's
+exact arithmetic [EMPIRICAL: on shard 0 of srbf's predictions (12,513), against the three-arm
+selection that rounded once at the end, 454 answers differ only in such a literal and print it one
+digit longer, 634 one digit shorter].
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:

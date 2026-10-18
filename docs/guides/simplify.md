@@ -109,20 +109,15 @@ whole expression, so the search owns it, in every mode alike, and `effort=0` doe
 
 The budget is the `effort` parameter. The default, `effort=None`
 (`simplipy.DEFAULT_EFFORT`), searches until a round finds nothing, so a second call
-has nothing left to continue (in `f64` and `real`; `permissive` bounds each search by its work
-budget, below). `simplify(expr, effort=64)` caps each search at 64 candidate
-descents (`permissive` runs several per call), and `effort=0` never enters the phase — byte-identical to the chain alone. Pass
+has nothing left to continue. `simplify(expr, effort=64)` caps the search at 64 candidate
+descents, and `effort=0` never enters the phase — byte-identical to the chain alone. Pass
 `effort=0` on throughput-critical paths.
 
-The second knob is `work`: the budget of each search in deterministic units, one step of the
-matcher or one canonical-constructor call, so a budget cuts the same walk at the same place on
+The second knob is `work`, an opt-in budget for the search in deterministic units, one step of
+the matcher or one canonical-constructor call, so a budget cuts the same walk at the same place on
 every machine and under any load. A search that spends its budget returns its best answer so far.
-`permissive`, whose selection runs many searches per call, defaults to
-`simplipy.DEFAULT_WORK = 10_000` units (a few tens of milliseconds per search); `f64` and `real`
-run without a budget by default. `work=None` lifts it. With these defaults no call on the simplify
-inputs of flash-ansr's T8.1 draws, srbf's ground truths or its model predictions takes more than
-1 s in any mode, and under 1% take more than 0.1 s (0.14.7: up to 18.2% and 1.52%, `permissive` on
-the predictions).
+No mode has one by default (`simplipy.DEFAULT_WORK` is `None`): a budget ends the search early
+and never changes which algorithm runs.
 
 A cap counts every candidate tried, refused ones included, over the whole expression, so
 the cap a search needs grows with the expression: one of srbf's model predictions needs 5
@@ -139,19 +134,18 @@ walk. On srbf's predictions it spends 15% more matcher steps and constructor cal
 `effort` (normalization, masking, mining, the verification monitor, the promotion refund)
 follows the default.
 
-`permissive` runs three arms (its two fold disciplines and the `f64` chain) and returns the
-cheapest of its candidates, each priced as it is returned — what it prints, re-read in
-`permissive`'s own measure: every state its two fold disciplines can end on under some budget
-(a capped run is the same walk cut short), the `f64` arm's states finished in `permissive`
-where they read cheaper than `permissive`'s own fixpoints and the input, the literal-fold
-continuation of every capped run's winner that carries long exact literals (and that winner
-with only its literals that print beyond float precision moved to their floats), and the input
-as read. So its answer never prices above the input, above its answer with the search off, or
-above its answer at a smaller `effort`, among calls with the same `work`; on flash-ansr's T8.1
-draws, srbf's ground truths and its predictions none does (efforts checked: 0, 1, 4 and the
-default). Under a work budget the literal-fold continuations run without the search. A second
-call can still change the answer, through another arm or a search the budget stopped: 148 of the
-129,490 T8.1 answers and 1,946 of srbf's 125,127 predictions change on a second call.
+`permissive` is one walk, like every mode: its chain to a fixpoint, then the search, in its own
+canon and rules. Its constructors never fold a transcendental, so a constructor identity always
+sees the shape it reads (`atanh(tanh(30))` is `30`); its ground fold is a step of the chain instead,
+tried after the rules at each node and kept only when it is cheaper (`asin(1e-8)` is `1e-8`, and
+`exp(9.55893790547399)` is `14170.787488305119`). Its literals are exact and rounded once, where
+they land: a literal that becomes a constant term, a coefficient, a function's argument or a
+power's operand beside a non-literal moves to the float nearest to it when that float's
+shortest spelling is cheaper (`3*(1/3 + 1e-20)` is `1`, `x1*0.0766…` with 64 digits is
+`0.07665412684716773*x1`). Its search has one move of its own, joining reciprocal sums
+(`c/(A*B)` is held as `c * A^-1 * B^-1`, and the move proposes `(A*B)^-1` and `(A/c)^-1` with the
+inside distributed). So, as in every mode, its answer never prices above the input or above its
+answer at a smaller `effort`, and a second call returns it unchanged.
 
 What the search buys, on the 129,490 simplify inputs of flash-ansr's T8.1 training draws
 (output price over input price, `complexity(.., mode=m)`): in `f64` it moves the mean ratio from 0.979
@@ -162,11 +156,11 @@ and from 21.2% to 33.9%, for about 64% more.
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
 below it (the result is never worse than the fixpoint, hence never costlier than the
-input; in `permissive` for its selection too), both
+input), both
 phases move only on strict descent of a well-founded ordering
 (termination, independent of the budget), and the walk order is deterministic
-(reproducibility; the work budget counts units, not time). Idempotence needs the search to run
-until a round finds nothing, the default of `f64` and `real`: a cap or a work budget can stop it
+(reproducibility; a work budget counts units, not time). Idempotence needs the search to run
+until a round finds nothing, the default in every mode: a cap or a work budget can stop it
 between two improvements, which a second call then continues.
 
 ## Soundness modes

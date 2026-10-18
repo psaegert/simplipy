@@ -231,21 +231,19 @@ DEFAULT_ENGINE_REVISION: str | None = None
 
 #: The exploration budget ``simplify()`` runs under when ``effort`` is not given.
 #: ``None``: the search runs until a round finds nothing, so a second call returns the
-#: answer unchanged (in ``permissive`` its work budget can stop a search, see
-#: ``DEFAULT_WORK``). The previous default, 4, stops searches between
+#: answer unchanged. The previous default, 4, stops searches between
 #: two improvements: on srbf's 125,127 model predictions 1,632 answers change on a second
 #: call in f64 at cap 4 (none uncapped).
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
 
-#: The WORK BUDGET of each search ``simplify(.., mode='permissive')`` runs when ``work`` is not
-#: given. Its units are deterministic -- one step of the AC matcher or one canonical-constructor
-#: call -- so a budget cuts the same walk at the same place on every machine and under any load. A
-#: search that spends it stops as if its descent cap had bound and returns its best answer so far.
-#: ``work=None`` lifts the bound: the search runs until a round finds nothing, the default of
-#: ``f64`` and ``real``, which stay fast without one.
-#: The compiled core declares it (the miner's permissive marks run under the same budget).
+#: The WORK BUDGET each search ``simplify()`` runs under when ``work`` is not given: ``None``, in
+#: every mode -- the search runs until a round finds nothing. ``work=k`` is an opt-in cap in
+#: deterministic units (one step of the AC matcher or one canonical-constructor call), so it cuts
+#: the same walk at the same place on every machine and under any load; a search that spends it
+#: returns its best answer so far. It ends a search early and never changes which algorithm runs.
+#: The compiled core declares it (the miner's marks run under the same budget).
 DEFAULT_WORK: int | None = _CORE_DEFAULT_WORK
 
 
@@ -1963,24 +1961,20 @@ class SimpliPyEngine:
             STRICTLY below it in the serve-time reduction ordering.
             ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
             nothing, so a second call returns the answer unchanged (up to the residual
-            classes in ``docs/formal.md``, I3 and L6, and in ``permissive`` a search its
-            work budget stopped); an int caps each search at that many candidate descents
-            (``permissive`` runs several per call), after which a second call can continue
-            it; ``0`` never enters the phase and is byte-identical to the plain chain
+            classes in ``docs/formal.md``, I3 and L6, and a search a ``work`` budget
+            stopped); an int caps the search at that many candidate descents, after which
+            a second call can continue it; ``0`` never enters the phase and is byte-identical to the plain chain
             (rules and constructors), which does not factor.
             Every guarantee survives any budget: soundness (same certificates), never-worse
-            (strictly-below acceptance; in ``permissive`` its selection too, never above its
-            input, its search-off answer or its answer at a smaller ``effort``, among calls
-            with the same ``work``), termination (well-founded ordering, independent of the
-            budget) and deterministic output.
+            (strictly-below acceptance: never above the input, and never above the answer at a
+            smaller ``effort`` with the same ``work``), termination (well-founded ordering,
+            independent of the budget) and deterministic output.
         work : int, None or 'default', optional
-            The WORK BUDGET of each search, in deterministic units (one AC-matcher step or
-            one canonical-constructor call). ``'default'`` is ``DEFAULT_WORK`` in
-            ``permissive`` and no bound in ``f64`` and ``real``; ``None`` lifts the bound (the
-            search runs until a round finds nothing). A search that spends its budget returns
-            its best answer so far, and the guarantees above hold at every budget;
-            ``permissive``'s three bounds hold among calls with the same ``work``. Under a
-            budget, ``permissive`` continues its literal fold without the search.
+            An opt-in WORK BUDGET for the search, in deterministic units (one AC-matcher step
+            or one canonical-constructor call). ``'default'`` is ``DEFAULT_WORK``, no bound in
+            every mode; ``None`` is the same (the search runs until a round finds nothing). A
+            search that spends its budget returns its best answer so far; the guarantees above
+            hold at every budget, and the budget never changes which algorithm runs.
 
         Returns
         -------
@@ -2079,7 +2073,7 @@ class SimpliPyEngine:
         mode = _coerce_mode(mode)
 
         if work == 'default':
-            work = DEFAULT_WORK if mode is Mode.permissive else None
+            work = DEFAULT_WORK
 
         # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds
         # HERE, on the mode's first use -- once, lock-guarded, announced. Under the

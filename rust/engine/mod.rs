@@ -30,11 +30,12 @@ pub use ac::RuleMode;
 pub use miner::{ConfirmSet, MineRefusal, MineSpec};
 pub use prettify::{Pretty, PrettyForm};
 
-/// The work budget of each search `simplify(.., mode='permissive')` runs when `work` is not
-/// given (`simplipy.DEFAULT_WORK` reads it from here). One step of the AC matcher or one
-/// canonical-constructor call per unit, so a budget cuts the same walk on every machine.
-/// The miner's permissive marks run under it too (`MineSpec::serve_work`).
-pub const DEFAULT_WORK: u64 = 10_000;
+/// The work budget each search runs under when `simplify` is not given `work`
+/// (`simplipy.DEFAULT_WORK` reads it from here): none, in every mode (owner ruling P5). `work`
+/// is an opt-in cap -- one step of the AC matcher or one canonical-constructor call per unit, so
+/// a budget cuts the same walk on every machine -- that ends a search early and never changes
+/// which algorithm runs. The miner's marks run under it too (`MineSpec::serve_work`).
+pub const DEFAULT_WORK: Option<u64> = None;
 
 /// Test-only plumbing for the serialization-stability probes (a per-call ctx + view + intern).
 #[cfg(test)]

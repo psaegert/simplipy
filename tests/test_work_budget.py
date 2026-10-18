@@ -1,8 +1,8 @@
-"""simplify(work=...): a deterministic work budget per search, the default in permissive mode.
+"""simplify(work=...): an opt-in deterministic work budget for the search, no budget by default.
 
 A unit is one step of the AC matcher or one canonical-constructor call, so a budget cuts the
-same walk at the same place on every machine. ``work=None`` lifts it: the search runs until a
-round finds nothing, which is the default of f64 and real.
+same walk at the same place on every machine. ``work=None`` (the default in every mode) runs the
+search until a round finds nothing; a budget ends it early and never changes which algorithm runs.
 """
 import pytest
 
@@ -28,7 +28,7 @@ def price(engine: SimpliPyEngine, expr: list[str], mode: str) -> int:
 
 
 def test_the_default_budget_is_exported() -> None:
-    assert simplipy.DEFAULT_WORK == 10_000
+    assert simplipy.DEFAULT_WORK is None
 
 
 @pytest.mark.parametrize('work, error', [(True, TypeError), (-1, ValueError), ('all', ValueError), (1.5, TypeError)])
@@ -37,8 +37,8 @@ def test_work_is_validated(engine, work, error) -> None:
         engine.simplify(['+', 'x1', 'x1'], work=work)
 
 
-@pytest.mark.parametrize('mode', ['f64', 'real'])
-def test_f64_and_real_run_unbounded_by_default(engine, mode) -> None:
+@pytest.mark.parametrize('mode', ['f64', 'real', 'permissive'])
+def test_every_mode_runs_unbounded_by_default(engine, mode) -> None:
     t = ladder(10)
     assert engine.simplify(t, mode=mode) == engine.simplify(t, mode=mode, work=None)
 
@@ -53,10 +53,11 @@ def test_a_budget_binds_when_asked_and_stays_sound(engine) -> None:
     assert price(engine, settled, 'f64') < price(engine, cut, 'f64') <= price(engine, t, 'f64')
 
 
-def test_permissive_defaults_to_the_budget(engine) -> None:
+def test_permissive_defaults_to_no_budget(engine) -> None:
     for t in (ladder(6), ladder(10), '+ * 2.5 x1 * 1.5 x1'.split()):
         default = engine.simplify(t, mode='permissive')
-        assert default == engine.simplify(t, mode='permissive', work=simplipy.DEFAULT_WORK)
+        assert default == engine.simplify(t, mode='permissive', work=None)
+        assert default == engine.simplify(t, mode='permissive', work='default')
         assert default == engine.simplify(t, mode='permissive')  # deterministic
 
 

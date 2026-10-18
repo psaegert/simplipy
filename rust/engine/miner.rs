@@ -45,9 +45,9 @@ impl MineSpec {
 }
 
 /// The work budget `simplify` runs a mode's searches under by default: the shared
-/// `DEFAULT_WORK` in permissive, none in f64 and real.
-pub fn serve_work(mode: RuleMode) -> Option<u64> {
-    matches!(mode, RuleMode::Permissive).then_some(super::DEFAULT_WORK)
+/// `DEFAULT_WORK`, the same in every mode (none).
+pub fn serve_work(_mode: RuleMode) -> Option<u64> {
+    super::DEFAULT_WORK
 }
 
 /// The engine's own answer for a source: the bar every target must beat. `mu` is `None`
