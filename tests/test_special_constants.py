@@ -192,8 +192,11 @@ class TestExactCollapsesMint:
         # The ground evaluation answers in the engine's own spelling, `-1` (one
         # canonical key with the alphabet's `(-1)`).
         assert (('cos', 'np.pi'), ('-1',)) in rules, sorted(rules)
-        assert (('sin', 'np.pi'), ('0',)) in rules, sorted(rules)
         assert (('log', 'np.e'), ('1',)) in rules, sorted(rules)
+        # `sin(np.pi) -> 0` is false in f64 (1.2246467991473532e-16), so the f64 mine, whose
+        # set the engine holds in its default slot, does not mint it; the real mine does.
+        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
+        assert (('sin', 'np.pi'), ('0',)) in real, sorted(real)
 
     def test_mined_engine_serves_the_collapse(self, mined):
         # The owner's ask, end to end: cos(pi) simplifies to -1 (via the mined rule).
@@ -204,14 +207,13 @@ class TestExactCollapsesMint:
         # to, and it is asserted from the mined rule set itself -- an earlier version
         # installed the rule into `real` and then asserted that same rule fires, which
         # says nothing about the mine at all.
-        # This fixture is a freshly-mined engine with ONE rule set (no triple), so the
-        # rule is in its default set and fires here. That is what "the mined engine serves
-        # the collapse" can mean for it. Where the rule LANDS -- `real`, not f64, because
-        # f64 computes 1.2246467991473532e-16 -- is a property of the ROUTED artifact and
-        # is pinned in `TestGroundFoldLicence` against the shipped triple.
-        rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        assert (('sin', 'np.pi'), ('0',)) in rules
-        assert mined.simplify(['sin', 'np.pi']) == ['0']
+        # Each mode is mined in its own mode, so the rule is minted by the real mine (f64
+        # computes 1.2246467991473532e-16) and the default set the engine holds, the f64
+        # mine's, does not serve it. Where the ROUTED artifact serves it is pinned in
+        # `TestGroundFoldLicence` against the shipped triple.
+        real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
+        assert (('sin', 'np.pi'), ('0',)) in real
+        assert mined.simplify(['sin', 'np.pi']) == ['sin', 'np.pi']
         from simplipy.verify._contract import judge_rule
         assert judge_rule(['sin', 'np.pi'], ['0'])['tier'] == 'real'
 

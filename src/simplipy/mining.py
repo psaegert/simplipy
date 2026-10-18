@@ -977,8 +977,13 @@ class RuleMiner:
                         None if prov is None else dict(
                             prov, measure=self.engine._measure_fingerprint(_mode)),
                         _triple[_mode], final=_complete, interrupted=not _complete)
-            if out_path is not None and finals is not None and out_path == output_file:
-                finals[rule_mode] = [(tuple(lhs), tuple(rhs)) for lhs, rhs in _triple[file_mode]]
+            if finals is not None and out_path == output_file:
+                # An in-memory mine (no output file) writes no triple: each mode's final is
+                # the set it mined, so the engine ends holding the f64 mine's set in the
+                # default slot, not the last mode's working set.
+                finals[rule_mode] = ([(tuple(lhs), tuple(rhs)) for lhs, rhs in _triple[file_mode]]
+                                     if out_path is not None else
+                                     [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules])
             return [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
 
         snapshot_at = dict(snapshot_at or {})
