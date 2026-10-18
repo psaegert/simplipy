@@ -189,6 +189,23 @@ class TestFactoringIsASearchMove:
         # a unit twin's left side was a sum holding a bare wildcard term
         assert not any(lhs[0] in ("+", "-") and lhs[1].startswith("?") for lhs, _, _ in served)
 
+    def test_a_rule_stating_the_law_is_refused_at_load(self) -> None:
+        # One FACTOR move turns each left side into its right side: the search owns that, so the
+        # load refuses both rules, and the search factors what they did.
+        e = make_engine(COMMON_FACTOR)
+        assert e._core.ac_rules_drop_census().get("engine-owned-law") == len(COMMON_FACTOR)
+        assert e._core.ac_served_rules() == []
+        for src, factored in ((["+", "*", "x1", "x2", "*", "x3", "x2"], ["*", "+", "x1", "x3", "x2"]),
+                              (["-", "*", "x1", "x2", "*", "x3", "x2"], ["*", "-", "x1", "x3", "x2"])):
+            assert e.simplify(list(src)) == e.simplify(list(factored)), src
+
+    def test_a_rule_over_a_piece_the_licence_can_refuse_stays(self) -> None:
+        # `_` binds any subtree, including one that is not finite a.e., where the search does not
+        # factor (its licence): such a rule states more than the search does, so it is served.
+        e = make_engine([[["+", "*", "_0", "_1", "*", "_2", "_1"], ["*", "+", "_0", "_2", "_1"]]])
+        assert "engine-owned-law" not in e._core.ac_rules_drop_census()
+        assert len(e._core.ac_served_rules()) >= 1
+
     def test_a_repeated_wildcard_binds_a_class_up_to_sign(self) -> None:
         # `x1/(x2 - x3) + x4/(x3 - x2)`: the two inverses carry one class in its two orientations.
         # A wildcard of a sort that binds a subtree, repeated, binds the class up to sign: the

@@ -490,7 +490,8 @@ fn factor_moves(terms: &[Ex], cx: &Cx, near: &[&Ex], power: Option<&Rat>) -> Vec
 /// THE DISTRIBUTIVE LAW read as factoring, at the sum `terms`: each candidate is the sum with
 /// some of its terms replaced by their content `c` times the sum of their quotients, returned with
 /// `c`. Every way the engine factors is here, once: the search proposes these moves
-/// ([`factor_moves`], with the licences in `licensed`).
+/// ([`factor_moves`], with the licences in `licensed`), and the rule load refuses a rule that
+/// states one of them ([`is_factoring`], with no licence), since the search owns the law.
 ///
 /// * SHARED BASES -- for every base two or more terms share, those terms factored by everything
 ///   they share, each base at its least exponent (`x1*x2 + x1*x3 + x4` is `x4 + x1*(x2 + x3)`).
@@ -600,6 +601,56 @@ pub(crate) fn factorings(terms: &[Ex], cx: &Cx, licensed: &dyn Fn(&Ex) -> bool) 
         }
     }
     out
+}
+
+/// Does one FACTOR move ([`factorings`], at any sum of the pattern `lhs`) turn `lhs` into `rhs`,
+/// under the search's licence at every binding the wildcards' sorts admit? Both canonical under
+/// `cx`. A rule that states this is an instance of the distributive law as the search applies it,
+/// so the search owns it, and the rule load refuses it (`AcRules::translate`).
+///
+/// The licence ([`factor_moves`]: every piece finite a.e.) is read off the pattern, as far as it
+/// can be sure of it: a piece built by sums, products and integer powers from literals and from
+/// wildcards whose sort binds only finite-a.e. subjects (`?` a variable, `!` and `$` under the
+/// finite-a.e. certificate), a negative power only of a base that is nonzero a.e. (`?`, `$`).
+/// Any other piece -- a `_` wildcard (any subtree), a function -- has instances the search's
+/// licence refuses (`acos(x1) - acos(x1)` stays a sum in `f64`), so a rule over it stays a rule.
+pub(crate) fn is_factoring(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
+    fn finite(f: &Ex, view: &crate::tokens::TokenView) -> bool {
+        match f {
+            Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const => true,
+            Ex::Leaf(t) => matches!(view.sigil(*t), b'?' | b'!' | b'$'),
+            Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| finite(x, view)),
+            Ex::Pow(b, x) => match &**x {
+                Ex::Num(r) if r.is_integer() && !r.is_negative() => finite(b, view),
+                Ex::Num(r) if r.is_integer() => {
+                    matches!(&**b, Ex::Leaf(t) if matches!(view.sigil(*t), b'?' | b'$'))
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    fn walk(e: &Ex, root: &Ex, rhs: &Ex, cx: &Cx, path: &mut Vec<usize>) -> bool {
+        if let Ex::Add(v) = e {
+            for (cand, _) in factorings(v, cx, &|f| finite(f, cx.view)) {
+                if rebuild(root, path, cand, cx) == *rhs {
+                    return true;
+                }
+            }
+        }
+        let kids: Vec<&Ex> = match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().collect(),
+            Ex::Pow(b, x) => vec![&**b, &**x],
+            _ => Vec::new(),
+        };
+        kids.into_iter().enumerate().any(|(i, k)| {
+            path.push(i);
+            let hit = walk(k, root, rhs, cx, path);
+            path.pop();
+            hit
+        })
+    }
+    walk(lhs, lhs, rhs, cx, &mut Vec::new())
 }
 
 /// `terms` as their content `c` (every base they all share, each at its least exponent) times

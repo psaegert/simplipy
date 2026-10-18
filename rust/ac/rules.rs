@@ -334,6 +334,16 @@ impl AcRules {
                 out.note_drop("not-ordered-below");
                 continue;
             }
+            // Eighth drop reason: the rule states the distributive law, which the search owns
+            // (one FACTOR move turns its LHS into its RHS, `search::is_factoring`): judged by
+            // the law, not by spelling. The search proposes every factoring such a rule makes,
+            // under whole-state acceptance; in the chain the rule would take the first factoring
+            // that lowers its own node, undo the search's DISTRIBUTE candidates, and pre-empt
+            // the other factorings and the merges they enable.
+            if super::search::is_factoring(&lhs, &rhs, &cx) {
+                out.note_drop("engine-owned-law");
+                continue;
+            }
             seen_pairs
                 .entry((lhs.clone(), rhs.clone()))
                 .or_insert((raw_idx, false));
