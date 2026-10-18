@@ -208,8 +208,8 @@ model predictions.
   in 0.14.7).
 - **Fewest signs, then outermost.** Where two spellings cost the same, the answer is the one with
   fewer signs, then the one whose signs stand further out, wherever such a tie is decided: the sign
-  placement, the product table, a sum's orientation and the order the rules are loaded and fired
-  under. A sign is a negative coefficient (a negation is `-1`) or a negative literal argument; an
+  placement, the product table, a sum's orientation and the order the rules fire under (a mined
+  rule whose two sides cost the same loads, and fires only where it descends). A sign is a negative coefficient (a negation is `-1`) or a negative literal argument; an
   exponent and an infinity carry none, and a sign inside a function's constant argument belongs to
   that constant. An odd function of a literal multiple, a bare or negated argument included, trades
   its sign wherever it stands, alone too. So `sin(-x1)` is `-sin(x1)`, `x1 + sin(-x1)` is

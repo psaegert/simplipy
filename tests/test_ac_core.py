@@ -19,7 +19,7 @@ from fractions import Fraction
 import pytest
 
 from simplipy import Mode, SimpliPyEngine
-from conftest import (ACJ4_INTERIM_REVERSED, ACJ4_INTERIM_SUBSUMED, acj4_refused_rows, acj_asset_dir,
+from conftest import (ACJ4_INTERIM_SUBSUMED, ACJ4_INTERIM_UPHILL, acj4_refused_rows, acj_asset_dir,
                       acj_config_path)
 
 HYPER_PREFIXES = ("mult", "div")
@@ -1400,12 +1400,13 @@ class TestC36DropCensus:
         # test_translation_audit_surface). INTERIM (2026-10-18): exactly the rows the sign key
         # moved past the staged asset (conftest), by count and by rule; the re-mine restores
         # `{}`.
-        assert engine._core.ac_rules_drop_census(rule_mode="default") == {
-            'arithmetic-subsumed': len(ACJ4_INTERIM_SUBSUMED),
-            'not-ordered-below': len(ACJ4_INTERIM_REVERSED)}
-        subsumed, reversed_ = acj4_refused_rows(engine)
+        expected = {'arithmetic-subsumed': len(ACJ4_INTERIM_SUBSUMED),
+                    'not-ordered-below': len(ACJ4_INTERIM_UPHILL)}
+        assert engine._core.ac_rules_drop_census(rule_mode="default") == \
+            {k: v for k, v in expected.items() if v}
+        subsumed, uphill = acj4_refused_rows(engine)
         assert subsumed == list(ACJ4_INTERIM_SUBSUMED)
-        assert reversed_ == list(ACJ4_INTERIM_REVERSED)
+        assert uphill == list(ACJ4_INTERIM_UPHILL)
 
 
 class TestSuppressedProbeAndShadowCensus:

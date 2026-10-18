@@ -270,7 +270,7 @@ is not counted, so a constant keeps its sign on its literal: `-sin(2)` is `sin(-
 `x1 - sin(2)` is the state `x1 + sin(-2)`. The sign key of a form is the number of its signs,
 then the sum of their depths (the root at depth 0). Wherever two spellings cost the same $\mu$ --
 a sign-trade site, the product table, a sum's orientation, and the reduction ordering (§5), so
-the rule load's gate G7 too -- the one with fewer signs wins, then the one whose signs stand
+every rule application -- the one with fewer signs wins, then the one whose signs stand
 further out, then `cmp_ex`: `sin(-x1)` is `-sin(x1)`, `x1 + sin(-x1)` is `x1 - sin(x1)`, and
 `-sin(x1 - x2)` is `sin(x2 - x1)` (one sign, not two). A rule whose two sides differ only in
 where the core places a sign has one canonical state on both sides and is refused at load as
@@ -359,12 +359,13 @@ G6–G8; there is no G5):
 | G3 | rules whose canonical RHS holds more $\diamond$ than their canonical LHS | masking is representation, not simplification |
 | G4 | non-composite LHS | catch-alls below the arithmetic waterline |
 | G6 | RHS wildcards not bound by the **canonical** LHS | an unbound wildcard would panic substitution at rewrite time; canon can erase LHS wildcards, so the raw check is insufficient |
-| G7 | $\mathrm{nf}(\rho) \not<_o \mathrm{nf}(\ell)$ (disoriented patterns) | keep every loaded rule aligned with the ordering the pass fires under (§5) |
+| G7 | $\mu(\mathrm{nf}(\rho)) > \mu(\mathrm{nf}(\ell))$ (uphill patterns) | no loaded rule climbs; sides of one price load, and the `oriented` gate decides each application under the full ordering (§5) |
 | G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node |
 
-G7 also keeps both directions of one rewrite from loading: $<_o$ is strict and total, so of a
-rule and its reverse at most one descends it, and no separate check for the inverse of an
-earlier rule is needed. Each admitted rule $\ell \to \rho$ whose negated LHS absorbs the sign
+Both directions of a rewrite whose sides cost the same may load (on the shipped `acj-5-4-llm`,
+`acos(0) - _0` and `asin(1) - _0`): $<_o$ is strict and total, so on any instance at most one of
+them descends it, and the `oriented` gate fires only that one; neither undoes the other, and no
+separate check for the inverse of an earlier rule is needed. Each admitted rule $\ell \to \rho$ whose negated LHS absorbs the sign
 also loads its orientation twin $-\ell \to -\rho$, through the same gates. Before translation,
 the licence registry refuses a rule that changes a defined extended-real value at a pole.
 Every drop is counted by reason (`ac_rules_drop_census`). On the shipped `acj-5-4-llm`
@@ -646,7 +647,10 @@ $\mathrm{Pow}(\_0, 2) \to \mathrm{Mul}[2, \_0]$ ties on patterns ($\mu = 11.585$
 signs, decided by `cmp_ex`), but the instance $\_0 \mapsto 5$ folds both sides to literals
 ($25$ at $\mu = 5.7$, $10$ at $\mu = 3$) whose comparison the pattern cannot see. This is why orientation is enforced **per
 instance at the fire site** (the `oriented` gate), and why G7's static pattern check is an
-*alignment* gate, not the termination mechanism. It also means the published system's
+*alignment* gate, not the termination mechanism: it refuses only a rule whose pattern sides climb
+in $\mu$, and a rule whose sides cost the same loads, its applications each decided by the
+`oriented` gate under $<_o$ (a literal instance that is cheaper fires, a tie fires only down the
+sign key). It also means the published system's
 static termination conditions (non-duplication + size decrease of the rule) do not
 transfer as a proof device — see §8.
 

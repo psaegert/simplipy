@@ -99,7 +99,9 @@ def require_triple(why: str = 'the acj-4 triple is not staged') -> None:
 # under the earlier order, and the f64 load refuses exactly these rows of it:
 #   * SUBSUMED (gate G2): a sign moved at an odd function, which the canon now places itself, so
 #     both sides are one canonical state;
-#   * REVERSED (gate G7): two spellings of one price that the sign key now orders the other way.
+#   * UPHILL (gate G7): none. G7 refuses only a rule whose sides climb in price; the rules whose
+#     two spellings cost the same and which the sign key orders the other way load, and the
+#     runtime gate fires them only where an application descends.
 # The suites pin the counts and these rows, so any other drift still fails.
 ACJ4_INTERIM_SUBSUMED = (
     ('neg asin _0', 'asin neg _0'), ('neg asinh _0', 'asinh neg _0'),
@@ -111,24 +113,7 @@ ACJ4_INTERIM_SUBSUMED = (
     ('neg rootn _0 3', 'rootn neg _0 3'), ('neg rootn _0 5', 'rootn neg _0 5'),
     ('neg rootn _0 7', 'rootn neg _0 7'), ('neg rootn _0 9', 'rootn neg _0 9'),
 )
-ACJ4_INTERIM_REVERSED = (
-    ('inv exp _0', 'exp neg _0'),
-    ('/ (-1) abs !0', 'inv neg abs !0'), ('/ (-1) acos !0', 'inv neg acos !0'),
-    ('/ (-1) acosh !0', 'inv neg acosh !0'), ('/ (-1) asin !0', 'inv asin neg !0'),
-    ('/ (-1) asinh !0', 'inv asinh neg !0'), ('/ (-1) atan !0', 'inv atan neg !0'),
-    ('/ (-1) atanh !0', 'inv atanh neg !0'), ('/ (-1) cos _0', 'inv neg cos _0'),
-    ('/ (-1) cosh _0', 'inv neg cosh _0'), ('/ (-1) exp !0', 'inv neg exp !0'),
-    ('/ (-1) log !0', 'inv neg log !0'), ('/ (-1) sin !0', 'inv neg sin !0'),
-    ('/ (-1) sinh !0', 'inv neg sinh !0'), ('/ (-1) tan !0', 'inv neg tan !0'),
-    ('/ (-1) tanh !0', 'inv neg tanh !0'),
-    ('inv pow _0 np.e', 'pow _0 neg np.e'), ('inv pow _0 np.pi', 'pow _0 neg np.pi'),
-    ('neg abs asin _0', 'asin neg abs _0'), ('neg abs asinh _0', 'asinh neg abs _0'),
-    ('neg abs atan _0', 'atan neg abs _0'), ('neg abs atanh _0', 'atanh neg abs _0'),
-    ('neg abs sinh _0', 'sinh neg abs _0'), ('neg abs tanh _0', 'tanh neg abs _0'),
-    ('neg cos asin _0', 'sin neg acos _0'),
-    ('pow exp _0 (-2)', 'exp * (-2) _0'), ('pow exp _0 (-4)', 'exp * (-4) _0'),
-    ('pow exp _0 (-8)', 'exp * (-8) _0'),
-)
+ACJ4_INTERIM_UPHILL = ()
 
 
 def acj4_refused_rows(engine: SimpliPyEngine) -> tuple[list, list]:

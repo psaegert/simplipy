@@ -430,26 +430,21 @@ impl AcRules {
                 out.note_drop("unbound-rhs-wildcard");
                 continue;
             }
-            // Seventh drop reason: the Knuth-Bendix orientation, checked statically on
-            // the canonical pattern sides (gate G7, docs/formal.md). The complexity
+            // Seventh drop reason: an uphill rule, checked statically on the canonical
+            // pattern sides by price alone (gate G7, docs/formal.md). The complexity
             // functional is not additive, so pattern-level descent neither implies nor is
-            // implied by instance-level descent -- the runtime `oriented` gate remains the
-            // enforcement per fire; this gate keeps every LOADED rule aligned with the
-            // ordering the pass fires under, and re-vets every asset on every load (an
-            // order change re-judges the rules automatically).
-            //
-            // G7 is also what keeps both directions of one rewrite from loading (a
-            // deterministic ping-pong, e.g. `* float("inf") !0 <-> / float("inf") !0`,
-            // which root at the same `Mul` after desugaring): the order is strict and
-            // total, so of a pair and its reverse at most one descends it.
-            if !ordered_below(&rhs, &lhs, view) {
+            // implied by instance-level descent -- the runtime `oriented` gate is the
+            // enforcement per fire, under the full ordering. Two sides of one price are
+            // therefore no orientation: the rule loads, and each application fires only where
+            // it descends (a literal instance that is cheaper, or the sign key's order on a
+            // tie). Both directions of such a rewrite may load (`* float("inf") !0 <-> / float("inf")
+            // !0` roots at the same `Mul` after desugaring); the order is strict and total, so
+            // on any instance at most one of them descends and fires, and neither undoes the
+            // other. The gate re-vets every asset on every load.
+            if complexity(&rhs, view) > complexity(&lhs, view) {
                 out.note_drop("not-ordered-below");
                 continue;
             }
-            debug_assert!(
-                !ordered_below(&lhs, &rhs, view),
-                "G7 must refuse the reverse of an admitted rule"
-            );
             // Eighth drop reason: the rule states the distributive law, which the search owns
             // (one FACTOR move turns its LHS into its RHS, `search::is_factoring`): judged by
             // the law, not by spelling. The search proposes every factoring such a rule makes,
@@ -540,17 +535,11 @@ impl AcRules {
             if !rhs_wilds.is_subset(&lhs_wilds) {
                 continue;
             }
-            // The KB orientation genuinely can differ from the source rule's at
-            // complexity ties (the tie-break is a total order, not sign-invariant):
-            // a twin that does not orient is dropped, conservative. The order is strict
-            // and total, so this gate also keeps the reverse of every loaded rule out.
-            if !ordered_below(&tr, &tl, view) {
+            // The twin's price can differ from the source rule's (negating redistributes
+            // signs into coefficients): an uphill twin is dropped, as G7 drops a rule.
+            if complexity(&tr, view) > complexity(&tl, view) {
                 continue;
             }
-            debug_assert!(
-                !ordered_below(&tl, &tr, view),
-                "G7 must refuse the reverse of an admitted twin"
-            );
             if let Some(&(owner, owner_was_twin)) = seen_rules.get(&(tl.clone(), tr.clone())) {
                 // The asset (or an earlier twin) already carries this exact rewrite;
                 // removing its owner would mint this twin instead -- census.
@@ -679,11 +668,12 @@ pub struct PassCtx<'a> {
     pub suppressed: Option<&'a FxHashSet<usize>>,
 }
 
-/// The REDUCTION ORDERING: is `a` strictly smaller than `b` in the lexicographic pair
-/// (mu, canonical total order)? This one predicate is the Knuth-Bendix orientation of
-/// the whole system: `translate` drops rules whose canonical pattern sides do not
-/// descend it (gate G7, docs/formal.md), and `rewrite_pass` refuses any FIRE or
-/// REBUILD whose result does not descend it at the rewritten node (Lemma L2).
+/// The REDUCTION ORDERING: is `a` strictly smaller than `b` in the lexicographic order
+/// (mu, the sign key, canonical total order -- `tie_cmp`)? This one predicate orients the
+/// whole system: `rewrite_pass` refuses any FIRE or REBUILD whose result does not descend it
+/// at the rewritten node (Lemma L2), and the search accepts only states below its best;
+/// `translate` drops only rules whose canonical pattern sides climb in mu (gate G7,
+/// docs/formal.md).
 ///
 /// Stage 2 (design/UNIFIED_SIMPLICITY_MEASURE.md): the first component is the unified
 /// simplicity measure mu (`ac::expr::complexity`), which ABSORBS the old lit_size

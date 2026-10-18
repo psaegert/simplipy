@@ -331,14 +331,12 @@ class TestCorpusGate:
         # ONE CLASS READING: 55,815,451 -> 55,812,451. An odd function of a negated argument is a
         # class member like one of a sum, so an even power over it files the positive argument:
         # row 397's `sinh(sinh(-x15))^2` is `sinh(sinh(x15))^2` (-3,000).
-        # THE SIGN KEY (2026-10-18): 55,812,451 -> 55,804,451. Fewest signs, then outermost, on
-        # every equal price, and an odd function of any literal multiple trades its sign: 13
+        # THE SIGN KEY (2026-10-18): 55,812,451 -> 55,795,451. Fewest signs, then outermost, on
+        # every equal price, and an odd function of any literal multiple trades its sign: 10
         # walk rows move. Eight rest cheaper, the sign traded where it costs least: 32 and 86
         # (-3,000 each), 160 and 233 (-2,000), 180 and 336 (-1,000), 256 (-6,000), 319 (-5,000).
-        # Five rest dearer by 3,000: 79, 254 and 365, where a staged rule the new order refuses
-        # at load (conftest.ACJ4_INTERIM_REVERSED) no longer fires (79 keeps `1/exp(c/x9)`),
-        # and 97 and 274, by the search's path.
-        assert walk['complexity_out'] == 55804451, walk['complexity_out']
+        # Two rest dearer by 3,000, 97 and 274, by the search's path.
+        assert walk['complexity_out'] == 55795451, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

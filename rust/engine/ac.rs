@@ -2030,9 +2030,9 @@ mod tests {
     /// A mode's set faces the SAME LOAD GATES as the default one: a mode relaxes what a
     /// rule may CLAIM about the deployed engine, never what the loader will admit.
     /// `sin _0 -> log _0` changes a defined value at a constructed exceptional point and
-    /// the licence registry refuses it; `sin _0 -> tan _0` does not descend the reduction
-    /// ordering and translation drops it. Both are refused in a mode set exactly as in
-    /// the default one.
+    /// the licence registry refuses it; `sin _0 -> exp sin _0` climbs in price and
+    /// translation drops it (G7). Both are refused in a mode set exactly as in the default
+    /// one.
     #[test]
     fn mode_sets_face_the_same_load_gates() {
         let Some(mut e) = engine() else { return };
@@ -2041,7 +2041,7 @@ mod tests {
             RuleMode::Permissive,
             Some(vec![
                 (t(&["sin", "_0"]), t(&["log", "_0"])),
-                (t(&["sin", "_0"]), t(&["tan", "_0"])),
+                (t(&["sin", "_0"]), t(&["exp", "sin", "_0"])),
             ]),
         );
         assert_eq!(e.mode_rules_len(RuleMode::Permissive), Some(2));
@@ -2657,15 +2657,15 @@ mod tests {
             "AC translation: kept={kept} subsumed={subsumed} dropped={dropped} twins={twins}"
         );
         assert!(kept > 0, "no rules survived translation");
-        // INTERIM (2026-10-18), until the re-mine resets both counts to 0: the sign key (fewest
-        // signs, then outermost) moved the canon past the staged asset, so its load refuses 28
-        // rows as reversed (G7) and 16 as subsumed (G2). The suites pin them by rule
-        // (`tests/conftest.py`, `ACJ4_INTERIM_*`); any other count still fails here.
         assert_eq!(
-            dropped, 28,
-            "published asset must translate loss-free but for the interim rows; a drop means it \
-             lags the engine -- republish, do not re-pin"
+            dropped, 0,
+            "published asset must translate loss-free; a drop means it lags the engine -- \
+             republish, do not re-pin"
         );
+        // INTERIM (2026-10-18), until the re-mine resets the count to 0: the sign key (fewest
+        // signs, then outermost) makes the canon place a sign at an odd function itself, so 16
+        // rows of the staged asset are subsumed (G2). The suites pin them by rule
+        // (`tests/conftest.py`, `ACJ4_INTERIM_SUBSUMED`); any other count still fails here.
         // G2 REPUBLISH (2026-08-15): the full-lane re-mine ships (6,594 rules, x3
         // byte-identical on the reference mint host, D20's row-by-row accounting) and the pin returns
         // to its PRISTINE form after the B5+B19 interim (6649/30/0, discharged). If

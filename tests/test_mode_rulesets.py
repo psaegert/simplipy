@@ -435,10 +435,10 @@ class TestTheModeSurfaceRefusesNonsense:
     def test_mode_sets_face_the_same_load_gates(self, tmp_path):
         """A mode relaxes what a rule may CLAIM about the deployed engine, never what
         the loader will admit. `sin _0 -> log _0` changes a defined value at a
-        constructed exceptional point (licence-registry refusal) and `sin _0 -> tan _0`
-        does not descend the reduction ordering -- both are refused in a mode's set
-        exactly as they are in the default one."""
-        bad = [[['sin', '_0'], ['log', '_0']], [['sin', '_0'], ['tan', '_0']]]
+        constructed exceptional point (licence-registry refusal) and `sin _0 -> exp sin _0`
+        climbs in price (G7) -- both are refused in a mode's set exactly as they are in the
+        default one."""
+        bad = [[['sin', '_0'], ['log', '_0']], [['sin', '_0'], ['exp', 'sin', '_0']]]
         cfg = write_artifact(tmp_path, rules=[P_DEFAULT], corpus=bad)
         e = SimpliPyEngine.from_config(cfg)
         assert e._core.mode_rules_len(rule_mode='permissive') == 2
