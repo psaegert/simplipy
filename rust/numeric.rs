@@ -143,7 +143,13 @@ pub(crate) fn leaf_value(tok: &str) -> Option<f64> {
     // 2026-08-03 -- the engine-side reader had the same hole, kept aligned).
     fn bare_value(t: &str) -> Option<f64> {
         if let Some(v) = parse_pyfloat(t) {
-            return Some(v);
+            // An INTEGER spelling is an integer to the deployed evaluator (Python reads `-0`
+            // as the int 0, `simplipy.utils.evaluator_literal`), and an integer has one zero:
+            // +0.0. A float spelling keeps its IEEE sign (`-0.0` is -0.0, as Python's float
+            // literal is).
+            let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
+            let integer = !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit());
+            return Some(if integer && v == 0.0 { 0.0 } else { v });
         }
         // The AC core's exact-fraction literal `p/q` (`1/3`): the realized infix reads it as
         // Python `int / int` true division, which rounds ONCE to the nearest f64.
@@ -530,6 +536,23 @@ mod tests {
 #[cfg(test)]
 mod aligned_pow_tests {
     use super::*;
+
+    /// The zero spellings read as the deployed evaluator reads them: an integer has one zero
+    /// (+0), a float spelling keeps its sign, a fraction is `int / int` (+0). The Python
+    /// side's twin is `tests/test_evaluator_literals.py`.
+    #[test]
+    fn an_integer_has_one_zero() {
+        let sign = |t: &str| leaf_value(t).unwrap().is_sign_negative();
+        for t in ["0", "-0", "+0", "00", "-00", "(-0)", "0/5", "-0/5"] {
+            assert!(!sign(t), "{t} must read +0");
+        }
+        for t in ["-0.0", "-.0", "-0.", "-0e0", "(-0.0)"] {
+            assert!(sign(t), "{t} must read -0");
+        }
+        for t in ["0.0", "+0.0", "0e5"] {
+            assert!(!sign(t), "{t} must read +0");
+        }
+    }
 
     /// The contract's normative pow cells at negative and infinite bases: NaN for
     /// negative base (incl. −∞) with finite non-integer exponent; integer exponents
