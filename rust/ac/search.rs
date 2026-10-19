@@ -561,54 +561,51 @@ pub(crate) fn factorings(terms: &[Ex], cx: &Cx, licensed: &dyn Fn(&Ex) -> bool) 
     out
 }
 
-/// Does one FACTOR move ([`factorings`], at any sum of the pattern `lhs`) turn `lhs` into `rhs`,
-/// under the search's licence at every binding the wildcards' sorts admit? Both canonical under
-/// `cx`. A rule that states this is an instance of the distributive law as the search applies it,
-/// so the search owns it, and the rule load refuses it (`AcRules::translate`).
+/// Does one FACTOR move -- the search's own ([`factor_moves`], with its licence and its
+/// negative-power filter), at any sum of the pattern `lhs` -- turn `lhs` into `rhs`? Both
+/// canonical under `cx`. A rule that states this is an instance of the distributive law as the
+/// search applies it, so the search owns it, and the rule load refuses it (`AcRules::translate`).
 ///
-/// The licence ([`factor_moves`]: every piece finite a.e.) is read off the pattern, as far as it
-/// can be sure of it: a piece built by sums, products and integer powers from literals and from
-/// wildcards whose sort binds only finite-a.e. subjects (`?` a variable, `!` and `$` under the
-/// finite-a.e. certificate), a negative power only of a base that is nonzero a.e. (`?`, `$`).
-/// Any other piece -- a `_` wildcard (any subtree), a function -- has instances the search's
-/// licence refuses (`acos(x1) - acos(x1)` stays a sum in `f64`), so a rule over it stays a rule.
+/// `cx` is the licence context of the search the rule would serve beside: its mode, and
+/// certificates that answer for every binding the wildcards' sorts admit
+/// (`Engine::law_instance` builds it). A piece the certificates cannot vouch for at every
+/// binding -- a `_` wildcard inside it, say -- is unlicensed, so a rule over it stays a rule.
 pub(crate) fn is_factoring(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
-    fn finite(f: &Ex, view: &crate::tokens::TokenView) -> bool {
-        match f {
-            Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const => true,
-            Ex::Leaf(t) => matches!(view.sigil(*t), b'?' | b'!' | b'$'),
-            Ex::Add(v) | Ex::Mul(v) => v.iter().all(|x| finite(x, view)),
-            Ex::Pow(b, x) => match &**x {
-                Ex::Num(r) if r.is_integer() && !r.is_negative() => finite(b, view),
-                Ex::Num(r) if r.is_integer() => {
-                    matches!(&**b, Ex::Leaf(t) if matches!(view.sigil(*t), b'?' | b'$'))
-                }
-                _ => false,
-            },
-            _ => false,
-        }
-    }
-    fn walk(e: &Ex, root: &Ex, rhs: &Ex, cx: &Cx, path: &mut Vec<usize>) -> bool {
+    fn walk(
+        e: &Ex,
+        power: Option<&Rat>,
+        root: &Ex,
+        rhs: &Ex,
+        cx: &Cx,
+        path: &mut Vec<usize>,
+    ) -> bool {
         if let Ex::Add(v) = e {
-            for (cand, _) in factorings(v, cx, &|f| finite(f, cx.view)) {
+            for cand in factor_moves(v, cx, power) {
                 if rebuild(root, path, cand, cx) == *rhs {
                     return true;
                 }
             }
         }
-        let kids: Vec<&Ex> = match e {
-            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().collect(),
-            Ex::Pow(b, x) => vec![&**b, &**x],
+        // The children with the power each is the base of, as `site_list` reads them.
+        let kids: Vec<(&Ex, Option<&Rat>)> = match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().map(|c| (c, None)).collect(),
+            Ex::Pow(b, x) => {
+                let k = match &**x {
+                    Ex::Num(r) if r.is_integer() => Some(r),
+                    _ => None,
+                };
+                vec![(&**b, k), (&**x, None)]
+            }
             _ => Vec::new(),
         };
-        kids.into_iter().enumerate().any(|(i, k)| {
+        kids.into_iter().enumerate().any(|(i, (k, p))| {
             path.push(i);
-            let hit = walk(k, root, rhs, cx, path);
+            let hit = walk(k, p, root, rhs, cx, path);
             path.pop();
             hit
         })
     }
-    walk(lhs, lhs, rhs, cx, &mut Vec::new())
+    walk(lhs, None, lhs, rhs, cx, &mut Vec::new())
 }
 
 /// `terms` as their content `c` (every base they all share, each at its least exponent) times

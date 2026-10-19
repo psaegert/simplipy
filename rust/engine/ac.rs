@@ -239,12 +239,95 @@ impl Engine {
             kept.push((l.clone(), r.clone()));
             kept_idx.push(i);
         }
-        let mut r = AcRules::translate(&kept, view, canon);
+        let fold_f64 = canon.cx(view).fold_f64;
+        let mut r = self.with_law_cx(view, mode, fold_f64, |law| {
+            AcRules::translate(&kept, view, canon, law)
+        });
         r.n_registry_dropped = n_registry_dropped;
         for s in r.src.iter_mut() {
             *s = kept_idx[*s];
         }
         r
+    }
+
+    /// Run `f` in the LICENCE CONTEXT of `mode`'s search over patterns, the context gate G8
+    /// judges a rule in (`ac::rules::engine_owned_law`): the mode's licences, with the fold
+    /// discipline of the reading, and certificates that answer for every binding a pattern
+    /// piece's wildcards admit ([`Engine::pattern_cert`]).
+    fn with_law_cx<R>(
+        &self,
+        view: &TokenView,
+        mode: RuleMode,
+        fold_f64: bool,
+        f: impl FnOnce(&Cx) -> R,
+    ) -> R {
+        let memo = RefCell::new(FxHashMap::default());
+        let cf = |e: &Ex| self.pattern_cert(e, view, false, &memo);
+        let cfz = |e: &Ex| self.pattern_cert(e, view, true, &memo);
+        let law = Cx {
+            view,
+            cert_fin: Some(&cf),
+            cert_finnz: Some(&cfz),
+            cert_nzae: None,
+            cert_nce: None,
+            mode,
+            fold_f64,
+            sentinels_expired: false,
+        };
+        f(&law)
+    }
+
+    /// The certificate a piece of a pattern INSTANCE (`ac::rules::pattern_instance`) carries
+    /// at every binding its wildcards' sorts admit, as the search's own certificate
+    /// (`interval::finite_ae`, or `finite_nonzero_ae` when `nonzero`) gives it. A `?`
+    /// variable is a variable; a lone `!` (`$`) variable binds only a subject that carries the
+    /// finite (finite and nonzero) certificate; a piece with a `!` or `$` variable inside, or a
+    /// `_` wildcard anywhere, has instances nothing here can vouch for, and is uncertified.
+    fn pattern_cert(
+        &self,
+        e: &Ex,
+        view: &TokenView,
+        nonzero: bool,
+        memo: &RefCell<FxHashMap<(Vec<String>, bool), bool>>,
+    ) -> bool {
+        let var = crate::ac::rules::PATTERN_VAR;
+        if let Ex::Leaf(t) = e {
+            let s = view.resolve_owned(*t);
+            match s.strip_prefix(var).and_then(|w| w.bytes().next()) {
+                Some(b'$') => return true,
+                Some(b'!') => return !nonzero,
+                _ => {}
+            }
+        }
+        let bare = Cx::bare(view);
+        let tokens: Vec<String> = to_prefix(e, &bare)
+            .iter()
+            .map(|t| view.resolve_owned(*t))
+            .collect();
+        let key = (tokens, nonzero);
+        if let Some(&b) = memo.borrow().get(&key) {
+            return b;
+        }
+        let slot = |s: &str| s.len() >= 2 && s[1..].bytes().all(|c| c.is_ascii_digit());
+        let mut instance = Vec::with_capacity(key.0.len());
+        let mut known = true;
+        for s in &key.0 {
+            match s.strip_prefix(var) {
+                // the interval layer reads `_k` as the variable of dimension k
+                Some(w) if w.starts_with('?') => instance.push(format!("_{}", &w[1..])),
+                Some(_) => known = false,
+                None if slot(s) && s.starts_with(['_', '?', '!', '$']) => known = false,
+                None => instance.push(s.clone()),
+            }
+        }
+        let b = known
+            && if nonzero {
+                crate::interval::finite_nonzero_ae(&instance, &self.operators)
+            } else {
+                crate::interval::finite_ae(&instance, &self.operators)
+            };
+        memo.borrow_mut().insert(key, b);
+        b
     }
 
     /// (kept, subsumed-by-arithmetic, dropped, orientation-twins) counts of the AC
@@ -1077,7 +1160,9 @@ impl Engine {
         let r = canon(from_prefix(&rt, &cx)?, &cx);
         Some(if l == r {
             Some("canon")
-        } else if crate::ac::rules::engine_owned_law(&l, &r, &cx) {
+        } else if self.with_law_cx(&view, mode, cx.fold_f64, |law| {
+            crate::ac::rules::engine_owned_law(&l, &r, law)
+        }) {
             Some("engine-owned-law")
         } else {
             None

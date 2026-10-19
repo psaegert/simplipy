@@ -94,6 +94,40 @@ def test_the_mode_less_twins_are_retired(eng):
     assert not re.findall(r'signature = \([^)]*(rule_mode="|wildcard_all=)', lib)
 
 
+#: (source, its law candidate as a rule): factorings over a function base, `_` and `!` sorts.
+FACTORINGS = [
+    (['+', '*', 'sin', 'x0', 'x1', '*', 'sin', 'x0', 'x2'],
+     ['+', '*', 'sin', '?0', '?1', '*', 'sin', '?0', '?2'], ['*', 'sin', '?0', '+', '?1', '?2']),
+    (['+', '*', 'exp', 'x0', 'x1', '*', 'exp', 'x0', 'x2'],
+     ['+', '*', 'exp', '?0', '?1', '*', 'exp', '?0', '?2'], ['*', 'exp', '?0', '+', '?1', '?2']),
+    (['+', '*', 'cos', 'x0', 'x1', 'cos', 'x0'],
+     ['+', '*', 'cos', '?0', '?1', 'cos', '?0'], ['*', 'cos', '?0', '+', '?1', '1']),
+    (['+', '*', 'log', 'x0', 'x1', '*', 'log', 'x0', 'x2'],
+     ['+', '*', 'log', '?0', '?1', '*', 'log', '?0', '?2'], ['*', 'log', '?0', '+', '?1', '?2']),
+    (['+', '*', 'x0', 'x1', '*', 'x0', 'x2'],
+     ['+', '*', '_0', '_1', '*', '_0', '_2'], ['*', '_0', '+', '_1', '_2']),
+    (['+', '*', 'x0', 'x1', '*', 'x0', 'x2'],
+     ['+', '*', '!0', '!1', '*', '!0', '!2'], ['*', '!0', '+', '!1', '!2']),
+    (['+', '/', 'x1', 'x0', '/', 'x2', 'x0'],
+     ['+', '/', '?1', '?0', '/', '?2', '?0'], ['/', '+', '?1', '?2', '?0']),
+]
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('source,lhs,rhs', FACTORINGS)
+def test_the_law_gate_takes_the_searchs_licence(eng, mode, source, lhs, rhs):
+    """G8 (S1): the gate names the distributive law exactly where the search performs it on
+    the rule's instances. The search factors `sin(x0)*x1 + sin(x0)*x2` in every mode, and the
+    gate's own pattern licence used to refuse every function base."""
+    instance = [{'?0': 'x0', '?1': 'x1', '?2': 'x2'}.get(t, t) for t in rhs]
+    searched = eng._core.mine_mark(source, rule_mode=mode) == eng._core.mine_mark(instance, rule_mode=mode)
+    owned = eng._core.law_instance(lhs, rhs, rule_mode=mode) == 'engine-owned-law'
+    if lhs[2] in ('_0', '!0'):  # a wide sort: the search must factor EVERY binding
+        assert owned == (mode == 'permissive' or lhs[2] == '!0'), (mode, lhs)
+    else:
+        assert owned == searched, (mode, lhs, searched)
+
+
 def test_each_mode_mines_from_its_own_set():
     """Without `reset_rules`, a mode's mine starts from that mode's own set, never from
     another mode's: the f64 set's rule does not seed the real and permissive files (S9)."""

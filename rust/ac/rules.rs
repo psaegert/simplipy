@@ -326,19 +326,59 @@ impl RuleCanon {
 /// the distributive law as the search applies it (one FACTOR move, `search::is_factoring`).
 /// The load drops such a rule ("engine-owned-law"); the miner refuses to mint it
 /// (`Engine::law_instance`, the miner's acceptance).
-pub(crate) fn engine_owned_law(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
-    super::search::is_factoring(lhs, rhs, cx)
+///
+/// The search meets a rule's INSTANCES, so the law is judged on one: every `?`, `!` and `$`
+/// wildcard becomes a variable of its own ([`pattern_instance`]), and the sides are read in
+/// `law`, the serving search's licence context (`Engine::with_law_cx`), whose certificates
+/// answer for every binding the sorts admit. The FACTOR move is then the search's own.
+pub(crate) fn engine_owned_law(lhs: &Ex, rhs: &Ex, law: &Cx) -> bool {
+    let mut fresh = FxHashMap::default();
+    let l = canon(pattern_instance(lhs, law.view, &mut fresh), law);
+    let r = canon(pattern_instance(rhs, law.view, &mut fresh), law);
+    super::search::is_factoring(&l, &r, law)
+}
+
+/// The spelling prefix of the variables [`pattern_instance`] puts in place of wildcards: the
+/// wildcard's own spelling follows it (`PATTERN_VAR` + `?0`). No token of a table spells it.
+pub(crate) const PATTERN_VAR: &str = "\u{1}";
+
+/// `e` with each `?`, `!` and `$` wildcard replaced by a variable leaf of its own, minted in
+/// `view`'s overlay (`fresh` keeps one per wildcard across both sides). A `?` binds a variable,
+/// so this is its instance up to renaming; `!` and `$` bind subjects that carry their sort's
+/// certificate, which the licence context's certificates read off the spelling. `_` binds any
+/// subtree, so it stays a wildcard and no licence holds for it.
+fn pattern_instance(e: &Ex, view: &TokenView, fresh: &mut FxHashMap<Tok, Tok>) -> Ex {
+    match e {
+        Ex::Leaf(t) if matches!(view.sigil(*t), b'?' | b'!' | b'$') => {
+            Ex::Leaf(*fresh.entry(*t).or_insert_with(|| {
+                view.intern(&format!("{PATTERN_VAR}{}", view.resolve_owned(*t)))
+            }))
+        }
+        Ex::Add(v) => Ex::Add(v.iter().map(|x| pattern_instance(x, view, fresh)).collect()),
+        Ex::Mul(v) => Ex::Mul(v.iter().map(|x| pattern_instance(x, view, fresh)).collect()),
+        Ex::Fun(f, v) => Ex::Fun(
+            *f,
+            v.iter().map(|x| pattern_instance(x, view, fresh)).collect(),
+        ),
+        Ex::Pow(b, x) => Ex::Pow(
+            Box::new(pattern_instance(b, view, fresh)),
+            Box::new(pattern_instance(x, view, fresh)),
+        ),
+        other => other.clone(),
+    }
 }
 
 impl AcRules {
     /// Translate a compiled ruleset's raw (asset-order) rules, read in the canon they were
-    /// certified in ([`RuleCanon`]). `view` must be a table-backed
+    /// certified in ([`RuleCanon`]); `law` is the serving search's licence context, which
+    /// gate G8 judges in ([`engine_owned_law`]). `view` must be a table-backed
     /// view; translation is read-only on the token side (parse + canon mint no tokens), so the
     /// resulting `Ex`s hold table ids only and are safe to store per-Engine.
     pub fn translate(
         raw: &[(Vec<Tok>, Vec<Tok>)],
         view: &TokenView,
         read_in: RuleCanon,
+        law: &Cx,
     ) -> AcRules {
         let cx = read_in.cx(view);
         let mut out = AcRules::default();
@@ -416,7 +456,7 @@ impl AcRules {
             // under whole-state acceptance; in the chain the rule would take the first factoring
             // that lowers its own node, undo the search's DISTRIBUTE candidates, and pre-empt
             // the other factorings and the merges they enable.
-            if engine_owned_law(&lhs, &rhs, &cx) {
+            if engine_owned_law(&lhs, &rhs, law) {
                 out.note_drop("engine-owned-law");
                 continue;
             }
