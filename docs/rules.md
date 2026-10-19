@@ -63,6 +63,13 @@ entry the mode does not license is dropped, and so is a ground rule the mode's c
 already performs; both are listed in the sidecar. Then the file and its sidecar are
 written.
 
+The permissive mine runs last, and its post-pass is also offered the finished f64 and real
+files (`offer_final_rules`, on by default). Permissive promises less than either mode, so
+their rules hold there too, and its answer must never cost more than theirs, while a
+per-mode mine finds only what its own scan reaches. Every rule of the two files runs through
+the proposal lane right after the proposals, certified by permissive's own acceptance, and
+enters only where permissive's answer is not already as low.
+
 The procedure is **deterministic**: a fixed `seed` reproduces the three files byte-for-byte,
 independent of process, hash randomization, thread count or the judge's process count. One
 master seed derives the evaluation matrices and every per-length, per-source and per-rule
@@ -77,7 +84,9 @@ Each file has a **provenance sidecar** (`<file>.provenance.json`) recording ever
 the universe coverage, the mode, how the mode accepted (`acceptance`: tolerances, whether
 and at which gate a near miss is re-judged, the licensed tiers, the judge's digest), per
 length the classes, picks, judge rounds, exclusions and twin-shadowed rows (`per_length`),
-the file gates (`gates`), the digests of the code that mined it (`code_digest`), the
+the file gates (`gates`), the digests of the code that mined it (`code_digest`), in the
+permissive sidecar the f64 and real files it was offered, pinned by name and sha256, with the
+lane's outcomes (`offered`), the
 versions that serve it (`requires_simplipy`) and every `SIMPLIPY_*` variable set during the
 mine (`soundness.env_overrides`), so a published file is reproducible from its artifact.
 
@@ -206,6 +215,10 @@ promote_sorts: true
 # interval_undecided counters flag systematic exhaustion. Recorded in the sidecar.
 # interval_node_budget: 800000
 
+# Offer the permissive mine the finished f64 and real files through its proposal
+# lane (the default); its sidecar pins both files.
+offer_final_rules: true
+
 # Optional: LLM/human-proposed rules, certified against the mined state at the
 # end of the run (see "LLM-proposed rules" below). Paths starting with ./ are
 # resolved relative to this config file. The published artifact's LLM lane is
@@ -240,6 +253,7 @@ simplipy verify-mine rules_real.json --mode real -e config.yaml
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |
+| `offered` | (`permissive` only) the sidecar pins the f64 and real files the mine was offered, and each lies beside the file with the pinned sha256 |
 
 It prints one line per gate and exits non-zero when any gate fails (`--report` writes the
 full report as JSON). `simplipy.mining.verify_mine` is the same check from Python.

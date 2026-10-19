@@ -106,9 +106,9 @@ organised by who you are, then the highlights, then every change in detail.
 - `find_rules` mines `rules_f64.json`, `rules_real.json` and `rules_permissive.json` each in its
   own mode, and writes a checkpoint after every completed length, which a rerun of the same mine
   resumes from.
-- New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`) and
-  `find_rules(judge=, judge_processes=)`. `save_every=` (CLI `-s`) is accepted and ignored: the
-  rule file is written once, when the mode's mine ends.
+- New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`),
+  `find_rules(judge=, judge_processes=)` and `find_rules(offer_final_rules=)`. `save_every=`
+  (CLI `-s`) is accepted and ignored: the rule file is written once, when the mode's mine ends.
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
   keyword `rule_mode` (`'f64'` or its alias `'default'`, `'real'`, `'permissive'`), and
   deduplication keeps the target lower in that mode's serve ordering, not the shorter one.
@@ -604,6 +604,15 @@ model predictions.
   rule the mode's constructor performs) before it is written. In `permissive` the covered
   prune also asks the non-finite instances every slot binds there, so the file keeps
   `$0 / $0 → 1` (`inf/inf` is `1`, not `nan`).
+- **The permissive mine is offered the f64 and real files.** Permissive promises less than
+  either mode, so their rules hold there too, and its answer must never cost more than theirs;
+  a per-mode mine finds only what its own scan reaches. The permissive file is mined last, and
+  every rule of the finished f64 and real files runs through its proposal lane: certified by
+  permissive's own acceptance, it enters only where permissive's answer is not already as
+  low. The permissive sidecar pins both files (`offered`: name, sha256 and count, the lane's
+  outcomes, and every offered rule that did not read `already_covered`), and `verify-mine`
+  checks the pins (gate `offered`). `find_rules(offer_final_rules=False)` (config key
+  `offer_final_rules`) declines the offer.
 - **A mine resumes from its checkpoint.** `find_rules` writes `<file>.checkpoint.json` after
   every completed length and a rerun of the same mine resumes after the last one; a
   checkpoint written by another mine — other parameters, mode, universe, starting rules, or

@@ -38,7 +38,11 @@ def mine(tmp_path_factory):
 
 def _plant(tmp_path, mine, mode, rules, sidecar_edit=None):
     """A copy of the clean file of `mode` with `rules` in place of its rows; its sidecar is
-    the clean one, edited by `sidecar_edit`."""
+    the clean one, edited by `sidecar_edit`. A permissive file lies beside the clean f64
+    and real files its sidecar pins (the `offered` gate)."""
+    if mode == 'permissive':
+        for other in ('f64', 'real'):
+            (tmp_path / FILES[other]).write_bytes((mine / FILES[other]).read_bytes())
     path = tmp_path / FILES[mode]
     path.write_text(json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules]))
     side = json.load(open(mine / (FILES[mode] + '.provenance.json')))
@@ -223,3 +227,35 @@ def test_a_sidecar_records_the_acceptance_and_the_code(mine) -> None:
     assert f64['acceptance']['rescue'] is False and f64['acceptance']['near_miss_frac'] is None
     assert f64['params']['interval_node_budget'] is None
     assert copy.deepcopy(f64['soundness']['env_overrides']) == {}
+
+
+def test_the_offered_gate(tmp_path, mine) -> None:
+    """The permissive sidecar pins the f64 and real files it was offered: each must lie
+    beside it with the pinned bytes, and a sidecar that pins nothing fails."""
+    import shutil
+    for name in FILES.values():
+        shutil.copy(mine / name, tmp_path / name)
+        shutil.copy(mine / (name + '.provenance.json'), tmp_path / (name + '.provenance.json'))
+    path = str(tmp_path / FILES['permissive'])
+
+    def offered():
+        return _gate(verify_mine(path, 'permissive', _OPERATORS, judge=core_judge), 'offered')
+
+    assert offered()['ok'], offered()
+    assert 'offered' not in verify_mine(str(tmp_path / FILES['f64']), 'f64', _OPERATORS,
+                                        judge=core_judge)['gates']
+    # the real file changes after the mine
+    real = json.load(open(tmp_path / FILES['real']))
+    (tmp_path / FILES['real']).write_text(json.dumps(real[1:], indent=4))
+    gate = offered()
+    assert not gate['ok'] and gate['examples'] == [['real', 'sha256', str(tmp_path / FILES['real'])]]
+    # the f64 file is gone
+    (tmp_path / FILES['f64']).unlink()
+    assert [e[:2] for e in offered()['examples']] == [['f64', 'missing'], ['real', 'sha256']]
+    # a permissive mine that was offered nothing
+    side_path = tmp_path / (FILES['permissive'] + '.provenance.json')
+    side = json.load(open(side_path))
+    del side['offered']
+    side_path.write_text(json.dumps(side))
+    gate = offered()
+    assert not gate['ok'] and gate['count'] == 1, gate

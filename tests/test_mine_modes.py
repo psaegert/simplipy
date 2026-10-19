@@ -181,3 +181,51 @@ def test_the_refund_reads_the_constructors_dedup(monkeypatch):
     refund(list(rules), ops, set(), progress=Spy(), rule_mode='default')
     done = [kw for name, kw in stages if name.endswith('derivability probe: done')][-1]
     assert done['fallbacks'] <= 2, done  # the replica made it 5: every probe
+
+
+_OFFER_OPERATORS = {
+    "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+    "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+    "tan": {"realization": "np.tan", "alias": [], "inverse": "atan", "arity": 1, "precedence": 3, "commutative": False},
+    "atan": {"realization": "np.arctan", "alias": [], "inverse": "tan", "arity": 1, "precedence": 3, "commutative": False},
+}
+# True on R, and beyond the length-2 horizon of the mine below, so permissive's own scan
+# never reaches it: only the offered real file can bring it.
+REAL_ONLY = (('tan', 'atan', '?0'), ('?0',))
+
+
+def _offer_mine(tmp_path, offer):
+    engine = SimpliPyEngine(operators=_OFFER_OPERATORS, rules=[], rules_real=[REAL_ONLY],
+                            rules_permissive=[])
+    engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2, dummy_variables=1,
+                      X=128, seed=3, reset_rules=False, promote_sorts=False, symbolic_gate=False,
+                      judge=lambda pairs: ['core'] * len(pairs), offer_final_rules=offer,
+                      output_file=str(tmp_path / 'rules_f64.json'))
+    side = json.load(open(tmp_path / 'rules_permissive.json.provenance.json'))
+    return engine, side
+
+
+def test_the_permissive_mine_is_offered_the_finished_files(tmp_path):
+    """Permissive promises less than f64 and real, so their rules hold there too. Its mine
+    runs last and passes both finished files through its proposal lane: a real rule its own
+    scan never reaches enters the permissive file, and the sidecar pins both files."""
+    import hashlib
+    engine, side = _offer_mine(tmp_path, offer=True)
+    assert REAL_ONLY in engine.real_simplification_rules
+    assert REAL_ONLY in engine.permissive_simplification_rules
+    offered = side['offered']
+    for key, name in (('f64', 'rules_f64.json'), ('real', 'rules_real.json')):
+        pin = offered['files'][key]
+        assert pin['file'] == name
+        assert pin['sha256'] == hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+        assert pin['count'] == len(json.load(open(tmp_path / name)))
+    assert side['params']['offer_final_rules'] is True
+    assert sum(offered['outcomes'].values()) == offered['count']
+    entry, = [e for e in offered['trail'] if e['source'] == ['tan', 'atan', 'x0']]
+    assert entry['verdict'] == 'certified' and entry['target'] == ['x0'], entry
+
+
+def test_the_offer_can_be_declined(tmp_path):
+    engine, side = _offer_mine(tmp_path, offer=False)
+    assert REAL_ONLY not in engine.permissive_simplification_rules
+    assert 'offered' not in side and side['params']['offer_final_rules'] is False

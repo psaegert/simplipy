@@ -81,6 +81,27 @@ def _rule_identity(lhs: Any, rhs: Any,
             tuple(_SLOT_SIGIL.sub(r'@\1', token) for token in target))
 
 
+def _slots_to_variables(tokens: Any, dummy_variables: list[str]) -> tuple[str, ...]:
+    """A rule side in the proposal channel's vocabulary: each slot (`?0`, `_1`, `!0`, `$2`)
+    becomes the dummy variable of its index, the sort erased, as the channel certifies
+    concrete variables and the promotion re-derives the sort. A slot beyond the dummy
+    variables stays as it is, and the channel refuses it by its vocabulary."""
+    out = []
+    for token in tokens:
+        match = _SLOT_SIGIL.match(str(token))
+        index = int(match.group(1)) if match else None
+        out.append(dummy_variables[index] if index is not None and index < len(dummy_variables)
+                   else str(token))
+    return tuple(out)
+
+
+def _rules_sha256(rules: Any) -> str:
+    """The sha256 of a rule file as a mine writes it (`json.dump(..., indent=4)`), so a pin
+    taken from the rules in memory is the pin of the file's bytes."""
+    text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules], indent=4)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
 def _reconcile_proposal_census(
         outcomes: dict, trail: list, watch: dict, drops: dict,
         rules: Any, dummy_variables: list[str]) -> None:
@@ -782,11 +803,16 @@ class RuleMiner:
             finals: dict[str, list] | None = None,
             judge: Callable | None = None,
             judge_warn_s: float = JUDGE_WARN_S,
-            judge_fail_s: float = JUDGE_FAIL_S) -> None:
+            judge_fail_s: float = JUDGE_FAIL_S,
+            cells: dict[tuple[str, str | None], list] | None = None,
+            offer_final_rules: bool = False) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``), for
         ONE file: ``rule_mode`` is the mode the file serves, and its mine runs in that mode
         throughout (marks, sources, library, acceptance, the rules installed so far). The
-        file's rules are written and recorded in ``finals[rule_mode]``.
+        file's rules are written and recorded in ``finals[rule_mode]``, and every cell it
+        finishes (a ladder snapshot or the file) in ``cells[(rule_mode, cell path)]``. With
+        ``offer_final_rules``, the permissive mine is offered the f64 and real cell of the
+        same path through its proposal lane (see :meth:`find_rules`).
 
         Mirrors the pure-Python worker pool, but correctly against the core: per source
         length (shortest first), each source is Kruskal-pruned against the rules found so
@@ -864,47 +890,83 @@ class RuleMiner:
             # covered-prunes, sort promotion). `_watch` follows every certified pair
             # through them and `_drops` records WHICH stage took it and WHY, so the
             # sidecar can carry a terminal outcome instead of a stale claim.
-            _outcomes: dict = {}
-            _trail: list = []
-            _watch: dict = {}
+            # One LANE per batch the proposal channel certifies -- the proposals, then the
+            # files offered to the permissive mine -- as (outcomes, trail, watch).
+            _lanes: list[tuple[dict, list, dict]] = []
             _drops: dict = {}
+            _offered_trail: list | None = None
 
             def _note_drops(stage: str, reason_of: Callable[[Any], str]) -> None:
                 """Attribute every watched pair that left the ruleset during `stage`."""
-                if not _watch:
+                watched = {identity for _, _, watch in _lanes for identity in watch}
+                if not watched:
                     return
                 alive = {_rule_identity(lhs, rhs, dummy_variables)
                          for lhs, rhs in self._mode_rules(rule_mode)}
-                for identity in _watch:
+                for identity in watched:
                     if identity not in _drops and identity not in alive:
                         _drops[identity] = (stage, reason_of(identity))
+
+            def _lane(entries: list) -> tuple[dict, list, dict]:
+                """Certify one batch through the proposal channel and merge it."""
+                outcomes, trail, judge_loop = self._certify_proposals(
+                    entries, library,
+                    leaf_nodes if leaf_nodes is not None else list(dummy_variables),
+                    dummy_variables, X_data, X_confirm, max_target_pattern_length,
+                    constants_fit_challenges, constants_fit_retries, rtol, atol,
+                    min_informative, mine_seed, confirm_seed, verbose, rule_mode,
+                    judge, judged)
+                # Arm the F94 watch on the pairs the census currently calls certified.
+                # `deduplicate_rules` has already folded the batch in, so a pair missing
+                # from the ruleset ALREADY lost the merge -- attributed here, not left to
+                # the fail-closed hole check at the end.
+                _lanes.append((outcomes, trail, {
+                    _rule_identity(e['source'], e['target'], dummy_variables): i
+                    for i, e in enumerate(trail) if e['verdict'] == 'certified'}))
+                _note_drops('merge', lambda _identity: 'folded-by-deduplicate')
+                return outcomes, trail, judge_loop
             # Proposal channel: certify externally proposed rules against the just-mined
             # state, BEFORE the optional prune. Skipped on interrupt: a partial mine is not
             # the rule state the proposals were aimed at, and a clean abort must stay cheap.
             # An explicitly-given EMPTY batch still runs (and records all-zero outcome
             # counts): the sidecar must show the channel ran, not silently omit it.
             if proposal_entries is not None and not interrupted():
-                outcomes, trail, judge_loop = self._certify_proposals(
-                    proposal_entries, library,
-                    leaf_nodes if leaf_nodes is not None else list(dummy_variables),
-                    dummy_variables, X_data, X_confirm, max_target_pattern_length,
-                    constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    min_informative, mine_seed, confirm_seed, verbose, rule_mode,
-                    judge, judged)
+                outcomes, trail, judge_loop = _lane(proposal_entries)
                 if prov is not None and 'proposals' in prov:
                     prov['proposals']['outcomes'] = outcomes
                     prov['proposals']['judge_loop'] = judge_loop
                     # The per-candidate verdict trail travels WITH the artifact: an aggregate
                     # tally cannot be audited (it never says which candidate died at which gate).
                     prov['proposals']['trail'] = trail
-                # Arm the F94 watch on the pairs the census currently calls certified.
-                # `deduplicate_rules` has already folded the batch in, so a pair missing
-                # from the ruleset ALREADY lost the merge -- attributed here, not left to
-                # the fail-closed hole check at the end.
-                _outcomes, _trail = outcomes, trail
-                _watch = {_rule_identity(e['source'], e['target'], dummy_variables): i
-                          for i, e in enumerate(_trail) if e['verdict'] == 'certified'}
-                _note_drops('merge', lambda _identity: 'folded-by-deduplicate')
+            # THE OFFERED FILES (`offer_final_rules`): permissive promises less than f64 and
+            # real, so every rule of theirs holds in permissive too, and permissive's answer
+            # must never cost more than theirs. A per-mode mine finds only what its own scan
+            # reaches, so the permissive mine -- the last of the three -- is offered the
+            # finished f64 and real cell of the same path through the same channel: each rule
+            # is certified by permissive's own acceptance (a source the engine already takes
+            # at least as low reads `already_covered`) and enters as any proposal does. The
+            # sidecar pins each file by its sha256.
+            if offer_final_rules and rule_mode == 'permissive' and not interrupted():
+                files: dict = {}
+                entries: list = []
+                for file_key, other in (('f64', 'default'), ('real', 'real')):
+                    if cells is None or (other, out_path) not in cells:
+                        raise RuntimeError(
+                            f'the permissive cell {out_path!r} has no finished {file_key} '
+                            f'cell to be offered')
+                    other_rules = cells[(other, out_path)]
+                    files[file_key] = {
+                        'file': (None if out_path is None
+                                 else os.path.basename(_triple_paths(out_path)[file_key])),
+                        'sha256': _rules_sha256(other_rules), 'count': len(other_rules)}
+                    entries += [(_slots_to_variables(lhs, dummy_variables),
+                                 _slots_to_variables(rhs, dummy_variables))
+                                for lhs, rhs in other_rules]
+                entries = list(dict.fromkeys(entries))  # file order, f64 first
+                outcomes, _offered_trail, judge_loop = _lane(entries)
+                if prov is not None:
+                    prov['offered'] = {'files': files, 'count': len(entries),
+                                       'outcomes': outcomes, 'judge_loop': judge_loop}
             # SYMBOLIC GATE (the third authority; owner-approved 2026-08-02): every
             # confirmed rule is re-judged by the independent symbolic verifier
             # (`simplipy.verify`) at exact symbolic trigger points with the
@@ -1110,9 +1172,15 @@ class RuleMiner:
                 final = _kept
                 self._install(rule_mode, final)
                 _note_drops('final_gate', lambda _identity: 'unlicensed-or-preempted')
-            if _watch:
-                _reconcile_proposal_census(
-                    _outcomes, _trail, _watch, _drops, final, dummy_variables)
+            for lane_outcomes, lane_trail, lane_watch in _lanes:
+                if lane_watch:
+                    _reconcile_proposal_census(
+                        lane_outcomes, lane_trail, lane_watch, _drops, final, dummy_variables)
+            if prov is not None and _offered_trail is not None:
+                # Every offered rule that did not read `already_covered` (those are the rest
+                # of the pinned files): what entered, what was refused and where.
+                prov['offered']['trail'] = [e for e in _offered_trail
+                                            if e['verdict'] != 'already_covered']
             if verbose:
                 print(f'Final gate ({file_mode}): {len(gate["unlicensed"])} unlicensed, '
                       f'{len(gate["preempted"])} preempted, {len(final)} rules')
@@ -1152,6 +1220,8 @@ class RuleMiner:
             # mines beside it and the engine ends holding it.
             if finals is not None and out_path == output_file:
                 finals[rule_mode] = [(tuple(lhs), tuple(rhs)) for lhs, rhs in final]
+            if cells is not None:
+                cells[(rule_mode, out_path)] = [(tuple(lhs), tuple(rhs)) for lhs, rhs in final]
             return [(tuple(lhs), tuple(rhs)) for lhs, rhs in final]
 
         snapshot_at = dict(snapshot_at or {})
@@ -1476,7 +1546,8 @@ class RuleMiner:
             reset_rules: bool,
             interval_node_budget: int | None,
             judge_warn_s: float = JUDGE_WARN_S,
-            judge_fail_s: float = JUDGE_FAIL_S) -> dict:
+            judge_fail_s: float = JUDGE_FAIL_S,
+            offer_final_rules: bool = True) -> dict:
         """Assemble the mined artifact's PROVENANCE record: the mine must
         be reproducible from its sidecar alone. Everything that determines the mine is
         recorded: parameters, seeds, the X specification (seed-derived, or content-hashed
@@ -1551,6 +1622,7 @@ class RuleMiner:
                 'prune': prune, 'reset_rules': reset_rules,
                 'interval_node_budget': interval_node_budget,
                 'judge_warn_s': judge_warn_s, 'judge_fail_s': judge_fail_s,
+                'offer_final_rules': offer_final_rules,
             },
             'X': x_spec,
             'universe': {
@@ -1986,7 +2058,8 @@ class RuleMiner:
             judge_processes: int = 4,
             interval_node_budget: int | None = None,
             judge_warn_s: float = JUDGE_WARN_S,
-            judge_fail_s: float = JUDGE_FAIL_S) -> None:
+            judge_fail_s: float = JUDGE_FAIL_S,
+            offer_final_rules: bool = True) -> None:
         """Systematically discovers new simplification rules.
 
         This method automates the discovery of simplification rules, one file per mode
@@ -2132,6 +2205,15 @@ class RuleMiner:
             depends on the machine's load; a judgment still running after ``judge_warn_s``
             seconds (default 60) is logged, and one past ``judge_fail_s`` (default 600) fails
             the mine with the rule's name. Recorded in the sidecar's parameters.
+        offer_final_rules : bool, optional
+            Offer the permissive mine the finished f64 and real files (default True).
+            Permissive promises less than either mode, so each of their rules holds there
+            too, and its answer must never cost more than theirs. The permissive file is
+            mined last, and every rule of the other two files runs through its proposal
+            lane: certified by permissive's own acceptance, it enters only where
+            permissive's answer is not already as low. The permissive sidecar pins both
+            files (``offered``: name, sha256, count) beside the lane's outcomes. Config key
+            ``offer_final_rules``; recorded in the sidecar's parameters.
 
         Notes
         -----
@@ -2249,7 +2331,8 @@ class RuleMiner:
             confirm=confirm,
             relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules,
             interval_node_budget=interval_node_budget,
-            judge_warn_s=judge_warn_s, judge_fail_s=judge_fail_s)
+            judge_warn_s=judge_warn_s, judge_fail_s=judge_fail_s,
+            offer_final_rules=offer_final_rules)
         if proposal_record is not None:
             # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
             # counts are filled in by the proposal pass itself (_find_rules_native).
@@ -2294,6 +2377,10 @@ class RuleMiner:
             # mode with no set of its own starts from nothing.
             initial = {rule_mode: self._mode_rules(rule_mode) for rule_mode, _ in _MINE_MODES}
             finals: dict[str, list] = {}
+            # Every finished cell of every mode, by (rule mode, the cell's f64 path): the
+            # permissive mine, which runs last, is offered the f64 and real cell it shares a
+            # path with (`offer_final_rules`), a ladder snapshot as well as the run's own.
+            cells: dict[tuple[str, str | None], list] = {}
             for rule_mode, _file_mode in _MINE_MODES:
                 if interrupted:
                     break
@@ -2333,6 +2420,8 @@ class RuleMiner:
                         fail_s=judge_fail_s),
                     judge_warn_s=judge_warn_s,
                     judge_fail_s=judge_fail_s,
+                    cells=cells,
+                    offer_final_rules=offer_final_rules,
                 )
             # The engine ends holding the three files it wrote, as it would load them.
             if 'default' in finals:
@@ -2370,7 +2459,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     - ``fingerprint``: the sidecar's measure record is of ``mode``, holds every probe, and
       prices each as this engine does;
     - ``env_switches``: the mine ran with no ``SIMPLIPY_*`` switch set, and so does this
-      check.
+      check;
+    - ``offered`` (``permissive`` only): the mine was offered the f64 and real files, and
+      each file its sidecar pins lies beside this one with the pinned sha256.
 
     Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}}``.
     """
@@ -2428,10 +2519,35 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
         [['the sidecar records no env_overrides', None]] if recorded_env is None else
         [[key, value] for key, value in sorted(recorded_env.items())]
         + [[key, value] for key, value in env_overrides().items()])
+    if mode == 'permissive':
+        gates['offered'] = _offered_pins_broken(rules_path, sidecar.get('offered'))
     report = {name: {'ok': not found, 'count': len(found), 'examples': found[:10]}
               for name, found in gates.items()}
     return {'file': rules_path, 'mode': mode, 'ok': all(g['ok'] for g in report.values()),
             'gates': report}
+
+
+def _offered_pins_broken(rules_path: str, offered: Any) -> list:
+    """What breaks the permissive file's ``offered`` pins (empty when they hold): the
+    sidecar must pin the f64 and the real file, by name and sha256, and each must lie beside
+    ``rules_path`` with exactly those bytes."""
+    if not isinstance(offered, dict) or not isinstance(offered.get('files'), dict):
+        return [['the permissive mine was offered no f64 or real file', None, None]]
+    broken: list = []
+    for file_key in ('f64', 'real'):
+        pin = offered['files'].get(file_key)
+        if not isinstance(pin, dict) or not pin.get('file') or not pin.get('sha256'):
+            broken.append([file_key, 'no pin', None])
+            continue
+        path = os.path.join(os.path.dirname(os.path.abspath(rules_path)), pin['file'])
+        if not os.path.exists(path):
+            broken.append([file_key, 'missing', path])
+            continue
+        with open(path, 'rb') as file:
+            digest = hashlib.sha256(file.read()).hexdigest()
+        if digest != pin['sha256']:
+            broken.append([file_key, 'sha256', path])
+    return broken
 
 
 def cross_mode_complexity(engine: Any, tokens: Any, mode: Any) -> int:
