@@ -1,18 +1,13 @@
-"""The MINE half of the package (C23a, D27).
+"""Rule mining: discovering, certifying and checking an engine's rule files.
 
-``RuleMiner`` holds the 13 mining/certification methods that lived on
-``SimpliPyEngine`` until 0.13.0. It is an ordinary object over an engine:
-``RuleMiner(engine).find_rules(...)``. Every access to engine state is
-EXPLICIT (``self.engine._core``, ``self.engine.simplification_rules``, ...) —
-the miner owns no state of its own beyond the engine reference (C23a step 2,
-the explicit-engine-access rewrite; step 1 was the verbatim facade move).
-``SimpliPyEngine.find_rules`` / ``certify_rules`` remain as thin delegators,
-so the public API does not move. The single-flight ``_MINE_LOCK`` and the
-mine-only module helpers live HERE; ``engine.py`` re-exports them so the lock
-stays ONE object across both modules (D28).
+:class:`RuleMiner` holds the mining and certification methods. It is an ordinary
+object over an engine, ``RuleMiner(engine).find_rules(...)``, and owns no state of its
+own beyond the engine reference; ``SimpliPyEngine.find_rules`` and ``certify_rules``
+are thin delegators to it. One mine runs per process: a module-level lock serializes
+every mine and certify entry point, however many miners exist.
 
-Equality gate (D29): full-mine byte-identity on ``rules.json``, machine-pinned
-— applied to step 1 and step 2 separately.
+:func:`verify_mine` checks a mined file against the re-mine gates in its own mode, and
+:func:`cross_mode_complexity` prices answers of different modes on one shared scale.
 """
 
 import hashlib
@@ -90,7 +85,7 @@ def _reconcile_proposal_census(
         outcomes: dict, trail: list, watch: dict, drops: dict,
         rules: Any, dummy_variables: list[str]) -> None:
     """Rewrite the proposal census so it describes the ARTIFACT, not the moment of
-    certification (F94, 2026-08-18).
+    certification.
 
     :meth:`RuleMiner._certify_proposals` records its verdicts BEFORE the symbolic gate,
     the covered-prune and the sort promotion have run, and every one of those stages may
@@ -126,8 +121,8 @@ def _tokens_in_vocabulary(tokens: Any, vocabulary: set) -> bool:
     """Vocabulary test for proposal/hint token sequences: numeric and constant-like
     literals are valid leaves everywhere (the generation-2 spellings carry their
     numbers as literal TOKENS -- `pow x0 2` where the retired ring spelled
-    `pow2 x0` -- so a bare vocabulary-set test silently skipped every such
-    proposal; audit Tier-1 #3)."""
+    `pow2 x0` -- so a bare vocabulary-set test would silently skip every such
+    proposal)."""
     return all(t in vocabulary or t in _CONSTLIKE_LEAVES or is_numeric_string(t)
                for t in tokens)
 
@@ -378,14 +373,14 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
 
 
 class RuleMiner:
-    """The dedicated miner (C23a step 2): 13 methods, engine access explicit.
+    """The rule miner of one engine: :meth:`find_rules` and :meth:`certify_rules`.
 
-    Stateless beyond the engine reference: mining reads ``engine._core`` /
-    ``engine.operator_arity``, swaps rule sets only through the engine's
-    copy-on-write ``_replace_rules``, and calls back into the engine's own
-    ``prune_covered_rules`` / ``is_valid`` / fingerprint methods. One miner
-    per process (D28): the module-level ``_MINE_LOCK`` single-flights every
-    mine/certify entry point regardless of how many miners are constructed.
+    Stateless beyond the engine reference: mining reads the engine's compiled core and
+    operator table, swaps rule sets only through the engine's copy-on-write rule
+    replacement, and calls back into the engine's own ``prune_covered_rules``,
+    ``is_valid`` and fingerprint methods. One mine runs per process: a module-level
+    lock serializes every mine and certify entry point, however many miners are
+    constructed.
     """
 
     def __init__(self, engine: 'SimpliPyEngine') -> None:
@@ -436,7 +431,7 @@ class RuleMiner:
         return {order[k] for k in bad}
 
     def _final_gate(self, rule_mode: str, judge: Callable, judged: dict) -> tuple[list, list]:
-        """THE FINAL PER-FILE GATE (miner.md 2.11) over the mode's installed set: every file
+        """THE FINAL PER-FILE GATE over the mode's installed set: every file
         spelling AND every entry the mode serves from it is judged (``judged`` memoises by
         pair), and a row with any unlicensed spelling is dropped. The file spelling is what
         release verification reads; the served entries are what fires.
@@ -456,7 +451,7 @@ class RuleMiner:
                 [[list(final[i][0]), list(final[i][1]), tier] for i, tier in sorted(off.items())])
 
     def _deshadow(self, rule_mode: str, rules: list) -> tuple[list, list]:
-        """TWIN-SHADOW REMOVAL (miner.md 2.7): drop every row the mode's load would mint
+        """TWIN-SHADOW REMOVAL: drop every row the mode's load would mint
         anyway. A census entry ``(victim, owner, False, 'twin-shadow')`` says the victim's
         orientation twin was skipped because the owner's own row carries the identical
         canonical rewrite -- so with the owner removed the twin mints in its place and the
@@ -476,7 +471,7 @@ class RuleMiner:
 
     def _mine_length(self, sources: list, mine: Callable, rule_mode: str, judge: Callable,
                      judged: dict, dummy_variables: list[str]) -> tuple[list, dict]:
-        """THE PER-LENGTH JUDGE LOOP (miner.md 2.6): mine the length, judge the picks, and
+        """THE PER-LENGTH JUDGE LOOP: mine the length, judge the picks, and
         re-scan exactly the sources whose pick the mode does not license, with that pick
         excluded, until every pick is licensed. The scan is deterministic and exclusions only
         remove refused targets, so the fixed point is the scan that consults the judge per
@@ -580,9 +575,9 @@ class RuleMiner:
         refusal)``: certificate ``'minimal'`` (scan) or ``'verified'`` (hint); with no
         target, ``refusal`` names why the hint was refused (None without a hint).
 
-        NO TOKEN-LENGTH BAR on a hint (owner ruling 2026-08-18: "Only 'remove' the length
-        gate for the LLM proposed rules"): descent is decided by the serve ordering, the
-        predicate G7 and the serve-time `oriented` check apply.
+        NO TOKEN-LENGTH BAR on a hint: a proposed rule need not shorten the token count.
+        Descent is decided by the serve ordering; the predicate G7 and the serve-time
+        `oriented` check apply.
 
         ``excluded``: the targets the judge loop refused for this source; both arms skip
         their class (a hint of an excluded class is refused as ``'excluded'``).
@@ -1476,14 +1471,14 @@ class RuleMiner:
         the specific (source, target) pair is verified instead (against the same
         ordering mark) -- sound, but without a minimality certificate. A source the
         engine already reduces is still SEARCHED: coverage is decided by the search,
-        never by the reduction alone (a canon respell used to read as "covered" and
-        silently discarded certifiable proposals, finding F2).
+        never by the reduction alone (otherwise a canon respell would read as "covered" and
+        silently discard a certifiable proposal).
 
         Intended for LLM- or human-proposed identities: proposals only ever ADD source
         expressions, and every accepted pair passes the same symbolic gate the mine
         runs (:func:`~simplipy.verify.verify_ruleset` with the precision-stability
-        discriminator; KILLs dropped, audit B3) -- so certified output is exactly as
-        sound as mined rules.
+        discriminator; KILLs dropped) -- so certified output is held to exactly the bar
+        mined rules are.
 
         Parameters mirror :meth:`find_rules`. The engine is not modified; returns a list
         of ``(source, target, certificate)`` tuples with certificate ``'minimal'`` or
@@ -1492,7 +1487,7 @@ class RuleMiner:
             pairs = engine.certify_rules(proposals, hints)
             engine.simplification_rules = deduplicate_rules(
                 engine.simplification_rules + [(s, t) for s, t, _ in pairs], dummies,
-                engine=engine, rule_mode='default')
+                engine=engine, rule_mode='f64')
             engine.compile_rules()
         """
         sources = [tuple(str(t) for t in s) for s in sources]
@@ -1652,11 +1647,11 @@ class RuleMiner:
         certification of untouched proposals.
 
         The certified pairs then join the ruleset through the same
-        :func:`~simplipy.utils.deduplicate_rules` path as mined rules (shortest target
-        per canonical source). Mutates the engine in place (rules, compiled state, core
+        :func:`~simplipy.utils.deduplicate_rules` path as mined rules (per canonical
+        source, the target lowest in the mode's serve ordering). Mutates the engine in place (rules, compiled state, core
         rules) and returns ``(counts, trail, judge_loop)``.
 
-        THE JUDGE LOOP, AS ONE EXTRA LENGTH (miner.md 2.11): the certified targets go to the
+        THE JUDGE LOOP, AS ONE EXTRA LENGTH: the certified targets go to the
         mine's judge exactly as a length's picks do; a target the mode does not license is
         excluded and its proposal certified again without it, so the hint or a scan
         alternative of another class can still certify. A proposal left without a licensed
@@ -1665,12 +1660,12 @@ class RuleMiner:
 
         ``counts`` is the per-outcome tally for the provenance sidecar: ``certified`` /
         ``already_covered`` / ``rejected`` / ``duplicate`` (certified, but canonically
-        identical to an earlier certified proposal and not shorter) /
+        identical to an earlier certified proposal and not lower in the serve ordering) /
         ``certified_then_dropped``. The last one is filled in LATER, by
         :func:`_reconcile_proposal_census`: certification runs upstream of the symbolic
         gate, the covered-prunes and the sort promotion, so the tally this method returns
         is provisional and the reconciliation moves every certified pair the artifact
-        does not contain out of ``certified`` (F94). The key is present even when zero.
+        does not contain out of ``certified``. The key is present even when zero.
 
         ``trail`` is the PER-PROPOSAL verdict record, one entry per input proposal in file
         order: ``{source, target, verdict, stage, certificate}``. A tally alone cannot be
@@ -1807,7 +1802,7 @@ class RuleMiner:
                 counts['certified'] += 1
                 seen[key] = canon_target
         if certified_pairs:
-            # The SAME merge path as mined rules: shortest target per canonical source.
+            # The SAME merge path as mined rules: per canonical source, the lowest target.
             self._install(rule_mode, deduplicate_rules(
                 before + certified_pairs, dummy_variables, verbose=verbose,
                 engine=self.engine, rule_mode=rule_mode))
@@ -1846,8 +1841,9 @@ class RuleMiner:
             interval_node_budget: int | None = None) -> None:
         """Systematically discovers new simplification rules.
 
-        This powerful method automates the discovery of simplification rules.
-        It operates in two phases:
+        This method automates the discovery of simplification rules, one file per mode
+        (``rules_f64.json``, ``rules_real.json``, ``rules_permissive.json``), each mined in
+        its own mode. It operates in two phases:
         1.  **Generation**: It combinatorially generates all possible valid
             expressions up to `max_source_pattern_length`.
         2.  **Verification**: It tests each generated expression for equivalence
@@ -1879,7 +1875,9 @@ class RuleMiner:
         output_file : str or None, optional
             If provided, saves the discovered rules to this JSON file.
         save_every : int, optional
-            How often to save the rules to the output file.
+            Deprecated and ignored (kept for signature compatibility). A mine writes
+            ``<output_file>.checkpoint.json`` after every completed length and the rule
+            files once, when each mode's mine ends.
         reset_rules : bool, optional
             If True, clears existing rules before starting.
         prune : bool or str, optional
@@ -1950,9 +1948,9 @@ class RuleMiner:
             / ``duplicate``). Config key ``proposals:`` in the find-rules YAML.
         promote_sorts : bool, optional
             Run the sort-promotion ladder after the prune, re-certifying every rule at the
-            stronger ``_``/``!``/``$`` sorts and shipping it at the strongest sound one.
-            ON by default (owner ruling 2026-08-01: features do not ship disabled) -- a
-            default mine emits the deployment-strength ruleset. Pass ``False`` for a raw,
+            stronger ``_``/``!``/``$`` sorts and shipping it at the strongest one it
+            certifies. On by default, so a default mine emits the ruleset that is
+            deployed. Pass ``False`` for a raw,
             entirely ``?``-sorted mine (promotion is fail-safe, so ``False`` costs only
             composite-subtree recall, never soundness).
         snapshot_at : dict[int, str] or None, optional
@@ -2187,7 +2185,7 @@ class RuleMiner:
 
 def verify_mine(rules_path: str, mode: Any, operators: dict, *,
                 judge: Callable | None = None, judge_processes: int = 4) -> dict:
-    """THE RE-MINE GATES of one mined file, in its own mode (miner.md 3).
+    """The re-mine gates of one mined file, in its own mode.
 
     ``rules_path`` is a rule file a mine wrote, read beside its provenance sidecar;
     ``mode`` the mode it serves (``'f64'``, also ``'default'``, ``'real'``, ``'permissive'``

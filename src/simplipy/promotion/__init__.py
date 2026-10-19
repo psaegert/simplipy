@@ -2,7 +2,7 @@
 """Post-mine sort promotion.
 
 The miner emits every rule at the conservative ``?`` (variable-leaf) sort. This pass
-re-certifies each rule at the stronger sorts and ships it at the strongest SOUND one.
+re-certifies each rule at the stronger sorts and ships it at the strongest one it certifies.
 The SHIPPED artifact speaks the four-sort language ``?`` < ``$`` < ``!`` < ``_``
 (binding-set nesting; see docs/rules.md): mined rules descend the ``_`` -> ``!`` -> ``?``
 ladder, and the ``$`` sort ships through the SEEDED multiplicative-cancellation
@@ -38,7 +38,7 @@ __all__ = ['promote']
 
 def promote(rules, engine, *, run_positive_controls=True, verbose=False, progress=None,
             rule_mode):
-    """Assign each ``?``-sorted mined rule its strongest sound sort; prune derivable rules.
+    """Assign each ``?``-sorted mined rule the strongest sort it certifies; prune derivable rules.
 
     ``rules``: iterable of (lhs, rhs) prefix-token sequences, all ``?``-sorted.
     ``engine``: the ``SimpliPyEngine`` whose operator realizations define the semantics.

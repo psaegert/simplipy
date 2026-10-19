@@ -132,15 +132,15 @@ _REQUIRED_OPERATOR_KEYS = ('realization', 'alias', 'arity', 'commutative')
 
 
 def _normalized_operator_specs(operators: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Validate operator specs LOUDLY and normalize them (C1.18).
+    """Validate operator specs LOUDLY and normalize them.
 
-    Three silent failure modes closed, none of which the suite's DEGENERATE battery
-    used to build: a spec missing a key died as a bare ``KeyError: 'alias'`` naming
-    neither the operator nor the file; ``commutative: true`` on a non-core operator
-    was consumed by NOTHING (only ``+`` and ``*`` are AC bags, so ``f(a, b)`` and
-    ``f(b, a)`` stayed two canonical states while the config claimed one value); and
-    a core serialization token declared WITHOUT ``precedence:`` bypassed the C1.8
-    conflicting-precedence guard, which compares only present values.
+    Three failure modes are refused by name instead of failing silently: a spec missing
+    a key (it would die as a bare ``KeyError: 'alias'`` naming neither the operator nor
+    the file); ``commutative: true`` on a non-core operator (only ``+`` and ``*`` are AC
+    bags, so ``f(a, b)`` and ``f(b, a)`` would stay two canonical states while the
+    config claims one value); and a core serialization token declared WITHOUT
+    ``precedence:`` (it would bypass the conflicting-precedence guard, which compares
+    only present values).
     """
     normalized: dict[str, dict[str, Any]] = {}
     core = _core_serialization_ops() if _core_serialization_ops is not None else {}
@@ -260,36 +260,32 @@ _SPECIAL_LEAVES = {'np.pi', 'np.e', 'float("inf")', 'float("-inf")', 'float("nan
 
 
 class Mode(Enum):
-    """Which soundness the simplification preserves. An AXIS, not an ordering.
+    """What a simplification preserves. The three modes are an axis, not an ordering.
 
-    The old ``Mode`` was an ``IntEnum`` on the premise that soundness is ordinal --
-    ``EXACT <= SOUND <= AE <= LOSSY``, a higher rung permitting strictly more. Measurement
-    refuted the premise. "Mathematically true" and "realised in f64" are INCOMPARABLE:
-    ``inv(acosh(cosh x)) -> abs(inv x)`` is true and NOT f64-realised (the deployed
-    evaluator diverges), while ``asin(1e-8) -> 1e-8`` is f64-exact and mathematically
-    FALSE (the cubic term is 1.667e-25). Neither rule is "more sound" than the other,
-    so there is no rung to put them on, and ``<`` between modes no longer type-checks.
+    "Mathematically true" and "realised in float64" are incomparable:
+    ``inv(acosh(cosh x)) -> abs(inv x)`` is true and not what the float64 evaluator
+    computes, while ``asin(1e-8) -> 1e-8`` is exact in float64 and false as mathematics
+    (the cubic term is 1.667e-25). Neither rule is "more sound" than the other, so modes
+    do not compare with ``<``.
 
-    - ``f64`` (the default): sound as the DEPLOYED f64 evaluator computes. Byte-identical
-      to the historical ``SOUND``. This is the inference/scoring mode -- it is what makes
-      a rewrite safe for a model that will be evaluated in f64.
-    - ``real``: sound as MATHEMATICS defines, independent of any float format. Use when
-      the rewrite must hold symbolically -- proofs, exact-arithmetic backends, or
-      publication -- and accept that some of it is not what f64 will compute.
-    - ``permissive``: both of the above UNION-ed, trading soundness for recall -- every
-      rule placeholder binds any subtree (the ``!``-sort finite-a.e. certificate is
-      skipped) and the constant-fold's finiteness gate is relaxed (so ``<constant>/0``
-      collapses to ``<constant>``). NOT equivalence-preserving. For training-corpus
-      canonicalisation ONLY: the training data is generated FROM the simplified form, so
-      the target equals the data and there is no external function to violate. Do NOT
-      use on an inference or scoring path.
+    - ``f64`` (the default; also spelled ``'default'``): preserves what the deployed
+      float64 evaluator computes. This is the inference and scoring mode: a rewrite in it
+      is safe for a model that is evaluated in float64.
+    - ``real``: preserves the function as mathematics defines it, independent of any
+      float format. Use it when the rewrite must hold symbolically (proofs,
+      exact-arithmetic backends, publication), accepting that some of it is not what
+      float64 computes.
+    - ``permissive``: accepts what holds up to sign or domain as well (``(x^2)^(1/2)`` is
+      ``x``, ``exp(log(<constant>))`` is ``<constant>``), trading equivalence for shorter forms.
+      It is not equivalence-preserving and is meant for training-corpus canonicalisation,
+      where the training data is generated from the simplified form, so there is no
+      external function to violate. Do not use it on an inference or scoring path.
 
-    Each mode names ONE DISTINCT, COMPLETE rule set -- ``rules_f64.json`` /
-    ``rules_real.json`` / ``rules_permissive.json`` (artifacts published before the
-    0.14.0 naming rulings call the f64 file ``rules.json`` and the permissive file
-    ``rules_corpus.json``; configs name their files, so they load unchanged) -- so
-    selecting a mode selects a file, and what is loaded IS what is served with nothing
-    unioned at serve time.
+    Each mode names one complete rule set of its own -- ``rules_f64.json``,
+    ``rules_real.json``, ``rules_permissive.json`` (artifacts published before 0.14.0 call
+    the f64 file ``rules.json`` and the permissive file ``rules_corpus.json``; configs name
+    their files, so they load unchanged) -- so selecting a mode selects a file, and what
+    is loaded is what is served.
 
     The names ``SOUND`` and ``LOSSY`` were removed in 0.14.0; use ``f64`` and
     ``permissive``.
@@ -373,9 +369,9 @@ class SimpliPyEngine:
         rules.
     rules_real : list[tuple] or None, optional
         The ``real`` mode's OWN COMPLETE rule set -- core rules AND the real-only
-        rules, in one self-contained list, NOT a supplement to ``rules``. Owner ruling
-        (2026-08-19): "one distinct rule set for each mode", so what is loaded IS what
-        is served and the engine never computes a union to decide what fires.
+        rules, in one self-contained list, NOT a supplement to ``rules``: each mode has
+        one distinct rule set, so what is loaded IS what is served and the engine never
+        computes a union to decide what fires.
         ``None`` (the default) means this engine names no ``real`` set of its own and
         that mode serves ``rules``; ``[]`` is the different, sayable statement "the
         ``real`` mode serves nothing".
@@ -399,13 +395,12 @@ class SimpliPyEngine:
         dedup key, and the set every absent mode falls back to). Naming ``'f64'`` in
         the tuple is therefore allowed but redundant.
 
-        A built set is translated at construction too, so the first call in a mode
+        A built set is compiled at construction too, so the first call in a mode
         pays nothing extra. Measured on the acj-5-4-llm artifact (fresh process each,
-        peak RSS directly after ``load``): ``modes='all'`` 957 MB,
-        ``modes=('f64', 'permissive')`` 737 MB, ``modes=('f64',)`` 498 MB; a deferred
-        set then costs its build on first use (~4 s on this artifact, announced by the
-        log line). The
-        worker profile ``modes=('f64', 'permissive')`` is the intended lean
+        peak RSS directly after ``load``): about 0.9 GB for ``modes='all'``, 0.7 GB for
+        ``modes=('f64', 'permissive')`` and 0.45 GB for ``modes=('f64',)``, about
+        100 MB per set; a deferred set then costs its build on first use (about 3-4 s
+        on this artifact, announced by the log line). The worker profile ``modes=('f64', 'permissive')`` is the intended lean
         deployment: inference (f64) plus training-corpus canonicalisation, without
         the ``real`` set's RAM.
     trusted_modules : list[str] or None, optional
@@ -634,14 +629,13 @@ class SimpliPyEngine:
         worker from the same recipe, re-running the trust check there rather than
         carrying imported modules across the process boundary.
 
-        C1.9: the recipe is REFUSED when it is ambiguous. The core echoes a digest of
+        The recipe is REFUSED when it is ambiguous. The core echoes a digest of
         the rules it was actually given (:meth:`compile_rules` or construction), and a
         mismatch with ``simplification_rules`` here means the two have diverged -- the
         list was mutated without :meth:`compile_rules`, or the core's rules were set
         directly. A pickle rebuilds the worker from the LIST, so a diverged parent
-        would silently spawn workers running different rules (measured before the fix:
-        50/400 corpus rows simplified differently between a parent and its own
-        unpickled worker, with no warning). Loud beats silent: sync first, then pickle.
+        would silently spawn workers running different rules. Sync first
+        (:meth:`compile_rules`), then pickle.
         """
         if not self._core.rules_in_sync(
                 [(list(lhs), list(rhs)) for lhs, rhs in self.simplification_rules]):
@@ -703,11 +697,10 @@ class SimpliPyEngine:
         Public contract (unchanged since the pure-Python engine): after mutating
         ``self.simplification_rules``, call this so ``simplify`` sees the new rules.
 
-        COPY-ON-WRITE (conc-1): a fresh core is built from the in-memory state and
-        the reference is swapped atomically -- an in-place ``set_rules`` push
-        mutated the core under a concurrent reader's feet mid-``simplify``. A
-        reader holding the old core finishes on a consistent (old) ruleset; the
-        ~20 ms rebuild is mutation-API cost only, never on the hot path.
+        COPY-ON-WRITE: a fresh core is built from the in-memory state and the reference
+        is swapped atomically, so a concurrent reader is never mutated mid-``simplify``.
+        A reader holding the old core finishes on a consistent (old) ruleset; the
+        rebuild is mutation-API cost only, never on the hot path.
 
         The other two modes' sets are re-pushed alongside: a fresh core starts with no
         set of its own for either, so NOT re-pushing them would silently retract both on
@@ -789,9 +782,8 @@ class SimpliPyEngine:
 
         What is freed depends on the recipe. A CONFIG-NAMED set (built by
         ``from_config``/``load``) drops both the compiled core structures and the
-        wrapper's parsed rule list -- the mode's full footprint, measured at roughly
-        130 MB per used set on the acj-5-4-llm artifact (~100-130 MB parsed plus
-        50-65 MB compiled; how much of it the allocator returns to the OS
+        wrapper's parsed rule list -- the mode's full footprint, about 100 MB per set
+        on the acj-5-4-llm artifact (how much of it the allocator returns to the OS
         immediately depends on heap layout). A set handed IN MEMORY to ``__init__``
         drops the compiled structures only: the wrapper's list is the sole recipe,
         so it stays.
@@ -1334,15 +1326,13 @@ class SimpliPyEngine:
         engine's vocabulary: every operator gets exactly its arity of operands, a
         single root remains, and every tag section closes.
 
-        All three external forms are accepted and VERIFIED (ruling 2026-08-18);
-        the form is detected exactly as the conversion API detects it (D2), by
-        TYPE first and then by dialect:
+        All three external forms are accepted and VERIFIED; the form is detected
+        exactly as the conversion API detects it, by TYPE first and then by dialect:
 
         * an infix ``str`` (``'2*atan(x0)/3'``) -- read, then verified;
         * an explicit binary-prefix token sequence (``['*', '2', 'atan', 'x0']``);
         * a TAGGED token sequence (``['<mul>', '2', 'atan', 'x0', '</mul>']``) --
-          the engine's own native serialization, which this predicate used to
-          refuse with a False verdict rather than read.
+          the engine's own native serialization.
 
         A ``list``, ``tuple`` or 1-D ``ndarray`` is a token sequence; tag-bearing
         sequences are verified by the shared liberal parser (the arbiter for that
@@ -1414,7 +1404,7 @@ class SimpliPyEngine:
     def _validation_tokens(
             self, expression: 'str | list[str] | tuple[str, ...] | np.ndarray') -> 'list[str] | None':
         """Read :meth:`is_valid`'s input into tokens, mirroring the conversion API's
-        detection (D2). Returns ``None`` when an infix ``str`` does not read at all --
+        detection. Returns ``None`` when an infix ``str`` does not read at all --
         an invalid expression, not an error. Refuses a non-expression TYPE loudly."""
         if isinstance(expression, str):
             try:
@@ -1562,7 +1552,7 @@ class SimpliPyEngine:
         and PRESERVING ITS SPELLING.
 
         The name states the contract because the contract is a CAPABILITY that no
-        other public entry offers (renamed from ``parse``, ruling 2026-08-18):
+        other public entry offers (it was called ``parse`` before 0.14.0):
 
         * **TOLERANT of unknown vocabulary.** A function this engine's config does
           not declare survives as a bare leaf --
@@ -1673,9 +1663,8 @@ class SimpliPyEngine:
 
         This is the front door for the numeric evaluation :meth:`simplify` refuses to
         do. The engine folds only what it computes EXACTLY (rational arithmetic, in the
-        constructors); the serve path's last f64-evaluation arm was deleted on
-        2026-08-02 because "an f64 evaluation landing exactly on a cheap literal while
-        truly differing at 1e-17" is not a simplification, it is a rounding. So
+        constructors), because an f64 evaluation that lands exactly on a cheap literal
+        while the true value differs at 1e-17 is not a simplification but a rounding. So
         ``simplify(['tan', '1'])`` returns ``tan 1`` in every mode, and this returns
         ``1.5574077246549023``.
 
@@ -1825,7 +1814,7 @@ class SimpliPyEngine:
     def mask(self, expression: str | list[str],
              policy: 'str | Callable[[str, Any], str | None]' = 'all',
              *, collect: bool = True) -> str | list[str]:
-        """Mask literals: the front door over :mod:`simplipy.masking` (design D8).
+        """Mask literals: the front door over :mod:`simplipy.masking`.
 
         Pure delegation to the toolkit -- the mechanism, the role walk, and the
         one-constant-per-degree-of-freedom collect stage are all
@@ -1922,18 +1911,17 @@ class SimpliPyEngine:
         canonical constructors under the same soundness certificates as the rule matcher
         (finite-a.e. for sign-cancelling addition, finite-and-nonzero-a.e. for
         exponent-cancelling multiplication), and coefficient arithmetic is exact rational
-        computation rather than mined rules. The output is idempotent
-        (``simplify(simplify(x)) == simplify(x)``) when every search runs until a round finds
-        nothing, the default of ``f64`` and ``real``; in ``permissive`` a search its work budget
-        stops, or another of its arms, can continue on a second call (``effort``, ``work``).
+        computation rather than mined rules. Every mode runs one walk: its chain of rules and
+        constructors, then the search, in its own canonical form and rules. The output is
+        idempotent (``simplify(simplify(x)) == simplify(x)``) when the search runs until a
+        round finds nothing, the default in every mode; a search that an ``effort`` cap or a
+        ``work`` budget stops can continue on a second call.
 
         .. note::
-            Pair this engine with SORT-PROMOTED rulesets (the ``2-1``/``3-2``/``4-3``
-            artifact family and later). The legacy ``dev_7-3`` asset predates the certificate
-            sorts (its pattern rules are uniformly ``_``-sorted, gated only by mining-time
-            sampling); it is supported only by simplipy <= 0.11 as a separate pinned install,
-            and its certificate-free cancellation rules are unsound on pole spellings that the
-            AC core's unified representation makes reachable.
+            Pair this engine with sort-promoted rulesets, which every published engine
+            (such as ``acj-5-4-llm``) is. Generation-1 artifacts (the retired hyper-operator
+            vocabulary, such as ``dev_7-3``) are refused at load; they need
+            ``simplipy<0.12``.
 
         Parameters
         ----------
@@ -1946,8 +1934,9 @@ class SimpliPyEngine:
             rule firings. One pass is one full rewrite sweep over the whole expression,
             and it reaches the fixpoint: it re-enters every node it changes, so the next
             pass only confirms that nothing moves. Defaults to 48; the cap is
-            defense-in-depth against an ordering bug (T6 proves the fixpoint is reached in
-            finitely many passes), not a tuning knob. Must be at least 1.
+            defense-in-depth against an ordering bug (the descent is well-founded, so the
+            fixpoint is reached in finitely many passes: Theorem T6 in ``docs/formal.md``),
+            not a tuning knob. Must be at least 1; ``0`` raises ``ValueError``.
 
         effort : int or None, optional
             The SEARCH BUDGET: after the chain reaches its fixpoint, an
@@ -1959,8 +1948,8 @@ class SimpliPyEngine:
             STRICTLY below it in the serve-time reduction ordering.
             ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
             nothing, so a second call returns the answer unchanged (up to the residual
-            classes in ``docs/formal.md``, I3 and L6, and a search a ``work`` budget
-            stopped); an int caps the search at that many candidate descents, after which
+            classes listed in ``docs/formal.md``, and a search a ``work`` budget stopped);
+            an int caps the search at that many candidate descents, after which
             a second call can continue it; ``0`` never enters the phase and is byte-identical to the plain chain
             (rules and constructors), which does not factor.
             Every guarantee survives any budget: soundness (same certificates), never-worse
@@ -2175,7 +2164,8 @@ class SimpliPyEngine:
         Returns
         -------
         str | list[str]
-            Infix text for ``form='infix'``, else a token list.
+            Infix text when the output form is ``'infix'`` (an infix input, or
+            ``form='infix'``), else a token list.
         """
         if isinstance(digits, bool) or not isinstance(digits, (int, np.integer)):
             raise TypeError(f"digits must be an int >= 1, not {type(digits).__name__} ({digits!r})")
@@ -2192,7 +2182,7 @@ class SimpliPyEngine:
             raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
         if not tokens:
             return '' if target == 'infix' else []
-        work = DEFAULT_WORK if mode is Mode.permissive else None
+        work = DEFAULT_WORK  # the one default of every mode, as in simplify
         return self._core.prettify(tokens, int(digits), target, True, DEFAULT_EFFORT, work, rule_mode=_RULE_MODE[mode])
 
     def complexity(
@@ -2227,6 +2217,13 @@ class SimpliPyEngine:
         Invariant in every case: mu prices structure and information, not spelling --
         signs and magnitude-1 coefficient/exponent slots are free, literals pay their
         description length on the exact value, symbols pay one symbol unit.
+
+        A literal costs at most what its float costs: the evaluator reads every literal as
+        its nearest float64, so a literal's price is capped at the price of that float's
+        shortest decimal (at most 17 significant digits). A number carrying more digits
+        than its float needs therefore costs that decimal, while :meth:`simplify` keeps and
+        prints the exact value. A literal kept as written (beyond the 1,100-bit cap, or not
+        admissible in ``f64``) keeps its own price. The price is an integer in milli-bits.
         """
         _, tokens = self._read_input(expression)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
@@ -2256,9 +2253,8 @@ class SimpliPyEngine:
     def find_rules(self, *args: Any, **kwargs: Any) -> Any:
         """Mine rewrite rules into this engine's rule set.
 
-        Thin delegator to :meth:`simplipy.mining.RuleMiner.find_rules` (C23a,
-        D27) — the signature, semantics, and single-flight lock are the
-        miner's; the public API is unchanged."""
+        Thin delegator to :meth:`simplipy.mining.RuleMiner.find_rules`: the
+        signature, the semantics and the one-mine-per-process lock are the miner's."""
         return RuleMiner(self).find_rules(*args, **kwargs)
 
     # the delegators carry the miner's REAL signature for inspect/docs/tests
@@ -2267,8 +2263,8 @@ class SimpliPyEngine:
     def certify_rules(self, *args: Any, **kwargs: Any) -> Any:
         """Certify proposed rules against this engine.
 
-        Thin delegator to :meth:`simplipy.mining.RuleMiner.certify_rules`
-        (C23a, D27); the public API is unchanged."""
+        Thin delegator to :meth:`simplipy.mining.RuleMiner.certify_rules`: the
+        signature and the semantics are the miner's."""
         return RuleMiner(self).certify_rules(*args, **kwargs)
 
     certify_rules.__wrapped__ = RuleMiner.certify_rules  # type: ignore[attr-defined]
@@ -2315,9 +2311,8 @@ class SimpliPyEngine:
         Without it an artifact mined under one measure is indistinguishable from one mined
         under another: the sidecar records the version, the build and the parameters, and
         every one of those can be identical across a measure change (worse, uncommitted
-        work stamps the same `-dirty` build string). Audit C1.4 flagged this as a BLOCKER to
-        fix BEFORE a re-mine; three artifacts were re-mined without it, so the values here
-        are also what identifies those retroactively.
+        work stamps the same `-dirty` build string). Artifacts mined before the fingerprint
+        existed are identified retroactively by the same values.
 
         The fingerprint is BEHAVIOURAL, not a version string: it records what the measure
         actually charges on probes chosen to separate the changes it has undergone. Any
@@ -2424,7 +2419,7 @@ class SimpliPyEngine:
 
     def libm_fingerprint(self) -> str:
         """A sha256 fingerprint of the host's libm, computed through the deployed
-        folding path (R5, audit L9).
+        folding path.
 
         The transcendental folds go through the SYSTEM libm (the C symbols
         `rust/numeric.rs` binds), which resolves on the running machine -- so two
@@ -2578,8 +2573,8 @@ class SimpliPyEngine:
         modules its own realizations needed, plus ``np`` for the ``np.pi``/``np.e``
         token grammar. Until 0.13 every engine shared ``simplipy.engine``'s module
         globals, so one engine's imports were reachable from another's expressions,
-        along with simplipy's own imports (``os``, ``importlib``, ...); register
-        C1.12 closed that. Python still injects builtins, and a hostile EXPRESSION is
+        along with simplipy's own imports (``os``, ``importlib``, ...); since 0.13 each
+        engine has its own namespace. Python still injects builtins, and a hostile EXPRESSION is
         still unsafe to compile -- the namespace is scoping, not a sandbox
         (:mod:`simplipy.trust`).
 

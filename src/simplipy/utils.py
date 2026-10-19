@@ -168,7 +168,7 @@ def get_used_modules(infix_expression: str) -> list[str]:
     .. note::
        This is a plain string scanner and carries no trust decision. Since 0.13 the
        engine derives its own realization roots and checks them against
-       :mod:`simplipy.trust` before importing anything (register C1.12) -- consult
+       :mod:`simplipy.trust` before importing anything -- consult
        that module, not this function, for what a config is allowed to import.
 
     Parameters
@@ -357,9 +357,9 @@ def explicit_constant_placeholders(prefix_expression: list[str], constants: list
     generated_index = 0
 
     for i, token in enumerate(prefix_expression):
-        # C_i re-numbering is part of the MECHANICAL contract and is unconditional; the
-        # deprecated flag only gates the numeral conversion. (Before 0.13.0 the flag
-        # gated BOTH, conflating codegen renaming with a masking decision.)
+        # C_i re-numbering is the helper's whole contract: it renames placeholder slots and
+        # never numerals (which literals become constants is decided upstream, by
+        # `simplipy.masking`).
         if is_constant_placeholder(token):
             if provided_index < len(provided_constants):
                 constant_name = provided_constants[provided_index]
@@ -763,7 +763,7 @@ def literal_float(token: str) -> float | None:
 
 
 def reserved_numeric_spelling(t: str) -> bool:
-    """H-007: a spelling a STANDARD numeric reader interprets but the engine's symbolic
+    """A spelling a STANDARD numeric reader interprets but the engine's symbolic
     core does not -- refused at every semantic boundary (defined once in the compiled core,
     ``utils::reserved_numeric_spelling``).
 
@@ -773,7 +773,7 @@ def reserved_numeric_spelling(t: str) -> bool:
     ``infinity``/``nan``, any case, optional sign), underscore digit groupings
     (``1_000``), base-prefixed integer literals (``0x10``/``0o17``/``0b101``), and
     malformed numerals -- tokens that start like a number but are not numerals of the
-    grammar (``1/0``, ``1/6.28``, ``--5``, ``1e5.5``; B2). Canonical numeric literals
+    grammar (``1/0``, ``1/6.28``, ``--5``, ``1e5.5``). Canonical numeric literals
     (``5``, ``+5``, ``1e-05``, ``1/3``, ``np.pi``, ``float("inf")``) and genuine free
     symbols (``x0``, ``_0``, ``x_0``) are NOT reserved.
     """
