@@ -104,9 +104,9 @@ pub fn explore(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex 
 }
 
 /// The descent of a candidate to its fixpoint under `pass` (or the `max_passes` truncation
-/// the chain itself accepts).
+/// the chain itself accepts; 0 runs no pass, as in the chain).
 fn descend(mut cur: Ex, pass: &PassCtx, max_passes: usize) -> Ex {
-    for _ in 0..max_passes.max(1) {
+    for _ in 0..max_passes {
         let next = rewrite_pass(cur.clone(), pass);
         if next == cur {
             break;

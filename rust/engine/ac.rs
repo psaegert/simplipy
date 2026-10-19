@@ -715,9 +715,9 @@ impl Engine {
     /// `pow`/function prefix, one-token exact literals, no sugar operators). Input accepts
     /// both the old grammar and the tagged form (one shared parser). `max_passes` bounds the
     /// number of outer REWRITE PASSES -- not nodes, not rule firings: each pass is one full
-    /// `rewrite_pass` over the state, and the loop stops early at the fixpoint. Measured
-    /// convergence is 2-4 passes against the FFI default of 48, so the bound is
-    /// defense-in-depth (T6) rather than a tuning knob. `wildcard_all` is the LOSSY switch
+    /// `rewrite_pass` over the state, and the loop stops early at the fixpoint. One pass
+    /// reaches it (asserted in debug builds), so the bound is defense-in-depth (T6) rather
+    /// than a tuning knob; 0 runs no pass. `wildcard_all` is the LOSSY switch
     /// (training-corpus canonicalisation only). A malformed input is returned unchanged.
     pub fn ac_simplify(
         &self,
@@ -1452,14 +1452,17 @@ impl Engine {
         // rebuilds are all descent-gated (Lemma L3, docs/formal.md) -- so the chain of pass
         // outputs strictly descends until a fixpoint: cycles are impossible, no seen-set is
         // needed (L4), and because the ordering is well-founded the fixpoint arrives in
-        // finitely many passes as a theorem (T6). This budget is defense-in-depth, like the
-        // pass-level step cap. The answer is the FINAL state: by L3 it carries the chain's
-        // minimum complexity anyway, and returning anything earlier ships a non-fixpoint
-        // (the former `best`-tracking did exactly that -- an earlier state of equal
-        // complexity but higher literal-size/canonical rank -- a non-fixpoint, so
-        // idempotence would break). A budget-truncated run returns the last state
-        // reached, which is sound.
-        for _ in 0..max_passes.max(1) {
+        // finitely many passes as a theorem (T6). In fact ONE pass reaches it: the pass
+        // re-enters every node it changes, so its output is a pass fixpoint (asserted in
+        // debug builds against a fresh memo), and the loop's next pass only confirms it.
+        // `max_passes` is therefore a safety cap, like the pass-level step cap; 0 runs no
+        // pass at all (the canonical state is the answer). The answer is the FINAL state:
+        // by L3 it carries the chain's minimum complexity anyway, and returning anything
+        // earlier ships a non-fixpoint (the former `best`-tracking did exactly that -- an
+        // earlier state of equal complexity but higher literal-size/canonical rank -- a
+        // non-fixpoint, so idempotence would break). A budget-truncated run returns the
+        // last state reached, which is sound.
+        for _ in 0..max_passes {
             // Clone-free fixpoint detection: `None` = the pass moved nothing (B1).
             let Some(next) = rewrite_pass_opt(&current, &pass) else {
                 break; // fixpoint, decided on the representation itself
@@ -1471,6 +1474,10 @@ impl Engine {
             debug_assert!(
                 stable(&next),
                 "pass output is not serialization-stable: {next:?}"
+            );
+            debug_assert!(
+                crate::ac::rules::is_pass_fixpoint(&next, &pass),
+                "pass output is not a pass fixpoint: {next:?}"
             );
             current = land_root(next, &cx);
         }
@@ -1539,7 +1546,7 @@ impl Engine {
                 stable2(&current),
                 "expired canonical state is not serialization-stable: {current:?}"
             );
-            for _ in 0..max_passes.max(1) {
+            for _ in 0..max_passes {
                 let Some(next) = rewrite_pass_opt(&current, &pass2) else {
                     break;
                 };
@@ -1550,6 +1557,10 @@ impl Engine {
                 debug_assert!(
                     stable2(&next),
                     "phase-2 pass output is not serialization-stable: {next:?}"
+                );
+                debug_assert!(
+                    crate::ac::rules::is_pass_fixpoint(&next, &pass2),
+                    "phase-2 pass output is not a pass fixpoint: {next:?}"
                 );
                 current = land_root(next, &cx2);
             }
@@ -1679,7 +1690,7 @@ mod tests {
         assert_eq!(
             e.ac_simplify_proj(
                 &t(&["*", "(-1)", "asin", "_0"]),
-                0,
+                1,
                 RuleMode::Default,
                 super::AcForm::Explicit
             )

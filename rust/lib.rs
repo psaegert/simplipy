@@ -153,6 +153,10 @@ fn explore_budget_of(effort: Option<usize>) -> usize {
 /// THE ONE simplify implementation behind the FFI. `ac_simplify` (the `wildcard_all`
 /// spelling that shipped) and `ac_simplify_in_mode` (the mode spelling) both land here,
 /// so the bool is a SPELLING of a mode and never a second mechanism beside it.
+///
+/// `max_passes` is a safety cap on the rewrite passes: one pass reaches the fixpoint (debug
+/// builds assert it). 0 runs no pass at all: the answer is the input's canonical form (the
+/// parse-only projection `is_valid` uses).
 #[allow(clippy::too_many_arguments)]
 fn ac_simplify_impl(
     core: &PyEngine,

@@ -82,8 +82,9 @@ class TestRemovedParameters:
 
     def test_max_passes_survives_with_its_guard(self, eng) -> None:
         assert eng.simplify('x0 + 0', max_passes=4) == 'x0'
-        with pytest.raises(ValueError, match='non-negative'):
-            eng.simplify('x0 + 0', max_passes=-1)
+        for bad in (-1, 0):
+            with pytest.raises(ValueError, match='at least 1'):
+                eng.simplify('x0 + 0', max_passes=bad)
 
     def test_load_has_no_path(self) -> None:
         with pytest.raises(TypeError, match='path'):

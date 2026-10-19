@@ -650,7 +650,7 @@ work that changes no state.
 
 *Defense-in-depth* [ENFORCED]. Two bounds remain in the code although T6 makes them
 non-load-bearing: the release-mode step cap (`STEP_CAP` = $10^6$ accepted steps per call)
-and the outer pass budget (`max_passes`, default 48; the chain measures 2–4 passes). They exist to fail closed against a *bug*
+and the outer pass budget (`max_passes`, default 48; one pass reaches the fixpoint, asserted in debug builds against a fresh memo, so the second pass only confirms it). They exist to fail closed against a *bug*
 in the ordering invariant (a mis-implemented gate would otherwise loop), not against any
 legitimate input; neither has ever been observed to bind [EMPIRICAL], and by T6 a binding
 bound now *proves* an implementation bug. When one binds, rewriting stops and the state

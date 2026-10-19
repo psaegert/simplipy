@@ -936,6 +936,25 @@ pub fn rewrite_pass_opt(node0: &Ex, p: &PassCtx) -> Option<Ex> {
     }
 }
 
+/// Debug check of the pass contract (Lemma L3 plus re-entry): is `e` a fixpoint of a
+/// FRESH pass -- the same rules, contexts and fold, but an empty normal-form memo, so the
+/// check does not trust the marks the checked pass placed itself? `rewrite_pass`
+/// re-enters every node it changes, so one pass ends where nothing fires, folds or
+/// rebuilds, and its output must pass this check. (Called from `debug_assert!` only.)
+pub fn is_pass_fixpoint(e: &Ex, p: &PassCtx) -> bool {
+    let fresh = PassCtx {
+        rules: p.rules,
+        cx: p.cx,
+        mcx: p.mcx,
+        fold: p.fold,
+        fires: Cell::new(0),
+        normal: RefCell::new(FxHashSet::default()),
+        explore: p.explore,
+        suppressed: p.suppressed,
+    };
+    rewrite_pass_opt(e, &fresh).is_none()
+}
+
 /// What one visit of a node decided.
 enum Visit {
     /// The node is a normal form of this pass (memo-marked unless the cap has bound).

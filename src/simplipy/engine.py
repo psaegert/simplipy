@@ -1918,13 +1918,12 @@ class SimpliPyEngine:
             1-D ``ndarray`` is a prefix token sequence (old grammar and tagged form are
             both accepted -- one shared parser).
         max_passes : int, optional
-            Bound on the number of outer REWRITE PASSES -- not on nodes, and not on rule
-            firings. One pass is one full rewrite sweep over the whole expression; the
-            chain stops as soon as a pass changes nothing (the fixpoint). Defaults to 48,
-            which is far above the observed convergence of 2-4 passes, so the bound is
+            Safety cap on the number of outer REWRITE PASSES -- not on nodes, and not on
+            rule firings. One pass is one full rewrite sweep over the whole expression,
+            and it reaches the fixpoint: it re-enters every node it changes, so the next
+            pass only confirms that nothing moves. Defaults to 48; the cap is
             defense-in-depth against an ordering bug (T6 proves the fixpoint is reached in
-            finitely many passes) rather than a tuning knob. ``max_passes=0`` is treated as
-            1: at least one pass always runs.
+            finitely many passes), not a tuning knob. Must be at least 1.
 
         effort : int or None, optional
             The SEARCH BUDGET: after the chain reaches its fixpoint, an
@@ -2007,10 +2006,11 @@ class SimpliPyEngine:
         """
         if max_passes is None:
             max_passes = 48
-        if max_passes < 0:
-            # would otherwise surface as a raw pyo3 OverflowError at the usize
-            # conversion (hardening H-006, 2026-08-03)
-            raise ValueError(f"max_passes must be non-negative, got {max_passes}")
+        if max_passes < 1:
+            # 0 would run no pass at all (the core reads it literally), and a negative
+            # value would surface as a raw pyo3 OverflowError at the usize conversion
+            # (hardening H-006, 2026-08-03)
+            raise ValueError(f"max_passes must be at least 1, got {max_passes}")
         if effort is None:
             effort = DEFAULT_EFFORT
         # None stays None: the core then searches until a round finds nothing.

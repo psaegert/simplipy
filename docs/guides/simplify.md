@@ -47,9 +47,10 @@ ordering (μ, then the canonical order), and that ordering is well-founded, so t
 never revisits a state and reaches its fixpoint in finitely many passes as a theorem;
 the `max_passes` parameter (default 48) and the internal step cap are defence-in-depth
 against ordering-invariant bugs, not part of the argument. `max_passes` bounds the
-number of times that `loop` body runs — **passes, not nodes**: on the 400-skeleton
-reference corpus the chain converges in 2–4 passes, so the default of 48 is never
-reached and the knob is not a performance dial. What strict descent alone cannot do —
+number of times that `loop` body runs — **passes, not nodes**: one pass reaches the
+fixpoint (it re-enters every node it changes; debug builds assert it), so the next pass
+only confirms it, the default of 48 is never reached, and the knob is not a performance
+dial. It must be at least 1. What strict descent alone cannot do —
 pass through a state that prices *higher* on the way to a cheaper one — is the job of
 the [search budget](#the-search-budget) below.
 The full ledger of what is theorem, what is enforced, and what is empirical is
