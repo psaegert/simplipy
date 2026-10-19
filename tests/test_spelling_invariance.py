@@ -123,5 +123,6 @@ class TestReaderRuleStaysInTheInfixPrinter:
             for f in files:
                 if f.endswith('.py'):
                     rel = os.path.relpath(os.path.join(root, f), REPO)
-                    hits += [rel for ln in self.source(rel) if '_core.ac_simplify_infix' in ln]
+                    # `simplify` asks the core it captured for the call (`_serve`): `core.`
+                    hits += [rel for ln in self.source(rel) if 'core.ac_simplify_infix' in ln]
         assert hits == ['src/simplipy/engine.py'], hits
