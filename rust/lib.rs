@@ -1732,11 +1732,12 @@ impl PyEngine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if mode == engine::RuleMode::Default {
                     let rules = rules.unwrap_or_default();
-                    self.pushed_rules_digest.store(
-                        pushed_rules_digest(&rules),
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
+                    let digest = pushed_rules_digest(&rules);
                     engine.set_mode_rules_read_in(mode, Some(rules), canon);
+                    // Only a set the core now holds is its recipe: the digest follows the
+                    // compile, so a push that fails leaves the old digest with the old set.
+                    self.pushed_rules_digest
+                        .store(digest, std::sync::atomic::Ordering::Relaxed);
                 } else {
                     engine.set_mode_rules_read_in(mode, rules, canon);
                 }
