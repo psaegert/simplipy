@@ -2342,6 +2342,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     ``mode`` the mode it serves (``'f64'``, also ``'default'``, ``'real'``, ``'permissive'``
     or a :class:`~simplipy.Mode` member); ``operators`` the engine's operator table. Each gate holds or names what breaks it:
 
+    - ``sidecar``: the sidecar exists, records a final, uninterrupted mine, and its mode is
+      ``mode``;
+    - ``rules``: the file holds rules (an empty file passes every other gate vacuously);
     - ``twin_shadow``: no row the mode's load would mint anyway (a twin-shadow owner);
     - ``engine_owned_law``: no rule that is a respelling within one canonical state, or an
       instance of the distributive law as the search applies it (``law_instance``). The sign
@@ -2351,7 +2354,8 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       a judged tier the mode licenses (the mine's final gate, with ``judge``);
     - ``preempted``: no ground rule the mode's constructor already performs;
     - ``translation``: the mode's load subsumes and drops nothing;
-    - ``fingerprint``: the sidecar's measure record prices every probe as this engine does;
+    - ``fingerprint``: the sidecar's measure record is of ``mode``, holds every probe, and
+      prices each as this engine does;
     - ``env_switches``: the mine ran with no ``SIMPLIPY_*`` switch set, and so does this
       check.
 
@@ -2372,6 +2376,14 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     miner._install(rule_mode, rules)
     core = engine._core
     gates: dict[str, list] = {}
+    # NOTHING PASSES VACUOUSLY: the file is a finished mine of this mode, and holds rules.
+    progress = sidecar.get('progress') or {}
+    gates['sidecar'] = (
+        [['no provenance sidecar', sidecar_path]] if not sidecar else
+        ([['not final', progress.get('final')]] if progress.get('final') is not True else [])
+        + ([['interrupted', True]] if progress.get('interrupted') else [])
+        + ([['mode', sidecar.get('mode'), mode]] if sidecar.get('mode') != mode else []))
+    gates['rules'] = [] if rules else [['the file holds no rules', rules_path]]
     gates['twin_shadow'] = [
         [list(rules[owner][0]), list(rules[owner][1])]
         for owner in sorted(_twin_shadow_owners(core.ac_shadow_census(rule_mode=rule_mode)))]
@@ -2388,8 +2400,14 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
                             if subsumed or dropped else [])
     recorded = sidecar.get('measure')
     if isinstance(recorded, dict):
-        moved, _ = engine._measure_drift(recorded)
-        gates['fingerprint'] = [[probe, old, now] for probe, (old, now) in sorted(moved.items())]
+        # Every probe is recorded, in this file's mode, at this engine's price: a probe the
+        # record lacks is one it cannot vouch for (an empty record vouches for nothing).
+        moved, unrecorded = engine._measure_drift(recorded)
+        gates['fingerprint'] = (
+            [[probe, old, now] for probe, (old, now) in sorted(moved.items())]
+            + [[probe, None, 'unrecorded'] for probe in unrecorded]
+            + ([['the measure record is of mode', recorded.get('mode'), mode]]
+               if recorded.get('mode') != mode else []))
     else:
         gates['fingerprint'] = [['no measure record in the sidecar', None, None]]
     recorded_env = (sidecar.get('soundness') or {}).get('env_overrides')

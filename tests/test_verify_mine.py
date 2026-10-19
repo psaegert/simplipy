@@ -137,6 +137,48 @@ def test_the_fingerprint_gate(tmp_path, mine) -> None:
     assert not gate['ok'] and gate['count'] == 1, gate
 
 
+def _unfinished(side):
+    side['progress']['final'] = False
+
+
+def _interrupted(side):
+    side['progress']['interrupted'] = True
+
+
+def _another_mode(side):
+    side['mode'] = 'real'
+
+
+def _no_probes(side):
+    side['measure'] = {'mode': 'permissive', 'probes': {}}
+
+
+def _no_sidecar(side):
+    side.clear()
+
+
+@pytest.mark.parametrize('edit, gate', [
+    (_unfinished, 'sidecar'), (_interrupted, 'sidecar'), (_another_mode, 'sidecar'),
+    (_no_probes, 'fingerprint'), (_no_sidecar, 'sidecar')])
+def test_a_vacuous_or_foreign_sidecar_fails(tmp_path, mine, edit, gate) -> None:
+    """S6/F3: verify-mine passes only a finished mine of the mode it is asked about."""
+    rules = json.load(open(mine / FILES['permissive']))
+    path = _plant(tmp_path, mine, 'permissive', rules, edit)
+    if edit is _no_sidecar:
+        (tmp_path / (FILES['permissive'] + '.provenance.json')).unlink()
+    report = verify_mine(path, 'permissive', _OPERATORS, judge=core_judge)
+    assert not report['ok'] and not report['gates'][gate]['ok'], report['gates'][gate]
+    # the clean copy passes
+    path = _plant(tmp_path, mine, 'permissive', rules)
+    assert verify_mine(path, 'permissive', _OPERATORS, judge=core_judge)['ok']
+
+
+def test_an_empty_file_fails(tmp_path, mine) -> None:
+    path = _plant(tmp_path, mine, 'f64', [])
+    report = verify_mine(path, 'f64', _OPERATORS, judge=core_judge)
+    assert not report['ok'] and not report['gates']['rules']['ok'], report['gates']
+
+
 def test_the_env_switch_gate(tmp_path, mine, monkeypatch) -> None:
     rules = json.load(open(mine / FILES['permissive']))
 
