@@ -3,9 +3,7 @@
 Hand-written to mirror the ``#[pymethods]`` surface in ``rust/lib.rs``; keep in sync on changes.
 Compiled extensions are opaque to static type-checkers, so this stub is what makes the ``Engine``
 surface (and the module constants) visible to mypy/pyright downstream and in this package.
-(Re-synced 2026-08-09, extreme-lane campaign: the file had drifted several methods behind the
-FFI -- ``from_strs`` among them, which mypy flagged on ``engine.py`` -- and the drift class is
-exactly what this header warns about.)
+``simplipy._core`` is internal: it carries no stability promise.
 """
 from typing import Any, Literal
 
@@ -33,7 +31,7 @@ class Engine:
         *,
         rule_mode: Literal["default", "real", "permissive"],
     ) -> list[str]: ...
-    #: DEFAULT-mode simplify with artifact rows (and their minted orientation twins)
+    #: Simplify in `rule_mode` with artifact rows (and their minted orientation twins)
     #: suppressed at the matcher's fire site -- behaviorally the engine built without
     #: those rows, up to the cross-rule translate state `ac_shadow_census` enumerates.
     def ac_simplify_suppressed(
@@ -60,7 +58,7 @@ class Engine:
         tokens: list[str],
         digits: int = ...,
         form: Literal["infix", "explicit", "tagged"] = ...,
-        resimplify: bool = ...,  # rule 11: simplify the display once and display that
+        resimplify: bool = ...,  # simplify the display once and display that
         explore_budget: int | None = ...,
         work_budget: int | None = ...,
         *,
@@ -308,5 +306,7 @@ def core_serialization_ops() -> dict[str, dict[str, Any]]: ...
 def set_interval_node_budget(budget: int | None) -> int: ...
 #: The numeral grammar (`rust/utils.rs`), the one definition `simplipy.utils` calls.
 def is_numeric_string(token: str) -> bool: ...
-#: H-007 reserved numeric spellings, the one definition `simplipy.utils` calls.
+#: Reserved numeric spellings (`inf`, `1_000`, `0x10`, `1/0`, `--5`): values to a standard
+#: numeric reader or malformed numerals, refused at every boundary; the one definition
+#: `simplipy.utils` calls.
 def reserved_numeric_spelling(token: str) -> bool: ...
