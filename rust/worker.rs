@@ -928,7 +928,6 @@ pub fn equivalent_no_const_check(
 /// next one instead of vetoing the whole selection (finding F2 -- the enumeration doctrine
 /// of finding F1 applied to candidate selection). It judges the candidate's FINAL spelling,
 /// i.e. after the bare-`<constant>` literal fold.
-#[allow(dead_code)] // rlib surface; exercised by tests
 pub fn select_best(
     source: &[String],
     mut matches: Vec<Vec<String>>,

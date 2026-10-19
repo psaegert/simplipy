@@ -3744,7 +3744,9 @@ fn nfn(t: &[String], ops: &Operators, d: u32) -> bool {
 /// only ±inf (`Z(1/A) = {A = ±inf}`, the odd-negative-power distribution's
 /// reciprocal factors). Fail-closed like every certificate in this module; the
 /// zero-set sub-claims inherit `zero_set_null`'s `<constant>` refusal.
-#[cfg_attr(not(test), allow(dead_code))] // standalone tokens-interface (certified + poison batteries); in-crate consumers reach `isn` through the zsn/nfn arms
+// Test-only tokens interface (certified + poison batteries); in-crate consumers reach `isn`
+// through the zsn/nfn arms.
+#[cfg(test)]
 pub fn infinite_set_null(tokens: &[String], ops: &Operators) -> bool {
     isn(tokens, ops, 0)
 }
@@ -3916,10 +3918,10 @@ pub fn nonconstant_entire(t: &[String], ops: &Operators) -> bool {
     false
 }
 
-/// f > 0 a.e.: the pow-base predicate completing the algebra. Conservative v1 (no
-/// production consumer yet -- the flatten-and-collect pass (proposal P4) is the intended
-/// one; the certified/poison batteries below pin its behavior meanwhile).
-#[cfg_attr(not(test), allow(dead_code))]
+/// f > 0 a.e.: the pow-base predicate completing the algebra. Conservative v1, and test-only:
+/// it has no production consumer (the flatten-and-collect pass, proposal P4, would be one);
+/// the certified/poison batteries below pin its behavior.
+#[cfg(test)]
 pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
     if tokens.is_empty() {
         return false;
@@ -3981,7 +3983,7 @@ pub fn reaches_all_of(cand: &Vs, src: &Vs) -> bool {
 /// Returns the width of the widest witness cell on which `expr` is defined everywhere (0.0 = no
 /// generic support). Deliberately the same subdivision as `domain_extension_p`, so the two agree
 /// on what "positive measure" means.
-#[allow(dead_code)] // standalone API: the in-crate gate deliberately uses `_at` (see below)
+#[cfg(test)] // the in-crate gate deliberately uses `_at` (see below); the tests use this one
 pub fn defined_measure_p(expr: &[String], params: &[f64], ops: &Operators) -> Option<f64> {
     // Standalone use only. A GATE decision must NOT call this: it derives its horizon from `expr`
     // alone, and deadness judged at a different horizon than its extension witness is a

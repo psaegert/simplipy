@@ -77,10 +77,9 @@ impl Tape {
         })
     }
 
-    /// Row-wise evaluation (one row at a time) with a caller-owned scratch stack. Kept for small
-    /// batches / one-off use; the miner hot path uses `eval_columns`.
-    #[inline]
-    #[cfg_attr(not(test), allow(dead_code))] // exercised by the tape-parity tests below
+    /// Row-wise evaluation (one row at a time) with a caller-owned scratch stack: the reference
+    /// the tape-parity tests check `eval_columns` (the miner's path) against.
+    #[cfg(test)]
     pub fn eval_row(&self, x_row: &[f64], params: &[f64], stack: &mut Vec<f64>) -> f64 {
         stack.clear();
         for ins in &self.instrs {

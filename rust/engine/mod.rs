@@ -255,8 +255,8 @@ impl Engine {
         toks.iter().map(|&t| view.resolve_owned(t)).collect()
     }
 
-    /// Crate-internal accessor for the operator tables (used by `crate::eval` tests/benches).
-    #[allow(dead_code)] // test/bench-only today
+    /// Crate-internal accessor for the operator tables (the interval probes in `lib.rs`, and
+    /// tests).
     pub(crate) fn operators_ref(&self) -> &Operators {
         &self.operators
     }
