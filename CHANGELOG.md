@@ -1,6 +1,138 @@
 # Changelog
 
-## Unreleased
+## Unreleased (0.15.0)
+
+0.15.0 changes what `simplify` returns and what `complexity` charges, in every mode, and a rule
+file is minimal and correctly ordered only under the canonical forms it was mined with, so the
+rule files are mined again for this release. The section starts with what to do when upgrading,
+organised by who you are, then the highlights, then every change in detail.
+
+### Upgrading from 0.14.x
+
+**Everyone**
+
+- **Answers and prices change.** The search owns the distributive law, poles are read by their
+  limits, numbers stay exact beyond 128 bits, and `complexity` prices each mode in its own
+  reading, a literal costing at most what its float costs. Regenerate every test, cache or
+  dataset that pins answers or prices.
+- **The search runs until a round finds nothing.** `simplipy.DEFAULT_EFFORT` is `None` (it was
+  4), so a second call has nothing left to continue. Code that compares `DEFAULT_EFFORT` with an
+  int now sees `None`; pass `effort=4` for the old cap.
+- **Loading does more up front.** Every rule set named at load is compiled before `load`
+  returns, so the first call in each mode answers at once. With `acj-5-4-llm` the process peaks
+  at about 0.9 GB with all three sets, about 0.7 GB with `modes=('f64', 'permissive')` and about
+  0.45 GB with `f64` alone; a set left out builds on its mode's first use, in about 3–4 s and
+  about 100 MB.
+- **Messages go through `logging`.** The default-engine announcement and the first-use build of
+  a deferred set are WARNING records on the `simplipy` logger, install progress is INFO and an
+  install failure ERROR; the library itself prints nothing (`list_assets` excepted, whose output
+  is its purpose). Silence them with `logging.getLogger('simplipy').setLevel(logging.ERROR)`.
+- **An installed asset loads without the network.** `load` and `get_path` resolve an installed
+  asset from the local copy of the manifest, verifying the files' digests, and go online only
+  for an asset that is not installed.
+- **`packaging` is a declared dependency** (it was already installed through `huggingface_hub`).
+
+**`f64` and `real` users**
+
+- **Factoring is a move of the search.** No rule states the distributive law, so factored and
+  expanded answers change. `effort=0`, the chain alone, does not factor (in `real` it did,
+  through four common-factor rules).
+- **One orientation per class.** A sum and its negation, and odd functions and odd roots of
+  them, are written in one orientation with the sign in the coefficient: `-1/(x1 - 3)` and
+  `1/(3 - x1)` are one answer, and at a pole the answer keeps the limit.
+- **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/2)` is `+0`,
+  the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`.
+- **Long exact coefficients.** An answer carries every digit of an exact number
+  (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
+  long, because a literal costs at most what its float costs. Show answers to a reader with
+  `engine.prettify(expr)`, which prints shortest floats.
+- **Float notation.** Numbers print positionally from 0.0001 up to 10^16 and as
+  `<mantissa>e<exponent>` outside that range where that is shorter (`1e-5*x1`, was
+  `0.00001*x1`).
+- **Throughput.** The uncapped search does more work on long inputs. Where time matters, bound a
+  call with `effort=k`, `effort=0` (the chain alone) or a `work=` budget, which counts
+  deterministic units and cuts the same walk at the same place on every machine.
+- **New errors.** `simplify(max_passes=0)` raises `ValueError` (it ran one pass; one pass
+  reaches the fixpoint, so pass 1). `complexity(..., canon=)` raises `TypeError` (see Removed).
+  An unknown `mode` raises `ValueError` in `complexity` as in `simplify` (it raised `KeyError`).
+  A malformed numeral token (`1/0`, `--5`, `2x`) raises `ValueError` at every boundary. In
+  infix text, two operands separated only by whitespace raise `ValueError` (`x0 x1`: write the
+  operator), and a call of an undeclared function is refused by name (`unknown function 'sqrt'`:
+  write `rootn(x, 2)`).
+
+**`permissive` users**
+
+- **One walk.** `permissive` runs its chain and then the search, like every mode, so its answer
+  never prices above the input and a second call returns it unchanged. Its answers change
+  accordingly.
+- **Literals are rounded once**, to their float, where they land (`3*(1/3 + 1e-20)` is `1`).
+- **The ground fold is a step of the chain**, kept only where it is cheaper (`asin(1e-8)` is
+  `1e-8`).
+- **No default work budget.** The search runs until a round finds nothing; bound it with
+  `work=` or `effort=` where time matters.
+- **The sign of an infinity is kept**: distributing over an infinity needs certified
+  finiteness, as in `f64` and `real` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
+- **The lean profile.** A worker that needs inference and corpus canonicalisation only loads
+  `modes=('f64', 'permissive')`, about 0.7 GB; `real` then builds on its first use.
+
+**Publishers of rule files**
+
+- A config may carry `requires_simplipy`, a PEP 440 specifier; a simplipy version outside it
+  refuses the artifact. The miner records the specifier for its own minor series
+  (`>=0.15,<0.16`).
+- Each rule file has its own provenance sidecar, and loading compares each sidecar present
+  probe by probe.
+- No environment variable changes what the core mines, certifies or serves:
+  `simplipy.engine.ARTIFACT_ENV_SWITCHES` is empty, and a sidecar records every `SIMPLIPY_*`
+  variable set during the mine.
+- The load refuses a rule that states the distributive law (a rule one factoring turns from its
+  left side into its right; drop reason `engine-owned-law`). A file mined before 0.15 loses such
+  rows in `real` and `permissive`.
+- Check a freshly mined file with `simplipy verify-mine <file> --mode <m> -e <engine>`.
+- `verify_triple(..., engine_config=)` checks the three rule sets it is given (the config
+  contributes its operators only) and sweeps `simplipy.verify.default_corpus()`, which ships in
+  the wheel, when `corpus_rows` is not given.
+- <!-- PENDING the re-mine: name the new artifacts and the pinned revision here. -->The rule
+  files are mined again for 0.15 and published under new names; `simplipy.DEFAULT_ENGINE` and
+  `simplipy.DEFAULT_ENGINE_REVISION` name the artifact and revision this version loads by
+  default.
+
+**Users of the miner API**
+
+- `find_rules` mines `rules_f64.json`, `rules_real.json` and `rules_permissive.json` each in its
+  own mode, and writes a checkpoint after every completed length, which a rerun of the same mine
+  resumes from.
+- New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`) and
+  `find_rules(judge=, judge_processes=)`. `save_every=` (CLI `-s`) is accepted and ignored: the
+  rule file is written once, when the mode's mine ends.
+- `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
+  keyword `rule_mode` (`'f64'` or its alias `'default'`, `'real'`, `'permissive'`), and
+  deduplication keeps the target lower in that mode's serve ordering, not the shorter one.
+- The sidecar records `gates`, `per_length`, `acceptance` and `code_digest`; the `triple` record,
+  `soundness.kill_switches` and `soundness.node_budget_env` are gone.
+- The mode-less entries of the compiled core are gone: every `_core` entry that reads a mode takes
+  it explicitly (see Removed).
+- `N_PTS` and `THRESH` are no longer read; `utils.remove_pow1` and
+  `explicit_constant_placeholders(convert_numbers_to_constant=)` are removed.
+
+### Highlights
+
+- **`prettify()`** displays an answer for a reader, with shortest floats and readable fractions.
+- **Exact numbers beyond 128 bits.** A literal is an exact rational of up to 1,100 bits on each
+  side, printed in Python's float notation.
+- **Poles are read by their limits**, and a sum and its negation are one class in every mode.
+- **The search owns the distributive law**, in every mode alike, with whole-state acceptance.
+- **One complexity measure per mode**, with a literal costing at most what its float costs.
+- **`permissive` is one walk**, like every mode: never above its input, and idempotent.
+- **Rule files per mode.** Each file is mined in its own mode, `verify-mine` checks it, and an
+  artifact names the simplipy versions that serve it.
+- **Infix text** reads implicit multiplication, and whitespace separates tokens.
+
+### In detail
+
+The measurements below use three sets: the 129,490 simplify inputs of flash-ansr's
+training-data generator (the training-data inputs), srbf's 6,531 ground truths and its 125,127
+model predictions.
 
 - **`prettify()` writes an expression for a reader.** `simplify` keeps every number exact;
   `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or
@@ -12,13 +144,10 @@
   and redisplayed, so displaying the simplified display gives the display back: on the release
   corpus, srbf's 6,531 ground truths, 1,000 of its predictions and 3,000 fuzz rows, in all three
   forms. Nothing inside SimpliPy calls it; see the guide "Displaying expressions".
-- **Fast in every mode.** Against 0.14.7, on the 129,490 simplify inputs of flash-ansr's T8.1
-  training draws, srbf's 6,531 ground truths and its 125,127 model predictions (both versions side
-  by side on one machine under other load), in every mode: under 1% of calls take more than 0.1 s
-  and none takes more than 1 s (0.14.7: up to 18.2% and 1.52%, permissive on the predictions).
-  Total time falls by 22% (`f64`), 16% (`real`) and 20% (`permissive`) on the T8.1 inputs and by
-  76%, 71% and 85% on the predictions; on the ground truths (about 2 s of calls per mode in
-  `f64` and `real`) it is 4% lower in `f64`, 13% higher in `real` and equal in `permissive`.
+<!-- TO BE MEASURED AFTER THE RE-MINE: the speed of 0.15.0 against 0.14.7, per mode, on the
+     simplify inputs of flash-ansr's training-data generator, srbf's ground truths and its model
+     predictions. The entry that stood here ("Fast in every mode") no longer holds: on the
+     400-row corpus f64 takes 26% more time than 0.14.7, real 14% more, permissive 52% less. -->
 - **An opt-in work budget for the search.** `simplify()` takes `work`: a budget for the search in
   deterministic units (one step of the matcher or one canonical-constructor call), so a budget cuts
   the same walk at the same place on every machine and under any load. A search that spends it
@@ -44,9 +173,10 @@
   the class's orientation, positive on that side, so the value at the zero is that side's limit:
   `log(x1 - 3)/(3 - x1)`, `-log(x1 - 3)/(x1 - 3)` and `log(x1 - 3)*(3 - x1)/(x1 - 3)^2` are one
   answer, `-log(x1 - 3)/(x1 - 3)`, `+inf` at `x1 = 3` like the limit from `x1 > 3`, and
-  `(3 - x1)^x4/(x1 - 3)` and `-(3 - x1)^x4/(3 - x1)` are `-(3 - x1)^x4/(3 - x1)`, `-inf` there like
-  the limit from `x1 < 3` (in `f64` and `real`; `permissive` keeps no value at a pole and gives
-  its cheapest orientation). Like terms collect up to
+  `(3 - x1)^(-1/2)/(x1 - 3)` and `-(3 - x1)^(-1/2)/(3 - x1)` are `-1/(3 - x1)^(3/2)`, `-inf` there
+  like the limit from `x1 < 3` (0.14.7 answers the first `1/(x1 - 3)/(3 - x1)^(1/2)`, `+inf`
+  there). `permissive` keeps no value at a pole in general and gives its cheapest orientation.
+  Like terms collect up to
   sign and a pattern variable that occurs twice matches a sum or its negation:
   `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and `x1 + sin(x3 - x2) - sin(x3 - x2)`
   is `x1` (0.14.7 keeps the first as written and gives `x1 + sin(x2 - x3) + sin(x3 - x2)` for
@@ -64,10 +194,11 @@
   Where two singularities meet, the float value at that point is the one the
   canonical spelling gives (most such points have no limit at all).
   Known limits: where a member's value at the zero is not read, the class takes its cheapest
-  orientation, which can leave that value off the limit (`1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))`, a
-  sum holding the class among terms free of it, is `+inf` at `x1 = 3` where its limit is `-inf`,
-  and `log(x2*(x1 - 3))/(3 - x1)`, a class scaled by a factor of unknown sign, is `+inf` at
-  `x1 = 3, x2 = -1` where its limit from `x1 < 3` is `-inf`);
+  orientation, which can leave that value off the limit (`log(x2*(x1 - 3))/(3 - x1)`, a class
+  scaled by a factor of unknown sign, is `+inf` at `x1 = 3, x2 = -1` where its limit from
+  `x1 < 3` is `-inf`, and with the search off, `effort=0`, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))`,
+  a sum holding the class among terms free of it, is `+inf` at `x1 = 3` where its limit is
+  `-inf`, which `f64` and `real` reach at the default effort);
   one class split across the terms of a sum with a dominant even term can give NaN at its zero,
   where the limit is infinite (`x5/abs(x3 - x2) - 2*x1/tan(x2 - x3)` at `x2 = x3`), because no
   single orientation is right at every such point; a class is read up to constant factors, not
@@ -80,9 +211,10 @@
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
   evaluator and in the high-precision judge; `rootn` also takes torch tensors. A canonical form
   that moves a negation under an odd root therefore keeps the infinity beside an odd factor of the
-  same zero: `1/(cbrt((3 - x1)*x2)*sinh(x2*(3 - x1)))`, `1/(cbrt(x2*(3 - x1))*(9 - x1^2))` and
-  `1/(cbrt((3 - x1)*x2)*(3*x2 - x1*x2))` are `+inf` at `x1 = 3`, like their inputs and their
-  limits, in every mode (0.14.7 gives `-inf` for the first). The scalar `abs(-0.0)` is `+0.0`, as on
+  same zero: `1/(rootn((3 - x1)*x2, 3)*sinh(x2*(3 - x1)))`,
+  `1/(rootn(x2*(3 - x1), 3)*(9 - x1^2))` and `1/(rootn((3 - x1)*x2, 3)*(3*x2 - x1*x2))` are
+  `+inf` at `x1 = 3, x2 = 1`, like their inputs and their limits, in every mode (0.14.7 gives
+  `-inf` for the first). The scalar `abs(-0.0)` is `+0.0`, as on
   arrays, so `1/abs(x)` is `+inf` at `-0.0` on every input path.
 - **The search owns the distributive law, in every mode alike.** Factoring and distributing are
   moves of the search, accepted only where the whole expression ends cheaper, and no rule states
@@ -97,19 +229,19 @@
   (0.14.7: `sin(x1)*sin(rootn(sin(x1), 2))/(sin(x1) + x1*sin(x1))`). On 400 random sums of 2 to
   5 monomials, which mean the same in every mode, the three modes give one answer for each. The
   rule load refuses a rule that one factoring turns from its left side into its right, judged by
-  that law and not by spelling: the `real` and `permissive` files serve four common-factor rules
-  and `<constant>*x - x -> <constant>*x` less. Factoring a sum under a division takes the
-  licence distributing the division needs, so in `f64` and `real` a sum that vanishes on a region
-  keeps its spelling. Against the factoring this replaces, at the default effort, answers are
-  cheaper on 653 of srbf's 6,531 ground truths in `f64`, 576 in `real` and 559 in `permissive`,
-  none costlier in `f64` and `real`; on its 125,127 predictions 33,401 are cheaper and 76
-  costlier in `f64` (`real`: 33,194 and 149), and on flash-ansr's 129,490 T8.1 inputs 21,403
-  and 25 (`real`: 19,047 and 78). In `permissive` 133 ground truths are costlier: its search
-  accepts what is cheaper in its working form, which can print dearer. No answer changes on a
-  second call in `f64` or `real`. The search does more work for it: in `f64` 56% more matcher
-  steps and constructor calls on the ground truths, 48% on the predictions and 138% on the T8.1
-  inputs (`real`: 8%, 15% and 73% more). `effort=0`, the chain alone, no longer factors in
-  `real` and `permissive`.
+  that law and not by spelling: on the `real` and `permissive` files it refuses four
+  common-factor rules and `<constant>*x - x -> <constant>*x`. Factoring a sum under a division
+  takes the licence distributing the division needs, so in `f64` and `real` a sum that vanishes
+  on a region keeps its spelling. Against the factoring this replaces, at the default effort,
+  answers are cheaper on 653 of srbf's 6,531 ground truths in `f64` and 576 in `real`, none
+  costlier; on its 125,127 predictions 33,401 are cheaper and 76 costlier in `f64` (`real`:
+  33,194 and 149), and on the 129,490 simplify inputs of flash-ansr's training-data generator
+  21,403 and 25 (`real`: 19,047 and 78).
+  <!-- TO BE RE-MEASURED: the permissive figures, measured against the removed three-arm
+       selection. --> No answer changes on a second call in `f64` or `real`. The search does
+  more work for it: in `f64` 56% more matcher steps and constructor calls on the ground truths,
+  48% on the predictions and 138% on the training-data inputs (`real`: 8%, 15% and 73% more).
+  `effort=0`, the chain alone, no longer factors in `real` and `permissive`.
 - **A fractional power of `-0` is `+0`.** The evaluator computed `(-0)^(1/2)` with numpy's
   `sqrt(-0) = -0`, so `1/x^(1/2)` was `-inf` at `x = -0` and `+inf` at `x = 0`; it now follows
   IEEE `pow` (`+0`, and `+inf` for a negative exponent) on numpy arrays, torch tensors and plain
@@ -128,21 +260,22 @@
   powers move between the two orientations (an odd amount moves a sign to the coefficient, or to a
   bare constant or infinity, which carries it); the fractional part of a power and symbolic powers
   stay; and negative odd powers move with their class as a whole (above). So
-  `(x - a)*(a - x)` is `-(x - a)^2`, `(x - a)^2/(a - x)/(x - a)` is `-1`, and
+  `(x1 - x2)*(x2 - x1)` is `-(x1 - x2)^2`, `(x1 - x2)^2/(x2 - x1)/(x1 - x2)` is `-1`, and
   `tanh(x1 - x2)*(tanh(x1 - x2)*(-1))` is `-tanh(x1 - x2)^2`, as written flat (0.14.7:
-  `tanh(x1 - x2)*tanh(x2 - x1)`). An odd function of a negative literal multiple has one spelling
+  `(x1 - x2)*(x2 - x1)`, `(x1 - x2)/(x2 - x1)` and `tanh(x1 - x2)*tanh(x2 - x1)`). An odd function of a negative literal multiple has one spelling
   in a product: `x2*atan(-2*x1)` and `-x2*atan(2*x1)` reach one answer, so
   `x2*atan(-2*x1) + x2*atan(2*x1)` is `0` (0.14.7 keeps both terms). On 1,653 generated products
   over opposite sums, odd functions and odd roots, each in up to eleven spellings (four
   bracketings and the tagged bag for all; two division spellings, the inverse of a product, a
   chain of divisions and the tagged bag with `<div>` where the product has a divisor; a negation
-  for 72), no product in `f64` and `real` and one in `permissive` reaches two answers (0.14.7: 616
-  in `f64` and `real`, 687 in `permissive`), and in `f64` and `real` none changes on a second call
-  at the same effort (in `permissive` one does, which a second call continues). In `f64` and
-  `real` no answer changes on a second call on any of the three sets (0.14.7: 59 and 57 T8.1
+  for 72), no product in `f64` and `real` reaches two answers (0.14.7: 616), and none changes on
+  a second call at the same effort.
+  <!-- TO BE RE-MEASURED: the 1,653 generated products in permissive (0.14.7: 687 reach two
+       answers), measured before permissive became one walk. --> In `f64` and `real` no answer
+  changes on a second call on any of the three sets (0.14.7: 59 and 57 of the training-data
   inputs, 4 ground truths, 31 predictions). The debug-build check that every intermediate state
   reads back as itself printed in a spelling no caller receives; it now prints as the callers do
-  and passes on all ground truths, predictions and T8.1 inputs in every mode.
+  and passes on all ground truths, predictions and training-data inputs in every mode.
 - **A fitted constant beside a sum keeps its family.** A product of a sum and a sum holding
   `<constant>` let the constant's sum take the product's sign as if the constant absorbed it:
   `(x2 - x1)*(x1 - <constant>)` became `(x1 + <constant>)*(x1 - x2)`, which no value of the
@@ -160,11 +293,10 @@
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
   `x1 > 1/2` (`1 + tanh(inf*(x1 - 1/2))` became `0`). Distributing over an infinity now needs
-  certified finiteness, as in `f64` and `real`. On the 2,131 of 3,008 fuzzed expressions whose
-  value does not hang on the sign of a zero, permissive's wrong answers go from 389 to 0. 187 of
-  the 2,243 T8.1 inputs whose answer holds an infinity change: 185 price higher (2 equal), the old
-  answers having used the step now refused, and 137 of the old answers were wrong at sampled
-  points (49 of the new ones are too, each with the value of its answer with the search off).
+  certified finiteness, as in `f64` and `real`.
+  <!-- TO BE RE-MEASURED: wrong answers on the 3,008 fuzzed expressions (389 -> 0 when it
+       landed) and the changed training-data inputs whose answer holds an infinity, both
+       measured against the removed three-arm selection. -->
 - **The tagged form writes every fraction as a bag.** `simplify` answers in the notation it was
   given and tells the tagged one by its bag delimiters. An answer whose bags all collapsed carried
   none, and a one-token fraction in it (`-25/4`, `pow x10 17/4`) re-read as the explicit notation
@@ -178,36 +310,35 @@
   `exp 1/2` included.
 - **Permissive is one walk.** `simplify(.., mode='permissive')` ran three arms (its two fold
   disciplines and the `f64` chain) and chose between them by the price of internal states it did
-  not return: 0.14.7 returns 769 of the T8.1 inputs, 3,326 of srbf's predictions and 12 of its
-  ground truths costlier than they came in, in permissive's own measure. It now runs one walk, like
-  every mode: its chain, then the search, in its own canon and rules. Its constructors never fold a
+  not return: 0.14.7 returns 769 of the training-data inputs, 3,326 of srbf's predictions and 12
+  of its ground truths costlier than they came in, in permissive's own measure. It now runs one
+  walk, like every mode: its chain, then the search, in its own canon and rules. Its constructors never fold a
   transcendental, so a constructor identity sees the shape it reads (`atanh(tanh(30))` is `30`); its
   ground fold is a step of the chain, tried after the rules at each node and kept only where it is
-  cheaper (`asin(1e-8)` is `1e-8`, `sqrt(exp(19.11787581094798))` is `14170.787488305119`); its
+  cheaper (`asin(1e-8)` is `1e-8`, `rootn(exp(19.11787581094798), 2)` is `14170.787488305119`); its
   literals are exact and rounded once, where they land as an operand (`3*(1/3 + 1e-20)` is `1`, a
   64-digit coefficient becomes its 17-digit float); and its search joins reciprocal sums (`c/(A*B)`,
   held as `c * A^-1 * B^-1`, is also tried as `(A*B)^-1` and `(A/c)^-1` with the inside
   distributed). So, as in every mode, its answer never prices above the input or above its answer
   at a smaller `effort`, and a second call returns it unchanged: on srbf's 6,531 ground truths,
-  shard 0 of the T8.1 inputs (12,949) and of srbf's predictions (12,513) none prices above
+  a tenth of the training-data inputs (12,949) and of srbf's predictions (12,513) none prices above
   its input and none changes on a second call. Against the three-arm selection it replaces, in
-  permissive's own measure, 323 ground truths get cheaper and 18 costlier, 790
-  T8.1 inputs and 54, and 5,368 predictions and 552; it spends
-  3.3, 2.6 and 2.9 times `f64`'s work units on these sets (the
-  selection: 8.2, 5.9 and 10.6). Where `f64`'s answer
-  prices below permissive's in permissive's reading (14, 49 and 399 rows), the
-  causes are a literal rounded twice (rounded where it landed, then combined again, so one ulp
-  off: on the predictions 454 answers print such a literal one digit longer and 634 one digit
-  shorter than the selection's single rounding), sign placement, `inf` beside a signed zero, and the
-  search's walk order.
+  permissive's own measure, 323 ground truths get cheaper and 18 costlier, 790 training-data
+  inputs and 54, and 5,368 predictions and 552; it spends 3.3, 2.6 and 2.9 times `f64`'s work
+  units on these sets (the selection: 8.2, 5.9 and 10.6). Where `f64`'s answer prices below
+  permissive's in permissive's reading (14, 49 and 399 rows), the causes are a literal rounded
+  twice (rounded where it landed, then combined again, so one ulp off: on the predictions 454
+  answers print such a literal one digit longer and 634 one digit shorter than the selection's
+  single rounding), sign placement, `inf` beside a signed zero, and the search's walk order.
 - **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:
   the modes accept different simplifications as true (`f64` follows the float evaluator, so
   `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not; `permissive` also what
   holds only up to sign or domain, so `(x^2)^(1/2)` is `x`, where `f64` and `real` give `abs(x)`),
   and each mode's `simplify` descends its own reading. So
-  `complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)` in every mode (on the three
-  sets above, no answer of any mode prices above its input), and prices of different modes are not
-  comparable. Before, `complexity()` read every expression the `f64` way, under which a `real` or
+  `complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)` in every mode (no answer
+  prices above its input on srbf's ground truths, its predictions and the training-data inputs in
+  `f64` and `real`, nor in `permissive` on the ground truths and a tenth of each other set), and
+  prices of different modes are not comparable. Before, `complexity()` read every expression the `f64` way, under which a `real` or
   `permissive` answer could price above its input although its own mode made it cheaper. `f64` is
   unchanged.
 - **The search runs until a round finds nothing.** `simplify()`'s default `effort` is now `None`
@@ -228,17 +359,19 @@
   monitor, the promotion refund) follows the default. `effort=k` caps the search at `k`
   candidates (a cap beyond 2^63 - 1 is none), the first `k` of that one walk; `effort=0` never enters the search, so the search change
   leaves its answers byte-identical (the float cap below changes some: 269 of srbf's 125,127
-  predictions in `f64`, 11,175 in `permissive`; so do permissive's one walk, the canonical-form
-  fixes above and, in `real` and `permissive`, the refused common-factor rules). Code that
+  predictions in `f64`<!-- TO BE RE-MEASURED: the permissive count, measured against the
+  removed three-arm selection -->; so do permissive's one walk, the canonical-form fixes above
+  and, in `real` and `permissive`, the refused common-factor rules). Code that
   compares `DEFAULT_EFFORT` with an int now sees `None`.
 - **Faster products.** Building a product decides where its sign goes by pricing every
   orientation of its sign-carrying factors. It now negates each such factor once instead of once
   per orientation (each negation builds products of its own, so the waste compounded with
   nesting), sums each orientation's price from per-factor prices, and remembers the prices of
-  numbers beyond 128 bits. Answers are byte-identical on every input of flash-ansr's T8.1
-  training draws, srbf's ground truths and srbf's model predictions, in every mode. On srbf's
-  predictions `simplify` takes 40-45% less time than without this in `f64` and about half the time
-  in `permissive`, where the slowest inputs run about 5 times faster.
+  numbers beyond 128 bits. Answers are byte-identical on every simplify input of flash-ansr's
+  training-data generator, srbf's ground truths and srbf's model predictions, in every mode. On
+  srbf's predictions `simplify` takes 40-45% less time than without this in `f64`.
+  <!-- TO BE RE-MEASURED: the permissive speed-up (about half the time, the slowest inputs about
+       5 times faster), measured against the removed three-arm selection. -->
 - **A literal costs at most what its float costs.** The evaluator reads every literal as its
   nearest float64, so the measure (`complexity`, and the ordering every simplification follows)
   caps a literal's price at the price of that float's shortest decimal (at most 17 significant
@@ -251,12 +384,12 @@
   keeps its price, `1/3` costs less. Answers still carry and print the exact value. Because long
   exact numbers no longer count against a form, the search accepts more expansions in `f64` and
   `real`: on srbf's model predictions 21% of the `f64` answers change (26,440 of 125,127; 0.2% of
-  flash-ansr's T8.1 training draws), almost all (98%) to expanded forms (a product of sums
+  the simplify inputs of flash-ansr's training-data generator), almost all (98%) to expanded forms (a product of sums
   multiplied out, a constant distributed over a sum) with about as many tokens (0.7% fewer) but
-  long exact coefficients, so they print 25% longer (all answers 7%). In `permissive`, whose
-  literal fold keeps such numbers short, the changed answers print shorter: 34% of srbf's
-  predictions change and print 7% shorter, and 2.6% of the T8.1 training draws, 4% shorter. The
-  measure fingerprint gains a probe for the cap, and compound probes priced in each mode's own
+  long exact coefficients, so they print 25% longer (all answers 7%).
+  <!-- TO BE RE-MEASURED: the permissive share of changed answers and their printed length
+       (34% of the predictions, 7% shorter; 2.6% of the training-data inputs, 4% shorter),
+       measured against the removed three-arm selection. --> The measure fingerprint gains a probe for the cap, and compound probes priced in each mode's own
   reading. Every rule file gets its own provenance sidecar, and loading compares each sidecar
   present probe by probe: it warns, naming the probes, when a recorded probe now prices
   differently, and a probe the sidecar does not record is not a mismatch. The published
@@ -268,7 +401,8 @@
   and the Larmor denominator `6*3.1415926535897*8.854e-12*(2.99792458e8)^3` is one number. A
   result beyond the cap keeps its pieces (`2^1100*x1` stays a power). Answers carry these numbers
   exactly, every significant digit included (`x1*1.602176634e-19*1.602176634e-19` is
-  `2.566969966535569956e-38*x1`). A number prints positionally from 0.0001 up to 10^16 and as
+  `2.566969966535569956e-38*x1`), in `f64` and `real`; `permissive` rounds a literal once, to its
+  float, where it lands (`2.56696996653557e-38*x1`). A number prints positionally from 0.0001 up to 10^16 and as
   `<mantissa>e<exponent>` outside that range where that is shorter, Python's float notation
   applied to exact values, in the list, tagged and text answers alike: `x1*1e-300` comes back as
   written, `x1*1e-150*1e-150` as `1e-300*x1`, `x1*1e10*1e10` as `1e20*x1` and `x1*1e-5` as
@@ -301,8 +435,8 @@
   recoveries and loses none: in a sample of 6,000 result rows whose answers move, 6 verdicts go
   from not recovered to recovered, where a truth's or a prediction's coefficients now fold to the
   same form (`3.097*x2 + 0.966*14.68*x2` becomes one coefficient). The `real` and `permissive` rule
-  sets of acj-5-4-llm serve 42 fewer rules (`(+-0.1)^n -> 1e-n` for n >= 40), because the
-  constructor now computes them; the next re-mine drops them from the files. A mode's rules are
+  sets of acj-5-4-llm serve 42 fewer rules (`(+-0.1)^n -> 1e-n` for n >= 40): the constructor now
+  computes them, and the load drops a rule whose two sides the constructors already make equal. A mode's rules are
   read in that mode's number domain, whichever mode asks for them first. The verification
   instruments fold only within the engine's cap and refuse oversized spellings before building
   them.
@@ -370,8 +504,8 @@
   opening parenthesis or (after a parenthesis) a number multiplies: `2x0` is `2*x0`, `0x10` is
   `0*x10`, `2(x0 + 1)` is `2*(x0 + 1)`, `(a)(b)` is `(a)*(b)`, `2pi` is `2*pi`. The product has
   the precedence of `*`, so `1/2x0` is `(1/2)*x0` and `2^3x0` is `(2^3)*x0`. Before, these
-  inputs were malformed. A name before a parenthesis stays a call, known or not (`sqrt(x0)` still
-  reads `sqrt x0`); a number before a name that starts with `_` is Python's digit grouping, not a
+  inputs were malformed. A name before a parenthesis stays a call, known or not
+  (`read_infix('sqrt(x0)')` is still `sqrt x0`); a number before a name that starts with `_` is Python's digit grouping, not a
   product (`1_000` stays malformed); and a character the tokenizer drops never becomes a product
   (`x1 $ x2` stays malformed).
 - **Infix: whitespace separates tokens.** Spaces used to be removed before reading, so
@@ -408,7 +542,7 @@
   500000000000000 / 3141592653589793 and printed as exactly that: correct, but nothing a reader
   recognises. A decimal is as exact as an integer, so the infix text now moves the numerator's
   factors 2 and 5 into the denominator, which then terminates, and prints
-  `1/6.283185307179586` (Feynman's `3/(20*pi)`: `3/62.83185307179586`). The spelling needs a
+  `1/6.283185307179586` (Feynman's `3/(20*3.141592653589793)`: `3/62.83185307179586`). The spelling needs a
   numerator with a factor 2 or 5 and is used where it is strictly shorter than the two
   integers, outside exponents: `1/2`, `2/3`, `5/8` and `1/3` keep their fractions, an exponent
   keeps the fraction (`x0^(500000000000000/3141592653589793)`), and the first value that moves
@@ -445,16 +579,22 @@
   checkpoint written by another mine — other parameters, mode, universe, starting rules, or
   code (the compiled core or the package's sources) — refuses to start, and is never
   overwritten. The rule file and its sidecar are written once, when the mode's mine ends.
-- **`simplipy verify-mine <file> --mode m`** (and `simplipy.mining.verify_mine`) checks a mined
-  file against the re-mine gates in its own mode: no twin-shadowed row, no engine-owned law,
-  every spelling licensed, nothing preempted, a translation that subsumes and drops nothing,
-  a clean measure fingerprint and no `SIMPLIPY_*` switch; it exits non-zero when one fails.
+- **`simplipy verify-mine <file> --mode m -e <engine>`** (and `simplipy.mining.verify_mine`)
+  checks a mined file against the re-mine gates in its own mode: no twin-shadowed row, no
+  engine-owned law, every spelling licensed, nothing preempted, a translation that subsumes and
+  drops nothing, a clean measure fingerprint and no `SIMPLIPY_*` switch; it exits non-zero when
+  one fails. `-e` names the engine (an official name or a config path) whose operators read the
+  file.
 - **The sidecar records each file's own mine**: `acceptance` (tolerances, whether and at
   which gate a near miss is re-judged, the licensed tiers, the judge's digest), `per_length`
   (classes, picks, judge rounds, exclusions, twin-shadowed rows), `gates` and
   `code_digest`, beside the existing parameters and `requires_simplipy`.
   `find_rules(interval_node_budget=...)` (config key `interval_node_budget`) sets the
   interval layer's node budget for the mine and records it in the parameters.
+- **`find_rules(judge=, judge_processes=)`.** The per-length judge loop asks `judge(pairs)` for
+  the judged tier of each served pattern; the default (`None`) is the contract judge, run on
+  `judge_processes` worker processes (default 4). Verdicts do not depend on the number of
+  processes. `simplipy verify-mine` takes `--judge-processes`.
 
 ### Removed
 
@@ -478,18 +618,96 @@
   core) is empty; a mine's sidecar records every `SIMPLIPY_*` variable set during it. The
   sort promotion no longer reads the unprefixed `N_PTS` and `THRESH` at import.
 - **The mine's triple router.** The sidecar's `triple` record (counts, rejects, preempted)
-  is replaced by each file's `gates` and `per_length`.
+  is replaced by each file's `gates` and `per_length`. The sidecar key
+  `soundness.node_budget_env` is gone with the variable it recorded; the node budget is in the
+  mine's parameters (`interval_node_budget`).
+- **`utils.remove_pow1`**, a cleanup of the generation-1 `pow1`/`pow_1` operators that nothing
+  called. Generation-2 configs that declare those names as operators still evaluate them.
+- **The `fast-assets` cargo feature**, which gated nothing. Builds that passed it drop the flag.
+- **Entries of the compiled core.** `simplipy._core` is internal and carries no stability promise;
+  for code that called it directly: the mode-less `Engine` entries `ac_simplify`,
+  `ac_simplify_infix`, `ac_ordered_below`, `ac_rules_info`, `ac_served_rules`, `set_rules` and
+  `ac_judge` are gone (use the `*_in_mode` entries, `ac_ordered_below_in`,
+  `set_mode_rules('default', ...)` and `mine_mark`, which take the mode explicitly, keyword-only
+  and without a default), and so are the probes `ac_odd_neg_carriers`,
+  `interval_entire_analytic_composition`, `interval_zero_set_null_generic_const` and
+  `registry_pole_refusals`. New on `Engine`: `ac_ordered_below_in`, `ac_translate_preview`,
+  `judge_hint`, `judge_pair`, `law_instance`, `mine_mark`, `mine_sources`, `prettify` and
+  `step_cap_binds`; new in the module: `ARTIFACT_ENV_SWITCHES`, `DEFAULT_WORK`,
+  `NEAR_MISS_FRAC`, `is_numeric_string`, `reserved_numeric_spelling` and
+  `set_interval_node_budget`. The simplify entries default `explore_budget` to the public effort
+  (`None`), not 0.
 
 ### Changed
 
+<!-- PENDING: CHANGELOG lines from the miner/rules and the core/concurrency fix rounds go here
+     (and under Removed, if any). -->
 - **The mining calls name their mode.** `prune_covered_rules`, `deduplicate_rules` and
-  `promote` take a required keyword `rule_mode` (`'default'`, `'real'` or `'permissive'`);
-  the CLI's `prune-covered-rules` prunes the default set. Every entry of the compiled core
-  that reads a mode takes it explicitly, and its mode-less twins are gone.
+  `promote` take a required keyword `rule_mode`: `'f64'` (also spelled `'default'`, the core's
+  name for the f64 set), `'real'` or `'permissive'`. The CLI's `prune-covered-rules` prunes the
+  f64 set. Every entry of the compiled core that reads a mode takes it explicitly, and its
+  mode-less twins are gone. Migration: add `rule_mode='f64'` where the call relied on the f64
+  set.
 - **Deduplication keeps the target lower in the mode's serve ordering**, not the one with
   fewer tokens.
-- **`complexity(mode=...)` refuses an unknown mode with `ValueError`**, as `simplify` does (it raised `KeyError`).
-- **Infix text calling an undeclared function is refused by name** (`unknown function 'sqrt' in 'sqrt(x1^2)'`) in `simplify`, `complexity`, `evaluate_constants`, `mask` and the conversions, instead of "invalid or malformed prefix expression"; `read_infix` still keeps such a call as written.
+- **`complexity(mode=...)` refuses an unknown mode with `ValueError`**, as `simplify` does (it
+  raised `KeyError`).
+- **Infix text calling an undeclared function is refused by name**
+  (`unknown function 'sqrt' in 'sqrt(x1^2)'`) in `simplify`, `complexity`, `evaluate_constants`,
+  `mask` and the conversions, instead of "invalid or malformed prefix expression"; `read_infix`
+  still keeps such a call as written. Write an even root as `rootn(x, 2)`.
+- **`simplify(max_passes=0)` raises `ValueError`** ("max_passes must be at least 1"); it used to
+  run one pass. One pass reaches the fixpoint, so `max_passes=1` gives the same answers as the
+  default; the cap guards against a bug and does not bind on real input.
+- **One reading of an expression argument.** `simplify`, `complexity`, `prettify`, the
+  conversions and `simplipy.normalization` read an argument the same way. Realization notation
+  is accepted by each of them (`simplify(['simplipy.operators.neg', 'x1'])` reads like
+  `to_prefix`; it raised), but only through an injective realization map: a config in which two
+  operators share a realization (`abs` and `absolute` both `np.abs`) refuses such input, naming
+  both, instead of silently picking one. A numpy array must be one-dimensional with string-like
+  tokens, or `ValueError` says which (`complexity(np.array([['x1']]))` raised a raw `TypeError`,
+  and `simplipy.normalization` flattened it); a bytes array is decoded.
+- **Rule sets are compiled when they load.** `load` returns with every set it was asked for
+  translated and ready, so no mode's first call pays for it (before, the first call per mode
+  did, for seconds). Peak memory with `acj-5-4-llm`: about 0.9 GB for all three sets, about
+  0.7 GB for `modes=('f64', 'permissive')`, about 0.45 GB for `f64` alone; a set left out builds
+  on its mode's first use in about 3–4 s and adds about 100 MB. Answers do not change.
+- **Library messages go through `logging`.** The default-engine announcement and the first-use
+  build of a deferred set are WARNING records on the `simplipy` logger (visible with no logging
+  setup), install progress is INFO and an install failure ERROR; nothing in the library prints
+  except `list_assets`, whose output is its purpose. To silence them:
+  `logging.getLogger('simplipy').setLevel(logging.ERROR)`. The CLI shows INFO records on
+  stderr.
+- **An installed asset loads without the network.** `get_path` (and so `load`) fetched the
+  manifest from the hub on every call, even for an installed asset. It now resolves an installed
+  asset from the local copy of the manifest, with the files present and their digests verified,
+  and goes online only when the asset is not installed or no local manifest exists.
+- **`install_asset` returns `False` on every download failure**, an offline or connection error
+  included (only an HTTP error did; the others escaped raw and left a partial download), logs the
+  cause and removes the partial download. A digest mismatch still raises `RuntimeError`.
+- **`evaluate_constants` knows a variable as the engine does.** It used its own definition
+  (`x<digits>`), so a subtree holding `y` was tried as a constant and left alone only by a
+  blanket `except`; it now asks `expression_variables` and catches only the evaluator's
+  `ValueError` for an operator it has no kernel for.
+- **An integer spelling of zero reads `+0`.** The core's literal reader (the offline evaluator,
+  the interval kernel, `permissive`'s ground fold) read `-0`, `-00` and `(-0)` as `-0.0`, while
+  the deployed evaluator reads an integer and an integer has one zero; they now read `+0.0`. A
+  float spelling keeps its sign (`-0.0`, `-0e0`), as Python's float literal does. No mined or
+  served token is affected.
+- **`verify_triple` checks the triple it is given.** With `engine_config`, permissive dominance
+  is checked on an engine built from the config's operators and the three rule sets passed in,
+  not from the rule files the config names, and every answer is priced by
+  `simplipy.mining.cross_mode_complexity`. Without `corpus_rows` it sweeps
+  `simplipy.verify.default_corpus()`, which ships in the wheel (a wheel install used to sweep
+  nothing and warn). A row on which a mode raises is a violation, reported with its error.
+- **The load census names its reasons anew.** The rows the load drops are counted by reason
+  (`_core`'s `ac_rules_drop_census` and `ac_shadow_census`): `engine-owned-law` is new (a rule
+  stating the distributive law), and `inverse-of-earlier-rule` and `twin-inverse` are gone,
+  their rows dropped as `not-ordered-below`, the reason they always also had. Served rules do
+  not change.
+- **`find_rules(save_every=)` and the CLI's `-s/--save-every` are deprecated and ignored.** The
+  rule file and its sidecar are written once, when the mode's mine ends, and progress survives
+  in the per-length checkpoint. Drop the argument.
 
 ## 0.14.7 (2026-10-01)
 
