@@ -1920,8 +1920,8 @@ class SimpliPyEngine:
 
         See :meth:`to_infix` for the shared contract. Bag members keep their
         source ORDER (sorting is canonicalisation, which is :meth:`simplify`'s job)
-        and literals keep their spelling, so a tagged sequence already in normal form
-        comes back byte-identical.
+        and literals keep their spelling (a fraction token aside, below), so a tagged
+        sequence already in normal form comes back byte-identical.
 
         The regrouping is CONSERVATIVE: a chain flattens only across nodes of the same
         kind at the same POLARITY. The right operand of ``-``/``/`` and the operand of
