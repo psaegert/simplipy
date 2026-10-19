@@ -29,14 +29,15 @@ The declared surface has three tiers:
 
 ## Versioning
 
-<!-- PENDING THE OWNER: the deprecation policy. This page used to promise a warning for at
-     least one minor release before a removal, while 0.14.0 and 0.15.0 removed names without
-     one. Proposed wording below; confirm or replace it before the release. -->
 While the major version is 0: breaking changes to declared names happen only
 at a **minor** version bump (0.x → 0.x+1) and are listed in the CHANGELOG under
-"Changed"/"Removed". A removal is a hard cut, announced in the release that makes it:
-the removed spelling raises instead of warning, and the CHANGELOG names the replacement.
-Patch releases (0.13.x) never break declared names or change artifact semantics.
+"Changed"/"Removed". Patch releases (0.13.x) never break declared names or change
+artifact semantics.
+
+**Deprecation policy.** A removal is a hard cut, announced in the release that makes it.
+There is no deprecation period and no warning cycle: the removed name or keyword raises
+from that release on, and the CHANGELOG's "Removed" section and the tables below name the
+replacement.
 
 Removed in 0.14.0:
 
