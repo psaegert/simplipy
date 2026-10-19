@@ -276,13 +276,11 @@ def test_a_ground_fact_the_engine_folds_is_no_rule(tmp_path, mine) -> None:
     assert not gate['ok'] and gate['examples'] == [[list(fact[0]), list(fact[1])]], gate
 
 
-@pytest.mark.xfail(strict=True, reason='the core does not yet fold a ground rootn whose index '
-                   'is no integer; once it folds ground NaN facts, this fact is preempted')
 def test_a_ground_nan_fact_of_a_non_integer_root_index_is_no_rule(tmp_path, mine) -> None:
     """The bulk of the published files: 106,093 of acj-5-4-llm's 138,651 f64 rules are ground
     facts with a `nan` right side, 105,085 of them `rootn` at a non-integer ground index. The
-    gate flags 13 rules of that file today and none of these; once the core folds them, the
-    same gate refuses every one, and a mine mints none (its mark is the fold)."""
+    core folds them itself, so the gate refuses every one, and a mine mints none (its mark is
+    the fold)."""
     fact = (('rootn', '(-5)', 'asinh', 'tanh', '4'), ('float("nan")',))
     path = _plant(tmp_path, mine, 'f64', [fact])
     gate = _gate(verify_mine(path, 'f64', _acj_operators(), judge=core_judge), 'preempted')
