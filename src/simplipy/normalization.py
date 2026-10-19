@@ -125,7 +125,7 @@ def to_expression(expression: str | list[str] | tuple[str, ...] | np.ndarray | N
     expression : str, list[str], tuple[str, ...], 1-D ndarray or None
         An infix ``str``, an explicit binary-prefix token sequence, or a tagged
         token sequence; the form is detected the way the conversion API detects
-        it (design D2: type first, then a liberal read of the tokens). ``None``
+        it (type first, then a liberal read of the tokens). ``None``
         maps to ``None``.
     engine : SimpliPyEngine
         Supplies the canonical state. Required: there is no engine-free path.
@@ -142,7 +142,7 @@ def to_expression(expression: str | list[str] | tuple[str, ...] | np.ndarray | N
     ------
     ValueError
         On a malformed expression, undeclared vocabulary, or a reserved numeric
-        spelling (``inf``, ``1_000``) -- the core's own token grammar (H-007).
+        spelling (``inf``, ``1_000``) -- the core's own token grammar.
     TypeError
         On a non-str/list/tuple/1-D-ndarray expression.
     """

@@ -1,4 +1,4 @@
-"""Artifact-generation compatibility: the load-time allowlist (owner ruling 2026-08-03).
+"""Artifact-generation compatibility: the load-time allowlist.
 
 An engine ARTIFACT (a config + mined ruleset) belongs to a GENERATION:
 
@@ -80,7 +80,7 @@ RETIRED_OPERATOR_TOKENS = frozenset({
     "pow1_2", "pow1_3", "pow1_4", "pow1_5",
     # D12 (owner-ratified 2026-08-16): the identity/reciprocal sugar spellings.
     # A config declaring them was ACCEPTED while the parser unconditionally
-    # rewrote their tokens away (`remove_pow1`) -- one engine, two answers for
+    # rewrote their tokens away on input -- one engine, two answers for
     # one expression. Refused at load like the rest of the family; the parser
     # contract (legacy INPUT rewriting) is untouched.
     "pow1", "pow_1",

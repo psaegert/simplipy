@@ -65,7 +65,7 @@ The ``-1`` after one pass IS the original ``<sub>``: collect moved the negation 
 ``atan`` (an odd function), so it is structure wearing a literal's clothes. Masking it
 invents a coefficient. Measured at ~0.15% of skeletons over 20k rows.
 
-KEEPING A SYMBOLIC CONSTANT BESIDE A MASKED ONE IS POINTLESS (owner, 2026-08-07). A policy
+KEEPING A SYMBOLIC CONSTANT BESIDE A MASKED ONE IS POINTLESS. A policy
 may keep ``np.pi`` while masking its coefficient, and the mechanism will honour it -- but
 the result ``<constant> * np.pi`` is worth nothing: the constant optimizer just fits an
 arbitrary float, and an arbitrary float times pi is an arbitrary float, so the

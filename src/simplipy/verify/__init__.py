@@ -63,7 +63,7 @@ MODE_TIERS: dict[str, frozenset] = {
 
 def effective_tier(detail: dict) -> str:
     """A judged rule's EFFECTIVE tier -- what ``MODE_TIERS`` licenses against. A verdict that
-    carries no tier reads ``reject`` (fail-closed). The Const-channel sentinel (D36) reads
+    carries no tier reads ``reject`` (fail-closed). The Const-channel sentinel reads
     ``core``: the multi-``<constant>`` family's soundness authority is the Const-channel
     chain, not the contract, so its verdict here is not a verdict about the rule."""
     if detail.get('detail') == CONST_CHANNEL_DETAIL:
@@ -77,29 +77,29 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     """Gate a whole rule set: judge every rule at its own trigger points.
 
     ``rules``: a list of ``[lhs, rhs]`` token-list pairs, or a path to such a JSON file.
-    ``mode``: which mode's set this is -- ``'f64'``, ``'real'`` or ``'permissive'``. See
-    below; ``None`` keeps the pre-triple meaning.
+    ``mode``: which mode's set this is -- ``'f64'`` (also ``'default'``), ``'real'``,
+    ``'permissive'`` or a :class:`~simplipy.Mode` member. See below; ``None`` keeps the
+    mode-less meaning.
     ``report_path``: optional path to dump the full per-rule report.
     ``build_path``: optional path to write the kept set (CERTIFIED + TOLERATED).
     ``judge_timeout_s``: per-rule wall-clock cap (a rule that exceeds it is bucketed
     JUDGE-TIMEOUT rather than blocking the sweep).
 
-    CLEANLINESS IS PER MODE (owner ruling, 2026-08-20: "0.14.0 is sound, full stop").
-    Before the triple there was one rule set and one contract, so "clean" could mean "no
-    fatal bucket". That is now wrong in BOTH directions. `atanh(tanh t) -> t` is
-    ENGINE-MISALIGN and belongs in ``rules_real.json``, where it is perfectly clean --
-    calling that file dirty would condemn the rules the split exists to keep. And a rule
-    that is f64-realised but mathematically false is clean for ``rules.json`` and NOT for
-    ``rules_real.json``, which a bucket count cannot express at all.
+    CLEANLINESS IS PER MODE. With one rule set per mode, "no fatal bucket" is the wrong
+    test in both directions. `atanh(tanh t) -> t` is ENGINE-MISALIGN and belongs in
+    ``rules_real.json``, where it is perfectly clean -- calling that file dirty would
+    condemn the rules the split exists to keep. And a rule that is f64-realised but
+    mathematically false is clean for ``rules_f64.json`` and NOT for ``rules_real.json``,
+    which a bucket count cannot express at all.
 
     So with ``mode`` given, ``is_clean`` means *every rule's judged tier is one this mode
     licenses* (``MODE_TIERS``) -- a rule can be clean for one file and dirty for another,
     which is the whole point. ``report['offenders']`` lists the ones that are not, with
     their tier.
 
-    With ``mode=None`` the legacy meaning is kept -- only CERTIFIED/TOLERATED are clean --
-    because that is what every pre-triple caller means. It is NOT the right gate for a
-    shipped triple; use :func:`verify_triple`.
+    With ``mode=None`` only CERTIFIED/TOLERATED are clean, the meaning before rule sets
+    were split by mode. It is NOT the right gate for a shipped triple; use
+    :func:`verify_triple`.
 
     ``report['buckets']`` maps each bucket name to the list of rule indices in it and
     ``report['exit_code']`` is 0 iff clean.
@@ -118,13 +118,12 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
                            announce_report=report_path is not None)
         with open(tmp) as fh:
             report = json.load(fh)
-    # D36 carve-out (`effective_tier`, also the mine's judge): the multi-`<constant>`
-    # family's soundness authority is the Const-channel chain, not the contract, so
-    # the judge's non-jurisdiction sentinel (UNSUPPORTED-SHAPE + CONST_CHANNEL_DETAIL)
-    # is not a verdict about the rule. Without this mirror, the moment a mine routes
-    # such a rule into the triple as `core`, `verify_ruleset` on the mine's own
-    # output reads tier None -> `reject` and reports dirty in every mode -- the gate
-    # disagreeing with the router about a ratified decision (audit U3, 2026-08-22).
+    # The Const-channel carve-out (`effective_tier`, which the mine's judge also reads):
+    # the multi-`<constant>` family's soundness authority is the Const-channel chain, not
+    # the contract, so the judge's non-jurisdiction sentinel (UNSUPPORTED-SHAPE +
+    # CONST_CHANNEL_DETAIL) is not a verdict about the rule. The mine files such a rule as
+    # `core`; without this mirror the mode-less sweep would count the sentinel as fatal and call
+    # the mine's own output dirty.
     if mode is None:
         d36 = {d.get('idx') for d in report.get('detail', [])
                if d.get('detail') == CONST_CHANNEL_DETAIL}
@@ -158,7 +157,7 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
     ``rules_permissive == rules_f64 UNION rules_real``. That is wrong once folding is
     mode-dependent, because the three modes then reduce in different canonical worlds and
     each file omits what its OWN constructor already performs -- so set overlap measures
-    SPELLING, not capability. On the shipped 0.14.0 artifact the union exceeds the permissive
+    SPELLING, not capability. On the 0.14.0 artifact the union exceeds the permissive
     file by 362 rules and permissive performs every one of them; the identity would report a
     correct artifact as dirty.
 
@@ -168,9 +167,9 @@ def verify_triple(f64_rules: list | str, real_rules: list | str,
     built from the config's operators and the three rule sets given here, never the rule
     files the config names, and prices every answer by
     :func:`simplipy.mining.cross_mode_complexity`. A row on which a mode raises is a
-    violation, reported with its error. Without an engine there is nothing
-    sound to say about the relationship between the files, and ``relationships`` stays
-    empty rather than asserting something false.
+    violation, reported with its error. Without an engine nothing can be said about the
+    relationship between the files, and ``relationships`` stays empty rather than
+    asserting something false.
 
     ``permissive_dominance`` CONTRACT. ``None`` when ``engine_config`` is not given
     (nothing was asked). The rows swept are ``corpus_rows``, or :func:`default_corpus`
