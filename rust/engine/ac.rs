@@ -1446,6 +1446,7 @@ impl Engine {
             cert_fin: Some(&cf),
             cert_finnz: Some(&cfz),
             wildcard_all,
+            near_misses: Cell::new(0),
         };
         let class_memo: RefCell<FxHashMap<Vec<crate::tokens::Tok>, Option<Ex>>> =
             RefCell::new(FxHashMap::default());

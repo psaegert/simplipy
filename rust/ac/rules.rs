@@ -59,7 +59,7 @@ pub struct AcRule {
     pub is_pattern: bool,
     /// Does a wildcard occur more than once in the LHS? Then it binds a class (a sum, an odd
     /// function or odd root of one) up to sign: a sum pattern whose first match met a near miss
-    /// (a binding refused by its repeat's negation, `matcher::near_misses`) tries its subject again
+    /// (a binding refused by its repeat's negation, `MCx::near_misses`) tries its subject again
     /// with every class in one orientation (`orient_term_classes`). `Repeat::Class` where the repeated
     /// wildcard's sort can bind a class in every mode (`_`, `!`, `$`); `Repeat::Leaf` where only
     /// a pass that binds any subtree (permissive) lets it, `?` binding variable leaves otherwise.
@@ -767,10 +767,10 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     out
                 };
                 // A repeated wildcard binds a class up to sign: where the first match met a
-                // binding refused by its repeat's negation (a near miss, `matcher::near_misses`),
+                // binding refused by its repeat's negation (a near miss, `MCx::near_misses`),
                 // the same terms with every class in one orientation, the signs in the
                 // coefficients, are tried too.
-                let misses = super::matcher::near_misses();
+                let misses = p.mcx.near_misses.get();
                 fire(sv, &bag_cls).or_else(|| {
                     let class_binds = match rule.repeat {
                         Repeat::No => false,
@@ -780,7 +780,7 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
                     if !class_binds {
                         return None;
                     }
-                    if super::matcher::near_misses() == misses {
+                    if p.mcx.near_misses.get() == misses {
                         return None;
                     }
                     let oriented = oriented_terms

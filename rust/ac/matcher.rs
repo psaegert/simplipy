@@ -25,27 +25,19 @@
 //! (finding F1), and first-match-wins stays well-defined: the first accepted assignment in
 //! canonical enumeration order.
 
+use std::cell::Cell;
+
 use rustc_hash::FxHashMap;
 
 use crate::tokens::{Tok, TokenView};
 
 use super::expr::{orientation_near_miss, Ex};
 
-thread_local! {
-    static NEAR_MISSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// How many near misses (`orientation_near_miss`) the matcher has met on this thread: a caller
-/// reads it before and after a match to learn whether one occurred there.
-pub fn near_misses() -> u64 {
-    NEAR_MISSES.with(|c| c.get())
-}
-
-/// A repeated wildcard bound to `bound` refused `subject`: count it if they are negations of each
-/// other through their classes' orientation.
+/// A repeated wildcard bound to `bound` refused `subject`: count it in the match context if
+/// they are negations of each other through their classes' orientation.
 fn note_near_miss(bound: &Ex, subject: &Ex, cx: &MCx) -> bool {
     if orientation_near_miss(bound, subject, cx.view) {
-        NEAR_MISSES.with(|c| c.set(c.get() + 1));
+        cx.near_misses.set(cx.near_misses.get() + 1);
         true
     } else {
         false
@@ -59,6 +51,9 @@ pub struct MCx<'a> {
     pub cert_fin: Option<&'a dyn Fn(&Ex) -> bool>,
     pub cert_finnz: Option<&'a dyn Fn(&Ex) -> bool>,
     pub wildcard_all: bool,
+    /// How many near misses (`orientation_near_miss`) matches under this context have met:
+    /// a caller reads it before and after a match to learn whether one occurred there.
+    pub near_misses: Cell<u64>,
 }
 
 pub type Binds = FxHashMap<Tok, Ex>;
@@ -654,6 +649,7 @@ mod tests {
             cert_fin: None,
             cert_finnz: None,
             wildcard_all: false,
+            near_misses: std::cell::Cell::new(0),
         }
     }
 
@@ -775,6 +771,7 @@ mod tests {
                 cert_fin: Some(&yes),
                 cert_finnz: None,
                 wildcard_all: false,
+                near_misses: std::cell::Cell::new(0),
             };
             binds.clear();
             assert!(matches(&comp, &Ex::Leaf(bang), &mut binds, &m2));
@@ -784,6 +781,7 @@ mod tests {
                 cert_fin: None,
                 cert_finnz: None,
                 wildcard_all: true,
+                near_misses: std::cell::Cell::new(0),
             };
             binds.clear();
             assert!(matches(&comp, &Ex::Leaf(q), &mut binds, &m3));
