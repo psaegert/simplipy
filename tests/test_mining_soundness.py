@@ -2211,14 +2211,16 @@ class TestTheGateRoutesInsteadOfDeleting:
                  (['asinh', 'sinh', '?0'], ['?0']), (['acosh', 'cosh', '?0'], ['abs', '?0'])]
         realised = {('asinh', 'sinh', '?0')}
         # ONE MINE PER FILE: real's constructor performs the inverse pairs itself (its serve
-        # answer for `atanh(tanh(x0))` is `x0`), so its mine mints none of them, and the
-        # f64 file carries exactly the one its mode realises.
+        # answer for `atanh(tanh(x0))` is `x0`), so its mine mints none of them. f64's
+        # constructor performs the one its mode realises (an overflow cuts no collapse band),
+        # so the f64 file carries none of them either.
         for lhs, rhs in pairs:
             spelled = [('x0' if t == '?0' else t) for t in lhs]
-            assert engine._core.mine_mark(spelled, rule_mode='real') == \
-                [('x0' if t == '?0' else t) for t in rhs], lhs
-            assert ((tuple(lhs), tuple(rhs)) in keys(f64)) is (tuple(lhs) in realised), \
-                f'{" ".join(lhs)}: in the f64 set iff f64 realises it'
+            target = [('x0' if t == '?0' else t) for t in rhs]
+            assert engine._core.mine_mark(spelled, rule_mode='real') == target, lhs
+            assert (engine._core.mine_mark(spelled, rule_mode='default') == target) \
+                is (tuple(lhs) in realised), f'{" ".join(lhs)}: f64 performs it iff it realises it'
+            assert (tuple(lhs), tuple(rhs)) not in keys(f64), lhs
             assert (tuple(lhs), tuple(rhs)) not in keys(real), lhs
         # each file's sidecar records its own mine
         for path, mode in ((out, 'f64'), (str(tmp_path / 'mined_real.json'), 'real'),
