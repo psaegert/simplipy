@@ -1843,7 +1843,8 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
                 // `(-1) % 2 == -1` and `k % 2 == 1` is FALSE for every negative odd k --
                 // exactly the k this branch handles. The -INF candidate was therefore never
                 // pushed, the two-sided pole came back as a one-sided reflected box, and the
-                // under-approximation `rust/lib.rs:764` calls fatal licensed `finite_ae` to
+                // under-approximation the `interval_value_set_box` contract (rust/lib.rs)
+                // calls fatal licensed `finite_ae` to
                 // certify expressions that are nan on positive measure: measured at runtime,
                 // `A - A -> '0'` in SOUND mode for `A = log(x0**K + 1)`, nan across all of
                 // (-1, 0). The correct idiom is the one 18 lines above at the pw() closure.
@@ -5454,10 +5455,10 @@ mod enclosure_fuzz {
     /// (audit B4/B6, plan sequencing: "write the enclosure fuzz before B4/B6, not after --
     /// writing it afterwards loses the proof that it works").
     ///
-    /// An interval box is only sound if it CONTAINS the pointwise value. `rust/lib.rs:764`
-    /// calls the opposite -- an under-approximation -- fatal, and it is: the box is what
-    /// licenses `finite_ae`, which licenses cancelling `A - A` to `0`. A box that misses the
-    /// pole loses the nan and the cancellation ships a wrong answer at runtime.
+    /// An interval box is only sound if it CONTAINS the pointwise value. The
+    /// `interval_value_set_box` contract (rust/lib.rs) calls the opposite -- an
+    /// under-approximation -- fatal, and it is: the box is what licenses `finite_ae`, which
+    /// licenses cancelling `A - A` to `0`. A box that misses the pole loses the nan and the cancellation ships a wrong answer at runtime.
     ///
     /// This sweeps a dense grid through the DEGENERATE box `[c, c]`: whatever the fold
     /// computes at `c`, the box at `c` must contain it.

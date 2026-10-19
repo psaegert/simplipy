@@ -45,11 +45,6 @@ pub(crate) const MAX_TOKENS: usize = 4096;
 /// `interval_value_set_box`'s row: `(has_finite, pos_inf, neg_inf, nan, fin_lo, fin_hi)`.
 type ValueSetBox = (bool, bool, bool, bool, f64, f64);
 
-/// The AC entry accepts BOTH the old grammar and the tagged form; `is_valid` only understands
-/// the former, so tag-bearing inputs skip the arity scan (the shared AC parser is the
-/// authority there -- a malformed tagged input fails the parse, the kernel returns `None`,
-/// and the FFI raises the same ValueError as every other malformed input; audit Tier-2,
-/// 2026-08-03: it used to be returned UNCHANGED, silently). The length cap applies to both.
 /// The WIRE SPELLING of a rule mode (`ac_simplify_in_mode` and its infix twin), refused
 /// loudly on anything else: a mistyped mode must never silently select a different rule
 /// set. Same doctrine as `simplify(mode=...)`'s string handling in the Python shim -- a
@@ -220,6 +215,11 @@ fn ac_simplify_infix_impl(
     .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
 }
 
+/// The AC entry accepts BOTH the old grammar and the tagged form; `is_valid` only understands
+/// the former, so tag-bearing inputs skip the arity scan (the shared AC parser is the
+/// authority there -- a malformed tagged input fails the parse, the kernel returns `None`,
+/// and the FFI raises the same ValueError as every other malformed input; audit Tier-2,
+/// 2026-08-03: it used to be returned UNCHANGED, silently). The length cap applies to both.
 fn ensure_ac_well_formed(inner: &engine::Engine, tokens: &[String]) -> PyResult<()> {
     ensure_tokens_are_tokens(tokens)?;
     // Tagged-form tokens and the `rootn` built-in live outside `is_valid`'s config
@@ -694,16 +694,6 @@ impl PyEngine {
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
-    /// THE DEDUP KEY (internal): the BARE-CONTEXT canonical serialization of each
-    /// expression -- exactly the internal form the rule loader (`AcRules::translate`)
-    /// builds for a rule side, in the engine's native tagged projection. Batched: a
-    /// ruleset is keyed side-by-side and one shared context serves the whole list.
-    /// `None` for an unparseable side, so the caller can fall back to the spelling
-    /// instead of failing a whole ruleset on one malformed entry.
-    ///
-    /// NOT interchangeable with `to_prefix`/`to_tagged`: those run the rewrite pass under
-    /// the LOADED RULESET, which on acj-4-3 turns `* (-1) asin _0` into `asin neg _0` --
-    /// that rule's own RHS. See `Engine::ac_canonical_key`.
     /// Census of the nodes `mu` CHARGES, over the bare canonical forms of a batch.
     /// The unit any symbol-cost table must be derived over -- serialized tokens are not it.
     fn ac_node_census(
@@ -714,6 +704,16 @@ impl PyEngine {
         Ok(py.detach(|| self.inner().ac_node_census(&exprs)))
     }
 
+    /// THE DEDUP KEY (internal): the BARE-CONTEXT canonical serialization of each
+    /// expression -- exactly the internal form the rule loader (`AcRules::translate`)
+    /// builds for a rule side, in the engine's native tagged projection. Batched: a
+    /// ruleset is keyed side-by-side and one shared context serves the whole list.
+    /// `None` for an unparseable side, so the caller can fall back to the spelling
+    /// instead of failing a whole ruleset on one malformed entry.
+    ///
+    /// NOT interchangeable with `to_prefix`/`to_tagged`: those run the rewrite pass under
+    /// the LOADED RULESET, which on acj-4-3 turns `* (-1) asin _0` into `asin neg _0` --
+    /// that rule's own RHS. See `Engine::ac_canonical_key`.
     #[pyo3(signature = (exprs, *, rule_mode))]
     fn ac_canonical_keys(
         &self,
@@ -1831,14 +1831,6 @@ impl PyEngine {
     }
 }
 
-/// The CORE SERIALIZATION LANGUAGE, exported so Python reads the SAME table the engine
-/// does instead of keeping its own copy.
-///
-/// `{token: {"arity": int, "precedence": float, "realization": str | None}}`. The audit
-/// counted five hand-maintained copies of this data (C1.10); a copy that drifts is not a
-/// tidiness problem but a soundness one -- the masking walk treated an unknown operator as
-/// a LEAF, so its operands inherited the enclosing bag's role and a `pow` exponent could be
-/// masked, the exact accident the role API exists to prevent.
 /// Set the interval layer's subdivision node budget (`None`: the default, 400,000) and
 /// return the previous one. `find_rules(interval_node_budget=...)` sets it for the mine and
 /// restores it after; the value is recorded in the artifact's parameters.
@@ -1848,6 +1840,14 @@ fn set_interval_node_budget(budget: Option<u32>) -> u32 {
     crate::interval::set_max_nodes_budget(budget)
 }
 
+/// The CORE SERIALIZATION LANGUAGE, exported so Python reads the SAME table the engine
+/// does instead of keeping its own copy.
+///
+/// `{token: {"arity": int, "precedence": float, "realization": str | None}}`. The audit
+/// counted five hand-maintained copies of this data (C1.10); a copy that drifts is not a
+/// tidiness problem but a soundness one -- the masking walk treated an unknown operator as
+/// a LEAF, so its operands inherited the enclosing bag's role and a `pow` exponent could be
+/// masked, the exact accident the role API exists to prevent.
 #[pyfunction]
 fn core_serialization_ops(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let out = PyDict::new(py);
