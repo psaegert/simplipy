@@ -155,7 +155,7 @@ fn explore_budget_of(effort: Option<usize>) -> usize {
 /// so the bool is a SPELLING of a mode and never a second mechanism beside it.
 #[allow(clippy::too_many_arguments)]
 fn ac_simplify_impl(
-    inner: &engine::Engine,
+    core: &PyEngine,
     py: Python<'_>,
     tokens: Vec<String>,
     max_passes: usize,
@@ -170,11 +170,12 @@ fn ac_simplify_impl(
     if tokens.is_empty() {
         return Ok(PyList::empty(py).into());
     }
-    ensure_ac_well_formed(inner, &tokens)?;
+    ensure_ac_well_formed(&core.inner(), &tokens)?;
     // Budget 0 takes the chain's own entry, so unused exploration is byte-identical
     // BY ROUTING, not by trusting the explore path's early return (D39 effort=0).
     let out = py
         .detach(|| {
+            let inner = core.inner();
             let _work = crate::ac::work::search_budget_scope(work_budget);
             if explore_budget > 0 {
                 inner.ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
@@ -189,7 +190,7 @@ fn ac_simplify_impl(
 /// The infix twin of [`ac_simplify_impl`], shared by `ac_simplify_infix` and
 /// `ac_simplify_infix_in_mode`.
 fn ac_simplify_infix_impl(
-    inner: &engine::Engine,
+    core: &PyEngine,
     py: Python<'_>,
     tokens: Vec<String>,
     max_passes: usize,
@@ -201,9 +202,10 @@ fn ac_simplify_infix_impl(
     if tokens.is_empty() {
         return Ok(String::new());
     }
-    ensure_ac_well_formed(inner, &tokens)?;
+    ensure_ac_well_formed(&core.inner(), &tokens)?;
     // Same routing doctrine as `ac_simplify_impl`: budget 0 is the chain's own entry.
     py.detach(|| {
+        let inner = core.inner();
         let _work = crate::ac::work::search_budget_scope(work_budget);
         if explore_budget > 0 {
             inner.ac_simplify_infix_explore(&tokens, max_passes, mode, explore_budget)
@@ -410,17 +412,41 @@ pub(crate) fn legacy_sugar_engine() -> Engine {
 /// Opaque, compiled engine handle held on the Python side. Construction (parse config.yaml +
 /// rules.json, intern the token table; the AC rule translation is lazy) happens ONCE;
 /// `simplify` is the hot path.
-#[pyclass(name = "Engine", module = "simplipy._core")]
+///
+/// `frozen`: every method takes `&self`, so pyo3 keeps no borrow flag and no call can
+/// fail with "Already borrowed". The one mutation, installing a rule set
+/// ([`PyEngine::set_mode_rules`]), extends the append-only token table and therefore needs
+/// the engine exclusively; the `RwLock` grants that by blocking. Every other call holds a
+/// read guard for its duration, and a waiting push blocks new readers (std's `RwLock` on
+/// Linux prefers writers), so a push lands once the calls in flight return.
+#[pyclass(name = "Engine", module = "simplipy._core", frozen)]
 struct PyEngine {
-    inner: engine::Engine,
+    engine: std::sync::RwLock<engine::Engine>,
     /// C1.9: a digest of the rules AS PUSHED (from_strs' initial set or the last
     /// `set_rules`), echoed back through [`PyEngine::rules_in_sync`] so the Python
     /// shim's `__getstate__` can refuse to pickle an engine whose rule list and
     /// compiled core have silently diverged. The digest is over the PUSHED
     /// representation (the raw (lhs, rhs) token lists), deliberately not the core's
     /// translated/registry-filtered internal set -- the question is "does the recipe
-    /// match what was pushed", not "what did the core keep".
-    pushed_rules_digest: u64,
+    /// match what was pushed", not "what did the core keep". Written under the engine's
+    /// write lock, together with the push it describes.
+    pushed_rules_digest: std::sync::atomic::AtomicU64,
+}
+
+impl PyEngine {
+    /// Shared access to the engine for one call. A read guard never leaves the engine half
+    /// written, and a push replaces each field whole, so a poisoned lock is read through
+    /// rather than refused.
+    ///
+    /// A guard that lives across `py.detach` must be taken INSIDE the detached closure, so
+    /// it is released before the thread waits for the GIL again. Taken outside, a reader
+    /// could hold the guard while waiting for the GIL, held by a thread queued behind a
+    /// waiting push: a deadlock.
+    fn inner(&self) -> std::sync::RwLockReadGuard<'_, engine::Engine> {
+        self.engine
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// C1.9: deterministic digest of a pushed rule list (std SipHash with fixed keys --
@@ -483,8 +509,8 @@ impl PyEngine {
         // C1.9: digest the initial rules exactly as `set_rules` digests later pushes --
         // the same (lhs, rhs) list representation the shim serialized into the JSON.
         Ok(Self {
-            inner,
-            pushed_rules_digest: pushed_rules_digest(&rules),
+            engine: std::sync::RwLock::new(inner),
+            pushed_rules_digest: std::sync::atomic::AtomicU64::new(pushed_rules_digest(&rules)),
         })
     }
 
@@ -513,7 +539,7 @@ impl PyEngine {
         rule_mode: &str,
     ) -> PyResult<Py<PyList>> {
         ac_simplify_impl(
-            &self.inner,
+            self,
             py,
             tokens,
             max_passes,
@@ -553,12 +579,12 @@ impl PyEngine {
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
-        ensure_ac_well_formed(&self.inner, &tokens)?;
+        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let form = parse_ac_form(form)?;
         let suppressed: FxHashSet<usize> = suppressed_rows.into_iter().collect();
         let out = py
             .detach(|| {
-                self.inner.ac_simplify_proj_suppressed(
+                self.inner().ac_simplify_proj_suppressed(
                     &tokens,
                     max_passes,
                     form,
@@ -598,10 +624,10 @@ impl PyEngine {
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
-        ensure_ac_well_formed(&self.inner, &tokens)?;
+        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let out = py
             .detach(|| {
-                self.inner
+                self.inner()
                     .ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
             })
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
@@ -621,7 +647,7 @@ impl PyEngine {
         rule_mode: &str,
     ) -> PyResult<String> {
         ac_simplify_infix_impl(
-            &self.inner,
+            self,
             py,
             tokens,
             max_passes,
@@ -644,7 +670,7 @@ impl PyEngine {
         ensure_tokens_are_tokens(&a)?;
         ensure_tokens_are_tokens(&b)?;
         let mode = parse_rule_mode(rule_mode)?;
-        py.detach(|| self.inner.ac_ordered_below_in(&a, &b, mode))
+        py.detach(|| self.inner().ac_ordered_below_in(&a, &b, mode))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
@@ -665,7 +691,7 @@ impl PyEngine {
         py: Python<'_>,
         exprs: Vec<Vec<String>>,
     ) -> PyResult<std::collections::HashMap<String, u64>> {
-        Ok(py.detach(|| self.inner.ac_node_census(&exprs)))
+        Ok(py.detach(|| self.inner().ac_node_census(&exprs)))
     }
 
     #[pyo3(signature = (exprs, *, rule_mode))]
@@ -679,7 +705,7 @@ impl PyEngine {
             ensure_tokens_are_tokens(e)?;
         }
         let mode = parse_rule_mode(rule_mode)?;
-        Ok(py.detach(|| self.inner.ac_canonical_keys(&exprs, mode)))
+        Ok(py.detach(|| self.inner().ac_canonical_keys(&exprs, mode)))
     }
 
     /// OFFLINE miner: the MARK a mine of `rule_mode` sets for `source` -- the mode's serve
@@ -694,7 +720,7 @@ impl PyEngine {
     ) -> PyResult<Vec<String>> {
         ensure_tokens_are_tokens(&source)?;
         let mode = parse_rule_mode(rule_mode)?;
-        py.detach(|| self.inner.mine_mark(&source, mode))
+        py.detach(|| self.inner().mine_mark(&source, mode))
             .map(|m| m.tokens().to_vec())
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
@@ -713,7 +739,7 @@ impl PyEngine {
             ensure_tokens_are_tokens(e)?;
         }
         let mode = parse_rule_mode(rule_mode)?;
-        Ok(py.detach(|| self.inner.mine_sources(&enumerated, mode)))
+        Ok(py.detach(|| self.inner().mine_sources(&enumerated, mode)))
     }
 
     /// The rules `rule_mode` would serve from `rules` without installing them: the load
@@ -731,7 +757,7 @@ impl PyEngine {
             ensure_tokens_are_tokens(r)?;
         }
         let mode = parse_rule_mode(rule_mode)?;
-        Ok(py.detach(|| self.inner.ac_translate_preview(&rules, mode)))
+        Ok(py.detach(|| self.inner().ac_translate_preview(&rules, mode)))
     }
 
     /// Does the rule `lhs -> rhs` state something the engine performs itself, read in
@@ -748,7 +774,7 @@ impl PyEngine {
         ensure_tokens_are_tokens(&lhs)?;
         ensure_tokens_are_tokens(&rhs)?;
         let mode = parse_rule_mode(rule_mode)?;
-        py.detach(|| self.inner.law_instance(&lhs, &rhs, mode))
+        py.detach(|| self.inner().law_instance(&lhs, &rhs, mode))
             .map(|v| v.map(str::to_string))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
@@ -781,12 +807,13 @@ impl PyEngine {
         if digits == 0 {
             return Err(PyValueError::new_err("digits must be at least 1"));
         }
-        ensure_ac_well_formed(&self.inner, &tokens)?;
+        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let budget = resimplify.then(|| explore_budget_of(explore_budget));
         let out = py
             .detach(|| {
                 let _work = crate::ac::work::search_budget_scope(work_budget);
-                self.inner.ac_prettify(&tokens, digits, form, mode, budget)
+                self.inner()
+                    .ac_prettify(&tokens, digits, form, mode, budget)
             })
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
         Ok(match out {
@@ -803,10 +830,10 @@ impl PyEngine {
         canon: &str,
         rule_mode: &str,
     ) -> PyResult<u64> {
-        ensure_ac_well_formed(&self.inner, &tokens)?;
+        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
         let canon_mode = parse_canon_mode(canon, mode)?;
-        py.detach(|| self.inner.ac_complexity(&tokens, mode, canon_mode))
+        py.detach(|| self.inner().ac_complexity(&tokens, mode, canon_mode))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
@@ -823,11 +850,11 @@ impl PyEngine {
         canon: &str,
         rule_mode: &str,
     ) -> PyResult<u64> {
-        ensure_ac_well_formed(&self.inner, &tokens)?;
+        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
         let canon_mode = parse_canon_mode(canon, mode)?;
         py.detach(|| {
-            self.inner
+            self.inner()
                 .ac_complexity_certified(&tokens, mode, canon_mode)
         })
         .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
@@ -844,7 +871,7 @@ impl PyEngine {
         rule_mode: &str,
     ) -> PyResult<(usize, usize, usize, usize)> {
         let mode = parse_rule_mode(rule_mode)?;
-        Ok(py.detach(|| self.inner.ac_rules_info_in_mode(mode)))
+        Ok(py.detach(|| self.inner().ac_rules_info_in_mode(mode)))
     }
 
     /// [`PyEngine::ac_served_rules`] for ANY mode: what that mode actually fires, with
@@ -856,7 +883,7 @@ impl PyEngine {
         rule_mode: &str,
     ) -> PyResult<Vec<ServedRule>> {
         let mode = parse_rule_mode(rule_mode)?;
-        Ok(py.detach(|| self.inner.ac_served_rules_in_mode(mode)))
+        Ok(py.detach(|| self.inner().ac_served_rules_in_mode(mode)))
     }
 
     /// How many rules this mode's OWN file was loaded with, BEFORE translation -- `None`
@@ -867,7 +894,7 @@ impl PyEngine {
     /// index -- it is a count of raw loaded pairs.
     #[pyo3(signature = (*, rule_mode))]
     fn mode_rules_len(&self, rule_mode: &str) -> PyResult<Option<usize>> {
-        Ok(self.inner.mode_rules_len(parse_rule_mode(rule_mode)?))
+        Ok(self.inner().mode_rules_len(parse_rule_mode(rule_mode)?))
     }
 
     /// Licence-registry load-consumer audit (C1.20): rules refused at AC load by the
@@ -876,7 +903,7 @@ impl PyEngine {
     /// stale or foreign artifact carried a violation past its own mine. Forces the
     /// lazy translation.
     fn ac_registry_dropped(&self, py: Python<'_>) -> PyResult<usize> {
-        Ok(py.detach(|| self.inner.ac_registry_dropped()))
+        Ok(py.detach(|| self.inner().ac_registry_dropped()))
     }
 
     /// C36: the per-reason rule-drop census as a dict -- what happened to every
@@ -889,7 +916,7 @@ impl PyEngine {
     ) -> PyResult<std::collections::HashMap<String, usize>> {
         let mode = parse_rule_mode(rule_mode)?;
         Ok(py
-            .detach(|| self.inner.ac_rules_drop_census(mode))
+            .detach(|| self.inner().ac_rules_drop_census(mode))
             .into_iter()
             .collect())
     }
@@ -911,7 +938,7 @@ impl PyEngine {
         rule_mode: &str,
     ) -> PyResult<Vec<(usize, usize, bool, String)>> {
         let mode = parse_rule_mode(rule_mode)?;
-        Ok(py.detach(|| self.inner.ac_shadow_census(mode)))
+        Ok(py.detach(|| self.inner().ac_shadow_census(mode)))
     }
 
     /// The licence registry for one would-be rule (C1.20), as a PROBE: the mint channels
@@ -943,7 +970,7 @@ impl PyEngine {
             if let Some(r) = engine::refusals::mint_refusals(&source, &mark, &target, &vars) {
                 return Some(r.name().to_string());
             }
-            if self.inner.mint_pole_refusal(&source, &target, &vars) {
+            if self.inner().mint_pole_refusal(&source, &target, &vars) {
                 engine::stats::REGISTRY_POLE_REFUSALS
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(
@@ -960,7 +987,7 @@ impl PyEngine {
     /// Part of the drop-in-engine surface; the most-called simplipy method on the per-candidate
     /// inference path.
     fn is_valid(&self, py: Python<'_>, tokens: Vec<String>) -> bool {
-        py.detach(|| self.inner.is_valid(&tokens))
+        py.detach(|| self.inner().is_valid(&tokens))
     }
 
     /// `prefix_to_infix`. `power` in {'func','**'} (default 'func');
@@ -984,8 +1011,11 @@ impl PyEngine {
             }
         };
         ensure_tokens_are_tokens(&tokens)?;
-        py.detach(|| self.inner.prefix_to_infix(&tokens, power_mode, realization))
-            .map_err(pyo3::exceptions::PyValueError::new_err)
+        py.detach(|| {
+            self.inner()
+                .prefix_to_infix(&tokens, power_mode, realization)
+        })
+        .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     /// SYNTACTIC prefix -> tagged regrouping (`forms.rs`): the notation half of the
@@ -993,7 +1023,7 @@ impl PyEngine {
     fn to_tagged_syntactic(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
         ensure_tokens_are_tokens(&tokens)?;
         let out = py
-            .detach(|| self.inner.to_tagged_syntactic(&tokens))
+            .detach(|| self.inner().to_tagged_syntactic(&tokens))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
@@ -1002,7 +1032,7 @@ impl PyEngine {
     fn to_prefix_syntactic(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<Py<PyList>> {
         ensure_tokens_are_tokens(&tokens)?;
         let out = py
-            .detach(|| self.inner.to_prefix_syntactic(&tokens))
+            .detach(|| self.inner().to_prefix_syntactic(&tokens))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
@@ -1010,14 +1040,14 @@ impl PyEngine {
     /// Well-formedness in either token dialect; `ValueError` names the malformation.
     fn check_form(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<()> {
         ensure_tokens_are_tokens(&tokens)?;
-        py.detach(|| self.inner.check_form(&tokens))
+        py.detach(|| self.inner().check_form(&tokens))
             .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     /// `infix_to_prefix`. Part of the drop-in-engine surface.
     fn infix_to_prefix(&self, py: Python<'_>, infix_expression: &str) -> PyResult<Py<PyList>> {
         let out = py
-            .detach(|| self.inner.infix_to_prefix(infix_expression))
+            .detach(|| self.inner().infix_to_prefix(infix_expression))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
@@ -1027,7 +1057,7 @@ impl PyEngine {
     fn convert_expression(&self, py: Python<'_>, prefix_expr: Vec<String>) -> PyResult<Py<PyList>> {
         ensure_tokens_are_tokens(&prefix_expr)?;
         let out = py
-            .detach(|| self.inner.convert_expression(&prefix_expr))
+            .detach(|| self.inner().convert_expression(&prefix_expr))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(PyList::new(py, out)?.into())
     }
@@ -1047,7 +1077,7 @@ impl PyEngine {
     ) -> PyResult<Py<PyList>> {
         let out = py
             .detach(|| {
-                self.inner
+                self.inner()
                     .parse(infix_expression, convert_expression, mask_numbers, strict)
             })
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -1060,7 +1090,7 @@ impl PyEngine {
         py: Python<'_>,
         tokens: Vec<String>,
     ) -> PyResult<Py<PyList>> {
-        let out = py.detach(|| self.inner.operators_to_realizations(&tokens));
+        let out = py.detach(|| self.inner().operators_to_realizations(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 
@@ -1070,7 +1100,7 @@ impl PyEngine {
         py: Python<'_>,
         tokens: Vec<String>,
     ) -> PyResult<Py<PyList>> {
-        let out = py.detach(|| self.inner.realizations_to_operators(&tokens));
+        let out = py.detach(|| self.inner().realizations_to_operators(&tokens));
         Ok(PyList::new(py, out)?.into())
     }
 
@@ -1083,7 +1113,7 @@ impl PyEngine {
         tokens: Vec<String>,
     ) -> PyResult<Option<String>> {
         ensure_tokens_are_tokens(&tokens)?;
-        Ok(py.detach(|| self.inner.evaluate_constant_subtree(&tokens)))
+        Ok(py.detach(|| self.inner().evaluate_constant_subtree(&tokens)))
     }
 
     /// The CPython-exact `str(float)` formatter alone (the result-formatting half of numeric folding),
@@ -1111,7 +1141,7 @@ impl PyEngine {
     ) -> PyResult<Vec<f64>> {
         ensure_tokens_are_tokens(&tokens)?;
         py.detach(|| {
-            self.inner
+            self.inner()
                 .evaluate_batch(&tokens, &var_names, &x_flat, n_rows, &params)
         })
         .map_err(PyValueError::new_err)
@@ -1155,7 +1185,7 @@ impl PyEngine {
         ensure_tokens_are_tokens(&candidate)?;
         let mi = min_informative.unwrap_or(n_rows / 8).max(1);
         py.detach(|| {
-            self.inner.equivalent_no_const_check(
+            self.inner().equivalent_no_const_check(
                 &source, &candidate, &var_names, &x_flat, n_rows, challenges, rtol, atol, mi, seed,
             )
         })
@@ -1170,7 +1200,7 @@ impl PyEngine {
         ensure_tokens_are_tokens(&tokens)?;
         Ok(crate::interval::finite_ae(
             &tokens,
-            self.inner.operators_ref(),
+            self.inner().operators_ref(),
         ))
     }
 
@@ -1183,7 +1213,7 @@ impl PyEngine {
         ensure_tokens_are_tokens(&tokens)?;
         Ok(crate::interval::zero_set_null_generic_const(
             &tokens,
-            self.inner.operators_ref(),
+            self.inner().operators_ref(),
         ))
     }
 
@@ -1194,7 +1224,7 @@ impl PyEngine {
         ensure_tokens_are_tokens(&tokens)?;
         Ok(crate::interval::entire_analytic_composition_probe(
             &tokens,
-            self.inner.operators_ref(),
+            self.inner().operators_ref(),
         ))
     }
 
@@ -1219,8 +1249,8 @@ impl PyEngine {
             Vec<(Vec<String>, bool, bool)>,
         )>,
     > {
-        ensure_ac_well_formed(&self.inner, &tokens)?;
-        py.detach(|| self.inner.ac_odd_neg_carriers(&tokens, max_passes))
+        ensure_ac_well_formed(&self.inner(), &tokens)?;
+        py.detach(|| self.inner().ac_odd_neg_carriers(&tokens, max_passes))
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
@@ -1231,7 +1261,7 @@ impl PyEngine {
     fn interval_class(&self, tokens: Vec<String>) -> PyResult<String> {
         ensure_tokens_are_tokens(&tokens)?;
         Ok(
-            match crate::interval::value_class(&tokens, self.inner.operators_ref()) {
+            match crate::interval::value_class(&tokens, self.inner().operators_ref()) {
                 Some(c) => format!("{:?}", c).to_uppercase(),
                 None => "ERROR".to_string(),
             },
@@ -1249,7 +1279,7 @@ impl PyEngine {
         ensure_tokens_are_tokens(&tokens)?;
         Ok(crate::interval::value_set(
             &tokens,
-            self.inner.operators_ref(),
+            self.inner().operators_ref(),
             &crate::interval::Vs::reals(),
         )
         .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan)))
@@ -1329,7 +1359,7 @@ impl PyEngine {
             .map(|(lo, hi)| crate::interval::Vs::interval(*lo, *hi, false, false))
             .collect();
         Ok(
-            crate::interval::value_set_p(&tokens, self.inner.operators_ref(), &doms, &[])
+            crate::interval::value_set_p(&tokens, self.inner().operators_ref(), &doms, &[])
                 .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan, v.lo, v.hi)),
         )
     }
@@ -1351,7 +1381,7 @@ impl PyEngine {
         Ok(crate::interval::domain_extension(
             &source,
             &target,
-            self.inner.operators_ref(),
+            self.inner().operators_ref(),
         ))
     }
 
@@ -1374,7 +1404,7 @@ impl PyEngine {
             &src_params,
             &target,
             &tgt_params,
-            self.inner.operators_ref(),
+            self.inner().operators_ref(),
         ))
     }
 
@@ -1411,7 +1441,7 @@ impl PyEngine {
         let mi = min_informative.unwrap_or(n_rows / 8).max(1);
         let rescue = !matches!(parse_rule_mode(rule_mode)?, engine::RuleMode::Default);
         py.detach(|| {
-            self.inner.find_rule_in(
+            self.inner().find_rule_in(
                 &source,
                 simplified_length,
                 max_target,
@@ -1456,7 +1486,7 @@ impl PyEngine {
         let mode = parse_rule_mode(rule_mode)?;
         let inner = py
             .detach(|| {
-                self.inner
+                self.inner()
                     .build_candidate_library(&candidates, &var_names, &x_flat, n_rows, mode)
             })
             .map_err(PyValueError::new_err)?;
@@ -1512,7 +1542,7 @@ impl PyEngine {
             confirm_seed,
         )?;
         py.detach(|| {
-            self.inner.find_rule_lib(
+            self.inner().find_rule_lib(
                 &source,
                 lib,
                 max_target,
@@ -1573,7 +1603,7 @@ impl PyEngine {
         )?;
         let verdict = py
             .detach(|| {
-                self.inner.judge_hint(
+                self.inner().judge_hint(
                     &source,
                     &hint,
                     lib,
@@ -1627,7 +1657,7 @@ impl PyEngine {
         };
         let verdict = py
             .detach(|| {
-                self.inner
+                self.inner()
                     .judge_pair(&source, &target, &var_names, &x_flat, n_rows, &spec, seed)
             })
             .map_err(PyValueError::new_err)?;
@@ -1653,9 +1683,13 @@ impl PyEngine {
     /// answers "does the core hold the DEFAULT recipe it was pushed", and the other two
     /// sets are separate recipes carried by the Python shim's own attributes, which
     /// re-push them on every core rebuild.
+    ///
+    /// Safe while other threads are inside the core: the push waits, with the GIL
+    /// released, for the calls in flight to return, and new calls queue behind it.
     #[pyo3(signature = (rule_mode, rules))]
     fn set_mode_rules(
-        &mut self,
+        &self,
+        py: Python<'_>,
         rule_mode: &str,
         rules: Option<Vec<(Vec<String>, Vec<String>)>>,
     ) -> PyResult<()> {
@@ -1668,13 +1702,22 @@ impl PyEngine {
                 ensure_tokens_are_tokens(rhs)?;
             }
         }
-        if mode == engine::RuleMode::Default {
-            let rules = rules.unwrap_or_default();
-            self.pushed_rules_digest = pushed_rules_digest(&rules);
-            self.inner.set_rules(rules);
-            return Ok(());
-        }
-        self.inner.set_mode_rules(mode, rules);
+        py.detach(|| {
+            let mut engine = self
+                .engine
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if mode == engine::RuleMode::Default {
+                let rules = rules.unwrap_or_default();
+                self.pushed_rules_digest.store(
+                    pushed_rules_digest(&rules),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                engine.set_rules(rules);
+            } else {
+                engine.set_mode_rules(mode, rules);
+            }
+        });
         Ok(())
     }
 
@@ -1684,7 +1727,10 @@ impl PyEngine {
     /// the worker from the LIST, so a diverged parent would otherwise silently spawn
     /// workers running different rules.
     fn rules_in_sync(&self, rules: Vec<(Vec<String>, Vec<String>)>) -> bool {
-        pushed_rules_digest(&rules) == self.pushed_rules_digest
+        pushed_rules_digest(&rules)
+            == self
+                .pushed_rules_digest
+                .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// OFFLINE (mine driver): mine ONE source-length IN PARALLEL (rayon, all cores) -- Kruskal-
@@ -1746,7 +1792,7 @@ impl PyEngine {
             confirm_seed,
         )?;
         Ok(py.detach(|| {
-            self.inner.mine_one_length(
+            self.inner().mine_one_length(
                 &sources,
                 lib,
                 max_target,
@@ -1780,7 +1826,7 @@ impl PyEngine {
     ) -> PyResult<Option<bool>> {
         ensure_tokens_are_tokens(&candidate)?;
         py.detach(|| {
-            self.inner.exist_constants_fit_linear(
+            self.inner().exist_constants_fit_linear(
                 &candidate, &var_names, &x_flat, n_rows, &y_target, rtol, atol,
             )
         })
@@ -1808,7 +1854,7 @@ impl PyEngine {
     ) -> PyResult<bool> {
         ensure_tokens_are_tokens(&candidate)?;
         py.detach(|| {
-            self.inner.exist_constants_fit(
+            self.inner().exist_constants_fit(
                 &candidate, &var_names, &x_flat, n_rows, &y_target, rtol, atol, n_restarts, seed,
             )
         })

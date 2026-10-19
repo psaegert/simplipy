@@ -11,7 +11,6 @@ import hashlib
 import importlib
 import os
 import threading
-import time
 import warnings
 from itertools import product
 from types import CodeType, FunctionType
@@ -526,8 +525,6 @@ class SimpliPyEngine:
         # guards every first-use build and unload so two threads cannot double-build.
         self._mode_rule_sources: dict[str, str] = {}
         self._mode_load_lock = threading.Lock()
-        self._push_gate = threading.Condition()
-        self._push_waiting = False
         self._core_loaded_modes = {
             m for m in _MODE_RULES_ATTR
             if m in eager and getattr(self, _MODE_RULES_ATTR[m]) is not None}
@@ -659,8 +656,6 @@ class SimpliPyEngine:
         # file on first use -- note this makes such a pickle portable exactly as far
         # as the recorded artifact paths resolve (the spawn-worker case it serves).
         state.pop('_mode_load_lock', None)
-        state.pop('_push_gate', None)
-        state.pop('_push_waiting', None)
         state.pop('_core_loaded_modes', None)
         return state
 
@@ -684,8 +679,6 @@ class SimpliPyEngine:
         self.__dict__.setdefault('_modes', 'all')
         self.__dict__.setdefault('_mode_rule_sources', {})
         self._mode_load_lock = threading.Lock()
-        self._push_gate = threading.Condition()
-        self._push_waiting = False
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.__dict__.setdefault('real_simplification_rules', None),
@@ -724,61 +717,15 @@ class SimpliPyEngine:
                 m for m in _MODE_RULES_ATTR
                 if getattr(self, _MODE_RULES_ATTR[m]) is not None}
 
-    def _await_no_pending_push(self) -> None:
-        """The reader half of the lazy-install fairness gate: hold a NEW
-        ``simplify``/``complexity`` core entry while a mode-set push is waiting.
-
-        Without this, a push under sustained concurrent traffic starves: the core's
-        exclusive (`&mut`) entry only opens when NO call is in flight, and
-        overlapping detached readers keep it closed indefinitely (measured: two
-        threads of long ``simplify`` calls held it closed past a 60 s deadline).
-        Readers pausing at this gate drain the in-flight calls, the push lands in
-        roughly one call duration, and the gate reopens. The fast path -- no push
-        pending, i.e. always, outside a lazy first use or an ``unload_mode`` -- is
-        one attribute test.
-        """
-        if self._push_waiting:
-            with self._push_gate:
-                while self._push_waiting:
-                    self._push_gate.wait(timeout=1.0)
-
     def _push_mode_rules(self, rule_mode: str, rules: list[tuple] | None) -> None:
-        """Push (or with ``None`` retract) one mode's set into the LIVE core, riding
-        out in-flight borrow contention.
+        """Push (or with ``None`` retract) one mode's set into the LIVE core.
 
-        The core's ``set_mode_rules`` needs exclusive access (`&mut` -- the token
-        table is deliberately lock-free), so pyo3 refuses it with ``RuntimeError:
-        Already borrowed`` while any other thread is inside a core call. The refusal
-        is transient -- a reader's borrow ends with its call -- so this helper
-        raises the fairness flag (parking NEW ``simplify``/``complexity`` entries at
-        :meth:`_await_no_pending_push`) and retries until the in-flight calls drain
-        and the push lands; it re-raises loudly, with the cause named, only if the
-        core never falls quiet within the deadline (e.g. long-running core work
-        outside the gated methods). Single-threaded callers never retry. Callers
-        hold ``_mode_load_lock``, so pushes cannot race each other -- only readers.
+        Safe while other threads are inside the core: the core's push waits for the
+        calls in flight to return, and translates the set before it returns. Callers
+        hold ``_mode_load_lock``, so two pushes cannot race each other.
         """
-        payload = (None if rules is None
-                   else [(list(lhs), list(rhs)) for lhs, rhs in rules])
-        deadline = time.monotonic() + 60.0
-        self._push_waiting = True
-        try:
-            while True:
-                try:
-                    self._core.set_mode_rules(rule_mode, payload)
-                    return
-                except RuntimeError as exc:
-                    if 'Already borrowed' not in str(exc) or time.monotonic() > deadline:
-                        raise RuntimeError(
-                            f"could not install the {rule_mode!r} rule set: the "
-                            f"compiled core stayed exclusively unavailable (other "
-                            f"threads kept it busy for 60 s). Retry at a quieter "
-                            f"moment, or build the set eagerly (modes=...) at "
-                            f"construction.") from exc
-                    time.sleep(0.002)
-        finally:
-            with self._push_gate:
-                self._push_waiting = False
-                self._push_gate.notify_all()
+        self._core.set_mode_rules(
+            rule_mode, None if rules is None else [(list(lhs), list(rhs)) for lhs, rhs in rules])
 
     def _ensure_mode_loaded(self, rule_mode: str) -> None:
         """Build ``rule_mode``'s set NOW if this engine names one that the core does
@@ -2112,9 +2059,6 @@ class SimpliPyEngine:
         # fail-closed `real` check below, so that check judges the loaded state.
         if mode is not Mode.f64:
             self._ensure_mode_loaded(_RULE_MODE[mode])
-        # The reader half of the lazy-install fairness gate (one attribute test
-        # when no push is pending -- i.e. always, outside a first-use build).
-        self._await_no_pending_push()
 
         if isinstance(expression, str):
             tokens = self._core.parse(expression, strict=True)
@@ -2232,7 +2176,6 @@ class SimpliPyEngine:
         mode = _coerce_mode(mode)
         if mode is not Mode.f64:
             self._ensure_mode_loaded(_RULE_MODE[mode])
-        self._await_no_pending_push()
         if mode is Mode.real and self._core.mode_rules_len(rule_mode='real') is None:
             raise ValueError("mode='real' needs a ruleset mined for it, and this artifact has none")
         in_form, tokens = self._conversion_input(expression)
@@ -2285,10 +2228,8 @@ class SimpliPyEngine:
             tokens = list(expression)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
         # LAZY MODES (task #88): same first-use hook as `simplify` -- the mode
-        # argument reaches the core below, so a deferred set must be built first --
-        # and the same reader half of the install fairness gate.
+        # argument reaches the core below, so a deferred set must be built first.
         self._ensure_mode_loaded(rule_mode)
-        self._await_no_pending_push()
         if certified:
             return self._core.ac_complexity_certified(tokens, 'mode', rule_mode=rule_mode)
         return self._core.ac_complexity(tokens, 'mode', rule_mode=rule_mode)
