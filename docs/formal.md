@@ -321,7 +321,14 @@ zero is not read, the class's cheapest orientation can leave that value off the 
 the class among terms free of it: with the search off, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))` is
 `+inf` at `x1 = 3` where its limit is `-inf`; a class scaled by a factor of unknown sign:
 `log(x2*(x1 - 3))/(3 - x1)` is `+inf` at `x1 = 3, x2 = -1` where its limit from `x1 < 3` is
-`-inf`); one class split across the
+`-inf`); a sum whose terms share a factor that is undefined on a region is not factored in `f64`
+and `real`, since FACTOR asks its content to be finite almost everywhere, which `log(3 - x3)` is
+not (it is NaN for `x3 > 3`), although the law fails only where the content is infinite: so
+`log(3 - x3)/(x3 - 3) + log(3 - x3)` stays two terms and is NaN at `x3 = 3`, each term reading
+its own limit (`-inf + inf`), where the limit is `+inf`; joined, the product would hold the class
+inside a sum among terms free of it, the residual above, and the cheapest orientation of that sum,
+`log(3 - x3)*(1/(x3 - 3) + 1)`, is `-inf` there, which is `permissive`'s answer (the joined
+`log(3 - x3)*(1 - 1/(3 - x3))` keeps the limit); one class split across the
 terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite;
 where two singularities meet, the float value can differ from the joint limit (most such points
 have none); polynomial factors are not classes (`9 - x1^2` does not hold `3 - x1`), and a sum that
