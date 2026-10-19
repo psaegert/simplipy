@@ -138,13 +138,15 @@ model predictions.
   explicit or tagged tokens. A fraction that fits the digit budget stays a fraction (`x1/4.2`,
   `22*x1/7`), any other number is its float64 in shortest form (`9.765625e-4*x1`,
   `2.1458314277221002*x1` for a 33-digit literal), pi is factored out as the literal
-  `3.141592653589793` where the rest fits (`1/(2*3.141592653589793)`), and even roots read
-  `rootn(x, n)`. It writes numbers and decides no value: a function of numbers stays a function
+  `3.141592653589793` where the rest fits (`1/(2*3.141592653589793)`), even roots read
+  `rootn(x, n)`, and every divisor of a product joins one denominator, functions and sums
+  included (`x1/(x2*exp(x3))`, `x1/(sin(x3)*(x2 + 1))`). It writes numbers and decides no value: a function of numbers stays a function
   (`x1*exp(-190.5)`), and the display is not simplified again, so it never collects what it
   wrote alike (`sin(1.00000000000000000001*x1) - sin(x1)` shows as `sin(x1) - sin(x1)`). A
   number is written exactly or as its float64, so the display reads back to the same float64
-  values, and displaying a display gives it back, on the release corpus in all three forms,
-  except where writing numbers as floats makes parts of it alike (the display of
+  values, and displaying a display gives it back: on the release corpus and srbf's 6,531 ground
+  truths in all three forms, and on 1,000 of its predictions, except where writing numbers as
+  floats makes parts of it alike or a power of them computable (the display of
   `sin(x1) - sin(x1)` is `0`). Nothing inside SimpliPy calls it; see the guide "Displaying
   expressions".
 <!-- TO BE MEASURED AFTER THE RE-MINE: the speed of 0.15.0 against 0.14.7, per mode, on the

@@ -6,7 +6,7 @@ use super::memo::SimplifyCtx;
 use super::Engine;
 use crate::ac::convert::from_prefix;
 use crate::ac::expr::{canon, Cx};
-use crate::ac::prettify::{to_infix, to_prefix, to_tagged, Display, Node};
+use crate::ac::prettify::{to_infix, to_prefix, to_tagged, Display, Layout, Node};
 
 /// The output form of `prettify`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +23,14 @@ impl PrettyForm {
             "explicit" => Some(PrettyForm::Explicit),
             "tagged" => Some(PrettyForm::Tagged),
             _ => None,
+        }
+    }
+
+    /// The form's divisor layout: one denominator, or a tagged section.
+    fn layout(self) -> Layout {
+        match self {
+            PrettyForm::Infix | PrettyForm::Explicit => Layout::OneDenominator,
+            PrettyForm::Tagged => Layout::Sections,
         }
     }
 }
@@ -45,14 +53,20 @@ fn render(node: &Node, form: PrettyForm) -> Pretty {
 impl Engine {
     /// The display tree of an expression's canonical state, read in `mode`'s number domain with
     /// the certificate-free context every projection uses. `None` on malformed input.
-    fn display_node(&self, tokens: &[String], digits: usize, mode: RuleMode) -> Option<Node> {
+    fn display_node(
+        &self,
+        tokens: &[String],
+        digits: usize,
+        mode: RuleMode,
+        layout: Layout,
+    ) -> Option<Node> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let state = canon(from_prefix(&toks, &bare)?, &bare);
-        Some(Display::new(&bare, digits).node(&state))
+        Some(Display::new(&bare, digits, layout).node(&state))
     }
 
     /// `prettify`: the display of `tokens` (any dialect) under the digit budget `digits`, its
@@ -64,7 +78,7 @@ impl Engine {
         form: PrettyForm,
         mode: RuleMode,
     ) -> Option<Pretty> {
-        let node = self.display_node(tokens, digits, mode)?;
+        let node = self.display_node(tokens, digits, mode, form.layout())?;
         Some(render(&node, form))
     }
 }

@@ -2213,25 +2213,29 @@ class SimpliPyEngine:
         * pi is the literal ``3.141592653589793``: a value that is a fitting fraction times
           or over it is written with the literal factored out (``3*x0^2/(20*3.141592653589793*x1*x2)``).
         * A float whose reciprocal float64 holds as written stays a divisor where the
-          denominator has another factor; a bare ``x1/0.225147640565301`` is
+          product has another divisor; a bare ``x1/0.225147640565301`` is
           ``4.441529999999994*x1``.
         * A function of numbers stays a function, its numbers written by these rules
           (``x1*exp(-381/2)`` is ``x1*exp(-190.5)``). No numbers combine to inf, 0 or a
           subnormal.
         * Exponents follow the same rules; ``x^(1/n)`` and ``x^(-1/n)`` are written
           ``rootn(x, n)`` and ``1/rootn(x, n)`` for even ``n``.
-        * Divisors that are numbers, variables or their powers and roots share one
-          denominator (``x0^2/(x1*x2)``), written the same whether the canonical form holds a
-          reciprocal per factor or one of their product; any other divisor keeps its own slash.
+        * One slash: every divisor of a product joins one denominator, functions and sums
+          included (``x1/x2/exp(x3)`` is ``x1/(x2*exp(x3))``, ``x1/sin(x3)/(x2 + 1)`` is
+          ``x1/(sin(x3)*(x2 + 1))``). The display is of the product reading it back builds:
+          the same whether the canonical form holds a reciprocal per factor or one of their
+          product, its factors in canonical order and a sign the denominator holds kept there
+          (``x3/(-(x11 + x9))``). Tagged tokens write a section member per reciprocal, so a
+          reciprocal of a product with a sum or a function stays one bag in the section.
         * Scientific notation from ``1e6`` and below ``1e-3``.
 
         A number is written exactly or as the float64 nearest to it, so the display reads
         back to the same float64 values: it evaluates as the expression does, up to the order
         of its operations. Displaying a display gives it back
         (``prettify(prettify(x)) == prettify(x)``), except where writing numbers as their
-        floats makes parts of the display alike that the expression keeps apart: the display
-        of ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``sin(x1) - sin(x1)``, whose own
-        display is ``0``.
+        floats lets reading the display collect or compute what the expression keeps apart:
+        the display of ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``sin(x1) - sin(x1)``,
+        whose own display is ``0``.
 
         Parameters
         ----------

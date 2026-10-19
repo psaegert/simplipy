@@ -58,8 +58,23 @@ engine.prettify(engine.simplify("3*x0^2/(20*3.141592653589793*x1*x2)"))
 # -> '3*x0^2/(20*3.141592653589793*x1*x2)'
 ```
 
-**Divisors.** A float whose reciprocal float64 holds as written stays a divisor where the
-denominator has another factor; a bare `x1/0.225147640565301` becomes a multiplier (above).
+**Divisors.** Every divisor of a product joins one denominator, functions and sums included:
+one slash. The display is of the product reading it back builds, so it is the same whether the
+canonical form holds a reciprocal per factor or one of their product. A float whose reciprocal
+float64 holds as written stays a divisor where the product has another divisor; a bare
+`x1/0.225147640565301` becomes a multiplier (above).
+
+```python
+engine.prettify(engine.simplify("x1/x2/exp(x3)"))
+# -> 'x1/(x2*exp(x3))'
+engine.prettify(engine.simplify("x1/sin(x3)/(x2 + 1)"))
+# -> 'x1/(sin(x3)*(x2 + 1))'
+engine.prettify(engine.simplify("x1/243/x2"))
+# -> 'x1/(243*x2)'
+```
+
+Tagged tokens write a section member per reciprocal, as the tagged form reads them, so there a
+reciprocal of a product holding a sum or a function stays one bag in the section.
 
 **Functions of numbers** stay functions, their numbers written by the same rules: what `simplify`
 keeps, the display shows. No numbers combine to inf, 0 or a subnormal.

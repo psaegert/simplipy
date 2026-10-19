@@ -140,14 +140,47 @@ def test_the_display_is_not_simplified(eng, text, expected):
 
 
 def test_divisors(eng):
-    """Rule 5 and the grouping: a float whose reciprocal float64 holds as written stays a divisor
-    beside another divisor; numbers, variables and their powers group; any other divisor keeps
-    its own slash, as the state keeps it."""
+    """Rule 5: a float whose reciprocal float64 holds as written stays a divisor beside another
+    divisor; a bare one is a multiplier."""
     assert show(eng, 'x1/243/x2') == 'x1/(243*x2)'
     assert show(eng, 'x1/243') == '0.00411522633744856*x1'
     assert show(eng, 'x0/(x1^2*x2)') == 'x0/(x1^2*x2)'
-    assert show(eng, 'x0/(cos(x1)*x2)') == 'x0/x2/cos(x1)'
-    assert show(eng, '1/x1^(1/2)/sin(1/x1)') == '1/rootn(x1, 2)/sin(1/x1)'
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('x1/x2/exp(x3)', 'x1/(x2*exp(x3))'),
+    ('x1/sin(x3)/(x2 + 1)', 'x1/(sin(x3)*(x2 + 1))'),
+    ('x1/x2/(x3 + 1)', 'x1/(x2*(x3 + 1))'),
+    ('x1/x2/x3^2', 'x1/(x2*x3^2)'),
+    ('x0/(cos(x1)*x2)', 'x0/(x2*cos(x1))'),
+    ('1/x1^(1/2)/sin(1/x1)', '1/(rootn(x1, 2)*sin(1/x1))'),
+    ('-x1/(3*x2)/(x3 + 1)', '-x1/(3*x2*(x3 + 1))'),
+])
+def test_one_slash(eng, text, expected):
+    """Every divisor of a product joins one denominator product, functions and sums included."""
+    assert show(eng, text) == expected
+
+
+def test_a_joined_reciprocal_keeps_its_sign_and_its_tagged_bag(eng):
+    """A joined reciprocal's sign stays in the denominator, where the state holds it; the tagged
+    section, which inverts each member on its own, keeps a joined reciprocal of a sum one bag."""
+    assert eng.prettify('x3/(-(x11 + x9))') == 'x3/(-(x11 + x9))'
+    assert eng.prettify(['/', 'x3', 'neg', '+', 'x11', 'x9']) == ['/', 'x3', 'neg', '+', 'x11', 'x9']
+    assert eng.prettify('x1/(x2*(x3 + 1))', form='tagged') == [
+        '<mul>', 'x1', '<div>', '<mul>', 'x2', '<add>', 'x3', '1', '</add>', '</mul>', '</mul>']
+
+
+def test_a_number_beside_a_fitted_constant_keeps_its_place(eng):
+    """A fitted constant absorbs a coefficient beside it, so the number of a joined reciprocal
+    stays in the denominator: the display loses no number, and it is its own display."""
+    import numpy as np
+    text = '<constant>*x5/(0.2*(rootn(x2, 2) + <constant>*x7))'
+    p = eng.prettify(text)
+    assert eng.prettify(p) == p
+    names, xs = ['x2', 'x5', 'x7'], np.random.default_rng(1).uniform(0.5, 2.0, size=(16, 3))
+    a = values(eng, eng._core.parse(text, strict=True), names, xs)
+    b = values(eng, eng._core.parse(p, strict=True), names, xs)
+    assert np.allclose(a, b, rtol=1e-12, atol=0)
 
 
 # ---------------------------------------------------------------- P1 and P2
@@ -183,12 +216,18 @@ def test_p1_check_catches_a_display_that_moves(eng):
     assert displays_that_move(eng, [row], 'infix') == [(row, 'sin(x1) - sin(x1)', '0')]
 
 
-@pytest.mark.parametrize('text', ['x13/(3*x4*rootn(x10, 2))', '2*x1/(4.2*x2*x3^2)',
-                                  'x0/(3125*x1^5*x2^5)/sinh(x1)^5'])
-@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+# Joined reciprocals of numbers, variables and their powers and roots: alike in every form.
+GROUPS = ['x13/(3*x4*rootn(x10, 2))', '2*x1/(4.2*x2*x3^2)', 'x0/(3125*x1^5*x2^5)/sinh(x1)^5']
+# Joined reciprocals holding functions and sums: alike in the forms with one denominator.
+JOINED = ['x1/(x2*(x3 + 1))', 'x1/(sin(x3)*(x2 + 1))', '2*x1/(4.2*x2*sin(x3))',
+          'x1/(x2*x3*(x4 + 1))/exp(x5)']
+
+
+@pytest.mark.parametrize('text,form', [(t, f) for t in GROUPS for f in ('infix', 'explicit', 'tagged')]
+                         + [(t, f) for t in JOINED for f in ('infix', 'explicit')])
 def test_p1_the_display_does_not_depend_on_how_the_state_holds_its_reciprocals(eng, text, form):
-    """The input reads as one joined reciprocal (`(3*x4*rootn(x10, 2))^-1`), the answer of
-    `simplify` holds a reciprocal per factor (`x4^-1*x10^(-1/2)`): the two display alike."""
+    """The input reads as one joined reciprocal (`(x2*(x3 + 1))^-1`), the answer of `simplify`
+    holds a reciprocal per factor (`x2^-1*(x3 + 1)^-1`): the two display alike."""
     joined = eng.prettify(in_form(eng, eng._core.parse(text, strict=True), form))
     split = eng.prettify(in_form(eng, eng.simplify(eng._core.parse(text, strict=True)), form))
     assert joined == split

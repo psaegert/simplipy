@@ -20,25 +20,32 @@
 //!    or `c * pi` has a fraction spelling that fits `D` (pi's digits not counted), the value is
 //!    written with the literal factored out (`1/(2*3.141592653589793)`).
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
-//!    joins an existing denominator (`x1/(243*x2)`); only a bare `x/float` becomes a
-//!    multiplier (`x1/243` is `0.00411522633744856*x1`).
+//!    joins the denominator (`x1/(243*x2)`); only a bare `x/float` becomes a multiplier
+//!    (`x1/243` is `0.00411522633744856*x1`).
 //! 6. **Exponents** are numbers like any other.
 //! 7. **Even roots**: `x^(1/n)` is `rootn(x, n)` and `x^(-1/n)` is `1/rootn(x, n)` for even `n`.
-//! 8. **Layout**: one coefficient in front, the denominator grouped (`x0^2/(x1*x2)`) where its
-//!    members are numbers, variables and their powers and roots; any other divisor keeps its own
-//!    slash. The group reads the same whether the state holds a reciprocal per member or one
-//!    joined reciprocal of their product (`(3*x4*rootn(x10, 2))^-1`, whose number divides the
-//!    coefficient), and its members follow the order of a canonical product: by base, then
-//!    exponent. Scientific notation from 10^6 and below 10^-3 with a lowercase `e`.
+//! 8. **Layout**: one coefficient in front and ONE SLASH: every divisor of a product joins a
+//!    single denominator product (`x1/(x2*exp(x3))`, `x1/(sin(x3)*(x2 + 1))`). The text
+//!    `n/(d1*d2)` reads back as one joined reciprocal, so the display writes the product the
+//!    canonical constructors build from the state's factors with every reciprocal joined into
+//!    one -- the product reading the display back builds -- whether the state held a reciprocal
+//!    per factor or a joined one (`(x2*(x3 + 1))^-1`). The joined reciprocal's number divides
+//!    the coefficient and its sign stays in the denominator (`x1/(-(x2 + x3))`); beside a factor
+//!    that absorbs a coefficient (a fitted constant, an infinity) its number stays there too.
+//!    The denominator's members are in canonical factor order. The tagged section inverts each
+//!    member on its own, so there a joined reciprocal stays one bag unless its members are
+//!    numbers, variables and their powers and roots. Scientific notation from 10^6 and below
+//!    10^-3 with a lowercase `e`.
 //! 9. **Range**: no numbers combine to inf, 0 or a subnormal.
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
 use num_bigint::{BigInt, BigUint};
 use num_traits::{One, Zero};
 
-use super::expr::{negate_term, Cx, Ex};
+use super::expr::{add, fun, mul, mul_factor_cmp, negate_term, pow, Cx, Ex};
 use super::rat::{number_domain, Rat};
 
 /// The literal pi is written as (the float64 nearest to pi, in its shortest form).
@@ -64,12 +71,13 @@ pub enum Node {
     Neg(Box<Node>),
     /// A sum: terms with a flag `true` when the term is subtracted.
     Sum(Vec<(bool, Node)>),
-    /// A product `±(num...)/(group)/(group)...`; an empty numerator is `1`. Each divisor group
-    /// is a product of members; one group re-reads as one divisor.
+    /// A product `±(num...)/(±den...)`; an empty numerator is `1`, an empty denominator none.
+    /// `den_neg` is a sign the denominator holds (`x1/(-(x2 + x3))`).
     Prod {
         neg: bool,
         num: Vec<Node>,
-        den: Vec<Vec<Node>>,
+        den: Vec<Node>,
+        den_neg: bool,
     },
     Pow(Box<Node>, Box<Node>),
     Call(String, Vec<Node>),
@@ -97,6 +105,22 @@ enum Spelling {
 }
 
 impl Spelling {
+    /// The exact values of the numerator and of the denominator it writes, given the `value`
+    /// the whole spelling reads back as.
+    fn values(&self, value: &Rat) -> Option<(Rat, Rat)> {
+        let _exact = number_domain(false);
+        let part = |s: &Option<String>| match s {
+            Some(t) => Rat::parse_decimal(t),
+            None => Some(Rat::ONE),
+        };
+        Some(match self {
+            Spelling::Int(_) | Spelling::Float(_) => (value.clone(), Rat::ONE),
+            Spelling::Frac { num, den } => (part(num)?, Rat::parse_decimal(den)?),
+            Spelling::PiNum { num, den } => (part(num)?.checked_mul(pi_value())?, part(den)?),
+            Spelling::PiDen { num, den } => (part(num)?, part(den)?.checked_mul(pi_value())?),
+        })
+    }
+
     /// The numerals of the numerator and of the denominator.
     fn parts(&self) -> (Vec<Node>, Vec<Node>) {
         let pi = || Node::Num(PI_LITERAL.to_string());
@@ -265,15 +289,32 @@ fn writable(y: f64) -> bool {
     y.is_finite() && y.abs() >= f64::MIN_POSITIVE
 }
 
+/// How a product's divisors are laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    /// One denominator product for every divisor (infix text and explicit tokens).
+    OneDenominator,
+    /// A tagged section, which inverts each member on its own.
+    Sections,
+}
+
 /// The DISPLAY of one canonical state under a digit budget.
 pub struct Display<'a, 'v> {
     cx: &'a Cx<'v>,
     digits: usize,
+    layout: Layout,
+    /// Set while rebuilding when a sum keeps terms apart that its rebuild would collect.
+    kept_apart: Cell<bool>,
 }
 
 impl<'a, 'v> Display<'a, 'v> {
-    pub fn new(cx: &'a Cx<'v>, digits: usize) -> Self {
-        Display { cx, digits }
+    pub fn new(cx: &'a Cx<'v>, digits: usize, layout: Layout) -> Self {
+        Display {
+            cx,
+            digits,
+            layout,
+            kept_apart: Cell::new(false),
+        }
     }
 
     /// The spelling of a positive value and the value that spelling reads back as (rules 2-4).
@@ -357,7 +398,8 @@ impl<'a, 'v> Display<'a, 'v> {
             Node::Prod {
                 neg: false,
                 num,
-                den: vec![den].into_iter().filter(|g| !g.is_empty()).collect(),
+                den,
+                den_neg: false,
             }
         };
         if r.is_negative() {
@@ -367,8 +409,75 @@ impl<'a, 'v> Display<'a, 'v> {
         }
     }
 
-    /// The display of a canonical expression.
+    /// The display of a canonical expression. With one denominator it is the display of the
+    /// expression reading that display back builds ([`Display::rebuild`]).
     pub fn node(&self, e: &Ex) -> Node {
+        match self.layout {
+            Layout::OneDenominator => self.write(&self.rebuild(e)),
+            Layout::Sections => self.write(e),
+        }
+    }
+
+    /// The expression reading its one-denominator display back builds: bottom up, every product
+    /// with one denominator ([`Display::one_denominator`]), every function, power and sum built
+    /// again by the canonical constructors. A sum whose terms that rebuild would collect keeps
+    /// its terms apart, as the expression holds them: the display collects nothing.
+    fn rebuild(&self, e: &Ex) -> Ex {
+        let cx = self.cx;
+        match e {
+            Ex::Fun(f, args) => fun(*f, args.iter().map(|a| self.rebuild(a)).collect(), cx),
+            Ex::Pow(b, x) if positive(e, cx).is_some() => {
+                let r = Ex::Pow(Box::new(self.rebuild(b)), x.clone());
+                self.one_denominator(std::slice::from_ref(&r)).unwrap_or(r)
+            }
+            Ex::Pow(b, x) => pow(self.rebuild(b), self.rebuild(x), cx),
+            Ex::Mul(v) => {
+                let outer = self.kept_apart.replace(false);
+                let mut factors: Vec<Ex> = Vec::new();
+                for f in v {
+                    // A reciprocal factor is laid out with the product it divides.
+                    let rebuilt = match f {
+                        Ex::Pow(b, x) if positive(f, cx).is_some() => {
+                            Ex::Pow(Box::new(self.rebuild(b)), x.clone())
+                        }
+                        _ => self.rebuild(f),
+                    };
+                    match rebuilt {
+                        Ex::Mul(inner) => factors.extend(inner),
+                        other => factors.push(other),
+                    }
+                }
+                // Reading a sum kept apart would collect it: such a product stays as it is.
+                let apart = self.kept_apart.get();
+                self.kept_apart.set(outer || apart);
+                let laid = if apart {
+                    None
+                } else {
+                    self.one_denominator(&factors)
+                };
+                laid.unwrap_or_else(|| mul(factors, cx))
+            }
+            Ex::Add(v) => {
+                let terms: Vec<Ex> = v.iter().map(|t| self.rebuild(t)).collect();
+                let built = add(terms.clone(), cx);
+                let kept = match &built {
+                    Ex::Add(t) => t.len(),
+                    Ex::Num(z) if z.is_zero() => 0,
+                    _ => 1,
+                };
+                if kept == terms.len() {
+                    built
+                } else {
+                    self.kept_apart.set(true);
+                    Ex::Add(terms)
+                }
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// The display of an expression as it stands.
+    fn write(&self, e: &Ex) -> Node {
         let view = self.cx.view;
         let name = |i: &str, t: &str| Node::Name(i.to_string(), t.to_string());
         match e {
@@ -385,7 +494,7 @@ impl<'a, 'v> Display<'a, 'v> {
             }
             Ex::Fun(f, args) => Node::Call(
                 view.resolve_owned(*f),
-                args.iter().map(|a| self.node(a)).collect(),
+                args.iter().map(|a| self.write(a)).collect(),
             ),
             // A power is a product of one member, laid out as every product is.
             Ex::Pow(..) => self.product(std::slice::from_ref(e)),
@@ -409,26 +518,27 @@ impl<'a, 'v> Display<'a, 'v> {
             }
             return (
                 false,
-                Node::Pow(Box::new(self.node(b)), Box::new(self.node(x))),
+                Node::Pow(Box::new(self.write(b)), Box::new(self.write(x))),
             );
         }
-        (false, self.node(f))
+        (false, self.write(f))
     }
 
     /// `b^k` for a positive exponent as displayed: `b` alone for 1, an even root for `1/n`.
     fn power(&self, b: &Ex, k: &Rat) -> Node {
         if k.is_one() {
-            return self.node(b);
+            return self.write(b);
         }
         if k.numer().is_one() && k.denom().is_even_integer() {
             return Node::Call(
                 "rootn".to_string(),
-                vec![self.node(b), Node::Num(k.denom().numer_string())],
+                vec![self.write(b), Node::Num(k.denom().numer_string())],
             );
         }
-        Node::Pow(Box::new(self.node(b)), Box::new(self.number(k).0))
+        Node::Pow(Box::new(self.write(b)), Box::new(self.number(k).0))
     }
 
+    /// The display of the product `v` as it stands.
     fn product(&self, v: &[Ex]) -> Node {
         // `-(a - b)` reads as `b - a`, as in every canonical printer.
         if let [Ex::Num(r), Ex::Add(terms)] = v {
@@ -442,39 +552,53 @@ impl<'a, 'v> Display<'a, 'v> {
                 }
             }
         }
+        // A fitted constant or an infinity absorbs a coefficient beside it, so a joined
+        // reciprocal's number cannot move out to the coefficient there.
+        let absorbs = v.iter().any(absorbs_a_coefficient);
         let mut numbers: Vec<Rat> = Vec::new();
-        // The numbers of the joined reciprocals read as the group: they divide the coefficient.
+        // The numbers of the joined reciprocals taken apart: they divide the coefficient.
         let mut divisors: Vec<Rat> = Vec::new();
         let mut num: Vec<Node> = Vec::new();
-        // Divisors: the GROUP of numbers, variables and their powers and roots, and every other
-        // divisor on its own. The group is written `/(m1*m2)`, which reads back as one joined
-        // reciprocal; the state's own reciprocals of group members and a joined reciprocal of
-        // them are therefore read alike, so the display is the same whichever the state holds
-        // and reading the display back gives the display again.
-        let mut den: Vec<Node> = Vec::new();
-        let mut alone: Vec<Node> = Vec::new();
+        let mut den: Vec<(Ex, Node)> = Vec::new();
+        let mut den_neg = false;
         for f in v {
             if let Ex::Num(r) = f {
                 numbers.push(r.clone());
-            } else if let Some(members) = joined_reciprocal(f).filter(|m| self.group_members(m)) {
+            } else if let Some(members) = joined_reciprocal(f).filter(|m| self.takes_apart(m)) {
                 for m in members {
                     match m {
+                        Ex::Num(r) if absorbs && self.layout == Layout::OneDenominator => {
+                            den_neg ^= r.is_negative();
+                            den.push((m.clone(), self.number(&r.abs()).0));
+                        }
                         Ex::Num(r) => divisors.push(r.clone()),
-                        _ => den.push(self.factor(m).1),
+                        _ => {
+                            // A divisor of the joined product multiplies: `1/(a/b)` is `b/a`.
+                            let (is_den, node) = self.factor(m);
+                            if is_den {
+                                num.push(node);
+                            } else {
+                                den.push((m.clone(), node));
+                            }
+                        }
                     }
                 }
             } else {
                 let (is_den, node) = self.factor(f);
-                if is_den && self.groups(f) {
-                    den.push(node);
-                } else if is_den {
-                    alone.push(node);
-                } else {
-                    num.push(node);
+                match positive(f, self.cx).filter(|_| is_den) {
+                    Some(key) => den.push((key, node)),
+                    None => num.push(node),
                 }
             }
         }
-        den.sort_by(factor_cmp);
+        let view = self.cx.view;
+        den.sort_by(|(a, _), (b, _)| mul_factor_cmp(a, b, view));
+        let den: Vec<Node> = den.into_iter().map(|(_, node)| node).collect();
+        // In one denominator a joined reciprocal's sign stays where the state holds it.
+        if self.layout == Layout::OneDenominator {
+            den_neg ^= divisors.iter().filter(|r| r.is_negative()).count() % 2 == 1;
+            divisors = divisors.iter().map(Rat::abs).collect();
+        }
         let mut neg = false;
         let mut lead: Vec<Node> = Vec::new();
         let mut lead_den: Vec<Node> = Vec::new();
@@ -483,8 +607,8 @@ impl<'a, 'v> Display<'a, 'v> {
                 neg = c.is_negative();
                 let (sp, value) = self.spell(&c.abs(), !num.is_empty());
                 if !value.is_one() {
-                    match self.divisor(&sp, &c.abs(), !den.is_empty() || !alone.is_empty()) {
-                        Some(d) => lead_den.push(d),
+                    match self.divisor(&sp, &c.abs(), !den.is_empty()) {
+                        Some((d, _)) => lead_den.push(d),
                         None => {
                             let (n, d) = sp.parts();
                             lead = n;
@@ -509,30 +633,101 @@ impl<'a, 'v> Display<'a, 'v> {
         }
         lead.extend(num);
         lead_den.extend(den);
-        let mut groups: Vec<Vec<Node>> = Vec::new();
-        if !lead_den.is_empty() {
-            groups.push(lead_den);
-        }
-        groups.extend(alone.into_iter().map(|n| vec![n]));
-        if groups.is_empty() && lead.len() == 1 {
+        if lead_den.is_empty() && lead.len() == 1 && !den_neg {
             let only = lead.pop().unwrap();
             return if neg { negate(only) } else { only };
         }
         Node::Prod {
             neg,
             num: lead,
-            den: groups,
+            den: lead_den,
+            den_neg,
         }
     }
 
-    /// May the divisor `f = b^-k` join the divisor group?
-    fn groups(&self, f: &Ex) -> bool {
-        let Ex::Pow(b, _) = f else { return false };
-        self.groupable(b)
+    /// The product `v` with one denominator: the product the canonical constructors build from
+    /// the display of `v` -- its factors, the coefficient as written, and every reciprocal (its
+    /// own `b^-k` and the members of a joined one, `(m1*m2)^-1`) in one joined reciprocal --
+    /// which is the product reading the display back builds. `None` when `v` has no reciprocal.
+    fn one_denominator(&self, v: &[Ex]) -> Option<Ex> {
+        let cx = self.cx;
+        let absorbs = v.iter().any(absorbs_a_coefficient);
+        let mut numbers: Vec<Rat> = Vec::new();
+        let mut divisors: Vec<Rat> = Vec::new();
+        let mut items: Vec<Ex> = Vec::new();
+        let mut den: Vec<Ex> = Vec::new();
+        for f in v {
+            if let Ex::Num(r) = f {
+                numbers.push(r.clone());
+                continue;
+            }
+            match positive(f, cx) {
+                Some(Ex::Mul(members)) => {
+                    for m in members {
+                        match (&m, positive(&m, cx)) {
+                            (Ex::Num(r), _) if !absorbs => divisors.push(r.clone()),
+                            // A divisor of the joined product multiplies: `1/(a/b)` is `b/a`.
+                            (_, Some(p)) => items.push(p),
+                            _ => den.push(m),
+                        }
+                    }
+                }
+                Some(p) => den.push(p),
+                None => items.push(f.clone()),
+            }
+        }
+        if den.is_empty() && divisors.is_empty() {
+            return None;
+        }
+        let den_neg = divisors.iter().filter(|r| r.is_negative()).count() % 2 == 1;
+        let magnitudes: Vec<Rat> = divisors.iter().map(Rat::abs).collect();
+        match coefficient(&numbers, &magnitudes) {
+            Some(c) => {
+                // The coefficient as the display writes it: its numerator beside the factors,
+                // its denominator in the joined reciprocal, which keeps the sign it holds.
+                let (top, bottom) = self.written(&c.abs(), !items.is_empty(), !den.is_empty())?;
+                items.push(Ex::Num(if c.is_negative() {
+                    top.checked_neg()?
+                } else {
+                    top
+                }));
+                den.push(Ex::Num(if den_neg {
+                    bottom.checked_neg()?
+                } else {
+                    bottom
+                }));
+            }
+            None => {
+                items.extend(numbers.into_iter().map(Ex::Num));
+                den.extend(divisors.into_iter().map(Ex::Num));
+            }
+        }
+        items.push(pow(mul(den, cx), Ex::Num(Rat::NEG_ONE), cx));
+        Some(mul(items, cx))
     }
 
-    /// Do the members of a joined reciprocal all join the group: numbers, and positive powers
-    /// and roots of variables and symbols?
+    /// The exact numerator and denominator a coefficient `a > 0` is written with: its spelling's
+    /// parts, or rule 5's divisor.
+    fn written(&self, a: &Rat, unit_free: bool, has_den: bool) -> Option<(Rat, Rat)> {
+        let (sp, value) = self.spell(a, unit_free);
+        if value.is_one() {
+            return Some((Rat::ONE, Rat::ONE));
+        }
+        if let Some((_, inv)) = self.divisor(&sp, a, has_den) {
+            return Some((Rat::ONE, inv));
+        }
+        sp.values(&value)
+    }
+
+    /// Is a joined reciprocal with these members taken apart into the denominator? Always with
+    /// one denominator; in a tagged section, which inverts each member on its own, only when its
+    /// members are numbers, variables and their powers and roots.
+    fn takes_apart(&self, members: &[Ex]) -> bool {
+        self.layout == Layout::OneDenominator || self.group_members(members)
+    }
+
+    /// Are the members of a joined reciprocal all numbers, and positive powers and roots of
+    /// variables and symbols?
     fn group_members(&self, members: &[Ex]) -> bool {
         members.iter().all(|m| match m {
             Ex::Num(_) => true,
@@ -541,7 +736,7 @@ impl<'a, 'v> Display<'a, 'v> {
         })
     }
 
-    /// Is `b` a base whose divisors group: a variable or a symbol, or an even root of one?
+    /// Is `b` a variable or a symbol, or an even root of one?
     fn groupable(&self, b: &Ex) -> bool {
         let base = match b {
             Ex::Fun(r, args) if self.cx.view.tok_is(*r, "rootn") => &args[0],
@@ -557,9 +752,9 @@ impl<'a, 'v> Display<'a, 'v> {
         }
     }
 
-    /// Rule 5: a float coefficient whose reciprocal float64 holds as written joins an existing
-    /// denominator as that decimal.
-    fn divisor(&self, sp: &Spelling, mag: &Rat, has_den: bool) -> Option<Node> {
+    /// Rule 5: a float coefficient whose reciprocal float64 holds as written joins the
+    /// denominator as that decimal, when the product has one.
+    fn divisor(&self, sp: &Spelling, mag: &Rat, has_den: bool) -> Option<(Node, Rat)> {
         let Spelling::Float(_) = sp else { return None };
         if !has_den || mag.is_integer() {
             return None;
@@ -569,7 +764,7 @@ impl<'a, 'v> Display<'a, 'v> {
         inv.decimal_parts()?;
         let y = inv.to_f64_nearest();
         (writable(y) && Rat::shortest_reading_as(y).as_ref() == Some(&inv))
-            .then(|| Node::Num(float_text(&inv)))
+            .then(|| (Node::Num(float_text(&inv)), inv))
     }
 
     fn sum(&self, v: &[Ex]) -> Node {
@@ -579,7 +774,7 @@ impl<'a, 'v> Display<'a, 'v> {
             if let Ex::Num(r) = t {
                 numbers.push(r.clone());
             } else {
-                terms.push(odd_literal_hoist(split_neg(self.node(t)), self.cx));
+                terms.push(odd_literal_hoist(split_neg(self.write(t)), self.cx));
             }
         }
         let constants: Vec<Rat> = match combine(&numbers, Rat::checked_add) {
@@ -646,76 +841,23 @@ fn joined_reciprocal(f: &Ex) -> Option<&[Ex]> {
     }
 }
 
-/// The order of a denominator's members: by base, then exponent, as a canonical product orders
-/// its factors (`x2*x3^2*exp(x3)*(x2 + 1)`).
-fn factor_cmp(a: &Node, b: &Node) -> Ordering {
-    fn split(n: &Node) -> (&Node, Option<&Node>) {
-        match n {
-            Node::Pow(b, x) => (b, Some(x)),
-            other => (other, None),
-        }
-    }
-    let ((ba, xa), (bb, xb)) = (split(a), split(b));
-    node_cmp(ba, bb).then_with(|| match (xa, xb) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (Some(x), Some(y)) => node_cmp(x, y),
-    })
+/// Does `f` absorb a coefficient beside it (a fitted constant, an infinity, nan)?
+fn absorbs_a_coefficient(f: &Ex) -> bool {
+    matches!(f, Ex::Const | Ex::PosInf | Ex::NegInf | Ex::NaN)
 }
 
-/// A total order on display trees: numbers, names, negations, calls, powers, sums, products,
-/// then by content.
-fn node_cmp(a: &Node, b: &Node) -> Ordering {
-    fn rank(n: &Node) -> u8 {
-        match n {
-            Node::Num(_) => 0,
-            Node::Name(..) => 1,
-            Node::Neg(_) => 2,
-            Node::Call(..) => 3,
-            Node::Pow(..) => 4,
-            Node::Sum(_) => 5,
-            Node::Prod { .. } => 6,
-        }
+/// `b^k` for a reciprocal `b^-k` (a negative numeric exponent), built canonically.
+fn positive(f: &Ex, cx: &Cx) -> Option<Ex> {
+    let Ex::Pow(b, x) = f else { return None };
+    let Ex::Num(k) = &**x else { return None };
+    if !k.is_negative() || matches!(&**b, Ex::Num(z) if z.is_zero()) {
+        return None;
     }
-    fn all(a: &[Node], b: &[Node]) -> Ordering {
-        a.iter()
-            .zip(b)
-            .map(|(x, y)| node_cmp(x, y))
-            .find(|o| o.is_ne())
-            .unwrap_or_else(|| a.len().cmp(&b.len()))
-    }
-    rank(a).cmp(&rank(b)).then_with(|| match (a, b) {
-        (Node::Num(x), Node::Num(y)) => x.cmp(y),
-        (Node::Name(x, _), Node::Name(y, _)) => x.cmp(y),
-        (Node::Neg(x), Node::Neg(y)) => node_cmp(x, y),
-        (Node::Call(f, xs), Node::Call(g, ys)) => f.cmp(g).then_with(|| all(xs, ys)),
-        (Node::Pow(b1, x1), Node::Pow(b2, x2)) => node_cmp(b1, b2).then_with(|| node_cmp(x1, x2)),
-        (Node::Sum(xs), Node::Sum(ys)) => xs
-            .iter()
-            .zip(ys)
-            .map(|((nx, x), (ny, y))| nx.cmp(ny).then_with(|| node_cmp(x, y)))
-            .find(|o| o.is_ne())
-            .unwrap_or_else(|| xs.len().cmp(&ys.len())),
-        (
-            Node::Prod {
-                neg: n1,
-                num: a1,
-                den: d1,
-            },
-            Node::Prod {
-                neg: n2,
-                num: a2,
-                den: d2,
-            },
-        ) => n1.cmp(n2).then_with(|| all(a1, a2)).then_with(|| {
-            d1.iter()
-                .zip(d2)
-                .map(|(x, y)| all(x, y))
-                .find(|o| o.is_ne())
-                .unwrap_or_else(|| d1.len().cmp(&d2.len()))
-        }),
-        _ => Ordering::Equal,
+    let k = k.checked_neg()?;
+    Some(if k.is_one() {
+        (**b).clone()
+    } else {
+        pow((**b).clone(), Ex::Num(k), cx)
     })
 }
 
@@ -736,10 +878,16 @@ fn odd_literal_hoist((neg, node): (bool, Node), cx: &Cx) -> (bool, Node) {
 fn negate(node: Node) -> Node {
     match node {
         Node::Neg(inner) => *inner,
-        Node::Prod { neg, num, den } => Node::Prod {
+        Node::Prod {
+            neg,
+            num,
+            den,
+            den_neg,
+        } => Node::Prod {
             neg: !neg,
             num,
             den,
+            den_neg,
         },
         other => Node::Neg(Box::new(other)),
     }
@@ -753,12 +901,14 @@ fn split_neg(node: Node) -> (bool, Node) {
             neg: true,
             num,
             den,
+            den_neg,
         } => (
             true,
             Node::Prod {
                 neg: false,
                 num,
                 den,
+                den_neg,
             },
         ),
         other => (false, other),
@@ -796,7 +946,12 @@ fn infix_prec(node: &Node, out: &mut String) -> u8 {
             }
             1
         }
-        Node::Prod { neg, num, den } => {
+        Node::Prod {
+            neg,
+            num,
+            den,
+            den_neg,
+        } => {
             if *neg {
                 out.push('-');
             }
@@ -809,20 +964,22 @@ fn infix_prec(node: &Node, out: &mut String) -> u8 {
                 }
                 infix_at(f, 2, out);
             }
-            for group in den {
-                if let [one] = group.as_slice() {
+            match (den.as_slice(), den_neg) {
+                ([], _) => {}
+                ([one], false) => {
                     out.push('/');
                     infix_at(one, 3, out);
-                    continue;
                 }
-                out.push_str("/(");
-                for (i, f) in group.iter().enumerate() {
-                    if i > 0 {
-                        out.push('*');
+                (all, _) => {
+                    out.push_str(if *den_neg { "/(-" } else { "/(" });
+                    for (i, f) in all.iter().enumerate() {
+                        if i > 0 {
+                            out.push('*');
+                        }
+                        infix_at(f, 2, out);
                     }
-                    infix_at(f, 2, out);
+                    out.push(')');
                 }
-                out.push(')');
             }
             if *neg {
                 1
@@ -871,8 +1028,8 @@ pub fn to_infix(node: &Node) -> String {
 }
 
 /// The explicit binary prefix tokens: right-nested `*` chains, a left-nested chain of `+` and
-/// `-`, `/ numerator denominator`, the sign in a leading numeral where there is one (`* -22 x1`)
-/// and `neg` otherwise.
+/// `-`, one `/ numerator denominator`, the sign in a leading numeral where there is one
+/// (`* -22 x1`) and `neg` otherwise.
 pub fn to_prefix(node: &Node) -> Vec<String> {
     let mut out = Vec::new();
     emit_prefix(node, &mut out);
@@ -910,14 +1067,18 @@ fn emit_prefix(node: &Node, out: &mut Vec<String>) {
                 emit_prefix(t, out);
             }
         }
-        Node::Prod { neg, num, den } => {
-            // `(num / g1) / g2 ...`: a left-nested division chain, one divisor per group.
-            for _ in den {
+        Node::Prod {
+            neg,
+            num,
+            den,
+            den_neg,
+        } => {
+            if !den.is_empty() {
                 out.push("/".to_string());
             }
             emit_chain(num, *neg, out);
-            for group in den {
-                emit_chain(group, false, out);
+            if !den.is_empty() {
+                emit_chain(den, *den_neg, out);
             }
         }
         Node::Pow(b, x) => {
@@ -998,7 +1159,12 @@ fn emit_tagged(node: &Node, out: &mut Vec<String>) {
             }
             out.push("</add>".to_string());
         }
-        Node::Prod { neg, num, den } => {
+        Node::Prod {
+            neg,
+            num,
+            den,
+            den_neg,
+        } => {
             out.push("<mul>".to_string());
             match (neg, num.first()) {
                 (true, Some(Node::Num(s))) => {
@@ -1018,8 +1184,10 @@ fn emit_tagged(node: &Node, out: &mut Vec<String>) {
             }
             if !den.is_empty() {
                 out.push("<div>".to_string());
-                // A section inverts each member on its own: every group's members join it.
-                den.iter().flatten().for_each(|f| emit_tagged(f, out));
+                if *den_neg {
+                    out.push("-1".to_string());
+                }
+                den.iter().for_each(|f| emit_tagged(f, out));
             }
             out.push("</mul>".to_string());
         }
@@ -1100,22 +1268,32 @@ mod tests {
         assert_eq!(float_text(&d("-0.5")), "-0.5");
     }
 
-    /// The three forms of one display tree: `-22*x1/(7*x2)/(x1 + 1)`.
+    /// The three forms of one display tree: `-22*x1/(7*x2*(x1 + 1))`, one slash.
     #[test]
     fn one_tree_three_forms() {
         let x = |s: &str| Node::Name(s.to_string(), s.to_string());
         let n = |s: &str| Node::Num(s.to_string());
         let sum = Node::Sum(vec![(false, x("x1")), (false, n("1"))]);
-        let tree = Node::Prod {
+        let tree = |den_neg| Node::Prod {
             neg: true,
             num: vec![n("22"), x("x1")],
-            den: vec![vec![n("7"), x("x2")], vec![sum]],
+            den: vec![n("7"), x("x2"), sum.clone()],
+            den_neg,
         };
-        assert_eq!(to_infix(&tree), "-22*x1/(7*x2)/(x1 + 1)");
-        assert_eq!(to_prefix(&tree).join(" "), "/ / * -22 x1 * 7 x2 + x1 1");
+        assert_eq!(to_infix(&tree(false)), "-22*x1/(7*x2*(x1 + 1))");
         assert_eq!(
-            to_tagged(&tree).join(" "),
+            to_prefix(&tree(false)).join(" "),
+            "/ * -22 x1 * 7 * x2 + x1 1"
+        );
+        assert_eq!(
+            to_tagged(&tree(false)).join(" "),
             "<mul> -22 x1 <div> 7 x2 <add> x1 1 </add> </mul>"
+        );
+        // a sign the denominator holds
+        assert_eq!(to_infix(&tree(true)), "-22*x1/(-7*x2*(x1 + 1))");
+        assert_eq!(
+            to_prefix(&tree(true)).join(" "),
+            "/ * -22 x1 * -7 * x2 + x1 1"
         );
     }
 }
