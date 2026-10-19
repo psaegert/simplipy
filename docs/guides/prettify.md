@@ -76,8 +76,8 @@ float64 holds as written stays a divisor where the product has another divisor; 
 `x1/0.225147640565301` becomes a multiplier (above).
 
 ```python
-engine.prettify(engine.simplify("x1/x2/exp(x3)"))
-# -> 'x1/(x2*exp(x3))'
+engine.prettify(engine.simplify("x1/x2/log(x3)"))
+# -> 'x1/(x2*log(x3))'
 engine.prettify(engine.simplify("x1/sin(x3)/(x2 + 1)"))
 # -> 'x1/(sin(x3)*(x2 + 1))'
 engine.prettify(engine.simplify("x1/243/x2"))

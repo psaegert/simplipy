@@ -173,7 +173,7 @@ def test_divisors(eng):
 
 
 @pytest.mark.parametrize('text,expected', [
-    ('x1/x2/exp(x3)', 'x1/(x2*exp(x3))'),
+    ('x1/x2/log(x3)', 'x1/(x2*log(x3))'),
     ('x1/sin(x3)/(x2 + 1)', 'x1/(sin(x3)*(x2 + 1))'),
     ('x1/x2/(x3 + 1)', 'x1/(x2*(x3 + 1))'),
     ('x1/x2/x3^2', 'x1/(x2*x3^2)'),
@@ -245,7 +245,7 @@ def test_p1_check_catches_a_display_that_moves(eng):
 GROUPS = ['x13/(3*x4*rootn(x10, 2))', '2*x1/(4.2*x2*x3^2)', 'x0/(3125*x1^5*x2^5)/sinh(x1)^5']
 # Joined reciprocals holding functions and sums: alike in the forms with one denominator.
 JOINED = ['x1/(x2*(x3 + 1))', 'x1/(sin(x3)*(x2 + 1))', '2*x1/(4.2*x2*sin(x3))',
-          'x1/(x2*x3*(x4 + 1))/exp(x5)']
+          'x1/(x2*x3*(x4 + 1))/log(x5)']
 
 
 @pytest.mark.parametrize('text,form', [(t, f) for t in GROUPS for f in ('infix', 'explicit', 'tagged')]

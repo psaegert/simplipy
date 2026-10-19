@@ -146,7 +146,7 @@ model predictions.
   `2.1458314277221002*x1` for a 33-digit literal), or with `k` significant digits at
   `precision=k` (`2.15*x1`). pi is factored out as the literal `3.141592653589793` where the
   rest fits (`1/(2*3.141592653589793)`), even roots read `rootn(x, n)`, and every divisor of a
-  product joins one denominator, functions and sums included (`x1/(x2*exp(x3))`,
+  product joins one denominator, functions and sums included (`x1/(x2*log(x3))`,
   `x1/(sin(x3)*(x2 + 1))`). It writes numbers and decides no value: a function of numbers stays
   a function (`x1*exp(-190.5)`), and the display is not simplified again, so it never collects
   what it wrote alike (`sin(1.00000000000000000001*x1) - sin(x1)` shows as

@@ -2227,7 +2227,7 @@ class SimpliPyEngine:
         * Exponents follow the same rules; ``x^(1/n)`` and ``x^(-1/n)`` are written
           ``rootn(x, n)`` and ``1/rootn(x, n)`` for even ``n``.
         * One slash: every divisor of a product joins one denominator, functions and sums
-          included (``x1/x2/exp(x3)`` is ``x1/(x2*exp(x3))``, ``x1/sin(x3)/(x2 + 1)`` is
+          included (``x1/x2/log(x3)`` is ``x1/(x2*log(x3))``, ``x1/sin(x3)/(x2 + 1)`` is
           ``x1/(sin(x3)*(x2 + 1))``). The display is of the product reading it back builds:
           the same whether the canonical form holds a reciprocal per factor or one of their
           product, its factors in canonical order and a sign the denominator holds kept there
