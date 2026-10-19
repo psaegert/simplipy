@@ -478,7 +478,7 @@ class TestFindRules:
         compiled core, so mining (and everything else) is always available."""
         engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
         assert engine._core is not None
-        assert engine._core.ac_simplify_in_mode(['+', 'x0', 'x0'], 48, 'explicit', rule_mode='default') == \
+        assert engine._core.ac_simplify_in_mode(['+', 'x0', 'x0'], 48, 'explicit', 0, rule_mode='default') == \
             ['*', '2', 'x0']
 
     def test_default_mine_ships_promoted_seeds(self, tmp_path) -> None:

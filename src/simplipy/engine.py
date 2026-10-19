@@ -1371,11 +1371,12 @@ class SimpliPyEngine:
         if _TAGGED_DIALECT_TOKENS.intersection(tokens):
             # TAGGED: the shared AC parser is the arbiter for this dialect (the arity
             # oracle has no reading of the bag delimiters and would reject every one
-            # of them). A budget-0 projection parses and serializes WITHOUT running
-            # the rewrite loop, so this is a pure well-formedness question; malformed
-            # input fails the parse and the FFI raises, which is the False verdict.
+            # of them). A projection with no pass and no search parses and serializes
+            # WITHOUT running the rewrite loop, so this is a pure well-formedness
+            # question; malformed input fails the parse and the FFI raises, which is the
+            # False verdict.
             try:
-                self._core.ac_simplify_in_mode(tokens, 0, 'tagged', rule_mode='default')
+                self._core.ac_simplify_in_mode(tokens, 0, 'tagged', 0, rule_mode='default')
             except ValueError:
                 if verbose:
                     self._explain_invalid(tokens, 'tagged')

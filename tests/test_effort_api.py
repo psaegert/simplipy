@@ -82,8 +82,13 @@ class TestEffortValidation:
         # The pre-effort core entry is the reference: the new dispatch at budget 0
         # must reproduce it byte-for-byte, tokens and rendering alike.
         tokens = engine.to_prefix(HILL)
-        via_plain = engine._core.ac_simplify_in_mode([str(t) for t in engine.to_tagged(tokens)], 48, "explicit", rule_mode='default')
-        assert via_plain == engine._core.ac_simplify_in_mode([str(t) for t in engine.to_tagged(tokens)], 48, "explicit", 0, rule_mode="default")
+        tagged = [str(t) for t in engine.to_tagged(tokens)]
+        via_plain = engine._core.ac_simplify_explore(tagged, 48, "explicit", 0, rule_mode='default')
+        assert via_plain == engine._core.ac_simplify_in_mode(tagged, 48, "explicit", 0, rule_mode="default")
+        # The FFI's own default is the public one, so a direct `_core` caller that omits the
+        # budget gets what `simplify` gives, not the chain alone.
+        assert engine._core.ac_simplify_in_mode(tagged, 48, "explicit", rule_mode="default") \
+            == engine._core.ac_simplify_in_mode(tagged, 48, "explicit", None, rule_mode="default")
         # The RULED default (owner 2026-10-06; 4 from 2026-08-24): None -- the default
         # call explores until a round finds nothing, and explicitly asking for the
         # chain alone differs on a mu-hill.

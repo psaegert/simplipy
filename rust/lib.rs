@@ -543,10 +543,10 @@ impl PyEngine {
     /// Contracts (empty input, malformed input, forms) are the SAME code as `ac_simplify`
     /// -- both entries are one call into `ac_simplify_impl`.
     /// `explore_budget` is the D39 B7 wire: the public `effort=` rides this parameter
-    /// (see [`explore_budget_of`]: `None` explores until a round finds nothing). 0 (the
-    /// default here) routes to the chain's own entry, byte-identical behaviour.
+    /// (see [`explore_budget_of`]: `None`, the default here as in `simplify`, explores until
+    /// a round finds nothing). 0 routes to the chain's own entry, byte-identical behaviour.
     /// `work_budget` bounds each search's work in `ac::work` units (`None`: unbounded).
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), work_budget=None, *, rule_mode))]
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, work_budget=None, *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn ac_simplify_in_mode(
         &self,
@@ -582,7 +582,7 @@ impl PyEngine {
     /// an empty `suppressed_rows` is byte-identical to `ac_simplify_in_mode` at
     /// `rule_mode="default"`.
     /// `explore_budget` reads as in `ac_simplify_in_mode` ([`explore_budget_of`]).
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), suppressed_rows=vec![], *, rule_mode))]
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, suppressed_rows=vec![], *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn ac_simplify_suppressed(
         &self,
@@ -656,7 +656,7 @@ impl PyEngine {
 
     /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`,
     /// whose `explore_budget` this reads the same way).
-    #[pyo3(signature = (tokens, max_passes=48, explore_budget=Some(0), work_budget=None, *, rule_mode))]
+    #[pyo3(signature = (tokens, max_passes=48, explore_budget=None, work_budget=None, *, rule_mode))]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,

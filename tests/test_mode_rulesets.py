@@ -62,7 +62,7 @@ def instantiate(rule: list) -> tuple[list[str], list[str]]:
 def fires(engine: SimpliPyEngine, rule: list, mode: str) -> bool:
     """Does this mode serve a set containing `rule`?"""
     lhs, rhs = instantiate(rule)
-    return engine._core.ac_simplify_in_mode(lhs, 48, 'explicit', rule_mode=mode) == rhs
+    return engine._core.ac_simplify_in_mode(lhs, 48, 'explicit', 0, rule_mode=mode) == rhs
 
 
 #: The config keys that name a mode's own rule set. `rules_corpus` is the pre-rename
@@ -213,8 +213,8 @@ class TestAbsentFilesAreANoOp:
         # what is NOT: the answer, because the constructor is mode-aware. Pinned as a
         # bounded, explained divergence rather than asserted away.
         differ = [row for row in rows
-                  if e._core.ac_simplify_in_mode(row, 48, 'tagged', rule_mode='real')
-                  != e._core.ac_simplify_in_mode(row, 48, 'tagged', rule_mode='default')]
+                  if e._core.ac_simplify_in_mode(row, 48, 'tagged', 0, rule_mode='real')
+                  != e._core.ac_simplify_in_mode(row, 48, 'tagged', 0, rule_mode='default')]
         assert len(differ) == 4, len(differ)
         bare = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
                               rules=[])
@@ -337,15 +337,15 @@ class TestEachModeServesExactlyItsOwnFile:
         Pinned at the core entry and through the convert-then-simplify route."""
         e = SimpliPyEngine.from_config(triple)
         lhs, _ = instantiate(P_CORPUS)
-        assert 'tan' in e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='permissive')
-        assert e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='default') != \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='permissive')
+        assert 'tan' in e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='permissive')
+        assert e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='default') != \
+            e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='permissive')
         # The old `form='infix'` shim is removed in 0.14.0; CONVERTING first is the
         # documented equivalent, and it must still select by mode identically.
         assert e.simplify(e.to_infix(lhs), mode=Mode.permissive) == \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='permissive')
+            e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='permissive')
         assert e.simplify(e.to_infix(lhs), mode=Mode.f64) == \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='default')
+            e._core.ac_simplify_infix_in_mode(lhs, 48, 0, rule_mode='default')
 
 
 class TestAnEmptySetIsNotAnAbsentOne:
@@ -442,5 +442,5 @@ class TestTheModeSurfaceRefusesNonsense:
         e = SimpliPyEngine.from_config(cfg)
         assert e._core.mode_rules_len(rule_mode='permissive') == 2
         assert e._core.ac_rules_info_in_mode(rule_mode='permissive')[0] == 0
-        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'explicit', rule_mode='permissive') \
+        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'explicit', 0, rule_mode='permissive') \
             == ['sin', 'x0']

@@ -87,7 +87,7 @@ def tok(engine: SimpliPyEngine, s: str) -> list[str]:
 
 def fix(engine: SimpliPyEngine, s: str, lossy: bool = False) -> list[str]:
     """Today's greedy fixpoint, tagged form -- the chain the theorems cover."""
-    return engine._core.ac_simplify_in_mode(tok(engine, s), 48, 'tagged', rule_mode=('permissive' if lossy else 'default'))
+    return engine._core.ac_simplify_in_mode(tok(engine, s), 48, 'tagged', 0, rule_mode=('permissive' if lossy else 'default'))
 
 
 def explore(engine: SimpliPyEngine, tokens: list[str], budget: int,
@@ -156,7 +156,7 @@ class TestRow156Falsifier:
         assert explore(engine, valley, BUDGET) == valley
         # And the valley is a fixpoint of the plain chain (the endpoint is a
         # chain state, not a new kind of state).
-        assert engine._core.ac_simplify_in_mode(valley, 48, 'tagged', rule_mode='default') == valley
+        assert engine._core.ac_simplify_in_mode(valley, 48, 'tagged', 0, rule_mode='default') == valley
 
     def test_deterministic(self, engine: SimpliPyEngine) -> None:
         for s in BATTERY:
@@ -183,12 +183,12 @@ class TestRow156Falsifier:
             for lossy in (False, True):
                 for form in ('tagged', 'explicit'):
                     assert explore(engine, t, 0, lossy, form) \
-                        == engine._core.ac_simplify_in_mode(t, 48, form, rule_mode=('permissive' if lossy else 'default'))
+                        == engine._core.ac_simplify_in_mode(t, 48, form, 0, rule_mode=('permissive' if lossy else 'default'))
 
     def test_budget_zero_is_the_default(self, engine: SimpliPyEngine) -> None:
         t = tok(engine, ROW156)
         assert engine._core.ac_simplify_explore(t, rule_mode='default') \
-            == engine._core.ac_simplify_in_mode(t, 48, 'tagged', rule_mode='default')
+            == engine._core.ac_simplify_in_mode(t, 48, 'tagged', 0, rule_mode='default')
 
     def test_boundary_contracts_match_ac_simplify(self, engine: SimpliPyEngine) -> None:
         # Empty input: the documented `simplify([]) == []` contract (H-003).
