@@ -201,29 +201,105 @@ _JUDGE_ROUNDS_MAX = 8
 _JUDGE_POOL_MIN = 64
 
 
-def _judge_chunk(pairs: list) -> list[str]:
+#: The mine's judge watchdog (`find_rules`' `judge_warn_s`/`judge_fail_s`): a judgment past
+#: the first is logged, one past the second fails the mine.
+JUDGE_WARN_S = 60.0
+JUDGE_FAIL_S = 600.0
+
+
+class _JudgmentOverrun(BaseException):
+    """Raised in the judging thread by the watchdog (`_watched_judgments`). A BaseException,
+    so the sweep's per-rule ``except Exception`` cannot file it as a verdict."""
+
+
+def _watched_judgments(pairs: list, warn_s: float = JUDGE_WARN_S,
+                       fail_s: float = JUDGE_FAIL_S) -> list[dict]:
+    """The contract judge's verdict record of each ``(lhs, rhs)`` pair, in order, judged one at
+    a time with NO wall-clock timeout: a timeout would file a verdict the machine's load
+    decided, and the mine memoises verdicts into its checkpoint. A WATCHDOG instead logs a
+    judgment still running after ``warn_s`` seconds and fails the mine (``RuntimeError``,
+    naming the rule) when one runs past ``fail_s``: on the main thread the judgment is
+    interrupted there, elsewhere the mine fails as soon as it returns."""
+    import _thread
     import contextlib
     import io
-    from .verify import effective_tier, verify_ruleset
-    # The sweep prints its CLI report; the loop's record of the verdicts is the sidecar.
-    with contextlib.redirect_stdout(io.StringIO()):
-        report = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs in pairs])
-    return [effective_tier(d) for d in sorted(report['detail'], key=lambda d: d['idx'])]
+    import logging
+    from .verify import verify_ruleset
+    log = logging.getLogger(__name__)
+    on_main = threading.current_thread() is threading.main_thread()
+
+    def _overrun(signum: int, frame: Any) -> None:
+        raise _JudgmentOverrun
+
+    previous = signal.signal(signal.SIGUSR1, _overrun) if on_main else None
+    out: list[dict] = []
+    try:
+        for idx, (lhs, rhs) in enumerate(pairs):
+            rule = f"{' '.join(lhs)} -> {' '.join(rhs)}"
+            done = threading.Event()
+            fired = threading.Event()
+
+            def _watch(rule: str = rule, done: threading.Event = done,
+                       fired: threading.Event = fired) -> None:
+                if done.wait(warn_s):
+                    return
+                log.warning('simplipy mine: the judgment of %s is still running after %g s',
+                            rule, warn_s)
+                if done.wait(max(fail_s - warn_s, 0.0)):
+                    return
+                fired.set()
+                if on_main:
+                    _thread.interrupt_main(signal.SIGUSR1)
+
+            watchdog = threading.Thread(target=_watch, daemon=True)
+            started = time.monotonic()
+            try:
+                watchdog.start()
+                try:
+                    # The sweep prints its CLI report; the mine's record is the sidecar.
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        report = verify_ruleset([[list(lhs), list(rhs)]], judge_timeout_s=0)
+                finally:
+                    done.set()
+                    watchdog.join()
+                if fired.is_set():
+                    raise _JudgmentOverrun
+            except _JudgmentOverrun:
+                raise RuntimeError(
+                    f'the judgment of {rule} ran past {fail_s:g} s (judge_fail_s); the mine '
+                    f'fails rather than file a verdict the clock decided') from None
+            elapsed = time.monotonic() - started
+            if elapsed > warn_s:
+                log.warning('simplipy mine: the judgment of %s took %.1f s', rule, elapsed)
+            detail = dict(report['detail'][0], idx=idx)
+            out.append(detail)
+    finally:
+        if on_main:
+            signal.signal(signal.SIGUSR1, previous)
+    return out
 
 
-def judge_tiers(pairs: list, processes: int = 4) -> list[str]:
+def _judge_chunk(pairs: list, warn_s: float = JUDGE_WARN_S,
+                 fail_s: float = JUDGE_FAIL_S) -> list[str]:
+    from .verify import effective_tier
+    return [effective_tier(d) for d in _watched_judgments(pairs, warn_s, fail_s)]
+
+
+def judge_tiers(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S,
+                fail_s: float = JUDGE_FAIL_S) -> list[str]:
     """THE JUDGE of the mine's per-length loop: the contract judge's effective tier of each
-    ``(lhs, rhs)`` pair, in order. Rules are judged independently, so a pool of
+    ``(lhs, rhs)`` pair, in order, under the mine's watchdog (``warn_s``, ``fail_s``; see
+    :func:`_watched_judgments`). Rules are judged independently, so a pool of
     ``processes`` workers (spawned: the parent holds the core's threads) gives the same
     answers as one; a small batch is judged in-process."""
     pairs = [(list(lhs), list(rhs)) for lhs, rhs in pairs]
     if processes <= 1 or len(pairs) < _JUDGE_POOL_MIN:
-        return _judge_chunk(pairs) if pairs else []
+        return _judge_chunk(pairs, warn_s, fail_s) if pairs else []
     import multiprocessing
     size = -(-len(pairs) // processes)
     chunks = [pairs[i:i + size] for i in range(0, len(pairs), size)]
     with multiprocessing.get_context('spawn').Pool(len(chunks)) as pool:
-        parts = pool.map(_judge_chunk, chunks)
+        parts = pool.map(functools.partial(_judge_chunk, warn_s=warn_s, fail_s=fail_s), chunks)
     return [tier for part in parts for tier in part]
 
 
@@ -697,7 +773,9 @@ class RuleMiner:
             rule_mode: str = 'default',
             initial_rules: list | None = None,
             finals: dict[str, list] | None = None,
-            judge: Callable | None = None) -> None:
+            judge: Callable | None = None,
+            judge_warn_s: float = JUDGE_WARN_S,
+            judge_fail_s: float = JUDGE_FAIL_S) -> None:
         """Phase 2 of :meth:`find_rules` on the compiled Rust core (``simplipy._core``), for
         ONE file: ``rule_mode`` is the mode the file serves, and its mine runs in that mode
         throughout (marks, sources, library, acceptance, the rules installed so far). The
@@ -723,7 +801,7 @@ class RuleMiner:
         """
         assert self.engine._core is not None
         if judge is None:
-            judge = judge_tiers
+            judge = functools.partial(judge_tiers, warn_s=judge_warn_s, fail_s=judge_fail_s)
 
         # THE TARGET BOUND IS mu, NOT TOKENS (owner ruling, re-mine 2026-08-20).
         # `max_target_pattern_length=None` now admits EVERY enumerated expression to the
@@ -833,7 +911,7 @@ class RuleMiner:
             # BEFORE the prune and promotion see the set; TOLERATED (null-set
             # extension doctrine, matching the engine's own licences) passes.
             if symbolic_gate and not interrupted() and self._mode_rules(rule_mode):
-                from .verify import CONST_CHANNEL_DETAIL, FATAL_BUCKETS, verify_ruleset
+                from .verify import CONST_CHANNEL_DETAIL, FATAL_BUCKETS
                 # JUDGE WHAT SERVES, NOT WHAT THE ARTIFACT SAYS. The gate used to judge
                 # `simplification_rules` -- the artifact -- but translation is not the
                 # identity on it: rules drop, and ORIENTATION TWINS are MINTED at load
@@ -845,8 +923,12 @@ class RuleMiner:
                 # cannot promise. Judging the served set also judges the DEPLOYED spelling
                 # (the canonical projection) rather than the mine's.
                 _served = self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode)
-                _rep = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs, _ in _served])
-                _detail = _rep['detail'] if isinstance(_rep, dict) else _rep
+                # Under the mine's watchdog, with no wall-clock timeout (`_watched_judgments`).
+                _detail = _watched_judgments([(lhs, rhs) for lhs, rhs, _ in _served],
+                                             judge_warn_s, judge_fail_s)
+                _buckets: dict = {b: [] for b in ('CERTIFIED', 'TOLERATED', *FATAL_BUCKETS)}
+                for d in _detail:
+                    _buckets.setdefault(d['verdict'], []).append(d['idx'])
                 # EVERY fatal bucket drops, not only KILL (audit B7): a rule the judge
                 # cannot evaluate (NO-WITNESS / UNSUPPORTED-SHAPE / JUDGE-TIMEOUT) or
                 # cannot reconcile (ENGINE-MISALIGN / UNRESOLVED-COVERAGE) never passed
@@ -922,8 +1004,7 @@ class RuleMiner:
                         # rather than looking like the gate simply missed them.
                         'routed_to_tier': {k: sorted([list(bl), list(br)] for bl, br in v)
                                            for k, v in sorted(_routed.items())},
-                        'census': ({b: len(ids) for b, ids in _rep['buckets'].items()}
-                                   if isinstance(_rep, dict) else None),
+                        'census': {b: len(ids) for b, ids in _buckets.items()},
                         'kept': len(self._mode_rules(rule_mode))}
             if prune == 'covered':
                 self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
@@ -1339,7 +1420,9 @@ class RuleMiner:
             relaxed_kruskal: bool,
             prune: bool | str,
             reset_rules: bool,
-            interval_node_budget: int | None) -> dict:
+            interval_node_budget: int | None,
+            judge_warn_s: float = JUDGE_WARN_S,
+            judge_fail_s: float = JUDGE_FAIL_S) -> dict:
         """Assemble the mined artifact's PROVENANCE record: the mine must
         be reproducible from its sidecar alone. Everything that determines the mine is
         recorded: parameters, seeds, the X specification (seed-derived, or content-hashed
@@ -1413,6 +1496,7 @@ class RuleMiner:
                 'relaxed_kruskal': relaxed_kruskal,
                 'prune': prune, 'reset_rules': reset_rules,
                 'interval_node_budget': interval_node_budget,
+                'judge_warn_s': judge_warn_s, 'judge_fail_s': judge_fail_s,
             },
             'X': x_spec,
             'universe': {
@@ -1840,7 +1924,9 @@ class RuleMiner:
             snapshot_at: dict[int, str] | None = None,
             judge: Callable | None = None,
             judge_processes: int = 4,
-            interval_node_budget: int | None = None) -> None:
+            interval_node_budget: int | None = None,
+            judge_warn_s: float = JUDGE_WARN_S,
+            judge_fail_s: float = JUDGE_FAIL_S) -> None:
         """Systematically discovers new simplification rules.
 
         This method automates the discovery of simplification rules, one file per mode
@@ -1981,6 +2067,11 @@ class RuleMiner:
             default, 400,000). An exhausted search is undecided and refuses its candidate;
             raise it when the sidecar's ``interval_undecided`` counters flag systematic
             exhaustion. Set for the mine only, and recorded in the sidecar's parameters.
+        judge_warn_s, judge_fail_s : float, optional
+            The judge's watchdog. A mine judges with no wall-clock timeout, so no verdict
+            depends on the machine's load; a judgment still running after ``judge_warn_s``
+            seconds (default 60) is logged, and one past ``judge_fail_s`` (default 600) fails
+            the mine with the rule's name. Recorded in the sidecar's parameters.
 
         Notes
         -----
@@ -2097,7 +2188,8 @@ class RuleMiner:
             seed=seed, mine_seed=mine_seed, confirm_seed=confirm_seed,
             confirm=confirm,
             relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules,
-            interval_node_budget=interval_node_budget)
+            interval_node_budget=interval_node_budget,
+            judge_warn_s=judge_warn_s, judge_fail_s=judge_fail_s)
         if proposal_record is not None:
             # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
             # counts are filled in by the proposal pass itself (_find_rules_native).
@@ -2177,7 +2269,10 @@ class RuleMiner:
                     initial_rules=initial[rule_mode],
                     finals=finals,
                     judge=judge if judge is not None else functools.partial(
-                        judge_tiers, processes=judge_processes),
+                        judge_tiers, processes=judge_processes, warn_s=judge_warn_s,
+                        fail_s=judge_fail_s),
+                    judge_warn_s=judge_warn_s,
+                    judge_fail_s=judge_fail_s,
                 )
             # The engine ends holding the three files it wrote, as it would load them.
             if 'default' in finals:

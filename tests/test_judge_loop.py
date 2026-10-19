@@ -347,3 +347,34 @@ def test_a_proposal_whose_target_the_mode_refuses_reads_rejected_at_the_judge(tm
     entry, = side['real']['proposals']['trail']
     assert entry['verdict'] == 'certified', entry
     assert side['real']['proposals']['judge_loop'] == {'judge_rounds': 1, 'excluded': []}
+
+
+def test_the_mine_judges_with_no_timeout_under_a_watchdog(monkeypatch, caplog) -> None:
+    """S2: a verdict never depends on the machine's load. The judge runs with no wall-clock
+    timeout; a judgment past `warn_s` is logged, one past `fail_s` fails the mine by name."""
+    import logging
+    import time
+    import simplipy.verify
+    from simplipy.mining import judge_tiers
+    real_verify = simplipy.verify.verify_ruleset
+    seen = []
+
+    def slow_verify(rules, **kwargs):
+        seen.append(kwargs.get('judge_timeout_s'))
+        if rules[0][0] == ['exp', 'log', '?0']:
+            for _ in range(200):
+                time.sleep(0.01)
+        return real_verify(rules, **kwargs)
+
+    monkeypatch.setattr(simplipy.verify, 'verify_ruleset', slow_verify)
+    rule, slow = (['log', 'exp', '?0'], ['?0']), (['exp', 'log', '?0'], ['?0'])
+    with caplog.at_level(logging.WARNING, logger='simplipy.mining'):
+        assert judge_tiers([rule], processes=1, warn_s=0.05, fail_s=60) == judge_tiers(
+            [rule], processes=1)
+        judge_tiers([slow], processes=1, warn_s=0.05, fail_s=60)
+    assert seen and set(seen) == {0}, seen
+    assert any('exp log ?0 -> ?0' in r.getMessage() for r in caplog.records), caplog.text
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match=r'exp log \?0 -> \?0 ran past 0.3 s'):
+        judge_tiers([rule, slow], processes=1, warn_s=0.1, fail_s=0.3)
+    assert time.monotonic() - started < 1.5, 'the watchdog did not interrupt the judgment'
