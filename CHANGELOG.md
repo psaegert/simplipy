@@ -317,8 +317,12 @@ model predictions.
   out of f64: `atanh(tanh(x0)) -> x0`, since `tanh` saturates inside the range, and
   `log(exp(x0)) -> x0`, 34 ULP apart at `x0 = 0.0137421`, where `exp` rounds its argument into
   the neighbourhood of 1. The verdict counts the points read this way (`out_of_range`). The
-  miner's numeric check in f64 compares the evaluator's values on every row of its matrix,
-  overflowing rows included, so an f64 mine does not mint these rules.
+  miner's own numeric check in f64 applies the same standard: a row of its matrix where an
+  operation of either side overflows or underflows is judged at high precision, where the
+  two sides' true values must agree, and every other row is compared as before. Both read
+  one definition of the event, the core's (`simplipy._core.range_event`), so an f64 mine
+  mints `rootn(exp(x0), 2) -> exp(x0/2)`. `log(exp(x0)) -> x0` passes the numeric check,
+  whose tolerance is wider than the 34 ULP, and the judge refuses it.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for

@@ -676,50 +676,29 @@ for _n in ARITY:
 #: still compared: `tanh` saturates to exactly 1.0 without leaving the range, and
 #: `atanh(1.0)` is a pole. So is every point where the contract cannot decide.
 #:
-#: Read off each operation's operands and float result, per operator: `_POLE` says where
-#: the exact value is infinite at finite operands, `_EXACT_ZERO` where it is zero at
-#: nonzero ones, and `_EXACT_WHEN_TINY` names the operators whose tiny results are always
-#: exact (a sum of floats that lands below the normal range is exactly representable). An
-#: operator outside these tables is never read as out of range: its points stay compared.
+#: THE EVENT IS DEFINED ONCE, in the compiled core (`numeric::RangeKind`, read here through
+#: `_core.range_event`), and the miner's scan reads the same definition, so the judge and the
+#: scan cannot disagree about which operation left the range. It is read off each operation's
+#: operands and float result, per operator: where the exact value is infinite at finite
+#: operands (a pole), where it is zero (an exact zero), and which operators' tiny results are
+#: always exact (a sum of floats below the normal range is exactly representable). An
+#: operator outside the core's table has no events: its points stay compared.
 _TINY = float(np.finfo(F).tiny)   # the smallest normal double
 
-
-def _never(*_):
-    return False
-
-
-_POLE = {
-    '/': lambda a, b: b == 0, 'inv': lambda a: a == 0, 'log': lambda a: a == 0,
-    'atanh': lambda a: a == 1 or a == -1,
-    'pow': lambda a, b: a == 0 and b < 0, 'rootn': lambda a, n: a == 0 and n < 0,
-}
-_EXACT_ZERO = {
-    '*': lambda a, b: a == 0 or b == 0, '/': lambda a, b: a == 0,
-    'pow': lambda a, b: a == 0, 'rootn': lambda a, n: a == 0,
-    'log': lambda a: a == 1, 'acos': lambda a: a == 1, 'acosh': lambda a: a == 1,
-    **{op: (lambda a: a == 0) for op in (
-        'sin', 'tan', 'asin', 'atan', 'sinh', 'tanh', 'asinh', 'atanh',
-        'div2', 'div3', 'div4', 'div5', 'pow2', 'pow3', 'pow4', 'pow5',
-        'pow1_2', 'pow1_3', 'pow1_4', 'pow1_5')},
-}
-_EXACT_WHEN_TINY = frozenset({'+', '-', 'neg', 'abs', 'mult2', 'mult3', 'mult4', 'mult5'})
-#: The operators the tables above need not name: `exp`, `cos` and `cosh` have neither a
-#: pole nor an exact zero at finite operands, and `inv` has no zero. Listed so that
-#: `_RANGE_KNOWN` is the whole vocabulary (a test holds it so).
-_RANGE_PLAIN = frozenset({'exp', 'cos', 'cosh', 'inv'})
-_RANGE_KNOWN = frozenset(_POLE) | frozenset(_EXACT_ZERO) | _EXACT_WHEN_TINY | _RANGE_PLAIN
+try:
+    from simplipy._core import range_event as _range_event  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover  (missing/unbuilt extension: no events, compared as before)
+    _range_event = None
 
 
 def out_of_range(op, args, value):
     """Does one deployed operation overflow or underflow (see the f64 standard above)?
-    `args` are the operands and `value` the float the deployed evaluator returned."""
-    if op not in _RANGE_KNOWN or not all(np.isfinite(a) for a in args):
+    `args` are the operands and `value` the float the deployed evaluator returned. The
+    answer is the core's (`_core.range_event`); an event always leaves a value outside the
+    normal range, so any other value is answered without the call."""
+    if _range_event is None or not (np.isinf(value) or value == 0 or abs(value) < _TINY):
         return False
-    if np.isinf(value):
-        return not _POLE.get(op, _never)(*args)
-    if value == 0 or abs(value) < _TINY:
-        return op not in _EXACT_WHEN_TINY and not _EXACT_ZERO.get(op, _never)(*args)
-    return False
+    return bool(_range_event(op, [float(a) for a in args], float(value)))
 
 
 def d_eval(tree, env, in_range=None):

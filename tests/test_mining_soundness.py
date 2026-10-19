@@ -2200,25 +2200,24 @@ class TestTheGateRoutesInsteadOfDeleting:
         # the union of the three files -- unconditionally true. What the files must show
         # is the routing itself, checked below.
 
-        # The inverse-pair family is true on R and not f64-realised (tanh attains 1.0
-        # from 18.990341103219276, exp overflows at 709.782713), so it is `real`: present
-        # in the real and corpus sets, absent from f64. Before the gate fix all four were
-        # simply deleted.
+        # The inverse-pair family is true on R. Three of them are not f64-realised: tanh
+        # attains 1.0 from 18.990341103219276, and exp and cosh round a small argument into
+        # the neighbourhood of 1, so `log(exp(x))` and `acosh(cosh(x))` lose the argument's
+        # digits there. They are `real`: absent from f64. `asinh(sinh(x))` stays within 2 ULP
+        # wherever sinh stays in range, and past its overflow at 710.48 f64 accepts the true
+        # value, so it is f64's too. Before the gate fix all four were simply deleted.
         pairs = [(['atanh', 'tanh', '?0'], ['?0']), (['log', 'exp', '?0'], ['?0']),
                  (['asinh', 'sinh', '?0'], ['?0']), (['acosh', 'cosh', '?0'], ['abs', '?0'])]
-        # The point of the routing: they are KEPT, in the two modes whose authority
-        # licenses them, and absent from the one that does not. (An earlier version of
-        # this test asserted only the absence, on the strength of a comment claiming they
-        # were gone from all three files -- which was false.)
+        realised = {('asinh', 'sinh', '?0')}
         # ONE MINE PER FILE: real's constructor performs the inverse pairs itself (its serve
         # answer for `atanh(tanh(x0))` is `x0`), so its mine mints none of them, and the
-        # f64 file, whose mode does not realise them, carries none either.
+        # f64 file carries exactly the one its mode realises.
         for lhs, rhs in pairs:
             spelled = [('x0' if t == '?0' else t) for t in lhs]
             assert engine._core.mine_mark(spelled, rule_mode='real') == \
                 [('x0' if t == '?0' else t) for t in rhs], lhs
-            assert (tuple(lhs), tuple(rhs)) not in keys(f64), \
-                f'{" ".join(lhs)} is NOT f64-realised and must not be in the f64 set'
+            assert ((tuple(lhs), tuple(rhs)) in keys(f64)) is (tuple(lhs) in realised), \
+                f'{" ".join(lhs)}: in the f64 set iff f64 realises it'
             assert (tuple(lhs), tuple(rhs)) not in keys(real), lhs
         # each file's sidecar records its own mine
         for path, mode in ((out, 'f64'), (str(tmp_path / 'mined_real.json'), 'real'),

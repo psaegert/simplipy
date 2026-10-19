@@ -16,17 +16,18 @@
 //! shipped mine runs rtol 1e-11, F4-audited in `mine.yaml`); the soundness-critical
 //! special values (div0 -> signed inf, sqrt(neg) -> nan) are bit-exact via the shared kernel.
 
-use crate::numeric::{binary_fn, unary_fn};
+use crate::numeric::{binary_fn, unary_fn, RangeKind};
 use crate::operators::Operators;
 
 /// One postfix instruction. Operators carry their scalar kernel as a function pointer (resolved at
-/// compile), so neither row nor column evaluation does any string matching.
+/// compile), so neither row nor column evaluation does any string matching, and their range kind
+/// (`numeric::RangeKind`), which `eval_columns_events` reads.
 enum Instr {
     Const(f64),
     Var(usize),
     Param(usize),
-    Unary(fn(f64) -> f64),
-    Binary(fn(f64, f64) -> f64),
+    Unary(fn(f64) -> f64, Option<RangeKind>),
+    Binary(fn(f64, f64) -> f64, Option<RangeKind>),
 }
 
 /// A prefix expression compiled to a postfix program. Compile ONCE, evaluate over many rows / params.
@@ -62,8 +63,8 @@ impl Tape {
         let mut max = 0i64;
         for ins in &instrs {
             match ins {
-                Instr::Binary(_) => depth -= 1,
-                Instr::Unary(_) => {}
+                Instr::Binary(..) => depth -= 1,
+                Instr::Unary(..) => {}
                 _ => depth += 1,
             }
             if depth > max {
@@ -87,11 +88,11 @@ impl Tape {
                 Instr::Const(v) => stack.push(*v),
                 Instr::Var(c) => stack.push(x_row[*c]),
                 Instr::Param(p) => stack.push(params[*p]),
-                Instr::Unary(f) => {
+                Instr::Unary(f, _) => {
                     let t = stack.last_mut().unwrap();
                     *t = f(*t);
                 }
-                Instr::Binary(g) => {
+                Instr::Binary(g, _) => {
                     let b = stack.pop().unwrap();
                     let a = stack.last_mut().unwrap();
                     *a = g(*a, b);
@@ -111,12 +112,12 @@ impl Tape {
                 Instr::Const(v) => stack.push(vec![*v; n_rows]),
                 Instr::Var(c) => stack.push(x_cols[*c].clone()),
                 Instr::Param(p) => stack.push(vec![params[*p]; n_rows]),
-                Instr::Unary(f) => {
+                Instr::Unary(f, _) => {
                     for x in stack.last_mut().unwrap().iter_mut() {
                         *x = f(*x);
                     }
                 }
-                Instr::Binary(g) => {
+                Instr::Binary(g, _) => {
                     let b = stack.pop().unwrap();
                     let a = stack.last_mut().unwrap();
                     for (x, y) in a.iter_mut().zip(b.iter()) {
@@ -126,6 +127,46 @@ impl Tape {
             }
         }
         stack.pop().unwrap_or_else(|| vec![f64::NAN; n_rows])
+    }
+
+    /// `eval_columns` that also marks each row where an operation overflowed or underflowed
+    /// (`numeric::RangeKind::event`): the rows at which the f64 standard accepts the true value
+    /// beside the evaluator's. The values are `eval_columns`' own, bit for bit.
+    pub fn eval_columns_events(
+        &self,
+        x_cols: &[Vec<f64>],
+        params: &[f64],
+        n_rows: usize,
+    ) -> (Vec<f64>, Vec<bool>) {
+        let mut events = vec![false; n_rows];
+        let mut stack: Vec<Vec<f64>> = Vec::with_capacity(self.max_stack);
+        for ins in &self.instrs {
+            match ins {
+                Instr::Const(v) => stack.push(vec![*v; n_rows]),
+                Instr::Var(c) => stack.push(x_cols[*c].clone()),
+                Instr::Param(p) => stack.push(vec![params[*p]; n_rows]),
+                Instr::Unary(f, kind) => {
+                    for (x, e) in stack.last_mut().unwrap().iter_mut().zip(events.iter_mut()) {
+                        let v = f(*x);
+                        *e |= kind.is_some_and(|k| k.event(&[*x], v));
+                        *x = v;
+                    }
+                }
+                Instr::Binary(g, kind) => {
+                    let b = stack.pop().unwrap();
+                    let a = stack.last_mut().unwrap();
+                    for ((x, y), e) in a.iter_mut().zip(b.iter()).zip(events.iter_mut()) {
+                        let v = g(*x, *y);
+                        *e |= kind.is_some_and(|k| k.event(&[*x, *y], v));
+                        *x = v;
+                    }
+                }
+            }
+        }
+        (
+            stack.pop().unwrap_or_else(|| vec![f64::NAN; n_rows]),
+            events,
+        )
     }
 }
 
@@ -150,11 +191,11 @@ fn compile_node(
         match arity {
             1 => {
                 let f = unary_fn(&tok).ok_or_else(|| format!("no unary kernel for {tok:?}"))?;
-                instrs.push(Instr::Unary(f));
+                instrs.push(Instr::Unary(f, RangeKind::of(&tok)));
             }
             2 => {
                 let g = binary_fn(&tok).ok_or_else(|| format!("no binary kernel for {tok:?}"))?;
-                instrs.push(Instr::Binary(g));
+                instrs.push(Instr::Binary(g, RangeKind::of(&tok)));
             }
             other => return Err(format!("unsupported arity {other} for {tok:?}")),
         }
@@ -295,6 +336,33 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// The f64 range standard's rows: `eval_columns_events` gives `eval_columns`' values bit
+    /// for bit and marks the rows where an operation overflowed or underflowed -- `exp` past
+    /// 709.78 and below -745.13 -- but not a saturation (`tanh(20)` is exactly 1.0) followed
+    /// by a pole (`atanh(1.0)`).
+    #[test]
+    fn eval_columns_events_marks_the_range_rows() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let cols = vec![vec![1.0, 700.0, 800.0, -1000.0, 20.0]];
+        let n = cols[0].len();
+        let tape = Tape::compile(&s(&["rootn", "exp", "x0", "2"]), ops, &vars).unwrap();
+        let (y, events) = tape.eval_columns_events(&cols, &[], n);
+        let plain = tape.eval_columns(&cols, &[], n);
+        assert!(y
+            .iter()
+            .zip(&plain)
+            .all(|(a, b)| a.to_bits() == b.to_bits()));
+        assert_eq!(events, vec![false, false, true, true, false]);
+        let tape = Tape::compile(&s(&["atanh", "tanh", "x0"]), ops, &vars).unwrap();
+        let (y, events) = tape.eval_columns_events(&cols, &[], n);
+        assert_eq!(y[4], f64::INFINITY);
+        assert_eq!(events, vec![false; n]);
     }
 
     #[test]

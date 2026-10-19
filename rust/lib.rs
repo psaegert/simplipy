@@ -1987,6 +1987,15 @@ fn reserved_numeric_spelling(token: &str) -> bool {
     crate::utils::reserved_numeric_spelling(token)
 }
 
+/// THE f64 RANGE EVENT (`numeric::RangeKind`), the one definition the miner's scan and the
+/// contract judge share: did the operation `op` on `args` overflow or underflow to `value`?
+/// `None` for an operator outside the table, whose points are compared as any other.
+/// `simplipy.verify._contract.out_of_range` calls it.
+#[pyfunction]
+fn range_event(op: &str, args: Vec<f64>, value: f64) -> Option<bool> {
+    crate::numeric::range_event(op, &args, value)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
@@ -1996,6 +2005,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
     m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
+    m.add_function(wrap_pyfunction!(range_event, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
     m.add("DEFAULT_WORK", engine::DEFAULT_WORK)?;
     // The near-miss gate of the high-precision re-judgement (real and permissive): the

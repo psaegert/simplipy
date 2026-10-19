@@ -657,10 +657,16 @@ class TestTheF64RangeStandard:
         assert C.out_of_range(op, [C.F(a) for a in args], value) is out, (op, args, value)
 
     def test_the_classifier_covers_the_whole_vocabulary(self) -> None:
-        """An operator outside the classifier's tables is never read as out of range, so a
-        new operator must be placed in them on purpose."""
+        """The event is the core's one definition, which the miner's scan reads too. An
+        operator outside its table is never read as out of range, so every operator the
+        judge speaks must be in it on purpose."""
+        from simplipy import _core
         from simplipy.verify import _contract as C
-        assert C._RANGE_KNOWN == frozenset(C.ARITY)
+        assert C._range_event is _core.range_event
+        unknown = [op for op, arity in C.ARITY.items()
+                   if _core.range_event(op, [1.0] * arity, 1.0) is None]
+        assert unknown == []
+        assert _core.range_event('no-such-operator', [1.0], math.inf) is None
 
 
 class TestCleanlinessIsPerMode:

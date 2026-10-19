@@ -346,6 +346,88 @@ pub fn rescue(
     true
 }
 
+/// THE f64 RANGE STANDARD on one instance (`numeric::RangeKind`): f64 promises the evaluator's
+/// value wherever nothing overflows or underflows, and at a row where an operation of either
+/// side does (`src_events`, `cand_events`; `None` marks no row), a rewrite may give the true
+/// value instead. So every row that fails
+/// the f64 predicate of `eval::allclose_extends` must be such a row, and must pass when judged
+/// at `P` bits (`judge_row_confirmed`, the rescue's own row judgment: both sides' true values
+/// agree). A failing row with no event refuses, exactly as f64 always did; a row whose true
+/// values disagree refuses too, so a rewrite gives the evaluator's value or the true one there
+/// and nothing else. No near-miss gate: a range event is the special case of the f64 promise,
+/// not a near miss, and the high-precision work stays on the failing event rows. `y_src`,
+/// `y_cand`, the parameters and `atol` are as in `rescue`.
+#[allow(clippy::too_many_arguments)]
+pub fn range_rescue(
+    y_src: &[f64],
+    y_cand: &[f64],
+    src_events: Option<&[bool]>,
+    cand_events: Option<&[bool]>,
+    source: &[String],
+    src_params: &[f64],
+    candidate: &[String],
+    cand_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    x_cols: &[Vec<f64>],
+    rtol: f64,
+    atol: f64,
+) -> bool {
+    let mut failing: Vec<usize> = Vec::new();
+    for (r, &s) in y_src.iter().enumerate() {
+        let c = y_cand[r];
+        if s.is_nan() {
+            continue; // undefined -> extendable
+        }
+        let fails = if s.is_infinite() {
+            c != s
+        } else {
+            !c.is_finite() || (s - c).abs() > atol + rtol * c.abs()
+        };
+        if fails {
+            if !(src_events.is_some_and(|e| e[r]) || cand_events.is_some_and(|e| e[r])) {
+                return false; // a failing row where nothing left the range: f64 refuses
+            }
+            failing.push(r);
+        }
+    }
+    // A pair with no variable evaluates to the same value on every row: one point.
+    if !source
+        .iter()
+        .chain(candidate.iter())
+        .any(|t| var_names.contains(t))
+    {
+        failing.truncate(1);
+    }
+    if failing.is_empty() {
+        return false; // nothing failed: not this function's question
+    }
+    let mut cc = match Consts::new() {
+        Ok(cc) => cc,
+        Err(_) => return false,
+    };
+    failing.iter().all(|&r| {
+        matches!(
+            judge_row_confirmed(
+                source,
+                src_params,
+                candidate,
+                cand_params,
+                ops,
+                var_names,
+                x_cols,
+                r,
+                y_src[r],
+                y_cand[r],
+                rtol,
+                atol,
+                &mut cc,
+            ),
+            Some(RowVerdict::Pass) | Some(RowVerdict::Extend)
+        )
+    })
+}
+
 /// The literal-resolution arbiter (worker's `resolve_const_slots`):
 /// `target(tgt_params) − source(src_params)` on one X row at the working precision, as a
 /// SIGNED difference (the resolver bisects on its sign and ranks on its magnitude).
@@ -2001,6 +2083,57 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// THE f64 RANGE STANDARD (`range_rescue`): at a row where an operation overflowed or
+    /// underflowed, the true value is accepted beside the evaluator's -- and nothing else is;
+    /// a failing row with no event refuses as f64 always did.
+    #[test]
+    fn range_rescue_accepts_only_the_true_value_at_a_range_event() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let vars = s(&["x0"]);
+        let cols = vec![vec![1.0, 800.0, -1000.0, 20.0]];
+        let n = cols[0].len();
+        let eval = |t: &[&str]| {
+            crate::eval::Tape::compile(&s(t), ops, &vars)
+                .unwrap()
+                .eval_columns_events(&cols, &[], n)
+        };
+        let judge = |src: &[&str], cand: &[&str], rows: std::ops::Range<usize>| {
+            let ((ys, es), (yc, ec)) = (eval(src), eval(cand));
+            let pick = |v: &[f64]| v[rows.clone()].to_vec();
+            let (es, ec) = (es[rows.clone()].to_vec(), ec[rows.clone()].to_vec());
+            let cols_r = vec![cols[0][rows.clone()].to_vec()];
+            range_rescue(
+                &pick(&ys),
+                &pick(&yc),
+                Some(&es),
+                Some(&ec),
+                &s(src),
+                &[],
+                &s(cand),
+                &[],
+                ops,
+                &vars,
+                &cols_r,
+                1e-11,
+                0.0,
+            )
+        };
+        // the true value past exp's overflow (800) and underflow (-1000)
+        assert!(judge(
+            &["rootn", "exp", "x0", "2"],
+            &["exp", "/", "x0", "2"],
+            0..3
+        ));
+        assert!(judge(&["log", "exp", "x0"], &["x0"], 0..3));
+        // a value that is neither the evaluator's nor the true one
+        assert!(!judge(&["log", "exp", "x0"], &["+", "x0", "1"], 1..2));
+        // saturation inside the range is no event: f64's verdict stands
+        assert!(!judge(&["atanh", "tanh", "x0"], &["x0"], 3..4));
     }
 
     /// `np.pi` denotes PI, not its f64 rendering. Lifting the

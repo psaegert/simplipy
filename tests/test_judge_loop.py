@@ -475,10 +475,13 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
     ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
     out = str(tmp_path / 'mined.json')
 
-    def judge(pairs):  # refuses the one length-4 pick, `log exp log ?0 -> log ?0`
+    # refuses the length-4 picks, `log exp log ?0 -> log ?0` and `log exp neg ?0 -> neg ?0`
+    # (the latter passes f64's special points where exp leaves the range, 750 and 1e17)
+    def judge(pairs):
         return ['real' if len(p[0]) >= 4 else 'core' for p in pairs]
 
-    with pytest.raises(RuntimeError, match=r"gave up on 1 source\(s\) of length 4.*'log', 'exp', 'log', 'x0'"):
+    with pytest.raises(RuntimeError, match=r"gave up on 2 source\(s\) of length 4.*"
+                                           r"'log', 'exp', 'log', 'x0'.*'log', 'exp', 'neg', 'x0'"):
         SimpliPyEngine(operators=ops, rules=[]).find_rules(
             max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
             X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,

@@ -37,9 +37,11 @@ against an exact counting recurrence.
    restarted optimizer otherwise). A row agrees relatively (`rtol`; zero agrees only with
    zero), rows where the source is undefined may be completed by the target (so
    `x/x → 1` certifies, in the sense of the limit), and a minimum number of informative
-   rows is required (`min_informative`). In `f64` the deployed evaluator's values decide;
-   in `real` and `permissive` a near miss (at most half of the points failing in f64) is
-   re-judged at high precision.
+   rows is required (`min_informative`). In `f64` the deployed evaluator's values decide,
+   except on a row where an operation of either side overflows or underflows: there the
+   true value is accepted too, so such a row is re-judged at high precision (the judge
+   reads the same event, one definition in the core). In `real` and `permissive` a near
+   miss (at most half of the points failing in f64) is re-judged at high precision.
 5. **Confirm**: the pick is re-judged on an independent, twice-as-wide matrix with fresh
    seeds; a pick that fails yields to the next candidate.
 6. **Judge**: the length's picks go to the contract judge (`simplipy.verify`), each as the

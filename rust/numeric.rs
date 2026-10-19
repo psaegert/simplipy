@@ -337,6 +337,112 @@ pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
     })
 }
 
+/// THE f64 RANGE EVENT: the one definition the miner's scan (`eval::Tape::eval_columns_events`)
+/// and the contract judge (`verify._contract.out_of_range`, through `_core.range_event`) share.
+/// f64 promises the evaluator's value wherever nothing overflows or underflows, and overflows
+/// are a special case: at a point where an operation of either side overflows or underflows, a
+/// rewrite may give the true value instead of the evaluator's, as the constructors do
+/// (`x1*x2/x2 -> x1`, `exp(x1)/exp(x1) -> 1`).
+///
+/// The two events are IEEE 754's. An operation OVERFLOWS when its operands are finite and its
+/// exact value is finite, but the float is +-inf (`exp(800)`, `1e200*1e200`); it UNDERFLOWS
+/// when its operands are finite and its exact value is nonzero, but the float is zero or
+/// subnormal (`exp(-800)`, `1e-200*1e-200`). Neither is a POLE, an exact value that is itself
+/// infinite (`1/0`, `log(0)`, `atanh(1)`), nor an EXACT ZERO (`x - x`, `log(1)`): those are
+/// what the operator computes. So `atanh(tanh(20))` holds no event: `tanh` saturates to
+/// exactly 1.0 inside the range, and `atanh(1.0)` is a pole. Each kind names where its
+/// operators have a pole and an exact zero at finite operands; an operator outside the table
+/// has no events, so its points are compared as any other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RangeKind {
+    /// `+ - neg abs mult2..mult5`: a result below the normal range is always exact.
+    ExactWhenTiny,
+    /// `exp cos cosh`: neither a pole nor an exact zero.
+    Plain,
+    /// `*`: an exact zero when an operand is zero.
+    Mul,
+    /// `/`: a pole at a zero divisor, an exact zero at a zero dividend.
+    Div,
+    /// `inv`: a pole at zero.
+    Inv,
+    /// `log`: a pole at zero, an exact zero at one.
+    Log,
+    /// `atanh`: poles at +-1, an exact zero at zero.
+    Atanh,
+    /// `pow`, `rootn`: a pole at a zero base under a negative exponent or index, an exact
+    /// zero at a zero base.
+    PowLike,
+    /// `acos acosh`: an exact zero at one.
+    ZeroAtOne,
+    /// `sin tan asin atan sinh tanh asinh`, `div2..div5`, `pow2..pow5`, `pow1_2..pow1_5`:
+    /// an exact zero at zero.
+    ZeroAtZero,
+}
+
+impl RangeKind {
+    /// The kind of an operator token, `None` outside the table.
+    pub(crate) fn of(name: &str) -> Option<RangeKind> {
+        use RangeKind::*;
+        Some(match name {
+            "+" | "-" | "neg" | "abs" | "mult2" | "mult3" | "mult4" | "mult5" => ExactWhenTiny,
+            "exp" | "cos" | "cosh" => Plain,
+            "*" => Mul,
+            "/" => Div,
+            "inv" => Inv,
+            "log" => Log,
+            "atanh" => Atanh,
+            "pow" | "rootn" => PowLike,
+            "acos" | "acosh" => ZeroAtOne,
+            "sin" | "tan" | "asin" | "atan" | "sinh" | "tanh" | "asinh" | "div2" | "div3"
+            | "div4" | "div5" | "pow2" | "pow3" | "pow4" | "pow5" | "pow1_2" | "pow1_3"
+            | "pow1_4" | "pow1_5" => ZeroAtZero,
+            _ => return None,
+        })
+    }
+
+    /// Is the exact value infinite at these finite operands?
+    fn pole(self, args: &[f64]) -> bool {
+        match self {
+            RangeKind::Div => args[1] == 0.0,
+            RangeKind::Inv | RangeKind::Log => args[0] == 0.0,
+            RangeKind::Atanh => args[0] == 1.0 || args[0] == -1.0,
+            RangeKind::PowLike => args[0] == 0.0 && args[1] < 0.0,
+            _ => false,
+        }
+    }
+
+    /// Is the exact value zero at these finite operands?
+    fn exact_zero(self, args: &[f64]) -> bool {
+        match self {
+            RangeKind::Mul => args[0] == 0.0 || args[1] == 0.0,
+            RangeKind::Div | RangeKind::PowLike | RangeKind::Atanh | RangeKind::ZeroAtZero => {
+                args[0] == 0.0
+            }
+            RangeKind::Log | RangeKind::ZeroAtOne => args[0] == 1.0,
+            RangeKind::ExactWhenTiny | RangeKind::Plain | RangeKind::Inv => false,
+        }
+    }
+
+    /// Did this operation, on `args`, overflow or underflow to `value`?
+    pub(crate) fn event(self, args: &[f64], value: f64) -> bool {
+        if !args.iter().all(|a| a.is_finite()) {
+            return false;
+        }
+        if value.is_infinite() {
+            return !self.pole(args);
+        }
+        if value == 0.0 || value.abs() < f64::MIN_POSITIVE {
+            return self != RangeKind::ExactWhenTiny && !self.exact_zero(args);
+        }
+        false
+    }
+}
+
+/// `RangeKind::event` by operator name: `None` for an operator outside the table.
+pub(crate) fn range_event(name: &str, args: &[f64], value: f64) -> Option<bool> {
+    RangeKind::of(name).map(|k| k.event(args, value))
+}
+
 /// Apply one canonical operator to its numeric operands as IEEE-754 f64 + libm. Thin dispatcher over
 /// `unary_fn`/`binary_fn` (ONE semantics source of truth, shared by the inline folder and the OFFLINE
 /// vectorized evaluator). `None` for an unknown operator or wrong operand count.
@@ -536,6 +642,68 @@ mod tests {
 #[cfg(test)]
 mod aligned_pow_tests {
     use super::*;
+
+    /// THE f64 RANGE EVENT: every operator with a kernel has a kind, and the kinds read
+    /// IEEE 754's overflow and underflow, never a pole, an exact zero or a saturation.
+    #[test]
+    fn range_events_are_ieee_overflow_and_underflow() {
+        let unary = [
+            "neg", "inv", "abs", "mult2", "mult3", "mult4", "mult5", "div2", "div3", "div4",
+            "div5", "pow2", "pow3", "pow4", "pow5", "pow1_2", "pow1_3", "pow1_4", "pow1_5", "sin",
+            "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh",
+            "atanh", "exp", "log",
+        ];
+        for op in unary {
+            assert!(
+                unary_fn(op).is_some() && RangeKind::of(op).is_some(),
+                "{op}"
+            );
+        }
+        for op in ["+", "-", "*", "/", "pow", "rootn"] {
+            assert!(
+                binary_fn(op).is_some() && RangeKind::of(op).is_some(),
+                "{op}"
+            );
+        }
+        assert_eq!(RangeKind::of("no-such-operator"), None);
+        let ev = |op: &str, args: &[f64]| {
+            let v = apply_op(op, args).unwrap();
+            range_event(op, args, v).unwrap()
+        };
+        // overflow and underflow
+        for (op, args) in [
+            ("exp", vec![800.0]),
+            ("exp", vec![-800.0]),
+            ("exp", vec![-740.0]), // subnormal
+            ("cosh", vec![800.0]),
+            ("*", vec![1e200, 1e200]),
+            ("*", vec![1e-200, 1e-200]),
+            ("+", vec![1e308, 1e308]),
+            ("pow", vec![10.0, 400.0]),
+            ("inv", vec![1e308]),
+            ("rootn", vec![5e-324, -1.0]),
+        ] {
+            assert!(ev(op, &args), "{op}{args:?} must be a range event");
+        }
+        // poles, exact zeros, saturation inside the range, non-finite operands
+        for (op, args) in [
+            ("atanh", vec![1.0]),
+            ("log", vec![0.0]),
+            ("/", vec![1.0, 0.0]),
+            ("pow", vec![0.0, -1.0]),
+            ("rootn", vec![0.0, -2.0]),
+            ("inv", vec![0.0]),
+            ("-", vec![0.5, 0.5]),
+            ("log", vec![1.0]),
+            ("acos", vec![1.0]),
+            ("*", vec![0.0, 1e-200]),
+            ("tanh", vec![20.0]),
+            ("exp", vec![f64::INFINITY]),
+            ("exp", vec![700.0]),
+        ] {
+            assert!(!ev(op, &args), "{op}{args:?} must not be a range event");
+        }
+    }
 
     /// The zero spellings read as the deployed evaluator reads them: an integer has one zero
     /// (+0), a float spelling keeps its sign, a fraction is `int / int` (+0). The Python
