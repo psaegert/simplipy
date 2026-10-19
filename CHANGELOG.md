@@ -642,6 +642,55 @@ model predictions.
 
 <!-- PENDING: CHANGELOG lines from the miner/rules and the core/concurrency fix rounds go here
      (and under Removed, if any). -->
+- **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
+  was read in its serving mode's canon, so a file mined before them could read as rules nothing
+  judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and
+  `rootn(2, 3)`, `x1 + rootn(2, 3)` and `x1*rootn(10, 5)` simplified to `nan` in `real` (212
+  such rows served on acj-5-4-llm). `from_config` now reads each file's canon off its
+  provenance sidecar: a recorded `mode` is that mode's canon; a file whose sidecar records none
+  (simplipy 0.14 and earlier mined all three files in one canon), or that has no sidecar, is
+  read in that one canon (`legacy`). Numerals are read in the serving mode's number domain
+  either way. In-memory sets are read in their own mode. New keyword
+  `SimpliPyEngine(rule_canons=...)`; on the core, `from_strs(.., canon)`,
+  `set_mode_rules(.., canon=)`, `ac_canonical_keys(.., canon=)` and `mode_rules_canon`.
+  On acj-5-4-llm, `real` now serves 133,552 rules (was 132,754; 122 subsumed at load, was 838)
+  and the f64 file keeps 141 more rows through the construction dedup.
+- **The engine-owned-law gate takes the search's own FACTOR move.** The load and the miner
+  refused a distributive-law rule only over plain sums and products, so
+  `sin(x)*a + sin(x)*b -> sin(x)*(a + b)` loaded and was mined although the search performs it
+  in every mode. The gate now judges the rule on an instance the search meets, with the search's
+  licence and `factor_moves`. On acj-5-4-llm it drops 2 (f64), 10 (real) and 13 (permissive)
+  rows at load, was 0, 5 and 5.
+- **A mine without `--reset-rules` starts each mode from its own set.** The real and
+  permissive mines were seeded from the f64 set.
+- **No judge timeout inside a mine.** The judge's 30 s wall-clock timeout filed a slow
+  judgment as a rejection, so a mined file depended on machine load. A mine now judges with no
+  timeout under a watchdog: a judgment past `judge_warn_s` (60 s) is logged, one past
+  `judge_fail_s` (600 s) fails the mine with the rule's name. Both are new `find_rules`
+  parameters, recorded in the sidecar.
+- **Checkpoints resume only their own mine.** The key now also holds the operator table, the
+  content of X and of the confirm matrix, the numeric environment (python, numpy, scipy,
+  mpmath, libc, the libm fingerprint) and the `SIMPLIPY_*` switches. A resumed mine keeps its
+  original `created` and `host` and records each resume under `resumed`.
+- **The judge loop's rounds cap is per source.** One stubborn source no longer fails a whole
+  length after the scan with nothing saved: it is given up on after 8 refusals while the others
+  converge, the checkpoint (with every verdict reached) is written, and the mine fails naming
+  the source and its excluded targets. The proposals' loop caps per proposal.
+- **The post-pass judges before it prunes.** The final gate now runs before each covered-rule
+  prune and once more on the set that ships, so a prune never leans on a rule the gate drops.
+- **`verify-mine` passes nothing vacuously.** New gates `sidecar` (a final, uninterrupted mine
+  of the mode asked) and `rules` (the file is not empty); `fingerprint` fails on a probe the
+  record lacks (an empty record) and on a record of another mode. The `engine_owned_law` gate
+  does not yet catch a sign pull (`neg sin _0 -> sin neg _0`); that waits for the sign rule.
+- **`requires_simplipy`**: an empty specifier is malformed, and an exact pin of a pre-release
+  (`==0.15.0.dev2`) admits that pre-release. Other specifiers still judge a pre-release as the
+  release it precedes.
+- **Rule pushes**: the core's pushed-rules digest is stored only after the push compiles, and a
+  push re-translates only the set it replaces (a default push used to discard and rebuild the
+  real and permissive translations).
+- **The promotion refund reads the constructor's dedup** instead of a copy of it ("shortest
+  target"), which disagreed with the serve-ordering tie-break and sent every probe to the slow
+  rebuild.
 - **The mining calls name their mode.** `prune_covered_rules`, `deduplicate_rules` and
   `promote` take a required keyword `rule_mode`: `'f64'` (also spelled `'default'`, the core's
   name for the f64 set), `'real'` or `'permissive'`. The CLI's `prune-covered-rules` prunes the
