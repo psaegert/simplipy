@@ -11,7 +11,7 @@ import pytest
 
 from simplipy import SimpliPyEngine
 
-# Training draws of flash-ansr's T8.1 catalog that permissive returned costlier than they came in.
+# Inputs from flash-ansr's training-data generator that permissive returned costlier than they came in.
 PRICIER_THAN_INPUT = [
     '- * + * + x16 * pow 0.36421583172854655 1.5 - x16 x9 x8 log x2 * x17 x7 x6',
     '/ neg / / x14 - + x17 x17 x5 x5 + * x9 + - x9 + - rootn x15 -2 - atanh x13 acos x7 x4 x15 x1',
