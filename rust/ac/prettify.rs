@@ -16,6 +16,8 @@
 //! 3. **Otherwise one float**: the float64 nearest to the value, in its shortest form, as a
 //!    multiplier. The display writes the value that float reads back as, so a coefficient a
 //!    hair from 1 shows as no coefficient and an exponent a hair from 1/2 as a square root.
+//!    With a precision `k`, the float shows `k` significant digits instead (round half to
+//!    even), the pi literal and a divisor of rule 5 included.
 //! 4. **pi** is the literal `3.141592653589793`, recognised by exact arithmetic: when `c / pi`
 //!    or `c * pi` has a fraction spelling that fits `D` (pi's digits not counted), the value is
 //!    written with the literal factored out (`1/(2*3.141592653589793)`).
@@ -121,9 +123,9 @@ impl Spelling {
         })
     }
 
-    /// The numerals of the numerator and of the denominator.
-    fn parts(&self) -> (Vec<Node>, Vec<Node>) {
-        let pi = || Node::Num(PI_LITERAL.to_string());
+    /// The numerals of the numerator and of the denominator, the literal pi written `pi`.
+    fn parts(&self, pi: &str) -> (Vec<Node>, Vec<Node>) {
+        let pi = || Node::Num(pi.to_string());
         let n = |s: &Option<String>| s.iter().map(|t| Node::Num(t.clone())).collect::<Vec<_>>();
         match self {
             Spelling::Int(s) | Spelling::Float(s) => (vec![Node::Num(s.clone())], vec![]),
@@ -284,6 +286,35 @@ fn float_text(s: &Rat) -> String {
     }
 }
 
+/// The spelling of a float `s` (an exact decimal): an integer where it writes as one.
+fn float_spelling(s: Rat) -> (Spelling, Rat) {
+    let text = float_text(&s);
+    if s.is_integer() && !text.contains('e') {
+        return (Spelling::Int(text), s);
+    }
+    (Spelling::Float(text), s)
+}
+
+/// The exact decimal `s` rounded to `k >= 1` significant digits, half to even.
+fn significant(s: &Rat, k: usize) -> Option<Rat> {
+    let _exact = number_domain(false);
+    let parts = s.decimal_parts()?;
+    let digits = parts.mantissa.digits();
+    if digits.len() <= k {
+        return Some(s.clone());
+    }
+    let drop = digits.len() - k;
+    let m: BigUint = digits.parse().ok()?;
+    let unit = power_of(10, drop);
+    let (mut q, r) = (&m / &unit, &m % &unit);
+    let half = &unit / BigUint::from(2u32);
+    if r > half || (r == half && q.bit(0)) {
+        q += 1u32;
+    }
+    let sign = if parts.negative { "-" } else { "" };
+    Rat::parse_decimal(&format!("{sign}{q}e{}", parts.exp + drop as i64))
+}
+
 /// Is `y` a float the display may write: finite, nonzero and normal (rule 9)?
 fn writable(y: f64) -> bool {
     y.is_finite() && y.abs() >= f64::MIN_POSITIVE
@@ -302,16 +333,19 @@ pub enum Layout {
 pub struct Display<'a, 'v> {
     cx: &'a Cx<'v>,
     digits: usize,
+    /// The significant digits a float shows (`None`: the shortest decimal of its float64).
+    precision: Option<usize>,
     layout: Layout,
     /// Set while rebuilding when a sum keeps terms apart that its rebuild would collect.
     kept_apart: Cell<bool>,
 }
 
 impl<'a, 'v> Display<'a, 'v> {
-    pub fn new(cx: &'a Cx<'v>, digits: usize, layout: Layout) -> Self {
+    pub fn new(cx: &'a Cx<'v>, digits: usize, precision: Option<usize>, layout: Layout) -> Self {
         Display {
             cx,
             digits,
+            precision,
             layout,
             kept_apart: Cell::new(false),
         }
@@ -339,15 +373,31 @@ impl<'a, 'v> Display<'a, 'v> {
             // Rule 9: no float can stand for it (only exact-domain values get here).
             return (self.exact_spelling(a), a.clone());
         };
+        if let Some(shown) = self.shortened(&s) {
+            return float_spelling(shown);
+        }
         if s != *a {
             // The display writes the value its float reads back as.
             return self.spell(&s, unit_free);
         }
-        let text = float_text(&s);
-        if s.is_integer() && !text.contains('e') {
-            return (Spelling::Int(text), s);
+        float_spelling(s)
+    }
+
+    /// A float `s` (an exact decimal) at the display's precision: `k` significant digits.
+    /// `None` without a precision, or where the shortened value would leave the range a float
+    /// may be written in (rule 9).
+    fn shortened(&self, s: &Rat) -> Option<Rat> {
+        let k = self.precision?;
+        let r = significant(s, k)?;
+        writable(r.to_f64_nearest()).then_some(r)
+    }
+
+    /// The pi literal at the display's precision.
+    fn pi_text(&self) -> String {
+        match self.shortened(pi_value()) {
+            Some(r) => float_text(&r),
+            None => PI_LITERAL.to_string(),
         }
-        (Spelling::Float(text), s)
     }
 
     /// Rule 4: `a` with the literal pi factored out, when the rest has a fraction that fits:
@@ -391,7 +441,7 @@ impl<'a, 'v> Display<'a, 'v> {
             return (Node::Num("0".to_string()), Rat::ZERO);
         }
         let (sp, value) = self.spell(&r.abs(), false);
-        let (num, den) = sp.parts();
+        let (num, den) = sp.parts(&self.pi_text());
         let node = if den.is_empty() && num.len() == 1 {
             num.into_iter().next().unwrap()
         } else {
@@ -610,7 +660,7 @@ impl<'a, 'v> Display<'a, 'v> {
                     match self.divisor(&sp, &c.abs(), !den.is_empty()) {
                         Some((d, _)) => lead_den.push(d),
                         None => {
-                            let (n, d) = sp.parts();
+                            let (n, d) = sp.parts(&self.pi_text());
                             lead = n;
                             lead_den = d;
                         }
@@ -763,8 +813,11 @@ impl<'a, 'v> Display<'a, 'v> {
         let inv = mag.checked_inv()?;
         inv.decimal_parts()?;
         let y = inv.to_f64_nearest();
-        (writable(y) && Rat::shortest_reading_as(y).as_ref() == Some(&inv))
-            .then(|| (Node::Num(float_text(&inv)), inv))
+        if !(writable(y) && Rat::shortest_reading_as(y).as_ref() == Some(&inv)) {
+            return None;
+        }
+        let shown = self.shortened(&inv).unwrap_or_else(|| inv.clone());
+        Some((Node::Num(float_text(&shown)), inv))
     }
 
     fn sum(&self, v: &[Ex]) -> Node {
@@ -1249,7 +1302,26 @@ mod tests {
         assert_eq!(fit(&a, 3, true), None);
     }
 
-    /// Rule 9: positional from 10^-3 (inclusive) to 10^6 (exclusive), else scientific.
+    /// A precision rounds a float to its significant digits, half to even.
+    #[test]
+    fn significant_digits_round_half_to_even() {
+        let d = |s: &str| {
+            let _exact = number_domain(false);
+            Rat::parse_decimal(s).unwrap()
+        };
+        let sig = |s: &str, k| float_text(&significant(&d(s), k).unwrap());
+        assert_eq!(sig("2.1458314277221002", 3), "2.15");
+        assert_eq!(sig("2.1458314277221002", 1), "2");
+        assert_eq!(sig("9.9999", 2), "10");
+        assert_eq!(sig("0.0009765625", 2), "9.8e-4");
+        assert_eq!(sig("2.25", 2), "2.2");
+        assert_eq!(sig("2.35", 2), "2.4");
+        assert_eq!(sig("-0.125", 2), "-0.12");
+        assert_eq!(sig("123456789", 3), "1.23e8");
+        assert_eq!(sig("1.5", 3), "1.5");
+    }
+
+    /// Rule 8: positional from 10^-3 (inclusive) to 10^6 (exclusive), else scientific.
     #[test]
     fn float_text_switches_to_scientific_outside_the_band() {
         let d = |s: &str| {

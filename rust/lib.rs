@@ -858,16 +858,18 @@ impl PyEngine {
     }
 
     /// `prettify`: the DISPLAY of an expression's canonical state under the digit budget
-    /// `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`, `"tagged"`), its numbers
-    /// read in `rule_mode`'s number domain. Display only: it simplifies nothing, and nothing in
-    /// the engine calls this or reads what it returns.
-    #[pyo3(signature = (tokens, digits=3, form="infix", *, rule_mode))]
+    /// `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`, `"tagged"`), a float
+    /// shown with `precision` significant digits (`None`: the shortest decimal of its float64),
+    /// its numbers read in `rule_mode`'s number domain. Display only: it simplifies nothing, and
+    /// nothing in the engine calls this or reads what it returns.
+    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, rule_mode))]
     fn prettify(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         digits: usize,
         form: &str,
+        precision: Option<usize>,
         rule_mode: &str,
     ) -> PyResult<Py<PyAny>> {
         let form = engine::PrettyForm::parse(form).ok_or_else(|| {
@@ -879,11 +881,14 @@ impl PyEngine {
         if digits == 0 {
             return Err(PyValueError::new_err("digits must be at least 1"));
         }
+        if precision == Some(0) {
+            return Err(PyValueError::new_err("precision must be at least 1"));
+        }
         let out = py.detach(|| {
             let inner = self.inner();
             ensure_ac_well_formed(&inner, &tokens)?;
             inner
-                .ac_prettify(&tokens, digits, form, mode)
+                .ac_prettify(&tokens, digits, precision, form, mode)
                 .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
         })?;
         Ok(match out {

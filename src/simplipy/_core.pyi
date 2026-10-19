@@ -60,6 +60,7 @@ class Engine:
         tokens: list[str],
         digits: int = ...,
         form: Literal["infix", "explicit", "tagged"] = ...,
+        precision: int | None = ...,  # significant digits of a float; None: its shortest decimal
         *,
         rule_mode: Literal["default", "real", "permissive"],  # the number domain; no rules
     ) -> str | list[str]: ...

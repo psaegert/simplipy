@@ -2183,6 +2183,7 @@ class SimpliPyEngine:
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             *,
             digits: int = 3,
+            precision: int | None = None,
             form: str | None = None,
             mode: Mode | str = Mode.f64) -> str | list[str]:
         """Write an expression for a READER: each number written to a digit budget, nothing else decided.
@@ -2209,7 +2210,10 @@ class SimpliPyEngine:
           ``x1/2`` stays ``x1/2``).
         * Otherwise the value is the float64 nearest to it, in its shortest form, as a
           multiplier (``x1/1024`` is ``9.765625e-4*x1``). A value a hair from a short
-          number shows as that number (``1.000000000000000000003*x1`` is ``x1``).
+          number shows as that number (``1.000000000000000000003*x1`` is ``x1``). With
+          ``precision=k`` such a float shows ``k`` significant digits instead
+          (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), the pi literal and
+          a divisor of the next rules included; a fraction that fits ``D`` is not affected.
         * pi is the literal ``3.141592653589793``: a value that is a fitting fraction times
           or over it is written with the literal factored out (``3*x0^2/(20*3.141592653589793*x1*x2)``).
         * A float whose reciprocal float64 holds as written stays a divisor where the
@@ -2229,9 +2233,11 @@ class SimpliPyEngine:
           reciprocal of a product with a sum or a function stays one bag in the section.
         * Scientific notation from ``1e6`` and below ``1e-3``.
 
-        A number is written exactly or as the float64 nearest to it, so the display reads
-        back to the same float64 values: it evaluates as the expression does, up to the order
-        of its operations. Displaying a display gives it back
+        At the default ``precision=None`` a number is written exactly or as the float64
+        nearest to it, so the display reads back to the same float64 values: it evaluates as
+        the expression does, up to the order of its operations. With a ``precision`` it does
+        not: a float shortened to ``k`` digits reads back as another number. Displaying a
+        display gives it back
         (``prettify(prettify(x)) == prettify(x)``), except where writing numbers as their
         floats lets reading the display collect or compute what the expression keeps apart:
         the display of ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``sin(x1) - sin(x1)``,
@@ -2244,6 +2250,9 @@ class SimpliPyEngine:
             Its canonical state is displayed; pass the answer of :meth:`simplify`.
         digits : int, optional
             The digit budget ``D`` (default 3).
+        precision : int or None, optional
+            The significant digits a number written as a float shows. ``None`` (the default)
+            writes the shortest decimal that reads back as the same float64.
         form : str, optional
             ``'infix'``, ``'explicit'`` or ``'tagged'``; by default the input's dialect, as
             :meth:`simplify` answers.
@@ -2261,6 +2270,13 @@ class SimpliPyEngine:
             raise TypeError(f"digits must be an int >= 1, not {type(digits).__name__} ({digits!r})")
         if digits < 1:
             raise ValueError(f"digits must be at least 1, got {digits}")
+        if precision is not None:
+            if isinstance(precision, bool) or not isinstance(precision, (int, np.integer)):
+                raise TypeError(
+                    f"precision must be None or an int >= 1, not {type(precision).__name__} ({precision!r})")
+            if precision < 1:
+                raise ValueError(f"precision must be at least 1, got {precision}")
+            precision = int(precision)
         mode = _coerce_mode(mode)
         in_form, tokens = self._read_input(expression)
         target = form or in_form
@@ -2268,7 +2284,7 @@ class SimpliPyEngine:
             raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
         if not tokens:
             return '' if target == 'infix' else []
-        return self._core.prettify(tokens, int(digits), target, rule_mode=_RULE_MODE[mode])
+        return self._core.prettify(tokens, int(digits), target, precision, rule_mode=_RULE_MODE[mode])
 
     def complexity(
             self,

@@ -57,6 +57,7 @@ impl Engine {
         &self,
         tokens: &[String],
         digits: usize,
+        precision: Option<usize>,
         mode: RuleMode,
         layout: Layout,
     ) -> Option<Node> {
@@ -66,19 +67,21 @@ impl Engine {
         let bare = Cx::bare(&view);
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let state = canon(from_prefix(&toks, &bare)?, &bare);
-        Some(Display::new(&bare, digits, layout).node(&state))
+        Some(Display::new(&bare, digits, precision, layout).node(&state))
     }
 
-    /// `prettify`: the display of `tokens` (any dialect) under the digit budget `digits`, its
-    /// numbers read in `mode`'s number domain. `None` on malformed input.
+    /// `prettify`: the display of `tokens` (any dialect) under the digit budget `digits`, a
+    /// float shown with `precision` significant digits (`None`: the shortest decimal of its
+    /// float64), its numbers read in `mode`'s number domain. `None` on malformed input.
     pub fn ac_prettify(
         &self,
         tokens: &[String],
         digits: usize,
+        precision: Option<usize>,
         form: PrettyForm,
         mode: RuleMode,
     ) -> Option<Pretty> {
-        let node = self.display_node(tokens, digits, mode, form.layout())?;
+        let node = self.display_node(tokens, digits, precision, mode, form.layout())?;
         Some(render(&node, form))
     }
 }

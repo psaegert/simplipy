@@ -50,6 +50,17 @@ engine.prettify(engine.simplify("1.000000000000000000003*x1"))
 # -> 'x1'
 ```
 
+**Precision.** `precision=k` shows a number written as a float with `k` significant digits
+instead of its shortest float64 form; a fraction that fits the digit budget is not affected.
+The default, `precision=None`, writes floats in full.
+
+```python
+engine.prettify(answer, precision=3)
+# -> '2.15*x1'
+engine.prettify(engine.simplify("x1*5/21"), precision=1)
+# -> 'x1/4.2'
+```
+
 **pi** is the literal `3.141592653589793`. A value that is a fitting fraction times pi, or over
 it, is written with the literal factored out.
 
@@ -116,8 +127,9 @@ engine.prettify(tokens, form="tagged")
 # -> ['<mul>', '1', '<div>', '2', '3.141592653589793', '</mul>']
 ```
 
-A number is written exactly or as the float64 nearest to it, so the display reads back to the
-same float64 values: it evaluates as the expression does, up to the order of its operations.
+At the default `precision=None` a number is written exactly or as the float64 nearest to it,
+so the display reads back to the same float64 values: it evaluates as the expression does, up to
+the order of its operations. A display at a `precision` does not read back to them.
 Displaying a display gives it back:
 
 ```python

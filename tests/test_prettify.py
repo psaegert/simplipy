@@ -101,6 +101,31 @@ def test_long_literals_show_their_float(eng):
     assert show(eng, 'x1^(300000000000000000001/600000000000000000000)') == 'rootn(x1, 2)'
 
 
+@pytest.mark.parametrize('text,precision,expected', [
+    ('2.14583142772210003669120562399025*x1', None, '2.1458314277221002*x1'),
+    ('2.14583142772210003669120562399025*x1', 3, '2.15*x1'),
+    ('2.14583142772210003669120562399025*x1', 1, '2*x1'),
+    ('x1/1024', 2, '9.8e-4*x1'),
+    ('(x2 + 0.5)^(500000000000000/4427)', 3, '(x2 + 1/2)^1.13e11'),
+    ('x1*sin(9463/890)', 4, 'x1*sin(10.63)'),
+    ('9.9999*x1', 2, '10*x1'),
+    ('1.000000000000000000003*x1', 3, 'x1'),
+    (f'1/(2*{PI})', 3, '1/(2*3.14)'),
+    ('x1/0.225147640565301', 3, '4.44*x1'),
+    ('(3.44153*x2 + x1)/(0.225147640565301*(x1 + sin(x2)))', 3,
+     '(x1 + 3.44*x2)/(0.225*(x1 + sin(x2)))'),
+])
+def test_precision(eng, text, precision, expected):
+    """`precision=k` shows a number written as a float with k significant digits; `None` keeps
+    the shortest decimal that reads back as the same float64."""
+    assert show(eng, text, precision=precision) == expected
+
+
+@pytest.mark.parametrize('text', ['x1*5/21', 'x1/12', '22/7*x1', 'x1^(5/21)', '3*x0^2/(20*x1*x2)'])
+def test_precision_leaves_the_fractions_digits_keeps(eng, text):
+    assert show(eng, text, precision=1) == show(eng, text)
+
+
 def test_digit_budget(eng):
     assert show(eng, 'x1/12', digits=2) == '0.08333333333333333*x1'
     assert show(eng, 'x1/1024', digits=5) == 'x1/1024'
@@ -276,6 +301,17 @@ def test_p2_the_display_evaluates_as_the_state_does_on_the_corpus(eng):
     assert not apart, apart[:5]
 
 
+def test_p2_holds_at_full_precision_only(eng):
+    """With `precision=k` a number no longer reads back as its float64: the gate catches it."""
+    import numpy as np
+    c = list(eng.simplify(eng._core.parse('x1/3 + 7.123456789012345*x2', strict=True)))
+    xs = np.random.default_rng(0).uniform(0.5, 2.0, size=(16, 2))
+    a = values(eng, c, ['x1', 'x2'], xs)
+    assert np.allclose(a, values(eng, eng.prettify(c), ['x1', 'x2'], xs), rtol=P2_RTOL, atol=0)
+    assert not np.allclose(a, values(eng, eng.prettify(c, precision=3), ['x1', 'x2'], xs),
+                           rtol=P2_RTOL, atol=0)
+
+
 @pytest.mark.parametrize('text', ['x1/0.225147640565301', 'x1/3 + 7.123456789012345*x2',
                                   'x1^2*x2^2/(6*3.1415926535897*8.854e-12*(2.99792458e8)^3)'])
 def test_p2_catches_a_one_ulp_change(eng, text):
@@ -382,6 +418,12 @@ def test_api(eng):
         eng.prettify(c, form='prefix')
     with pytest.raises(ValueError):
         eng.prettify(['/', 'x1'])
+    with pytest.raises(ValueError):
+        eng.prettify(c, precision=0)
+    with pytest.raises(TypeError):
+        eng.prettify(c, precision=True)
+    with pytest.raises(TypeError):
+        eng.prettify(c, precision=2.5)
 
 
 def test_prettify_never_changes_the_state(eng):
