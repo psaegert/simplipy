@@ -30,6 +30,7 @@
 //! docs/formal.md).
 
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -868,8 +869,28 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
 /// Since the reduction ordering is well-founded (see `ordered_below`), every run is
 /// finite as a THEOREM and this cap is defense-in-depth against bugs in the ordering
 /// invariant itself, not a load-bearing bound. Orders of magnitude above any observed
-/// run; when it binds, the pass completes descent-free, which is sound.
+/// run; when it binds, the pass completes descent-free, which is sound -- but the answer
+/// may then be a non-fixpoint, so every binding is counted ([`step_cap_binds`]).
 const STEP_CAP: u64 = 1_000_000;
+
+/// Descent steps refused because `STEP_CAP` had bound, process-wide. Expected 0 on every
+/// input: a nonzero count means the ordering invariant has a bug (see `STEP_CAP`).
+static STEP_CAP_BINDS: AtomicU64 = AtomicU64::new(0);
+
+/// How many descent steps `STEP_CAP` has refused in this process (expected 0).
+pub fn step_cap_binds() -> u64 {
+    STEP_CAP_BINDS.load(Relaxed)
+}
+
+/// May the walk take one more descent step? A refusal is a binding of the cap, counted.
+#[inline]
+fn step_allowed(p: &PassCtx) -> bool {
+    let allowed = p.fires.get() < STEP_CAP;
+    if !allowed {
+        STEP_CAP_BINDS.fetch_add(1, Relaxed);
+    }
+    allowed
+}
 
 /// One top-down rewrite pass. The protocol at each node ([`visit`]): fire site on the node
 /// as-is -> fold fallback -> recurse into children + canonical rebuild -> re-enter on an
@@ -947,7 +968,7 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
     // First fire site. Every accepted fire strictly descends the reduction ordering at this
     // node (gated inside `try_rules_at`); the step cap bounds the tier the descent argument
     // leaves open (see STEP_CAP).
-    if p.fires.get() < STEP_CAP {
+    if step_allowed(p) {
         if let Some(next) = try_rules_at(node, p) {
             p.fires.set(p.fires.get() + 1);
             return Visit::Step(next);
@@ -1001,7 +1022,7 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
         // fire (a disoriented rebuild is REFUSED), with the composite step as its one
         // second chance.
         Some(rebuilt) if rebuilt != *node => {
-            if p.fires.get() < STEP_CAP && oriented(&rebuilt, node, p) {
+            if oriented(&rebuilt, node, p) && step_allowed(p) {
                 p.fires.set(p.fires.get() + 1);
                 return Visit::Step(rebuilt);
             }
@@ -1022,7 +1043,7 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
 /// `node`. `None` = refused (or exploration is off at this level, or the cap has bound).
 #[inline(always)]
 fn composite_step(rebuilt: Ex, node: &Ex, p: &PassCtx) -> Option<Ex> {
-    if !(p.explore && p.fires.get() < STEP_CAP) {
+    if !(p.explore && step_allowed(p)) {
         if trace_fires() {
             eprintln!("AC rebuild refused (disoriented):\n  node={node:?}\n  rebuilt={rebuilt:?}");
         }
@@ -1040,7 +1061,7 @@ fn composite_step(rebuilt: Ex, node: &Ex, p: &PassCtx) -> Option<Ex> {
     };
     let endpoint = rewrite_pass(rebuilt, &sub);
     p.fires.set(sub.fires.get());
-    if p.fires.get() < STEP_CAP && oriented(&endpoint, node, p) {
+    if oriented(&endpoint, node, p) && step_allowed(p) {
         p.fires.set(p.fires.get() + 1);
         if trace_fires() {
             eprintln!("AC composite step committed:\n  node={node:?}\n  endpoint={endpoint:?}");

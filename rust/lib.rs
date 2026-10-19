@@ -1327,6 +1327,13 @@ impl PyEngine {
         crate::interval::UNANALYZABLE_MISSES.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Process-wide count of rewrite steps the step cap refused (`ac::rules::STEP_CAP`).
+    /// Expected 0 on every input: the reduction ordering is well-founded, so a binding cap
+    /// is an ordering bug and the answer it cut short may not be a fixpoint.
+    fn step_cap_binds(&self) -> u64 {
+        crate::ac::rules::step_cap_binds()
+    }
+
     // (`simplify_counters`/`reset_simplify_counters` were removed in D3, 2026-08-05:
     // they reported the DELETED binary kernel's hot-path counters, whose bump sites
     // went with the kernel -- an FFI answering all-zeros regardless of build features

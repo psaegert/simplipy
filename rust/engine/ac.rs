@@ -3731,6 +3731,29 @@ mod tests {
         }
     }
 
+    /// The step cap never binds on the corpus: every row in every mode, through the
+    /// default-effort entry (the search runs until a round finds nothing, so its candidate
+    /// descents share the call's step account). A binding cap would leave a non-fixpoint
+    /// answer with no other signal.
+    #[test]
+    fn step_cap_never_binds_on_the_corpus() {
+        let Some(e) = engine() else { return };
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/simplipy/verify/data/raw_skeletons_nv.json"
+        );
+        let corpus: Vec<Vec<String>> =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("corpus present"))
+                .expect("corpus parses");
+        for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+            for expr in corpus.iter() {
+                e.ac_explore_proj(expr, 48, mode, super::AcForm::Tagged, usize::MAX)
+                    .expect("corpus row parses");
+            }
+        }
+        assert_eq!(crate::ac::rules::step_cap_binds(), 0, "STEP_CAP bound");
+    }
+
     /// Corpus gates, amortized over one engine build: output validity, idempotence,
     /// commutative-permutation invariance, complexity accounting, and no `<constant>`
     /// minting. (Numeric EQUIVALENCE gating is cross-installation territory by the clean-
