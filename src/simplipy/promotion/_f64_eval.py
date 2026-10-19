@@ -119,7 +119,7 @@ def _num(tok):
     # literal nor a symbol; the boundary forbids it, so seeing one here is a defect.
     core = tok.strip('()')
     if reserved_numeric_spelling(core):
-        raise ValueError(f"reserved numeric spelling {tok!r} reached the f64 oracle (H-007)")
+        raise ValueError(f"reserved numeric spelling {tok!r} reached the f64 oracle")
     # fractions and huge integers read as the compiled expression reads them
     return literal_float(core)
 

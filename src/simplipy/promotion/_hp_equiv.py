@@ -237,7 +237,7 @@ def _ev(tokens, i, env, consts, ci):
     # misread as a value; the boundary forbids such tokens, so seeing one is a defect.
     core = t.strip('()')
     if reserved_numeric_spelling(core):
-        raise ValueError(f"reserved numeric spelling {t!r} reached the hp oracle (H-007)")
+        raise ValueError(f"reserved numeric spelling {t!r} reached the hp oracle")
     value = literal_float(core)  # fractions too, read as the compiled expression reads them
     if value is None:
         raise ValueError(f"not a literal: {t!r}")

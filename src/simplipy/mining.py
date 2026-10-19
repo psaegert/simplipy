@@ -114,7 +114,7 @@ def _reconcile_proposal_census(
             raise RuntimeError(
                 f"certified proposal {entry['source']} -> {entry['target']} is absent from "
                 f"the mined ruleset and no stage recorded dropping it -- the provenance "
-                f"sidecar cannot account for one of its own certified pairs (F94)")
+                f"sidecar cannot account for one of its own certified pairs")
         stage, reason = record
         trail[index].update(verdict='certified_then_dropped',
                             dropped_at=stage, drop_reason=reason)
