@@ -819,11 +819,10 @@ impl Engine {
         Some(self.resolve_seq(&toks, &ctx))
     }
 
-    /// DEFAULT-mode simplify with a SUPPRESSION SET of artifact rule rows: behaviorally
-    /// the run of an engine built without those rows (see `ac_simplify_ex_fold_sup` for
-    /// the equivalence argument). Default mode only -- the one consumer is the promotion
-    /// pipeline's derivability refund, which judges the default set; permissive's
-    /// three-arm dispatcher is deliberately not replicated here.
+    /// Simplify in `mode` with a SUPPRESSION SET of artifact rule rows (rows of `mode`'s
+    /// own file): behaviorally the run of an engine built without those rows (see
+    /// `ac_simplify_ex_fold_sup` for the equivalence argument). The one consumer is the
+    /// promotion pipeline's derivability refund, which judges each mode's set in that mode.
     pub fn ac_simplify_proj_suppressed(
         &self,
         tokens: &[String],
@@ -1625,10 +1624,9 @@ impl RuleMode {
         matches!(self, RuleMode::Permissive)
     }
 
-    /// TODAY'S MAP, and the only place the two-valued `simplipy.Mode` becomes a
-    /// three-valued rule mode: `SOUND` -> the default set, `LOSSY` -> the permissive set.
-    /// The `Mode` rename replaces this function with a total three-way map; nothing else
-    /// in the core has to move.
+    /// The mode a bare `wildcard_all` flag names: `true` the permissive set, `false` the
+    /// default (f64) one. `real` has no flag spelling; the FFI names every mode by
+    /// [`RuleMode::parse`].
     pub fn from_wildcard_all(wildcard_all: bool) -> Self {
         if wildcard_all {
             RuleMode::Permissive

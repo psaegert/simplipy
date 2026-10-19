@@ -8,9 +8,11 @@
 //! Wildcard sorts are carried over from the shipped matcher unchanged -- the sort rides in the
 //! token: `?N` binds a variable leaf only; `_N` binds anything; `!N` binds a variable leaf
 //! freely and a composite only under the finite-a.e. certificate; `$N` likewise under
-//! finite-and-nonzero-a.e.; `wildcard_all` (LOSSY) binds everything and skips the certificates.
-//! The `<constant>` rebind guard is ported as-is: a placeholder bound to a `Const`-containing
-//! expression never matches a second occurrence (independent constants).
+//! finite-and-nonzero-a.e.; `wildcard_all` (`permissive`) binds everything and skips the
+//! certificates. A wildcard that occurs twice may bind a sum and its negation (a class up to
+//! sign): a binding refused by its own negation is a near miss the caller retries in one
+//! orientation. The `<constant>` rebind guard is ported as-is: a placeholder bound to a
+//! `Const`-containing expression never matches a second occurrence (independent constants).
 //!
 //! Bag matching detail: pattern elements are tried STRUCTURED-FIRST (non-wildcard elements bind
 //! wildcards through their structure), then wildcard elements. A wildcard already bound to a
@@ -21,8 +23,8 @@
 //! deterministic, and assignment-COMPLETE: the search is continuation-passing, so a nested
 //! member match is resumable and a binding refused by a LATER sibling (or by the caller's
 //! acceptance check) is revised rather than fatal. Reach therefore depends on neither the
-//! rule's wildcard numbering nor on where the canonical order places a shared subterm
-//! (finding F1), and first-match-wins stays well-defined: the first accepted assignment in
+//! rule's wildcard numbering nor on where the canonical order places a shared subterm,
+//! and first-match-wins stays well-defined: the first accepted assignment in
 //! canonical enumeration order.
 
 use std::cell::Cell;

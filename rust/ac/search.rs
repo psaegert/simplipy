@@ -1,20 +1,26 @@
-//! D39 B1: opportunistic POST-FIXPOINT EXPLORATION -- the search scaffolding.
+//! THE SEARCH: the exploration phase after the chain's fixpoint.
 //!
-//! Ledger D39: the deterministic chain runs
-//! UNCHANGED to its fixpoint (the termination theorem is untouched -- this module is
-//! never entered by the default entry points), then an explicit, budgeted exploration
-//! phase tries EXPANSION moves -- states the descent chain refuses because they ascend
-//! the reduction ordering at their node -- runs each candidate through the SAME
-//! certified machinery (canonical constructors under the full-certificate [`Cx`], then
-//! the [`rewrite_pass`] descent loop), and accepts an endpoint iff it is STRICTLY
-//! below the incumbent in the engine's one reduction ordering ([`ordered_below`]).
+//! The deterministic chain (rules and constructors) runs UNCHANGED to its fixpoint (the
+//! termination theorem is untouched), then the search tries EXPANSION moves -- states the
+//! descent chain refuses because they ascend the reduction ordering at their node -- runs each
+//! candidate through the SAME certified machinery (canonical constructors under the caller's
+//! [`Cx`], then the [`rewrite_pass`] descent loop), and accepts an endpoint iff it is STRICTLY
+//! below the incumbent in the engine's one reduction ordering ([`ordered_below`]). Every mode
+//! runs it, `permissive` included, in its own pass context; `effort=0` never enters it.
 //!
-//! MEASURE-AGNOSTIC by construction (roadmap B1): no measure number appears anywhere
-//! in this module -- acceptance is the `ordered_below` predicate, the same
-//! Knuth-Bendix orientation the chain and the miner judge in. The numeric caps below
-//! are CANDIDATE-SIZE guards (budget-class, like `max_passes`), not measure values.
+//! ONE WALK ([`explore`]): a round takes the best state's candidates -- every move at every
+//! place, each rebuilt into the whole state it is -- cheapest rebuilt state first, descends each
+//! to its fixpoint, steps to the first endpoint strictly below the best and starts the next
+//! round there; a round that accepts nothing ends the search. `effort=k` is the first `k`
+//! descents of that walk, and the work budget ([`super::work`]: matcher steps and constructor
+//! calls) cuts the same walk at the same place on every machine and under any load.
 //!
-//! The D39 properties, and where they live:
+//! MEASURE-AGNOSTIC by construction: no measure number appears anywhere in this module --
+//! acceptance is the `ordered_below` predicate, the same Knuth-Bendix orientation the chain
+//! and the miner judge in. The numeric caps below are CANDIDATE-SIZE guards (budget-class,
+//! like `max_passes`), not measure values.
+//!
+//! The properties, and where they live:
 //! * SOUNDNESS -- every candidate is built through the canonical constructors under
 //!   the caller's certificate context, and the moves carry their own licences (see
 //!   `distribute_product`): value preservation a.e. exactly as the chain's own
@@ -29,26 +35,23 @@
 //!   infinite.
 //! * IDEMPOTENCE -- deterministic order (canonical bag order, pre-order walk, candidates
 //!   ordered by price, single thread), and a reached valley re-explores to nothing: its own
-//!   expansions all settle at or above it (an uncapped search ends on a full round of
-//!   the answer's own candidates that found nothing). That holds for the answer only when the
-//!   search ran until a whole round of the answer's candidates found nothing (the public
-//!   default, `effort=None`; owner
-//!   2026-10-06): a cap can stop it between two accepted valleys, and a second call then
-//!   continues from the first one's answer. It also needs the answer to re-read to
-//!   itself (L6a, docs/formal.md) and the step cap not to bind. `permissive` selects among
-//!   three searches, and its winner is a valley of its own search only (formal.md L6).
+//!   expansions all settle at or above it. That holds for the answer only when the search ran
+//!   until a whole round of the answer's candidates found nothing (the default,
+//!   `effort=None`): a cap or a spent work budget can stop it between two accepted valleys,
+//!   and a second call then continues from the first one's answer. It also needs the answer
+//!   to re-read to itself (L6a, docs/formal.md) and the step cap not to bind.
 //!
-//! MOVE SET (B1): the distributive law, which the search owns, both ways: `distribute` (a
-//! Mul bag's Add children, fully distributed -- the row-156 move -- or one factor into one
-//! sum factor, or the other factors over one term of a sum factor) and its Pow sibling
-//! `pow-expand` (integer power of a sum, expanded through the same product builder), and
-//! their reverse `factor` (terms of a sum that share a factor, as that factor times the
-//! quotient sum, see [`factorings`]). The enumeration in `local_moves` is the single
-//! extension point for further kinds (common-denominator is deferred to the B7 lane
-//! with its own falsifier). One deliberate scaffolding bound: the search moves only
-//! from ACCEPTED valleys, so every win is reachable by depth-1 moves from a
-//! valley -- composite hills that need two unaccepted expansions in sequence are
-//! out of scope here and priced in the B7 acceptance study.
+//! MOVE SET: the distributive law, which the search owns (the rule load refuses a rule that
+//! states it, `rules::engine_owned_law`), both ways: DISTRIBUTE (a Mul bag's Add children,
+//! fully distributed, or one factor into one sum factor, or the other factors over one term of
+//! a sum factor) and its Pow sibling POW-EXPAND (an integer power of a sum, expanded through the
+//! same product builder), and their reverse FACTOR (terms of a sum that share a factor, as that
+//! factor times the quotient sum, see [`factorings`]). In `permissive` the RECIPROCAL JOIN
+//! ([`reciprocal_joins`]) also joins a product's reciprocal sums, which permissive's `pow`
+//! holds split. The enumeration in [`local_moves`] is the single extension point for further
+//! kinds. One deliberate bound: the search moves only from ACCEPTED valleys, so every win is
+//! reachable by depth-1 moves from a valley -- composite hills that need two unaccepted
+//! expansions in sequence are out of scope.
 //!
 //! Shared-state note: the caller's [`PassCtx`] (normal-form memo, step counter) is
 //! reused across candidate descents -- same semantics as the chain's own passes; on
@@ -72,9 +75,8 @@ const EXPAND_TERM_CAP: usize = 64;
 /// bounds the width; this keeps the factor list itself small.
 const POW_EXPAND_CAP: i128 = 6;
 
-/// The exploration phase (ledger D39). `fix` is the chain's fixpoint for the calling
-/// mode; `pass` is that mode's OWN pass context (sound: the phase-1 pass; lossy: the
-/// sentinel-expired phase-2 pass) -- the same certified machinery, byte for byte.
+/// The exploration phase. `fix` is the chain's fixpoint for the calling mode; `pass` is that
+/// mode's OWN pass context -- the same certified machinery as its chain, byte for byte.
 /// `budget` counts candidate descents; 0 disables the phase (the caller's guard makes
 /// that the no-call case, so unused exploration is byte-identical behavior).
 ///
@@ -382,7 +384,8 @@ fn term_factors(t: &Ex) -> SplitTerm {
 /// on the factored sum alone.
 fn factor_moves(terms: &[Ex], cx: &Cx, power: Option<&Rat>) -> Vec<Ex> {
     // A cost bound, not a measure: the groups grow with the square of the terms. No sum on srbf's
-    // ground truths, a tenth of its predictions or a tenth of the T8.1 inputs reaches it.
+    // ground truths, a tenth of its predictions or a tenth of the simplify inputs of flash-ansr's
+    // training-data generator reaches it.
     if terms.len() > EXPAND_TERM_CAP {
         return Vec::new();
     }
@@ -616,7 +619,7 @@ fn factor_shared(terms: &[Ex], cx: &Cx, licensed: &dyn Fn(&Ex) -> bool) -> Optio
     // A term that holds one base twice holds two powers of it its constructor would not merge,
     // so its exponent does not split as `b^r = b^c * b^(r - c)` either: it is not factored
     // (soundness, not cost; on srbf's ground truths and a tenth of its predictions and of the
-    // T8.1 inputs, no answer depends on it).
+    // simplify inputs of flash-ansr's training-data generator, no answer depends on it).
     let twice = |fs: &[(Ex, Rat)]| {
         fs.iter()
             .enumerate()

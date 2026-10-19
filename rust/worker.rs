@@ -1280,7 +1280,8 @@ fn candidate_matches(
             // `domain_extension_p_at`) must never read as "no extension" = accept. The
             // counters (`interval_horizon_misses`, `interval_node_budget_misses`) count
             // fail-closed REJECTIONS; a large per-stratum delta in a mine is the flag to
-            // raise `SIMPLIPY_IVL_NODE_BUDGET` / R_MAX for that stratum and re-run it.
+            // raise `find_rules(interval_node_budget=...)` / R_MAX for that stratum and re-run
+            // it.
             let (gh_r, gh_d, gh_decidable) =
                 crate::interval::gate_horizon(source, inst_params, &cand.tokens, cand_params, ops);
             let verdict = if gh_decidable {

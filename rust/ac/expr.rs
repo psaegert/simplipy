@@ -8185,34 +8185,28 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     Ex::Pow(Box::new(base), Box::new(exp))
 }
 
-/// The canonical function-application constructor. No folding here on purpose: literal
-/// evaluation (`sin(1) -> 0.841...`) and `<constant>`-collapse (`sin(C) -> C`) are RULES-PASS
-/// FALLBACKS, exactly as in the shipped engine -- running them at construction would destroy
-/// the exact rules' chance to fire first (`sin(pi) -> 0` must beat `sin(3.14159...) ->
-/// 1.22e-16`).
-/// EXPERIMENT (branch experiment/f64-folding, owner-ruled 2026-08-20 for 0.14.0):
-/// fold a ground function application to its f64 value, but ONLY when that is cheaper.
+/// THE f64 GROUND FOLD (`fun`, f64 mode only): fold a function of one literal to the float64
+/// the deployed evaluator computes for it, but ONLY when that literal is cheaper.
 ///
-/// The 2026-08-02 ban had one rationale -- "an f64 evaluation landing exactly on a cheap
-/// literal while truly differing at 1e-17" -- and that conflation IS the f64/real
-/// distinction the mode split now represents. In `f64` the deployed evaluator is the
-/// authority, so its answer is exact BY DEFINITION of the mode. In `real` this never
-/// runs: `tan(1)` is irrational and no literal in the grammar spells it at any precision,
-/// so exact rational arithmetic is not a policy there but the only representable thing.
+/// An f64 evaluation can land exactly on a cheap literal while the true value differs at
+/// 1e-17; that is the f64/real distinction the modes represent. In `f64` the deployed
+/// evaluator is the authority, so its answer is exact BY DEFINITION of the mode. In `real`
+/// this never runs: `tan(1)` is irrational and no literal in the grammar spells it at any
+/// precision, so exact rational arithmetic is not a policy there but the only representable
+/// thing. (`permissive` folds ground terms in its pass instead; see the body.)
 ///
 /// mu MAKES IT SELF-LIMITING, which is what makes "fold everything" safe to say:
 ///     mu(tan 1)      = 11000   vs its float 58877  -> refused, `tan 1` survives
 ///     mu(asin 1e-08) = 14170   vs its float  6170  -> folded
 /// so the canon does not fill with 17-digit literals; it folds exactly where the literal
-/// is genuinely the simpler object. That asymmetry is also why the 18-rule
-/// `f(+-10^-k) -> +-10^-k` family had to be MINED: the mine found as rules what the
-/// constructor was forbidden to do.
+/// is genuinely the simpler object.
 ///
 /// Two refusals carried over from `evaluate_constants`, both load-bearing: a non-finite
 /// result is never injected (that is the defect class that put a guard into flash-ansr),
 /// and anything that is not an exact rational operand is left alone (a `<constant>` is a
-/// fitted degree of freedom, not a value). A value whose shortest decimal will not fit
-/// `Rat`'s i128 also refuses -- fail-closed, and it costs only very large exponents.
+/// fitted degree of freedom, not a value). A value whose shortest decimal is no number of
+/// the f64 domain (numerator or denominator beyond 2^1022, see `rat::number_domain`) also
+/// refuses -- fail-closed, and it costs only results of extreme magnitude.
 fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
     // f64 ONLY. Corpus was included at first and it cost `atanh(tanh 30)`: f64 tanh(30)
     // attains exactly 1.0, mu folds `tanh 30 -> 1`, and the literal-provenance arm then
@@ -8257,14 +8251,13 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
     }
 }
 
-/// THE PERMISSIVE LITERAL FOLD (owner ruling 2026-09-03: "in the permissive mode, we can
-/// relax this"). An exact rational the constructors produced -- the quotient of two
+/// THE PERMISSIVE LITERAL FOLD. An exact rational the constructors produced -- the quotient of two
 /// 16-digit decimals, a coefficient cleared into `p/q`, a 30-digit integer -- prices under
 /// mu' as the rational codeword alone once its expansion stops terminating, and the
 /// emitter must spell it as that fraction, because a spelling denotes the state's EXACT
 /// value (`decimal_spelling_wins` chooses among exact codewords only). On the permissive
 /// tier the value is allowed to move -- that tier's licence -- so the literal folds to the
-/// f64 nearest to it (printed as that float's exact decimal) WHEN the exact codewords
+/// f64 nearest to it (as that float's shortest decimal) WHEN the exact codewords
 /// ([`mu_rat_exact`]) price that spelling strictly cheaper -- the float price ([`mu_rat`]) of the
 /// two is equal by construction, the fold changes what is PRINTED:
 /// `2e29/426738538271436458205631863649` (196.8 bits) becomes `0.46867105279529636`
@@ -8272,7 +8265,8 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
 /// any 17-digit float; a literal that already IS a shortest f64 spelling is its own fold
 /// and never moves, so the drawn constants of a training stream are untouched, and the fold
 /// is idempotent. It is applied where a literal lands ([`land`]). Values whose shortest
-/// spelling leaves `i128` refuse (fail-closed, exactly as `f64_fold`); non-finite values
+/// spelling is no number of the f64 domain refuse (fail-closed, exactly as `f64_fold`);
+/// non-finite values
 /// never fold.
 pub fn lossy_literal(r: &Rat) -> Option<Rat> {
     let y = r.to_f64_nearest();
@@ -8287,8 +8281,8 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
     (mu_rat_exact(&snapped) < mu_rat_exact(r)).then_some(snapped)
 }
 
-/// ρ, PERMISSIVE'S ONE ROUNDING (0.15 rebuild, owner ruling P2: a literal is rounded once,
-/// when it becomes part of the expression, not at every operation). Arithmetic BETWEEN
+/// ρ, PERMISSIVE'S ONE ROUNDING: a literal is rounded once, when it becomes part of the
+/// expression, not at every operation. Arithmetic BETWEEN
 /// literals stays exact -- an all-literal node folds exactly, as in every mode -- and a literal
 /// is moved by [`lossy_literal`] at the one place it LANDS as an operand of a composite node:
 /// a sum's constant term or a term's coefficient (`add`, `term_join`), a product's coefficient
