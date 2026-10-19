@@ -253,7 +253,6 @@ impl<'a> Acceptor<'a> {
             return Err(MineRefusal::EngineOwnedLaw);
         }
         if super::refusals::pole_refusal(self.src, t, &self.eng.operators, self.vars).is_some() {
-            super::stats::REGISTRY_POLE_REFUSALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Err(MineRefusal::Pole);
         }
         Ok(())

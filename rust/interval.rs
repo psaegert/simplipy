@@ -3278,12 +3278,6 @@ fn entire_analytic_composition(t: &[String], ops: &Operators) -> bool {
     rec(t, 0, ops).is_some_and(|j| j == t.len())
 }
 
-/// OFFLINE probe surface for the F80 E2 design read (lib.rs instrument): the gate
-/// alone, no witness. Not a certificate -- diagnostics only.
-pub fn entire_analytic_composition_probe(t: &[String], ops: &Operators) -> bool {
-    entire_analytic_composition(t, ops)
-}
-
 /// Tier-0 (E2 rider, owner-ratified 2026-08-11, audit F81): a GROUND subtree --
 /// no variables, no `<constant>` -- denotes a constant, and a constant function
 /// is entire regardless of its SPELLING: the exact-fraction literal `/ 5 4` is
@@ -4466,7 +4460,7 @@ mod tests {
             "x3 - 5/4 vanishes on one hyperplane: the literal SPELLING must not refuse"
         );
         assert!(
-            entire_analytic_composition_probe(&s(&["-", "x3", "/", "5", "4"]), ops),
+            entire_analytic_composition(&s(&["-", "x3", "/", "5", "4"]), ops),
             "tier-0: a ground subtree is a constant, hence entire (gate rider)"
         );
         // 1/x - x clears to N = 1 - x^2: zeros {-1, +1}, null.

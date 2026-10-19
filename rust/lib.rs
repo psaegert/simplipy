@@ -986,8 +986,6 @@ impl PyEngine {
                 return Some(r.name().to_string());
             }
             if self.inner().mint_pole_refusal(&source, &target, &vars) {
-                engine::stats::REGISTRY_POLE_REFUSALS
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(
                     engine::refusals::Refusal::PoleClassChange
                         .name()
@@ -1219,56 +1217,6 @@ impl PyEngine {
         ))
     }
 
-    /// OFFLINE instrument (F80 E2 design read): the zero-set certificate exactly as
-    /// the odd-negative distribution licence consumes it (`zero_set_null_generic_const`,
-    /// E1 semantics: `<constant>` as a generic parameter in the joint space). Lets the
-    /// design-read scripts ask the LIVE walker+witness about transformed factor
-    /// spellings instead of mirroring the machinery in python. Read-only diagnostics.
-    fn interval_zero_set_null_generic_const(&self, tokens: Vec<String>) -> PyResult<bool> {
-        ensure_tokens_are_tokens(&tokens)?;
-        Ok(crate::interval::zero_set_null_generic_const(
-            &tokens,
-            self.inner().operators_ref(),
-        ))
-    }
-
-    /// OFFLINE instrument (F80 E2 design read): the witness path's entire-analyticity
-    /// gate alone (`entire_analytic_composition`), for splitting gate refusals from
-    /// witness/horizon failures in the design read. Read-only diagnostics.
-    fn interval_entire_analytic_composition(&self, tokens: Vec<String>) -> PyResult<bool> {
-        ensure_tokens_are_tokens(&tokens)?;
-        Ok(crate::interval::entire_analytic_composition_probe(
-            &tokens,
-            self.inner().operators_ref(),
-        ))
-    }
-
-    /// OFFLINE instrument (F80 E3 read): kept negative-exponent bag carriers
-    /// `Pow(Mul[..], n<0)` in the sound simplify endpoint, with per-factor licence
-    /// verdicts (`nz_ae_certified`, `certainly_nonneg`) re-asked under the deployed
-    /// certificates. Rows `(carrier_prefix, exp_token, odd_neg_int, has_div_factor,
-    /// [(factor_prefix, nzae, nonneg), ..])` -- the F80 nesting classification's
-    /// bridge. Read-only diagnostics; nothing feeds the chain.
-    #[pyo3(signature = (tokens, max_passes=48))]
-    fn ac_odd_neg_carriers(
-        &self,
-        py: Python<'_>,
-        tokens: Vec<String>,
-        max_passes: usize,
-    ) -> PyResult<
-        Vec<(
-            Vec<String>,
-            String,
-            bool,
-            bool,
-            Vec<(Vec<String>, bool, bool)>,
-        )>,
-    > {
-        ensure_ac_well_formed(&self.inner(), &tokens)?;
-        py.detach(|| self.inner().ac_odd_neg_carriers(&tokens, max_passes))
-            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
-    }
-
     /// OFFLINE: EXACT value-class of an expression by interval analysis (`rust/interval.rs`) --
     /// the deterministic replacement for the sampled pole grid / classify probe. Returns one of
     /// FINITE / POSINF / NEGINF / NAN / MIXED / EMPTY, or ERROR if unevaluable.
@@ -1345,15 +1293,6 @@ impl PyEngine {
     /// instead of only the end-of-tier summary. `(0, 0)` before the first tier starts.
     fn mining_progress(&self) -> (u64, u64) {
         crate::engine::stats::mine_progress()
-    }
-
-    /// Licence-registry observability (C1.20): the process-wide count of candidates
-    /// the pole entry refused, across every mint channel. A raised-tier mine that
-    /// reaches a pole-mirror candidate INCREMENTS this while minting nothing -- the
-    /// falsification tests read it to prove the gate FIRED rather than the candidate
-    /// never being enumerated ("report it, never silence it", `engine::stats`).
-    fn registry_pole_refusals(&self) -> u64 {
-        crate::engine::stats::REGISTRY_POLE_REFUSALS.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// OFFLINE / TEST HOOK: the value set of `tokens` over an explicit per-variable BOX --
