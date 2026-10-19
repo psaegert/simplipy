@@ -829,6 +829,31 @@ impl Rat {
             .expect("an integer has a decimal expansion")
     }
 
+    /// The two floats BRACKETING this value: the nearest one, and the float on the value's other
+    /// side of it, or `None` when the value is that float exactly. `None` for a value whose
+    /// nearest float is not finite. Decided by exact comparison with the nearest float.
+    pub fn float_bracket(&self) -> Option<(f64, Option<f64>)> {
+        let y = self.to_f64_nearest();
+        if !y.is_finite() {
+            return None;
+        }
+        let _exact = number_domain(false);
+        let (m, e) = f64_parts(y);
+        let two = BigInt::from(2u8);
+        let (num, den) = if e >= 0 {
+            (BigInt::from(m) * two.pow(e as u32), BigInt::from(1u8))
+        } else {
+            (BigInt::from(m), two.pow(e.unsigned_abs()))
+        };
+        let exact = Rat::from_big(num, den)?;
+        let other = match self.cmp_exact(&exact) {
+            Ordering::Greater => Some(next_up(y)),
+            Ordering::Less => Some(next_down(y)),
+            Ordering::Equal => None,
+        };
+        Some((y, other.filter(|o| o.is_finite())))
+    }
+
     /// The shortest decimal that reads as `y` (Rust's `{:?}` for f64 is the shortest string
     /// that round-trips), exactly, built in the exact number domain so the value does not depend
     /// on the calling mode. `None` for a non-finite `y`.

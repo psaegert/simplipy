@@ -65,7 +65,8 @@ organised by who you are, then the highlights, then every change in detail.
 - **One walk.** `permissive` runs its chain and then the search, like every mode, so its answer
   never prices above the input and a second call returns it unchanged. Its answers change
   accordingly.
-- **Literals are rounded once**, to their float, where they land (`3*(1/3 + 1e-20)` is `1`).
+- **Literals are rounded once**, to their float, where they land (`3*(1/3 + 1e-20)` is `1`), and
+  land on whichever of the two floats around them prints shorter.
 - **The ground fold is a step of the chain**, kept only where it is cheaper (`asin(1e-8)` is
   `1e-8`).
 - **No default work budget.** The search runs until a round finds nothing; bound it with
@@ -273,6 +274,15 @@ model predictions.
   inputs 241 (164 cheaper, 6 dearer: a whole ground node folded where folding its parts first
   reached a cheaper exact form) and on a tenth of the predictions 51 (50 cheaper). `real` and
   `permissive` answers do not change, and none changes on a second call.
+- **Permissive lands a literal on the shorter of its two floats.** Permissive promises float
+  precision, not the nearest float, so a literal that lands as an operand moves to whichever of the
+  two floats around its exact value prints shorter (the nearest on a tie): `4/3*3.141592653589793`
+  is `4.188790204786391`, not the nearest float's `4.1887902047863905`. Against the nearest float,
+  on srbf's ground truths 142 permissive answers change (103 cheaper, none dearer), on a tenth of
+  the training-data inputs 724 (610 cheaper, 9 dearer) and on a tenth of the predictions 7,621
+  (5,890 cheaper, 270 dearer); the dearer ones are literals combined from several landed literals,
+  each landing moving less than an ulp, which can end farther from the single rounding. No answer
+  changes on a second call, and `f64` and `real` do not change.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

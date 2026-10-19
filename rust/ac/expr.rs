@@ -8294,21 +8294,30 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
 /// (57.1 bits); `1/2`, `15/37` and `4366/8875` stay, their fractions being cheaper than
 /// any 17-digit float; a literal that already IS a shortest f64 spelling is its own fold
 /// and never moves, so the drawn constants of a training stream are untouched, and the fold
-/// is idempotent. It is applied where a literal lands ([`land`]). Values whose shortest
+/// is idempotent. It is applied where a literal lands ([`land`]).
+///
+/// THE FLOAT IT LANDS ON: the value lies between two floats, and permissive promises float
+/// precision, not the nearest float, so the literal lands on whichever of the two prints
+/// shorter (the cheaper shortest spelling; the nearest on a tie). A literal combined from
+/// literals that already landed can sit an ulp from the single rounding of its exact sources,
+/// on the float whose shortest spelling carries a digit more (`0.016213652755841255` where the
+/// sources give `0.01621365275584125`); the shorter neighbour is that rounding wherever it is
+/// one of the two, and no worse a float anywhere. Values whose shortest
 /// spelling is no number of the f64 domain refuse (fail-closed, as the ground fold does);
 /// non-finite values
 /// never fold.
 pub fn lossy_literal(r: &Rat) -> Option<Rat> {
-    let y = r.to_f64_nearest();
-    if !y.is_finite() {
-        return None;
-    }
+    let (y, other) = r.float_bracket()?;
     // Rust's `{:?}` for f64 is the shortest string that round-trips, which is precisely the
     // spelling whose f64 reading is this value again.
     let snapped = Rat::parse_decimal(&format!("{y:?}"))?;
     if snapped == *r {
         return None;
     }
+    let snapped = match other.and_then(|o| Rat::parse_decimal(&format!("{o:?}"))) {
+        Some(s) if mu_rat_exact(&s) < mu_rat_exact(&snapped) => s,
+        _ => snapped,
+    };
     (mu_rat_exact(&snapped) < mu_rat_exact(r)).then_some(snapped)
 }
 
@@ -8323,11 +8332,12 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
 /// each operation would give `0.9999999999999999`.
 ///
 /// ρ is the identity outside permissive, idempotent (a moved literal is a shortest float
-/// spelling, which [`lossy_literal`] never moves), and mu-neutral: the float cap prices a
-/// literal and its float alike ([`mu_rat`]), so the reduction ordering, termination and every
-/// descent argument are unchanged, and every state the walk holds prints the codeword it is
-/// priced at. It moves a value by at most half an ulp, inside permissive's licence; it never
-/// creates an infinity or a zero (non-finite values refuse, a normal value's float is normal).
+/// spelling, which [`lossy_literal`] never moves), and never raises a price: the float cap prices
+/// a literal and its nearest float alike ([`mu_rat`]), and the shorter neighbour costs less, so
+/// the reduction ordering, termination and every descent argument are unchanged, and every state
+/// the walk holds prints the codeword it is priced at. It moves a value to one of the two floats
+/// around it, less than an ulp, inside permissive's licence; it never creates an infinity or a
+/// zero (non-finite values refuse, and both floats around a nonzero value are nonzero).
 #[inline]
 pub fn land(r: Rat, cx: &Cx) -> Rat {
     if !cx.lossy() {
@@ -9333,6 +9343,26 @@ mod tests {
                 Ex::Pow(..)
             ));
         });
+    }
+
+    /// Permissive's one rounding lands on whichever of the two floats around the value prints
+    /// shorter: a value between 0.1 and the next float, nearer the next, lands on 0.1 (the
+    /// nearest, 0.10000000000000002, prints a digit more). A float's own shortest spelling never
+    /// moves.
+    #[test]
+    fn a_landed_literal_takes_the_shorter_of_its_two_floats() {
+        let r = Rat::from_big(
+            num_bigint::BigInt::from(28823037615171179u64),
+            num_bigint::BigInt::from(288230376151711744u64),
+        )
+        .unwrap();
+        assert_eq!(r.to_f64_nearest(), 0.10000000000000002);
+        assert_eq!(lossy_literal(&r), Rat::parse_decimal("0.1"));
+        assert_eq!(lossy_literal(&Rat::parse_decimal("0.1").unwrap()), None);
+        assert_eq!(
+            lossy_literal(&Rat::parse_decimal("0.10000000000000002").unwrap()),
+            None
+        );
     }
 
     /// ONE PRICE FOR A SIGN: one bit wherever it sits -- on a literal, on a product's

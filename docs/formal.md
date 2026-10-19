@@ -794,14 +794,16 @@ rules), so L3, L6 and the prefix argument for `effort` cover it as they cover ev
 two steps of its own are ordinary steps: the ground fold is the pass's fold (tried after the
 rules at a node, kept only when the result descends, so L3 holds; `f64` takes the same step), and
 the
-landing rounding ρ moves a literal to its float only where the float's shortest spelling is
-cheaper as an exact codeword, which the float cap prices alike (mu-neutral, so the descent
-arguments and T6 are unchanged; idempotent, since a float's shortest spelling is never moved). Its
+landing rounding ρ moves a literal to one of the two floats around it, the one whose shortest
+spelling is cheaper (permissive promises float precision, not the nearest float), and only where
+that spelling is cheaper as an exact codeword than the literal: the float cap prices the literal
+at its nearest float's spelling, so ρ never raises a price and the descent arguments and T6 are
+unchanged (idempotent, since a float's shortest spelling is never moved). Its
 search move that joins reciprocal sums is a candidate like the others, accepted only strictly
 below. A literal rounded where it lands is exact from then on, so a later step that combines it
-rounds again: an answer's literal can sit one ulp from the correctly rounded value of the input's
-exact arithmetic, and print one digit longer or shorter than a single rounding of that value
-would.
+rounds again: an answer's literal can sit an ulp or more from the correctly rounded value of the
+input's exact arithmetic (each landing moves less than one ulp), and print a digit longer or
+shorter than a single rounding of that value would.
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:

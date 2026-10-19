@@ -144,9 +144,10 @@ tried after the rules at each node and kept only when it is cheaper (`asin(1e-8)
 node before its parts (`rootn(exp(19.11787581094798), 2)` is `14170.787488305119`, not the root
 of `200811218.03870487`). Its literals are exact and rounded once, where
 they land: a literal that becomes a constant term, a coefficient, a function's argument or a
-power's operand beside a non-literal moves to the float nearest to it when that float's
-shortest spelling is cheaper (`3*(1/3 + 1e-20)` is `1`, `x1*0.0766…` with 64 digits is
-`0.07665412684716773*x1`). Its search has one move of its own, joining reciprocal sums
+power's operand beside a non-literal moves to whichever of the two floats around it prints
+shorter, when that spelling is cheaper (`3*(1/3 + 1e-20)` is `1`, `x1*0.0766…` with 64 digits is
+`0.07665412684716773*x1`, and `4/3*3.141592653589793` is `4.188790204786391`, not the nearest
+float's `4.1887902047863905`). Its search has one move of its own, joining reciprocal sums
 (`c/(A*B)` is held as `c * A^-1 * B^-1`, and the move proposes `(A*B)^-1` and `(A/c)^-1` with the
 inside distributed). So, as in every mode, its answer never prices above the input or above its
 answer at a smaller `effort`, and a second call returns it unchanged.

@@ -7,9 +7,9 @@ cheaper EXACT codeword; a value with no finite decimal expansion has only the ra
 codeword, so the quotient of two 16-digit decimals became a 60-digit fraction, three tokens
 for one degree of freedom. The strict tiers cannot do better: a spelling denotes the state's
 exact value. The permissive tier is licensed to move values, so there an exact literal folds
-to its f64 nearest, spelled shortest, WHEN mu' prices that spelling strictly cheaper -- and
-only then: `1/2`, `15/37`, `4366/8875` keep their fractions, drawn constants (already shortest
-f64 spellings) never move.
+to the shorter-spelled of the two floats around it WHEN mu' prices that spelling strictly
+cheaper -- and only then: `1/2`, `15/37`, `4366/8875` keep their fractions, drawn constants
+(already shortest f64 spellings) never move.
 """
 import math
 import re
@@ -42,12 +42,27 @@ def exact_value(expr):
     return eval(src, {"Fraction": Fraction, "pow": pow})
 
 
+def floats_around(value):
+    """The float nearest to `value` and the float on its other side (one when exact)."""
+    nearest = float(value)
+    if Fraction(nearest) == value:
+        return [nearest]
+    return [nearest, math.nextafter(nearest, math.inf if value > Fraction(nearest) else -math.inf)]
+
+
+def significant_digits(spelling):
+    mantissa = spelling.lstrip('-').split('e')[0].replace('.', '')
+    return len(mantissa.strip('0'))
+
+
 def test_permissive_folds_the_monster_to_its_float(engine):
     out = prefix(engine, MONSTER, Mode.permissive)
-    # The f64 nearest to the EXACT quotient, spelled shortest: 0.46867105279529636 (float
-    # arithmetic on the literals lands one ulp away, at 0.4686710527952964 -- the fold is
-    # correctly rounded, not the quotient of two rounded components).
-    assert out == [repr(float(exact_value(MONSTER)))] == ["0.46867105279529636"], out
+    # The EXACT quotient lies between 0.46867105279529636 (the nearest float) and
+    # 0.4686710527952964: permissive promises float precision, not the nearest float, so it
+    # lands on the shorter spelling.
+    assert float(out[0]) in floats_around(exact_value(MONSTER))
+    assert out == ["0.4686710527952964"], out
+    assert repr(float(exact_value(MONSTER))) == "0.46867105279529636"
 
 
 def test_strict_tier_keeps_the_exact_fraction(engine):
@@ -87,9 +102,10 @@ def test_fold_is_idempotent_and_descends_the_exact_price(engine):
     once = prefix(engine, MONSTER, Mode.permissive)
     assert list(engine.simplify(once, mode=Mode.permissive)) == once
     exact = prefix(engine, MONSTER, Mode.f64)
-    # Under the float cap the exact quotient already costs its float's shortest
-    # decimal, so the measure is level; the fold descends the EXACT price, which gates it.
-    assert engine.complexity(once) == engine.complexity(exact)
+    # Under the float cap the exact quotient costs its nearest float's shortest decimal; the
+    # fold lands on the shorter neighbour, so the measure never rises; the fold descends the
+    # EXACT price, which gates it.
+    assert engine.complexity(once) <= engine.complexity(exact)
     assert exact_price(Fraction(once[0])) < exact_price(exact_value(MONSTER))
 
 
@@ -112,11 +128,11 @@ def test_huge_integer_folds_to_its_float_value(engine):
     "74.22110491129965 - 92.12760331603121 * pow(9.440764872280846, 4)",  # beyond 128 bits: the strict tier kept all four operators before 2c
     "2.7167019109484434 * 3.1415926535897 * 1.4142135623730951 * 1.7320508075688772",
 ])
-def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
+def test_fold_follows_the_mu_gate_and_lands_on_a_float_around_the_value(engine, expr):
     """The permissive endpoint is the cheaper of the strict tier's exact spelling and the single
-    literal float(Fraction(...)) -- the correctly rounded float, not the quotient of two rounded
-    components -- priced by the EXACT codewords (where the fold fires, the float cap prices both
-    alike; the fold changes what is printed)."""
+    literal on one of the two floats around the exact value -- the shorter-spelled one, not the
+    quotient of two rounded components -- priced by the EXACT codewords (where the fold fires,
+    the fold changes what is printed and never raises the price)."""
     exact = exact_value(expr)
     strict = prefix(engine, expr, Mode.f64)
     as_float = [repr(float(exact))]
@@ -125,10 +141,11 @@ def test_fold_follows_the_mu_gate_and_is_correctly_rounded(engine, expr):
         # One literal, the float's value; the emitter spells it as the exact decimal of that
         # float (an integer as its digit string, a small value positionally), so compare values.
         assert len(out) == 1 and "/" not in out[0], out
-        if len(strict) == 3 and strict[0] == "/":
-            assert float(out[0]) == float(exact), (out, as_float)
-        elif len(strict) == 1:
-            assert float(out[0]) == float(exact), (out, as_float)
+        if (len(strict) == 3 and strict[0] == "/") or len(strict) == 1:
+            around = floats_around(exact)
+            assert float(out[0]) in around, (out, as_float)
+            assert significant_digits(out[0]) == min(significant_digits(repr(f)) for f in around), \
+                (out, around)
         else:
             # the strict tier keeps more than one literal (a refused fold): the members fold
             # piecewise, so the endpoint is correctly rounded per fold, within an ulp or two
