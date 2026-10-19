@@ -771,8 +771,6 @@ impl Engine {
                     CompiledRules::compile(Vec::new(), canon, &mut self.tokens, &self.operators)
                 });
                 self.ac_rules_cell = std::sync::OnceLock::new();
-                self.ac_real_rules_cell = std::sync::OnceLock::new();
-                self.ac_permissive_rules_cell = std::sync::OnceLock::new();
             }
             RuleMode::Real => {
                 self.real_rules = compiled;

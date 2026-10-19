@@ -1979,6 +1979,27 @@ mod tests {
         }
     }
 
+    /// A PUSH TRANSLATES ONLY THE SET IT REPLACES (F9): replacing the default set keeps the
+    /// other modes' translations, and a mode with no set of its own still serves the new
+    /// default set (it reads the default translation itself, never its own cell).
+    #[test]
+    fn a_push_keeps_the_other_modes_translations() {
+        let Some(mut e) = engine() else { return };
+        e.set_rules(vec![rule(P_ALL)]);
+        e.set_mode_rules(RuleMode::Real, Some(vec![rule(P_REAL)]));
+        e.set_mode_rules(RuleMode::Permissive, None);
+        e.ac_rules_for(RuleMode::Real);
+        e.set_rules(vec![rule(P_DEFAULT)]);
+        assert!(
+            e.ac_real_rules_cell.get().is_some(),
+            "real was translated again"
+        );
+        assert!(fires(&e, P_REAL, RuleMode::Real));
+        assert!(
+            fires(&e, P_DEFAULT, RuleMode::Permissive) && !fires(&e, P_ALL, RuleMode::Permissive)
+        );
+    }
+
     /// AN EMPTY SET IS NOT AN ABSENT ONE. `Some(vec![])` says "this mode serves nothing"
     /// and is honoured; `None` says "this mode names no set" and falls back to the
     /// default one. Keying the fallback on emptiness would collapse the two -- and would

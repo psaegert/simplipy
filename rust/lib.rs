@@ -1742,7 +1742,9 @@ impl PyEngine {
                     engine.set_mode_rules_read_in(mode, rules, canon);
                 }
             }
-            translate_held_sets(&self.inner());
+            // Only the pushed set changed; the others keep their translations (a mode with
+            // no set of its own serves the default translation itself).
+            self.inner().ac_rules_for(mode);
         });
         Ok(())
     }
