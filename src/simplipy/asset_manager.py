@@ -318,7 +318,6 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
 
         print(f"Installing asset '{asset}' to {local_path}.")
         from huggingface_hub import hf_hub_download
-        from huggingface_hub.utils import HfHubHTTPError
         try:
             for file in asset_info['files']:
                 # R6: pin the download to the manifest's recorded revision when it
@@ -331,24 +330,28 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
                     local_dir=local_dir,
                     revision=asset_info.get('revision'),
                 )
-            # R6: verify what actually landed on disk against the manifest digests.
-            # An integrity failure RAISES (distinct from the network-failure False):
-            # a corrupt artifact must never be reported as installed.
-            try:
-                _verify_asset_digests(local_dir, asset_info)
-            except RuntimeError:
-                if local_path.exists():
-                    shutil.rmtree(local_path, ignore_errors=True)
-                raise
-            print(f"Successfully installed '{asset}'.")
-            return True
-        except HfHubHTTPError as e:
-            print(f"Error downloading asset '{asset}': {e}")
+        except Exception as e:  # noqa: BLE001 -- the hub raises several families (C51)
+            # Every download failure is the documented False, with its cause printed: the
+            # hub raises HTTP, offline and connection errors from different families, and
+            # catching only HfHubHTTPError let the others escape raw and leave a partial
+            # download behind (the class `fetch_manifest` already handles this way).
+            print(f"Error downloading asset '{asset}': {e!r}")
             # Clean up only THIS asset's partial download -- never the shared cache root
             # (rmtree(local_dir) would delete other assets / other workers' caches).
             if local_path.exists():
                 shutil.rmtree(local_path, ignore_errors=True)
             return False
+        # R6: verify what actually landed on disk against the manifest digests.
+        # An integrity failure RAISES (distinct from the network-failure False):
+        # a corrupt artifact must never be reported as installed.
+        try:
+            _verify_asset_digests(local_dir, asset_info)
+        except RuntimeError:
+            if local_path.exists():
+                shutil.rmtree(local_path, ignore_errors=True)
+            raise
+        print(f"Successfully installed '{asset}'.")
+        return True
 
 
 def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | None = None, repo_id: str | None = None, manifest_filename: str | None = None) -> bool:

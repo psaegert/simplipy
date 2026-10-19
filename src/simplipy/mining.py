@@ -372,10 +372,9 @@ def _preempted_by(engine: Any, lhs: Any, rhs: Any, mode: str) -> bool:
         # serves no rules", which is exactly the constructor-only engine we want.
         bare._core.set_mode_rules('real', [])
         engine._ruleless_twin = bare
-    try:
-        return tuple(bare.simplify(list(lhs), mode=mode)) == tuple(bare.simplify(list(rhs), mode=mode))
-    except Exception:
-        return False
+    # No error is read as "not preempted": a ground rule side the engine cannot read is a
+    # defect of the rule set, and the gate reports it by raising instead of keeping the rule.
+    return tuple(bare.simplify(list(lhs), mode=mode)) == tuple(bare.simplify(list(rhs), mode=mode))
 
 
 class RuleMiner:

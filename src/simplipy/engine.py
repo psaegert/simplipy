@@ -1686,6 +1686,8 @@ class SimpliPyEngine:
         self._core.check_form(prefix)
 
         arity = self.operator_arity
+        # A variable is what `expression_variables` says it is, the engine's one definition.
+        variables = set(self.expression_variables(prefix))
 
         def span(i: int) -> int:
             j = i + 1
@@ -1694,8 +1696,8 @@ class SimpliPyEngine:
             return j
 
         def foldable(sub: list[str]) -> bool:
-            return not any(t == '<constant>' or t[:1] in '_!?$' and t[1:].isdigit()
-                           or (t.startswith('x') and t[1:].isdigit()) for t in sub)
+            return not any(t in variables or t == '<constant>' or t[:1] in '_!?$' and t[1:].isdigit()
+                           for t in sub)
 
         out: list[str] = []
         i = 0
@@ -1706,7 +1708,7 @@ class SimpliPyEngine:
                 try:
                     value = float(np.asarray(
                         self._core.evaluate_batch(sub, ['x0'], [0.0], 1, [])).ravel()[0])
-                except Exception:
+                except ValueError:  # an operator the evaluator has no kernel for: left as is
                     value = float('nan')
                 if np.isfinite(value):
                     out.append(repr(value))
@@ -2415,10 +2417,9 @@ class SimpliPyEngine:
         assert self._core is not None
         lines = []
         for probe in self._LIBM_PROBES:
-            try:
-                out = self._core.evaluate_constant_subtree(list(probe))
-            except Exception:
-                out = None
+            # `None` is the core's own answer for a probe it cannot fold (an operator the
+            # config lacks); an error is not an answer and propagates.
+            out = self._core.evaluate_constant_subtree(list(probe))
             lines.append(f"{' '.join(probe)}={out}")
         return hashlib.sha256('\n'.join(lines).encode()).hexdigest()
 

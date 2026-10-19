@@ -225,6 +225,13 @@ class TestEvaluateConstants:
             == ['+', '1.5574077246549023', 'x0']
         assert eng.evaluate_constants(['+', 'x0', 'x1']) == ['+', 'x0', 'x1']
 
+    def test_a_variable_is_what_expression_variables_says(self, eng):
+        """`y` is a variable to `expression_variables`, so the subtree holding it is not a
+        constant -- it used to be tried, fail inside the evaluator, and be left alone by
+        an `except Exception` that hid the reason."""
+        assert eng.expression_variables(['+', 'y', 'tan', '1']) == ['y']
+        assert eng.evaluate_constants(['+', 'y', 'tan', '1']) == ['+', 'y', '1.5574077246549023']
+
     def test_it_is_dialect_preserving_like_simplify(self, eng):
         assert eng.evaluate_constants('tan(1) + x0') == '1.5574077246549023 + x0'
         assert eng.evaluate_constants(eng.to_tagged(['+', 'tan', '1', 'x0'])) \
