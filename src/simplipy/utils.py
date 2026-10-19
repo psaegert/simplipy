@@ -643,18 +643,27 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
     """
     from .engine import _coerce_rule_mode
     rule_mode = _coerce_rule_mode(rule_mode)
-    deduplicated_rules: dict[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]] = {}
-    for key, pair in _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose,
-                                        rule_mode=rule_mode, canon=canon):
-        existing = deduplicated_rules.get(key)
+    keyed = _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose,
+                               rule_mode=rule_mode, canon=canon)
+    return [keyed[p][1] for p in _dedup_fold(keyed, engine, rule_mode)]
+
+
+def _dedup_fold(keyed: list, engine: Any, rule_mode: str) -> list[int]:
+    """THE DEDUP FOLD over :func:`_dedup_keyed_rules` output: one slot per key, at its first
+    occurrence, held by the pair whose target :func:`dedup_target_wins` puts lowest (the
+    earlier on ties). -> the winning positions, in slot order. :func:`deduplicate_rules` is
+    this fold; a consumer that must know which input row holds which slot (the promotion
+    refund) reads it here rather than replicate it."""
+    slots: dict[_DedupKey, int] = {}
+    for p, (key, pair) in enumerate(keyed):
+        held = slots.get(key)
         # The WHOLE PAIR wins or loses: a target strictly below the kept one in the mode's
         # ordering brings its own source spelling with it, so every emitted rule is a
         # (source, target) that was certified together -- never a cross of one rule's source
         # with another's target.
-        if existing is None or dedup_target_wins(engine, pair[1], existing[1], rule_mode):
-            deduplicated_rules[key] = pair
-
-    return list(deduplicated_rules.values())
+        if held is None or dedup_target_wins(engine, pair[1], keyed[held][1][1], rule_mode):
+            slots[key] = p
+    return list(slots.values())
 
 
 def is_numeric_string(s: str) -> bool:

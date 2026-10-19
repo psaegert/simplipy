@@ -149,3 +149,35 @@ def test_each_mode_mines_from_its_own_set():
     assert real_only in engine.real_simplification_rules
     assert f64_only not in engine.permissive_simplification_rules
     assert real_only not in engine.permissive_simplification_rules
+
+
+def test_the_refund_reads_the_constructors_dedup(monkeypatch):
+    """The promotion refund maps each probe to its row through the constructor's own dedup
+    fold. A replica of it ("shortest target") disagreed with the fold's tie-break (the serve
+    ordering), and every probe then fell back to the slow rebuild. With a tie-break of the
+    test's own, only the probes of the shared bucket fall back."""
+    import simplipy.utils
+    from simplipy.promotion._refund import refund
+    monkeypatch.setattr(simplipy.utils, 'dedup_target_wins',
+                        lambda engine, new, kept, rule_mode: len(new) > len(kept))
+    ops = {
+        "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+        "neg": {"realization": "simplipy.operators.neg", "alias": [], "inverse": "neg", "arity": 1, "precedence": 2.5, "commutative": False},
+        "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
+        "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
+    }
+    rules = [(('neg', 'neg', '?0'), ('?0',)), (('neg', 'neg', '?0'), ('*', '1', '?0')),
+             (('log', 'exp', '?0'), ('?0',)), (('exp', 'log', 'exp', '?0'), ('exp', '?0')),
+             (('neg', 'exp', 'log', '?0'), ('neg', '?0'))]
+    stages = []
+
+    class Spy:
+        def stage(self, name, **kw):
+            stages.append((name, kw))
+
+        def track(self, iterable, name, total=None):
+            return iterable
+
+    refund(list(rules), ops, set(), progress=Spy(), rule_mode='default')
+    done = [kw for name, kw in stages if name.endswith('derivability probe: done')][-1]
+    assert done['fallbacks'] <= 2, done  # the replica made it 5: every probe

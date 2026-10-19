@@ -37,7 +37,7 @@ import re
 from ..engine import (_CORE_SERIALIZATION_ARITIES, _TAGGED_DIALECT_TOKENS, DEFAULT_EFFORT,
                       SimpliPyEngine)
 from ..progress import Progress
-from ..utils import _dedup_keyed_rules
+from ..utils import _dedup_fold, _dedup_keyed_rules
 
 Q = re.compile(r'^\?(\d+)$')
 
@@ -169,25 +169,21 @@ def refund(rules, operators, promote_set, progress=None, *, rule_mode):
             # The mode serves the SAME deduplicated list, so its rows are the default rows.
             engine._core.set_mode_rules(
                 rule_mode, [(list(l), list(r)) for l, r in engine.simplification_rules])
+        # The constructor's own dedup (`SimpliPyEngine.__init__`: the default mode, the
+        # default set's canon), so each slot's row is read off the fold itself, never off
+        # a replica of it. Positions in non-singleton buckets are dedup-entangled: removing
+        # one can promote a twin or move a slot, which suppression cannot spell -- fallback
+        # tier.
         keyed = _dedup_keyed_rules(live, [f'x{k}' for k in range(100)], engine,
-                                   rule_mode=rule_mode)
+                                   rule_mode='default',
+                                   canon=engine._rule_canons.get('default'))
         buckets = {}
         for p, (key, _) in enumerate(keyed):
             buckets.setdefault(key, []).append(p)
-        # Replicate the constructor's dedup fold exactly: one slot per key at its first
-        # occurrence, the WHOLE PAIR with the strictly shortest target wins it (first on
-        # ties). Positions in non-singleton buckets are dedup-entangled: removing one can
-        # promote a twin or move a slot, which suppression cannot spell -- fallback tier.
-        row_of, expected, irregular = {}, [], set()
-        for p, (key, _) in enumerate(keyed):
-            b = buckets[key]
-            if len(b) > 1:
-                irregular.add(p)
-            if b[0] != p:
-                continue
-            w = min(b, key=lambda q: (len(keyed[q][1][1]), b.index(q)))
-            row_of[w] = len(expected)
-            expected.append(keyed[w][1])
+        irregular = {p for p, (key, _) in enumerate(keyed) if len(buckets[key]) > 1}
+        winners = _dedup_fold(keyed, engine, 'default')
+        row_of = {w: row for row, w in enumerate(winners)}
+        expected = [keyed[w][1] for w in winners]
         if expected != list(engine.simplification_rules):
             # The fold above no longer mirrors the constructor: refuse every shortcut
             # rather than trust a stale replica (each probe then runs the reference
