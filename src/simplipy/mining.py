@@ -192,9 +192,11 @@ _CERTIFY_RULE_MODE = 'permissive'
 _RULES_ATTR = {'default': 'simplification_rules', 'real': 'real_simplification_rules',
                'permissive': 'permissive_simplification_rules'}
 
-#: The judge loop of one length gives up -- loudly -- after this many rounds. Each round
-#: strictly grows a finite exclusion set, so the loop terminates; a cap that binds says the
-#: scan and the judge disagree about something, and that must be seen, not papered over.
+#: The judge loop gives up on ONE SOURCE -- loudly -- when the judge has refused its pick this
+#: many times. Each refusal strictly grows a finite exclusion set, so the loop terminates; a
+#: cap that binds says the scan and the judge disagree about that source, and that must be
+#: seen, not papered over. The cap is per source, so one stubborn source neither costs the
+#: others their rounds nor hides behind them.
 _JUDGE_ROUNDS_MAX = 8
 
 #: Batches below this size are judged in-process: spawning workers costs more than it saves.
@@ -556,28 +558,33 @@ class RuleMiner:
         candidate: another tier's pick can never shadow a licensed alternative.
 
         ``mine(sources, indices, exclusions)`` runs `mine_one_length` with the global source
-        indices (which seed the sources and key the exclusions)."""
+        indices (which seed the sources and key the exclusions).
+
+        A source whose pick the judge refuses ``_JUDGE_ROUNDS_MAX`` times is given up on --
+        it is not re-scanned again -- and listed in ``stats['stubborn']`` with the targets it
+        excluded; the loop runs on for the others. The caller fails the mine on it."""
         picks = {idx: (list(src), list(tgt)) for idx, src, tgt in mine(sources, None, None)}
         exclusions: dict[int, list] = {}
+        refusals: dict[int, int] = {}
+        stubborn: list[int] = []
         rounds = 0
         while True:
             rounds += 1
             bad = self._unlicensed(picks, rule_mode, judge, judged, dummy_variables)
-            if not bad:
-                break
-            if rounds >= _JUDGE_ROUNDS_MAX:
-                raise RuntimeError(
-                    f'the judge loop did not converge in {_JUDGE_ROUNDS_MAX} rounds '
-                    f'({len(bad)} picks still unlicensed in mode {rule_mode})')
-            again = sorted(bad)
-            for idx in again:
+            again: list[int] = []
+            for idx in sorted(bad):
                 exclusions.setdefault(idx, []).append(picks.pop(idx)[1])
+                refusals[idx] = refusals.get(idx, 0) + 1
+                (stubborn if refusals[idx] >= _JUDGE_ROUNDS_MAX else again).append(idx)
+            if not again:
+                break
             for idx, src, tgt in mine([sources[i] for i in again], again, exclusions):
                 picks[idx] = (list(src), list(tgt))
         stats = {'judge_rounds': rounds,
                  'excluded': sorted([list(sources[i]), tgt] for i, ts in exclusions.items()
                                     for tgt in ts),
-                 'licensed': len(picks)}
+                 'licensed': len(picks),
+                 'stubborn': [[list(sources[i]), exclusions[i]] for i in sorted(stubborn)]}
         return [picks[i] for i in sorted(picks)], stats
 
     def _mining_sample_x(self, n_rows: int, n_vars: int, rng: np.random.Generator) -> np.ndarray:
@@ -1211,6 +1218,23 @@ class RuleMiner:
                          'after_length': resumed_at}]
                 if verbose:
                     print(f'=== resuming the {file_mode} mine after length {resumed_at}')
+
+        def _checkpoint(completed_length: int, completed_rules: list) -> None:
+            """THE RESUME POINT, never under the final filename: the rules file and its sidecar
+            are written once, by `_finalize`, and a crash leaves only this. The judge's memo
+            is written whole, so a resume re-judges nothing."""
+            if out_file is None:
+                return
+            with open(out_file + '.checkpoint.json', 'w') as file:
+                json.dump({'fingerprint': checkpoint_fp, 'completed_length': completed_length,
+                           'rules': [[list(lhs), list(rhs)] for lhs, rhs in completed_rules],
+                           'per_length': {str(k): v for k, v in per_length.items()},
+                           'judged': [[list(lhs), list(rhs), tier]
+                                      for (lhs, rhs), tier in judged.items()],
+                           'provenance': provenance},
+                          file, default=str)
+
+        completed = resumed_at
         for length in sorted(k for k in list(expressions_of_length) if k <= max_source_pattern_length):
             if interrupted():
                 break
@@ -1270,6 +1294,15 @@ class RuleMiner:
                 lambda: self._mine_length(sources, mine, rule_mode, judge, judged,
                                           dummy_variables),
                 verbose)
+            if _loop['stubborn']:
+                # Every verdict this length reached is kept for the resume; the length itself
+                # is not complete, so the checkpoint stays at the last one that is.
+                _checkpoint(completed, rules)
+                raise RuntimeError(
+                    f'the judge loop gave up on {len(_loop["stubborn"])} source(s) of length '
+                    f'{length} in mode {rule_mode}, each refused {_JUDGE_ROUNDS_MAX} times '
+                    f'(source, excluded targets): {_loop["stubborn"]}; every other verdict is '
+                    f'checkpointed')
             # GATED BEFORE INSTALLED (miner.md 2.7): only licensed picks join the set the next
             # length's marks are computed against, so a rule the judge refuses never prunes a
             # longer source.
@@ -1293,17 +1326,8 @@ class RuleMiner:
                       f'({_loop["judge_rounds"]} judge rounds, {len(_loop["excluded"])} excluded, '
                       f'{len(_shadowed)} twin-shadowed), {len(rules):,} total')
             self._write_provenance(None, provenance, rules, completed_length=length)
-            if out_file is not None:
-                # THE RESUME POINT, never under the final filename: the rules file and its
-                # sidecar are written once, by `_finalize`, and a crash leaves only this.
-                with open(out_file + '.checkpoint.json', 'w') as file:
-                    json.dump({'fingerprint': checkpoint_fp, 'completed_length': length,
-                               'rules': [[list(lhs), list(rhs)] for lhs, rhs in rules],
-                               'per_length': {str(k): v for k, v in per_length.items()},
-                               'judged': [[list(lhs), list(rhs), tier]
-                                          for (lhs, rhs), tier in judged.items()],
-                               'provenance': provenance},
-                              file, default=str)
+            completed = length
+            _checkpoint(completed, rules)
             # LADDER SNAPSHOT: finishing this length also finishes the shorter cell
             # (length, max_target_pattern_length) of the same ladder. Emit it as a completed
             # artifact, then restore the RAW state and keep climbing -- the taller cell must
@@ -1835,20 +1859,26 @@ class RuleMiner:
                                   fit, mine_seed + offset, confirm, rule_mode)}
 
         excluded: dict[int, list] = {}
+        stubborn: list[int] = []
         rounds = 0
         while True:
             rounds += 1
             picks = {i: (list(proposal_entries[i][0]), list(p['result'][0]))
                      for i, p in pending.items() if p['result'][0] is not None}
             bad = self._unlicensed(picks, rule_mode, judge, judged, dummy_variables) if picks else set()
-            if not bad:
-                break
-            if rounds >= _JUDGE_ROUNDS_MAX:
-                raise RuntimeError(
-                    f'the proposals\' judge loop did not converge in {_JUDGE_ROUNDS_MAX} rounds '
-                    f'({len(bad)} targets still unlicensed in mode {rule_mode})')
+            again: list[int] = []
             for i in sorted(bad):
                 excluded.setdefault(i, []).append(list(pending[i]['result'][0]))
+                # the cap is per proposal, as per source in the length loop
+                (stubborn if len(excluded[i]) >= _JUDGE_ROUNDS_MAX else again).append(i)
+            if stubborn:
+                raise RuntimeError(
+                    f'the proposals\' judge loop gave up on {len(stubborn)} proposal(s) in mode '
+                    f'{rule_mode}, each refused {_JUDGE_ROUNDS_MAX} times (source, excluded '
+                    f'targets): {[[list(proposal_entries[i][0]), excluded[i]] for i in stubborn]}')
+            if not again:
+                break
+            for i in again:
                 source, hint = proposal_entries[i]
                 pending[i]['result'] = self._certify_one(
                     source, hint, library, vocabulary, max_target_pattern_length, fit,

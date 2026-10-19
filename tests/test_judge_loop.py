@@ -422,3 +422,38 @@ def test_a_checkpoint_resumes_only_its_own_mine(tmp_path, monkeypatch) -> None:
     assert (side['created'], side['host']) == origin
     assert [(r['host'], r['after_length']) for r in side['resumed']] == [('elsewhere', 3)]
     assert 'resumed' not in json.load(open(str(tmp_path / 'mined_real.json.provenance.json')))
+
+
+def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
+    """S5: a source the judge keeps refusing is given up on by itself; the others converge."""
+    import simplipy.mining
+    monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 2)
+    other = ['tan', 'atan', 'sin', 'x0']
+    stubborn = ('sinh', 'asinh', '?0')
+
+    def judge(pairs):
+        return ['real' if tuple(p[0]) == stubborn else 'core' for p in pairs]
+
+    found, stats = RuleMiner(acj)._mine_length([WITNESS, other], _scan(acj), 'default',
+                                               judge, {}, ['x0'])
+    assert found == [(other, ['sin', 'x0'])], found
+    assert stats['stubborn'] == [[WITNESS, [FIRST, SECOND]]], stats
+
+
+def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path, monkeypatch) -> None:
+    import simplipy.mining
+    monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 1)
+    ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
+    out = str(tmp_path / 'mined.json')
+
+    def judge(pairs):  # refuses the one length-4 pick, `log exp log ?0 -> log ?0`
+        return ['real' if len(p[0]) >= 4 else 'core' for p in pairs]
+
+    with pytest.raises(RuntimeError, match=r"gave up on 1 source\(s\) of length 4.*'log', 'exp', 'log', 'x0'"):
+        SimpliPyEngine(operators=ops, rules=[]).find_rules(
+            max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
+            X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,
+            symbolic_gate=False, output_file=out, judge=judge)
+    ckpt = json.load(open(out + '.checkpoint.json'))
+    assert ckpt['completed_length'] == 3
+    assert [['log', 'exp', 'log', '?0'], ['log', '?0'], 'real'] in ckpt['judged']
