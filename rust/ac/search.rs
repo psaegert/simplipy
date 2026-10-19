@@ -785,27 +785,33 @@ fn two_signed_poles(members: &[Ex], cx: &Cx) -> bool {
 }
 
 /// Does `addend`, built from the product of `pieces` and a co-piece, still hold one of their
-/// poles: a member that is not certainly finite, or, for a negative power, a negative power of
-/// the same base? A co-piece that cancelled the pole leaves none (`x2*x2^-1` is `1`), and a pole
-/// of the co-piece's own is not the pieces'.
+/// poles: anywhere inside it, a member that is not certainly finite, or, for a negative power, a
+/// negative power of the same base (`log(x)*log(x)` is `log(x)^2`, which holds `log(x)`)? A
+/// co-piece that cancelled the pole leaves none (`x2*x2^-1` is `1`), and a pole of the co-piece's
+/// own is not the pieces'.
 fn holds_a_pole_of(addend: &Ex, pieces: &[Ex], cx: &Cx) -> bool {
-    let factors: &[Ex] = match addend {
-        Ex::Mul(fs) => fs,
-        other => std::slice::from_ref(other),
-    };
     fn inverse_base(f: &Ex) -> Option<&Ex> {
         match f {
             Ex::Pow(b, k) if matches!(&**k, Ex::Num(r) if r.is_negative()) => Some(&**b),
             _ => None,
         }
     }
-    pieces
-        .iter()
-        .filter(|f| !cx.certainly_finite(f))
-        .any(|f| match inverse_base(f) {
-            Some(b) => factors.iter().any(|g| inverse_base(g) == Some(b)),
-            None => factors.contains(f),
-        })
+    fn holds(e: &Ex, f: &Ex) -> bool {
+        let here = match inverse_base(f) {
+            Some(b) => inverse_base(e) == Some(b),
+            None => e == f,
+        };
+        here || match e {
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(|c| holds(c, f)),
+            Ex::Pow(x, y) => holds(x, f) || holds(y, f),
+            _ => false,
+        }
+    }
+    !cx.certainly_finite(addend)
+        && pieces
+            .iter()
+            .filter(|f| !cx.certainly_finite(f))
+            .any(|f| holds(addend, f))
 }
 
 /// Do `a` and `b` hold a common leaf?
