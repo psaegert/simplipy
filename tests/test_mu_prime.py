@@ -50,12 +50,13 @@ MU_FREE_PRIME = 67 * MILLI   # the re-derived c_free' (TestCfreePrimeDerivation 
 #: mismatch test can differ FROM.
 ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 
-#: The probes the shipped acj-4 cell's sidecar does not record: the float cap's probe, the
+#: The probes the shipped acj-4 cell's sidecar does not record: the float cap's probes, the
 #: sign probes and the compound reading probes were added to the battery after it was mined. Unrecorded
 #: is not moved, so loading the cell is silent; `test_acj_load_compares_what_was_recorded`
 #: pins exactly this set, so a re-mine that records them fails there and is noticed.
 ACJ_UNRECORDED_PROBES = [
     '0.0766541268471677307861497420516056347394916180597539647375669841',
+    '/ 1.2345678901234567e-305 9.876543210987654e-10',
     '-2', 'neg x0', '* neg x0 x1',
     'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', 'atanh tanh x0', '/ x0 * x0 x1']
 
@@ -552,6 +553,43 @@ class TestOneMeasurePerMode:
                 eng.complexity(['x0'], canon=canon)
 
 
+class TestTheFloatCapOnEveryPath:
+    """A literal costs at most what its float costs, however a state holds it. The f64 number
+    domain (f64 and permissive) admits a number only where its numerator and denominator are at
+    most 2^1022, and holds in pieces a value that `real` holds as one number: a literal as
+    written, a product, a sum, a reciprocal. Each costs what `real` prices the one number at."""
+
+    A, B = '1.2345678901234567e-305', '9.876543210987654e-10'  # A's denominator is 10^321
+
+    @pytest.mark.parametrize('text', [
+        f'{A} / {B}',                            # a leaf times a number
+        f'x1 * {A} / {B}',                       # the same, beside a variable
+        f'x1 + {A} + 1',                         # a sum
+        f'x1 / {A}',                             # a reciprocal
+        f'{A} * 1.5e300',                        # a product of two leaves
+        '1.23456789012345678901234567e-305',     # a leaf longer than its float
+        '1.2345678901234567e-290 * 1e-15 * x1',  # two numbers whose product leaves the domain
+    ])
+    def test_every_mode_prices_what_real_prices(self, eng, text):
+        real = eng.complexity(text, mode='real')
+        for mode in ('f64', 'permissive'):
+            assert eng.complexity(text, mode=mode) == real, mode
+
+    def test_the_quotient_costs_its_float(self, eng):
+        quotient = f'{self.A} / {self.B}'
+        its_float = repr(float(Fraction(self.A) / Fraction(self.B)))
+        for mode in ('f64', 'real', 'permissive'):
+            assert eng.complexity(quotient, mode=mode) == eng.complexity(its_float, mode=mode) == 59436
+
+    def test_a_value_beyond_the_cap_keeps_its_price(self, eng):
+        # 1e400 has no number in either domain (its 1,329 bits pass the 1,100-bit cap), so its
+        # product with 1e-300 keeps the price of its pieces, alike in every mode.
+        text = 'x1 * 1e400 * 1e-300'
+        prices = {mode: eng.complexity(text, mode=mode) for mode in ('f64', 'real', 'permissive')}
+        assert len(set(prices.values())) == 1
+        assert prices['f64'] > eng.complexity('x1 * 1e100', mode='f64')
+
+
 class TestFingerprintAndArtifactLoad:
     """The load contract: acj-4-3 (mined under mu) still loads and serves; the
     measure fingerprint MOVES (that is what it is for) and is write-only at load --
@@ -570,6 +608,9 @@ class TestFingerprintAndArtifactLoad:
             # the float cap: 64 digits cost their float's shortest decimal,
             # 0.07665412684716773 (selector + L(7665412684716773) + L(17))
             '0.0766541268471677307861497420516056347394916180597539647375669841': mu_prime_expected(Fraction('0.07665412684716773')),
+            # ... on every path: f64 holds this quotient in pieces (the first literal's
+            # denominator passes 2^1022), and it costs its float's shortest decimal
+            '/ 1.2345678901234567e-305 9.876543210987654e-10': mu_prime_expected(Fraction('1.249999988609375e-296')),
             # the symbol table, one probe per entry. Add and Mul price the same here and
             # still need separate probes: a change to ONE of them has to move a probe.
             'x0': MU_LEAF,                    # 6

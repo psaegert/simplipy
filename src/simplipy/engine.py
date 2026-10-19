@@ -2332,8 +2332,12 @@ class SimpliPyEngine:
         its nearest float64, so a literal's price is capped at the price of that float's
         shortest decimal (at most 17 significant digits). A number carrying more digits
         than its float needs therefore costs that decimal, while :meth:`simplify` keeps and
-        prints the exact value. A literal kept as written (beyond the 1,100-bit cap, or not
-        admissible in ``f64``) keeps its own price. The price is an integer in milli-bits.
+        prints the exact value. The cap holds however a form holds a literal: ``f64`` and
+        ``permissive`` admit a number only where its numerator and denominator are at most
+        2^1022, and hold any other value in pieces (``1.2345678901234567e-305`` as written,
+        and its quotient by ``9.876543210987654e-10`` as that literal times a number), which
+        cost at most what ``real`` prices the one number at. A literal beyond the 1,100-bit
+        cap keeps its own price. The price is an integer in milli-bits.
         """
         _, tokens = self._read_input(expression)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
@@ -2390,6 +2394,10 @@ class SimpliPyEngine:
         # it reads as, so a decimal carrying more than float precision costs that decimal. Every
         # probe above is its own float's shortest decimal (or cheaper), so none of them moved.
         ('0.0766541268471677307861497420516056347394916180597539647375669841',),
+        # ... on every path: a value f64's number domain holds in pieces (here a literal whose
+        # denominator passes 2^1022 times a number) costs at most what its float costs, as the
+        # one number `real` holds.
+        ('/', '1.2345678901234567e-305', '9.876543210987654e-10'),
         # the SYMBOL TABLE, one probe per entry. Without these, six of the nine entries
         # were invisible to the fingerprint: changing `Pow` from 4 bits to 3 moved no probe.
         ('x0',),                    # leaf

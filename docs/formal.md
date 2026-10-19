@@ -580,9 +580,14 @@ finite (L5).
 **The float cap.** The evaluator reads every literal as its nearest float64, so a literal's
 price is capped at that float's shortest round-trip decimal $d(v)$ (at most 17 significant
 digits), priced by the same codebook: $\mu'(v) = \min\big(\mu(v),\, \mu(d(v))\big)$ for a
-finite nonzero nearest float, $\mu(v)$ otherwise; a literal the engine holds as a numeric
-string (beyond the 1,100-bit cap, or in f64 mode not admissible) keeps its print's price
-(`mu_numeric_str`). Every literal that is its own float's
+finite nonzero nearest float, $\mu(v)$ otherwise. The cap holds however a term holds a
+literal: f64 mode admits a number only where its numerator and denominator are at most
+$2^{1022}$ and holds any other value in *pieces* -- a numeric string as written, or a sum,
+product or integer power of numbers that would leave the domain. Pieces whose exact value
+is a number within the 1,100-bit cap price as $\min(\text{their own prices}, \mu'(v))$, the
+price real mode gives the one number, never below one bit per node (`piece_price`); a
+numeric string beyond the cap keeps its print's price (`mu_numeric_str`). Every literal that
+is its own float's
 shortest decimal keeps its price (every constant drawn for flash-ansr's training data among
 them), and no price rises; a literal carrying more digits than its float needs (the 64-digit
 fourth power of a 16-digit constant, or a fitted constant printed with 17 digits where 16
@@ -626,14 +631,16 @@ were not scanned].
 canonical terms $t$ have $\mu(t) = \mu_0$. *Proof.* $\mu$ bounds the node count
 (every node and leaf contributes $\geq 1$ bit -- a negation standing alone is one bit, every
 other node and leaf $\geq 2$ -- except at most one zero-cost coefficient slot $+1$ per bag and
-one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \leq \mu_0$ in bits — the carrier
+one zero-cost exponent slot per `Pow`, and the pieces of a literal priced together pay at
+least one bit per node, so $\#\mathrm{nodes} \leq \mu_0$ in bits — the carrier
 being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
 vocabulary are finite; and there are finitely many numbers at all: a number's numerator
 and denominator have at most 1,100 bits each. $\mu_0$ does not bound a number's codeword
 components (the float cap prices every literal at most at its float's shortest decimal), so
-the finiteness of the literals comes from the 1,100-bit cap, not from the price. A numeric-string leaf
-(beyond the cap, or not admissible in f64 mode) pays a cost that grows with its
+the finiteness of the literals comes from the 1,100-bit cap, not from the price. A numeric-string
+leaf not admissible in f64 mode but within the cap denotes one of those numbers; one beyond the
+cap pays a cost that grows with its
 canonical print (`mu_numeric_str` is strictly monotone in significand digits and in
 the scale within each codeword), so $\mu_0$ bounds the print's significand length
 and scale magnitude too, leaving finitely many leaf choices per slot.
@@ -845,7 +852,7 @@ strictly lower state, so L2–T6 hold verbatim in permissive mode.
 | L1 nf termination | structural recursion; the two audited self-calls (`pow`, `fun`/rootn) | full suites exercise both self-call sites |
 | G1–G4, G6–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
 | L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or committed as a composite step) |
-| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle |
+| L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str`/`piece_price` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle; a value f64 holds in pieces prices as real's one number |
 | composite acceptance | the exploration branch in `rewrite_pass` (one level, private memo) | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form |
 | T6 defense-in-depth | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | by T6 a binding bound proves an implementation bug; each binding of the step cap is counted (`step_cap_binds`, pinned at 0 on the corpus in every mode); fixpoint break covered by idempotence gates |
 | L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 |

@@ -27,7 +27,7 @@ use std::cmp::Ordering;
 use crate::tokens::{Tok, TokenView};
 
 use super::rat::{Mantissa, Rat};
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
 
 /// An AC-core expression. Leaves carry interned [`Tok`] ids (variables `x0..`, wildcards
@@ -526,9 +526,11 @@ pub fn mu_rat_exact(r: &Rat) -> u64 {
 /// spelling; on rare exact ties it can differ from Python's `repr` in the last digit), never a
 /// fraction that reads as the same float: `0.3333333333333333` keeps its 16-digit price although
 /// `1/3` reads as the same float. A literal beyond float64's range (or below its smallest
-/// subnormal) keeps its exact price, and a numeric-string leaf (beyond the 1,100-bit cap, or not
-/// admissible in f64 mode) keeps its print's price (`mu_numeric_str`); a leaf never becomes a
-/// `Rat`, so no ordering cliff opens between the two. The state keeps
+/// subnormal) keeps its exact price. The cap reaches every literal the exact domain holds as a
+/// number, however a state holds it (`is_piece`, `piece_price`): a numeric-string leaf not
+/// admissible in f64 mode, and a product, sum or power the f64 domain keeps in pieces, cost at
+/// most what this function prices their value at; a leaf beyond the 1,100-bit cap keeps its
+/// print's price (`mu_numeric_str`), so no ordering cliff opens between the two. The state keeps
 /// the exact value and prints it: only the measure reads the float. The price is a function of the
 /// value alone (the decimal is built in the exact number domain), so each thread remembers the
 /// prices it computed, emptying the table at 65,536 entries.
@@ -974,37 +976,197 @@ fn is_negation(v: &[Ex]) -> bool {
         && v.iter().any(|f| !matches!(f, Ex::Num(_)))
 }
 
+/// THE MEASURE `mu` of a canonical state, in milli-bits.
 pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
+    priced(e, view).0
+}
+
+/// Is `s` a NUMERIC-STRING leaf (a literal the engine holds as written)? A first-byte filter
+/// skips the full numeric parse for ordinary vocabulary leaves (`x0`, function names), which
+/// never start with a digit, dot, or sign.
+#[inline]
+fn numeric_leaf(s: &str) -> bool {
+    s.as_bytes()
+        .first()
+        .is_some_and(|b| b.is_ascii_digit() || *b == b'-' || *b == b'.' || *b == b'+')
+        && crate::utils::is_numeric_string(s)
+}
+
+/// A PIECE OF A LITERAL: a number, a numeric-string leaf, an integer power of a piece, or a sum
+/// or product of pieces -- variable-free arithmetic that denotes one rational value.
+///
+/// The exact number domain (`real`) holds every such value within the 1,100-bit cap as one
+/// `Rat`, which [`mu_rat`] prices at most at its float's price. The f64 domain admits only
+/// numbers whose components are at most 2^1022 (`rat::number_domain`) and holds the rest in
+/// pieces: a literal whose exact fraction leaves it stays a leaf as written
+/// (`1.2345678901234567e-305`, whose denominator is 10^321), and a product, sum or power that
+/// leaves it stays a product, sum or power (`1.2345678901234567e-305 / 9.876543210987654e-10`
+/// is the leaf times the number `1/9.876543210987654e-10`). Priced piece by piece, such a value
+/// costs what its pieces cost, above its float. [`priced`] prices the pieces of a bag, and a
+/// node that is pieces throughout, as the one literal they denote ([`piece_price`]).
+fn is_piece(e: &Ex, view: &TokenView) -> bool {
     match e {
-        Ex::Num(r) => mu_rat(r),
-        Ex::Pi => mu_pi(),
-        Ex::E => mu_e(),
-        Ex::PosInf | Ex::NegInf | Ex::NaN => mu_infinity(),
-        // A vocabulary leaf is one symbol; a NUMERIC-STRING leaf is a beyond-`Rat`
-        // literal and pays the description length of the value its print denotes
-        // (see `mu_numeric_str` -- the boundary must not be an ordering cliff).
-        // HOT PATH: no allocation (`with_str`), and a first-byte filter skips the
-        // full numeric parse for ordinary vocabulary leaves (`x0`, function names),
-        // which never start with a digit, dot, or sign.
+        Ex::Num(_) => true,
+        Ex::Leaf(t) => view.with_str(*t, numeric_leaf),
+        Ex::Pow(b, k) => matches!(&**k, Ex::Num(k) if k.is_integer()) && is_piece(b, view),
+        Ex::Add(v) | Ex::Mul(v) => v.iter().all(|f| is_piece(f, view)),
+        _ => false,
+    }
+}
+
+/// The nodes of a piece ([`is_piece`]); an exponent is part of its power.
+fn piece_nodes(e: &Ex) -> u64 {
+    match e {
+        Ex::Pow(b, _) => 1 + piece_nodes(b),
+        Ex::Add(v) | Ex::Mul(v) => v.iter().fold(1, |n, f| n + piece_nodes(f)),
+        _ => 1,
+    }
+}
+
+/// The exact value of a piece ([`is_piece`]) as the exact number domain holds it: `None` where
+/// that domain holds no number for it (a component beyond the 1,100-bit cap, a leaf no numeral
+/// reader reads) or where `e` is no piece. The caller enters the exact domain.
+fn piece_value(e: &Ex, view: &TokenView) -> Option<Rat> {
+    match e {
+        Ex::Num(r) => Some(r.clone()),
+        Ex::Leaf(t) => view.with_str(*t, leaf_value),
+        Ex::Pow(b, k) => match &**k {
+            Ex::Num(k) => piece_value(b, view)?.checked_pow_integer(k),
+            _ => None,
+        },
+        Ex::Add(v) => pieces_value(v.iter(), true, view),
+        Ex::Mul(v) => pieces_value(v.iter(), false, view),
+        _ => None,
+    }
+}
+
+/// The exact value of a numeric-string leaf as the exact number domain holds it (see
+/// [`piece_value`]). The caller enters the exact domain.
+fn leaf_value(s: &str) -> Option<Rat> {
+    if !numeric_leaf(s) {
+        return None;
+    }
+    let (p, q) = super::rat::token_rational(s)?;
+    Rat::from_big(p, q)
+}
+
+/// The exact sum (`sum`) or product of pieces ([`piece_value`]), formed exactly and capped once,
+/// so it does not depend on the order of a bag's members. The caller enters the exact domain.
+fn pieces_value<'a>(
+    pieces: impl Iterator<Item = &'a Ex>,
+    sum: bool,
+    view: &TokenView,
+) -> Option<Rat> {
+    let mut p = BigInt::from(u8::from(!sum));
+    let mut q = BigInt::from(1u8);
+    for f in pieces {
+        let (a, b) = piece_value(f, view)?.big_parts();
+        if sum {
+            p = p * &b + a * &q;
+        } else {
+            p *= a;
+        }
+        q *= b;
+    }
+    Rat::from_big(p, q)
+}
+
+/// The exact value of the pieces among `members` ([`is_piece`]), their sum or their product.
+fn bag_literal_value(members: &[Ex], sum: bool, view: &TokenView) -> Option<Rat> {
+    let _exact = super::rat::number_domain(false);
+    pieces_value(members.iter().filter(|f| is_piece(f, view)), sum, view)
+}
+
+/// THE FLOAT CAP ON EVERY PATH. The price of a literal held in pieces ([`is_piece`]):
+/// `structural`, its pieces priced one by one, at most what the exact domain prices the value
+/// they denote ([`mu_rat`], so at most what its float costs), and never below one bit per node,
+/// so that the price still bounds the node count (L5, docs/formal.md). `None`, a value the exact
+/// domain holds no number for (beyond the 1,100-bit cap), keeps the structural price.
+fn piece_price(structural: u64, value: Option<&Rat>, nodes: u64) -> u64 {
+    match value {
+        Some(v) => structural.min(mu_rat(v).max(nodes.saturating_mul(MU_MILLI))),
+        None => structural,
+    }
+}
+
+/// The price of a NUMERIC-STRING leaf: the price of its print ([`mu_numeric_str`]), at most what
+/// the exact domain prices its value ([`piece_price`]): a literal not admissible in the f64
+/// domain costs at most its float's price, as a `Num` does; one beyond the 1,100-bit cap keeps its
+/// print's price. A function of the string, so each thread remembers the prices it computed,
+/// emptying the table at 65,536 entries.
+fn mu_numeric_leaf(s: &str) -> u64 {
+    thread_local! {
+        static LEAF_PRICES: std::cell::RefCell<rustc_hash::FxHashMap<Box<str>, u64>> =
+            std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    }
+    if let Some(v) = LEAF_PRICES.with(|m| m.borrow().get(s).copied()) {
+        return v;
+    }
+    let value = {
+        let _exact = super::rat::number_domain(false);
+        leaf_value(s)
+    };
+    let v = piece_price(mu_numeric_str(s), value.as_ref(), 1);
+    LEAF_PRICES.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 1 << 16 {
+            m.clear();
+        }
+        m.insert(s.into(), v);
+    });
+    v
+}
+
+/// [`complexity`], and whether `e` is a piece of a literal ([`is_piece`]).
+fn priced(e: &Ex, view: &TokenView) -> (u64, bool) {
+    match e {
+        Ex::Num(r) => (mu_rat(r), true),
+        Ex::Pi => (mu_pi(), false),
+        Ex::E => (mu_e(), false),
+        Ex::PosInf | Ex::NegInf | Ex::NaN => (mu_infinity(), false),
+        // A vocabulary leaf is one symbol; a NUMERIC-STRING leaf is a literal the engine holds
+        // as written and pays the description length of the value its print denotes (see
+        // `mu_numeric_str` -- the boundary must not be an ordering cliff), capped
+        // (`mu_numeric_leaf`). HOT PATH: no allocation (`with_str`).
         Ex::Leaf(t) => view.with_str(*t, |s| {
-            if s.as_bytes()
-                .first()
-                .is_some_and(|b| b.is_ascii_digit() || *b == b'-' || *b == b'.' || *b == b'+')
-                && crate::utils::is_numeric_string(s)
-            {
-                mu_numeric_str(s)
+            if numeric_leaf(s) {
+                (mu_numeric_leaf(s), true)
             } else {
-                mu_leaf()
+                (mu_leaf(), false)
             }
         }),
-        Ex::Const => mu_free(),
-        Ex::Add(v) => v
-            .iter()
-            .fold(mu_add(), |t, x| t.saturating_add(complexity(x, view))),
+        Ex::Const => (mu_free(), false),
+        Ex::Add(v) => {
+            // The sum's literal: its pieces, priced as the one literal they denote.
+            let mut total = mu_add();
+            let (mut lit, mut lit_nodes, mut pieces) = (0u64, 0u64, 0usize);
+            for x in v {
+                let (p, piece) = priced(x, view);
+                if piece {
+                    lit = lit.saturating_add(p);
+                    lit_nodes += piece_nodes(x);
+                    pieces += 1;
+                } else {
+                    total = total.saturating_add(p);
+                }
+            }
+            let value = (pieces >= 2)
+                .then(|| bag_literal_value(v, true, view))
+                .flatten();
+            let total = total.saturating_add(piece_price(lit, value.as_ref(), lit_nodes));
+            if pieces == v.len() {
+                (piece_price(total, value.as_ref(), lit_nodes + 1), true)
+            } else {
+                (total, false)
+            }
+        }
         Ex::Mul(v) => {
             let head = mu_mul();
             let mut total = head;
             let mut members = 0u64;
+            // The product's literal: its coefficient slots and its other pieces, priced as the
+            // one literal they denote.
+            let (mut lit, mut lit_nodes, mut pieces) = (0u64, 0u64, 0usize);
             for f in v {
                 match f {
                     // The rational coefficient slot: +1 is no sign (free), -1 is a bare sign
@@ -1014,26 +1176,44 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
                     // of riding free below it).
                     Ex::Num(r) => {
                         if *r == Rat::NEG_ONE {
-                            total = total.saturating_add(mu_sign());
+                            lit = lit.saturating_add(mu_sign());
                         } else if !r.is_one() {
-                            total = total.saturating_add(mu_rat(r));
+                            lit = lit.saturating_add(mu_rat(r));
                         }
+                        lit_nodes += 1;
+                        pieces += 1;
                     }
                     _ => {
                         members += 1;
-                        total = total.saturating_add(complexity(f, view));
+                        let (p, piece) = priced(f, view);
+                        if piece {
+                            lit = lit.saturating_add(p);
+                            lit_nodes += piece_nodes(f);
+                            pieces += 1;
+                        } else {
+                            total = total.saturating_add(p);
+                        }
                     }
                 }
             }
-            if members == 0 {
+            let value = (pieces >= 2)
+                .then(|| bag_literal_value(v, false, view))
+                .flatten();
+            let total = total.saturating_add(piece_price(lit, value.as_ref(), lit_nodes));
+            let structural = if members == 0 {
                 // Degenerate all-coefficient bag: the literal (or bare Const) itself.
-                return (total - head).max(2);
-            }
-            if is_negation(v) {
+                (total - head).max(2)
+            } else if is_negation(v) {
                 // A negation standing alone is a sign, not a product: its operand and one bit.
-                return total - head;
+                total - head
+            } else {
+                total
+            };
+            if pieces == v.len() {
+                (piece_price(structural, value.as_ref(), lit_nodes + 1), true)
+            } else {
+                (structural, false)
             }
-            total
         }
         Ex::Pow(b, ex) => {
             let head = mu_pow();
@@ -1045,17 +1225,36 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
                 } else {
                     mu_rat(r)
                 };
-                return head.saturating_add(complexity(b, view)).saturating_add(mag);
+                let (base, piece) = priced(b, view);
+                let structural = head.saturating_add(base).saturating_add(mag);
+                if piece && r.is_integer() {
+                    // An integer power of a piece is a piece: the literal it denotes.
+                    let value = {
+                        let _exact = super::rat::number_domain(false);
+                        piece_value(e, view)
+                    };
+                    return (
+                        piece_price(structural, value.as_ref(), piece_nodes(e)),
+                        true,
+                    );
+                }
+                return (structural, false);
             }
-            head.saturating_add(complexity(b, view))
-                .saturating_add(complexity(ex, view))
+            (
+                head.saturating_add(complexity(b, view))
+                    .saturating_add(complexity(ex, view)),
+                false,
+            )
         }
         // The head is priced by NAME (`mu_fun_bits`): the elementary/transcendental gap
         // is the table's load-bearing entry. Read without allocating, like the leaf above.
         Ex::Fun(t, args) => {
             let head = view.with_str(*t, |s| sym_bits(mu_fun_bits(s)));
-            args.iter()
-                .fold(head, |acc, x| acc.saturating_add(complexity(x, view)))
+            (
+                args.iter()
+                    .fold(head, |acc, x| acc.saturating_add(complexity(x, view))),
+                false,
+            )
         }
     }
 }
@@ -4609,7 +4808,14 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
     // re-orient a sum of the rest (a `Const`-bearing, negation-absorbing or infinite one) and take
     // the sign or the coefficient into it, the bound counts only the classes' factors and the
     // rest's other factors, at their cheaper orientations.
+    // A piece of a literal (`is_piece`) is priced with the coefficient and the product's other
+    // pieces as the one literal they denote, which can cost less than its pieces: where the
+    // product holds one, the bound counts neither the pieces, nor the coefficient, nor the node.
+    let pieces = raw.iter().any(|f| is_piece(f, cx.view));
     let factor_lb = |f: &Ex| {
+        if is_piece(f, cx.view) {
+            return 0;
+        }
         let mu = complexity(f, cx.view);
         match sign_trade_flip(f, cx) {
             Some(nf) => mu.min(complexity(&nf, cx.view)),
@@ -4639,7 +4845,7 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
         if members == 0 {
             return 0;
         }
-        if !bounded {
+        if !bounded || pieces {
             return rest_lb.saturating_add(lb);
         }
         let node = if members >= 2 || !unit { mu_mul() } else { 0 };
@@ -6870,7 +7076,8 @@ impl SignOrbit<'_> {
 }
 
 /// THE SIGN ORBIT'S ARGMIN, for any number of classes. A product's price is the sum of its
-/// factors' prices and the carrier's (`complexity`'s Mul arm), so the cheapest spelling is
+/// factors' prices and the carrier's (`complexity`'s Mul arm; pieces of a literal, `is_piece`,
+/// price together, which a site that is one reads as its own price), so the cheapest spelling is
 /// separable up to the one coupling the classes share, the PARITY of the sites they flip (the
 /// sign the carrier takes). Each class flips as a whole and prices as the sum of its members; a
 /// zero check (`zero_limit`) constrains the classes whose sites it counts, and the classes one
@@ -10005,5 +10212,63 @@ mod tests {
             assert_eq!(in_f64, in_exact, "{r:?}");
             assert!(in_f64 <= mu_rat_exact(r), "{r:?}");
         }
+    }
+
+    /// The float cap on every path: a value the f64 domain holds in pieces costs what the exact
+    /// domain prices the one number at, alone or beside other factors.
+    #[test]
+    fn float_cap_reaches_a_literal_held_in_pieces() {
+        with_view(|view| {
+            let cx = Cx::bare(view); // f64's number domain
+            let (a, b) = {
+                let _exact = crate::ac::rat::number_domain(false);
+                (
+                    Rat::parse_decimal("1.2345678901234567e-305").unwrap(),
+                    Rat::parse_decimal("9.876543210987654e-10").unwrap(),
+                )
+            };
+            let inv_b = b.checked_inv().unwrap();
+            let exact = {
+                let _exact = crate::ac::rat::number_domain(false);
+                a.checked_mul(&inv_b).unwrap()
+            };
+            // a's denominator, 10^321, passes 2^1022: a stays a leaf as written, beside 1/b
+            let leaf = Ex::Leaf(view.intern("1.2345678901234567e-305"));
+            let quotient = mul(
+                vec![leaf.clone(), pow(Ex::Num(b.clone()), Ex::int(-1), &cx)],
+                &cx,
+            );
+            assert_eq!(
+                quotient,
+                Ex::Mul(vec![Ex::Num(inv_b.clone()), leaf.clone()])
+            );
+            let pieces = mu_numeric_str("1.2345678901234567e-305") + mu_rat(&inv_b);
+            assert!(mu_rat(&exact) < pieces);
+            assert_eq!(complexity(&quotient, view), mu_rat(&exact));
+            let beside = mul(vec![quotient, x(view)], &cx);
+            assert_eq!(
+                complexity(&beside, view),
+                mu_mul() + mu_rat(&exact) + mu_leaf()
+            );
+            // A product deciding opposite sums beside a piece prices its candidates against
+            // bounds below their prices (`decide_opposite_sums`' debug assertion).
+            let s = add(
+                vec![x(view), Ex::Num(Rat::parse_decimal("-9.6").unwrap())],
+                &cx,
+            );
+            let t = mul(vec![Ex::int(-1), s.clone()], &cx);
+            let p = mul(vec![Ex::int(3), leaf, s, t], &cx);
+            let Ex::Mul(v) = &p else {
+                panic!("not a product: {p:?}")
+            };
+            assert_eq!(v.iter().filter(|f| is_piece(f, view)).count(), 2, "{p:?}");
+            let literal = bag_literal_value(v, false, view).unwrap();
+            let rest: u64 = v
+                .iter()
+                .filter(|f| !is_piece(f, view))
+                .map(|f| complexity(f, view))
+                .sum();
+            assert_eq!(complexity(&p, view), mu_mul() + mu_rat(&literal) + rest);
+        });
     }
 }

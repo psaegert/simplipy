@@ -486,8 +486,13 @@ model predictions.
 - **A literal costs at most what its float costs.** The evaluator reads every literal as its
   nearest float64, so the measure (`complexity`, and the ordering every simplification follows)
   caps a literal's price at the price of that float's shortest decimal (at most 17 significant
-  digits); a literal kept as written (beyond the 1,100-bit cap, or not admissible in f64 mode)
-  keeps its price. A number carrying more digits than its float needs -- a product or power of
+  digits), however a form holds the literal: `f64` and `permissive` admit a number only where its
+  numerator and denominator are at most 2^1022 and hold any other value in pieces
+  (`1.2345678901234567e-305` as written, its quotient by `9.876543210987654e-10` as that literal
+  times a number), which cost at most what `real` prices the one number at (59,436 milli-bits
+  for that quotient, its float's price, where its pieces cost 122,955; no answer on srbf's ground
+  truths or a tenth of the training-data inputs changes with it); only a literal beyond the
+  1,100-bit cap keeps its own price. A number carrying more digits than its float needs -- a product or power of
   long constants folded exactly, or a constant printed with 17 digits where 16 suffice -- now
   costs that decimal, not its exact digits; every literal that is its own float's shortest decimal
   keeps its price (every constant drawn for flash-ansr's training data among them), and no price
@@ -500,7 +505,7 @@ model predictions.
   long exact coefficients, so they print 25% longer (all answers 7%).
   <!-- TO BE RE-MEASURED: the permissive share of changed answers and their printed length
        (34% of the predictions, 7% shorter; 2.6% of the training-data inputs, 4% shorter),
-       measured against the removed three-arm selection. --> The measure fingerprint gains a probe for the cap, and compound probes priced in each mode's own
+       measured against the removed three-arm selection. --> The measure fingerprint gains two probes for the cap, and compound probes priced in each mode's own
   reading. Every rule file gets its own provenance sidecar, and loading compares each sidecar
   present probe by probe: it warns, naming the probes, when a recorded probe now prices
   differently, and a probe the sidecar does not record is not a mismatch. The published
