@@ -19,11 +19,23 @@ from tqdm import tqdm
 import numpy as np
 
 # The numeral grammar and the reserved numeric spellings have ONE definition, in the core
-# (`rust/utils.rs`); the functions below call it rather than keep a copy in sync.
-from simplipy._core import (  # type: ignore[attr-defined]
-    is_numeric_string as _core_is_numeric_string,
-    reserved_numeric_spelling as _core_reserved_numeric_spelling,
-)
+# (`rust/utils.rs`); the functions below call it rather than keep a copy in sync. The import is
+# guarded as the engine's is (`simplipy.engine`), so a missing or unbuilt extension does not
+# stop `import simplipy`: the engine refuses at construction, naming the failure, and these two
+# refuse when called.
+try:
+    from simplipy._core import (  # type: ignore[attr-defined]
+        is_numeric_string as _core_is_numeric_string,
+        reserved_numeric_spelling as _core_reserved_numeric_spelling,
+    )
+except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
+    _CORE_IMPORT_ERROR = _exc
+
+    def _core_missing(token: str) -> bool:
+        raise ImportError('simplipy._core is required (the pure-Python engine was removed): the '
+                          f'compiled extension failed to import ({_CORE_IMPORT_ERROR!r})')
+
+    _core_is_numeric_string = _core_reserved_numeric_spelling = _core_missing
 
 # The declared public surface of this module (D11 column R18, owner-ratified
 # 2026-08-16): the evidence-backed names. Everything else here is reachable

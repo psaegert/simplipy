@@ -5,6 +5,8 @@ and deleted ones lingered. This compares the public names both ways, for each cl
 for the module itself.
 """
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,3 +36,20 @@ def test_module_names_match_the_stub() -> None:
         elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
             stubbed.add(n.target.id)
     assert _public(stubbed) == _public(dir(_core))
+
+
+def test_a_missing_core_is_refused_at_construction_not_at_import() -> None:
+    """The core import is guarded in every module that imports it (review F6: an unguarded
+    import in `simplipy.utils` made the engine's guard unreachable, so a missing extension
+    failed `import simplipy` itself instead of the engine refusing, naming the failure)."""
+    code = (
+        "import sys\n"
+        "sys.modules['simplipy._core'] = None\n"
+        "import simplipy\n"
+        "ops = {'+': {'realization': '+', 'alias': [], 'arity': 2, 'precedence': 1, 'commutative': True}}\n"
+        "try:\n"
+        "    simplipy.SimpliPyEngine(operators=ops)\n"
+        "except ImportError as e:\n"
+        "    print('refused:', e)\n")
+    out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True).stdout
+    assert out.startswith('refused: simplipy._core is required'), out
