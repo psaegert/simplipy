@@ -648,6 +648,13 @@ model predictions.
   f64 set. Every entry of the compiled core that reads a mode takes it explicitly, and its
   mode-less twins are gone. Migration: add `rule_mode='f64'` where the call relied on the f64
   set.
+- **One mode vocabulary.** Every entry that takes a mode (`mode=`, `modes=`, `rule_mode=`,
+  `unload_mode`, `verify_ruleset`, `verify_mine`, `cross_mode_complexity` and the CLI's
+  `verify-mine --mode`) accepts `'f64'` and `'default'` as the same mode, besides `'real'`,
+  `'permissive'` (in any case) and `simplipy.Mode` members. Before, `rule_mode` took
+  `'default'` and refused `'f64'` (`prune_covered_rules` raised a bare `KeyError`), while
+  `simplify`, `--mode` and `verify_mine` took `'f64'` and refused `'default'`. An unknown name
+  raises `ValueError` naming both spellings.
 - **Deduplication keeps the target lower in the mode's serve ordering**, not the one with
   fewer tokens.
 - **`complexity(mode=...)` refuses an unknown mode with `ValueError`**, as `simplify` does (it

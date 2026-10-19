@@ -329,7 +329,7 @@ certified = engine.certify_rules(proposals, hints,
 dummies = ["x0", "x1"]
 engine.simplification_rules = deduplicate_rules(
     engine.simplification_rules + [(s, t) for s, t, _ in certified], dummies,
-    engine=engine, rule_mode="default")   # keys on the mode's internal form, not the spelling
+    engine=engine, rule_mode="f64")   # keys on the mode's internal form, not the spelling
 engine.compile_rules()
 ```
 
