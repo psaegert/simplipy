@@ -77,6 +77,7 @@ Removed in 0.15.0, again without an alias cycle:
 | removed in 0.15.0 | replacement |
 |---|---|
 | `complexity(..., canon=)` | `complexity(e, mode=m)` prices in mode `m`'s own reading; `simplipy.mining.cross_mode_complexity` compares answers across modes |
+| `evaluate_constants(..., form=)` | it answers in the input's dialect; convert the answer with `to_infix`, `to_tagged` or `to_prefix` |
 | `explicit_constant_placeholders(..., convert_numbers_to_constant=)` | drop the keyword; decide which literals are fittable with `simplipy.masking` |
 | `utils.remove_pow1` | none needed: it cleaned up generation-1 operators and had no caller |
 

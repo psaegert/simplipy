@@ -112,3 +112,11 @@ class TestRemovedIn015:
     def test_the_core_takes_no_work_budget(self, eng, entry) -> None:
         with pytest.raises(TypeError, match='work_budget'):
             getattr(eng._core, entry)(['x0'], work_budget=10, rule_mode='default')
+
+    def test_evaluate_constants_has_no_form(self, eng) -> None:
+        for form in ('infix', 'tagged', 'explicit'):
+            with pytest.raises(TypeError, match='form'):
+                eng.evaluate_constants(['+', 'tan', '1', 'x0'], form=form)
+        # it answers in the input's dialect
+        assert eng.evaluate_constants(['+', 'tan', '1', 'x0']) == ['+', '1.5574077246549023', 'x0']
+        assert eng.evaluate_constants('tan(1) + x0') == '1.5574077246549023 + x0'

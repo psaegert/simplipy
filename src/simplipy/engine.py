@@ -1772,8 +1772,7 @@ class SimpliPyEngine:
         return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'explicit'), tokens
 
     def evaluate_constants(
-            self, expression: str | list[str] | tuple[str, ...] | np.ndarray,
-            form: str | None = None) -> str | list[str]:
+            self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str | list[str]:
         """Fold every variable-free subtree to its f64 value -- EXPLICITLY, on request.
 
         This is the front door for the numeric evaluation :meth:`simplify` refuses to
@@ -1799,9 +1798,10 @@ class SimpliPyEngine:
         non-finite guard into flash-ansr; refusing is the safe direction and the caller
         can still evaluate the expression themselves.
 
-        NEVER called by :meth:`simplify`, in any mode. Returns the input's dialect (infix
-        text for a ``str``, otherwise the tagged or binary-prefix tokens it was given)
-        unless ``form`` names another: ``'tagged'``, ``'explicit'`` or ``'infix'``.
+        NEVER called by :meth:`simplify`, in any mode. Returns the input's dialect: infix
+        text for a ``str``, otherwise the tagged or binary-prefix tokens it was given. To
+        change the notation, convert the answer (:meth:`to_infix`, :meth:`to_tagged`,
+        :meth:`to_prefix`).
         """
         in_form, tokens = self._read_input(expression)
         if not tokens:
@@ -1842,14 +1842,11 @@ class SimpliPyEngine:
             out.append(prefix[i])
             i += 1
 
-        target = form or in_form
-        if target == 'explicit':
-            return out
-        if target == 'tagged':
+        if in_form == 'tagged':
             return cast(list, self.to_tagged(out))
-        if target == 'infix':
+        if in_form == 'infix':
             return cast(str, self.to_infix(out))
-        raise ValueError(f"unknown form {form!r}: expected 'tagged', 'explicit' or 'infix'")
+        return out
 
     def to_infix(self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str:
         """Convert an expression to the INFIX form -- NOTATION ONLY.

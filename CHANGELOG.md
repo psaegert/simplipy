@@ -52,7 +52,8 @@ organised by who you are, then the highlights, then every change in detail.
 - **Throughput.** The uncapped search does more work on long inputs. Where time matters, bound a
   call with `effort=k` or `effort=0` (the chain alone).
 - **New errors.** `simplify(max_passes=0)` raises `ValueError` (it ran one pass; one pass
-  reaches the fixpoint, so pass 1). `complexity(..., canon=)` raises `TypeError` (see Removed).
+  reaches the fixpoint, so pass 1). `complexity(..., canon=)` and
+  `evaluate_constants(..., form=)` raise `TypeError` (see Removed).
   An unknown `mode` raises `ValueError` in `complexity` as in `simplify` (it raised `KeyError`).
   A malformed numeral token (`1/0`, `--5`, `2x`) raises `ValueError` at every boundary. In
   infix text, two operands separated only by whitespace raise `ValueError` (`x0 x1`: write the
@@ -603,6 +604,11 @@ model predictions.
 
 ### Removed
 
+Each removal is a hard cut: the removed keyword or name raises instead of warning.
+
+- **`evaluate_constants(..., form=)`.** `evaluate_constants` answers in the input's dialect, as
+  `simplify` does; passing the keyword raises `TypeError`. For another notation, convert the
+  answer with `to_infix`, `to_tagged` or `to_prefix`.
 - **`complexity(..., canon=)`.** `complexity()` prices each mode in its own reading, and the
   keyword that priced a mode's parse in `f64`'s canon is gone (passing it raises `TypeError`). To
   compare answers of different modes on one scale, use `simplipy.mining.cross_mode_complexity`.
