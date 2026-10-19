@@ -2460,7 +2460,9 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
       (``neg sin _0 -> sin neg _0``) passes until the sign rule makes the orbit one canon;
     - ``unlicensed``: every file spelling and every entry the mode serves from it carries
       a judged tier the mode licenses (the mine's final gate, with ``judge``);
-    - ``preempted``: no ground rule the mode's constructor already performs;
+    - ``preempted``: no ground rule whose left side the rule-less engine of the mode already
+      takes to its right side's state: a ground fact the engine folds (``log (-3) ->
+      float("nan")``) is not a rule;
     - ``translation``: the mode's load subsumes and drops nothing;
     - ``fingerprint``: the sidecar's measure record is of ``mode``, holds every probe, and
       prices each as this engine does;

@@ -620,10 +620,10 @@ model predictions.
   overwritten. The rule file and its sidecar are written once, when the mode's mine ends.
 - **`simplipy verify-mine <file> --mode m -e <engine>`** (and `simplipy.mining.verify_mine`)
   checks a mined file against the re-mine gates in its own mode: no twin-shadowed row, no
-  engine-owned law, every spelling licensed, nothing preempted, a translation that subsumes and
-  drops nothing, a clean measure fingerprint and no `SIMPLIPY_*` switch; it exits non-zero when
-  one fails. `-e` names the engine (an official name or a config path) whose operators read the
-  file.
+  engine-owned law, every spelling licensed, nothing preempted (no ground fact the rule-less
+  engine folds, such as `log (-3) -> nan`), a translation that subsumes and drops nothing, a
+  clean measure fingerprint and no `SIMPLIPY_*` switch; it exits non-zero when one fails. `-e`
+  names the engine (an official name or a config path) whose operators read the file.
 - **The sidecar records each file's own mine**: `acceptance` (tolerances, whether and at
   which gate a near miss is re-judged, the licensed tiers, the judge's digest), `per_length`
   (classes, picks, judge rounds, exclusions, twin-shadowed rows), `gates` and

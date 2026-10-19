@@ -259,3 +259,31 @@ def test_the_offered_gate(tmp_path, mine) -> None:
     side_path.write_text(json.dumps(side))
     gate = offered()
     assert not gate['ok'] and gate['count'] == 1, gate
+
+
+def _acj_operators():
+    from conftest import acj_config_path, require_or_skip
+    require_or_skip(acj_config_path(), 'needs the acj vocabulary')
+    return yaml.safe_load(open(acj_config_path()))['operators']
+
+
+def test_a_ground_fact_the_engine_folds_is_no_rule(tmp_path, mine) -> None:
+    """`preempted` is the census of ground facts: a ground rule whose left side the rule-less
+    engine already takes to its right side's state. `log(-3)` folds to `nan` today."""
+    fact = (('log', '(-3)'), ('float("nan")',))
+    path = _plant(tmp_path, mine, 'f64', [fact])
+    gate = _gate(verify_mine(path, 'f64', _acj_operators(), judge=core_judge), 'preempted')
+    assert not gate['ok'] and gate['examples'] == [[list(fact[0]), list(fact[1])]], gate
+
+
+@pytest.mark.xfail(strict=True, reason='the core does not yet fold a ground rootn whose index '
+                   'is no integer; once it folds ground NaN facts, this fact is preempted')
+def test_a_ground_nan_fact_of_a_non_integer_root_index_is_no_rule(tmp_path, mine) -> None:
+    """The bulk of the published files: 106,093 of acj-5-4-llm's 138,651 f64 rules are ground
+    facts with a `nan` right side, 105,085 of them `rootn` at a non-integer ground index. The
+    gate flags 13 rules of that file today and none of these; once the core folds them, the
+    same gate refuses every one, and a mine mints none (its mark is the fold)."""
+    fact = (('rootn', '(-5)', 'asinh', 'tanh', '4'), ('float("nan")',))
+    path = _plant(tmp_path, mine, 'f64', [fact])
+    gate = _gate(verify_mine(path, 'f64', _acj_operators(), judge=core_judge), 'preempted')
+    assert not gate['ok'] and gate['examples'] == [[list(fact[0]), list(fact[1])]], gate
