@@ -2201,8 +2201,10 @@ def verify_mine(rules_path: str, mode: Any, operators: dict, *,
     or a :class:`~simplipy.Mode` member); ``operators`` the engine's operator table. Each gate holds or names what breaks it:
 
     - ``twin_shadow``: no row the mode's load would mint anyway (a twin-shadow owner);
-    - ``engine_owned_law``: no rule that is an instance of a law the engine owns
-      (``law_instance``: the distributive law, the sign orbit);
+    - ``engine_owned_law``: no rule that is a respelling within one canonical state, or an
+      instance of the distributive law as the search applies it (``law_instance``). The sign
+      orbit is not among them yet: a sign pull through an odd function
+      (``neg sin _0 -> sin neg _0``) passes until the sign rule makes the orbit one canon;
     - ``unlicensed``: every file spelling and every entry the mode serves from it carries
       a judged tier the mode licenses (the mine's final gate, with ``judge``);
     - ``preempted``: no ground rule the mode's constructor already performs;

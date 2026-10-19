@@ -83,6 +83,19 @@ def test_the_engine_owned_law_gate(tmp_path, mine) -> None:
                                 [list(canon[0]), list(canon[1]), 'canon']], gate
 
 
+@pytest.mark.xfail(strict=True, reason='sign rule (D1) makes the sign orbit one canon')
+def test_the_engine_owned_law_gate_catches_the_sign_pull(tmp_path, mine) -> None:
+    """A sign pull through an odd function is the sign orbit, which the engine will own: the
+    gate must flag it. Today `law_instance` knows only the canon and the distributive law, so
+    the f64 file serves 8 such rows (`neg sin _0 -> sin neg _0`) and the gate passes them."""
+    ops = dict(_OPERATORS, asin={"realization": "np.arcsin", "alias": [], "inverse": "sin",
+                                 "arity": 1, "precedence": 3, "commutative": False})
+    pull = (('neg', 'asin', '_0'), ('asin', 'neg', '_0'))
+    path = _plant(tmp_path, mine, 'f64', [pull])
+    gate = _gate(verify_mine(path, 'f64', ops, judge=core_judge), 'engine_owned_law')
+    assert not gate['ok'], gate
+
+
 def test_the_unlicensed_gate(tmp_path, mine) -> None:
     """An f64 file holding a rule the judge files `real`."""
     rule = (('log', 'exp', '?0'), ('?0',))
