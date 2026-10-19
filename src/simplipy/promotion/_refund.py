@@ -197,6 +197,8 @@ def refund(rules, operators, promote_set, progress=None, *, rule_mode):
         owner_map, owner_regular = {}, {}
         for victim, owner, was_twin, kind in census:
             owner_map.setdefault(owner, []).append(victim)
+            # 'twin-shadow' is the census's only kind: a reversed asset pair is G7's drop, and
+            # removing its owner resurrects nothing, so it never had an owner to rebuild for.
             ok = (kind == 'twin-shadow') and not was_twin
             owner_regular[owner] = owner_regular.get(owner, True) and ok
         return {'broken': False, 'engine': engine, 'rebuild': False,

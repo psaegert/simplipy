@@ -143,15 +143,14 @@ pub struct AcRules {
     pub drop_census: Vec<(&'static str, usize)>,
     /// The SHADOW CENSUS: every translate-time skip caused by CROSS-RULE state, i.e.
     /// every entry that would (re)appear if some OTHER artifact row were removed from
-    /// the input. `(victim_row, owner_row, owner_was_twin, kind)`:
-    ///   - `"inverse"`      -- asset rule `victim_row` dropped because `owner_row`
-    ///     already owns its reversed pair (`seen_pairs`),
-    ///   - `"twin-shadow"`  -- the orientation twin of `victim_row` skipped because
-    ///     `owner_row`'s entry (its asset rule, or its own twin when `owner_was_twin`)
-    ///     already carries the identical pair (`seen_rules`).
+    /// the input. `(victim_row, owner_row, owner_was_twin, kind)`, with one kind,
+    /// `"twin-shadow"`: the orientation twin of `victim_row` skipped because
+    /// `owner_row`'s entry (its asset rule, or its own twin when `owner_was_twin`)
+    /// already carries the identical pair (`seen_rules`).
     ///
-    /// A twin is never skipped as the reverse of a loaded rule: the twin's own G7 check
-    /// refuses it first (`ordered_below` is a strict total order).
+    /// No other cross-rule skip exists. The reverse of a loaded rule (asset or twin) never
+    /// loads, but by gate G7 alone (`ordered_below` is a strict total order, so a pair and
+    /// its reverse cannot both descend it), and removing the owner resurrects nothing.
     ///
     /// Twin victims are recorded only when every OTHER admission gate passes, so an
     /// entry states "removing the owner resurrects this rewrite", not merely "a hash
@@ -294,14 +293,6 @@ impl AcRules {
     ) -> AcRules {
         let cx = rule_cx(view, mode);
         let mut out = AcRules::default();
-        // Inverse-pair guard: the asset contains BOTH directions of some length-neutral
-        // canonicalizations (`* float("inf") !0 <-> / float("inf") !0`), which root at
-        // DIFFERENT operators in the old tree but at the same `Mul` after desugaring -- a
-        // deterministic ping-pong. First-match-wins resolves the direction: the earlier rule
-        // owns it, the reversed later rule is dropped. The map value is the OWNING artifact
-        // row (and whether the owner is a minted twin), feeding the shadow census; the
-        // guard's membership semantics are unchanged (first insert wins).
-        let mut seen_pairs: FxHashMap<(Ex, Ex), (usize, bool)> = FxHashMap::default();
         for (raw_idx, (lhs_t, rhs_t)) in raw.iter().enumerate() {
             let (Some(lhs0), Some(rhs0)) = (from_prefix(lhs_t, &cx), from_prefix(rhs_t, &cx))
             else {
@@ -339,14 +330,6 @@ impl AcRules {
                 out.note_drop("catch-all-lhs");
                 continue;
             }
-            if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(rhs.clone(), lhs.clone())) {
-                // The exact inverse of an earlier rule: ping-pong fuel. Removing the
-                // owner would let this rule load, so the census records the dependency.
-                out.shadow_census
-                    .push((raw_idx, owner, owner_was_twin, "inverse"));
-                out.note_drop("inverse-of-earlier-rule");
-                continue;
-            }
             // Sixth drop reason: an RHS wildcard the canonical LHS does not bind would
             // panic `substitute` at rewrite time -- a delayed, data-dependent crash
             // pointing nowhere near the defective rule. Fail closed at load instead.
@@ -365,10 +348,19 @@ impl AcRules {
             // enforcement per fire; this gate keeps every LOADED rule aligned with the
             // ordering the pass fires under, and re-vets every asset on every load (an
             // order change re-judges the rules automatically).
+            //
+            // G7 is also what keeps both directions of one rewrite from loading (a
+            // deterministic ping-pong, e.g. `* float("inf") !0 <-> / float("inf") !0`,
+            // which root at the same `Mul` after desugaring): the order is strict and
+            // total, so of a pair and its reverse at most one descends it.
             if !ordered_below(&rhs, &lhs, view) {
                 out.note_drop("not-ordered-below");
                 continue;
             }
+            debug_assert!(
+                !ordered_below(&lhs, &rhs, view),
+                "G7 must refuse the reverse of an admitted rule"
+            );
             // Eighth drop reason: the rule states the distributive law, which the search owns
             // (one FACTOR move turns its LHS into its RHS, `search::is_factoring`): judged by
             // the law, not by spelling. The search proposes every factoring such a rule makes,
@@ -379,9 +371,6 @@ impl AcRules {
                 out.note_drop("engine-owned-law");
                 continue;
             }
-            seen_pairs
-                .entry((lhs.clone(), rhs.clone()))
-                .or_insert((raw_idx, false));
             out.src.push(raw_idx);
             let sig = atom_sig(&lhs, view);
             let is_pattern = lhs.contains_wildcard(view);
