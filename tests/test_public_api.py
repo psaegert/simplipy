@@ -41,7 +41,7 @@ MODULE_ALLS = {
         'AssetType',
     },
     'simplipy.engine': {'SimpliPyEngine', 'Mode', 'ARTIFACT_ENV_SWITCHES', 'DEFAULT_EFFORT'},
-    'simplipy.mining': {'RuleMiner'},
+    'simplipy.mining': {'RuleMiner', 'verify_mine', 'cross_mode_complexity'},
     # Joined 2026-08-23: the two public modules the D11 landing missed. The
     # compatibility policy says every public module declares its column; these
     # rows make that sentence literally true and pin it.
