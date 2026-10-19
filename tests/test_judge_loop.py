@@ -378,3 +378,47 @@ def test_the_mine_judges_with_no_timeout_under_a_watchdog(monkeypatch, caplog) -
     with pytest.raises(RuntimeError, match=r'exp log \?0 -> \?0 ran past 0.3 s'):
         judge_tiers([rule, slow], processes=1, warn_s=0.1, fail_s=0.3)
     assert time.monotonic() - started < 1.5, 'the watchdog did not interrupt the judgment'
+
+
+class _Crash(Exception):
+    pass
+
+
+def test_a_checkpoint_resumes_only_its_own_mine(tmp_path, monkeypatch) -> None:
+    """S3: the checkpoint key holds the operator table, the data's content and the numeric
+    environment, and a resume keeps the mine's origin (`created`, `host`) and records itself."""
+    import platform
+    ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
+    out = str(tmp_path / 'mined.json')
+    rng = np.random.default_rng(1)
+    x_a, x_b = rng.normal(size=(128, 1)), rng.normal(size=(128, 1))
+    kwargs = dict(max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
+                  seed=7, promote_sorts=False, symbolic_gate=False, output_file=out)
+
+    def crashing(pairs):  # the length-4 pick `log exp log ?0 -> log ?0`
+        if any(len(lhs) >= 4 for lhs, _ in pairs):
+            raise _Crash
+        return ['core'] * len(pairs)
+
+    def core(pairs):
+        return ['core'] * len(pairs)
+
+    with pytest.raises(_Crash):
+        SimpliPyEngine(operators=ops, rules=[]).find_rules(X=x_a, judge=crashing, **kwargs)
+    ckpt = json.load(open(out + '.checkpoint.json'))
+    assert ckpt['completed_length'] == 3
+    origin = (ckpt['provenance']['created'], ckpt['provenance']['host'])
+    other_ops = dict(ops, exp=dict(ops['exp'], precedence=4))
+    for engine_ops, x in ((other_ops, x_a), (ops, x_b)):
+        with pytest.raises(RuntimeError, match='different mine'):
+            SimpliPyEngine(operators=engine_ops, rules=[]).find_rules(X=x, judge=core, **kwargs)
+    with monkeypatch.context() as m:
+        m.setattr(SimpliPyEngine, 'libm_fingerprint', lambda self: 'another libm')
+        with pytest.raises(RuntimeError, match='different mine'):
+            SimpliPyEngine(operators=ops, rules=[]).find_rules(X=x_a, judge=core, **kwargs)
+    monkeypatch.setattr(platform, 'node', lambda: 'elsewhere')
+    SimpliPyEngine(operators=ops, rules=[]).find_rules(X=x_a, judge=core, **kwargs)
+    side = json.load(open(out + '.provenance.json'))
+    assert (side['created'], side['host']) == origin
+    assert [(r['host'], r['after_length']) for r in side['resumed']] == [('elsewhere', 3)]
+    assert 'resumed' not in json.load(open(str(tmp_path / 'mined_real.json.provenance.json')))

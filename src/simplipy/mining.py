@@ -1162,9 +1162,20 @@ class RuleMiner:
         # climb continues after the last completed length.
         per_length: dict[int, dict] = {}
         judged: dict = {}
+        # Everything the length loop's state is a function of: the parameters, the mode, the
+        # code, the operator table, the evaluation data (its content, explicit or seeded),
+        # the numeric environment that evaluates it, the universe and the starting sets.
+        _environment = {k: v for k, v in ((provenance or {}).get('environment') or {}).items()
+                        if k != 'platform'}
         checkpoint_fp = hashlib.sha256(json.dumps(
             {'params': (provenance or {}).get('params'), 'rule_mode': rule_mode,
              'code': code_digest(),
+             'operators': self.engine._operators_config,
+             'X': hashlib.sha256(np.ascontiguousarray(X_data).tobytes()).hexdigest(),
+             'X_confirm': (None if X_confirm is None else hashlib.sha256(
+                 np.ascontiguousarray(X_confirm).tobytes()).hexdigest()),
+             'environment': _environment,
+             'env_overrides': env_overrides(),
              'universe': {str(k): len(v) for k, v in sorted(expressions_of_length.items())},
              'initial': [[list(lhs), list(rhs)] for lhs, rhs in rules],
              'other_sets': [getattr(self.engine, _RULES_ATTR[m]) for m, _ in _MINE_MODES
@@ -1175,13 +1186,13 @@ class RuleMiner:
             with open(out_file + '.checkpoint.json') as file:
                 ckpt = json.load(file)
             if ckpt.get('fingerprint') != checkpoint_fp:
-                # A checkpoint of ANOTHER mine -- other parameters, mode, universe, starting
-                # sets, or code (the compiled core or the package's sources) -- is never
-                # resumed and never silently overwritten.
+                # A checkpoint of ANOTHER mine -- other parameters, mode, operators, data,
+                # numeric environment, universe, starting sets, or code (the compiled core or
+                # the package's sources) -- is never resumed and never silently overwritten.
                 raise RuntimeError(
                     f"'{out_file}.checkpoint.json' was written by a different mine (its "
-                    f"parameters, mode, universe, starting rules or code differ); remove it "
-                    f"to mine from the start")
+                    f"parameters, mode, operators, data, numeric environment, universe, "
+                    f"starting rules or code differ); remove it to mine from the start")
             else:
                 resumed_at = ckpt['completed_length']
                 rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in ckpt['rules']]
@@ -1191,7 +1202,13 @@ class RuleMiner:
                                               for k, v in per_length.items()})
                 judged = {(tuple(lhs), tuple(rhs)): tier for lhs, rhs, tier in ckpt['judged']}
                 if provenance is not None:
+                    # The mine began where and when the checkpoint says (its `created` and
+                    # `host`); this run is recorded as a resume of it, not as its origin.
+                    import platform
                     provenance.update(ckpt['provenance'])
+                    provenance['resumed'] = list(provenance.get('resumed') or []) + [
+                        {'host': platform.node(), 'at': time.strftime('%Y-%m-%d %H:%M:%S %z'),
+                         'after_length': resumed_at}]
                 if verbose:
                     print(f'=== resuming the {file_mode} mine after length {resumed_at}')
         for length in sorted(k for k in list(expressions_of_length) if k <= max_source_pattern_length):
