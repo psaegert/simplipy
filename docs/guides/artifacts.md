@@ -40,25 +40,33 @@ is the paired operational RAM knob: it drops that mode's built structures (about
 per used set on acj-5-4-llm) and the mode's next use lazily reloads them; the default
 f64 set is always present and refuses to unload.
 
-**The triple is the unit of mining, pinning and distribution.** A mine run is valid only
-if all three fall out of it; a partial triple is not shippable. The provenance sidecar
-covers the triple as a whole, and so does the byte-identity promise: a re-mine at the
-recorded environment reproduces all three files. Rules the mine finds and
-can license in no mode are recorded in the sidecar's drop census rather than
-silently absent.
+**The triple is the unit of mining, pinning and distribution.** One mine run writes all
+three files, each mined in its own mode (see [How mining works](../rules.md#how-mining-works)),
+and the byte-identity promise covers the three: a re-mine at the recorded environment
+reproduces them. Each file's sidecar records its own mine: the mode, how it accepted
+(`acceptance`), per length the judge loop's rounds and exclusions (`per_length`), and the
+file gates (`gates`: the rows dropped as unlicensed in the mode or as already performed by
+its constructor) — a rule the mine finds and the mode does not license is recorded there,
+never silently absent.
 
 Verify a shipped triple with `simplipy.verify.verify_triple`, which sweeps each file
-against its own mode's contract. Cleanliness is per mode: `atanh(tanh t) → t` is
-exactly what belongs in `rules_real.json` and would be a defect in `rules_f64.json`.
+against its own mode's contract, and a freshly mined file with `simplipy verify-mine <file>
+--mode m`, which also checks the re-mine gates (twin-shadowed rows, engine-owned laws,
+translation, the measure fingerprint, environment switches; see
+[Verifying a mine](../rules.md#verifying-a-mine)). Cleanliness is per mode:
+`atanh(tanh t) → t` is exactly what belongs in `rules_real.json` and would be a defect in
+`rules_f64.json`.
 
 The provenance
 sidecar records how the ruleset came to be: the mine parameters, the core build stamp
-(package version plus git revision of the compiled core), the environment (python,
+(package version plus git revision of the compiled core) and the digests of the code that
+mined it (`code_digest`: the compiled core and the package's sources), the environment (python,
 platform, libc, numpy/scipy/mpmath versions, and a `libm_fingerprint` — a digest of a
 fixed probe battery evaluated through the deployed folding path, so two sidecars are
 comparable-or-not by inspection), the soundness state at mine
-time (every artifact-affecting environment override
-recorded verbatim, and the interval layer's fail-closed miss counters), and the
+time (every `SIMPLIPY_*` variable set during the mine, recorded verbatim — no
+artifact-affecting switch is read since 0.15 — and the interval layer's fail-closed miss
+counters), and the
 measure fingerprint (the μ constants and the probe values, priced in the file's own mode,
 with a digest) — so artifacts mined under different orderings are distinguishable from
 provenance alone. Each of the three rule files has its own sidecar. Loading reads every

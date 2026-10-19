@@ -355,6 +355,33 @@ rules and gains nine orientation twins, serving 5,347
 mine whose acceptance rides the serve ordering produces an artifact the serve ordering
 fully admits].
 
+**How a rule is mined, per mode.** Each mode $m$'s file is mined in $m$. For a source $s$
+(the canonical projection of its class in $m$'s reading) the mark is $m$'s own answer
+$\mathrm{simplify}_m(s)$ under the rules of the shorter lengths, and a candidate $t$ is
+*accepted* iff it passes, in order: the licences (no `<constant>` introduced into a
+determined source, no special constant absorbed, $\mathrm{nf}_m(t) <_o$ the mark in $m$'s
+serve ordering, no instance of an engine-owned law — G8's predicate — and no defined
+extended-real value changed at a pole), the numeric agreement on the mine's matrix (f64
+values in `f64`; a near miss re-judged at high precision in `real` and `permissive`), and
+the same agreement on an independent confirm matrix. The scan visits candidates in a fixed
+order (μ tiers ascending, library order inside a tier) with per-source seeds that depend
+only on the source's global index, so it is a deterministic function $\mathrm{pick}(s, E)$
+of the source and a set $E$ of excluded canonical classes, returning the first accepted
+candidate whose class is not in $E$.
+
+**The judge loop** [THEOREM]. Let $J$ be the contract judge and $L_m$ the tiers $m$
+licenses. For each source, start with $E = \emptyset$; while $p = \mathrm{pick}(s, E)$
+exists and some spelling of $p$ (its pattern, or an entry $m$ serves from it) has
+$J \notin L_m$, add $p$'s class to $E$. Since $\mathrm{pick}$ only skips excluded classes,
+the loop ends at the first candidate in scan order that is accepted and whose spellings
+$m$ licenses — the result of a scan that asks $J$ about every candidate — or at none. The
+candidate set is finite, so the loop terminates; the implementation caps it at 8 rounds
+per length and fails the mine there. Only the loop's survivors are installed before the
+next length's marks, so a rule $J$ refuses in $m$ never changes a mark of $m$. The
+proposals are one more length of the same loop. The file gates then re-judge the
+post-processed file (sort promotion respells) and drop what $m$ does not license, so every
+shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ serves from it.
+
 **The step relation.** For canonical $t$, one *step* $t \Rightarrow t'$ is one of:
 
 - **(fire)** at some node $u$ of $t$: a rule $(\ell, \rho)$ matches $u$ — for bag nodes, a

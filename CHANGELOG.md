@@ -428,6 +428,34 @@
   it precedes; a config without the key loads as before. `packaging` is now a declared
   dependency (it was already installed through `huggingface_hub`).
 
+- **Each rule file is mined in its own mode.** `find_rules` mines `rules_f64.json`,
+  `rules_real.json` and `rules_permissive.json` each in its own mode: the mode's reading of
+  a source, its own answer as the mark to beat, its numerics, its serve ordering for the
+  covered prune and the deduplication, and its licence for the judge's tier. The contract
+  judge decides per length, inside the scan: a pick whose tier the mode does not license is
+  excluded by class and its source scanned again, so a target another mode would keep never
+  hides one this mode licenses, and a refused rule never prunes a longer source. Proposals
+  run through the same loop. Rows the mode's load mints anyway are dropped per length, and
+  each file passes a final gate (every file spelling and served entry licensed, no ground
+  rule the mode's constructor performs) before it is written. In `permissive` the covered
+  prune also asks the non-finite instances every slot binds there, so the file keeps
+  `$0 / $0 → 1` (`inf/inf` is `1`, not `nan`).
+- **A mine resumes from its checkpoint.** `find_rules` writes `<file>.checkpoint.json` after
+  every completed length and a rerun of the same mine resumes after the last one; a
+  checkpoint written by another mine — other parameters, mode, universe, starting rules, or
+  code (the compiled core or the package's sources) — refuses to start, and is never
+  overwritten. The rule file and its sidecar are written once, when the mode's mine ends.
+- **`simplipy verify-mine <file> --mode m`** (and `simplipy.mining.verify_mine`) checks a mined
+  file against the re-mine gates in its own mode: no twin-shadowed row, no engine-owned law,
+  every spelling licensed, nothing preempted, a translation that subsumes and drops nothing,
+  a clean measure fingerprint and no `SIMPLIPY_*` switch; it exits non-zero when one fails.
+- **The sidecar records each file's own mine**: `acceptance` (tolerances, whether and at
+  which gate a near miss is re-judged, the licensed tiers, the judge's digest), `per_length`
+  (classes, picks, judge rounds, exclusions, twin-shadowed rows), `gates` and
+  `code_digest`, beside the existing parameters and `requires_simplipy`.
+  `find_rules(interval_node_budget=...)` (config key `interval_node_budget`) sets the
+  interval layer's node budget for the mine and records it in the parameters.
+
 ### Removed
 
 - **`complexity(..., canon=)`.** `complexity()` prices each mode in its own reading, and the
@@ -443,13 +471,23 @@
   `SIMPLIPY_EXACT_INDEX` and `SIMPLIPY_HIPREC_FRAC` are no longer read; the engine always
   behaves as with each unset. None of the four soundness layers of the miner can be switched
   off, so the provenance sidecar no longer records `soundness.kill_switches`.
-  `simplipy.engine.ARTIFACT_ENV_SWITCHES` now lists the two switches that remain
-  (`SIMPLIPY_IVL_NODE_BUDGET`, `SIMPLIPY_TAGGED_FRACTION_MAX`) and is declared by the compiled
-  core, which reads them. The sort promotion no longer reads the unprefixed `N_PTS` and
-  `THRESH` at import.
+  `SIMPLIPY_IVL_NODE_BUDGET` is now `find_rules(interval_node_budget=...)`, and
+  `SIMPLIPY_TAGGED_FRACTION_MAX` is gone: the tagged form spells a decimal as a fraction bag
+  up to numerator and denominator 10. No environment variable changes what the core mines,
+  certifies or serves, so `simplipy.engine.ARTIFACT_ENV_SWITCHES` (declared by the compiled
+  core) is empty; a mine's sidecar records every `SIMPLIPY_*` variable set during it. The
+  sort promotion no longer reads the unprefixed `N_PTS` and `THRESH` at import.
+- **The mine's triple router.** The sidecar's `triple` record (counts, rejects, preempted)
+  is replaced by each file's `gates` and `per_length`.
 
 ### Changed
 
+- **The mining calls name their mode.** `prune_covered_rules`, `deduplicate_rules` and
+  `promote` take a required keyword `rule_mode` (`'default'`, `'real'` or `'permissive'`);
+  the CLI's `prune-covered-rules` prunes the default set. Every entry of the compiled core
+  that reads a mode takes it explicitly, and its mode-less twins are gone.
+- **Deduplication keeps the target lower in the mode's serve ordering**, not the one with
+  fewer tokens.
 - **`complexity(mode=...)` refuses an unknown mode with `ValueError`**, as `simplify` does (it raised `KeyError`).
 - **Infix text calling an undeclared function is refused by name** (`unknown function 'sqrt' in 'sqrt(x1^2)'`) in `simplify`, `complexity`, `evaluate_constants`, `mask` and the conversions, instead of "invalid or malformed prefix expression"; `read_infix` still keeps such a call as written.
 
