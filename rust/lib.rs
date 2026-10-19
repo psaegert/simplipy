@@ -410,7 +410,7 @@ pub(crate) fn legacy_sugar_engine() -> Engine {
 }
 
 /// Opaque, compiled engine handle held on the Python side. Construction (parse config.yaml +
-/// rules.json, intern the token table; the AC rule translation is lazy) happens ONCE;
+/// rules.json, intern the token table, translate every set the core holds) happens ONCE;
 /// `simplify` is the hot path.
 ///
 /// `frozen`: every method takes `&self`, so pyo3 keeps no borrow flag and no call can
@@ -446,6 +446,21 @@ impl PyEngine {
         self.engine
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Translate every rule set `engine` holds, now: the default set and each mode's own set
+/// (a mode with no set of its own serves the default one). The core translates what it
+/// holds when it receives it, at construction and at every push, so no `simplify` call
+/// pays for a translation and the only deferred work is the Python shim's `modes=`
+/// selection, which decides which sets are pushed at all.
+fn translate_held_sets(engine: &engine::Engine) {
+    for mode in [
+        engine::RuleMode::Default,
+        engine::RuleMode::Real,
+        engine::RuleMode::Permissive,
+    ] {
+        engine.ac_rules_for(mode);
     }
 }
 
@@ -492,7 +507,7 @@ impl PyEngine {
     /// `SimpliPyEngine(operators=..., rules=...)` construction serializes its state and
     /// attaches a core here, filesystem-free (there is no pure-Python fallback).
     #[staticmethod]
-    fn from_strs(config_yaml: &str, rules_json: &str) -> PyResult<Self> {
+    fn from_strs(py: Python<'_>, config_yaml: &str, rules_json: &str) -> PyResult<Self> {
         // threatmodel-3: parse and CAP the rules BEFORE the engine build -- rule
         // compile walks each side recursively, and this was the one token-taking
         // FFI entry the H-043 cap never reached: a ~1e5-deep chain in a hostile or
@@ -506,6 +521,7 @@ impl PyEngine {
         }
         let inner = engine::Engine::from_strs(config_yaml, rules_json)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        py.detach(|| translate_held_sets(&inner));
         // C1.9: digest the initial rules exactly as `set_rules` digests later pushes --
         // the same (lhs, rhs) list representation the shim serialized into the JSON.
         Ok(Self {
@@ -1685,7 +1701,8 @@ impl PyEngine {
     /// re-push them on every core rebuild.
     ///
     /// Safe while other threads are inside the core: the push waits, with the GIL
-    /// released, for the calls in flight to return, and new calls queue behind it.
+    /// released, for the calls in flight to return, and new calls queue behind it. The
+    /// pushed set is translated before this returns.
     #[pyo3(signature = (rule_mode, rules))]
     fn set_mode_rules(
         &self,
@@ -1703,20 +1720,23 @@ impl PyEngine {
             }
         }
         py.detach(|| {
-            let mut engine = self
-                .engine
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if mode == engine::RuleMode::Default {
-                let rules = rules.unwrap_or_default();
-                self.pushed_rules_digest.store(
-                    pushed_rules_digest(&rules),
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                engine.set_rules(rules);
-            } else {
-                engine.set_mode_rules(mode, rules);
+            {
+                let mut engine = self
+                    .engine
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if mode == engine::RuleMode::Default {
+                    let rules = rules.unwrap_or_default();
+                    self.pushed_rules_digest.store(
+                        pushed_rules_digest(&rules),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    engine.set_rules(rules);
+                } else {
+                    engine.set_mode_rules(mode, rules);
+                }
             }
+            translate_held_sets(&self.inner());
         });
         Ok(())
     }

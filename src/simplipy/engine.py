@@ -389,10 +389,12 @@ class SimpliPyEngine:
         dedup key, and the set every absent mode falls back to). Naming ``'f64'`` in
         the tuple is therefore allowed but redundant.
 
-        Measured on the acj-5-4-llm artifact (fresh process each, RSS directly after
-        ``load``): ``modes='all'`` 569 MB, ``modes=('f64', 'permissive')`` 469 MB,
-        ``modes=('f64',)`` 338 MB; a deferred set then costs its build on first use
-        (~4 s and ~130 MB per set on this artifact, announced by the log line). The
+        A built set is translated at construction too, so the first call in a mode
+        pays nothing extra. Measured on the acj-5-4-llm artifact (fresh process each,
+        peak RSS directly after ``load``): ``modes='all'`` 957 MB,
+        ``modes=('f64', 'permissive')`` 737 MB, ``modes=('f64',)`` 498 MB; a deferred
+        set then costs its build on first use (~4 s on this artifact, announced by the
+        log line). The
         worker profile ``modes=('f64', 'permissive')`` is the intended lean
         deployment: inference (f64) plus training-corpus canonicalisation, without
         the ``real`` set's RAM.

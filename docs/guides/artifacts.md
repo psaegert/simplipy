@@ -33,7 +33,7 @@ absent, so the fallback would serve them the one thing they opted out of.
 
 Loading is per-mode on request: `SimpliPyEngine.load(..., modes=('f64', 'permissive'))`
 builds only the named sets eagerly — the profile a training worker runs, inference plus
-corpus canonicalisation, at 469 MB instead of 569 MB on acj-5-4-llm — and any other
+corpus canonicalisation, at 737 MB instead of 957 MB on acj-5-4-llm — and any other
 config-named set builds on its mode's first use, once, announced with one log line. The
 default `modes='all'` builds everything, exactly as always. `engine.unload_mode(mode)`
 is the paired operational RAM knob: it drops that mode's built structures (about 130 MB
