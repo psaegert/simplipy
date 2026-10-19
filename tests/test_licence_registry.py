@@ -91,9 +91,10 @@ class TestLoadConsumer:
         # under the current instrument ships 5,338 f64 rows (widened judge admits the
         # atanh-tanh np.e literal and the F104-band refinements); translation stays
         # PRISTINE 0/0 and the orientation twins go 8 -> 9 with the new row.
-        # READ IN F64'S OWN READING (fold on): `atanh pow (-10) (-9) -> -1e-09` is what the
-        # f64 constructor performs, so that one row is subsumed: (5347, 0, 0, 9) -> (5346, 1, 0, 9).
-        assert (kept, subsumed, dropped, twins) == (5346, 1, 0, 9)
+        # READ IN THE CANON IT WAS CERTIFIED IN (the legacy one: the file is a pre-0.15 mine),
+        # nothing is subsumed: pristine (5347, 0, 0, 9) again. (Read in f64's folded canon,
+        # `atanh pow (-10) (-9) -> -1e-09` was subsumed: (5346, 1, 0, 9).)
+        assert (kept, subsumed, dropped, twins) == (5347, 0, 0, 9)
 
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads
