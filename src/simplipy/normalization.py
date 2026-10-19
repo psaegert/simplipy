@@ -55,7 +55,7 @@ dialect-dependent key is the failure this module exists to prevent.
 ONE MASKING PATH
 ----------------
 :func:`to_skeleton` is not a third masking implementation. It IS
-:func:`to_expression` followed by the ratified front door
+:func:`to_expression` followed by the masking front door
 ``engine.mask(..., policy='all')`` -- the same mechanism, the same role walk, the
 same one-``<constant>``-per-degree-of-freedom collect stage (``2*x0/3`` is ONE
 free value, not two). Two consequences worth knowing:
@@ -156,7 +156,7 @@ def to_skeleton(expression: str | list[str] | tuple[str, ...] | np.ndarray | Non
                 engine: SimpliPyEngine) -> str | list[str] | None:
     """The SKELETON form: the canonical expression with EVERY numeric masked.
 
-    Equivalent, exactly, to :func:`to_expression` followed by the ratified front
+    Equivalent, exactly, to :func:`to_expression` followed by the masking front
     door ``engine.mask(..., policy='all')`` -- it is not a third masking path.
     "Every numeric" means every one: coefficients, addends, function arguments,
     the special constants ``np.pi``/``np.e``, and ``pow`` EXPONENTS and ``rootn``

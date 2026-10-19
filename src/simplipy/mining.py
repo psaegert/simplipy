@@ -704,7 +704,7 @@ class RuleMiner:
         Mirrors the pure-Python worker pool, but correctly against the core: per source
         length (shortest first), each source is Kruskal-pruned against the rules found so
         far and searched for an equivalent shorter candidate; the growing rule set is
-        pushed into the core between lengths (``set_rules``), which the Python pool cannot
+        pushed into the core between lengths (``set_mode_rules``), which the Python pool cannot
         do (the core is immutable from forked workers, so it would mine nothing).
         Parallelism is rayon over all cores; cap it with ``RAYON_NUM_THREADS``.
 
