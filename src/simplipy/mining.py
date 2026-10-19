@@ -760,10 +760,10 @@ class RuleMiner:
             print(f'Candidate library: {library.n_candidates:,} candidates'
                   f' ({library.n_filtered:,} var-free filtered)')
 
-        # Existing rules (empty after reset_rules=True) join the Kruskal pruning and the
-        # final deduplicated set, like the pure-Python path.
+        # The mode's own existing rules (empty after reset_rules=True) join the Kruskal pruning
+        # and the final deduplicated set; another mode's set never seeds this one.
         rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in (
-            initial_rules if initial_rules is not None else self.engine.simplification_rules)]
+            initial_rules if initial_rules is not None else self._mode_rules(rule_mode))]
 
         # --- The post-pass: what turns a raw mined rule set into a CELL ARTIFACT ---
         # A closure, because the ladder runs it MORE THAN ONCE. A (7,4) climb passes through
@@ -2130,18 +2130,24 @@ class RuleMiner:
         from simplipy import _core as _core_module
         previous_budget = _core_module.set_interval_node_budget(interval_node_budget)
         try:
-            initial_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
             if reset_rules:
                 # every mode's set starts empty: each file is mined from nothing
                 self.engine.real_simplification_rules = None
                 self.engine.permissive_simplification_rules = None
+            else:
+                for rule_mode, _ in _MINE_MODES[1:]:  # a set deferred by `modes=` loads now
+                    self.engine._ensure_mode_loaded(rule_mode)
+            # EACH MODE'S MINE STARTS FROM ITS OWN SET, never from another mode's: a mine reads
+            # its set in its own canon, and another mode's facts read there are not facts. A
+            # mode with no set of its own starts from nothing.
+            initial = {rule_mode: self._mode_rules(rule_mode) for rule_mode, _ in _MINE_MODES}
             finals: dict[str, list] = {}
             for rule_mode, _file_mode in _MINE_MODES:
                 if interrupted:
                     break
                 # Each mode after f64 mines against the finished f64 set in the default slot, as
                 # its file is served beside it.
-                self.engine._replace_rules(finals.get('default', initial_rules))
+                self.engine._replace_rules(finals.get('default', initial['default']))
                 self._find_rules_native(
                     dict(expressions_of_length),
                     max_source_pattern_length,
@@ -2168,7 +2174,7 @@ class RuleMiner:
                     symbolic_gate=symbolic_gate,
                     snapshot_at=snapshot_at,
                     rule_mode=rule_mode,
-                    initial_rules=initial_rules,
+                    initial_rules=initial[rule_mode],
                     finals=finals,
                     judge=judge if judge is not None else functools.partial(
                         judge_tiers, processes=judge_processes),

@@ -92,3 +92,26 @@ def test_the_mode_less_twins_are_retired(eng):
     lib = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             'rust', 'lib.rs')).read()
     assert not re.findall(r'signature = \([^)]*(rule_mode="|wildcard_all=)', lib)
+
+
+def test_each_mode_mines_from_its_own_set():
+    """Without `reset_rules`, a mode's mine starts from that mode's own set, never from
+    another mode's: the f64 set's rule does not seed the real and permissive files (S9)."""
+    ops = {
+        "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+        "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+        "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
+        "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
+    }
+    f64_only = (('log', 'exp', 'exp', '?0'), ('exp', '?0'))
+    real_only = (('exp', 'log', 'exp', '?0'), ('exp', '?0'))
+    engine = SimpliPyEngine(operators=ops, rules=[f64_only], rules_real=[real_only],
+                            rules_permissive=[])
+    engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2, dummy_variables=1,
+                      X=128, seed=3, reset_rules=False, promote_sorts=False, symbolic_gate=False,
+                      judge=lambda pairs: ['core'] * len(pairs))
+    assert f64_only in engine.simplification_rules
+    assert f64_only not in engine.real_simplification_rules
+    assert real_only in engine.real_simplification_rules
+    assert f64_only not in engine.permissive_simplification_rules
+    assert real_only not in engine.permissive_simplification_rules
