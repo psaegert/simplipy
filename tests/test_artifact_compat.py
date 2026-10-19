@@ -224,7 +224,7 @@ class TestRequiresSimplipy:
                            match=r'requires simplipy >=99\.0,<99\.1.*pip install "simplipy>=99\.0,<99\.1"'):
             SimpliPyEngine.from_config(path)
 
-    @pytest.mark.parametrize('declared', ['0.15', '>=0.15,<', 15, ['>=0.15']])
+    @pytest.mark.parametrize('declared', ['0.15', '>=0.15,<', 15, ['>=0.15'], '', '  '])
     def test_a_malformed_specifier_refuses(self, tmp_path, declared):
         path = self._write(tmp_path, requires_simplipy=declared)
         with pytest.raises(IncompatibleArtifactError, match='malformed requires_simplipy'):
@@ -238,6 +238,24 @@ class TestRequiresSimplipy:
         monkeypatch.setattr(compat, '_package_version', lambda: running)
         config = {'operators': self.OPS, 'engine_generation': 2,
                   'requires_simplipy': '>=0.15,<0.16'}
+        if served:
+            compat.check_config(config, source='cfg')
+        else:
+            with pytest.raises(IncompatibleArtifactError, match='requires simplipy'):
+                compat.check_config(config, source='cfg')
+
+    @pytest.mark.parametrize('running, declared, served', [
+        ('0.15.0.dev2', '==0.15.0.dev2', True), ('0.15.0.dev2', '==0.15.0.dev1', False),
+        ('0.15.0', '==0.15.0.dev2', False), ('0.15.0.dev2', '==0.15.0', True),
+        ('0.15.0.dev2', '==0.15.*', True), ('0.15.0.dev2', '>=0.15.0.dev2,<0.16', True),
+        ('0.15.0.dev2', '===0.15.0.dev2', True)])
+    def test_an_exact_pin_of_a_prerelease_names_that_prerelease(self, monkeypatch, running,
+                                                                declared, served):
+        """F4: `==0.15.0.dev2` is the pre-release itself; a range still judges a pre-release
+        as the release it precedes."""
+        from simplipy import compat
+        monkeypatch.setattr(compat, '_package_version', lambda: running)
+        config = {'operators': self.OPS, 'engine_generation': 2, 'requires_simplipy': declared}
         if served:
             compat.check_config(config, source='cfg')
         else:

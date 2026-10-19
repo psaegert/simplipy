@@ -167,7 +167,8 @@ def _check_requires_simplipy(config: dict[str, Any], source: str) -> None:
     if declared is None:
         return
     try:
-        if not isinstance(declared, str):
+        # An empty specifier admits every version, which no mine means: it is malformed.
+        if not isinstance(declared, str) or not declared.strip():
             raise InvalidSpecifier(repr(declared))
         specifier = SpecifierSet(declared)
     except InvalidSpecifier:
@@ -176,15 +177,28 @@ def _check_requires_simplipy(config: dict[str, Any], source: str) -> None:
             f"(expected a PEP 440 specifier such as '>=0.15,<0.16')") from None
     running = _package_version()
     try:
-        release: Version | None = Version(Version(running).base_version)
+        version: Version | None = Version(running)
     except InvalidVersion:
-        release = None
-    if release is not None and specifier.contains(release):
+        version = None
+    if version is not None and all(_admits(spec, version) for spec in specifier):
         return
     raise IncompatibleArtifactError(
         f"{source} requires simplipy {declared}, and this is simplipy {running}: its "
         f"rules were mined under another version's canonical forms. Install a version "
         f"that serves it: pip install \"simplipy{declared}\"")
+
+
+def _admits(spec: Any, version: Version) -> bool:
+    """Does one specifier admit the running ``version``? A pre-release is judged as the
+    release it precedes, except by an exact pin of a pre-release (``==0.15.0.dev2``), which
+    names that pre-release and admits it alone."""
+    try:
+        pins_prerelease = spec.operator in ('==', '===') and Version(spec.version).is_prerelease
+    except InvalidVersion:  # a wildcard pin (`==0.15.*`) is a range
+        pins_prerelease = False
+    if pins_prerelease:
+        return bool(spec.contains(version, prereleases=True))
+    return bool(spec.contains(Version(version.base_version)))
 
 
 def check_asset_name(name: str) -> None:
