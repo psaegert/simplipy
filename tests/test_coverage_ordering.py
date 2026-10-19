@@ -157,8 +157,10 @@ class TestStrictKruskalSearchesRespells:
             constants_fit_challenges=2, constants_fit_retries=2,
             seed=7, relaxed_kruskal=False, verbose=False)
 
-        assert engine.simplify(["/", "1", "exp", "x0"]) == \
-            ["exp", "neg", "x0"], engine.simplification_rules
+        # Each file is mined in its own mode: f64 refuses the rule (`exp(-t)` and `1/exp(t)`
+        # round differently near underflow), real and permissive mint it.
+        assert engine.simplify(["/", "1", "exp", "x0"], mode="permissive") == \
+            ["exp", "neg", "x0"], engine.permissive_simplification_rules
 
 
 class TestProposalVerdictHonesty:
