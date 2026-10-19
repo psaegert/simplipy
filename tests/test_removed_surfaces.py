@@ -120,3 +120,19 @@ class TestRemovedIn015:
         # it answers in the input's dialect
         assert eng.evaluate_constants(['+', 'tan', '1', 'x0']) == ['+', '1.5574077246549023', 'x0']
         assert eng.evaluate_constants('tan(1) + x0') == '1.5574077246549023 + x0'
+
+    def test_find_rules_has_no_save_every(self, eng) -> None:
+        from simplipy.mining import RuleMiner
+        # prune=True is refused before any mining, so a find_rules that still took the
+        # keyword fails this test at once with that ValueError instead of starting a mine
+        with pytest.raises(TypeError, match='save_every'):
+            RuleMiner(eng).find_rules(save_every=10, prune=True)
+
+    @pytest.mark.parametrize('flag', ['-s', '--save-every'])
+    def test_the_cli_has_no_save_every(self, flag, capsys) -> None:
+        from simplipy.__main__ import main
+        with pytest.raises(SystemExit) as exit_info:
+            main(['find-rules', '-e', 'nonexistent_engine_xyz', '-c', 'dummy.yaml',
+                  '-o', 'out.json', flag, '10'])
+        assert exit_info.value.code == 2  # argparse refuses the flag before anything runs
+        assert 'unrecognized arguments' in capsys.readouterr().err

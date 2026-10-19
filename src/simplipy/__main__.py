@@ -27,9 +27,6 @@ def main(argv: str = None) -> None:
         help='Path of the f64 rules file (convention: rules_f64.json). The real/permissive '
              'siblings are derived from it with the _f64 marker replaced: '
              'rules_f64.json writes rules_real.json and rules_permissive.json beside it')
-    find_simplifications_parser.add_argument(
-        '-s', '--save-every', type=int, default=100_000,
-        help='Deprecated and ignored: a mine checkpoints after every completed length')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
 
@@ -157,7 +154,6 @@ def main(argv: str = None) -> None:
                         os.path.dirname(os.path.abspath(args.output_file)), v)
                     for k, v in (rule_finding_config.get('snapshot_at') or {}).items()},
                 output_file=args.output_file,
-                save_every=args.save_every,
                 reset_rules=args.reset_rules,
                 prune=rule_finding_config.get('prune', False),
                 verbose=args.verbose)

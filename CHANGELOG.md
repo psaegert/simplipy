@@ -101,8 +101,8 @@ organised by who you are, then the highlights, then every change in detail.
   own mode, and writes a checkpoint after every completed length, which a rerun of the same mine
   resumes from.
 - New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`) and
-  `find_rules(judge=, judge_processes=)`. `save_every=` (CLI `-s`) is accepted and ignored: the
-  rule file is written once, when the mode's mine ends.
+  `find_rules(judge=, judge_processes=)`. `save_every=` (CLI `-s/--save-every`) is removed: the
+  rule file is written once, when the mode's mine ends (see Removed).
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
   keyword `rule_mode` (`'f64'` or its alias `'default'`, `'real'`, `'permissive'`), and
   deduplication keeps the target lower in that mode's serve ordering, not the shorter one.
@@ -606,6 +606,10 @@ model predictions.
 
 Each removal is a hard cut: the removed keyword or name raises instead of warning.
 
+- **`find_rules(..., save_every=)` and the CLI's `find-rules -s/--save-every`.** The rule file
+  and its sidecar are written once, when the mode's mine ends, and progress survives in the
+  per-length checkpoint, so nothing reads the interval. Passing the keyword raises `TypeError`
+  and the CLI refuses the flag; drop the argument.
 - **`evaluate_constants(..., form=)`.** `evaluate_constants` answers in the input's dialect, as
   `simplify` does; passing the keyword raises `TypeError`. For another notation, convert the
   answer with `to_infix`, `to_tagged` or `to_prefix`.
@@ -809,9 +813,6 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   stating the distributive law), and `inverse-of-earlier-rule` and `twin-inverse` are gone,
   their rows dropped as `not-ordered-below`, the reason they always also had. Served rules do
   not change.
-- **`find_rules(save_every=)` and the CLI's `-s/--save-every` are deprecated and ignored.** The
-  rule file and its sidecar are written once, when the mode's mine ends, and progress survives
-  in the per-length checkpoint. Drop the argument.
 
 ## 0.14.7 (2026-10-01)
 

@@ -78,6 +78,7 @@ Removed in 0.15.0, again without an alias cycle:
 |---|---|
 | `complexity(..., canon=)` | `complexity(e, mode=m)` prices in mode `m`'s own reading; `simplipy.mining.cross_mode_complexity` compares answers across modes |
 | `evaluate_constants(..., form=)` | it answers in the input's dialect; convert the answer with `to_infix`, `to_tagged` or `to_prefix` |
+| `find_rules(..., save_every=)`, CLI `find-rules -s/--save-every` | drop the argument: the rule file is written once, when the mode's mine ends, and a mine checkpoints after every completed length |
 | `explicit_constant_placeholders(..., convert_numbers_to_constant=)` | drop the keyword; decide which literals are fittable with `simplipy.masking` |
 | `utils.remove_pow1` | none needed: it cleaned up generation-1 operators and had no caller |
 
@@ -89,7 +90,6 @@ Signatures changed in 0.15.0:
 | `utils.deduplicate_rules(..., rule_mode=)` | the keyword is required, as above; the kept target is the one lower in that mode's serve ordering |
 | `promotion.promote(..., rule_mode=)` | the keyword is required, as above |
 | `simplify(..., max_passes=0)` | raises `ValueError` (it ran one pass); pass `max_passes=1` or leave the default |
-| `find_rules(..., save_every=)`, CLI `find-rules -s` | deprecated and ignored: the rule file is written once, when the mode's mine ends |
 
 Behaviour changes in 0.14.0 that are **not** deprecations, because no name changed:
 

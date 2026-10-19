@@ -1968,7 +1968,6 @@ class RuleMiner:
             constants_fit_challenges: int = 16,
             constants_fit_retries: int = 16,
             output_file: str | None = None,
-            save_every: int = 100,
             reset_rules: bool = True,
             prune: bool | str = False,
             verbose: bool = False,
@@ -2021,9 +2020,7 @@ class RuleMiner:
         constants_fit_retries : int, optional
             Number of retries for the curve fitting process.
         output_file : str or None, optional
-            If provided, saves the discovered rules to this JSON file.
-        save_every : int, optional
-            Deprecated and ignored (kept for signature compatibility). A mine writes
+            If provided, saves the discovered rules to this JSON file. A mine writes
             ``<output_file>.checkpoint.json`` after every completed length and the rule
             files once, when each mode's mine ends.
         reset_rules : bool, optional
