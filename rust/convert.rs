@@ -1352,7 +1352,7 @@ pub fn parse(
     {
         return Err(format!(
             "invalid token {t:?}: reserved numeric spelling -- a value to Python or a \
-             malformed numeral, but not a simplipy numeric literal (H-007); use the canonical \
+             malformed numeral, but not a simplipy numeric literal; use the canonical \
              spelling ('5', '0.5', '1e-05', '1/3', float(\"inf\"), float(\"-inf\"), \
              float(\"nan\"))"
         ));

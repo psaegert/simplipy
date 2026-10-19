@@ -53,8 +53,8 @@ type ValueSetBox = (bool, bool, bool, bool, f64, f64);
 fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
     engine::RuleMode::parse(name).ok_or_else(|| {
         PyValueError::new_err(format!(
-            "unknown rule_mode {name:?}: expected 'default', 'real' or 'permissive' \
-             ('corpus' is the pre-release spelling of 'permissive')"
+            "unknown rule_mode {name:?}: expected 'default' (the f64 set), 'real' or \
+             'permissive'"
         ))
     })
 }
@@ -71,7 +71,7 @@ fn parse_canon_mode(canon: &str, rule_mode: engine::RuleMode) -> PyResult<engine
         "mode" => Ok(rule_mode),
         other => Err(PyValueError::new_err(format!(
             "unknown canon {other:?}: expected 'mode' (the mode's own reading) or \
-             'default' (deprecated: f64's reading for every mode)"
+             'default' (f64's reading for every mode, the cross-mode yardstick)"
         ))),
     }
 }
@@ -145,9 +145,8 @@ fn explore_budget_of(effort: Option<usize>) -> usize {
     effort.unwrap_or(usize::MAX)
 }
 
-/// THE ONE simplify implementation behind the FFI. `ac_simplify` (the `wildcard_all`
-/// spelling that shipped) and `ac_simplify_in_mode` (the mode spelling) both land here,
-/// so the bool is a SPELLING of a mode and never a second mechanism beside it.
+/// THE ONE simplify implementation behind the FFI: `ac_simplify_in_mode` lands here, so
+/// every mode runs the same code.
 ///
 /// `max_passes` is a safety cap on the rewrite passes: one pass reaches the fixpoint (debug
 /// builds assert it). 0 runs no pass at all: the answer is the input's canonical form (the
@@ -186,8 +185,7 @@ fn ac_simplify_impl(
     Ok(PyList::new(py, out)?.into())
 }
 
-/// The infix twin of [`ac_simplify_impl`], shared by `ac_simplify_infix` and
-/// `ac_simplify_infix_in_mode`.
+/// The infix twin of [`ac_simplify_impl`], behind `ac_simplify_infix_in_mode`.
 fn ac_simplify_infix_impl(
     core: &PyEngine,
     py: Python<'_>,
@@ -286,8 +284,8 @@ fn ensure_tokens_are_tokens(tokens: &[String]) -> PyResult<()> {
             return Err(PyValueError::new_err(format!(
                 "invalid token {t:?}: reserved numeric spelling -- a value to Python \
                  (float()/literal syntax) or a malformed numeral, but not a simplipy numeric \
-                 literal, so the engine would apply symbol algebra to a value-bearing token \
-                 (H-007). Use the canonical spelling instead: decimal/exponent literals ('5', \
+                 literal, so the engine would apply symbol algebra to a value-bearing token. \
+                 Use the canonical spelling instead: decimal/exponent literals ('5', \
                  '0.5', '1e-05'), exact fractions of integers ('1/3'), or the non-finite tokens \
                  'float(\"inf\")', 'float(\"-inf\")', 'float(\"nan\")'."
             )));
@@ -534,15 +532,13 @@ impl PyEngine {
         })
     }
 
-    /// `ac_simplify` addressing the rule mode DIRECTLY -- `"default"` (`rules.json`),
-    /// `"real"` (`rules_real.json`) or `"permissive"` (`rules_permissive.json`). Each mode serves
-    /// ONE DISTINCT, COMPLETE set; `"default"`/`"permissive"` are exactly what
-    /// `wildcard_all=False`/`True` select above, and `"real"` is the rung today's
-    /// `simplipy.Mode` cannot yet name.
+    /// Simplify `tokens` in the rule mode `rule_mode`: `"default"` (the f64 set, `Mode.f64`),
+    /// `"real"` or `"permissive"`. Each mode serves ONE DISTINCT, COMPLETE set, and every mode
+    /// runs one walk: its chain, then the search.
     ///
-    /// Contracts (empty input, malformed input, forms) are the SAME code as `ac_simplify`
-    /// -- both entries are one call into `ac_simplify_impl`.
-    /// `explore_budget` is the D39 B7 wire: the public `effort=` rides this parameter
+    /// The empty input answers empty; a malformed input raises `ValueError`. `form` is the
+    /// output projection (`"tagged"` or `"explicit"`).
+    /// `explore_budget` is the public `effort=`
     /// (see [`explore_budget_of`]: `None`, the default here as in `simplify`, explores until
     /// a round finds nothing). 0 routes to the chain's own entry, byte-identical behaviour.
     /// `work_budget` bounds each search's work in `ac::work` units (`None`: unbounded).
@@ -570,17 +566,17 @@ impl PyEngine {
         )
     }
 
-    /// DEFAULT-mode `ac_simplify` with a SUPPRESSION SET of artifact rule rows: rules at
-    /// the given `rules.json` indices -- and the orientation twins minted from them,
-    /// which report their source's row -- never fire, so the call answers exactly as an
+    /// `ac_simplify_in_mode` with a SUPPRESSION SET of artifact rule rows: rules at
+    /// the given indices of `rule_mode`'s own file -- and the orientation twins minted from
+    /// them, which report their source's row -- never fire, so the call answers exactly as an
     /// engine built WITHOUT those rows would (per-rule translation, in-place bucket
     /// filtering; see `PassCtx::suppressed`). The consumer is the promotion refund's
     /// derivability probe, which needs "the engine minus this one rule" tens of
     /// thousands of times per mine and cannot pay a rule-translation rebuild per probe.
     ///
-    /// Contracts (empty input, malformed input, forms) are the SAME as `ac_simplify`;
-    /// an empty `suppressed_rows` is byte-identical to `ac_simplify_in_mode` at
-    /// `rule_mode="default"`.
+    /// Contracts (empty input, malformed input, forms) are the SAME as
+    /// `ac_simplify_in_mode`; an empty `suppressed_rows` is byte-identical to it in the same
+    /// `rule_mode`.
     /// `explore_budget` reads as in `ac_simplify_in_mode` ([`explore_budget_of`]).
     #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, suppressed_rows=vec![], *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
@@ -617,18 +613,16 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// D39 B1 -- `ac_simplify` with the OPT-IN post-fixpoint exploration phase (ledger
-    /// D39): the deterministic chain runs unchanged to its fixpoint, then a budgeted
-    /// exploration phase proposes expansion moves through the same certified machinery
-    /// and accepts only endpoints STRICTLY below in the serve ordering
-    /// (`ac_ordered_below`'s predicate -- measure-agnostic scaffolding, roadmap B1).
-    /// `explore_budget` counts candidate descents; 0 (the default) never enters the
-    /// phase, so this entry is then byte-identical to `ac_simplify` (the ledger's
-    /// effort=0 semantics). The public `effort=` API (D39 B7, wired 2026-08-24) rides
-    /// the `_in_mode` entries' `explore_budget` parameter instead -- this bool-mode
-    /// entry stays as the B1 scaffolding surface its falsifier suite drives. It opens no work
-    /// budget, so the search runs unbounded. Contracts (empty input, malformed input, forms)
-    /// exactly as `ac_simplify`.
+    /// The search driven directly (a test surface): the deterministic chain runs to its
+    /// fixpoint, then the search proposes expansion moves through the same certified
+    /// machinery and accepts only endpoints STRICTLY below in the serve ordering
+    /// (`ac_ordered_below`'s predicate).
+    /// `explore_budget` counts candidate descents; 0 (the default here) never enters the
+    /// search, so this entry is then byte-identical to `ac_simplify_in_mode` with
+    /// `explore_budget=0`. The public `effort=` rides `ac_simplify_in_mode`'s
+    /// `explore_budget` instead. This entry opens no work budget, so the search runs
+    /// unbounded. Contracts (empty input, malformed input, forms) exactly as
+    /// `ac_simplify_in_mode`.
     #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=0, *, rule_mode))]
     fn ac_simplify_explore(
         &self,
@@ -654,8 +648,8 @@ impl PyEngine {
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`,
-    /// whose `explore_budget` this reads the same way).
+    /// `ac_simplify_in_mode`'s answer as pretty infix text (see `ac_simplify_in_mode`, whose
+    /// `explore_budget` and `work_budget` this reads the same way).
     #[pyo3(signature = (tokens, max_passes=48, explore_budget=None, work_budget=None, *, rule_mode))]
     fn ac_simplify_infix_in_mode(
         &self,
@@ -712,8 +706,9 @@ impl PyEngine {
     /// instead of failing a whole ruleset on one malformed entry.
     ///
     /// NOT interchangeable with `to_prefix`/`to_tagged`: those run the rewrite pass under
-    /// the LOADED RULESET, which on acj-4-3 turns `* (-1) asin _0` into `asin neg _0` --
-    /// that rule's own RHS. See `Engine::ac_canonical_key`.
+    /// the LOADED RULESET, which can turn a rule's left side into its own right side
+    /// (`* (-1) asin _0` into `asin neg _0` under a set holding that rule). See
+    /// `Engine::ac_canonical_key`.
     #[pyo3(signature = (exprs, *, rule_mode))]
     fn ac_canonical_keys(
         &self,
@@ -799,9 +794,9 @@ impl PyEngine {
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
-    /// `prettify` (number plan phase 3): the DISPLAY of an expression's canonical state under
+    /// `prettify`: the DISPLAY of an expression's canonical state under
     /// the digit budget `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`,
-    /// `"tagged"`). `resimplify` is rule 11: the display is simplified once in `rule_mode`
+    /// `"tagged"`). With `resimplify`, the display is simplified once in `rule_mode`
     /// (search budget `explore_budget`, work budget `work_budget`, read as in
     /// `ac_simplify_in_mode`) and that answer is displayed. Display only: nothing in the engine
     /// calls this or reads what it returns.
@@ -842,6 +837,8 @@ impl PyEngine {
         })
     }
 
+    /// Bare-canon complexity: the measure `mu` (in milli-bits) of `tokens` read in the
+    /// certificate-free context. `canon` selects the reading as in `ac_complexity_certified`.
     #[pyo3(signature = (tokens, canon="default", *, rule_mode))]
     fn ac_complexity(
         &self,
@@ -861,7 +858,8 @@ impl PyEngine {
     /// `engine::ac::ac_complexity_certified`): `mu(simplify(e)) <= mu(e)` is a
     /// theorem under this pricing, unlike the bare `ac_complexity`. `canon="mode"` routes
     /// the canon through `rule_mode` itself (each mode's own measure, what `complexity()`
-    /// prices); `canon="default"` pins it to f64's canon (the mode's parse is kept).
+    /// prices); `canon="default"` pins it to f64's canon (the mode's parse is kept), the
+    /// cross-mode yardstick of `simplipy.mining.cross_mode_complexity`.
     #[pyo3(signature = (tokens, canon="default", *, rule_mode))]
     fn ac_complexity_certified(
         &self,
@@ -880,10 +878,10 @@ impl PyEngine {
         .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
-    /// The four translation counts for ANY mode's served set (`"default"` / `"real"` /
-    /// `"permissive"`). `ac_rules_info` stays the DEFAULT mode's tuple, unwidened -- it is
-    /// pinned by the corpus gate, and answering it must never force another mode's index
-    /// to be built. Forces the named mode's lazy translation, and only that one.
+    /// The four translation counts of `rule_mode`'s served set (`"default"` / `"real"` /
+    /// `"permissive"`): `(kept, subsumed by arithmetic, dropped, orientation twins)`, where
+    /// `kept` is the serving rule count including the minted twins. Forces the named mode's
+    /// lazy translation, and only that one.
     #[pyo3(signature = (*, rule_mode))]
     fn ac_rules_info_in_mode(
         &self,
@@ -894,8 +892,8 @@ impl PyEngine {
         Ok(py.detach(|| self.inner().ac_rules_info_in_mode(mode)))
     }
 
-    /// [`PyEngine::ac_served_rules`] for ANY mode: what that mode actually fires, with
-    /// `source` indexing THAT MODE'S OWN file. The judge surface for the triple.
+    /// The rules `rule_mode` actually fires, with `source` indexing THAT MODE'S OWN file.
+    /// The judge surface for the triple.
     #[pyo3(signature = (*, rule_mode))]
     fn ac_served_rules_in_mode(
         &self,
@@ -917,7 +915,7 @@ impl PyEngine {
         Ok(self.inner().mode_rules_len(parse_rule_mode(rule_mode)?))
     }
 
-    /// Licence-registry load-consumer audit (C1.20): rules refused at AC load by the
+    /// The licence registry's load check: rules refused at AC load by the
     /// pole entry (a defined extended-real value changed at a constructed exceptional
     /// point). 0 for every artifact the mint-side registry produced; nonzero means a
     /// stale or foreign artifact carried a violation past its own mine. Forces the
@@ -926,8 +924,8 @@ impl PyEngine {
         Ok(py.detach(|| self.inner().ac_registry_dropped()))
     }
 
-    /// C36: the per-reason rule-drop census as a dict -- what happened to every
-    /// non-kept rule of the loaded asset, by name.
+    /// The per-reason rule-drop census of `rule_mode`'s set as a dict -- what happened to
+    /// every non-kept rule of the loaded asset, by reason name.
     #[pyo3(signature = (*, rule_mode))]
     fn ac_rules_drop_census(
         &self,
@@ -959,12 +957,12 @@ impl PyEngine {
         Ok(py.detach(|| self.inner().ac_shadow_census(mode)))
     }
 
-    /// The licence registry for one would-be rule (C1.20), as a PROBE: the mint channels
+    /// The licence registry for one would-be rule, as a PROBE: the mint channels
     /// consult the registry through the miner's one acceptance (`judge_hint` for a hint),
     /// never through this entry. Returns the refusal
     /// name (`"const_introduction"` / `"special_absorption"` / `"pole_class_change"`)
     /// or None. `mark` is the engine's endpoint for the source (the special count is
-    /// taken on the max of both sides, F49's spelling-independence); wildcard-shaped
+    /// taken on the max of both sides, so it is independent of the spelling); wildcard-shaped
     /// tokens (`_i`/`!i`/`?i`) in the patterns are treated as variables alongside
     /// `var_names`.
     fn registry_mint_refusal(
@@ -1134,7 +1132,8 @@ impl PyEngine {
 
     /// The CPython-exact `str(float)` formatter alone (the result-formatting half of numeric folding),
     /// exposed for the float-repr fuzz. Static; does not need engine state.
-    /// KEPT with no in-repo caller: fuzz-instrument surface (the float-repr differential fuzz drives it via `_core`; audit 2026-08-03).
+    /// No caller inside the package: kept for the float-repr differential fuzz, which drives it
+    /// through `_core`.
     #[staticmethod]
     fn py_float_repr(x: f64) -> String {
         crate::numeric::py_float_repr(x)
@@ -1145,7 +1144,8 @@ impl PyEngine {
     /// to `params` left-to-right; numeric/special literals fold to their value. Returns the length-
     /// `n_rows` result column. NOT part of the inline (online) surface; replaces the Python
     /// realize->infix->codify->lambda->safe_f residual path inside `find_rule_worker`.
-    /// KEPT with no in-repo caller: offline-miner instrument surface -- flash-ansr's `experimental/simplipy_offline_miner` scripts drive it via `_core` (audit 2026-08-03).
+    /// No caller inside the package: kept as an instrument for offline-miner scripts that
+    /// drive `_core` directly.
     fn evaluate_batch(
         &self,
         py: Python<'_>,
@@ -1165,7 +1165,8 @@ impl PyEngine {
 
     /// `numpy.allclose(a, b, rtol, atol, equal_nan=True)` -- the miner's accept/reject decision gate.
     /// `b` is the asymmetric reference (second arg), matching the miner's call order. Static.
-    /// KEPT with no in-repo caller: offline-miner instrument surface -- flash-ansr's `experimental/simplipy_offline_miner` scripts drive it via `_core` (audit 2026-08-03).
+    /// No caller inside the package: kept as an instrument for offline-miner scripts that
+    /// drive `_core` directly.
     #[staticmethod]
     #[pyo3(signature = (a, b, rtol=1e-5, atol=1e-8))]
     fn allclose(a: Vec<f64>, b: Vec<f64>, rtol: f64, atol: f64) -> bool {
@@ -1211,7 +1212,8 @@ impl PyEngine {
     /// OFFLINE: the `!`-sort certificate -- is the expression DEFINED AND FINITE a.e. over its
     /// variables (within the standalone horizon box)? Fail-closed: every undecided path is
     /// `false`. The same predicate the engine's `!` pattern matching runs behind its cache.
-    /// KEPT with no in-repo caller: certificate-layer probe surface for cross-repo research scripts and ad-hoc soundness audits (queried directly via `_core`; audit 2026-08-03).
+    /// No caller inside the package: kept as a probe of the certificate layer for scripts
+    /// that query `_core` directly.
     fn interval_finite_ae(&self, tokens: Vec<String>) -> PyResult<bool> {
         ensure_tokens_are_tokens(&tokens)?;
         Ok(crate::interval::finite_ae(
@@ -1223,7 +1225,8 @@ impl PyEngine {
     /// OFFLINE: EXACT value-class of an expression by interval analysis (`rust/interval.rs`) --
     /// the deterministic replacement for the sampled pole grid / classify probe. Returns one of
     /// FINITE / POSINF / NEGINF / NAN / MIXED / EMPTY, or ERROR if unevaluable.
-    /// KEPT with no in-repo caller: certificate-layer probe surface for cross-repo research scripts and ad-hoc soundness audits (queried directly via `_core`; audit 2026-08-03).
+    /// No caller inside the package: kept as a probe of the certificate layer for scripts
+    /// that query `_core` directly.
     fn interval_class(&self, tokens: Vec<String>) -> PyResult<String> {
         ensure_tokens_are_tokens(&tokens)?;
         Ok(
@@ -1237,7 +1240,8 @@ impl PyEngine {
     /// OFFLINE: the raw positive-measure value COMPONENTS of an expression over free constants,
     /// as `(has_finite, pos_inf, neg_inf, nan)` -- the reachability gate's inputs, before `Class`
     /// collapses them. `None` if unevaluable.
-    /// KEPT with no in-repo caller: certificate-layer probe surface for cross-repo research scripts and ad-hoc soundness audits (queried directly via `_core`; audit 2026-08-03).
+    /// No caller inside the package: kept as a probe of the certificate layer for scripts
+    /// that query `_core` directly.
     fn interval_value_components(
         &self,
         tokens: Vec<String>,
@@ -1261,19 +1265,18 @@ impl PyEngine {
     }
 
     /// OFFLINE: how many subdivision searches exhausted their node budget with no witness found.
-    /// Since the F0-era fix this is UNDECIDED and the caller fails closed (an exhausted search has
-    /// not earned the decided "no witness"). Recorded per mine in the provenance sidecar, next to
-    /// `interval_horizon_misses`.
+    /// Each is UNDECIDED and the caller fails closed (an exhausted search has not earned the
+    /// decided "no witness"). Recorded per mine in the provenance sidecar
+    /// (`soundness.interval_undecided`), next to `interval_horizon_misses`.
     fn interval_node_budget_misses(&self) -> u64 {
         crate::interval::NODE_BUDGET_MISSES.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// OFFLINE: how many subdivision searches visited an UNANALYZABLE box (`value_set_p`
     /// fail-closed, e.g. rootn with an expression-position index) and found no witness -- each
-    /// returned UNDECIDED and its caller rejected (fail-closed). This was the THIRD fail-open
-    /// until 2026-07-30 (F0): the abandoned box read as clean and the completed search as a
-    /// decided verdict, which is how the five NaN-a.e. rootn rules of the 2026-07-29 acj-4-3
-    /// mine shipped. Read after a mine, next to the other two miss counters.
+    /// returned UNDECIDED and its caller rejected (fail-closed): an abandoned box never reads
+    /// as clean, nor the search around it as a decided verdict. Read after a mine, next to the
+    /// other two miss counters (`soundness.interval_undecided` in the provenance sidecar).
     fn interval_unanalyzable_misses(&self) -> u64 {
         crate::interval::UNANALYZABLE_MISSES.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -1333,7 +1336,8 @@ impl PyEngine {
     /// gate: a rule must never be grossly domain dependent. `None` = UNDECIDED (horizon past
     /// R_MAX, or node budget exhausted with no witness) -- the gate fails closed on it; a
     /// consumer must treat `None` as "extension not ruled out", never as 0.0.
-    /// KEPT with no in-repo caller: certificate-layer probe surface for cross-repo research scripts and ad-hoc soundness audits (queried directly via `_core`; audit 2026-08-03).
+    /// No caller inside the package: kept as a probe of the certificate layer for scripts
+    /// that query `_core` directly.
     fn interval_domain_extension(
         &self,
         source: Vec<String>,
@@ -1353,7 +1357,8 @@ impl PyEngine {
     /// values (k-th `<constant>` in prefix order -> `params[k]`). This is the form the miner uses:
     /// the gate runs per instance at the source's drawn constants and the constants the fit chose.
     /// `None` = UNDECIDED (fail-closed), as in `interval_domain_extension`.
-    /// KEPT with no in-repo caller: certificate-layer probe surface for cross-repo research scripts and ad-hoc soundness audits (queried directly via `_core`; audit 2026-08-03).
+    /// No caller inside the package: kept as a probe of the certificate layer for scripts
+    /// that query `_core` directly.
     fn interval_domain_extension_p(
         &self,
         source: Vec<String>,
@@ -1689,7 +1694,7 @@ impl PyEngine {
         Ok(())
     }
 
-    /// C1.9: does `rules` match what was last PUSHED into this core (`from_strs` or
+    /// Does `rules` match what was last PUSHED into this core (`from_strs` or
     /// `set_mode_rules("default", ..)`)? The Python shim's `__getstate__` calls this with the current
     /// `simplification_rules` and refuses to pickle on a mismatch -- a pickle rebuilds
     /// the worker from the LIST, so a diverged parent would otherwise silently spawn
@@ -1703,8 +1708,9 @@ impl PyEngine {
 
     /// OFFLINE (mine driver): mine ONE source-length IN PARALLEL (rayon, all cores) -- Kruskal-
     /// prune each source with the current rules, then `find_rule` on survivors. Returns the found
-    /// (source -> target) rules. The Python driver loops lengths, dedups/canonicalizes, and `set_rules`
-    /// between them (the order-dependent barrier). GIL released for the parallel work.
+    /// (source -> target) rules. The Python driver loops lengths, dedups/canonicalizes, and
+    /// installs the grown set (`set_mode_rules`) between them (the order-dependent barrier).
+    /// GIL released for the parallel work.
     /// `relaxed_kruskal=True` (the default) still searches sources the current rules already
     /// shorten, with the bound tightened to the simplified length (targets must beat what
     /// `simplify` already reaches); `False` skips them (strict Kruskal). See
@@ -1804,7 +1810,8 @@ impl PyEngine {
     /// OFFLINE miner: native `exist_constants_that_fit`. Affine candidates ->
     /// closed-form (deterministic); nonlinear-in-params -> `n_restarts` LM solves from random N(0,5)
     /// starts (seeded). Accept iff any makes `allclose(y_target, fitted)` pass -- scipy's exact gate.
-    /// KEPT with no in-repo caller: offline-miner instrument surface -- flash-ansr's `experimental/simplipy_offline_miner` scripts drive it via `_core` (audit 2026-08-03).
+    /// No caller inside the package: kept as an instrument for offline-miner scripts that
+    /// drive `_core` directly.
     #[pyo3(signature = (candidate, var_names, x_flat, n_rows, y_target, rtol=1e-5, atol=1e-8, n_restarts=16, seed=0))]
     #[allow(clippy::too_many_arguments)]
     fn exist_constants_fit(
@@ -1842,11 +1849,11 @@ fn set_interval_node_budget(budget: Option<u32>) -> u32 {
 /// The CORE SERIALIZATION LANGUAGE, exported so Python reads the SAME table the engine
 /// does instead of keeping its own copy.
 ///
-/// `{token: {"arity": int, "precedence": float, "realization": str | None}}`. The audit
-/// counted five hand-maintained copies of this data (C1.10); a copy that drifts is not a
-/// tidiness problem but a soundness one -- the masking walk treated an unknown operator as
-/// a LEAF, so its operands inherited the enclosing bag's role and a `pow` exponent could be
-/// masked, the exact accident the role API exists to prevent.
+/// `{token: {"arity": int, "precedence": float, "realization": str | None}}`. A
+/// hand-maintained copy that drifts is not a tidiness problem but a soundness one -- a
+/// masking walk that treats an unknown operator as a LEAF lets its operands inherit the
+/// enclosing bag's role, so a `pow` exponent can be masked, the exact accident the role API
+/// exists to prevent.
 #[pyfunction]
 fn core_serialization_ops(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let out = PyDict::new(py);
@@ -1867,8 +1874,10 @@ fn is_numeric_string(token: &str) -> bool {
     crate::utils::is_numeric_string(token)
 }
 
-/// H-007's reserved numeric spellings (`utils::reserved_numeric_spelling`), refused at
-/// every semantic boundary; `simplipy.utils.reserved_numeric_spelling` calls it.
+/// The reserved numeric spellings (`utils::reserved_numeric_spelling`): tokens a standard
+/// numeric reader takes as a value, or malformed numerals, that are no simplipy numeric
+/// literal (`inf`, `1_000`, `0x10`, `1/0`, `--5`). Refused at every semantic boundary;
+/// `simplipy.utils.reserved_numeric_spelling` calls it.
 #[pyfunction]
 fn reserved_numeric_spelling(token: &str) -> bool {
     crate::utils::reserved_numeric_spelling(token)
