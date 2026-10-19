@@ -216,6 +216,23 @@ class TestOneReading:
         with pytest.raises(TypeError, match='expected an infix str or a token sequence'):
             getattr(engine, entry)(42)
 
+    @pytest.mark.parametrize("entry", ['simplify', 'complexity', 'to_prefix', 'to_infix', 'to_tagged'])
+    @pytest.mark.parametrize("bad", [
+        pytest.param(['+', 'x1', True], id='bool'),
+        pytest.param(['+', 'x1', None], id='None'),
+        pytest.param(['+', 'x1', np.bool_(False)], id='numpy-bool'),
+        pytest.param(np.array(['+', 'x1', None], dtype=object), id='object-ndarray'),
+        pytest.param(('+', 'x1', object()), id='object'),
+    ])
+    def test_a_token_that_is_no_str_or_number_is_refused(self, engine: SimpliPyEngine, entry, bad) -> None:
+        # review F5: `str(True)` and `str(None)` read as the symbols 'True' and 'None'
+        with pytest.raises(ValueError, match='a token must be a str or a number'):
+            getattr(engine, entry)(bad)
+
+    def test_a_number_token_reads_as_its_str(self, engine: SimpliPyEngine) -> None:
+        assert engine.to_prefix(['+', 'x1', 2]) == ['+', 'x1', '2']
+        assert engine.to_prefix(['*', np.float64(0.5), 'x1']) == ['*', '0.5', 'x1']
+
     def test_simplify_reads_realization_notation_like_to_prefix(self, engine: SimpliPyEngine) -> None:
         realized = ['simplipy.operators.neg', 'x1']
         assert engine.to_prefix(realized) == ['neg', 'x1']

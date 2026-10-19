@@ -367,6 +367,18 @@ _MODE_RULES_ATTR: dict[str, str] = {
     'permissive': 'permissive_simplification_rules',
 }
 
+
+def _token_of(t: Any) -> str:
+    """One element of a token sequence as its token: a ``str`` as itself, a number as its
+    ``str``. Anything else is refused: ``str(True)`` and ``str(None)`` are words, not the tokens
+    of anything the element denotes."""
+    if isinstance(t, str):
+        return t
+    if isinstance(t, (int, float, np.integer, np.floating)) and not isinstance(t, (bool, np.bool_)):
+        return str(t)
+    raise ValueError(f'a token must be a str or a number, not {type(t).__name__} ({t!r})')
+
+
 #: :meth:`SimpliPyEngine.simplify`'s refusal of ``mode='real'`` on an engine naming no real set.
 _REAL_NEEDS_A_SET = (
     "mode='real' needs a ruleset mined for it, and this artifact has none: "
@@ -1754,9 +1766,12 @@ class SimpliPyEngine:
             if expression.dtype.kind not in {'U', 'S', 'O'}:
                 raise ValueError('expected a numpy array of string-like tokens, '
                                  f'got dtype {expression.dtype}')
-            tokens = [str(t) for t in expression.astype(str).tolist()]
+            if expression.dtype.kind == 'O':
+                tokens = [_token_of(t) for t in expression.tolist()]
+            else:
+                tokens = [str(t) for t in expression.astype(str).tolist()]
         elif isinstance(expression, (list, tuple)):
-            tokens = [str(t) for t in expression]
+            tokens = [_token_of(t) for t in expression]
         else:
             raise TypeError(
                 f'expected an infix str or a token sequence '
