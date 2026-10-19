@@ -654,7 +654,10 @@ model predictions.
   `'permissive'` (in any case) and `simplipy.Mode` members. Before, `rule_mode` took
   `'default'` and refused `'f64'` (`prune_covered_rules` raised a bare `KeyError`), while
   `simplify`, `--mode` and `verify_mine` took `'f64'` and refused `'default'`. An unknown name
-  raises `ValueError` naming both spellings.
+  raises `ValueError` naming both spellings, and a mode that is neither a string nor a `Mode`
+  raises `TypeError` (`verify_ruleset` raised `ValueError`).
+- **`simplipy.mining` declares `verify_mine` and `cross_mode_complexity`** in `__all__`, so both
+  are declared surface, in the power-user tier of the compatibility policy.
 - **Deduplication keeps the target lower in the mode's serve ordering**, not the one with
   fewer tokens.
 - **`complexity(mode=...)` refuses an unknown mode with `ValueError`**, as `simplify` does (it
