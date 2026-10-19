@@ -165,9 +165,7 @@ class TestPrefixClosureExhaustive:
         op_names = DEGENERATE[config]
         engine = make_engine(op_names)
         for src in universe(op_names, 3):
-            judged = engine._core.ac_judge(list(src), 48)
-            assert judged is not None, f"ac_judge failed on in-vocabulary source {src}"
-            out = judged[2]
+            out = engine._core.mine_mark(list(src), rule_mode='default')
             assert engine._core.ac_ordered_below_in(list(out), list(out), rule_mode='default') is False, (
                 f"acceptance cannot read the engine's own output {out} (source {src})"
             )

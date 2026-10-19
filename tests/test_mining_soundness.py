@@ -986,7 +986,7 @@ class TestEmitParseClosure:
         assert engine.simplify(list(out)) == out, "own output must re-simplify to itself"
 
     def test_ordering_judge_reads_own_output(self, engine) -> None:
-        _, _, ac_out = engine._core.ac_judge(["*", "exp", "x0", "exp", "x0"], 48)
+        ac_out = engine._core.mine_mark(["*", "exp", "x0", "exp", "x0"], rule_mode='default')
         assert engine._core.ac_ordered_below_in(["exp", "+", "x0", "x0"], ac_out, rule_mode='default') is True
         assert engine._core.ac_ordered_below_in(["pow2", "exp", "x0"], ac_out, rule_mode='default') is False
 
@@ -1326,7 +1326,7 @@ class TestProposalTargetAllowance:
         assert sidecar["proposals"]["trail"][-1]["verdict"] == "rejected"
         assert sidecar["proposals"]["trail"][-1]["stage"] == "search"
         assert eng._core is not None
-        _, _, endpoint = eng._core.ac_judge(src, 48)
+        endpoint = eng._core.mine_mark(src, rule_mode='default')
         assert not eng._core.ac_ordered_below_in(tgt, endpoint, rule_mode='default'), \
             "the specimen must be refused BY THE ORDERING (or it belongs in the certify pin above)"
         assert not any(tuple(rhs) == ("pow", "*", "?0", "?1", "2")
@@ -1350,7 +1350,7 @@ class TestProposalTargetAllowance:
         assert sidecar["proposals"]["trail"][-1]["verdict"] == "rejected"
         assert sidecar["proposals"]["trail"][-1]["stage"] == "search"
         assert eng._core is not None
-        _, _, endpoint = eng._core.ac_judge(src, 48)
+        endpoint = eng._core.mine_mark(src, rule_mode='default')
         assert not eng._core.ac_ordered_below_in(tgt, endpoint, rule_mode='default'), "tie: not below"
         assert not eng._core.ac_ordered_below_in(endpoint, tgt, rule_mode='default'), "tie: not above either"
 
@@ -1734,8 +1734,8 @@ class TestProposalHintLengthAllowance:
                 ("*", "2", "pow", "sin", "?0", "2")) in saved
         # SERVE. `simplify` is DIALECT-PRESERVING (owner-ruled): it answers in the
         # dialect it was handed, and SIN_SRC is explicit binary prefix, so the answer is
-        # too -- `to_tagged` is the separate step for the bag spelling. `ac_judge`'s
-        # endpoint is the same state in the mine's binary alphabet. Before the merge both
+        # too -- `to_tagged` is the separate step for the bag spelling. The mine's mark
+        # (`mine_mark`) is the same state in the mine's binary alphabet. Before the merge both
         # are the source itself -- the rule is what moves them.
         # It serves from the file that carries it: real.
         assert eng.simplify(list(self.SIN_SRC), mode='real') \
@@ -1759,7 +1759,7 @@ class TestProposalHintLengthAllowance:
         eng = self._engine(str(tmp_path / "probe"))
         core = eng._core
         assert core is not None
-        _, _, endpoint = core.ac_judge(list(self.COS_SRC), 48)
+        endpoint = core.mine_mark(list(self.COS_SRC), rule_mode='default')
         # every gate the pair PASSES
         assert len(self.COS_TGT) == len(self.COS_SRC), "the retired gate refused on this"
         assert eng.is_valid(list(self.COS_TGT))
@@ -1801,7 +1801,7 @@ class TestProposalHintLengthAllowance:
                                 max_target_pattern_length=3, X=256, seed=7)
         assert [(tuple(s), tuple(t), c) for s, t, c in out] \
             == [(tuple(self.LONG_SRC), tuple(self.LONG_TGT), "verified")]
-        _, _, endpoint = core.ac_judge(list(self.LONG_SRC), 48)
+        endpoint = core.mine_mark(list(self.LONG_SRC), rule_mode='default')
         assert core.ac_ordered_below_in(list(self.LONG_TGT), endpoint, rule_mode='default'), \
             "the specimen certifies BECAUSE it descends, not because it is long"
 
@@ -1815,7 +1815,7 @@ class TestProposalHintLengthAllowance:
         core = eng._core
         assert core is not None
         assert len(self.TIE_TGT) < len(self.TIE_SRC), "the retired gate would have passed this"
-        _, _, endpoint = core.ac_judge(list(self.TIE_SRC), 48)
+        endpoint = core.mine_mark(list(self.TIE_SRC), rule_mode='default')
         assert not core.ac_ordered_below_in(list(self.TIE_TGT), endpoint, rule_mode='default'), "tie: not below"
         assert not core.ac_ordered_below_in(endpoint, list(self.TIE_TGT), rule_mode='default'), "tie: not above either"
         assert eng.certify_rules([self.TIE_SRC], [self.TIE_TGT], dummy_variables=1,

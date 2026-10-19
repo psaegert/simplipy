@@ -976,7 +976,7 @@ class SimpliPyEngine:
             # (each Const slot bound to a ground subterm -- `0` fulfills
             # `<constant>`, `* 2.71... x0` fulfills `* <constant> x0`) has fulfilled
             # it, though the total order sees only unrelated leaf kinds there.
-            # (ac_judge/ac_ordered_below: the AC parser is the arbiter, no
+            # (mine_mark/ac_ordered_below_in: the AC parser is the arbiter, no
             # config-vocabulary gate; an undecidable ordering raises.)
             def fulfilled(variant_lhs: list[str], variant_rhs: list[str]) -> bool:
                 probe_out = core.mine_mark(variant_lhs, rule_mode=rule_mode)

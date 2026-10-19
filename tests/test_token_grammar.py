@@ -97,7 +97,7 @@ class TestReservedSpellingsRefused:
 
     def test_judge_and_complexity_refuse(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError, match="reserved numeric spelling"):
-            engine._core.ac_judge(["inf"], 48)
+            engine._core.mine_mark(["inf"], rule_mode="default")
         with pytest.raises(ValueError, match="reserved numeric spelling"):
             engine._core.ac_complexity(["nan"], rule_mode='default')
 
@@ -228,7 +228,7 @@ class TestRecursionCapEveryEntry:
             lambda: core.set_mode_rules('default', [(deep, ["x0"])]),
             lambda: core.mine_one_length([deep], lib, rule_mode='default'),
             lambda: core.ac_ordered_below_in(deep, ["x0"], rule_mode='default'),
-            lambda: core.ac_judge(deep, 48),
+            lambda: core.mine_mark(deep, rule_mode='default'),
             lambda: core.parse("neg(" * 100_000 + "x0" + ")" * 100_000, True, False),
         ]
         for i, call in enumerate(calls):

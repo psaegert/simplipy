@@ -648,22 +648,6 @@ impl PyEngine {
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
-    /// MINING JUDGE (internal): one fused call -- (canonical input complexity, reduced
-    /// complexity, reduced expression in the explicit projection). The AC parser is the
-    /// arbiter; only the length cap guards recursion. The scores are reference values:
-    /// coverage decisions judge in the serve ordering via `ac_ordered_below`, never by
-    /// comparing them.
-    fn ac_judge(
-        &self,
-        py: Python<'_>,
-        tokens: Vec<String>,
-        max_passes: usize,
-    ) -> PyResult<(u64, u64, Vec<String>)> {
-        ensure_tokens_are_tokens(&tokens)?;
-        py.detach(|| self.inner.ac_judge(&tokens, max_passes))
-            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
-    }
-
     /// THE DEDUP KEY (internal): the BARE-CONTEXT canonical serialization of each
     /// expression -- exactly the internal form the rule loader (`AcRules::translate`)
     /// builds for a rule side, in the engine's native tagged projection. Batched: a

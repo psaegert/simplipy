@@ -87,7 +87,7 @@ def test_the_mode_less_twins_are_retired(eng):
     import os
     import re
     for name in ('ac_simplify', 'ac_simplify_infix', 'ac_ordered_below', 'ac_rules_info',
-                 'ac_served_rules', 'set_rules'):
+                 'ac_served_rules', 'set_rules', 'ac_judge'):
         assert not hasattr(eng._core, name), name
     lib = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             'rust', 'lib.rs')).read()

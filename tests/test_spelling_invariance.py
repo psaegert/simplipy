@@ -81,7 +81,7 @@ class TestTheTokenSpellingDoesNotMove:
     @pytest.mark.parametrize('expr, answer, _', CASES)
     def test_the_mining_judge_answers_in_the_token_spelling(self, eng, expr, answer, _):
         # the judge's form is the miner's "mark to beat" and coverage's comparison spelling
-        assert eng._core.ac_judge(expr, 48)[2] == answer
+        assert eng._core.mine_mark(expr, rule_mode='default') == answer
 
     @pytest.mark.parametrize('expr, answer, _', CASES)
     def test_the_tagged_answer_has_no_reader_spelling(self, eng, expr, answer, _):
