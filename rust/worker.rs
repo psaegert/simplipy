@@ -468,6 +468,7 @@ fn adopt_snapped_witness(
     cols: &[Vec<f64>],
     n_rows: usize,
     y_src: &[f64],
+    src_events: Option<&[bool]>,
     fitted: Vec<f64>,
     rtol: f64,
     atol: f64,
@@ -476,7 +477,11 @@ fn adopt_snapped_witness(
     let Some(snapped) = crate::battery::snap_candidates(&fitted) else {
         return fitted;
     };
-    let y_fit = cand_tape.eval_columns(cols, &snapped, n_rows);
+    let (y_fit, cand_events) = if rescue {
+        (cand_tape.eval_columns(cols, &snapped, n_rows), None)
+    } else {
+        events_if_any(cand_tape.eval_columns_events(cols, &snapped, n_rows))
+    };
     // one-zero relaxation: an (inf, inf) row pair passes regardless of sign -- feed the
     // downstream checks the candidate's own value there so neither vetoes the pair
     let y_adj: Vec<f64> = y_src
@@ -491,8 +496,8 @@ fn adopt_snapped_witness(
         })
         .collect();
     let ok = allclose_extends(&y_adj, &y_fit, rtol, atol)
-        || (rescue
-            && crate::hiprec::rescue(
+        || if rescue {
+            crate::hiprec::rescue(
                 &y_adj,
                 &y_fit,
                 source_tokens,
@@ -504,12 +509,75 @@ fn adopt_snapped_witness(
                 cols,
                 rtol,
                 atol,
-            ));
+            )
+        } else {
+            f64_range_rescue(
+                &y_adj,
+                &y_fit,
+                src_events,
+                cand_events.as_deref(),
+                source_tokens,
+                src_params,
+                cand_tokens,
+                &snapped,
+                ops,
+                var_names,
+                cols,
+                rtol,
+                atol,
+            )
+        };
     if ok {
         snapped
     } else {
         fitted
     }
+}
+
+/// An evaluation's values with its range-event marks (`Tape::eval_columns_events`), the marks
+/// dropped when no row has one: most expressions never leave the range on the mine's rows.
+fn events_if_any((y, events): (Vec<f64>, Vec<bool>)) -> (Vec<f64>, Option<Vec<bool>>) {
+    let any = events.iter().any(|&e| e);
+    (y, any.then_some(events))
+}
+
+/// THE f64 RANGE STANDARD on one instance (`hiprec::range_rescue`), the two sides' range events
+/// merged: a row where an operation of either side overflowed or underflowed may carry the true
+/// value instead of the evaluator's. With no event on either side, f64's own verdict stands.
+#[allow(clippy::too_many_arguments)]
+fn f64_range_rescue(
+    y_src: &[f64],
+    y_cand: &[f64],
+    src_events: Option<&[bool]>,
+    cand_events: Option<&[bool]>,
+    source: &[String],
+    src_params: &[f64],
+    cand_tokens: &[String],
+    cand_params: &[f64],
+    ops: &Operators,
+    var_names: &[String],
+    cols: &[Vec<f64>],
+    rtol: f64,
+    atol: f64,
+) -> bool {
+    if src_events.is_none() && cand_events.is_none() {
+        return false;
+    }
+    crate::hiprec::range_rescue(
+        y_src,
+        y_cand,
+        src_events,
+        cand_events,
+        source,
+        src_params,
+        cand_tokens,
+        cand_params,
+        ops,
+        var_names,
+        cols,
+        rtol,
+        atol,
+    )
 }
 
 /// F3 literal resolution: pin a matched Const-bearing candidate's slots to literal
@@ -718,13 +786,27 @@ fn battery_rows_ok(
     var_names: &[String],
     rtol: f64,
     atol: f64,
+    f64_range: bool,
 ) -> bool {
     let Some(sb) = battery else { return true };
-    let y_s = src_tape.eval_columns(&sb.cols, src_params, sb.n_rows);
-    let y_c = cand_tape.eval_columns(&sb.cols, cand_params, sb.n_rows);
+    // f64's range standard (`numeric::RangeKind`): a special point where an operation of
+    // either side overflows or underflows may carry the true value.
+    let (y_s, y_c, events) = if f64_range {
+        let (y_s, e_s) = src_tape.eval_columns_events(&sb.cols, src_params, sb.n_rows);
+        let (y_c, e_c) = cand_tape.eval_columns_events(&sb.cols, cand_params, sb.n_rows);
+        let events: Vec<bool> = e_s.iter().zip(&e_c).map(|(a, b)| *a || *b).collect();
+        (y_s, y_c, Some(events))
+    } else {
+        (
+            src_tape.eval_columns(&sb.cols, src_params, sb.n_rows),
+            cand_tape.eval_columns(&sb.cols, cand_params, sb.n_rows),
+            None,
+        )
+    };
     crate::battery::rows_consistent(
         &y_s,
         &y_c,
+        events.as_deref(),
         sb,
         source_tokens,
         src_params,
@@ -839,6 +921,7 @@ fn equivalent_no_const(
             var_names,
             rtol,
             atol,
+            false,
         ) {
             return false;
         }
@@ -865,6 +948,7 @@ fn equivalent_no_const(
                 var_names,
                 rtol,
                 atol,
+                false,
             ) {
                 return false;
             }
@@ -974,6 +1058,9 @@ struct CandEntry {
     linearity: crate::fit::Linearity,
     tape: Tape,
     y_const_free: Option<Vec<f64>>,
+    /// The rows of `y_const_free` where an operation overflowed or underflowed
+    /// (`numeric::RangeKind`), `None` when there is none: f64's range standard reads them.
+    events_const_free: Option<Vec<bool>>,
     /// count_finite(y_const_free) precomputed at library build (0 for const-bearing candidates):
     /// the informativeness gate rejects vacuous (all-NaN/inf) candidates before any comparison.
     finite_y: usize,
@@ -1013,10 +1100,11 @@ impl CandEntry {
     ) -> Result<CandEntry, String> {
         let tape = Tape::compile(c, ops, var_names)?;
         let n_const = tape.n_params;
-        let y_const_free = if n_const == 0 {
-            Some(tape.eval_columns(cols, &[], n_rows))
+        let (y_const_free, events_const_free) = if n_const == 0 {
+            let (y, events) = events_if_any(tape.eval_columns_events(cols, &[], n_rows));
+            (Some(y), events)
         } else {
-            None
+            (None, None)
         };
         let linearity = crate::fit::classify(c, ops)?;
         let loglin = if linearity == crate::fit::Linearity::Nonlinear {
@@ -1038,6 +1126,7 @@ impl CandEntry {
             linearity,
             tape,
             y_const_free,
+            events_const_free,
             finite_y,
             loglin,
             hash: token_hash(c),
@@ -1085,6 +1174,7 @@ fn var_mask(tokens: &[String], var_names: &[String]) -> u32 {
 #[allow(clippy::too_many_arguments)]
 fn candidate_matches(
     y_src: &[(Vec<f64>, Vec<f64>)],
+    src_events: &[Option<Vec<bool>>],
     cand: &CandEntry,
     source: &[String],
     src_tape: &Tape,
@@ -1114,6 +1204,8 @@ fn candidate_matches(
         // WITNESS, not just a bool: None = reject; Some(None) = VACUOUS pass (no constants
         // determined -- every row was extendable); Some(Some(c)) = pass AT the constants `c`.
         // The domain gate needs `c` to bind the candidate's `<constant>` leaves.
+        // The source's range events on this instance (f64 only; see `f64_range_rescue`).
+        let ev_src = src_events.get(inst).and_then(|e| e.as_deref());
         let ok: Option<Option<Vec<f64>>> = if cand.n_const == 0 {
             // GENERIC EQUIVALENCE: source-finite rows must match; source-nonfinite
             // rows may be domain-EXTENDED (x/x -> 1). a = source, b = candidate.
@@ -1124,7 +1216,10 @@ fn candidate_matches(
             // equal 0 (`exp(sinh(-5)) -> 0` is false by 5.9e-33 and passed `atol` = 1e-12).
             // - f64 (no rescue): the deployed evaluator's values decide. `exp(sinh(-10))` is
             //   exactly 0.0 in f64, so `-> 0` holds there; `sin(np.pi)` is 1.2e-16, so `-> 0`
-            //   does not.
+            //   does not. At a row where an operation of either side overflows or
+            //   underflows, the true value is accepted beside the evaluator's (the f64 range
+            //   standard, `f64_range_rescue`): `rootn(exp(x), 2) -> exp(x/2)` certifies past
+            //   exp's overflow, `atanh(tanh(x)) -> x` does not (tanh saturates in range).
             // - real and permissive (rescue): f64 is a PRE-FILTER, and a near-miss reject is
             //   re-judged at high precision on exactly the failing rows (`hiprec::rescue`),
             //   where a zero is a residual that collapses as the precision doubles. True
@@ -1132,8 +1227,8 @@ fn candidate_matches(
             //   sin(np.pi) -> 0 -- certify; a value that only looks like zero does not.
             let y_cand = cand.y_const_free.as_ref().unwrap();
             let hit = allclose_extends(y, y_cand, rtol, 0.0)
-                || (rescue
-                    && crate::hiprec::rescue(
+                || if rescue {
+                    crate::hiprec::rescue(
                         y,
                         y_cand,
                         source,
@@ -1145,7 +1240,24 @@ fn candidate_matches(
                         cols,
                         rtol,
                         0.0,
-                    ));
+                    )
+                } else {
+                    f64_range_rescue(
+                        y,
+                        y_cand,
+                        ev_src,
+                        cand.events_const_free.as_deref(),
+                        source,
+                        inst_params,
+                        &cand.tokens,
+                        &[],
+                        ops,
+                        var_names,
+                        cols,
+                        rtol,
+                        0.0,
+                    )
+                };
             // A const-free candidate binds nothing, so even a vacuous match has a determined
             // (empty) witness and the gate applies exactly.
             if hit {
@@ -1180,8 +1292,33 @@ fn candidate_matches(
             ) {
                 crate::fit::FitVerdict::Pass(c) => Some(c),
                 crate::fit::FitVerdict::Fail => None,
-                // f64 never escalates: the deployed evaluator's values decide.
-                crate::fit::FitVerdict::NearMiss(_) if !rescue => None,
+                // f64 does not escalate a near miss: the deployed evaluator's values decide,
+                // except at the rows where an operation of either side overflows or
+                // underflows, where the true value is accepted at the fitted constants (the
+                // f64 range standard, `f64_range_rescue`).
+                crate::fit::FitVerdict::NearMiss(c0) if !rescue => {
+                    let (y_fit, ev_fit) =
+                        events_if_any(cand.tape.eval_columns_events(cols, &c0, n_rows));
+                    if f64_range_rescue(
+                        y,
+                        &y_fit,
+                        ev_src,
+                        ev_fit.as_deref(),
+                        source,
+                        inst_params,
+                        &cand.tokens,
+                        &c0,
+                        ops,
+                        var_names,
+                        cols,
+                        rtol,
+                        atol,
+                    ) {
+                        Some(Some(c0))
+                    } else {
+                        None
+                    }
+                }
                 // FIT-ARM ESCALATION: a true constant-bearing rule whose SOURCE
                 // f64 evaluation is corrupted on a few rows (atanh(tanh(C*x)) -> C*x) fails
                 // the fit with CONTAMINATED constants (the corrupted rows pull the least
@@ -1253,6 +1390,7 @@ fn candidate_matches(
                     cols,
                     n_rows,
                     y,
+                    ev_src,
                     c,
                     rtol,
                     atol,
@@ -1382,6 +1520,7 @@ fn candidate_matches(
             var_names,
             rtol,
             atol,
+            !rescue,
         ) {
             return None;
         }
@@ -1396,7 +1535,11 @@ fn candidate_matches(
     if n_src_const == 1 {
         for (k, &s) in crate::battery::SPECIAL_CONSTS.iter().enumerate() {
             let sp = vec![s];
-            let y_s = src_tape.eval_columns(cols, &sp, n_rows);
+            let (y_s, ev_s) = if rescue {
+                (src_tape.eval_columns(cols, &sp, n_rows), None)
+            } else {
+                events_if_any(src_tape.eval_columns_events(cols, &sp, n_rows))
+            };
             if crate::eval::count_finite(&y_s) == 0 {
                 continue;
             }
@@ -1433,6 +1576,7 @@ fn candidate_matches(
                         cols,
                         n_rows,
                         &y_s,
+                        ev_s.as_deref(),
                         c,
                         rtol,
                         atol,
@@ -1454,6 +1598,7 @@ fn candidate_matches(
                 var_names,
                 rtol,
                 atol,
+                !rescue,
             ) {
                 return None;
             }
@@ -1660,11 +1805,16 @@ struct SourceCtx<'s> {
     n_const: usize,
     mask: u32,
     y: Vec<(Vec<f64>, Vec<f64>)>,
+    /// Per instance of `y`, the rows where an operation overflowed or underflowed
+    /// (`numeric::RangeKind`), `None` where none did; read by f64's range standard only, and
+    /// computed only for it.
+    events: Vec<Option<Vec<bool>>>,
     reach: Option<crate::interval::Vs>,
     battery: Option<crate::battery::SpecialBattery>,
 }
 
 impl<'s> SourceCtx<'s> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         ops: &Operators,
         source: &'s [String],
@@ -1673,6 +1823,7 @@ impl<'s> SourceCtx<'s> {
         n_rows: usize,
         challenges: usize,
         seed: u64,
+        f64_range: bool,
     ) -> Result<Self, String> {
         let tape = Tape::compile(source, ops, var_names)?;
         let n_const = tape.n_params;
@@ -1680,6 +1831,13 @@ impl<'s> SourceCtx<'s> {
         let mut rng = Rng::new(seed);
         // Source instances shared across the whole candidate scan (see `source_instances`).
         let y = source_instances(&tape, n_const, &combos, cols, n_rows, challenges, &mut rng);
+        let events = if f64_range {
+            y.iter()
+                .map(|(p, _)| events_if_any(tape.eval_columns_events(cols, p, n_rows)).1)
+                .collect()
+        } else {
+            Vec::new()
+        };
         // REACHABILITY gate (exact, interval-analytic) for a VARIABLE-FREE source: every value
         // component the source takes over its constants must be reachable by the candidate over its
         // own (see `interval::reaches_all_of`). Scoped to variable-free sources -- the class the
@@ -1703,6 +1861,7 @@ impl<'s> SourceCtx<'s> {
             n_const,
             mask: var_mask(source, var_names),
             y,
+            events,
             reach,
             battery,
         })
@@ -1755,6 +1914,7 @@ fn certify_candidate(
     }
     let witness = candidate_matches(
         &sc.y,
+        &sc.events,
         cand,
         source,
         &sc.tape,
@@ -1807,6 +1967,7 @@ fn certify_candidate(
             CandEntry::compile(t, ops, var_names, cols, n_rows, u64::MAX).is_ok_and(|entry| {
                 candidate_matches(
                     &sc.y,
+                    &sc.events,
                     &entry,
                     source,
                     &sc.tape,
@@ -2134,6 +2295,7 @@ pub fn find_rule_with_lib(
         lib.n_rows,
         challenges,
         seed,
+        !rescue,
     )?;
     // THE SEARCH BOUND. `max_mu` (the caller's mark, i.e. mu of the engine's own endpoint
     // for this source) makes the search bound the SAME predicate as the acceptance gate:
@@ -2308,7 +2470,9 @@ pub fn judge_pair(
     min_informative: usize,
     rescue: bool,
 ) -> Result<Option<&'static str>, String> {
-    let sc = SourceCtx::new(ops, source, var_names, cols, n_rows, challenges, seed)?;
+    let sc = SourceCtx::new(
+        ops, source, var_names, cols, n_rows, challenges, seed, !rescue,
+    )?;
     let cand = CandEntry::compile(target, ops, var_names, cols, n_rows, u64::MAX)?;
     let Some(c) = certify_candidate(
         &sc,
@@ -2933,6 +3097,7 @@ mod tests {
             &cols,
             n,
             &y,
+            None,
             vec![-0.999_999_999_997_003_7],
             1e-9,
             1e-12,
@@ -2952,6 +3117,7 @@ mod tests {
             &cols,
             n,
             &yb,
+            None,
             vec![2.999_999_7],
             1e-9,
             1e-12,

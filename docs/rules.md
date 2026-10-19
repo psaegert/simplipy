@@ -37,9 +37,11 @@ against an exact counting recurrence.
    restarted optimizer otherwise). A row agrees relatively (`rtol`; zero agrees only with
    zero), rows where the source is undefined may be completed by the target (so
    `x/x → 1` certifies, in the sense of the limit), and a minimum number of informative
-   rows is required (`min_informative`). In `f64` the deployed evaluator's values decide;
-   in `real` and `permissive` a near miss (at most half of the points failing in f64) is
-   re-judged at high precision.
+   rows is required (`min_informative`). In `f64` the deployed evaluator's values decide,
+   except on a row where an operation of either side overflows or underflows: there the
+   true value is accepted too, so such a row is re-judged at high precision (the judge
+   reads the same event, one definition in the core). In `real` and `permissive` a near
+   miss (at most half of the points failing in f64) is re-judged at high precision.
 5. **Confirm**: the pick is re-judged on an independent, twice-as-wide matrix with fresh
    seeds; a pick that fails yields to the next candidate.
 6. **Judge**: the length's picks go to the contract judge (`simplipy.verify`), each as the
@@ -63,6 +65,13 @@ entry the mode does not license is dropped, and so is a ground rule the mode's c
 already performs; both are listed in the sidecar. Then the file and its sidecar are
 written.
 
+The permissive mine runs last, and its post-pass is also offered the finished f64 and real
+files (`offer_final_rules`, on by default). Permissive promises less than either mode, so
+their rules hold there too, and its answer must never cost more than theirs, while a
+per-mode mine finds only what its own scan reaches. Every rule of the two files runs through
+the proposal lane right after the proposals, certified by permissive's own acceptance, and
+enters only where permissive's answer is not already as low.
+
 The procedure is **deterministic**: a fixed `seed` reproduces the three files byte-for-byte,
 independent of process, hash randomization, thread count or the judge's process count. One
 master seed derives the evaluation matrices and every per-length, per-source and per-rule
@@ -70,14 +79,20 @@ seed, and a source's seed and exclusions follow its global index, so a length mi
 shards equals the length mined at once. A mine writes `<file>.checkpoint.json` after every
 completed length; a rerun of the same mine (the same parameters, mode, universe, starting
 rules and code) resumes after the last completed length, any other mine refuses to start
-over it, and the checkpoint is removed once the file is final.
+over it, and the checkpoint is removed once the file is final. A final file is not mined
+again: its sidecar records the mine's key (`resume.key`, the checkpoint's) and the file's
+sha256 (`resume.rules_sha256`), and a rerun of the same mine takes an unchanged file as it
+is, its ladder snapshots included. So a crash in a later mode costs only that mode; another
+mine, or a file edited after the mine, mines the mode anew.
 
 Each file has a **provenance sidecar** (`<file>.provenance.json`) recording every parameter
 (`interval_node_budget` included), the derived seeds, the evaluation-matrix specification,
 the universe coverage, the mode, how the mode accepted (`acceptance`: tolerances, whether
 and at which gate a near miss is re-judged, the licensed tiers, the judge's digest), per
 length the classes, picks, judge rounds, exclusions and twin-shadowed rows (`per_length`),
-the file gates (`gates`), the digests of the code that mined it (`code_digest`), the
+the file gates (`gates`), the digests of the code that mined it (`code_digest`), in the
+permissive sidecar the f64 and real files it was offered, pinned by name and sha256, with the
+lane's outcomes (`offered`), the
 versions that serve it (`requires_simplipy`) and every `SIMPLIPY_*` variable set during the
 mine (`soundness.env_overrides`), so a published file is reproducible from its artifact.
 
@@ -206,6 +221,10 @@ promote_sorts: true
 # interval_undecided counters flag systematic exhaustion. Recorded in the sidecar.
 # interval_node_budget: 800000
 
+# Offer the permissive mine the finished f64 and real files through its proposal
+# lane (the default); its sidecar pins both files.
+offer_final_rules: true
+
 # Optional: LLM/human-proposed rules, certified against the mined state at the
 # end of the run (see "LLM-proposed rules" below). Paths starting with ./ are
 # resolved relative to this config file. The published artifact's LLM lane is
@@ -236,10 +255,11 @@ simplipy verify-mine rules_real.json --mode real -e config.yaml
 | `twin_shadow` | no row is one the mode's load mints anyway from another row's orientation twin |
 | `engine_owned_law` | no rule respells one canonical state or states the distributive law as the search factors (a sign pull such as `neg sin _0 -> sin neg _0` still passes) |
 | `unlicensed` | every file spelling and every served entry carries a judged tier the mode licenses |
-| `preempted` | no ground rule is one the mode's constructor already performs |
+| `preempted` | no ground rule is one the rule-less engine already performs, such as a ground fact it folds (`log (-3) → nan`) |
 | `translation` | the mode's load subsumes and drops nothing |
 | `fingerprint` | the sidecar's measure record prices every probe as this engine does |
 | `env_switches` | the mine ran, and the check runs, with no `SIMPLIPY_*` switch set |
+| `offered` | (`permissive` only) the sidecar pins the f64 and real files the mine was offered, and each lies beside the file with the pinned sha256 |
 
 It prints one line per gate and exits non-zero when any gate fails (`--report` writes the
 full report as JSON). `simplipy.mining.verify_mine` is the same check from Python.

@@ -271,7 +271,9 @@ class Mode(Enum):
     do not compare with ``<``.
 
     - ``f64`` (the default; also spelled ``'default'``): preserves what the deployed
-      float64 evaluator computes. This is the inference and scoring mode: a rewrite in it
+      float64 evaluator computes, wherever no operation overflows or underflows. Where one
+      does, a rewrite may give the true value instead (``exp(x)/exp(x)`` is ``1`` also
+      past ``exp``'s overflow). This is the inference and scoring mode: a rewrite in it
       is safe for a model that is evaluated in float64.
     - ``real``: preserves the function as mathematics defines it, independent of any
       float format. Use it when the rewrite must hold symbolically (proofs,
@@ -2307,9 +2309,11 @@ class SimpliPyEngine:
 
         Each mode reads an expression into its own canonical form, because the modes accept
         different simplifications as true: ``f64`` follows the deployed float evaluator
-        (``atanh(tanh(x))`` is not ``x``: in floats ``tanh`` saturates to ``1``), ``real`` exact
-        real arithmetic (it is ``x``), and ``permissive`` also what holds only up to sign or
-        domain (``(x^2)^(1/2)`` is ``x``, where ``f64`` and ``real`` give ``abs(x)``). A ground
+        wherever no operation overflows or underflows (``atanh(tanh(x))`` is not ``x``: in
+        floats ``tanh`` saturates to ``1``; past an overflow the true value is accepted as
+        well, so ``exp(x)/exp(x)`` is ``1``), ``real`` exact real arithmetic (``atanh(tanh(x))``
+        is ``x``), and ``permissive`` also what holds only up to sign or domain
+        (``(x^2)^(1/2)`` is ``x``, where ``f64`` and ``real`` give ``abs(x)``). A ground
         constant is read as written in every mode: folding it to its float is a step of
         :meth:`simplify`'s walk in ``f64`` and ``permissive``, not part of the reading.
         This prices that form, on the

@@ -475,10 +475,13 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
     ops = {k: v for k, v in _OPERATORS.items() if k != 'pow2'}
     out = str(tmp_path / 'mined.json')
 
-    def judge(pairs):  # refuses the one length-4 pick, `log exp log ?0 -> log ?0`
+    # refuses the length-4 picks, `log exp log ?0 -> log ?0` and `log exp neg ?0 -> neg ?0`
+    # (the latter passes f64's special points where exp leaves the range, 750 and 1e17)
+    def judge(pairs):
         return ['real' if len(p[0]) >= 4 else 'core' for p in pairs]
 
-    with pytest.raises(RuntimeError, match=r"gave up on 1 source\(s\) of length 4.*'log', 'exp', 'log', 'x0'"):
+    with pytest.raises(RuntimeError, match=r"gave up on 2 source\(s\) of length 4.*"
+                                           r"'log', 'exp', 'log', 'x0'.*'log', 'exp', 'neg', 'x0'"):
         SimpliPyEngine(operators=ops, rules=[]).find_rules(
             max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
             X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, promote_sorts=False,
@@ -486,3 +489,137 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
     ckpt = json.load(open(out + '.checkpoint.json'))
     assert ckpt['completed_length'] == 3
     assert [['log', 'exp', 'log', '?0'], ['log', '?0'], 'real'] in ckpt['judged']
+
+
+def test_the_watchdog_fails_the_mine_from_any_thread(monkeypatch) -> None:
+    """A mine may run off the main thread, and a judgment that never returns must still fail
+    it at `fail_s`: the watchdog interrupts the judgment in its own thread, not only when it
+    returns."""
+    import threading
+    import time
+    import simplipy.verify
+    from simplipy.mining import judge_tiers
+    real_verify = simplipy.verify.verify_ruleset
+
+    def stuck_verify(rules, **kwargs):
+        if rules[0][0] == ['exp', 'log', '?0']:
+            for _ in range(1000):  # 10 s, far past `fail_s`
+                time.sleep(0.01)
+        return real_verify(rules, **kwargs)
+
+    monkeypatch.setattr(simplipy.verify, 'verify_ruleset', stuck_verify)
+    rule, stuck = (['log', 'exp', '?0'], ['?0']), (['exp', 'log', '?0'], ['?0'])
+    outcome: dict = {}
+
+    def mine() -> None:
+        started = time.monotonic()
+        try:
+            judge_tiers([rule, stuck], processes=1, warn_s=0.1, fail_s=0.3)
+        except RuntimeError as error:
+            outcome['error'] = str(error)
+        outcome['elapsed'] = time.monotonic() - started
+        # the thread carries no exception the watchdog left behind
+        outcome['after'] = judge_tiers([rule], processes=1, warn_s=0.1, fail_s=0.3)
+
+    worker = threading.Thread(target=mine)
+    worker.start()
+    worker.join(30)
+    assert not worker.is_alive()
+    assert 'exp log ?0 -> ?0 ran past 0.3 s' in outcome.get('error', ''), outcome
+    assert outcome['elapsed'] < 2.0, 'the watchdog waited for the judgment to return'
+    assert outcome['after'] == judge_tiers([rule], processes=1)
+
+
+def test_a_judgment_without_a_timeout_leaves_the_alarm_alone() -> None:
+    """The mine judges with no wall-clock alarm, and it neither arms one nor cancels or
+    replaces the process's own: a SIGALRM handler and a pending alarm survive a judgment."""
+    import signal
+    from simplipy.verify import verify_ruleset
+
+    def handler(signum, frame):
+        raise AssertionError('the test alarm fired')
+
+    previous = signal.signal(signal.SIGALRM, handler)
+    try:
+        signal.alarm(100)
+        verify_ruleset([[['log', 'exp', '?0'], ['?0']]], judge_timeout_s=0)
+        assert signal.getsignal(signal.SIGALRM) is handler
+        assert signal.alarm(0) > 0, 'the pending alarm was cancelled'
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def _mode_mine(directory, crash_in=None, **kw):
+    """A small three-mode mine in `directory`, recording which mode each mined length
+    belongs to; with `crash_in`, it dies when that mode's first length starts."""
+    modes: list = []
+    original = RuleMiner._mine_length
+
+    def spy(self, sources, mine_, rule_mode, judge_, judged, dummy_variables):
+        modes.append(rule_mode)
+        if rule_mode == crash_in:
+            raise KeyboardInterrupt('simulated crash')
+        return original(self, sources, mine_, rule_mode, judge_, judged, dummy_variables)
+
+    directory.mkdir(exist_ok=True)
+    (directory / 'rules.json').write_text('[]')
+    (directory / 'config.yaml').write_text(yaml.safe_dump(
+        {'engine_generation': 2, 'operators': _OPERATORS, 'rules': 'rules.json'}))
+    engine = SimpliPyEngine.from_config(str(directory / 'config.yaml'))
+    RuleMiner._mine_length = spy  # type: ignore[method-assign]
+    try:
+        engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4,
+                          dummy_variables=1, extra_internal_terms=['2'], X=256, seed=7,
+                          promote_sorts=False, verbose=False,
+                          output_file=str(directory / 'mined.json'), **kw)
+    finally:
+        RuleMiner._mine_length = original  # type: ignore[method-assign]
+    return modes, engine
+
+
+_FILES = ('mined.json', 'mined_real.json', 'mined_permissive.json')
+
+
+def test_a_crash_in_a_later_mode_reuses_the_finished_files(tmp_path) -> None:
+    """RESUME FROM DISK FIRST, a finished mode: the f64 and real files are final when the
+    permissive mine dies, and their sidecars record this mine's key and each file's sha256.
+    The rerun takes both as they are and mines permissive alone, to the files a one-shot mine
+    writes."""
+    import hashlib
+    once, _ = _mode_mine(tmp_path / 'once')
+    assert set(once) == {'default', 'real', 'permissive'}
+    with pytest.raises(KeyboardInterrupt):
+        _mode_mine(tmp_path / 'crashed', crash_in='permissive')
+    finished = {name: (tmp_path / 'crashed' / name).read_bytes() for name in _FILES[:2]}
+    assert json.loads(finished['mined.json']), 'vacuous: an empty f64 file'
+    side = json.load(open(tmp_path / 'crashed' / 'mined.json.provenance.json'))
+    assert side['resume']['rules_sha256'] == hashlib.sha256(finished['mined.json']).hexdigest()
+    rerun, engine = _mode_mine(tmp_path / 'crashed')
+    assert set(rerun) == {'permissive'}, rerun
+    for name in _FILES:
+        assert (tmp_path / 'once' / name).read_bytes() == \
+            (tmp_path / 'crashed' / name).read_bytes(), name
+    for name, raw in finished.items():
+        assert (tmp_path / 'crashed' / name).read_bytes() == raw, name
+    # the engine ends holding the three files, as after a one-shot mine
+    assert [(tuple(lhs), tuple(rhs)) for lhs, rhs in engine.simplification_rules] == \
+        [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.loads(finished['mined.json'])]
+
+
+def test_a_finished_file_is_reused_only_by_its_own_mine(tmp_path) -> None:
+    """The reuse is a resume, so it answers to the mine's key and the file's bytes: other
+    parameters, or a file edited after the mine, mine the mode again."""
+    _mode_mine(tmp_path / 'a')
+    again, _ = _mode_mine(tmp_path / 'a')
+    assert again == [], 'vacuous: the same mine reuses all three files'
+    other, _ = _mode_mine(tmp_path / 'a', interval_node_budget=12345)
+    assert set(other) == {'default', 'real', 'permissive'}, other
+    rules = json.load(open(tmp_path / 'a' / 'mined.json'))
+    assert rules, 'vacuous: an empty file edits to the same bytes'
+    (tmp_path / 'a' / 'mined.json').write_text(json.dumps(rules[1:], indent=4))
+    edited, _ = _mode_mine(tmp_path / 'a', interval_node_budget=12345)
+    # f64 mines again, to the same rules: the later modes' inputs are unchanged, so they are
+    # reused
+    assert set(edited) == {'default'}, edited
+    assert json.load(open(tmp_path / 'a' / 'mined.json')) == rules

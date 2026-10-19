@@ -183,3 +183,108 @@ def test_the_refund_reads_the_constructors_dedup(monkeypatch):
     refund(list(rules), ops, set(), progress=Spy(), rule_mode='default')
     done = [kw for name, kw in stages if name.endswith('derivability probe: done')][-1]
     assert done['fallbacks'] <= 2, done  # the replica made it 5: every probe
+
+
+_OFFER_OPERATORS = {
+    "+": {"realization": "+", "alias": [], "inverse": "-", "arity": 2, "precedence": 1, "commutative": True},
+    "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+    "tan": {"realization": "np.tan", "alias": [], "inverse": "atan", "arity": 1, "precedence": 3, "commutative": False},
+    "atan": {"realization": "np.arctan", "alias": [], "inverse": "tan", "arity": 1, "precedence": 3, "commutative": False},
+}
+# True on R, and beyond the length-2 horizon of the mine below, so permissive's own scan
+# never reaches it: only the offered real file can bring it.
+REAL_ONLY = (('tan', 'atan', '?0'), ('?0',))
+
+
+def _offer_mine(tmp_path, offer):
+    engine = SimpliPyEngine(operators=_OFFER_OPERATORS, rules=[], rules_real=[REAL_ONLY],
+                            rules_permissive=[])
+    engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=2, dummy_variables=1,
+                      X=128, seed=3, reset_rules=False, promote_sorts=False, symbolic_gate=False,
+                      judge=lambda pairs: ['core'] * len(pairs), offer_final_rules=offer,
+                      output_file=str(tmp_path / 'rules_f64.json'))
+    side = json.load(open(tmp_path / 'rules_permissive.json.provenance.json'))
+    return engine, side
+
+
+def test_the_permissive_mine_is_offered_the_finished_files(tmp_path):
+    """Permissive promises less than f64 and real, so their rules hold there too. Its mine
+    runs last and passes both finished files through its proposal lane: a real rule its own
+    scan never reaches enters the permissive file, and the sidecar pins both files."""
+    import hashlib
+    engine, side = _offer_mine(tmp_path, offer=True)
+    assert REAL_ONLY in engine.real_simplification_rules
+    assert REAL_ONLY in engine.permissive_simplification_rules
+    offered = side['offered']
+    for key, name in (('f64', 'rules_f64.json'), ('real', 'rules_real.json')):
+        pin = offered['files'][key]
+        assert pin['file'] == name
+        assert pin['sha256'] == hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+        assert pin['count'] == len(json.load(open(tmp_path / name)))
+    assert side['params']['offer_final_rules'] is True
+    assert sum(offered['outcomes'].values()) == offered['count']
+    entry, = [e for e in offered['trail'] if e['source'] == ['tan', 'atan', 'x0']]
+    assert entry['verdict'] == 'certified' and entry['target'] == ['x0'], entry
+
+
+def test_the_offer_can_be_declined(tmp_path):
+    engine, side = _offer_mine(tmp_path, offer=False)
+    assert REAL_ONLY not in engine.permissive_simplification_rules
+    assert 'offered' not in side and side['params']['offer_final_rules'] is False
+
+
+def test_the_f64_scan_reads_the_range_standard(eng):
+    """The scan's f64 check applies the judge's standard (`numeric::RangeKind`, one
+    definition): on a row where an operation of either side overflows or underflows, the
+    true value is accepted beside the evaluator's. The mine's own matrix carries such rows
+    (exp overflows past 709.78 and underflows below -745.13). Real reads the true value
+    everywhere and is unchanged."""
+    import numpy as np
+    from simplipy.mining import RuleMiner
+    X = RuleMiner(eng)._mining_sample_x(1024, 2, np.random.default_rng(42))
+    assert (abs(X[:, 0]) > 709.78).sum() > 0 and (X[:, 0] < -745.13).sum() > 0
+
+    def judged(source, target, mode):
+        return eng._core.judge_pair(source, target, ['x0', 'x1'], X.flatten().tolist(),
+                                    X.shape[0], rule_mode=mode, rtol=1e-11, atol=1e-12)[0]
+
+    pairs = {  # pair -> (f64, real)
+        (('rootn', 'exp', 'x0', '2'), ('exp', '/', 'x0', '2')): (True, True),
+        # the fit arm: the fitted constant |C| on the rows past the overflow
+        (('rootn', '*', 'pow', '<constant>', '2', 'exp', 'x0', '2'),
+         ('*', '<constant>', 'exp', '/', 'x0', '2')): (True, True),
+        # tanh saturates to 1.0 inside the range, and atanh(1.0) is a pole: no event
+        (('atanh', 'tanh', 'x0'), ('x0',)): (False, True),
+        (('sin', 'x0'), ('x0',)): (False, False),
+    }
+    for (source, target), want in pairs.items():
+        got = (judged(list(source), list(target), 'default'),
+               judged(list(source), list(target), 'real'))
+        assert got == want, (source, target, got)
+
+
+def test_the_f64_mine_reads_the_range_standard(tmp_path):
+    """A tiny mine: f64 mints `rootn(exp(x), 2) -> exp(x/2)`, which differs from the
+    evaluator only past exp's overflow and underflow. `atanh(tanh(x)) -> x` stays out, since
+    tanh saturates inside the range. `log(exp(x)) -> x` passes the scan, whose tolerance
+    is wider than its rounding, and the contract judge refuses it as `real`: its sides differ
+    by 34 ULP at the ordinary point 0.0137421."""
+    ops = {
+        "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+        "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
+        "exp": {"realization": "np.exp", "alias": [], "inverse": "log", "arity": 1, "precedence": 3, "commutative": False},
+        "log": {"realization": "np.log", "alias": [], "inverse": "exp", "arity": 1, "precedence": 3, "commutative": False},
+        "tanh": {"realization": "np.tanh", "alias": [], "inverse": "atanh", "arity": 1, "precedence": 3, "commutative": False},
+        "atanh": {"realization": "np.arctanh", "alias": [], "inverse": "tanh", "arity": 1, "precedence": 3, "commutative": False},
+        "rootn": {"realization": "simplipy.operators.rootn", "alias": [], "inverse": None, "arity": 2, "precedence": 3, "commutative": False},
+    }
+    engine = SimpliPyEngine(operators=ops, rules=[])
+    engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
+                      extra_internal_terms=['2'], X=512, seed=7, judge_processes=1,
+                      output_file=str(tmp_path / 'rules_f64.json'), promote_sorts=False)
+    f64 = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(open(tmp_path / 'rules_f64.json'))]
+    assert (('rootn', 'exp', '?0', '2'), ('exp', '/', '?0', '2')) in f64
+    assert not [r for r in f64 if r[0][:2] == ('atanh', 'tanh') and len(r[0]) == 3]
+    assert not [r for r in f64 if r[0] == ('log', 'exp', '?0')]
+    side = json.load(open(tmp_path / 'rules_f64.json.provenance.json'))
+    assert [['log', 'exp', 'x0'], ['x0']] in side['per_length']['3']['excluded']

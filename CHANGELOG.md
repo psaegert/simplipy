@@ -34,6 +34,10 @@ organised by who you are, then the highlights, then every change in detail.
 
 **`f64` and `real` users**
 
+- **What `f64` promises.** `f64` promises the deployed evaluator's value wherever no operation
+  overflows or underflows. Where one does, a rewrite may give the true value instead, as the
+  constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge now reads f64 rules by
+  the same standard.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor (in `real` it did,
   through four common-factor rules).
@@ -102,10 +106,10 @@ organised by who you are, then the highlights, then every change in detail.
 
 - `find_rules` mines `rules_f64.json`, `rules_real.json` and `rules_permissive.json` each in its
   own mode, and writes a checkpoint after every completed length, which a rerun of the same mine
-  resumes from.
-- New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`) and
-  `find_rules(judge=, judge_processes=)`. `save_every=` (CLI `-s`) is accepted and ignored: the
-  rule file is written once, when the mode's mine ends.
+  resumes from; the rerun takes a mode whose file is already final as it is.
+- New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`),
+  `find_rules(judge=, judge_processes=)` and `find_rules(offer_final_rules=)`. `save_every=`
+  (CLI `-s`) is accepted and ignored: the rule file is written once, when the mode's mine ends.
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
   keyword `rule_mode` (`'f64'` or its alias `'default'`, `'real'`, `'permissive'`), and
   deduplication keeps the target lower in that mode's serve ordering, not the shorter one.
@@ -377,6 +381,23 @@ model predictions.
   at points the contract tolerates as null events, as realised in f64: `/ $0 $0 -> 1` is `core`
   (served in every mode), not `real`. A NaN hole on positive measure, or at a point the contract
   does not tolerate, still keeps a rule out of f64.
+  Overflow and underflow are the same kind of special case: f64 promises the evaluator's value
+  wherever nothing overflows or underflows. Where an operation overflows or underflows, the
+  constructors give the true value (`exp(x1)/exp(x1)` is `1`, `rootn(exp(800.5), 2)` is
+  `exp(1601/4)`), and the judge now accepts the true value at such a point as well as the
+  evaluator's: `rootn(exp(x0), 2) -> exp(x0/2)` and `exp(x0)/exp(x0) -> 1` are `core`, not
+  `real`. A pole is not an overflow (`atanh(1)` is infinite exactly) and an exact zero is not an
+  underflow (`log(1)`). Every other point is compared as before, so a rule that gives neither
+  value at a range event (`exp(1000) -> 5`) or disagrees where nothing leaves the range stays
+  out of f64: `atanh(tanh(x0)) -> x0`, since `tanh` saturates inside the range, and
+  `log(exp(x0)) -> x0`, 34 ULP apart at `x0 = 0.0137421`, where `exp` rounds its argument into
+  the neighbourhood of 1. The verdict counts the points read this way (`out_of_range`). The
+  miner's own numeric check in f64 applies the same standard: a row of its matrix where an
+  operation of either side overflows or underflows is judged at high precision, where the
+  two sides' true values must agree, and every other row is compared as before. Both read
+  one definition of the event, the core's (`simplipy._core.range_event`), so an f64 mine
+  mints `rootn(exp(x0), 2) -> exp(x0/2)`. `log(exp(x0)) -> x0` passes the numeric check,
+  whose tolerance is wider than the 34 ULP, and the judge refuses it.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for
@@ -662,17 +683,29 @@ model predictions.
   rule the mode's constructor performs) before it is written. In `permissive` the covered
   prune also asks the non-finite instances every slot binds there, so the file keeps
   `$0 / $0 → 1` (`inf/inf` is `1`, not `nan`).
+- **The permissive mine is offered the f64 and real files.** Permissive promises less than
+  either mode, so their rules hold there too, and its answer must never cost more than theirs;
+  a per-mode mine finds only what its own scan reaches. The permissive file is mined last, and
+  every rule of the finished f64 and real files runs through its proposal lane: certified by
+  permissive's own acceptance, it enters only where permissive's answer is not already as
+  low. The permissive sidecar pins both files (`offered`: name, sha256 and count, the lane's
+  outcomes, and every offered rule that did not read `already_covered`), and `verify-mine`
+  checks the pins (gate `offered`). `find_rules(offer_final_rules=False)` (config key
+  `offer_final_rules`) declines the offer.
 - **A mine resumes from its checkpoint.** `find_rules` writes `<file>.checkpoint.json` after
   every completed length and a rerun of the same mine resumes after the last one; a
   checkpoint written by another mine — other parameters, mode, universe, starting rules, or
   code (the compiled core or the package's sources) — refuses to start, and is never
-  overwritten. The rule file and its sidecar are written once, when the mode's mine ends.
+  overwritten. The rule file and its sidecar are written once, when the mode's mine ends. A
+  rerun of the same mine does not mine a finished file again: the sidecar records the mine's
+  key and the file's sha256 (`resume`), and an unchanged file is taken as it is, its ladder
+  snapshots included, so a crash in the permissive mine costs only the permissive mine.
 - **`simplipy verify-mine <file> --mode m -e <engine>`** (and `simplipy.mining.verify_mine`)
   checks a mined file against the re-mine gates in its own mode: no twin-shadowed row, no
-  engine-owned law, every spelling licensed, nothing preempted, a translation that subsumes and
-  drops nothing, a clean measure fingerprint and no `SIMPLIPY_*` switch; it exits non-zero when
-  one fails. `-e` names the engine (an official name or a config path) whose operators read the
-  file.
+  engine-owned law, every spelling licensed, nothing preempted (no ground fact the rule-less
+  engine folds, such as `log (-3) -> nan`), a translation that subsumes and drops nothing, a
+  clean measure fingerprint and no `SIMPLIPY_*` switch; it exits non-zero when one fails. `-e`
+  names the engine (an official name or a config path) whose operators read the file.
 - **The sidecar records each file's own mine**: `acceptance` (tolerances, whether and at
   which gate a near miss is re-judged, the licensed tiers, the judge's digest), `per_length`
   (classes, picks, judge rounds, exclusions, twin-shadowed rows), `gates` and
@@ -754,8 +787,10 @@ model predictions.
 - **No judge timeout inside a mine.** The judge's 30 s wall-clock timeout filed a slow
   judgment as a rejection, so a mined file depended on machine load. A mine now judges with no
   timeout under a watchdog: a judgment past `judge_warn_s` (60 s) is logged, one past
-  `judge_fail_s` (600 s) fails the mine with the rule's name. Both are new `find_rules`
-  parameters, recorded in the sidecar.
+  `judge_fail_s` (600 s) is interrupted in the thread that runs it, whichever thread that is,
+  and fails the mine with the rule's name. Both are new `find_rules` parameters, recorded in
+  the sidecar. A judgment with no timeout leaves the process's own alarm and its handler
+  alone. Outside a mine, `verify_ruleset` keeps its 30 s timeout.
 - **Checkpoints resume only their own mine.** The key now also holds the operator table, the
   content of X and of the confirm matrix, the numeric environment (python, numpy, scipy,
   mpmath, libc, the libm fingerprint) and the `SIMPLIPY_*` switches. A resumed mine keeps its

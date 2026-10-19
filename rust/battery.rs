@@ -313,10 +313,15 @@ fn dep_structural(s: f64, c: f64, rtol: f64, atol: f64) -> crate::hiprec::PointC
 ///     precision-roulette seam class);
 ///   - snapped (symbolic-cancellation / pole-proximity at the point) -> row passes (the f64
 ///     algebra evaluates a DIFFERENT point there; measurement error, not a value claim).
+///
+/// `events` (f64 only) marks the rows where an operation of either side overflowed or
+/// underflowed (`numeric::RangeKind`): there f64 accepts the true value, so a row the contract
+/// finds equal passes however the deployed sides diverge, as in the contract judge's battery.
 #[allow(clippy::too_many_arguments)]
 pub fn rows_consistent(
     y_src: &[f64],
     y_cand: &[f64],
+    events: Option<&[bool]>,
     battery: &SpecialBattery,
     source: &[String],
     src_params: &[f64],
@@ -349,6 +354,7 @@ pub fn rows_consistent(
             // DIVERGENCE -- and that is the structural question, not the realisation one.
             // A few ULP between two spellings is rounding; asking the realisation bar here
             // would reject sound rules for it.
+            Some(P::Eq) if events.is_some_and(|e| e[r]) => false,
             Some(P::Eq) | None => {
                 !snapped && dep_structural(y_src[r], y_cand[r], rtol, atol) != P::Eq
             }
