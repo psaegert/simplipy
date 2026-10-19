@@ -1,10 +1,12 @@
-//! `prettify`: the DISPLAY of a canonical state (number plan v2, phase 3).
+//! `prettify`: the DISPLAY of a canonical state.
 //!
 //! The state stays exact; this module only decides how a reader sees it. It is a pure function
 //! of the canonical expression and a digit budget `D`, and nothing inside the engine calls it or
 //! reads what it writes (a source guard in the test suite holds that line). The display keeps
-//! the state's structure -- its bags, nested divisors and function applications -- and decides
-//! only how each NUMBER is written:
+//! the state's structure -- its bags, divisors and function applications -- and decides only
+//! how each NUMBER is written. It evaluates nothing and simplifies nothing: a function of
+//! numbers stays a function (`x1*exp(-190.5)`), and what the display writes alike is not
+//! collected.
 //!
 //! 1. **Digit budget.** A spelling's digits are every digit it writes, a numerator of 1
 //!    included (`1/12` counts 3, `3/123` counts 4).
@@ -20,19 +22,15 @@
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
 //!    joins an existing denominator (`x1/(243*x2)`); only a bare `x/float` becomes a
 //!    multiplier (`x1/243` is `0.00411522633744856*x1`).
-//! 6. **Functions of numbers** fold to one float only when every number inside would itself
-//!    be written as a float (`sin(sin(9463/890))` folds, `sin(2)` stays). The fold evaluates
-//!    with the deployed evaluator's kernels (`numeric::unary_fn` / `binary_fn`).
-//! 7. **Exponents** are numbers like any other.
-//! 8. **Even roots**: `x^(1/n)` is `rootn(x, n)` and `x^(-1/n)` is `1/rootn(x, n)` for even `n`.
-//! 9. **Layout**: one coefficient in front, the denominator grouped (`x0^2/(x1*x2)`) where the
-//!    group re-reads into the state's own reciprocals (numbers, variables, their powers and
-//!    roots); any other divisor keeps its own slash, as the state keeps it. Scientific notation
-//!    from 10^6 and below 10^-3 with a lowercase `e`.
-//! 10. **Range**: nothing folds or combines to inf, 0 or a subnormal.
-//!
-//! Rule 11 (re-simplify the display once and redo it) needs the rule set, so it lives with the
-//! engine (`engine::prettify`); this module is the display alone.
+//! 6. **Exponents** are numbers like any other.
+//! 7. **Even roots**: `x^(1/n)` is `rootn(x, n)` and `x^(-1/n)` is `1/rootn(x, n)` for even `n`.
+//! 8. **Layout**: one coefficient in front, the denominator grouped (`x0^2/(x1*x2)`) where its
+//!    members are numbers, variables and their powers and roots; any other divisor keeps its own
+//!    slash. The group reads the same whether the state holds a reciprocal per member or one
+//!    joined reciprocal of their product (`(3*x4*rootn(x10, 2))^-1`, whose number divides the
+//!    coefficient), and its members follow the order of a canonical product: by base, then
+//!    exponent. Scientific notation from 10^6 and below 10^-3 with a lowercase `e`.
+//! 9. **Range**: no numbers combine to inf, 0 or a subnormal.
 
 use std::cmp::Ordering;
 use std::sync::OnceLock;
@@ -235,7 +233,7 @@ fn fraction_fit(a: &Rat, d: usize, unit_free: bool) -> Option<Fraction> {
     best
 }
 
-/// The float form of an exact decimal `s` (rule 9): positional between 10^-3 (inclusive) and
+/// The float form of an exact decimal `s` (rule 8): positional between 10^-3 (inclusive) and
 /// 10^6 (exclusive), else `d.ddde<exp>`.
 fn float_text(s: &Rat) -> String {
     let parts = s
@@ -262,7 +260,7 @@ fn float_text(s: &Rat) -> String {
     }
 }
 
-/// Is `y` a float the display may write: finite, nonzero and normal (rule 10)?
+/// Is `y` a float the display may write: finite, nonzero and normal (rule 9)?
 fn writable(y: f64) -> bool {
     y.is_finite() && y.abs() >= f64::MIN_POSITIVE
 }
@@ -297,7 +295,7 @@ impl<'a, 'v> Display<'a, 'v> {
         }
         let y = a.to_f64_nearest();
         let Some(s) = Rat::shortest_reading_as(y).filter(|_| writable(y)) else {
-            // Rule 10: no float can stand for it (only exact-domain values get here).
+            // Rule 9: no float can stand for it (only exact-domain values get here).
             return (self.exact_spelling(a), a.clone());
         };
         if s != *a {
@@ -371,9 +369,6 @@ impl<'a, 'v> Display<'a, 'v> {
 
     /// The display of a canonical expression.
     pub fn node(&self, e: &Ex) -> Node {
-        if let Some(v) = self.fold(e) {
-            return self.number(&v).0;
-        }
         let view = self.cx.view;
         let name = |i: &str, t: &str| Node::Name(i.to_string(), t.to_string());
         match e {
@@ -392,18 +387,8 @@ impl<'a, 'v> Display<'a, 'v> {
                 view.resolve_owned(*f),
                 args.iter().map(|a| self.node(a)).collect(),
             ),
-            Ex::Pow(..) => {
-                let (den, node) = self.factor(e);
-                if den {
-                    Node::Prod {
-                        neg: false,
-                        num: vec![],
-                        den: vec![vec![node]],
-                    }
-                } else {
-                    node
-                }
-            }
+            // A power is a product of one member, laid out as every product is.
+            Ex::Pow(..) => self.product(std::slice::from_ref(e)),
             Ex::Add(v) => self.sum(v),
             Ex::Mul(v) => self.product(v),
         }
@@ -458,18 +443,26 @@ impl<'a, 'v> Display<'a, 'v> {
             }
         }
         let mut numbers: Vec<Rat> = Vec::new();
+        // The numbers of the joined reciprocals read as the group: they divide the coefficient.
+        let mut divisors: Vec<Rat> = Vec::new();
         let mut num: Vec<Node> = Vec::new();
-        // Divisors: the GROUP of members a divisor product re-reads into separately (numbers,
-        // variables and their powers and roots), and every other divisor on its own, as the
-        // state holds it -- grouping a sum `S` into `/(2*S)` would re-read as one joined
-        // reciprocal the certificates may refuse to split, a different state.
+        // Divisors: the GROUP of numbers, variables and their powers and roots, and every other
+        // divisor on its own. The group is written `/(m1*m2)`, which reads back as one joined
+        // reciprocal; the state's own reciprocals of group members and a joined reciprocal of
+        // them are therefore read alike, so the display is the same whichever the state holds
+        // and reading the display back gives the display again.
         let mut den: Vec<Node> = Vec::new();
         let mut alone: Vec<Node> = Vec::new();
         for f in v {
             if let Ex::Num(r) = f {
                 numbers.push(r.clone());
-            } else if let Some(x) = self.fold(f) {
-                numbers.push(x);
+            } else if let Some(members) = joined_reciprocal(f).filter(|m| self.group_members(m)) {
+                for m in members {
+                    match m {
+                        Ex::Num(r) => divisors.push(r.clone()),
+                        _ => den.push(self.factor(m).1),
+                    }
+                }
             } else {
                 let (is_den, node) = self.factor(f);
                 if is_den && self.groups(f) {
@@ -481,10 +474,11 @@ impl<'a, 'v> Display<'a, 'v> {
                 }
             }
         }
+        den.sort_by(factor_cmp);
         let mut neg = false;
         let mut lead: Vec<Node> = Vec::new();
         let mut lead_den: Vec<Node> = Vec::new();
-        match combine(&numbers, Rat::checked_mul) {
+        match coefficient(&numbers, &divisors) {
             Some(c) => {
                 neg = c.is_negative();
                 let (sp, value) = self.spell(&c.abs(), !num.is_empty());
@@ -500,12 +494,16 @@ impl<'a, 'v> Display<'a, 'v> {
                 }
             }
             None => {
-                // Several numbers whose product leaves the range (rule 10): each its own.
+                // Numbers whose product leaves the range (rule 9): each its own.
                 for r in &numbers {
-                    let (node, _) = self.number(r);
-                    let (s, node) = split_neg(node);
+                    let (s, node) = split_neg(self.number(r).0);
                     neg ^= s;
                     lead.push(node);
+                }
+                for r in &divisors {
+                    let (s, node) = split_neg(self.number(r).0);
+                    neg ^= s;
+                    lead_den.push(node);
                 }
             }
         }
@@ -527,11 +525,25 @@ impl<'a, 'v> Display<'a, 'v> {
         }
     }
 
-    /// May the divisor `f = b^-k` join the divisor group? When its base is a variable or a
-    /// symbol: a product of those re-reads into separate reciprocals in every context.
+    /// May the divisor `f = b^-k` join the divisor group?
     fn groups(&self, f: &Ex) -> bool {
         let Ex::Pow(b, _) = f else { return false };
-        let base = match &**b {
+        self.groupable(b)
+    }
+
+    /// Do the members of a joined reciprocal all join the group: numbers, and positive powers
+    /// and roots of variables and symbols?
+    fn group_members(&self, members: &[Ex]) -> bool {
+        members.iter().all(|m| match m {
+            Ex::Num(_) => true,
+            Ex::Pow(b, x) => matches!(&**x, Ex::Num(k) if !k.is_negative()) && self.groupable(b),
+            other => self.groupable(other),
+        })
+    }
+
+    /// Is `b` a base whose divisors group: a variable or a symbol, or an even root of one?
+    fn groupable(&self, b: &Ex) -> bool {
+        let base = match b {
             Ex::Fun(r, args) if self.cx.view.tok_is(*r, "rootn") => &args[0],
             other => other,
         };
@@ -566,8 +578,6 @@ impl<'a, 'v> Display<'a, 'v> {
         for t in v {
             if let Ex::Num(r) = t {
                 numbers.push(r.clone());
-            } else if let Some(x) = self.fold(t) {
-                numbers.push(x);
             } else {
                 terms.push(odd_literal_hoist(split_neg(self.node(t)), self.cx));
             }
@@ -591,135 +601,10 @@ impl<'a, 'v> Display<'a, 'v> {
         terms.sort_by_key(|(neg, _)| *neg);
         Node::Sum(terms)
     }
-
-    /// Rule 6: the value of a ground subtree holding a function of numbers that are all written
-    /// as floats, evaluated as the deployed evaluator does; `None` when it does not fold.
-    fn fold(&self, e: &Ex) -> Option<Rat> {
-        // An integer power of a number, which the state keeps only because the exact value
-        // leaves the size cap: once the base is written as a float, the power of that float
-        // is a number like any other, combined exactly.
-        if let Ex::Pow(b, x) = e {
-            if let (Ex::Num(base), Ex::Num(k)) = (&**b, &**x) {
-                if base.is_zero() {
-                    return None;
-                }
-                if !k.is_integer() {
-                    return self.fold_function(e);
-                }
-                let (sp, shown) = self.spell(&base.abs(), false);
-                if !matches!(sp, Spelling::Float(_)) {
-                    return None;
-                }
-                let _exact = number_domain(false);
-                let shown = if base.is_negative() {
-                    shown.checked_neg()?
-                } else {
-                    shown
-                };
-                let v = shown.checked_pow_integer(k)?;
-                return writable(v.to_f64_nearest()).then_some(v);
-            }
-        }
-        self.fold_function(e)
-    }
-
-    /// Rule 6 proper: a ground subtree with a function inside, every number of it a float.
-    fn fold_function(&self, e: &Ex) -> Option<Rat> {
-        if matches!(e, Ex::Num(_)) || !self.foldable(e) {
-            return None;
-        }
-        let mut pieces = Vec::new();
-        collect_numbers(e, self.cx, &mut pieces);
-        if pieces.is_empty() {
-            return None;
-        }
-        for r in &pieces {
-            if r.is_zero() || !matches!(self.spell(&r.abs(), false).0, Spelling::Float(_)) {
-                return None;
-            }
-        }
-        let y = evaluate(e, self.cx)?;
-        if !writable(y) {
-            return None;
-        }
-        Rat::shortest_reading_as(y)
-    }
-
-    /// Ground and non-rational: no variable, slot, constant or symbol, and a function inside.
-    fn foldable(&self, e: &Ex) -> bool {
-        fn ground(e: &Ex) -> bool {
-            match e {
-                Ex::Num(_) => true,
-                Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const | Ex::Leaf(_) => {
-                    false
-                }
-                Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().all(ground),
-                Ex::Pow(b, x) => ground(b) && ground(x),
-            }
-        }
-        fn has_function(e: &Ex) -> bool {
-            match e {
-                Ex::Fun(..) => true,
-                Ex::Pow(b, x) => !matches!(&**x, Ex::Num(r) if r.is_integer()) || has_function(b),
-                Ex::Add(v) | Ex::Mul(v) => v.iter().any(has_function),
-                _ => false,
-            }
-        }
-        ground(e) && has_function(e)
-    }
-}
-
-/// The numbers of a ground subtree that rule 6 reads: every literal except exponents and root
-/// indices.
-fn collect_numbers(e: &Ex, cx: &Cx, out: &mut Vec<Rat>) {
-    match e {
-        Ex::Num(r) => out.push(r.clone()),
-        Ex::Add(v) | Ex::Mul(v) => v.iter().for_each(|x| collect_numbers(x, cx, out)),
-        Ex::Fun(f, v) => {
-            if cx.view.tok_is(*f, "rootn") {
-                if let Some(x) = v.first() {
-                    collect_numbers(x, cx, out);
-                }
-            } else {
-                v.iter().for_each(|x| collect_numbers(x, cx, out));
-            }
-        }
-        Ex::Pow(b, x) => {
-            collect_numbers(b, cx, out);
-            if !matches!(&**x, Ex::Num(_)) {
-                collect_numbers(x, cx, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// The f64 value of a ground subtree under the deployed evaluator's kernels: each literal is
-/// the float64 nearest to it, then the operations run in float64 (libm for functions).
-fn evaluate(e: &Ex, cx: &Cx) -> Option<f64> {
-    match e {
-        Ex::Num(r) => Some(r.to_f64_nearest()),
-        Ex::Add(v) => v
-            .iter()
-            .try_fold(0.0, |acc, x| Some(acc + evaluate(x, cx)?)),
-        Ex::Mul(v) => v
-            .iter()
-            .try_fold(1.0, |acc, x| Some(acc * evaluate(x, cx)?)),
-        Ex::Pow(b, x) => {
-            let (b, x) = (evaluate(b, cx)?, evaluate(x, cx)?);
-            crate::numeric::apply_op("pow", &[b, x])
-        }
-        Ex::Fun(f, args) => {
-            let name = cx.view.resolve_owned(*f);
-            let vals: Option<Vec<f64>> = args.iter().map(|a| evaluate(a, cx)).collect();
-            crate::numeric::apply_op(&name, &vals?)
-        }
-        _ => None,
-    }
 }
 
 /// The exact combination of several numbers (`None` when it leaves the representable range or
-/// float64's normal range: rule 10). An empty list combines to nothing.
+/// float64's normal range: rule 9). An empty list combines to nothing.
 fn combine(numbers: &[Rat], op: fn(&Rat, &Rat) -> Option<Rat>) -> Option<Rat> {
     let (first, rest) = numbers.split_first()?;
     let mut acc = first.clone();
@@ -730,6 +615,108 @@ fn combine(numbers: &[Rat], op: fn(&Rat, &Rat) -> Option<Rat>) -> Option<Rat> {
         return None;
     }
     Some(acc)
+}
+
+/// The coefficient of a product: its numbers over the numbers of its joined reciprocals, exact
+/// (`None` when that leaves the range, as in [`combine`]). No numbers is no coefficient.
+fn coefficient(numbers: &[Rat], divisors: &[Rat]) -> Option<Rat> {
+    let top = combine(numbers, Rat::checked_mul);
+    if divisors.is_empty() {
+        return top;
+    }
+    if top.is_none() && !numbers.is_empty() {
+        return None;
+    }
+    let bottom = combine(divisors, Rat::checked_mul)?;
+    let c = top
+        .unwrap_or(Rat::ONE)
+        .checked_mul(&bottom.checked_inv()?)?;
+    (c.is_zero() || writable(c.to_f64_nearest())).then_some(c)
+}
+
+/// The members of a joined reciprocal `(m1*m2*...)^-1`: the reciprocal of a product the state
+/// holds whole.
+fn joined_reciprocal(f: &Ex) -> Option<&[Ex]> {
+    match f {
+        Ex::Pow(b, x) => match (&**b, &**x) {
+            (Ex::Mul(members), Ex::Num(k)) if *k == Rat::NEG_ONE => Some(members),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The order of a denominator's members: by base, then exponent, as a canonical product orders
+/// its factors (`x2*x3^2*exp(x3)*(x2 + 1)`).
+fn factor_cmp(a: &Node, b: &Node) -> Ordering {
+    fn split(n: &Node) -> (&Node, Option<&Node>) {
+        match n {
+            Node::Pow(b, x) => (b, Some(x)),
+            other => (other, None),
+        }
+    }
+    let ((ba, xa), (bb, xb)) = (split(a), split(b));
+    node_cmp(ba, bb).then_with(|| match (xa, xb) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(x), Some(y)) => node_cmp(x, y),
+    })
+}
+
+/// A total order on display trees: numbers, names, negations, calls, powers, sums, products,
+/// then by content.
+fn node_cmp(a: &Node, b: &Node) -> Ordering {
+    fn rank(n: &Node) -> u8 {
+        match n {
+            Node::Num(_) => 0,
+            Node::Name(..) => 1,
+            Node::Neg(_) => 2,
+            Node::Call(..) => 3,
+            Node::Pow(..) => 4,
+            Node::Sum(_) => 5,
+            Node::Prod { .. } => 6,
+        }
+    }
+    fn all(a: &[Node], b: &[Node]) -> Ordering {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| node_cmp(x, y))
+            .find(|o| o.is_ne())
+            .unwrap_or_else(|| a.len().cmp(&b.len()))
+    }
+    rank(a).cmp(&rank(b)).then_with(|| match (a, b) {
+        (Node::Num(x), Node::Num(y)) => x.cmp(y),
+        (Node::Name(x, _), Node::Name(y, _)) => x.cmp(y),
+        (Node::Neg(x), Node::Neg(y)) => node_cmp(x, y),
+        (Node::Call(f, xs), Node::Call(g, ys)) => f.cmp(g).then_with(|| all(xs, ys)),
+        (Node::Pow(b1, x1), Node::Pow(b2, x2)) => node_cmp(b1, b2).then_with(|| node_cmp(x1, x2)),
+        (Node::Sum(xs), Node::Sum(ys)) => xs
+            .iter()
+            .zip(ys)
+            .map(|((nx, x), (ny, y))| nx.cmp(ny).then_with(|| node_cmp(x, y)))
+            .find(|o| o.is_ne())
+            .unwrap_or_else(|| xs.len().cmp(&ys.len())),
+        (
+            Node::Prod {
+                neg: n1,
+                num: a1,
+                den: d1,
+            },
+            Node::Prod {
+                neg: n2,
+                num: a2,
+                den: d2,
+            },
+        ) => n1.cmp(n2).then_with(|| all(a1, a2)).then_with(|| {
+            d1.iter()
+                .zip(d2)
+                .map(|(x, y)| all(x, y))
+                .find(|o| o.is_ne())
+                .unwrap_or_else(|| d1.len().cmp(&d2.len()))
+        }),
+        _ => Ordering::Equal,
+    })
 }
 
 /// The canonical infix's sign hoist for a sum term (owner ruling 2026-08-08): an odd function

@@ -3,7 +3,7 @@
 `simplify` returns the canonical form, and its numbers are exact: a literal keeps every digit
 it was given, and a coefficient that combines several literals is their exact product.
 `prettify` is the display of that form. It decides how each number is written for a reader and
-leaves the expression's structure as it is.
+leaves the expression's structure as it is: it evaluates nothing and simplifies nothing.
 
 ```python
 import simplipy as sp
@@ -61,12 +61,14 @@ engine.prettify(engine.simplify("3*x0^2/(20*3.141592653589793*x1*x2)"))
 **Divisors.** A float whose reciprocal float64 holds as written stays a divisor where the
 denominator has another factor; a bare `x1/0.225147640565301` becomes a multiplier (above).
 
-**Functions of numbers** fold to one float only when every number inside would itself be
-written as a float. Nothing folds or combines to inf, 0 or a subnormal.
+**Functions of numbers** stay functions, their numbers written by the same rules: what `simplify`
+keeps, the display shows. No numbers combine to inf, 0 or a subnormal.
 
 ```python
+engine.prettify(engine.simplify("x1*exp(-381/2)"))
+# -> 'x1*exp(-190.5)'
 engine.prettify(engine.simplify("sin(sin(9463/890))"))
-# -> '-0.8045036621463277'
+# -> 'sin(sin(10.632584269662921))'
 engine.prettify(engine.simplify("x1 + sin(2)"))
 # -> 'x1 + sin(2)'
 ```
@@ -99,16 +101,19 @@ engine.prettify(tokens, form="tagged")
 # -> ['<mul>', '1', '<div>', '2', '3.141592653589793', '</mul>']
 ```
 
-Rounding a number can make another form of the expression cheaper (an exponent a hair above 3
-becomes 3, and the power then multiplies out). `prettify` therefore simplifies its display once
-more, in `mode` (default `f64`), and displays that answer. Displaying the simplified display
-gives the display back:
+A number is written exactly or as the float64 nearest to it, so the display reads back to the
+same float64 values: it evaluates as the expression does, up to the order of its operations.
+Displaying a display gives it back:
 
 ```python
 shown = engine.prettify(answer)
-engine.prettify(engine.simplify(shown)) == shown
+engine.prettify(shown) == shown
 # -> True
 ```
 
-Reading the display back changes no value beyond rounding a number to its float64 and the
-folded functions. The display rules are designed for `f64` mode.
+The exception is a display in which writing numbers as their floats makes parts alike that the
+expression keeps apart. `prettify` does not decide that they are alike, and it does not simplify
+what it wrote, so the display of `sin(1.00000000000000000001*x1) - sin(x1)` is
+`sin(x1) - sin(x1)` (whose own display is `0`), and an exponent a hair above 3 is written `3`
+without multiplying the power out. `mode` (default `f64`) is the mode whose number domain reads
+the numbers; the display rules are designed for `f64`.

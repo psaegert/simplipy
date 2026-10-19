@@ -138,11 +138,15 @@ model predictions.
   explicit or tagged tokens. A fraction that fits the digit budget stays a fraction (`x1/4.2`,
   `22*x1/7`), any other number is its float64 in shortest form (`9.765625e-4*x1`,
   `2.1458314277221002*x1` for a 33-digit literal), pi is factored out as the literal
-  `3.141592653589793` where the rest fits (`1/(2*3.141592653589793)`), functions of numbers that
-  are all floats fold, and even roots read `rootn(x, n)`. The display is simplified once more
-  and redisplayed, so displaying the simplified display gives the display back: on the release
-  corpus, srbf's 6,531 ground truths, 1,000 of its predictions and 3,000 fuzz rows, in all three
-  forms. Nothing inside SimpliPy calls it; see the guide "Displaying expressions".
+  `3.141592653589793` where the rest fits (`1/(2*3.141592653589793)`), and even roots read
+  `rootn(x, n)`. It writes numbers and decides no value: a function of numbers stays a function
+  (`x1*exp(-190.5)`), and the display is not simplified again, so it never collects what it
+  wrote alike (`sin(1.00000000000000000001*x1) - sin(x1)` shows as `sin(x1) - sin(x1)`). A
+  number is written exactly or as its float64, so the display reads back to the same float64
+  values, and displaying a display gives it back, on the release corpus in all three forms,
+  except where writing numbers as floats makes parts of it alike (the display of
+  `sin(x1) - sin(x1)` is `0`). Nothing inside SimpliPy calls it; see the guide "Displaying
+  expressions".
 <!-- TO BE MEASURED AFTER THE RE-MINE: the speed of 0.15.0 against 0.14.7, per mode, on the
      simplify inputs of flash-ansr's training-data generator, srbf's ground truths and its model
      predictions. The entry that stood here ("Fast in every mode") no longer holds: on the
@@ -738,9 +742,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   is: `read_infix('x0*pow_1')` returned the malformed `['*', 'x0', 'inv']`.
 - **`import simplipy` succeeds without the compiled core**, and constructing an engine raises the
   `ImportError` that names the failure; an unguarded import in `simplipy.utils` failed the import
-  itself. For code that calls `simplipy._core` directly: the simplify, infix and `prettify`
-  entries take a keyword `own_set`, which raises the new `simplipy._core.MissingModeSet` where the
-  mode holds no set of its own.
+  itself. For code that calls `simplipy._core` directly: the simplify and infix entries take a
+  keyword `own_set`, which raises the new `simplipy._core.MissingModeSet` where the mode holds no
+  set of its own.
 - **The mining calls name their mode.** `prune_covered_rules`, `deduplicate_rules` and
   `promote` take a required keyword `rule_mode`: `'f64'` (also spelled `'default'`, the core's
   name for the f64 set), `'real'` or `'permissive'`. The CLI's `prune-covered-rules` prunes the

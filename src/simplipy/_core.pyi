@@ -60,11 +60,8 @@ class Engine:
         tokens: list[str],
         digits: int = ...,
         form: Literal["infix", "explicit", "tagged"] = ...,
-        resimplify: bool = ...,  # simplify the display once and display that
-        explore_budget: int | None = ...,
         *,
-        rule_mode: Literal["default", "real", "permissive"],
-        own_set: bool = ...,
+        rule_mode: Literal["default", "real", "permissive"],  # the number domain; no rules
     ) -> str | list[str]: ...
     def ac_simplify_explore(
         self,

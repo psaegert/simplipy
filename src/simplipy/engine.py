@@ -2185,19 +2185,21 @@ class SimpliPyEngine:
             digits: int = 3,
             form: str | None = None,
             mode: Mode | str = Mode.f64) -> str | list[str]:
-        """Write an expression for a READER: numbers rounded to a digit budget, the state untouched.
+        """Write an expression for a READER: each number written to a digit budget, nothing else decided.
 
         :meth:`simplify` returns the canonical form, whose numbers are exact
         (``2.14583142772210003669120562399025*x1`` stays as long as it was given). ``prettify``
         is the display of that form: it decides how each number is WRITTEN and leaves the
-        structure as it is. Nothing inside SimpliPy calls it or reads what it returns, so
-        call it where people read expressions, on the answer of :meth:`simplify`::
+        structure as it is. It evaluates nothing and simplifies nothing, so what the canonical
+        form keeps, the display shows. Nothing inside SimpliPy calls it or reads what it
+        returns; call it where people read expressions, on the answer of :meth:`simplify`::
 
             engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
             # '2.1458314277221002*x1'
             engine.prettify(engine.simplify('x1*5/21'))        # 'x1/4.2'
             engine.prettify(engine.simplify('1/(2*3.141592653589793)'))
             # '1/(2*3.141592653589793)'
+            engine.prettify(engine.simplify('x1*exp(-381/2)'))  # 'x1*exp(-190.5)'
 
         The rules, at the digit budget ``D = digits`` (every digit a spelling writes counts,
         a numerator of 1 included: ``1/12`` counts 3):
@@ -2213,14 +2215,23 @@ class SimpliPyEngine:
         * A float whose reciprocal float64 holds as written stays a divisor where the
           denominator has another factor; a bare ``x1/0.225147640565301`` is
           ``4.441529999999994*x1``.
-        * A function of numbers folds to one float only when every number inside would
-          itself be a float (``sin(sin(9463/890))`` is ``-0.8045036621463277``, ``sin(2)``
-          stays). Nothing folds or combines to inf, 0 or a subnormal.
+        * A function of numbers stays a function, its numbers written by these rules
+          (``x1*exp(-381/2)`` is ``x1*exp(-190.5)``). No numbers combine to inf, 0 or a
+          subnormal.
         * Exponents follow the same rules; ``x^(1/n)`` and ``x^(-1/n)`` are written
           ``rootn(x, n)`` and ``1/rootn(x, n)`` for even ``n``.
+        * Divisors that are numbers, variables or their powers and roots share one
+          denominator (``x0^2/(x1*x2)``), written the same whether the canonical form holds a
+          reciprocal per factor or one of their product; any other divisor keeps its own slash.
         * Scientific notation from ``1e6`` and below ``1e-3``.
-        * The display is simplified once more (in ``mode``) and that answer is displayed,
-          so displaying the simplified display gives the display back.
+
+        A number is written exactly or as the float64 nearest to it, so the display reads
+        back to the same float64 values: it evaluates as the expression does, up to the order
+        of its operations. Displaying a display gives it back
+        (``prettify(prettify(x)) == prettify(x)``), except where writing numbers as their
+        floats makes parts of the display alike that the expression keeps apart: the display
+        of ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``sin(x1) - sin(x1)``, whose own
+        display is ``0``.
 
         Parameters
         ----------
@@ -2233,8 +2244,8 @@ class SimpliPyEngine:
             ``'infix'``, ``'explicit'`` or ``'tagged'``; by default the input's dialect, as
             :meth:`simplify` answers.
         mode : Mode | str, optional
-            The mode whose numbers are read and whose rules the extra simplification uses
-            (default ``f64``; the display rules are designed for it).
+            The mode whose number domain reads the expression's numbers (default ``f64``, for
+            which the display rules are designed). No rules are used.
 
         Returns
         -------
@@ -2247,19 +2258,13 @@ class SimpliPyEngine:
         if digits < 1:
             raise ValueError(f"digits must be at least 1, got {digits}")
         mode = _coerce_mode(mode)
-        refusal = "mode='real' needs a ruleset mined for it, and this artifact has none"
-        if mode is Mode.real and not self._names_mode_set('real'):
-            raise ValueError(refusal)
         in_form, tokens = self._read_input(expression)
         target = form or in_form
         if target not in ('infix', 'explicit', 'tagged'):
             raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
         if not tokens:
             return '' if target == 'infix' else []
-        rule_mode = _RULE_MODE[mode]
-        return self._serve(mode, lambda core: core.prettify(
-            tokens, int(digits), target, True, DEFAULT_EFFORT, rule_mode=rule_mode,
-            own_set=mode is Mode.real), refusal)
+        return self._core.prettify(tokens, int(digits), target, rule_mode=_RULE_MODE[mode])
 
     def complexity(
             self,

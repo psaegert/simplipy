@@ -1,12 +1,14 @@
-"""`prettify`: the display of a canonical state (number plan v2, phase 3).
+"""`prettify`: the display of a canonical state.
 
 Pinned here:
-* the plan's expected-output table at D = 3, row by row, plus the token forms;
-* P1, the display fixed point: `prettify(simplify(p)) == p` for `p = prettify(c)`, in all three
-  forms, on the release corpus -- and the check fails where it should (rule 11 off on a row
-  whose rounding makes another form cheaper);
-* P2, the round trip: `simplify(prettify(c))` is `c` on the corpus except where the display
-  rounds a number, and a one-ulp change to a displayed float is caught;
+* the expected-output table at D = 3, row by row, plus the token forms;
+* display only: prettify writes numbers and decides no value -- a function of numbers stays a
+  function, and the display is not simplified again;
+* P1, idempotence: `prettify(prettify(c)) == prettify(c)` in all three forms on the release
+  corpus, and the display does not depend on how the state holds its reciprocals;
+* P2, the read-back: every number of the display reads back as the float64 of the value it
+  stands for -- the display evaluates as the state does on the corpus, and a one-ulp change to
+  a displayed float is caught;
 * the source guard: nothing inside SimpliPy calls prettify -- and the guard catches a call;
 * the API: digits, form, dialects, empty input.
 """
@@ -59,7 +61,7 @@ TABLE = [
     ('(x2 + 0.5)^(500000000000000/4427)', '(x2 + 1/2)^1.1294330246216399e11'),
     ('x1^2*x2^2/(6*3.1415926535897*8.854e-12*(2.99792458e8)^3)', '2.2238078067157093e-16*x1^2*x2^2'),  # Larmor
     ('x1*20847313721190114925292351/1875000000000000000000000000', '0.011118567317968061*x1'),
-    ('sin(sin(9463/890))', '-0.8045036621463277'),
+    ('sin(sin(9463/890))', 'sin(sin(10.632584269662921))'),
     ('x1*6.626e-34', '6.626e-34*x1'),
     ('x1*1e-40*3', '3e-40*x1'),
     ('x1*1e200*1e200', '1e200*1e200*x1'),
@@ -107,17 +109,34 @@ def test_digit_budget(eng):
     assert show(eng, '1234567*x1') == '1.234567e6*x1'
 
 
-def test_functions_of_numbers_fold_only_when_every_number_is_a_float(eng):
-    assert show(eng, 'sin(2) + x1') == 'x1 + sin(2)'
-    assert show(eng, 'x1*sin(9463/890)') == '-0.9348393354311442*x1'
-    assert show(eng, 'x1 + sin(9463/890)') == 'x1 - 0.9348393354311442'
+@pytest.mark.parametrize('text,expected', [
+    ('x1*exp(-381/2)', 'x1*exp(-190.5)'),
+    ('x1*sin(sin(9463/890))', 'x1*sin(sin(10.632584269662921))'),
+    ('x1*sin(9463/890)', 'x1*sin(10.632584269662921)'),
+    ('x1 + sin(9463/890)', 'x1 + sin(10.632584269662921)'),
+    ('sin(2) + x1', 'x1 + sin(2)'),
     # an odd function of a negative literal gives its sign to the joiner, as in `simplify`'s text
-    assert show(eng, 'x1 + sin(-2)') == 'x1 - sin(2)'
-    # a power the state keeps only for its size is a number once its base is a float
-    long = '0.001980784624751695158377988284554202796250646643885207061964241892776071925160468502'
-    assert show(eng, f'x1*{long}^5') == '3.0492025996286705e-14*x1'
-    assert show(eng, '3^5000*x1') == '3^5000*x1'
-    assert show(eng, 'x1*2^(1/3)') == '2^(1/3)*x1'
+    ('x1 + sin(-2)', 'x1 - sin(2)'),
+    # a power the state keeps for its size stays a power of its base, written as a float
+    ('x1*0.001980784624751695158377988284554202796250646643885207061964241892776071925160468502^5',
+     '0.001980784624751695^5*x1'),
+    ('3^5000*x1', '3^5000*x1'),
+    ('x1*2^(1/3)', '2^(1/3)*x1'),
+])
+def test_functions_of_numbers_stay_functions(eng, text, expected):
+    """prettify writes numbers and evaluates nothing: what `simplify` keeps, it shows."""
+    assert show(eng, text) == expected
+
+
+# The display rounds `1.00000000000000000001` to `1` and the exponent `3 + 1e-22` to `3`; it does
+# not simplify what it wrote, so the display neither collapses to `0` nor multiplies out.
+@pytest.mark.parametrize('text,expected', [
+    ('sin(1.00000000000000000001*x1) - sin(x1)', 'sin(x1) - sin(x1)'),
+    ('x3 + (1815963197375679774584911*x1/1.1784e19)^(9000000000000000000001/3000000000000000000000)',
+     'x3 + (154104.1409857162*x1)^3'),
+])
+def test_the_display_is_not_simplified(eng, text, expected):
+    assert show(eng, text) == expected
 
 
 def test_divisors(eng):
@@ -137,32 +156,42 @@ def corpus():
     return default_corpus()
 
 
+def in_form(eng, c, form):
+    return eng.to_infix(c) if form == 'infix' else eng.to_tagged(c) if form == 'tagged' else c
+
+
+def displays_that_move(eng, rows, form):
+    """The rows whose display is not its own display: `prettify(p) != p`."""
+    moved = []
+    for row in rows:
+        p = eng.prettify(in_form(eng, eng.simplify(row), form))
+        if eng.prettify(p) != p:
+            moved.append((row, p, eng.prettify(p)))
+    return moved
+
+
 @pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
-def test_p1_display_fixed_point_on_the_corpus(eng, form):
-    failures = []
-    for row in corpus():
-        c = eng.simplify(row)
-        c = eng.to_infix(c) if form == 'infix' else eng.to_tagged(c) if form == 'tagged' else c
-        p = eng.prettify(c)
-        if eng.prettify(eng.simplify(p)) != p:
-            failures.append((row, p))
-    assert not failures, failures[:5]
+def test_p1_displaying_a_display_gives_it_back_on_the_corpus(eng, form):
+    moved = displays_that_move(eng, corpus(), form)
+    assert not moved, moved[:5]
 
 
-# Rounding `(c*x1)^(3 + 1e-22)` to `(c*x1)^3` makes the multiplied-out form cheaper: displaying
-# the canonical state alone is no fixed point; rule 11 (simplify the display once and display
-# that) is.
-REROUND = 'x3 + (1815963197375679774584911*x1/1.1784e19)^(9000000000000000000001/3000000000000000000000)'
+def test_p1_check_catches_a_display_that_moves(eng):
+    """The gate can fail. Writing a number as its float can make two terms of the display alike
+    that the state keeps apart; reading the display then collects them."""
+    row = 'sin(1.00000000000000000001*x1) - sin(x1)'
+    assert displays_that_move(eng, [row], 'infix') == [(row, 'sin(x1) - sin(x1)', '0')]
 
 
-def test_p1_check_fails_without_rule_11(eng):
-    c = list(eng.simplify(eng._core.parse(REROUND, strict=True)))
-    raw = eng._core.prettify(c, 3, 'infix', False, rule_mode='default')
-    assert raw == 'x3 + (154104.1409857162*x1)^3'
-    assert eng.prettify(eng.simplify(raw)) != raw  # the P1 check catches it
-    p = eng.prettify(c, form='infix')
-    assert p == 'x3 + 3.6596784345305275e15*x1^3'
-    assert eng.prettify(eng.simplify(p)) == p
+@pytest.mark.parametrize('text', ['x13/(3*x4*rootn(x10, 2))', '2*x1/(4.2*x2*x3^2)',
+                                  'x0/(3125*x1^5*x2^5)/sinh(x1)^5'])
+@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+def test_p1_the_display_does_not_depend_on_how_the_state_holds_its_reciprocals(eng, text, form):
+    """The input reads as one joined reciprocal (`(3*x4*rootn(x10, 2))^-1`), the answer of
+    `simplify` holds a reciprocal per factor (`x4^-1*x10^(-1/2)`): the two display alike."""
+    joined = eng.prettify(in_form(eng, eng._core.parse(text, strict=True), form))
+    split = eng.prettify(in_form(eng, eng.simplify(eng._core.parse(text, strict=True)), form))
+    assert joined == split
 
 
 def floats(tokens):
@@ -179,28 +208,33 @@ def floats(tokens):
 
 
 def values(eng, tokens, names, xs):
+    """The float64 values of `tokens` at the points `xs`, every `<constant>` set to one value."""
     import numpy as np
-    return np.asarray(eng._core.evaluate_batch(list(tokens), names, xs.ravel().tolist(), len(xs), []))
+    params = [1.2345] * sum(t == '<constant>' for t in tokens)
+    return np.asarray(eng._core.evaluate_batch(list(tokens), names, xs.ravel().tolist(), len(xs), params))
 
 
-def test_p2_round_trip_on_the_corpus(eng):
-    """Re-reading the display gives the state back, except where a number is rounded; there the
-    two evaluate alike in float64 and display alike."""
+# The display writes each number exactly or as the float64 the evaluator reads it as, and writes
+# the same operations; only their order can differ (a sum's association, the order of divisions).
+# Measured on the corpus at these points: at most 9.1e-13 apart, where exp(sinh(...)) amplifies a
+# re-associated sum. The gate catches a number written short of its float64 to a few digits; the
+# one-ulp test below is the fine check that a float is written in full.
+P2_RTOL = 1e-9
+
+
+def test_p2_the_display_evaluates_as_the_state_does_on_the_corpus(eng):
     import numpy as np
     rng = np.random.default_rng(0)
-    moved = []
+    apart = []
     for row in corpus():
         c = list(eng.simplify(row))
-        r = list(eng.simplify(eng.prettify(c)))
-        if r != c:
-            moved.append((c, r))
-    assert len(moved) == 1, moved  # `19*x16/12` shows (and re-reads) as `1.5833333333333333*x16`
-    for c, r in moved:
-        assert eng.prettify(c) == eng.prettify(r)
-        names = sorted({t for t in c + r if re.fullmatch(r'x\d+', t)})
-        xs = rng.uniform(0.5, 2.0, size=(64, len(names)))
-        a, b = values(eng, c, names, xs), values(eng, r, names, xs)
-        assert np.allclose(a, b, rtol=4e-16, atol=0, equal_nan=True)
+        p = list(eng.prettify(c))
+        names = sorted({t for t in c + p if re.fullmatch(r'x\d+', t)})
+        xs = rng.uniform(0.5, 2.0, size=(64, max(len(names), 1)))
+        a, b = values(eng, c, names or ['x0'], xs), values(eng, p, names or ['x0'], xs)
+        if not np.allclose(a, b, rtol=P2_RTOL, atol=0, equal_nan=True):
+            apart.append((eng.to_infix(c), eng.to_infix(p)))
+    assert not apart, apart[:5]
 
 
 @pytest.mark.parametrize('text', ['x1/0.225147640565301', 'x1/3 + 7.123456789012345*x2',

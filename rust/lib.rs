@@ -857,25 +857,18 @@ impl PyEngine {
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
-    /// `prettify`: the DISPLAY of an expression's canonical state under
-    /// the digit budget `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`,
-    /// `"tagged"`). With `resimplify`, the display is simplified once in `rule_mode`
-    /// (search budget `explore_budget`, read as in `ac_simplify_in_mode`) and that answer is
-    /// displayed. Display only: nothing in the engine
-    /// calls this or reads what it returns.
-    /// `own_set` reads as in `ac_simplify_in_mode`.
-    #[pyo3(signature = (tokens, digits=3, form="infix", resimplify=true, explore_budget=None, *, rule_mode, own_set=false))]
-    #[allow(clippy::too_many_arguments)]
+    /// `prettify`: the DISPLAY of an expression's canonical state under the digit budget
+    /// `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`, `"tagged"`), its numbers
+    /// read in `rule_mode`'s number domain. Display only: it simplifies nothing, and nothing in
+    /// the engine calls this or reads what it returns.
+    #[pyo3(signature = (tokens, digits=3, form="infix", *, rule_mode))]
     fn prettify(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         digits: usize,
         form: &str,
-        resimplify: bool,
-        explore_budget: Option<usize>,
         rule_mode: &str,
-        own_set: bool,
     ) -> PyResult<Py<PyAny>> {
         let form = engine::PrettyForm::parse(form).ok_or_else(|| {
             PyValueError::new_err(format!(
@@ -886,13 +879,11 @@ impl PyEngine {
         if digits == 0 {
             return Err(PyValueError::new_err("digits must be at least 1"));
         }
-        let budget = resimplify.then(|| explore_budget_of(explore_budget));
         let out = py.detach(|| {
             let inner = self.inner();
-            ensure_own_set(&inner, mode, own_set)?;
             ensure_ac_well_formed(&inner, &tokens)?;
             inner
-                .ac_prettify(&tokens, digits, form, mode, budget)
+                .ac_prettify(&tokens, digits, form, mode)
                 .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
         })?;
         Ok(match out {
