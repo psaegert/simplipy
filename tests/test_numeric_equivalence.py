@@ -183,6 +183,11 @@ class TestCorpusGate:
     def test_permutation_invariant(self, walk):
         assert not walk['perm_rows'], f'permutation failures at rows {walk["perm_rows"]}'
 
+    def test_step_cap_never_binds(self, eng, walk):
+        # The walk ran the deployed default effort on every row. A binding step cap would
+        # leave a non-fixpoint answer with no other signal.
+        assert eng._core.step_cap_binds() == 0
+
     def test_screen_coverage_exact(self, walk):
         # anti-vacuity, pinned exactly: 400 rows minus the 135 whose INPUT carries
         # <constant> (measured 2026-07-29 on the tracked corpus). Engine-side
