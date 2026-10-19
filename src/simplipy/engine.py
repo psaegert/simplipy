@@ -1628,6 +1628,8 @@ class SimpliPyEngine:
         operator tokens first: it is a notation of the same expression. Only
         realizations that differ from their operator token identify it, and those are
         dotted names no operator vocabulary contains, so it is detected, never guessed.
+        Reading it back needs an injective realization map, so a config where two
+        operators share a realization refuses it (:meth:`_assert_realizations_are_invertible`).
 
         Refuses loudly: an ``ndarray`` that is not 1-D or not string-like raises
         ``ValueError``, any other type ``TypeError``. The reading does not validate;
@@ -1650,6 +1652,7 @@ class SimpliPyEngine:
                 f'expected an infix str or a token sequence '
                 f'(list, tuple or 1-D ndarray), not {type(expression).__name__}')
         if self._realization_only_tokens().intersection(tokens):
+            self._assert_realizations_are_invertible()
             tokens = self.realizations_to_operators(tokens)
         return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'explicit'), tokens
 
