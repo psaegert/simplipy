@@ -1164,46 +1164,6 @@ def match_pattern(tree: list, pattern: list, mapping: dict[str, Any] | None = No
     return True, mapping
 
 
-def remove_pow1(prefix_expression: list[str]) -> list[str]:
-    """Remove identity power operations from a prefix expression.
-
-    This utility cleans up an expression by removing `pow1` operators, which
-    represent raising to the power of 1 (an identity operation), and replaces
-    `pow_1` (power of -1) with its canonical equivalent, `inv`.
-
-    Parameters
-    ----------
-    prefix_expression : list[str]
-        The prefix expression to clean.
-
-    Returns
-    -------
-    list[str]
-        The cleaned prefix expression without `pow1` or `pow_1` tokens.
-
-    Examples
-    --------
-    >>> expr = ['pow1', 'x', '+', 'y', 'pow_1', 'z']
-    >>> remove_pow1(expr)
-    ['x', '+', 'y', 'inv', 'z']
-    """
-    filtered_expression = []
-    for token in prefix_expression:
-        if token == 'pow1':
-            continue
-
-        if token == 'pow_1':
-            filtered_expression.append('inv')
-            continue
-
-        filtered_expression.append(token)
-
-    return filtered_expression
-
-
-# four sorts: `_N` any subtree, `!N` a subtree the interval engine certifies
-# defined-and-finite a.e., `$N` a subtree certified defined-finite-AND-nonzero a.e.
-# (the multiplicative-cancellation sort), `?N` a variable leaf.
 _WILDCARD_RE = re.compile(r'^[_?!$]\d+$')
 
 

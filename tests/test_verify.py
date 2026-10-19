@@ -704,8 +704,8 @@ class TestOperandScaledPrecision:
         `log(0) = -inf` at BOTH rungs. It is `real`: true on R, and not f64-realised
         because exp overflows at 709.782713."""
         from simplipy.verify._contract import judge_rule
-        got = judge_rule('log + cosh mult5 mult5 ?0 sinh mult5 mult5 ?0'.split(),
-                         'mult5 mult5 ?0'.split())
+        got = judge_rule('log + cosh * 25 ?0 sinh * 25 ?0'.split(),
+                         '* 25 ?0'.split())
         assert got['verdict'] != 'KILL'
         assert got['tier'] == 'real'
 
@@ -1362,7 +1362,7 @@ class TestNanIsInTheWidestSortsQuantifier:
         """nan propagates through strict identities: both sides read nan at the atom,
         compare 'eq', and the verdict cannot move."""
         for lhs, rhs in (('/ 1 abs _0', 'abs inv _0'),
-                         ('pow1_3 pow3 _0', '_0'),
+                         ('rootn pow _0 3 3', '_0'),
                          ('inv abs abs _0', 'inv abs _0')):
             r = judge_rule(lhs.split(), rhs.split())
             assert r['verdict'] == 'CERTIFIED', (lhs, r)
@@ -1394,7 +1394,7 @@ class TestTheGateAgreesWithTheRouterAndTheClock:
             rep = verify_ruleset(rules, mode=mode)
             assert rep['is_clean'] is True, (mode, rep)
         # and the carve-out opens NOTHING else: a false rule stays dirty everywhere
-        bad = [[['pow1_2', 'pow2', '?0'], ['?0']]]
+        bad = [[['rootn', 'pow', '?0', '2', '2'], ['?0']]]
         for mode in (None, 'f64'):
             assert verify_ruleset(bad, mode=mode)['is_clean'] is False, mode
 
@@ -1423,6 +1423,18 @@ class TestTheGateAgreesWithTheRouterAndTheClock:
         monkeypatch.setattr(_gate, 'judge_rule', hung)
         code = _gate.sweep([(['neg', 'neg', '?0'], ['?0'])])
         assert code != 0, "fail-closed: a rule that times out twice is held out"
+
+
+def test_the_self_tests_speak_the_live_vocabulary() -> None:
+    # The touchstones and the gate's poisons exercise the spelling a 0.15 artifact uses
+    # (`pow`, `rootn`, `*`), not the retired hyper-operators.
+    from simplipy.verify._contract import TOUCHSTONES
+    from simplipy.verify._gate import POISONS, PHANTOMS
+    retired = {f'{f}{k}' for f in ('pow', 'mult', 'div', 'pow1_') for k in range(2, 6)}
+    for lhs, rhs, *_ in [*TOUCHSTONES, *POISONS, *PHANTOMS]:
+        tokens = [*(lhs.split() if isinstance(lhs, str) else lhs),
+                  *(rhs.split() if isinstance(rhs, str) else rhs)]
+        assert not retired & set(tokens), (lhs, rhs)
 
 
 def test_the_legacy_odd_roots_judge_like_rootn() -> None:

@@ -32,14 +32,12 @@ JUDGE_TIMEOUT_S = 30   # per-rule budget. A gate that can HANG is not a gate: mp
                        # silently skipped.
 
 POISONS = [
-    # legacy-vocabulary spellings (the gate keeps judging pre-0.12 artifacts)
-    ('pow1_2 pow2 ?0'.split(), '?0'.split(), 'KILL',
+    ('rootn pow ?0 2 2'.split(), '?0'.split(), 'KILL',
      'clause (a): sqrt(x^2)->x changes real values on x<0'),
-    ('pow4 pow5 pow1_2 !0'.split(), 'pow !0 <constant>'.split(), 'KILL',
+    ('pow pow rootn !0 2 5 4'.split(), 'pow !0 <constant>'.split(), 'KILL',
      'clause (b): even-root half-line domain extension'),
-    ('pow1_2 pow float("-inf") ?0'.split(), 'pow float("inf") ?0'.split(), 'KILL',
+    ('rootn pow float("-inf") ?0 2'.split(), 'pow float("inf") ?0'.split(), 'KILL',
      'clause (b): pow(-inf, data) undefined a.e.'),
-    # live 0.12-vocabulary spellings (rootn + the $ mult-certified sort)
     ('pow rootn !0 2 2'.split(), '!0'.split(), 'KILL',
      'clause (b): even-root round-trip extends the x<0 half-line (rootn spelling)'),
     ('/ $0 $0'.split(), '0'.split(), 'KILL',

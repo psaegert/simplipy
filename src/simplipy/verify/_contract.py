@@ -50,7 +50,9 @@ except Exception:  # pragma: no cover  (missing/unbuilt extension)
     _CORE_ARITY = {}
 
 #: The judge's vocabulary is DELIBERATELY broader than the engine's: it keeps the deleted
-#: 0.11 hyper-operator spellings so legacy-engine rewrites stay judgeable (pinned by
+#: 0.11 hyper-operator spellings, because a generation-2 config may still declare those
+#: names as operators (the mining test vocabularies declare `pow2`, and the Rust evaluator
+#: has kernels for them), so rules spelled with them stay judgeable (pinned by
 #: `test_legacy_hyperop_spellings_remain_judgeable`). Only the CORE half is derived --
 #: that is the half that must never drift from the engine; the rest is this module's own
 #: and is listed explicitly.
@@ -640,7 +642,8 @@ DEP_OPS = {
     # hyper-operator vocabulary is deleted, once and for all"), which silently emptied
     # these DEP_OPS slots via the getattr fallback below and let a planted gate poison
     # evaporate into NO-WITNESS (E1). Hand-coded here, transplanted from the pre-0.12
-    # module, so the gate keeps judging LEGACY artifacts and its legacy-spelled poisons.
+    # module, so the gate keeps judging rules spelled with those names: 0.15 refuses
+    # generation-1 ARTIFACTS, but a generation-2 config may still declare the names.
     'pow2': lambda a: F(a) ** F(2), 'pow3': lambda a: F(a) ** F(3),
     'pow4': lambda a: F(a) ** F(4), 'pow5': lambda a: F(a) ** F(5),
     'pow1_2': _legacy_even_root(0.5), 'pow1_4': _legacy_even_root(0.25),
@@ -2050,7 +2053,7 @@ TOUCHSTONES = [
     # (lhs, rhs, expected verdict, why -- the mathematical reason)
     ('+ ?0 pow sin ?0 float("inf")', '?0', 'KILL',
      'powsin: real value x+1 changed at exact pi/2 (clause a, null measure irrelevant)'),
-    ('pow1_2 pow2 ?0', '?0', 'KILL',
+    ('rootn pow ?0 2 2', '?0', 'KILL',
      'sqrt(x^2)->x: real values differ on x<0 (clause a + measure)'),
     ('atan tan asin _0', 'asin _0', 'TOLERATED',
      'nan-caused zero-measure extension at +-1 is NOT the powsin class'),
@@ -2062,13 +2065,13 @@ TOUCHSTONES = [
      'absorption: exact everywhere on reals; 0*inf indeterminate at nullx events only'),
     ('inv sin np.pi', 'float("inf")', 'CERTIFIED',
      'sin(pi) is exactly 0 (symbolic point + snap), 1/0 = +inf'),
-    ('pow4 inv pow1_4 ?0', 'pow ?0 <constant>', 'KILL',
+    ('pow inv rootn ?0 4 4', 'pow ?0 <constant>', 'KILL',
      'even-root extension on the negative half-line (clause b, positive measure)'),
-    ('pow1_2 pow float("-inf") ?0', 'pow float("inf") ?0', 'KILL',
+    ('rootn pow float("-inf") ?0 2', 'pow float("inf") ?0', 'KILL',
      'pow(-inf, data): undefined a.e. (clause b, positive measure)'),
-    ('pow1_2 pow1_2 atanh !0', 'pow1_4 atanh !0', 'CERTIFIED',
-     'pow1_4(-inf) = nan = sqrt(sqrt(-inf)): both spellings agree with the contract'),
-    ('/ 0 mult2 ?0', '0', 'TOLERATED',
+    ('rootn rootn atanh !0 2 2', 'rootn atanh !0 4', 'CERTIFIED',
+     'rootn(-inf, 4) = nan = sqrt(sqrt(-inf)): both spellings agree with the contract'),
+    ('/ 0 * 2 ?0', '0', 'TOLERATED',
      '0/0 at x=0 is an undefined->defined null-set extension (the x/x->1 class); the '
      'deployed zero-sign residue is a documented gap by design'),
     ('neg + (-1) _0', '- 1 _0', 'CERTIFIED',
@@ -2076,9 +2079,9 @@ TOUCHSTONES = [
     ('pow sin <constant> float("inf")', '0', 'KILL',
      'powsin in CONSTANT space: at c = pi/2 (symbolic atom) the value is 1, not 0 -- '
      'clause (a); fitted constants reach pi/2'),
-    ('pow1_3 pow3 _0', '_0', 'CERTIFIED',
+    ('rootn pow _0 3 3', '_0', 'CERTIFIED',
      'cbrt(t^3) = t exactly on all of R incl negatives and +-inf (odd-root exactness)'),
-    ('mult3 log pow1_3 _0', 'log _0', 'CERTIFIED',
+    ('* 3 log rootn _0 3', 'log _0', 'CERTIFIED',
      '3*log(cbrt t) = log t for t>0; both undefined for t<0; -inf vs -inf equal at 0; '
      '3*inf = inf at +inf: no disagreement event anywhere -- exactly certified'),
     ('atanh tanh !0', '!0', 'ENGINE-MISALIGN',
@@ -2103,9 +2106,9 @@ TOUCHSTONES = [
      'AND in f64, where 0.0 + sin(exp(-100)) == 0.0 is False. The snap absorbs it at '
      'dps 50 (threshold 1e-40) and not at dps 120 (1e-110), so rungs 2 and 3 decide, '
      'which is the escalation working as designed.'),
-    ('pow1_2 * - ?0 0.2 - ?0 0.8', 'pow1_2 abs * - ?0 0.2 - ?0 0.8', 'KILL',
+    ('rootn * - ?0 0.2 - ?0 0.8 2', 'rootn abs * - ?0 0.2 - ?0 0.8 2', 'KILL',
      'undefined on (0.2, 0.8), measure 0.6: invisible to a coarse unit-spaced grid'),
-    ('+ ?0 * pow exp neg pow2 - <constant> 2 float("inf") ?0', '?0', 'KILL',
+    ('+ ?0 * pow exp neg pow - <constant> 2 2 float("inf") ?0', '?0', 'KILL',
      'violates exactly at c = 2: requires the constant battery to include even integers '
      '(powsin-in-constant-space at an ordinary value)'),
     ('pow abs ?0 <constant>', 'pow abs ?0 <constant>', 'CERTIFIED',

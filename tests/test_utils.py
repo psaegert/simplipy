@@ -360,14 +360,6 @@ def test_match_pattern():
     assert not does_match
 
 
-def test_remove_pow1():
-    """Tests the removal of `pow1` and replacement of `pow_1`."""
-    expr = ['pow1', 'x', '+', 'y', 'pow_1', 'z']
-    expected = ['x', '+', 'y', 'inv', 'z']
-    result = utils.remove_pow1(expr)
-    assert result == expected
-
-
 def test_explicit_constant_placeholders_leaves_numerals_alone_by_default():
     # The mechanical contract since 0.13.0: only explicit placeholder slots are renamed.
     # Digit-only literals -- including pow exponents, whose integrality controls the
