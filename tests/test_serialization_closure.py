@@ -126,6 +126,14 @@ def ref_state(referee: SimpliPyEngine, tokens: list[str]) -> tuple[str, ...]:
     return tuple(referee.simplify(referee.to_prefix(list(tokens))))
 
 
+def _holds_quotient(token: str) -> bool:
+    """A sum, product, quotient, reciprocal or fraction token: what the tagged dialect bags."""
+    if token in ("+", "-", "*", "/", "inv"):
+        return True
+    p, _, q = token.partition("/")
+    return bool(q) and p.lstrip("-").isdigit() and q.isdigit()
+
+
 class TestPrefixClosureExhaustive:
     """Every prefix emission parses, is a fixpoint, and means what the source meant."""
 
@@ -138,19 +146,25 @@ class TestPrefixClosureExhaustive:
             want = ref_state(referee, src)
             for form, convert in (("tagged", engine.to_tagged),
                                   ("explicit", engine.to_prefix)):
-                out = engine.simplify(convert(list(src)))
+                given = convert(list(src))
+                # A tagged sequence declares its dialect by its bags, so every quotient and sum
+                # of the source is bagged (review T7: `neg inv x0` and `exp 1/2` declared none,
+                # so `simplify` read them as explicit and answered explicit).
+                bagged = any(t in ("<add>", "<mul>") for t in given)
+                if form == "tagged" and not bagged and any(_holds_quotient(t) for t in src):
+                    failures.append(f"[tagged] {' '.join(src)} -> {given}: declares no dialect")
+                    continue
+                out = engine.simplify(given)
+                # The answer is a STRICT token fixpoint in the dialect its input declared: a
+                # bagless tagged sequence (`pow 2 -1`, whose answer `/ 1 2` holds a quotient the
+                # source spells none of) declares the explicit one.
+                again = convert if (form == "explicit" or bagged) else engine.to_prefix
                 try:
-                    # dialect-preserving: re-simplifying stays in the dialect the tokens
-                    # DECLARE. A tagged answer that carries no bag delimiter (`neg inv x0`,
-                    # `pow x0 -2`) is a sequence of BOTH token dialects, so it re-reads as
-                    # explicit and may re-spell -- the same state, a different projection.
-                    # Feeding it back through the answer's own dialect is the closure
-                    # question; the state check below is what pins "no drift".
-                    back = engine.simplify(convert(list(out)))
+                    back = engine.simplify(again(list(out)))
                 except ValueError as exc:  # noqa: PERF203 -- collecting all failures
                     failures.append(f"[{form}] {' '.join(src)} -> {out}: RAISE {exc}")
                     continue
-                if list(back) != list(out) and ref_state(referee, back) != ref_state(referee, out):
+                if list(back) != list(out):
                     failures.append(f"[{form}] {' '.join(src)} -> {out} -> {back}: not a fixpoint")
                     continue
                 got = ref_state(referee, list(out))

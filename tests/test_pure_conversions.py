@@ -229,9 +229,16 @@ class TestAssociationAndSections:
         assert engine.to_prefix(['<mul>', 'x0', '<div>', '<mul>', 'x1', 'x2', '</mul>', '</mul>']) \
             == ['/', 'x0', '*', 'x1', 'x2']
 
-    def test_lone_group_inverse_keeps_its_unary_spelling(self, engine) -> None:
+    def test_a_lone_negation_is_unary_and_a_lone_reciprocal_is_bagged(self, engine) -> None:
+        # A tagged sequence declares its dialect by its bags, so every quotient carries one: a
+        # reciprocal has no one-member bag and is bagged with the unit (review T7).
         assert engine.to_tagged(['neg', 'x0']) == ['neg', 'x0']
-        assert engine.to_tagged(['inv', 'x0']) == ['inv', 'x0']
+        assert engine.to_tagged(['inv', 'x0']) == ['<mul>', '1', '<div>', 'x0', '</mul>']
+        assert engine.to_tagged(['neg', 'inv', 'x1']) == ['neg', '<mul>', '1', '<div>', 'x1', '</mul>']
+
+    def test_a_fraction_token_is_bagged_as_its_quotient(self, engine) -> None:
+        assert engine.to_tagged(['exp', '1/2']) == ['exp', '<mul>', '1', '<div>', '2', '</mul>']
+        assert engine.to_tagged(['exp', '-7/4']) == ['exp', '<mul>', '-7', '<div>', '4', '</mul>']
 
     def test_empty_positive_part_expands_to_the_unary_inverse(self, engine) -> None:
         assert engine.to_prefix(['<add>', '<sub>', 'a', 'b', '</add>']) == ['-', 'neg', 'a', 'b']

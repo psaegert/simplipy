@@ -211,7 +211,12 @@ fn emit_tagged(node: &Node, out: &mut Vec<String>) {
         return;
     }
     match node {
-        Node::Leaf(t) => out.push(t.clone()),
+        Node::Leaf(t) => match fraction_parts(t) {
+            // A fraction is a quotient, so the tagged dialect spells it as one: a tagged sequence
+            // declares its dialect by its bags, and `exp 1/2` declared none (review T7).
+            Some((p, q)) => out.extend(["<mul>", p, "<div>", q, "</mul>"].map(String::from)),
+            None => out.push(t.clone()),
+        },
         Node::App(op, args) => {
             out.push(op.clone());
             for a in args {
@@ -222,8 +227,20 @@ fn emit_tagged(node: &Node, out: &mut Vec<String>) {
     }
 }
 
-/// One bag, or -- when the regrouping yields a LONE inverted member, which the AC grammar
-/// cannot spell as a bag -- the unary group-inverse spelling it keeps instead.
+/// The numerator and denominator of a one-token exact fraction (`1/2`, `-7/4`, `(-1/3)`).
+fn fraction_parts(t: &str) -> Option<(&str, &str)> {
+    let bare = t
+        .strip_prefix('(')
+        .and_then(|x| x.strip_suffix(')'))
+        .unwrap_or(t);
+    crate::utils::split_fraction(bare)
+}
+
+/// One bag. A LONE inverted member has no bag of its own (a bag holds two members or more): a
+/// reciprocal is bagged with the unit, `<mul> 1 <div> x </mul>`, so every quotient of a tagged
+/// sequence carries a bag and the sequence declares its dialect (review T7: `neg inv x1` declared
+/// none, so `simplify` read it as explicit and answered explicit); a negation keeps its unary
+/// spelling `neg x`, which both dialects read and answer alike.
 fn emit_bag(
     pos: &[&Node],
     neg: &[&Node],
@@ -234,9 +251,15 @@ fn emit_bag(
     out: &mut Vec<String>,
 ) {
     if pos.len() + neg.len() < 2 {
-        // `neg x0` / `inv x0`: one member, inverted -- there is no one-member bag.
-        out.push(unary.to_string());
-        emit_tagged(neg[0], out);
+        // One member, inverted: there is no one-member bag.
+        if unary == "inv" {
+            out.extend(["<mul>", "1", "<div>"].map(String::from));
+            emit_tagged(neg[0], out);
+            out.push(close.to_string());
+        } else {
+            out.push(unary.to_string());
+            emit_tagged(neg[0], out);
+        }
         return;
     }
     out.push(open.to_string());
@@ -373,10 +396,41 @@ mod tests {
                 "<mul>", "x0", "<div>", "<mul>", "x1", "x2", "</mul>", "</mul>",
             ]),
             t(&["neg", "x0"]),
-            t(&["inv", "x0"]),
+            t(&["<mul>", "1", "<div>", "x0", "</mul>"]),
         ] {
             let p = tagged_to_prefix(&row, &o).unwrap();
             assert_eq!(prefix_to_tagged(&p, &o).unwrap(), row, "via {p:?}");
+        }
+    }
+
+    /// Every quotient of a tagged sequence carries a bag (review T7): a lone reciprocal is
+    /// bagged with the unit and a fraction token as its quotient, a negation stays unary.
+    #[test]
+    fn every_reciprocal_and_fraction_is_bagged() {
+        let o = ops();
+        for (prefix, tagged) in [
+            (
+                t(&["inv", "x0"]),
+                t(&["<mul>", "1", "<div>", "x0", "</mul>"]),
+            ),
+            (
+                t(&["neg", "inv", "x1"]),
+                t(&["neg", "<mul>", "1", "<div>", "x1", "</mul>"]),
+            ),
+            (
+                t(&["sin", "1/2"]),
+                t(&["sin", "<mul>", "1", "<div>", "2", "</mul>"]),
+            ),
+            (
+                t(&["sin", "(-1/3)"]),
+                t(&["sin", "<mul>", "-1", "<div>", "3", "</mul>"]),
+            ),
+            (t(&["neg", "x0"]), t(&["neg", "x0"])),
+            (t(&["sin", "0.5"]), t(&["sin", "0.5"])),
+        ] {
+            assert_eq!(prefix_to_tagged(&prefix, &o).unwrap(), tagged, "{prefix:?}");
+            let back = tagged_to_prefix(&tagged, &o).unwrap();
+            assert_eq!(prefix_to_tagged(&back, &o).unwrap(), tagged, "via {back:?}");
         }
     }
 

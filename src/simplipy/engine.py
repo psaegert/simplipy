@@ -1928,8 +1928,11 @@ class SimpliPyEngine:
         ``neg``/``inv`` become ONE section member, never a flattened run, because
         ``1/(a*b)`` and ``(1/a)*(1/b)`` are different expressions -- they part company
         at ``0`` and ``inf``, which is why the AC core gates that distribution behind a
-        nonzero certificate. A lone group inverse keeps its unary spelling (``neg x0``,
-        ``inv x0``): the grammar has no one-member bag.
+        nonzero certificate. A tagged sequence declares its dialect by its bags, so every
+        quotient carries one: a fraction token is its quotient (``1/2`` is
+        ``<mul> 1 <div> 2 </mul>``), and a lone reciprocal, having no one-member bag, is
+        bagged with the unit (``inv x0`` is ``<mul> 1 <div> x0 </mul>``). A lone negation
+        keeps its unary spelling ``neg x0``, which both dialects read alike.
         """
         form, tokens = self._read_input(expression)
         if not tokens:
