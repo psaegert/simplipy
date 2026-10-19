@@ -32,13 +32,13 @@ cubic term. A caller selecting `Mode.real` is asking precisely for those rules t
 absent, so the fallback would serve them the one thing they opted out of.
 
 Loading is per-mode on request: `SimpliPyEngine.load(..., modes=('f64', 'permissive'))`
-builds only the named sets eagerly — the profile a training worker runs, inference plus
-corpus canonicalisation, at 737 MB instead of 957 MB on acj-5-4-llm — and any other
-config-named set builds on its mode's first use, once, announced with one log line. The
-default `modes='all'` builds everything, exactly as always. `engine.unload_mode(mode)`
-is the paired operational RAM knob: it drops that mode's built structures (about 130 MB
-per used set on acj-5-4-llm) and the mode's next use lazily reloads them; the default
-f64 set is always present and refuses to unload.
+builds only the named sets, each compiled before `load` returns — the profile a training
+worker runs, inference plus corpus canonicalisation, at about 0.7 GB instead of about 0.9 GB
+with acj-5-4-llm (about 0.45 GB for `f64` alone) — and any other config-named set builds on its
+mode's first use, once, in about 3–4 s, announced with one log record. The default
+`modes='all'` builds everything. `engine.unload_mode(mode)` is the paired operational RAM knob:
+it drops that mode's built structures (about 100 MB per set with acj-5-4-llm) and the mode's next
+use lazily reloads them; the default f64 set is always present and refuses to unload.
 
 **The triple is the unit of mining, pinning and distribution.** One mine run writes all
 three files, each mined in its own mode (see [How mining works](../rules.md#how-mining-works)),
@@ -51,7 +51,7 @@ never silently absent.
 
 Verify a shipped triple with `simplipy.verify.verify_triple`, which sweeps each file
 against its own mode's contract, and a freshly mined file with `simplipy verify-mine <file>
---mode m`, which also checks the re-mine gates (twin-shadowed rows, engine-owned laws,
+--mode <m> -e <engine>`, which also checks the re-mine gates (twin-shadowed rows, engine-owned laws,
 translation, the measure fingerprint, environment switches; see
 [Verifying a mine](../rules.md#verifying-a-mine)). Cleanliness is per mode:
 `atanh(tanh t) → t` is exactly what belongs in `rules_real.json` and would be a defect in
@@ -97,9 +97,11 @@ sp.list_assets("engine")       # list available and installed engine assets
 sp.uninstall("acj-5-4-llm")    # remove (alias of asset_manager.uninstall_asset)
 ```
 
-Resolution works offline once installed: a network failure falls back to the
-last cached manifest copy, so installed assets resolve on a plane; only a cold
-cache with no network fails, loudly.
+An installed asset resolves without the network: `get_path` (and so `load`) reads the
+local copy of the manifest, checks that the asset's files are present and their digests
+match, and goes online only for an asset that is not installed or when no local manifest
+exists. Only a cold cache with no network fails, loudly. Progress and failures are records
+on the `simplipy` logger, not printed output.
 
 ## Compatibility
 

@@ -148,11 +148,13 @@ shortest spelling is cheaper (`3*(1/3 + 1e-20)` is `1`, `x1*0.0766…` with 64 d
 inside distributed). So, as in every mode, its answer never prices above the input or above its
 answer at a smaller `effort`, and a second call returns it unchanged.
 
-What the search buys, on the 129,490 simplify inputs of flash-ansr's T8.1 training draws
+<!-- TO BE RE-MEASURED after the re-mine: this paragraph was measured before the search took
+     over the distributive law and before permissive became one walk (permissive then: mean ratio
+     0.961 -> 0.950, strictly simplified 21.2% -> 33.9%, about 64% more median time). -->
+What the search buys, on the 129,490 simplify inputs of flash-ansr's training-data generator
 (output price over input price, `complexity(.., mode=m)`): in `f64` it moves the mean ratio from 0.979
 with the search off to 0.972 and lifts the strictly simplified answers from 5.7% to 13.5%, for
-about 30% more median time per call; in `permissive` from 0.961 to 0.950
-and from 21.2% to 33.9%, for about 64% more.
+about 30% more median time per call.
 
 Every guarantee above survives any budget: candidates are built under the same
 certificates (soundness), the incumbent is only ever replaced by something strictly
@@ -358,10 +360,12 @@ nothing, and the fixpoint loop memoizes whole passes and rule-normal subtrees. T
 engine line; the published ruleset artifacts are the distinguishing factor between engines,
 and rule application always considers every pattern in the loaded artifact.
 
+<!-- TO BE RE-MEASURED after the re-mine: this benchmark (table, figures and timings) was
+     measured with acj-5-4-llm at effort=4, before 0.15.0. -->
 The published benchmark is pre-registered: every arm runs serially on one
 pinned core of an otherwise idle AMD Ryzen 9 9950X (BLAS thread caps at 1),
 paired per row against SymPy 1.14.0's `simplify()` under a 1 s cap, on
-three declared corpora — the v25 SR training prior (seed 20260830,
+three declared corpora — a symbolic-regression training prior of flash-ansr (seed 20260830,
 n = 65,536), the same prior under the engine mask policy 'all'
 (n = 65,536), and an external neutral problem set (SOOSE fc/nc/wc,
 n = 600; every row compiles in the engine language). The engine is the

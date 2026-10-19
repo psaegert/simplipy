@@ -29,11 +29,14 @@ The declared surface has three tiers:
 
 ## Versioning
 
+<!-- PENDING THE OWNER: the deprecation policy. This page used to promise a warning for at
+     least one minor release before a removal, while 0.14.0 and 0.15.0 removed names without
+     one. Proposed wording below; confirm or replace it before the release. -->
 While the major version is 0: breaking changes to declared names happen only
-at a **minor** version bump (0.x → 0.x+1), are listed in the CHANGELOG under
-"Changed"/"Removed", and the old spelling
-warns for at least one minor release before removal. Patch releases (0.13.x)
-never break declared names or change artifact semantics.
+at a **minor** version bump (0.x → 0.x+1) and are listed in the CHANGELOG under
+"Changed"/"Removed". A removal is a hard cut, announced in the release that makes it:
+the removed spelling raises instead of warning, and the CHANGELOG names the replacement.
+Patch releases (0.13.x) never break declared names or change artifact semantics.
 
 Removed in 0.14.0:
 
@@ -75,6 +78,17 @@ Removed in 0.15.0, again without an alias cycle:
 |---|---|
 | `complexity(..., canon=)` | `complexity(e, mode=m)` prices in mode `m`'s own reading; `simplipy.mining.cross_mode_complexity` compares answers across modes |
 | `explicit_constant_placeholders(..., convert_numbers_to_constant=)` | drop the keyword; decide which literals are fittable with `simplipy.masking` |
+| `utils.remove_pow1` | none needed: it cleaned up generation-1 operators and had no caller |
+
+Signatures changed in 0.15.0:
+
+| changed in 0.15.0 | what to do |
+|---|---|
+| `SimpliPyEngine.prune_covered_rules(..., rule_mode=)` | the keyword is required: `'f64'` (also spelled `'default'`), `'real'` or `'permissive'` |
+| `utils.deduplicate_rules(..., rule_mode=)` | the keyword is required, as above; the kept target is the one lower in that mode's serve ordering |
+| `promotion.promote(..., rule_mode=)` | the keyword is required, as above |
+| `simplify(..., max_passes=0)` | raises `ValueError` (it ran one pass); pass `max_passes=1` or leave the default |
+| `find_rules(..., save_every=)`, CLI `find-rules -s` | deprecated and ignored: the rule file is written once, when the mode's mine ends |
 
 Behaviour changes in 0.14.0 that are **not** deprecations, because no name changed:
 
@@ -108,17 +122,18 @@ same minor version.
 
 Mined-artifact reproducibility is **environment-qualified**: a mine's
 provenance sidecar records the engine build, the numeric environment
-(including the libm fingerprint), and every artifact-affecting environment
-switch that was set. Byte-identical re-mines are promised only on an
-environment matching that record — see
-[environment qualification](method/environment-qualification.md).
+(including the libm fingerprint), and every `SIMPLIPY_*` variable set during the
+mine. Byte-identical re-mines are promised only on an environment matching that
+record — see [environment qualification](method/environment-qualification.md).
 
 ## Environment variables
 
-The environment switches that can change a mined artifact or a certification
-verdict are exactly those listed in `simplipy.engine.ARTIFACT_ENV_SWITCHES`;
-they are recorded in the provenance sidecar of any mine run under them.
+No environment variable changes what the core mines, certifies or serves:
+`simplipy.engine.ARTIFACT_ENV_SWITCHES`, the registry of such switches, is empty.
+A mine still records every `SIMPLIPY_*` variable set while it runs (the inert
+diagnostic ones excepted) in its
+provenance sidecar, and `simplipy verify-mine` requires that record to be empty.
 `SIMPLIPY_TRUSTED_MODULES` extends the realization trust model as documented.
-All other `SIMPLIPY_*` switches are observability/debug knobs: undocumented
-and unstable. See [environment variables](environment.md).
+All other `SIMPLIPY_*` switches are observability/debug knobs: undocumented and
+unstable. See [environment variables](environment.md).
 
