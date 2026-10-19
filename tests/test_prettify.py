@@ -142,9 +142,9 @@ def test_digit_budget(eng):
     ('sin(2) + x1', 'x1 + sin(2)'),
     # an odd function of a negative literal gives its sign to the joiner, as in `simplify`'s text
     ('x1 + sin(-2)', 'x1 - sin(2)'),
-    # a power the state keeps for its size stays a power of its base, written as a float
-    ('x1*0.001980784624751695158377988284554202796250646643885207061964241892776071925160468502^5',
-     '0.001980784624751695^5*x1'),
+    # a power the state keeps for its size stays a power of its base, written as a float (the
+    # walk folds a ground power only where its float is cheaper, which this one's is not)
+    ('x1*0.12345670000000000001^100', '0.1234567^100*x1'),
     ('3^5000*x1', '3^5000*x1'),
     ('x1*2^(1/3)', '2^(1/3)*x1'),
 ])
