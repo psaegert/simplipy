@@ -39,11 +39,13 @@ try:
     from simplipy._core import Engine as _RustEngine  # type: ignore[attr-defined]
     from simplipy._core import core_serialization_ops as _core_serialization_ops  # type: ignore[attr-defined]
     from simplipy._core import DEFAULT_WORK as _CORE_DEFAULT_WORK  # type: ignore[attr-defined]
+    from simplipy._core import MissingModeSet as _MissingModeSet  # type: ignore[attr-defined]
     _CORE_IMPORT_ERROR: Exception | None = None
 except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
     _RustEngine = None  # type: ignore[assignment, misc]
     _core_serialization_ops = None  # type: ignore[assignment]
     _CORE_DEFAULT_WORK = None
+    _MissingModeSet = LookupError  # type: ignore[assignment, misc]
     _CORE_IMPORT_ERROR = _exc
 
 #: The library's announcements (the implicit default engine, a deferred set's first-use
@@ -364,6 +366,15 @@ _MODE_RULES_ATTR: dict[str, str] = {
     'real': 'real_simplification_rules',
     'permissive': 'permissive_simplification_rules',
 }
+
+#: :meth:`SimpliPyEngine.simplify`'s refusal of ``mode='real'`` on an engine naming no real set.
+_REAL_NEEDS_A_SET = (
+    "mode='real' needs a ruleset mined for it, and this artifact has none: "
+    "it predates the rules_f64/rules_real/rules_permissive triple. Falling back "
+    "to the default set would serve f64-certified rules under a claim of "
+    "MATHEMATICAL soundness, and the two are incomparable -- some f64 rules "
+    "are mathematically false. Use mode='f64' for the deployed semantics, or "
+    "load an artifact whose config names a real ruleset.")
 
 
 class SimpliPyEngine:
@@ -779,7 +790,7 @@ class SimpliPyEngine:
             rule_mode, None if rules is None else [(list(lhs), list(rhs)) for lhs, rhs in rules],
             canon=self._rule_canons.get(rule_mode))
 
-    def _ensure_mode_loaded(self, rule_mode: str) -> None:
+    def _ensure_mode_loaded(self, rule_mode: str, *, found_absent: bool = False) -> None:
         """Build ``rule_mode``'s set NOW if this engine names one that the core does
         not currently hold -- the first-use half of the lazy ``modes=`` machinery.
 
@@ -790,8 +801,14 @@ class SimpliPyEngine:
         nothing), and announces itself with one WARNING record on the ``simplipy``
         logger, like :meth:`load`'s default-engine announcement, because the build pauses the
         call for a few seconds on a large artifact.
+
+        ``found_absent``: a core call has just found the set missing (an :meth:`unload_mode`
+        landed after the fast path), so the membership is read under the lock, where it
+        agrees with the core.
         """
-        if rule_mode not in _MODE_RULES_ATTR or rule_mode in self._core_loaded_modes:
+        if rule_mode not in _MODE_RULES_ATTR:
+            return
+        if not found_absent and rule_mode in self._core_loaded_modes:
             return
         with self._mode_load_lock:
             if rule_mode in self._core_loaded_modes:
@@ -818,6 +835,38 @@ class SimpliPyEngine:
                              "it compiles", rule_mode, self._modes)
             self._push_mode_rules(rule_mode, rules)
             self._core_loaded_modes.add(rule_mode)
+
+    def _names_mode_set(self, rule_mode: str) -> bool:
+        """Does this engine name a set of its own for ``rule_mode`` (in memory, or a file it
+        rebuilds from)? Fixed for the engine's life: :meth:`unload_mode` keeps the recipe."""
+        return (getattr(self, _MODE_RULES_ATTR[rule_mode]) is not None
+                or rule_mode in self._mode_rule_sources)
+
+    def _serve(self, mode: Mode, call: Callable[[Any], Any], refusal: str) -> Any:
+        """``call(core)`` for one public call in ``mode``, on the live core captured once.
+
+        ``real`` FAILS CLOSED: a mode naming no set of its own falls back to the default
+        set, which is right for ``permissive`` (its divergence is search semantics) and
+        wrong for ``real``, whose only divergence IS which rules are certified -- the f64
+        set holds rules that are mathematically false. ``call`` passes ``own_set`` for
+        ``real``, so the core makes that decision under the read guard it answers under,
+        and an :meth:`unload_mode` cannot land between the check and the answer. A core
+        found without the set either belongs to an engine that names none (``refusal`` is
+        raised) or had it unloaded since the lazy load check; then the next use rebuilds
+        it, as :meth:`unload_mode` promises, and the call is asked again.
+        """
+        rule_mode = _RULE_MODE[mode]
+        found_absent = False
+        while True:
+            if mode is not Mode.f64:
+                self._ensure_mode_loaded(rule_mode, found_absent=found_absent)
+            core = self._core
+            try:
+                return call(core)
+            except _MissingModeSet:
+                if not self._names_mode_set(rule_mode):
+                    raise ValueError(refusal) from None
+                found_absent = True
 
     def unload_mode(self, mode: 'Mode | str') -> None:
         """Drop ``mode``'s built rule structures; the next use lazily rebuilds them.
@@ -847,12 +896,14 @@ class SimpliPyEngine:
         the refusal into a silent lie. Unloading a mode that names no set of its own
         is a no-op, and the call is idempotent.
 
-        Operational discipline: call it at a QUIET moment for the mode being
-        unloaded. The drop itself is guarded (it waits for in-flight core calls and
-        cannot corrupt one), but a call racing into that mode on ANOTHER thread may
-        pass its already-loaded check before the drop lands and then run against the
-        core's absence semantics for the mode -- ``permissive`` falling back to the
-        default set for that one call. The next call lazily rebuilds.
+        Calling it while other threads simplify is safe. The drop waits for in-flight
+        core calls and cannot corrupt one. A ``real`` call that races it is never served
+        the default set: the core checks for the mode's own set under the read guard it
+        answers under, and a call that finds the set gone rebuilds it before it answers,
+        paying the rebuild's pause. A ``permissive`` call that races it may run against
+        the core's absence semantics for the mode, falling back to the default set for
+        that one call. Call it at a quiet moment for the mode being unloaded, since every
+        racing call that rebuilds the set undoes the drop.
 
         Parameters
         ----------
@@ -2122,44 +2173,27 @@ class SimpliPyEngine:
         if work == 'default':
             work = DEFAULT_WORK
 
-        # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds
-        # HERE, on the mode's first use -- once, lock-guarded, announced. Under the
-        # default `modes='all'` this is one set-membership test. Runs BEFORE the
-        # fail-closed `real` check below, so that check judges the loaded state.
-        if mode is not Mode.f64:
-            self._ensure_mode_loaded(_RULE_MODE[mode])
-
         # DIALECT-PRESERVING (owner ruling 2026-08-18): `simplify` only simplifies and
         # answers in the form it was handed -- a str is infix, a token sequence carrying
         # a bag delimiter is tagged, anything else is the explicit binary prefix. This is
         # what closed the old "tagged leak" (a prefix-in token list used to come back
         # tagged); to change the NOTATION, convert: `simplify(to_tagged(x))`.
         form, tokens = self._read_input(expression)
-        if mode is Mode.real and self._core.mode_rules_len(rule_mode='real') is None:
-            # FAIL CLOSED. A mode naming no set of its own falls back to the default
-            # set, which is right for `permissive` (its divergence is search semantics, so
-            # the fallback reproduces today's LOSSY exactly) and WRONG for `real`, whose
-            # only divergence IS which rules are certified. Silently serving the f64 set
-            # here would answer a request for mathematical soundness with rules known to
-            # be mathematically false -- the 18-rule `f(+-10^-k) -> +-10^-k` family is
-            # f64-exact and false by a cubic term -- which is the exact over-claim the
-            # mode split exists to prevent. An artifact predating the triple cannot
-            # answer this question, so it says so.
-            raise ValueError(
-                "mode='real' needs a ruleset mined for it, and this artifact has none: "
-                "it predates the rules_f64/rules_real/rules_permissive triple. Falling back "
-                "to the default set would serve f64-certified rules under a claim of "
-                "MATHEMATICAL soundness, and the two are incomparable -- some f64 rules "
-                "are mathematically false. Use mode='f64' for the deployed semantics, or "
-                "load an artifact whose config names a real ruleset.")
 
         # ONE lookup, both branches: the rule mode is decided here and the core is asked
         # for it by name, so the two output paths cannot end up serving different sets.
+        # LAZY MODES (task #88): a set deferred by a lean `modes=` selection builds in
+        # `_serve`, on the mode's first use -- once, lock-guarded, announced; under the
+        # default `modes='all'` that is one set-membership test. `real` FAILS CLOSED there
+        # (`_serve`): the 18-rule `f(+-10^-k) -> +-10^-k` family is f64-exact and false by a
+        # cubic term, so serving the f64 set would over-claim mathematical soundness.
         rule_mode = _RULE_MODE[mode]
+        own_set = mode is Mode.real
         if form == 'infix':
-            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, effort, work, rule_mode=rule_mode)
-
-        out = self._core.ac_simplify_in_mode(tokens, max_passes, form, effort, work, rule_mode=rule_mode)
+            return self._serve(mode, lambda core: core.ac_simplify_infix_in_mode(
+                tokens, max_passes, effort, work, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
+        out = self._serve(mode, lambda core: core.ac_simplify_in_mode(
+            tokens, max_passes, form, effort, work, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
         return self._denormalize(out, expression)
 
     def prettify(
@@ -2231,10 +2265,9 @@ class SimpliPyEngine:
         if digits < 1:
             raise ValueError(f"digits must be at least 1, got {digits}")
         mode = _coerce_mode(mode)
-        if mode is not Mode.f64:
-            self._ensure_mode_loaded(_RULE_MODE[mode])
-        if mode is Mode.real and self._core.mode_rules_len(rule_mode='real') is None:
-            raise ValueError("mode='real' needs a ruleset mined for it, and this artifact has none")
+        refusal = "mode='real' needs a ruleset mined for it, and this artifact has none"
+        if mode is Mode.real and not self._names_mode_set('real'):
+            raise ValueError(refusal)
         in_form, tokens = self._read_input(expression)
         target = form or in_form
         if target not in ('infix', 'explicit', 'tagged'):
@@ -2242,7 +2275,10 @@ class SimpliPyEngine:
         if not tokens:
             return '' if target == 'infix' else []
         work = DEFAULT_WORK  # the one default of every mode, as in simplify
-        return self._core.prettify(tokens, int(digits), target, True, DEFAULT_EFFORT, work, rule_mode=_RULE_MODE[mode])
+        rule_mode = _RULE_MODE[mode]
+        return self._serve(mode, lambda core: core.prettify(
+            tokens, int(digits), target, True, DEFAULT_EFFORT, work, rule_mode=rule_mode,
+            own_set=mode is Mode.real), refusal)
 
     def complexity(
             self,

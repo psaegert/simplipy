@@ -16,17 +16,20 @@ byte-identical ``simplify`` outputs per mode, because all three paths install th
 same file into the same core through the same ``set_mode_rules`` entry.
 """
 import io
+import json
 import logging
 import os
 import pickle
 import threading
+import time
 import warnings
 from contextlib import contextmanager
 
 import pytest
 import yaml
 
-from conftest import acj_config_path, require_or_skip
+import simplipy
+from conftest import acj_config_path, acj_real_rules_path, acj_rules_path, require_or_skip
 from simplipy import Mode, SimpliPyEngine
 from test_mode_rulesets import (
     P_ALL, P_CORPUS, P_DEFAULT, P_REAL, instantiate, write_artifact)
@@ -306,6 +309,107 @@ class TestLazyMachinery:
             stop.set()
             for t in readers:
                 t.join()
+
+
+class TestConcurrentCoreAccess:
+    """Calls racing a push or a retraction on other threads (review P5, P6)."""
+
+    def test_real_is_never_served_the_default_set_while_it_is_unloaded(self):
+        """`real` FAILS CLOSED inside the core call: an `unload_mode('real')` racing the
+        call can neither get the default set served under `mode='real'` nor make the call
+        refuse a set the engine names (it rebuilds it). The default set holds one rule the
+        real set lacks, so a default-set answer is visible. Measured before the fix on 30 s
+        of this traffic: 8 default-set answers and 609,709 spurious refusals."""
+        config = yaml.safe_load(open(acj_config_path()))
+        e = SimpliPyEngine(operators=config['operators'],
+                           rules=[(('sin', 'x0'), ('x0',))], rules_real=[])
+        assert e.simplify(['sin', 'x0']) == ['x0']
+        assert e.simplify(['sin', 'x0'], mode='real') == ['sin', 'x0']
+        stop = threading.Event()
+        seen = {'own set': 0, 'default set': 0, 'refused': 0}
+        lock = threading.Lock()
+
+        def reader() -> None:
+            while not stop.is_set():
+                try:
+                    out = e.simplify(['sin', 'x0'], mode='real')
+                    key = 'own set' if out == ['sin', 'x0'] else 'default set'
+                except ValueError:
+                    key = 'refused'
+                with lock:
+                    seen[key] += 1
+
+        def unloader() -> None:
+            while not stop.is_set():
+                e.unload_mode('real')
+
+        threads = [threading.Thread(target=reader) for _ in range(2)]
+        threads.append(threading.Thread(target=unloader))
+        with _announcements(io.StringIO()):
+            for t in threads:
+                t.start()
+            stop.wait(3.0)
+            stop.set()
+            for t in threads:
+                t.join()
+        assert seen['default set'] == 0 and seen['refused'] == 0, seen
+        assert seen['own set'] > 0
+
+    def test_a_waiting_push_does_not_stall_the_interpreter(self):
+        """Every read guard is taken with the GIL released: a call queued behind a waiting
+        push (std's RwLock prefers writers) waits without holding the GIL, so pure-Python
+        threads keep running. Measured before the fix: the interpreter froze for the long
+        reader's whole remaining time (14.9 s on the review's probe)."""
+        cfg = acj_config_path()
+        require_or_skip(acj_real_rules_path(), 'the acj-4 real set is not staged')
+        config = yaml.safe_load(open(cfg))
+        real = [tuple(map(tuple, r)) for r in json.load(open(acj_real_rules_path()))[:500]]
+        e = SimpliPyEngine(operators=config['operators'],
+                           rules=[tuple(map(tuple, r)) for r in json.load(open(acj_rules_path()))[:500]],
+                           rules_real=real)
+        rows = [r for r in json.load(open(os.path.join(
+            os.path.dirname(simplipy.__file__), 'verify', 'data', 'raw_skeletons_nv.json')))]
+        start = time.perf_counter()
+        e._core.ac_canonical_keys(rows, rule_mode='permissive')
+        per_batch = time.perf_counter() - start
+        # A long in-flight reader: about 1.5 s of work, whatever this machine's speed.
+        batch = rows * max(1, int(1.5 / max(per_batch, 1e-6)))
+        gaps: list[float] = []
+        stop = threading.Event()
+
+        def ticker() -> None:
+            last = time.perf_counter()
+            while not stop.is_set():
+                time.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - last)
+                last = now
+
+        tick = threading.Thread(target=ticker)
+        tick.start()
+        try:
+            for call in (lambda: e._core.mode_rules_len(rule_mode='real'),
+                         lambda: e.simplify(['sin', 'x0']),
+                         lambda: e._core.interval_finite_ae(['x0'])):
+                reader = threading.Thread(target=lambda: e._core.ac_canonical_keys(
+                    batch, rule_mode='permissive'))
+                pusher = threading.Thread(target=lambda: e._core.set_mode_rules(
+                    'real', [(list(lhs), list(rhs)) for lhs, rhs in real]))
+                reader.start()
+                time.sleep(0.2)
+                pusher.start()
+                time.sleep(0.2)
+                gaps.clear()
+                waited = time.perf_counter()
+                call()  # queued behind the waiting push until the reader returns
+                waited = time.perf_counter() - waited
+                stall = max(gaps, default=0.0)
+                reader.join()
+                pusher.join()
+                assert stall < 0.5, f'the interpreter stalled {stall:.2f} s (call waited {waited:.2f} s)'
+        finally:
+            stop.set()
+            tick.join()
 
 
 # ---------------------------------------------------------------------------

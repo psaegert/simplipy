@@ -12,6 +12,9 @@ DEFAULT_WORK: int | None
 NEAR_MISS_FRAC: float
 ARTIFACT_ENV_SWITCHES: list[str]
 
+#: Raised by a call passed ``own_set=True`` when the core holds no set of its own for the mode.
+class MissingModeSet(LookupError): ...
+
 class CandidateLibrary:
     @property
     def n_candidates(self) -> int: ...
@@ -30,6 +33,7 @@ class Engine:
         work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
         *,
         rule_mode: Literal["default", "real", "permissive"],
+        own_set: bool = ...,  # serve only the mode's own set: MissingModeSet where it has none
     ) -> list[str]: ...
     #: Simplify in `rule_mode` with artifact rows (and their minted orientation twins)
     #: suppressed at the matcher's fire site -- behaviorally the engine built without
@@ -52,6 +56,7 @@ class Engine:
         work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
         *,
         rule_mode: Literal["default", "real", "permissive"],
+        own_set: bool = ...,
     ) -> str: ...
     def prettify(
         self,
@@ -63,6 +68,7 @@ class Engine:
         work_budget: int | None = ...,
         *,
         rule_mode: Literal["default", "real", "permissive"],
+        own_set: bool = ...,
     ) -> str | list[str]: ...
     def ac_simplify_explore(
         self,

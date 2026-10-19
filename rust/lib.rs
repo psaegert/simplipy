@@ -28,6 +28,28 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rustc_hash::FxHashSet;
 
+pyo3::create_exception!(
+    _core,
+    MissingModeSet,
+    pyo3::exceptions::PyLookupError,
+    "A call that must be served by its mode's own rule set (`own_set=True`) found the core \
+     holding none for that mode."
+);
+
+/// THE FAIL-CLOSED CHECK of a call that must be served by its mode's OWN set (`real`, whose
+/// one divergence from the default set is which rules are certified): refused when the core
+/// holds none for the mode, rather than served from the default set the core falls back to.
+/// Callers decide it under the read guard the call answers under, so no push or retraction
+/// lands between the check and the answer.
+fn ensure_own_set(inner: &engine::Engine, mode: engine::RuleMode, own_set: bool) -> PyResult<()> {
+    if own_set && inner.mode_rules_len(mode).is_none() {
+        return Err(MissingModeSet::new_err(format!(
+            "the core holds no rule set of its own for {mode:?}"
+        )));
+    }
+    Ok(())
+}
+
 /// Reject inputs the recursive kernel cannot safely handle, with a clean `ValueError` BEFORE it runs.
 /// Two off-distribution hazards, both of which would otherwise ABORT the interpreter (uncatchable):
 ///   1. PATHOLOGICALLY LONG input -> the tree recursions (parse / canonicalize / serialize) recurse
@@ -175,31 +197,36 @@ fn ac_simplify_impl(
     form: engine::AcForm,
     explore_budget: usize,
     work_budget: Option<u64>,
+    own_set: bool,
 ) -> PyResult<Py<PyList>> {
-    // The documented empty-input contract: `simplify([]) == []` (the one valid
-    // case `is_valid` rejects). Restored explicitly after the malformed-input
-    // hardening accidentally made it raise (hardening H-003, 2026-08-03).
-    if tokens.is_empty() {
-        return Ok(PyList::empty(py).into());
-    }
-    ensure_ac_well_formed(&core.inner(), &tokens)?;
-    // Budget 0 takes the chain's own entry, so unused exploration is byte-identical
-    // BY ROUTING, not by trusting the explore path's early return (D39 effort=0).
-    let out = py
-        .detach(|| {
-            let inner = core.inner();
-            let _work = crate::ac::work::search_budget_scope(work_budget);
-            if explore_budget > 0 {
-                inner.ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
-            } else {
-                inner.ac_simplify_proj(&tokens, max_passes, mode, form)
-            }
-        })
-        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
+    // ONE read guard for the whole call, taken with the GIL released: the fail-closed check,
+    // the validation and the answer read the same engine, and a thread queued behind a waiting
+    // push never holds the GIL while it waits.
+    let out = py.detach(|| {
+        let inner = core.inner();
+        ensure_own_set(&inner, mode, own_set)?;
+        // The documented empty-input contract: `simplify([]) == []` (the one valid
+        // case `is_valid` rejects). Restored explicitly after the malformed-input
+        // hardening accidentally made it raise (hardening H-003, 2026-08-03).
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        ensure_ac_well_formed(&inner, &tokens)?;
+        // Budget 0 takes the chain's own entry, so unused exploration is byte-identical
+        // BY ROUTING, not by trusting the explore path's early return (D39 effort=0).
+        let _work = crate::ac::work::search_budget_scope(work_budget);
+        if explore_budget > 0 {
+            inner.ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
+        } else {
+            inner.ac_simplify_proj(&tokens, max_passes, mode, form)
+        }
+        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+    })?;
     Ok(PyList::new(py, out)?.into())
 }
 
 /// The infix twin of [`ac_simplify_impl`], behind `ac_simplify_infix_in_mode`.
+#[allow(clippy::too_many_arguments)]
 fn ac_simplify_infix_impl(
     core: &PyEngine,
     py: Python<'_>,
@@ -208,23 +235,26 @@ fn ac_simplify_infix_impl(
     mode: engine::RuleMode,
     explore_budget: usize,
     work_budget: Option<u64>,
+    own_set: bool,
 ) -> PyResult<String> {
-    // Empty-input contract, as in `ac_simplify` (H-003): the empty rendering.
-    if tokens.is_empty() {
-        return Ok(String::new());
-    }
-    ensure_ac_well_formed(&core.inner(), &tokens)?;
-    // Same routing doctrine as `ac_simplify_impl`: budget 0 is the chain's own entry.
+    // One read guard, GIL released, as in `ac_simplify_impl`.
     py.detach(|| {
         let inner = core.inner();
+        ensure_own_set(&inner, mode, own_set)?;
+        // Empty-input contract, as in `ac_simplify` (H-003): the empty rendering.
+        if tokens.is_empty() {
+            return Ok(String::new());
+        }
+        ensure_ac_well_formed(&inner, &tokens)?;
+        // Same routing doctrine as `ac_simplify_impl`: budget 0 is the chain's own entry.
         let _work = crate::ac::work::search_budget_scope(work_budget);
         if explore_budget > 0 {
             inner.ac_simplify_infix_explore(&tokens, max_passes, mode, explore_budget)
         } else {
             inner.ac_simplify_infix(&tokens, max_passes, mode)
         }
+        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     })
-    .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
 }
 
 /// The AC entry accepts BOTH the old grammar and the tagged form; `is_valid` only understands
@@ -573,7 +603,10 @@ impl PyEngine {
     /// (see [`explore_budget_of`]: `None`, the default here as in `simplify`, explores until
     /// a round finds nothing). 0 routes to the chain's own entry, byte-identical behaviour.
     /// `work_budget` bounds each search's work in `ac::work` units (`None`: unbounded).
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, work_budget=None, *, rule_mode))]
+    /// `own_set=True` serves only the mode's OWN set: where the core holds none for the mode,
+    /// the call raises `MissingModeSet` instead of serving the default set ([`ensure_own_set`],
+    /// decided under the call's own read guard).
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, work_budget=None, *, rule_mode, own_set=false))]
     #[allow(clippy::too_many_arguments)]
     fn ac_simplify_in_mode(
         &self,
@@ -584,6 +617,7 @@ impl PyEngine {
         explore_budget: Option<usize>,
         work_budget: Option<u64>,
         rule_mode: &str,
+        own_set: bool,
     ) -> PyResult<Py<PyList>> {
         ac_simplify_impl(
             self,
@@ -594,6 +628,7 @@ impl PyEngine {
             parse_ac_form(form)?,
             explore_budget_of(explore_budget),
             work_budget,
+            own_set,
         )
     }
 
@@ -626,12 +661,13 @@ impl PyEngine {
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
-        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let form = parse_ac_form(form)?;
         let suppressed: FxHashSet<usize> = suppressed_rows.into_iter().collect();
-        let out = py
-            .detach(|| {
-                self.inner().ac_simplify_proj_suppressed(
+        let out = py.detach(|| {
+            let inner = self.inner();
+            ensure_ac_well_formed(&inner, &tokens)?;
+            inner
+                .ac_simplify_proj_suppressed(
                     &tokens,
                     max_passes,
                     form,
@@ -639,8 +675,8 @@ impl PyEngine {
                     &suppressed,
                     mode,
                 )
-            })
-            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
+                .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        })?;
         Ok(PyList::new(py, out)?.into())
     }
 
@@ -669,19 +705,20 @@ impl PyEngine {
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
-        ensure_ac_well_formed(&self.inner(), &tokens)?;
-        let out = py
-            .detach(|| {
-                self.inner()
-                    .ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
-            })
-            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
+        let out = py.detach(|| {
+            let inner = self.inner();
+            ensure_ac_well_formed(&inner, &tokens)?;
+            inner
+                .ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
+                .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        })?;
         Ok(PyList::new(py, out)?.into())
     }
 
     /// `ac_simplify_in_mode`'s answer as pretty infix text (see `ac_simplify_in_mode`, whose
-    /// `explore_budget` and `work_budget` this reads the same way).
-    #[pyo3(signature = (tokens, max_passes=48, explore_budget=None, work_budget=None, *, rule_mode))]
+    /// `explore_budget`, `work_budget` and `own_set` this reads the same way).
+    #[pyo3(signature = (tokens, max_passes=48, explore_budget=None, work_budget=None, *, rule_mode, own_set=false))]
+    #[allow(clippy::too_many_arguments)]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,
@@ -690,6 +727,7 @@ impl PyEngine {
         explore_budget: Option<usize>,
         work_budget: Option<u64>,
         rule_mode: &str,
+        own_set: bool,
     ) -> PyResult<String> {
         ac_simplify_infix_impl(
             self,
@@ -699,6 +737,7 @@ impl PyEngine {
             parse_rule_mode(rule_mode)?,
             explore_budget_of(explore_budget),
             work_budget,
+            own_set,
         )
     }
 
@@ -836,7 +875,8 @@ impl PyEngine {
     /// (search budget `explore_budget`, work budget `work_budget`, read as in
     /// `ac_simplify_in_mode`) and that answer is displayed. Display only: nothing in the engine
     /// calls this or reads what it returns.
-    #[pyo3(signature = (tokens, digits=3, form="infix", resimplify=true, explore_budget=None, work_budget=None, *, rule_mode))]
+    /// `own_set` reads as in `ac_simplify_in_mode`.
+    #[pyo3(signature = (tokens, digits=3, form="infix", resimplify=true, explore_budget=None, work_budget=None, *, rule_mode, own_set=false))]
     #[allow(clippy::too_many_arguments)]
     fn prettify(
         &self,
@@ -848,6 +888,7 @@ impl PyEngine {
         explore_budget: Option<usize>,
         work_budget: Option<u64>,
         rule_mode: &str,
+        own_set: bool,
     ) -> PyResult<Py<PyAny>> {
         let form = engine::PrettyForm::parse(form).ok_or_else(|| {
             PyValueError::new_err(format!(
@@ -858,15 +899,16 @@ impl PyEngine {
         if digits == 0 {
             return Err(PyValueError::new_err("digits must be at least 1"));
         }
-        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let budget = resimplify.then(|| explore_budget_of(explore_budget));
-        let out = py
-            .detach(|| {
-                let _work = crate::ac::work::search_budget_scope(work_budget);
-                self.inner()
-                    .ac_prettify(&tokens, digits, form, mode, budget)
-            })
-            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
+        let out = py.detach(|| {
+            let inner = self.inner();
+            ensure_own_set(&inner, mode, own_set)?;
+            ensure_ac_well_formed(&inner, &tokens)?;
+            let _work = crate::ac::work::search_budget_scope(work_budget);
+            inner
+                .ac_prettify(&tokens, digits, form, mode, budget)
+                .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        })?;
         Ok(match out {
             engine::Pretty::Text(s) => pyo3::types::PyString::new(py, &s).into_any().unbind(),
             engine::Pretty::Tokens(t) => PyList::new(py, t)?.into_any().unbind(),
@@ -883,11 +925,15 @@ impl PyEngine {
         canon: &str,
         rule_mode: &str,
     ) -> PyResult<u64> {
-        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
         let canon_mode = parse_canon_mode(canon, mode)?;
-        py.detach(|| self.inner().ac_complexity(&tokens, mode, canon_mode))
-            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        py.detach(|| {
+            let inner = self.inner();
+            ensure_ac_well_formed(&inner, &tokens)?;
+            inner
+                .ac_complexity(&tokens, mode, canon_mode)
+                .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
+        })
     }
 
     /// Certified-canon complexity (the serve ordering's own pricing; see
@@ -904,14 +950,15 @@ impl PyEngine {
         canon: &str,
         rule_mode: &str,
     ) -> PyResult<u64> {
-        ensure_ac_well_formed(&self.inner(), &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
         let canon_mode = parse_canon_mode(canon, mode)?;
         py.detach(|| {
-            self.inner()
+            let inner = self.inner();
+            ensure_ac_well_formed(&inner, &tokens)?;
+            inner
                 .ac_complexity_certified(&tokens, mode, canon_mode)
+                .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
         })
-        .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
     /// The four translation counts of `rule_mode`'s served set (`"default"` / `"real"` /
@@ -947,8 +994,9 @@ impl PyEngine {
     /// mode names no set" vs "this mode names an EMPTY set and serves nothing". Builds no
     /// index -- it is a count of raw loaded pairs.
     #[pyo3(signature = (*, rule_mode))]
-    fn mode_rules_len(&self, rule_mode: &str) -> PyResult<Option<usize>> {
-        Ok(self.inner().mode_rules_len(parse_rule_mode(rule_mode)?))
+    fn mode_rules_len(&self, py: Python<'_>, rule_mode: &str) -> PyResult<Option<usize>> {
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner().mode_rules_len(mode)))
     }
 
     /// The canon `rule_mode`'s set is read in (the one it was certified in): `"legacy"` or a
@@ -1260,12 +1308,9 @@ impl PyEngine {
     /// `false`. The same predicate the engine's `!` pattern matching runs behind its cache.
     /// No caller inside the package: kept as a probe of the certificate layer for scripts
     /// that query `_core` directly.
-    fn interval_finite_ae(&self, tokens: Vec<String>) -> PyResult<bool> {
+    fn interval_finite_ae(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<bool> {
         ensure_tokens_are_tokens(&tokens)?;
-        Ok(crate::interval::finite_ae(
-            &tokens,
-            self.inner().operators_ref(),
-        ))
+        Ok(py.detach(|| crate::interval::finite_ae(&tokens, self.inner().operators_ref())))
     }
 
     /// OFFLINE: EXACT value-class of an expression by interval analysis (`rust/interval.rs`) --
@@ -1273,14 +1318,14 @@ impl PyEngine {
     /// FINITE / POSINF / NEGINF / NAN / MIXED / EMPTY, or ERROR if unevaluable.
     /// No caller inside the package: kept as a probe of the certificate layer for scripts
     /// that query `_core` directly.
-    fn interval_class(&self, tokens: Vec<String>) -> PyResult<String> {
+    fn interval_class(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<String> {
         ensure_tokens_are_tokens(&tokens)?;
-        Ok(
-            match crate::interval::value_class(&tokens, self.inner().operators_ref()) {
-                Some(c) => format!("{:?}", c).to_uppercase(),
-                None => "ERROR".to_string(),
-            },
-        )
+        let class =
+            py.detach(|| crate::interval::value_class(&tokens, self.inner().operators_ref()));
+        Ok(match class {
+            Some(c) => format!("{:?}", c).to_uppercase(),
+            None => "ERROR".to_string(),
+        })
     }
 
     /// OFFLINE: the raw positive-measure value COMPONENTS of an expression over free constants,
@@ -1290,15 +1335,18 @@ impl PyEngine {
     /// that query `_core` directly.
     fn interval_value_components(
         &self,
+        py: Python<'_>,
         tokens: Vec<String>,
     ) -> PyResult<Option<(bool, bool, bool, bool)>> {
         ensure_tokens_are_tokens(&tokens)?;
-        Ok(crate::interval::value_set(
-            &tokens,
-            self.inner().operators_ref(),
-            &crate::interval::Vs::reals(),
-        )
-        .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan)))
+        Ok(py.detach(|| {
+            crate::interval::value_set(
+                &tokens,
+                self.inner().operators_ref(),
+                &crate::interval::Vs::reals(),
+            )
+            .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan))
+        }))
     }
 
     /// OFFLINE: how many gate calls fell OUTSIDE the box horizon and were therefore UNDECIDED
@@ -1358,6 +1406,7 @@ impl PyEngine {
     /// the gate unable to reject a sound rule. If this ever under-reports, that proof is void.
     fn interval_value_set_box(
         &self,
+        py: Python<'_>,
         tokens: Vec<String>,
         los: Vec<f64>,
         his: Vec<f64>,
@@ -1371,10 +1420,10 @@ impl PyEngine {
             .zip(his.iter())
             .map(|(lo, hi)| crate::interval::Vs::interval(*lo, *hi, false, false))
             .collect();
-        Ok(
+        Ok(py.detach(|| {
             crate::interval::value_set_p(&tokens, self.inner().operators_ref(), &doms, &[])
-                .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan, v.lo, v.hi)),
-        )
+                .map(|v| (v.has_fin, v.pinf, v.ninf, v.nan, v.lo, v.hi))
+        }))
     }
 
     /// OFFLINE: witness WIDTH of a positive-measure region where `source` is NaN but `target`
@@ -1386,17 +1435,16 @@ impl PyEngine {
     /// that query `_core` directly.
     fn interval_domain_extension(
         &self,
+        py: Python<'_>,
         source: Vec<String>,
         target: Vec<String>,
     ) -> PyResult<Option<f64>> {
         // H-043/D4: the guard its four sibling probes already run (alphabet + cap).
         ensure_tokens_are_tokens(&source)?;
         ensure_tokens_are_tokens(&target)?;
-        Ok(crate::interval::domain_extension(
-            &source,
-            &target,
-            self.inner().operators_ref(),
-        ))
+        Ok(py.detach(|| {
+            crate::interval::domain_extension(&source, &target, self.inner().operators_ref())
+        }))
     }
 
     /// OFFLINE: `interval_domain_extension` with both sides' `<constant>` leaves BOUND to concrete
@@ -1407,6 +1455,7 @@ impl PyEngine {
     /// that query `_core` directly.
     fn interval_domain_extension_p(
         &self,
+        py: Python<'_>,
         source: Vec<String>,
         src_params: Vec<f64>,
         target: Vec<String>,
@@ -1414,13 +1463,15 @@ impl PyEngine {
     ) -> PyResult<Option<f64>> {
         ensure_tokens_are_tokens(&source)?;
         ensure_tokens_are_tokens(&target)?;
-        Ok(crate::interval::domain_extension_p(
-            &source,
-            &src_params,
-            &target,
-            &tgt_params,
-            self.inner().operators_ref(),
-        ))
+        Ok(py.detach(|| {
+            crate::interval::domain_extension_p(
+                &source,
+                &src_params,
+                &target,
+                &tgt_params,
+                self.inner().operators_ref(),
+            )
+        }))
     }
 
     /// OFFLINE miner: the full native `find_rule_worker` decision for one source --
@@ -1942,6 +1993,7 @@ fn reserved_numeric_spelling(token: &str) -> bool {
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
     m.add_class::<PyCandidateLibrary>()?;
+    m.add("MissingModeSet", m.py().get_type::<MissingModeSet>())?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
