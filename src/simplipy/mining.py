@@ -392,8 +392,10 @@ class RuleMiner:
                 (getattr(self.engine, _RULES_ATTR[rule_mode]) or [])]
 
     def _install(self, rule_mode: str, rules: list) -> None:
-        """Install ``rules`` as ``rule_mode``'s own set, keeping the other modes' sets."""
+        """Install ``rules`` as ``rule_mode``'s own set, keeping the other modes' sets. The
+        mine reads and judges the set in ``rule_mode``'s canon, so it is read in that one."""
         rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in rules]
+        self.engine._rule_canons.pop(rule_mode, None)
         if rule_mode == 'default':
             self.engine._replace_rules(rules)
         else:
@@ -2175,6 +2177,7 @@ class RuleMiner:
             if 'default' in finals:
                 self.engine.real_simplification_rules = finals.get('real')
                 self.engine.permissive_simplification_rules = finals.get('permissive')
+                self.engine._rule_canons.clear()  # each set was mined in its own mode
                 self.engine._replace_rules(finals['default'])
         finally:
             _core_module.set_interval_node_budget(previous_budget)

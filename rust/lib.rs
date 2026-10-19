@@ -59,6 +59,20 @@ fn parse_rule_mode(name: &str) -> PyResult<engine::RuleMode> {
     })
 }
 
+/// The canon a pushed set was certified in (`ac::rules::RuleCanon`): `"legacy"` or a rule
+/// mode's name; `None` is the mode the set is installed for.
+fn parse_rule_canon(name: Option<&str>, mode: engine::RuleMode) -> PyResult<ac::rules::RuleCanon> {
+    match name {
+        None => Ok(ac::rules::RuleCanon::Mode(mode)),
+        Some(name) => ac::rules::RuleCanon::parse(name).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown rule canon {name:?}: expected 'legacy', 'default', 'real' or \
+                 'permissive'"
+            ))
+        }),
+    }
+}
+
 /// The complexity instruments' canon selector: `"mode"` routes the canon through the
 /// requested rule mode itself -- that mode's own reading, the measure its simplify descends
 /// (what `complexity()` prices); `"default"` pins the canon to the f64 default -- the
@@ -369,7 +383,15 @@ pub(crate) fn test_engine() -> Option<Engine> {
         return None;
     }
     let rules = format!("{home}/.cache/simplipy/engines/acj-4/rules.json");
-    let mut e = Engine::from_paths(&cfg, &rules).expect("engine loads");
+    // acj-4 is a pre-0.15 mine, so every file is read in the legacy canon, as the python
+    // loader reads it (`SimpliPyEngine.from_config`, the sidecar records no mode).
+    let legacy = ac::rules::RuleCanon::Legacy;
+    let mut e = Engine::from_strs_read_in(
+        &std::fs::read_to_string(&cfg).expect("config reads"),
+        &std::fs::read_to_string(&rules).expect("rules read"),
+        legacy,
+    )
+    .expect("engine loads");
     // The acj-4 cell ships the full triple, and each mode serves ITS OWN complete file
     // (the python loader reads the config's `rules_real:`/`rules_permissive:` keys; the
     // rust core is handed resolved content). Loading only rules.json here would run
@@ -392,7 +414,7 @@ pub(crate) fn test_engine() -> Option<Engine> {
             .expect("acj-4 ships a full triple");
         let raw: Vec<(Vec<String>, Vec<String>)> =
             serde_json::from_str(&text).expect("triple rules file parses");
-        e.set_mode_rules(mode, Some(raw));
+        e.set_mode_rules_read_in(mode, Some(raw), legacy);
     }
     Some(e)
 }
@@ -508,8 +530,17 @@ impl PyEngine {
     /// Build from in-memory config YAML + rules JSON text: the shim's direct
     /// `SimpliPyEngine(operators=..., rules=...)` construction serializes its state and
     /// attaches a core here, filesystem-free (there is no pure-Python fallback).
+    /// `canon` is the canon the rules were certified in (`parse_rule_canon`); `None` is the
+    /// default mode's own.
     #[staticmethod]
-    fn from_strs(py: Python<'_>, config_yaml: &str, rules_json: &str) -> PyResult<Self> {
+    #[pyo3(signature = (config_yaml, rules_json, canon=None))]
+    fn from_strs(
+        py: Python<'_>,
+        config_yaml: &str,
+        rules_json: &str,
+        canon: Option<&str>,
+    ) -> PyResult<Self> {
+        let canon = parse_rule_canon(canon, engine::RuleMode::Default)?;
         // threatmodel-3: parse and CAP the rules BEFORE the engine build -- rule
         // compile walks each side recursively, and this was the one token-taking
         // FFI entry the H-043 cap never reached: a ~1e5-deep chain in a hostile or
@@ -521,7 +552,7 @@ impl PyEngine {
             ensure_tokens_are_tokens(lhs)?;
             ensure_tokens_are_tokens(rhs)?;
         }
-        let inner = engine::Engine::from_strs(config_yaml, rules_json)
+        let inner = engine::Engine::from_strs_read_in(config_yaml, rules_json, canon)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         py.detach(|| translate_held_sets(&inner));
         // C1.9: digest the initial rules exactly as `set_rules` digests later pushes --
@@ -709,18 +740,23 @@ impl PyEngine {
     /// the LOADED RULESET, which can turn a rule's left side into its own right side
     /// (`* (-1) asin _0` into `asin neg _0` under a set holding that rule). See
     /// `Engine::ac_canonical_key`.
-    #[pyo3(signature = (exprs, *, rule_mode))]
+    ///
+    /// `canon` is the canon the keyed rules were certified in (`set_mode_rules`'s); `None` is
+    /// `rule_mode`'s own.
+    #[pyo3(signature = (exprs, *, rule_mode, canon=None))]
     fn ac_canonical_keys(
         &self,
         py: Python<'_>,
         exprs: Vec<Vec<String>>,
         rule_mode: &str,
+        canon: Option<&str>,
     ) -> PyResult<Vec<Option<Vec<String>>>> {
         for e in &exprs {
             ensure_tokens_are_tokens(e)?;
         }
         let mode = parse_rule_mode(rule_mode)?;
-        Ok(py.detach(|| self.inner().ac_canonical_keys(&exprs, mode)))
+        let canon = parse_rule_canon(canon, mode)?;
+        Ok(py.detach(|| self.inner().ac_canonical_keys(&exprs, mode, canon)))
     }
 
     /// OFFLINE miner: the MARK a mine of `rule_mode` sets for `source` -- the mode's serve
@@ -913,6 +949,16 @@ impl PyEngine {
     #[pyo3(signature = (*, rule_mode))]
     fn mode_rules_len(&self, rule_mode: &str) -> PyResult<Option<usize>> {
         Ok(self.inner().mode_rules_len(parse_rule_mode(rule_mode)?))
+    }
+
+    /// The canon `rule_mode`'s set is read in (the one it was certified in): `"legacy"` or a
+    /// rule mode's name. A mode with no set of its own reports the default set's.
+    #[pyo3(signature = (*, rule_mode))]
+    fn mode_rules_canon(&self, rule_mode: &str) -> PyResult<&'static str> {
+        Ok(self
+            .inner()
+            .mode_rules_canon(parse_rule_mode(rule_mode)?)
+            .name())
     }
 
     /// The licence registry's load check: rules refused at AC load by the
@@ -1656,14 +1702,20 @@ impl PyEngine {
     /// Safe while other threads are inside the core: the push waits, with the GIL
     /// released, for the calls in flight to return, and new calls queue behind it. The
     /// pushed set is translated before this returns.
-    #[pyo3(signature = (rule_mode, rules))]
+    ///
+    /// `canon` is the canon the set was certified in, which it is read in: `"legacy"` for a
+    /// file mined before per-mode mines, a rule mode's name for one mined in that mode;
+    /// `None` (an in-memory set) is `rule_mode`'s own.
+    #[pyo3(signature = (rule_mode, rules, *, canon=None))]
     fn set_mode_rules(
         &self,
         py: Python<'_>,
         rule_mode: &str,
         rules: Option<Vec<(Vec<String>, Vec<String>)>>,
+        canon: Option<&str>,
     ) -> PyResult<()> {
         let mode = parse_rule_mode(rule_mode)?;
+        let canon = parse_rule_canon(canon, mode)?;
         // H-043/D4: same cap + alphabet as every other token-taking entry -- rule compile
         // parses each side into a tree, recursively.
         if let Some(rules) = &rules {
@@ -1684,9 +1736,9 @@ impl PyEngine {
                         pushed_rules_digest(&rules),
                         std::sync::atomic::Ordering::Relaxed,
                     );
-                    engine.set_rules(rules);
+                    engine.set_mode_rules_read_in(mode, Some(rules), canon);
                 } else {
-                    engine.set_mode_rules(mode, rules);
+                    engine.set_mode_rules_read_in(mode, rules, canon);
                 }
             }
             translate_held_sets(&self.inner());

@@ -112,7 +112,7 @@ impl Engine {
     /// and [`Engine::translate_rules`] for the load gates every set faces.
     pub(crate) fn ac_rules(&self) -> &AcRules {
         self.ac_rules_cell
-            .get_or_init(|| self.translate_rules(&self.rules.raw, RuleMode::Default))
+            .get_or_init(|| self.translate_rules(&self.rules, RuleMode::Default))
     }
 
     /// THE RULE SET THIS MODE SERVES -- ONE DISTINCT, COMPLETE SET PER MODE (owner
@@ -163,7 +163,7 @@ impl Engine {
     ) -> &'a AcRules {
         match set {
             None => self.ac_rules(),
-            Some(compiled) => cell.get_or_init(|| self.translate_rules(&compiled.raw, mode)),
+            Some(compiled) => cell.get_or_init(|| self.translate_rules(compiled, mode)),
         }
     }
 
@@ -190,24 +190,24 @@ impl Engine {
     /// Const-introduction case is already load-refused by the Const-count invariant.
     /// Refusals are counted (`n_registry_dropped`), expected 0 for every artifact the
     /// mint-side registry produced.
-    fn translate_rules(
-        &self,
-        raw: &[(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)],
-        mode: RuleMode,
-    ) -> AcRules {
+    ///
+    /// The set is read in the canon it was certified in (`CompiledRules::canon`), with
+    /// numerals in the serving mode's number domain.
+    fn translate_rules(&self, set: &CompiledRules, mode: RuleMode) -> AcRules {
         let overlay = RefCell::new(TokenOverlay::new(self.tokens.len()));
         let view = TokenView::new(&self.tokens, &overlay);
-        self.translate_in(raw, &view, mode)
+        self.translate_in(&set.raw, &view, mode, set.canon)
     }
 
     /// [`Engine::translate_rules`] over a caller's view (the preview interns its rules into
-    /// a call's overlay): the registry's pole filter, `AcRules::translate` in `mode`'s
-    /// context, the provenance lift.
+    /// a call's overlay): the registry's pole filter, `AcRules::translate` in `canon`, the
+    /// provenance lift.
     fn translate_in(
         &self,
         raw: &[(Vec<crate::tokens::Tok>, Vec<crate::tokens::Tok>)],
         view: &TokenView,
         mode: RuleMode,
+        canon: crate::ac::rules::RuleCanon,
     ) -> AcRules {
         // A mode's rules are read in that mode's number domain (design 2c), whichever run
         // first asks for them (translation is lazy and may start inside another mode's run).
@@ -239,7 +239,7 @@ impl Engine {
             kept.push((l.clone(), r.clone()));
             kept_idx.push(i);
         }
-        let mut r = AcRules::translate(&kept, view, mode);
+        let mut r = AcRules::translate(&kept, view, canon);
         r.n_registry_dropped = n_registry_dropped;
         for s in r.src.iter_mut() {
             *s = kept_idx[*s];
@@ -280,6 +280,17 @@ impl Engine {
             RuleMode::Real => self.real_rules.as_ref().map(|c| c.raw.len()),
             RuleMode::Permissive => self.permissive_rules.as_ref().map(|c| c.raw.len()),
         }
+    }
+
+    /// The canon `mode`'s set is read in -- the one it was certified in (`RuleCanon`) --
+    /// or, for a mode with no set of its own, the default set's, which it serves.
+    pub fn mode_rules_canon(&self, mode: RuleMode) -> crate::ac::rules::RuleCanon {
+        let own = match mode {
+            RuleMode::Default => None,
+            RuleMode::Real => self.real_rules.as_ref(),
+            RuleMode::Permissive => self.permissive_rules.as_ref(),
+        };
+        own.unwrap_or(&self.rules).canon
     }
 
     /// THE SERVED RULE SET: every rule the matcher can fire, in the EXPLICIT projection,
@@ -1004,20 +1015,23 @@ impl Engine {
 
     pub fn ac_canonical_key(&self, tokens: &[String], mode: RuleMode) -> Option<Vec<String>> {
         let ctx = SimplifyCtx::new(self.tokens.len());
-        self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx, mode)
+        let own = crate::ac::rules::RuleCanon::Mode(mode);
+        self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx, mode, own)
             .pop()?
     }
 
     /// [`Engine::ac_canonical_key`] over a BATCH, sharing one context (and therefore one
     /// token overlay) across the whole list -- a ruleset is keyed side-by-side, and a
-    /// per-expression context would re-pay the overlay setup 2x per rule.
+    /// per-expression context would re-pay the overlay setup 2x per rule. `read_in` is the
+    /// canon the keyed rules were certified in (`RuleCanon`), the one their load reads.
     pub fn ac_canonical_keys(
         &self,
         exprs: &[Vec<String>],
         mode: RuleMode,
+        read_in: crate::ac::rules::RuleCanon,
     ) -> Vec<Option<Vec<String>>> {
         let ctx = SimplifyCtx::new(self.tokens.len());
-        self.ac_canonical_keys_in(exprs, &ctx, mode)
+        self.ac_canonical_keys_in(exprs, &ctx, mode, read_in)
     }
 
     /// The canonical state of `tokens` as `mode` READS a rule side or a mine source
@@ -1084,7 +1098,7 @@ impl Engine {
             .map(|(l, r)| (self.intern_seq(l, &ctx), self.intern_seq(r, &ctx)))
             .collect();
         let view = self.view(&ctx);
-        let rules = self.translate_in(&toks, &view, mode);
+        let rules = self.translate_in(&toks, &view, mode, crate::ac::rules::RuleCanon::Mode(mode));
         let bare = Cx::bare(&view);
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         rules
@@ -1117,6 +1131,7 @@ impl Engine {
         exprs: &[Vec<String>],
         ctx: &SimplifyCtx,
         mode: RuleMode,
+        read_in: crate::ac::rules::RuleCanon,
     ) -> Vec<Option<Vec<String>>> {
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         exprs
@@ -1124,7 +1139,7 @@ impl Engine {
             .map(|tokens| {
                 let toks = self.intern_seq(tokens, ctx);
                 let view = self.view(ctx);
-                let bare = crate::ac::rules::rule_cx(&view, mode);
+                let bare = read_in.cx(&view);
                 let e = canon(from_prefix(&toks, &bare)?, &bare);
                 let key = to_prefix_tagged(&e, &Cx::bare(&view));
                 // INJECTIVITY, asserted where it is cheapest to check. The key is a KEY
@@ -2542,13 +2557,12 @@ mod tests {
         // to its PRISTINE form after the B5+B19 interim (6649/30/0, discharged). If
         // either count moves off 0 again, the published asset lags the engine:
         // REPUBLISH, do not re-pin.
-        // Read in f64's own reading (its fold on), exactly ONE row of the published f64
-        // file states what the f64 constructor performs: `atanh pow (-10) (-9) -> -1e-09`.
-        // The per-mode re-mine does not mint it; until that asset is republished the count
-        // is 1. Any other value means the canon moved past the asset -- republish.
+        // The published asset is a pre-0.15 mine, read in the canon it was certified in (the
+        // legacy one, `RuleCanon::Legacy`): nothing is subsumed. Read in f64's own folded
+        // canon, `atanh pow (-10) (-9) -> -1e-09` was, a row nothing judged in that canon.
         assert_eq!(
-            subsumed, 1,
-            "published asset vs f64's reading: one known f64-folded row; any other \
+            subsumed, 0,
+            "published asset, read in its own canon, must translate loss-free; a \
              subsumption means the canon moved past it -- republish, do not re-pin"
         );
         let _ = twins;

@@ -154,8 +154,21 @@ impl Engine {
     /// Build from in-memory config/rules text: direct `SimpliPyEngine(operators=..., rules=...)`
     /// construction serializes its in-memory state and attaches a core through here -- with no
     /// pure-Python fallback, every construction path must reach a compiled core without touching
-    /// the filesystem.
+    /// the filesystem. The default set is read in its own mode's canon.
     pub fn from_strs(cfg_text: &str, rules_text: &str) -> Result<Self, Box<dyn Error>> {
+        Self::from_strs_read_in(
+            cfg_text,
+            rules_text,
+            crate::ac::rules::RuleCanon::Mode(RuleMode::Default),
+        )
+    }
+
+    /// [`Engine::from_strs`] with the canon the default set was certified in.
+    pub fn from_strs_read_in(
+        cfg_text: &str,
+        rules_text: &str,
+        canon: crate::ac::rules::RuleCanon,
+    ) -> Result<Self, Box<dyn Error>> {
         let cfg: EngineConfig = serde_yaml_ng::from_str(cfg_text)?;
 
         // rules.json: a JSON list of [lhs_tokens, rhs_tokens] pairs; serde_json maps each
@@ -218,7 +231,7 @@ impl Engine {
         // The per-Engine token table (operators + aliases + vocab), then compile interns
         // every rule token into it.
         let mut tokens = TokenTable::build(&order, &operators);
-        let compiled = CompiledRules::compile(raw, &mut tokens, &operators);
+        let compiled = CompiledRules::compile(raw, canon, &mut tokens, &operators);
 
         Ok(Self {
             operators,

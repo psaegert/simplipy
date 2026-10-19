@@ -7,14 +7,17 @@
 //! ids -- a query token that only exists in a per-call overlay can, by injectivity, never
 //! equal any rule token.
 
+use crate::ac::rules::RuleCanon;
 use crate::operators::Operators;
 use crate::tokens::{Tok, TokenTable};
 
 /// The loaded ruleset, interned. `raw` is every rule in ASSET ORDER as (lhs, rhs) token
-/// sequences: the AC translation needs the global first-match-wins order intact.
-#[derive(Debug, Default)]
+/// sequences: the AC translation needs the global first-match-wins order intact. `canon` is
+/// the canon the set was certified in, which the translation reads it in.
+#[derive(Debug)]
 pub struct CompiledRules {
     pub raw: Vec<(Vec<Tok>, Vec<Tok>)>,
+    pub canon: RuleCanon,
 }
 
 impl CompiledRules {
@@ -22,6 +25,7 @@ impl CompiledRules {
     /// `&mut` here) token table, preserving asset order.
     pub fn compile(
         raw: Vec<(Vec<String>, Vec<String>)>,
+        canon: RuleCanon,
         table: &mut TokenTable,
         ops: &Operators,
     ) -> Self {
@@ -34,6 +38,9 @@ impl CompiledRules {
                 )
             })
             .collect();
-        Self { raw: raw_interned }
+        Self {
+            raw: raw_interned,
+            canon,
+        }
     }
 }

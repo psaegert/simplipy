@@ -272,6 +272,55 @@ pub(crate) fn rule_cx<'a>(view: &'a TokenView<'a>, mode: crate::engine::RuleMode
     cx
 }
 
+/// THE CANON A RULE SET WAS CERTIFIED IN, and so the one it is read in. A rule is judged on
+/// the pattern its mine wrote, read in its mine's canon; read in another canon, its LHS can
+/// become a different pattern, which nothing judged. Real's canon reads the f64 fact
+/// `rootn 2 atanh tanh 3 -> nan` (f64's `atanh(tanh(3))` is not 3) as `rootn 2 3 -> nan`,
+/// which is false. Read in the canon it was mined in, the pattern stays the one judged, and a
+/// pattern the serving canon never produces never fires.
+///
+/// Numerals are read in the SERVING mode's number domain whatever the canon (a numeral
+/// denotes the number it spells, and real reads it exactly); the canon decides the structure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleCanon {
+    /// A per-mode mine of this mode (0.15 on), and every set handed over in memory: the
+    /// mode's own reading ([`rule_cx`]).
+    Mode(crate::engine::RuleMode),
+    /// A mine from before per-mode mines (0.14 and earlier): one mode-blind canon for all
+    /// three files, Default's, unfolded and uncertified ([`Cx::bare`]), the reading every
+    /// file was loaded in until per-mode mines.
+    Legacy,
+}
+
+impl RuleCanon {
+    /// The context a rule side of this canon is read in.
+    pub(crate) fn cx<'a>(self, view: &'a TokenView<'a>) -> Cx<'a> {
+        match self {
+            RuleCanon::Mode(mode) => rule_cx(view, mode),
+            RuleCanon::Legacy => Cx::bare(view),
+        }
+    }
+
+    /// The wire spelling: `"legacy"`, or a rule mode's (`RuleMode::parse`).
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "legacy" => Some(RuleCanon::Legacy),
+            other => crate::engine::RuleMode::parse(other).map(RuleCanon::Mode),
+        }
+    }
+
+    /// The wire spelling [`RuleCanon::parse`] reads back.
+    pub fn name(self) -> &'static str {
+        use crate::engine::RuleMode;
+        match self {
+            RuleCanon::Legacy => "legacy",
+            RuleCanon::Mode(RuleMode::Default) => "default",
+            RuleCanon::Mode(RuleMode::Real) => "real",
+            RuleCanon::Mode(RuleMode::Permissive) => "permissive",
+        }
+    }
+}
+
 /// THE ENGINE-OWNED LAW (gate G8), one definition for the rule load and the miner: does the
 /// rule `lhs -> rhs` (canonical sides) state a law the engine itself performs? Today that is
 /// the distributive law as the search applies it (one FACTOR move, `search::is_factoring`).
@@ -282,16 +331,16 @@ pub(crate) fn engine_owned_law(lhs: &Ex, rhs: &Ex, cx: &Cx) -> bool {
 }
 
 impl AcRules {
-    /// Translate a compiled ruleset's raw (asset-order) rules, read in `mode`'s context
-    /// ([`rule_cx`]). `view` must be a table-backed
+    /// Translate a compiled ruleset's raw (asset-order) rules, read in the canon they were
+    /// certified in ([`RuleCanon`]). `view` must be a table-backed
     /// view; translation is read-only on the token side (parse + canon mint no tokens), so the
     /// resulting `Ex`s hold table ids only and are safe to store per-Engine.
     pub fn translate(
         raw: &[(Vec<Tok>, Vec<Tok>)],
         view: &TokenView,
-        mode: crate::engine::RuleMode,
+        read_in: RuleCanon,
     ) -> AcRules {
-        let cx = rule_cx(view, mode);
+        let cx = read_in.cx(view);
         let mut out = AcRules::default();
         for (raw_idx, (lhs_t, rhs_t)) in raw.iter().enumerate() {
             let (Some(lhs0), Some(rhs0)) = (from_prefix(lhs_t, &cx), from_prefix(rhs_t, &cx))

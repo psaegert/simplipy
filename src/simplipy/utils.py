@@ -543,9 +543,12 @@ def _dedup_keyed_rules(
         variable_prefix: str = '?',
         verbose: bool = False,
         *,
-        rule_mode: str) -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
+        rule_mode: str,
+        canon: str | None = None) -> list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]]:
     """The variable-remapped rules paired with their dedup keys, in input order. The key is
-    the canonical form as ``rule_mode`` reads a rule side (its parse and canon).
+    the canonical form as ``rule_mode``'s load reads a rule side: in the canon the rules were
+    certified in (``canon``, :class:`~simplipy.SimpliPyEngine`'s ``rule_canons``; ``None``
+    is ``rule_mode``'s own).
 
     ONE key, every consumer: :func:`deduplicate_rules` folds this list, and the mine's
     per-proposal duplicate accounting folds it identically. A second copy of the keying
@@ -569,7 +572,8 @@ def _dedup_keyed_rules(
     # THE KEY IS THE INTERNAL FORM, not the spelling (owner ruling 2026-08-18). Batched
     # through the core in ONE call: a ruleset is keyed side-by-side and a per-rule call
     # would re-pay the token-overlay setup for every entry.
-    keys = engine._core.ac_canonical_keys([list(source) for source, _ in remapped], rule_mode=rule_mode)
+    keys = engine._core.ac_canonical_keys([list(source) for source, _ in remapped], rule_mode=rule_mode,
+                                          canon=canon)
     out: list[tuple[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]]] = []
     for key, pair in zip(keys, remapped):
         # A side the AC parser refuses keeps its SPELLING as the key: the loader drops
@@ -589,7 +593,7 @@ def dedup_target_wins(engine: Any, new: Any, kept: Any, rule_mode: str) -> bool:
         return False
 
 
-def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any, rule_mode: Any) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any, rule_mode: Any, canon: str | None = None) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     """Deduplicate a list of simplification rules by canonicalizing variables.
 
     This function processes a list of (source, target) simplification rules. It
@@ -628,6 +632,9 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
         ``'default'``), ``'real'``, ``'permissive'`` or a :class:`~simplipy.Mode` member.
         It decides how a rule side is read (the key) and which target wins (its serve
         ordering).
+    canon : str or None, optional
+        The canon the rules were certified in, which keys them (``'legacy'`` or a rule
+        mode); ``None`` is ``rule_mode``'s own.
 
     Returns
     -------
@@ -638,7 +645,7 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
     rule_mode = _coerce_rule_mode(rule_mode)
     deduplicated_rules: dict[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]] = {}
     for key, pair in _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose,
-                                        rule_mode=rule_mode):
+                                        rule_mode=rule_mode, canon=canon):
         existing = deduplicated_rules.get(key)
         # The WHOLE PAIR wins or loses: a target strictly below the kept one in the mode's
         # ordering brings its own source spelling with it, so every emitted rule is a

@@ -310,6 +310,25 @@ _MODE_NAMES: dict[str, Mode] = {
 _MODE_CHOICES = "'f64' (also 'default'), 'real' or 'permissive'"
 
 
+def _canon_of_record(rules_path: str) -> str:
+    """The canon the rule file at ``rules_path`` was certified in, as its provenance sidecar
+    records it: the mode of a per-mode mine (``'f64'``, ``'real'``, ``'permissive'``), else
+    ``'legacy'``. Mines before per-mode mines (simplipy 0.14 and earlier) mined all three files
+    in one canon and recorded no mode: they wrote one sidecar, beside the f64 file."""
+    sidecar = rules_path + '.provenance.json'
+    if not os.path.exists(sidecar):
+        return 'legacy'
+    with open(sidecar, 'r') as f:
+        record = json.load(f)
+    mode = record.get('mode') if isinstance(record, dict) else None
+    if mode is None:
+        return 'legacy'
+    if mode not in {m.name for m in Mode}:
+        raise ValueError(f"the sidecar '{sidecar}' records the mode {mode!r}, which this "
+                         f"simplipy does not know: expected one of {[m.name for m in Mode]}")
+    return str(mode)
+
+
 def _coerce_mode(mode: 'Mode | str') -> Mode:
     """A :class:`Mode` member, or one of its names in any case; anything else raises.
 
@@ -378,6 +397,12 @@ class SimpliPyEngine:
     rules_permissive : list[tuple] or None, optional
         The ``permissive`` mode's OWN COMPLETE rule set, same discipline as ``rules_real``.
         This is the set ``Mode.permissive`` serves.
+    rule_canons : dict[str, str] or None, optional
+        The canon each set was certified in, which the engine reads it in, by mode name
+        (``'f64'``, ``'real'``, ``'permissive'``): a mode name for a set mined in that
+        mode, or ``'legacy'`` for a set mined before per-mode mines (simplipy 0.14 and
+        earlier mined all three files in one canon). A mode not named reads its set in
+        its own canon. :meth:`from_config` fills this from each file's provenance sidecar.
     modes : str or Mode or tuple or list, optional
         Which mode rule sets are built EAGERLY, at construction. The default ``'all'``
         builds every set the engine names -- byte-identical to the historical
@@ -439,11 +464,13 @@ class SimpliPyEngine:
     def __init__(self, operators: dict[str, dict[str, Any]], rules: list[tuple] | None = None, *,
                  rules_real: list[tuple] | None = None,
                  rules_permissive: list[tuple] | None = None,
+                 rule_canons: dict[str, str] | None = None,
                  modes: 'str | Mode | tuple | list' = 'all',
                  trusted_modules: list[str] | None = None) -> None:
         # Loud validation FIRST, like the operator specs below: a mistyped `modes`
         # must never construct an engine that silently built the wrong sets.
         self._modes = self._normalized_modes(modes)
+        self._rule_canons = self._normalized_rule_canons(rule_canons)
         # C1.18: loud spec validation + normalization BEFORE anything reads a key --
         # the first consumer used to be a bare `KeyError: 'alias'`.
         operators = _normalized_operator_specs(operators)
@@ -495,7 +522,8 @@ class SimpliPyEngine:
         else:
             self._core = self._build_core(self._operators_config, [])
             self.simplification_rules = deduplicate_rules(
-                rules, dummy_variables=dummy_variables, engine=self, rule_mode='default')
+                rules, dummy_variables=dummy_variables, engine=self, rule_mode='default',
+                canon=self._rule_canons.get('default'))
 
         # THE OTHER TWO MODES' SETS. Normalized to the same (tuple, tuple) shape as the
         # default list, and deliberately NOT deduplicated against it: each set is
@@ -524,7 +552,8 @@ class SimpliPyEngine:
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.real_simplification_rules if 'real' in eager else None,
-            self.permissive_simplification_rules if 'permissive' in eager else None)
+            self.permissive_simplification_rules if 'permissive' in eager else None,
+            canons=self._rule_canons)
         # The lazy-mode bookkeeping. `_mode_rule_sources` maps a rule mode name to the
         # FILE its set loads from (attached by `from_config` for every config-named
         # set); `_core_loaded_modes` holds the non-default modes whose sets the CURRENT
@@ -572,6 +601,19 @@ class SimpliPyEngine:
         return tuple(n for n in ('f64', 'real', 'permissive') if n in names)
 
     @staticmethod
+    def _normalized_rule_canons(canons: dict[str, str] | None) -> dict[str, str]:
+        """``rule_canons`` as the core spells it: rule mode -> canon (``'legacy'`` or a rule
+        mode). A mode not named, or named with its own canon, is left out: it reads its set
+        in its own canon."""
+        out: dict[str, str] = {}
+        for mode, canon in (canons or {}).items():
+            rule_mode = _RULE_MODE[_coerce_mode(mode)]
+            read_in = canon if canon == 'legacy' else _RULE_MODE[_coerce_mode(canon)]
+            if read_in != rule_mode:
+                out[rule_mode] = read_in
+        return out
+
+    @staticmethod
     def _normalized_mode_rules(rules: list[tuple] | None) -> list[tuple] | None:
         """One mode's own rule set in the engine's (tuple, tuple) shape -- ``None``
         through unchanged, because ``None`` (no set of its own) and ``[]`` (an empty
@@ -583,7 +625,8 @@ class SimpliPyEngine:
     @staticmethod
     def _build_core(operators: dict[str, dict[str, Any]], rules: list[tuple],
                     rules_real: list[tuple] | None = None,
-                    rules_permissive: list[tuple] | None = None) -> Any:
+                    rules_permissive: list[tuple] | None = None, *,
+                    canons: dict[str, str] | None = None) -> Any:
         """Build the compiled core (``simplipy._core``) from in-memory config + rules.
 
         The core is REQUIRED: a missing extension or a load failure is a hard error --
@@ -597,18 +640,23 @@ class SimpliPyEngine:
         separate statements rather than more arguments to ``from_strs`` because the mine
         driver needs exactly this surface too (it installs a freshly minted set on a live
         core), and one entry point is easier to keep honest than two.
+
+        ``canons`` maps a rule mode to the canon its set was certified in
+        (:meth:`_normalized_rule_canons`); a mode not named reads its set in its own.
         """
+        canons = canons or {}
         if _RustEngine is None:
             raise ImportError(
                 'simplipy._core is required (the pure-Python engine was removed): the compiled '
                 f'extension failed to import ({_CORE_IMPORT_ERROR!r})')
         config_text = yaml.safe_dump({'operators': operators}, sort_keys=False)
         rules_text = json.dumps([[list(lhs), list(rhs)] for lhs, rhs in rules])
-        core = _RustEngine.from_strs(config_text, rules_text)
+        core = _RustEngine.from_strs(config_text, rules_text, canons.get('default'))
         for mode_name, mode_rules in (('real', rules_real), ('permissive', rules_permissive)):
             if mode_rules is not None:
                 core.set_mode_rules(
-                    mode_name, [(list(lhs), list(rhs)) for lhs, rhs in mode_rules])
+                    mode_name, [(list(lhs), list(rhs)) for lhs, rhs in mode_rules],
+                    canon=canons.get(mode_name))
         return core
 
     def __getstate__(self) -> dict[str, Any]:
@@ -679,11 +727,13 @@ class SimpliPyEngine:
         # `modes='all'` engines with no file sources, which is exactly what they were.
         self.__dict__.setdefault('_modes', 'all')
         self.__dict__.setdefault('_mode_rule_sources', {})
+        self.__dict__.setdefault('_rule_canons', {})
         self._mode_load_lock = threading.Lock()
         self._core = self._build_core(
             self._operators_config, self.simplification_rules,
             self.__dict__.setdefault('real_simplification_rules', None),
-            self.__dict__.setdefault('permissive_simplification_rules', None))
+            self.__dict__.setdefault('permissive_simplification_rules', None),
+            canons=self._rule_canons)
         # The fresh core carries exactly the non-None in-memory sets `_build_core`
         # just pushed; a set that was deferred (or unloaded) in the parent stays
         # deferred here and lazily loads from its recorded source on first use.
@@ -712,7 +762,8 @@ class SimpliPyEngine:
         with self._mode_load_lock:
             self._core = self._build_core(
                 self._operators_config, self.simplification_rules,
-                self.real_simplification_rules, self.permissive_simplification_rules)
+                self.real_simplification_rules, self.permissive_simplification_rules,
+                canons=self._rule_canons)
             self._core_loaded_modes = {
                 m for m in _MODE_RULES_ATTR
                 if getattr(self, _MODE_RULES_ATTR[m]) is not None}
@@ -725,7 +776,8 @@ class SimpliPyEngine:
         hold ``_mode_load_lock``, so two pushes cannot race each other.
         """
         self._core.set_mode_rules(
-            rule_mode, None if rules is None else [(list(lhs), list(rhs)) for lhs, rhs in rules])
+            rule_mode, None if rules is None else [(list(lhs), list(rhs)) for lhs, rhs in rules],
+            canon=self._rule_canons.get(rule_mode))
 
     def _ensure_mode_loaded(self, rule_mode: str) -> None:
         """Build ``rule_mode``'s set NOW if this engine names one that the core does
@@ -838,7 +890,8 @@ class SimpliPyEngine:
         with self._mode_load_lock:
             new_core = self._build_core(
                 self._operators_config, rules,
-                self.real_simplification_rules, self.permissive_simplification_rules)
+                self.real_simplification_rules, self.permissive_simplification_rules,
+                canons=self._rule_canons)
             self.simplification_rules = rules
             self._core = new_core
             self._core_loaded_modes = {
@@ -957,13 +1010,15 @@ class SimpliPyEngine:
                 if rule_mode == 'default':
                     core = self._build_core(self._operators_config, probe_set,
                                             self.real_simplification_rules,
-                                            self.permissive_simplification_rules)
+                                            self.permissive_simplification_rules,
+                                            canons=self._rule_canons)
                 else:
                     core = self._build_core(
                         self._operators_config, self.simplification_rules,
                         probe_set if rule_mode == 'real' else self.real_simplification_rules,
                         probe_set if rule_mode == 'permissive'
-                        else self.permissive_simplification_rules)
+                        else self.permissive_simplification_rules,
+                        canons=self._rule_canons)
                 readd = [rule for rule in
                          prog.track(list(pending), f'  wave {wave_length} round {rounds}: coverage scan')
                          if not covered(core, *rule)]
@@ -1216,9 +1271,13 @@ class SimpliPyEngine:
                     f"'{mode_path}'): the engine is built WITHOUT it, so {consequence}. "
                     f"The other modes are unaffected -- each mode's set is its own file.",
                     UserWarning)
+        # Each file is read in the canon it was certified in, which its sidecar records.
+        canons = {mode_name: _canon_of_record(path) for mode_name, path in mode_sources.items()}
+        if rules_path is not None and os.path.exists(rules_path):
+            canons['f64'] = _canon_of_record(rules_path)
         engine = cls(operators=config['operators'], rules=rules,
                      rules_real=mode_rules['real'], rules_permissive=mode_rules['permissive'],
-                     modes=modes, trusted_modules=trusted_modules)
+                     rule_canons=canons, modes=modes, trusted_modules=trusted_modules)
         # The file recipe, attached AFTER construction because paths are this
         # loader's knowledge, not `__init__`'s: a deferred set lazily loads from
         # here on first use, and `unload_mode` re-reads from here after a drop.

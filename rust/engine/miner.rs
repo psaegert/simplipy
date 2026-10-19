@@ -727,16 +727,11 @@ impl Engine {
     /// Takes `&mut self`, so extending the token table with any NEW rule tokens is safe
     /// (append-only; existing ids -- including `bang_cache` keys -- stay valid).
     pub fn set_rules(&mut self, raw: Vec<(Vec<String>, Vec<String>)>) {
-        self.rules = CompiledRules::compile(raw, &mut self.tokens, &self.operators);
-        // The AC translation is cached lazily (ac_rules_cell); the AC-judged Kruskal prune
-        // must see the rules just installed, so the cache dies with the old rule set.
-        self.ac_rules_cell = std::sync::OnceLock::new();
-        // ...and so do the other two modes' cells. Not because their SETS changed -- they
-        // did not -- but because a mode with NO set of its own SERVES this one, so its
-        // answer moved even though its file did not. Retaining them would leave such a
-        // mode serving a rule set the engine no longer holds.
-        self.ac_real_rules_cell = std::sync::OnceLock::new();
-        self.ac_permissive_rules_cell = std::sync::OnceLock::new();
+        self.set_mode_rules_read_in(
+            RuleMode::Default,
+            Some(raw),
+            crate::ac::rules::RuleCanon::Mode(RuleMode::Default),
+        );
     }
 
     /// Install ONE MODE'S OWN COMPLETE RULE SET (`rules_real.json` / `rules_permissive.json`),
@@ -746,19 +741,39 @@ impl Engine {
     /// mode then serves nothing. The distinction is the design (see `Engine::ac_rules_for`)
     /// and it survives every layer up to the config loader.
     ///
-    /// `RuleMode::Default` routes to `set_rules`, so there is exactly one way to say
-    /// "replace the default set" and it keeps that path's invalidation discipline.
-    /// Shaped like `set_rules` otherwise: the same `&mut self` token-table extension (the
-    /// table is append-only, so existing ids -- including `bang_cache` keys -- stay valid)
-    /// and the same lazy-cell invalidation. Only the named mode's cell dies; installing
-    /// `real` can never move a `default` or `permissive` answer.
+    /// `RuleMode::Default` with `None` installs the empty default set (the default mode
+    /// always has one). The `&mut self` token-table extension is append-only, so existing
+    /// ids -- including `bang_cache` keys -- stay valid.
+    ///
+    /// Only the named mode's translation dies. A mode with no set of its own reads the
+    /// default translation itself (`Engine::ac_mode_rules`), never its own cell, so
+    /// replacing the default set moves its answers without touching its cell, and
+    /// installing `real` can never move a `default` or `permissive` answer.
+    ///
+    /// The set is read in its own mode's canon (an in-memory set is stated for the mode it
+    /// is installed for); [`Engine::set_mode_rules_read_in`] names another.
     pub fn set_mode_rules(&mut self, mode: RuleMode, raw: Option<Vec<(Vec<String>, Vec<String>)>>) {
-        if mode == RuleMode::Default {
-            self.set_rules(raw.unwrap_or_default());
-            return;
-        }
-        let compiled = raw.map(|r| CompiledRules::compile(r, &mut self.tokens, &self.operators));
+        self.set_mode_rules_read_in(mode, raw, crate::ac::rules::RuleCanon::Mode(mode));
+    }
+
+    /// [`Engine::set_mode_rules`] with the canon the set was certified in (`RuleCanon`).
+    pub fn set_mode_rules_read_in(
+        &mut self,
+        mode: RuleMode,
+        raw: Option<Vec<(Vec<String>, Vec<String>)>>,
+        canon: crate::ac::rules::RuleCanon,
+    ) {
+        let compiled =
+            raw.map(|r| CompiledRules::compile(r, canon, &mut self.tokens, &self.operators));
         match mode {
+            RuleMode::Default => {
+                self.rules = compiled.unwrap_or_else(|| {
+                    CompiledRules::compile(Vec::new(), canon, &mut self.tokens, &self.operators)
+                });
+                self.ac_rules_cell = std::sync::OnceLock::new();
+                self.ac_real_rules_cell = std::sync::OnceLock::new();
+                self.ac_permissive_rules_cell = std::sync::OnceLock::new();
+            }
             RuleMode::Real => {
                 self.real_rules = compiled;
                 self.ac_real_rules_cell = std::sync::OnceLock::new();
@@ -767,7 +782,6 @@ impl Engine {
                 self.permissive_rules = compiled;
                 self.ac_permissive_rules_cell = std::sync::OnceLock::new();
             }
-            RuleMode::Default => unreachable!("handled above"),
         }
     }
 
