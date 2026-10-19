@@ -611,8 +611,11 @@ impl Engine {
     /// `<constant>`) whose class is not decided above is evaluated by the deployed f64
     /// evaluator (`numeric::evaluate_constant_subtree`: libm kernels, `np.pi` and `np.e` as their
     /// floats, the bag in its printed order) and offered as the literal of the shortest decimal
-    /// that reads back as that float. Only a normal (or zero) float folds -- a subnormal or a
-    /// value beyond the f64 number domain stays symbolic, as a written one does.
+    /// that reads back as that float, read as the walk reads that decimal written: in the f64
+    /// number domain (`rat::number_domain`). So a float whose shortest decimal leaves the domain
+    /// stays symbolic, as the written decimal does -- a subnormal, a value beyond 2^1022, and a
+    /// normal value whose decimal does not fit it (`2.781342323134002e-308`, whose denominator
+    /// is 5e322) -- and the state holds the number its print reads back as.
     ///
     /// It is the pass's fold, so it is tried at a node only after no rule fired there, the pass
     /// visits an enclosing node before its children, and the result is accepted only when it
@@ -625,11 +628,11 @@ impl Engine {
     fn ground_fold(&self, strs: &[String]) -> Option<Ex> {
         let tok = crate::numeric::evaluate_constant_subtree(strs, &self.operators)?;
         let y = crate::numeric::leaf_value(&tok)?;
-        let normal = y == 0.0 || (y.abs() >= f64::MIN_POSITIVE && y.abs() <= 2f64.powi(1022));
-        if !y.is_finite() || !normal {
+        if !y.is_finite() {
             return None;
         }
-        crate::ac::rat::Rat::shortest_reading_as(y).map(Ex::Num)
+        let _f64 = crate::ac::rat::number_domain(true);
+        crate::ac::rat::Rat::parse_decimal(&format!("{y:?}")).map(Ex::Num)
     }
 
     fn ac_fold(
