@@ -54,9 +54,12 @@ $$ t ::= q \mid \pi \mid e \mid +\infty \mid -\infty \mid \mathrm{NaN} \mid \dia
 
 where $q$ ranges over exact rationals (`Rat`: $p/q$ with $|p|$ and $q$ of at most 1,100 bits
 each, `CAP_BITS`; normalized $q > 0$, $\gcd(|p|, q) = 1$; held as `i128` whenever it fits, never
-`i128::MIN`; in f64 mode only the numbers the float64 evaluator reads back as themselves --
-zero or normal, $|p| \leq$ DBL_MAX, $q \leq 2^{1022}$ -- and in real mode every number within
-the cap; any other literal stays a token leaf as written), $\diamond$ is the abstract fitted constant
+`i128::MIN`; in the `f64` and `permissive` modes -- "f64 mode" below, for the number domain --
+only zero and the numbers whose numerator and denominator are both at most $2^{1022}$, so that
+the number and its reciprocal are normal float64 values and every printed spelling reads back as
+the same number, and in real mode every number within the cap; any other literal stays a token
+leaf as written: `1e400` in every mode, and in f64 mode also the subnormal `5e-324` and
+`5e307`), $\diamond$ is the abstract fitted constant
 (`Const`), $x$ over vocabulary leaves, $f$ over operator tokens, and $M$ over multisets of
 terms with $|M| \geq 2$.
 
@@ -79,37 +82,33 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   and in f64 mode where the result is not admissible (numerator and denominator at most
   $2^{1022}$, a set closed under negation and reciprocals); an exponent merge also needs its
   branch-cut licence. No two members of a partition fold, so it is the partition of each of its
-  subsets and re-reads to itself in any printed order. *Known residuals* [EMPIRICAL, tracked]:
-  the partition makes each group re-read to itself, not every form around it. Two boundary
-  fuzzes with literals at the 128-bit, float64-range and cap boundaries give canonical-form
-  idempotence failures (at effort 0) below the 128-bit engine's on the same inputs in every
-  mode: 3 f64, 0 real, 1 permissive over 60,000 calls per mode (128 bits: 6, 6, 3), and 10, 7, 5
-  over another 52,000 (128 bits: 16, 16, 19; exact McNemar p = 0.26, 0.064, 0.001, so only permissive's gap is
-  significant). The classes: sums whose sign orientation stays open because they hold literals
-  that stay opaque leaves (beyond the cap, or in f64 mode outside the admissible set: `1e400`,
-  subnormals, `1.7976931348623157e308`, and the decimal `2.2250738585072014e-308`, whose exact
-  denominator is $10^{324}$) or stand beside a $\pm\infty$ factor (`-inf*(x2 - x1)` re-reads as
-  `inf*(x1 - x2)`, in real mode too); in permissive mode,
-  an infinity that absorbs a term only on re-read (`x1*(inf - c/(1e400*x1*x2))` becomes
-  `inf*x1`); a like term whose coefficient is itself a refused two-member partition, whose
-  coefficient and key can split differently on re-read (also in the 128-bit engine); and
+  subsets and re-reads to itself in any printed order. *Known residuals* [EMPIRICAL]:
+  the partition makes each group re-read to itself, not every form around it. Measured against
+  the same code with 128-bit literals, two boundary fuzzes with literals at the 128-bit,
+  float64-range and cap boundaries gave fewer canonical-form idempotence failures (at effort 0)
+  in every mode: 3 f64, 0 real, 1 permissive over 60,000 calls per mode (128 bits: 6, 6, 3), and
+  10, 7, 5 over another 52,000 (128 bits: 16, 16, 19; exact McNemar p = 0.26, 0.064, 0.001, so
+  only permissive's gap is significant). The classes: sums whose sign orientation stays open
+  because they hold literals that stay opaque leaves (beyond the cap, or in f64 mode outside the
+  admissible set: `1e400`, subnormals, `1.7976931348623157e308`, and the decimal
+  `2.2250738585072014e-308`, whose exact denominator is $10^{324}$) or stand beside a
+  $\pm\infty$ factor; a like term whose coefficient is itself a refused two-member partition,
+  whose coefficient and key can split differently on re-read (also with 128-bit literals); and
   odd-function sign extraction. A class independent of literal size is closed: a product with
   more than six sign-trade sites kept the placement it entered with, two sums that are each
   other's negation stayed apart, and a join whose coefficient became 1 kept its key's signs, so
   a state and the parse of its own print could differ (0.14.7: 28 of srbf's 125,127 model
   predictions change on a second call in f64 with the search off). Each is now decided by the
-  orbit (§3), and no f64 or real answer changes on a second call on the 129,490 simplify inputs of
-  flash-ansr's T8.1 draws, srbf's ground truths or its predictions, with the search off or at the
-  default effort. The sign placement keeps the entry
+  orbit (§3), and no f64 or real answer changes on a second call on the 129,490 simplify inputs
+  of flash-ansr's training-data generator, srbf's ground truths or its predictions, with the
+  search off or at the default effort. The sign placement keeps the entry
   spelling where an orientation would collide with another factor's base or a negation overflows
   (§3). At a refusal every grouping of a product partitions the same multiset of coefficients,
   because the parse builds the product once from all of its members:
   `(1e200*1e100)*(1e100*x1)` and `1e200*(1e100*(1e100*x1))` reach one canonical form (pinned
-  in tests). Uncapped (the default in
-  f64 and real; L6), the exploration phase can reach states of the literal classes above that the
-  chain alone never visits (for example an unmerged `3e-310` coefficient that re-reads in another
-  order; a `<constant>` absorbed on re-read). A capped search, or one a work budget stops, can
-  stop between two improvements, which a second call continues.
+  in tests). Uncapped (the default in every mode; L6), the exploration phase can reach states of
+  the literal classes above that the chain alone never visits. A capped search, or one a work
+  budget stops, can stop between two improvements, which a second call continues.
 - **I4 (fold normal form):** the licensed structural folds of §3 have been applied; e.g. no
   $\mathrm{Pow}(t, 1)$, no $\mathrm{rootn}(t, k)$ with $k \leq 0$ or $|k| = 1$, no
   all-literal composite that the constructors fold — and the sign placement between a
@@ -119,7 +118,8 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   node itself dissolves) and $-5 \cdot \sin(2)$ as $5 \cdot \sin(-2)$ — while a
   magnitude-1 coefficient beside *other* factors keeps the sign, because it rides
   $\mu$-free where the literal's sign bit would cost ($-1 \cdot x_0 \cdot \sin(2)$ is
-  canonical as spelled). **An EVEN index is canonical**: `rootn(t, 2)` and `rootn(t, 4)` are normal forms, not reducible ones --
+  canonical as spelled). <!-- pending: the sign-tie rule is being changed; rewrite after it lands (this sentence and the "written over the positive literal" class text in §3 disagree about sin(-2) vs sin(2)) -->
+  **An EVEN index is canonical**: `rootn(t, 2)` and `rootn(t, 4)` are normal forms, not reducible ones --
   `rootn` is the canonical spelling of a principal even root and $\mu$ ties it with
   $\mathrm{Pow}(t, 1/k)$, so neither orientation is forced.
 
@@ -135,17 +135,14 @@ specimens remain. The instrument itself printed each state with the mode's certi
 context, a spelling no caller receives (every caller prints with the bare context), which
 raised false alarms and hid three real classes (the closed I3 class above); it now prints as
 the callers do, and in a debug build it holds on every state of srbf's ground truths and
-predictions and of the 129,490 T8.1 simplify inputs, in every mode. A second
-measured class (2026-08-24) sat not in `canon()` but in the
-*pricing instrument*: `complexity()` parsed fold-free while the `f64`/`permissive` chains
-parse fold-at-parse, so on 10 of 65,536 benchmark rows the instrument priced a
-different state than the chain descended from and $\mu(\mathrm{simplify}(e)) \le
-\mu(e)$ failed *as measured* while holding per route. Closed by construction: the
-instruments are route-parameterized and price each mode through that mode's own parse
-route. A route-invariant `canon()` proof is deferred with a named trigger:
-a *value-changing* divergence at entry canon reopens it immediately; a μ-equal
-divergence reopens the deferred route-invariance work. The assert's failure
-diagnostics classify any future specimen along exactly that line.
+predictions and of the 129,490 simplify inputs of flash-ansr's training-data generator, in every
+mode. A second measured class sat not in `canon()` but in the *pricing instrument*:
+`complexity()` once parsed without the folds a mode's chain applies at parse, so on 10 of 65,536
+benchmark rows it priced a different state than the chain descended from and
+$\mu(\mathrm{simplify}(e)) \le \mu(e)$ failed *as measured* while holding per route. Closed by
+construction: the instruments price each mode through that mode's own parse route. No proof
+that `canon()` is route-invariant is claimed; the assert's failure diagnostics tell a
+*value-changing* divergence at entry canon from a μ-equal one.
 
 $T_{\mathrm{can}} \subset T$ denotes the terms satisfying I1–I4. Serialization
 (`to_prefix`) and parsing (`from_prefix`) connect $T_{\mathrm{can}}$ to token sequences;
@@ -218,7 +215,7 @@ convention below) restricts the orientations of the classes it counts, which are
 together where one check counts several. An orientation in which a flipped factor lands on the
 base another factor is collected under (an even root counts as a power of its radicand) is no
 candidate. Exact ties go to a non-negative coefficient and then follow an order that is a
-function of the orbit, never of the entry spelling. The debug build checks the price against
+function of the orbit, never of the entry spelling. <!-- pending: the sign-tie rule is being changed; rewrite after it lands --> The debug build checks the price against
 the enumeration of every placement on orbits of up to six classes.
 
 **Convention (opposite classes, one table per product).** A sum $S$ and its negation are one
@@ -239,19 +236,20 @@ moves with its class as a whole under the pole convention below; fractional and 
 never move.
 Every placement, including how a side's mass splits between its integer and its fractional
 powers, is priced as the whole product, and the cheapest wins, an exact tie going to a
-non-negative coefficient and then the structurally smaller product, as in `sign_place`. The
+non-negative coefficient and then the structurally smaller product, as in `sign_place`. <!-- pending: the sign-tie rule is being changed; rewrite after it lands --> The
 classes are decided together while their placements combine to at most 4,096 products (priced
 in the order of a lower bound on their prices), else one at a time until none moves. The
 decision is a function of the multiset of members, so the product does not depend on how its
-factors were bracketed or ordered: `(x - a)*(a - x)` is `-(x - a)^2`, `(x - a)^2/(a - x)/(x - a)`
-is `-1`, and `tanh(x - a)*(tanh(x - a)*(-1))` is `-tanh(x - a)^2`, as written flat. The bare
+factors were bracketed or ordered: `(x1 - x2)*(x2 - x1)` is `-(x1 - x2)^2`,
+`(x1 - x2)^2/(x2 - x1)/(x1 - x2)` is `-1`, and `tanh(x1 - x2)*(tanh(x1 - x2)*(-1))` is
+`-tanh(x1 - x2)^2`, as written flat. The bare
 (certificate-free) context, such as the entry parse, the bare measure or a rule's sides, uses
 the same tables and rule and differs only in the collections it may license. A class has one
 definition (`class_base`), which the tables, the like terms, the sign trade and the search's shared
 factors all read: a sum, or an odd function or odd root (of an odd index of at least 3) of a
 negatable argument, a sum or a literal multiple `c u` (a bare `u` is `1 u`, a negation `-1 u`).
 So an odd function of a literal multiple and of its negation are one class, written over the
-positive literal: `sin(2*x1)/sin(-2*x1)` and `sin(x1)/sin(-x1)` are `-1`,
+positive literal <!-- pending: the sign-tie rule is being changed; rewrite after it lands (I4 files -sin(2) as sin(-2)) -->: `sin(2*x1)/sin(-2*x1)` and `sin(x1)/sin(-x1)` are `-1`,
 `sin(2*x1)*sin(-2*x1)` is `-sin(2*x1)^2`, and an even power of one over a negative literal files
 the positive one (`sin(-2*x1)^2` is `sin(2*x1)^2`); `x2*atan(-2*x1)` and `-x2*atan(2*x1)` are
 one answer, so their sum is `0`, and `x3*sin(x1) - sin(x1)` is `sin(x1)*(x3 - 1)`. A join whose
@@ -295,8 +293,8 @@ sides agree. A member defined beside the zero on one side only (a log, an even r
 or symbolic power of an odd member, or a sum such members dominate there because they are infinite
 at the zero and its other terms finite) fixes that side: the class is written in the orientation
 positive there, so every base over $S$ is $+0$ at the zero and the float value is that side's
-limit (`(3 - x1)^x4/(x1 - 3)` is `-(3 - x1)^x4/(3 - x1)`, `-inf` at `x1 = 3` like its limit from
-`x1 < 3`). Members defined on opposite sides leave no domain and fix nothing, and a product that is
+limit (`(3 - x1)^(-1/2)/(x1 - 3)` and `-(3 - x1)^(-1/2)/(3 - x1)` are `-1/(3 - x1)^(3/2)`,
+`-inf` at `x1 = 3` like the limit from `x1 < 3`, where the first input gives `+inf`). Members defined on opposite sides leave no domain and fix nothing, and a product that is
 NaN at the zero in every orientation (an infinity times a zero, `log(x1 - 3)*(3 - x1)`) keeps no
 value there. The sign trade, the product table's placements and the sum's like terms ask one
 predicate (`zero_limit`); where a member's value at the zero is not read, the product keeps no
@@ -310,9 +308,10 @@ binding was refused by its own negation; the search's FACTOR move (§4) takes a 
 to sign the same way. So `x1/(x2 - x3) + x4/(x3 - x2)` is `(x1 - x4)/(x2 - x3)` and
 `x1 + sin(x3 - x2) - sin(x3 - x2)` is `x1`. Residuals [EMPIRICAL]: where a member's value at the
 zero is not read, the class's cheapest orientation can leave that value off the limit (a sum holding
-the class among terms free of it, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))` is `+inf` at `x1 = 3` where
-its limit is `-inf`; a class scaled by a factor of unknown sign, `log(x2*(x1 - 3))/(3 - x1)` is
-`+inf` at `x1 = 3, x2 = -1` where its limit is `-inf`); one class split across the
+the class among terms free of it: with the search off, `1/((x1 - 3 - (x1 - 3)^3)*(3 - x1))` is
+`+inf` at `x1 = 3` where its limit is `-inf`; a class scaled by a factor of unknown sign:
+`log(x2*(x1 - 3))/(3 - x1)` is `+inf` at `x1 = 3, x2 = -1` where its limit from `x1 < 3` is
+`-inf`); one class split across the
 terms of a sum with a dominant even term can give NaN at its zero where the limit is infinite;
 where two singularities meet, the float value can differ from the joint limit (most such points
 have none); polynomial factors are not classes (`9 - x1^2` does not hold `3 - x1`), and a sum that
@@ -321,12 +320,16 @@ vanishes at a class's zero only through a term that vanishes faster there
 root keeps the sign of zero like every odd function (IEEE-754 `rootn(-0, n) = -0` for odd `n`), so
 it reads at the zero as its radicand does.
 
-**Convention (factored vs. flat scaling, finite and infinite alike).** Content extraction
-is deliberately restricted to the unanimity case (it must never lengthen a term), so a
-factored input spelling like $-2 \cdot (x - 5/2)$ and its distributed equal $5 - 2x$ are
-*both* stable representatives. This is a knowing restriction on cross-spelling
-convergence of *scaled* families, identical for finite and infinity-bearing sums — not an
-infinity-specific defect.
+**Convention (factored vs. flat scaling, finite and infinite alike).** The constructors
+extract a sum's content only in the unanimity case (it must never lengthen a term), so with
+the search off (`effort=0`) a factored spelling like `-2*(x1 - 5/2)` and its distributed equal
+`5 - 2*x1` are *both* stable representatives. The search (§4) joins such a pair where
+distributing is strictly cheaper: at the default effort both are `5 - 2*x1`, in every mode. It
+does not factor a numeric content out of a sum (FACTOR takes shared bases, not a shared
+coefficient), so `2*x1 + 6` stays as written although `2*(x1 + 3)` prices lower, and both remain
+stable representatives. This is a knowing restriction on cross-spelling convergence of
+*scaled* families, identical for finite and infinity-bearing sums — not an infinity-specific
+defect.
 
 ## 4. The rule layer
 
@@ -334,26 +337,35 @@ A **rule** is a pair $(\ell, \rho)$ of canonical patterns — terms over $T$ ext
 sorted wildcard leaves (sorts `_`, `!`, `$`, `?` bind under certificate side conditions;
 see the matcher). Rules come from a mined asset in raw prefix form and pass through
 **translation** (`AcRules::translate`), which parses both sides with the *same* boundary
-converter as subjects, canonicalizes them with a bare (certificate-free) context, and
-applies eight load-time gates:
+converter as subjects, canonicalizes them with a bare (certificate-free) context in the
+reading of the mode whose file it is, and applies seven load-time gates (numbered G1–G4 and
+G6–G8; there is no G5):
 
 | Gate | Drops / normalizes | Why |
 |---|---|---|
 | G1 | unparseable sides | fail closed |
 | G2 | $\mathrm{nf}(\ell) = \mathrm{nf}(\rho)$ (arithmetic-subsumed) | the engine's own arithmetic already performs the rewrite |
-| G3 | $\diamond$-introducing rules | masking is representation, not simplification |
+| G3 | rules whose canonical RHS holds more $\diamond$ than their canonical LHS | masking is representation, not simplification |
 | G4 | non-composite LHS | catch-alls below the arithmetic waterline |
-| G5 | exact inverse of an earlier rule | ping-pong fuel |
 | G6 | RHS wildcards not bound by the **canonical** LHS | an unbound wildcard would panic substitution at rewrite time; canon can erase LHS wildcards, so the raw check is insufficient |
 | G7 | $\mathrm{nf}(\rho) \not<_o \mathrm{nf}(\ell)$ (disoriented patterns) | keep every loaded rule aligned with the ordering the pass fires under (§5) |
 | G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node |
 
-All eight are counted; asset `acj-4` (5,338 rows, all reaching
-translation, mined under $\mu$ itself on the deployed literal alphabet) loses **zero**
-rules and gains nine orientation twins, serving 5,347
-[EMPIRICAL — re-verified on every load, since translation runs the gates each time; a
-mine whose acceptance rides the serve ordering produces an artifact the serve ordering
-fully admits].
+G7 also keeps both directions of one rewrite from loading: $<_o$ is strict and total, so of a
+rule and its reverse at most one descends it, and no separate check for the inverse of an
+earlier rule is needed. Each admitted rule $\ell \to \rho$ whose negated LHS absorbs the sign
+also loads its orientation twin $-\ell \to -\rho$, through the same gates. Before translation,
+the licence registry refuses a rule that changes a defined extended-real value at a pole.
+Every drop is counted by reason (`ac_rules_drop_census`). On the shipped `acj-5-4-llm`
+[EMPIRICAL — re-verified on every load, since translation runs the gates each time]: <!-- re-measure after the re-mine: the translation counts below -->
+
+| mode's file | rows reaching translation | G2 | G4 | G7 | G8 | twins | served |
+|---|---|---|---|---|---|---|---|
+| `f64` | 138,334 | 83 | 0 | 0 | 0 | 337 | 138,588 |
+| `real` | 133,294 | 838 | 44 | 43 | 5 | 390 | 132,754 |
+| `permissive` | 139,299 | 122 | 0 | 0 | 5 | 457 | 139,629 |
+
+No row is dropped by G1, G3 or G6, and the registry refuses none.
 
 **How a rule is mined, per mode.** Each mode $m$'s file is mined in $m$. For a source $s$
 (the canonical projection of its class in $m$'s reading) the mark is $m$'s own answer
@@ -389,21 +401,31 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   (Peterson–Stickel extension behavior); the candidate is
   $u' = \mathrm{nf}(\mathrm{bag}(\mathrm{rem} \cup \{\rho\sigma\}))$, and the step is
   **accepted only if** $u' <_o u$;
-- **(fold)** at a node $u$ that is either *ground with a certified non-finite value
-  class* or $\diamond$-collapsible: $u' =$ the class literal (`nan`/$\pm$`inf`) resp.
-  $\diamond$, **accepted only if** $u' <_o u$. The
-  fold performs **no numeric evaluation**: exact rational arithmetic lives in the
-  constructors (bag coefficient merging, integer/rational `pow`, exact roots, the two
-  determined reciprocal arms $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$), a ground
-  composite whose rigorous interval *class* is non-finite folds to that class literal
-  (a class is an exact fact — no finite value is read, so no rounding can occur), and
-  every finite transcendental identity (`cos 0` $\to$ `1`, `cos pi` $\to$ `-1`,
-  `exp(-inf)` $\to$ `0`) arrives as a mined, symbolically certified *rule*. `exp(1)`,
-  `sin(-1)`, `sqrt(8)` stay symbolic *structurally* — no arm exists that could
-  evaluate them. Respelling one exact symbol as another
-  is a different thing and *is* a constructor's job: `exp(1)` $\to$ `np.e`
-  chooses between two exact names for one value and nothing is rounded, which is what
-  makes it admissible where evaluation is not;
+- **(fold)** at a node $u$ that is *ground with a certified non-finite value class*,
+  $\diamond$-collapsible, or (in `permissive` only) ground with a finite value: $u' =$ the
+  class literal (`nan`/$\pm$`inf`), $\diamond$, resp. the literal of that value,
+  **accepted only if** $u' <_o u$. Exact rational arithmetic lives in the constructors (bag
+  coefficient merging, integer/rational `pow`, exact roots, the two determined reciprocal arms
+  $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$), and a ground composite whose rigorous
+  interval *class* is non-finite folds to that class literal in every mode (a class is an
+  exact fact — no finite value is read, so no rounding can occur). Where a finite value would
+  be read, the modes differ, because each reads a different function. *`real` evaluates
+  nothing*: a finite transcendental identity (`cos(0)` $\to$ `1`, `cos(pi)` $\to$ `-1`,
+  `exp(-inf)` $\to$ `0`) arrives as a mined, symbolically certified *rule*, and `asin(1e-8)`,
+  `sin(-1)` and `exp(9.55893790547399)` stay as written. *`f64` folds in the constructor*, not
+  in this step: one of the fourteen unary transcendentals of a literal becomes the value the
+  deployed evaluator computes (the system libm, at the literal's nearest float), where that
+  value is finite and its shortest decimal costs less than the call. So `asin(1e-8)` is `1e-8`
+  and `sin(91618929858.17857)` is `-0.9807991153359534`, while `sin(1)` stays (its float costs
+  more); and since the constructors work bottom-up, `atanh(tanh(30))` is `inf`, as the
+  evaluator computes it. *`permissive` folds in this step* and never in a constructor: a ground
+  node no rule rewrote is evaluated by the deployed f64 evaluator and offered as the shortest
+  decimal that reads back as a normal (or zero) result, kept only where it descends. The pass
+  reaches an enclosing node before its children, so `rootn(exp(19.11787581094798), 2)` is
+  `14170.787488305119` and `atanh(tanh(30))` is `30` (the constructor identity reads the shape
+  first); `asin(1e-8)` is `1e-8`, and `sin(1)` stays. Respelling one exact symbol as another is
+  a constructor's job in every mode: `exp(1)` $\to$ `e` chooses between two exact names for
+  one value and nothing is rounded;
 - **(rebuild)** at a node $u$ whose children were rewritten: $u' = \mathrm{nf}(u[\text{new
   children}])$, **accepted immediately if** $u' <_o u$. If the immediate test fails, the
   rebuild gets one **composite** chance: the ordinary pass — with composite exploration
@@ -429,7 +451,14 @@ exactly those terms, by everything they share, and leaves the other terms. The g
 terms holding a base two or more terms share (as spelled, or up to a class's orientation, §3),
 every two terms sharing a base, and every term holding all that two share; a bare term is its own
 product with the unit coefficient, and a term $c \cdot S \cdot q$ whose sum factor $S$, or $-S$,
-stands spread among the other terms factors as $S \cdot (c q \pm 1)$. Each
+stands spread among the other terms factors as $S \cdot (c q \pm 1)$. In `permissive` the
+search also proposes **RECIPROCAL JOIN**: permissive's `pow` distributes a reciprocal over a
+product unconditionally, so `c/(A*B)` is held as `c * A^-1 * B^-1`, where no DISTRIBUTE reaches
+the product inside the reciprocal; the move joins two reciprocal sums (`A^-1 * B^-1` becomes
+`(A*B)^-1`, with `A*B` distributed into one sum), or moves the coefficient or another factor into
+one reciprocal sum (`c * A^-1` becomes `(A/c)^-1`, with `1/c` distributed over `A`'s terms). So
+`x2/(x2 - x1)` is `1/(1 - x1/x2)` in `permissive`; `f64` and `real` keep such a reciprocal
+joined where it is not certified to split, and their DISTRIBUTE reaches inside it. Each
 move carries its licence (every piece finite a.e., so the identity cannot meet $\infty - \infty$;
 no `<constant>` duplicated or merged). A candidate is the move at one place with its ancestors
 rebuilt through the constructors, so it is the **whole state**; it is descended by the step
@@ -657,7 +686,7 @@ bound now *proves* an implementation bug. When one binds, rewriting stops and th
 reached is returned — sound, possibly non-minimal.
 
 **Equal-$\mu$ ties, measured** [EMPIRICAL, on the 128-bit engine — instrumented build over 50,800 simplify
-calls: the 400-expression mined corpus in strict and permissive modes, plus 50,000 fuzz
+calls: the 400-expression mined corpus in the `f64` and `permissive` modes, plus 50,000 fuzz
 expressions biased toward coefficient/exponent cost shifts and i128-boundary literals].
 Tie **fires**: none occurred (0). Tie **rebuilds**: 169 calls (0.3%), every one on a
 fuzz input carrying overflow-magnitude literals, at most 4 per call, none from the
@@ -671,15 +700,23 @@ exhaustion merely returns an intermediate state). Cap- or budget-truncated outpu
 correct, just possibly non-minimal.
 
 **$\mu$-descent is not a token bound** [EMPIRICAL — the 400-expression canonical corpus
-at head, asset `acj-4`]. $\mu$ prices description length, not serialization length, so
-the chain's $\mu$-non-increase (L3) implies nothing about the number of tokens emitted.
-Measured over the corpus: $\mu(\mathrm{simplify}(e)) \leq \mu(e)$ on 400/400 (56
-strictly cheaper), while 77/400 outputs are *longer* in the explicit dialect — 70 of them
-at exact $\mu$ ties, and 7 strictly $\mu$-cheaper yet longer, a cheaper literal costing
-more tokens to spell. In the tagged dialect — which writes the bag delimiters
-explicitly — 45/400 outputs are longer than their inputs. The engine's carried guarantee is the $\mu$-non-increase, soundness and
-idempotence; no output-token bound is claimed in either serialization. (The user-facing
-statement of this is in [the simplification guide](guides/simplify.md).)
+(`simplipy.verify.default_corpus()`), artifact `acj-5-4-llm`, the default effort]. $\mu$
+prices description length, not serialization length, so the chain's $\mu$-non-increase (L3)
+implies nothing about the number of tokens emitted. Measured over the corpus, each mode in its
+own measure <!-- re-measure after the re-mine: this table -->:
+
+| mode | $\mu(\mathrm{simplify}(e)) \leq \mu(e)$ | strictly cheaper | longer, explicit dialect | of these, at an exact $\mu$ tie | longer, tagged dialect |
+|---|---|---|---|---|---|
+| `f64` | 400/400 | 138 | 73 | 54 | 34 |
+| `real` | 400/400 | 148 | 71 | 51 | 34 |
+| `permissive` | 400/400 | 197 | 62 | 36 | 32 |
+
+The longer outputs not at a tie are strictly $\mu$-cheaper yet longer: a cheaper literal or
+factoring can cost more tokens to spell. The tagged dialect writes the bag delimiters
+explicitly. No answer changes on a second call in any mode. The engine's carried guarantee is
+the $\mu$-non-increase, soundness and idempotence; no output-token bound is claimed in either
+serialization. (The user-facing statement of this is in
+[the simplification guide](guides/simplify.md).)
 
 **Lemma L6a (serialization injectivity — the certificate-cache premise)** [THEOREM,
 conditional on `stable()`]. The finiteness-certificate caches are keyed on
@@ -690,8 +727,8 @@ assertion), `to_prefix` has a left inverse and is therefore injective — two st
 sharing a serialization would be mapped back to the same state by the left inverse.
 The identity is exercised per state in debug builds (the full suites run green under
 debug, so every state reached by the tests and the mini-mines satisfies it, and so does every
-state of srbf's ground truths and model predictions and of the 129,490 T8.1 simplify inputs, in
-every mode). It fails on the documented I3 residuals at literals that stay leaves. These
+state of srbf's ground truths and model predictions and of the 129,490 simplify inputs of
+flash-ansr's training-data generator, in every mode). It fails on the documented I3 residuals at literals that stay leaves. These
 residuals scope the cache guarantee too.
 
 **Lemma L6 (conditional idempotence)** [THEOREM, conditional]. If a run reaches a pass
@@ -716,45 +753,46 @@ skips fire sites), and the descent of a candidate does not depend on the memo's 
 valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
 srbf's 125,127 model predictions change on a second call 1,632 times in `f64` at cap 4, the former
 default, every one to a cheaper form (`real` the same); uncapped, never, in `f64` and `real`, on these and on
-srbf's ground truths and the simplify inputs of flash-ansr's T8.1 draws]. Where
+srbf's ground truths and the training-data generator's inputs]. Where
 the round-trip premise fails (L6a) the re-run starts from a different state. A further
 premise: each accepted candidate's descent reaches its fixpoint within `max_passes`.
-`permissive` is one walk too (0.15), so L3, L6 and the prefix argument for `effort` cover it as
-they cover every mode. Its two steps of its own are ordinary steps: the ground fold is the pass's
-fold (tried after the rules at a node, kept only when the result descends, so L3 holds), and the
+`permissive` is one walk like every mode (its chain, then the search, in its own canon and
+rules), so L3, L6 and the prefix argument for `effort` cover it as they cover every mode. Its
+two steps of its own are ordinary steps: the ground fold is the pass's fold (tried after the
+rules at a node, kept only when the result descends, so L3 holds), and the
 landing rounding ρ moves a literal to its float only where the float's shortest spelling is
 cheaper as an exact codeword, which the float cap prices alike (mu-neutral, so the descent
 arguments and T6 are unchanged; idempotent, since a float's shortest spelling is never moved). Its
 search move that joins reciprocal sums is a candidate like the others, accepted only strictly
 below. A literal rounded where it lands is exact from then on, so a later step that combines it
 rounds again: an answer's literal can sit one ulp from the correctly rounded value of the input's
-exact arithmetic [EMPIRICAL: on shard 0 of srbf's predictions (12,513), against the three-arm
-selection that rounded once at the end, 454 answers differ only in such a literal and print it one
-digit longer, 634 one digit shorter].
+exact arithmetic, and print one digit longer or shorter than a single rounding of that value
+would.
 
 **Canonicity across spellings** [EMPIRICAL]. That all spellings of the same bag (operand
 permutations, re-bracketings) reach the same representative is measured, not proven:
 commutative-permutation and adjacency-collection property tests, plus the corpus
-permutation gate (0 violations / 400 canonical corpus expressions at head). Two registered
-residual classes: the I3 residuals above, and products with a class pinned at its pole (§3),
-whose spellings can keep different orientations. Elsewhere re-bracketings of a product reach one
-representative:
-the parse builds a product once from all of its members and `mul()` decides its opposite classes
-from their exponent totals, a function of the multiset of members (§3). On 1,653 generated
+permutation gate (0 violations / 400 canonical corpus expressions). The known residual class
+is the I3 residuals above. Re-bracketings of a product reach one representative: the parse
+builds a product once from all of its members and `mul()` decides its opposite classes from
+their exponent totals, a function of the multiset of members (§3). On 1,653 generated
 products over opposite sums, odd functions and odd roots, each in up to eleven spellings (four
 bracketings and the tagged bag for all; two division spellings, the inverse of a product, a
 chain of divisions and the tagged bag with `<div>` where the product has a divisor; a negation
-for 72), two products in `f64` and `real` (each with a class pinned at its pole, §3) and one in
-`permissive` reach two answers, of equal value (0.14.7: 616 in `f64` and `real`, 687 in
-`permissive`); on the route fuzz of 150 products none depends on the nesting in any mode, with the
-search off or at the default (0.14.7 with the search off: 87, 87 and 82). Where the certificate refuses to split an inverse over a product (a
+for 72), no product in `f64` and `real` and one in `permissive` reaches two answers (0.14.7:
+616 in `f64` and `real`, 687 in `permissive`), and in `f64` and `real` none changes on a second
+call at the same effort <!-- re-measure after the re-mine: the 1,653-product counts -->; on the
+route fuzz of 150 products none depends on the nesting in any mode, with the search off or at
+the default (0.14.7 with the search off: 87, 87 and 82). Where the certificate refuses to split an inverse over a product (a
 factor that vanishes on a region, such as `abs(x2) - x2`), `1/(a*b)` and `1/a*1/b` are different
 functions and keep different answers. (The scale gates held 0 idempotence and 0 permutation
 failures when last run, on the 128-bit engine.)
 
-**Corpus mode.** `wildcard_all` widens matching and the $\diamond$-collapse licence
-(training-corpus canonicalization). It relaxes *soundness* licences, never the ordering:
-fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in permissive mode.
+**Permissive mode.** `permissive` is the mode for canonicalizing a training corpus: it
+accepts rewrites that hold only up to sign or domain, lets every wildcard sort bind any
+subtree, and widens the $\diamond$-collapse licence. It relaxes *soundness* licences, never
+the ordering: fires, folds and rebuilds remain `oriented`-gated and the search accepts only a
+strictly lower state, so L2–T6 hold verbatim in permissive mode.
 
 ## 7. Where each property is checked
 
@@ -762,12 +800,12 @@ fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in permissi
 |---|---|---|
 | I1–I4 canonical invariants | constructors in `ac/expr.rs` | `no_nested_bags` + `stable()` debug asserts; property tests in `tests/test_ac_core.py` |
 | L1 nf termination | structural recursion; the two audited self-calls (`pow`, `fun`/rootn) | full suites exercise both self-call sites |
-| G1–G7 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; shipped counts pinned by `test_translation_audit_surface` |
-| L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted step |
+| G1–G4, G6–G8 translation gates | `AcRules::translate` | poisoned-asset test (`test_free_rhs_wildcards_are_dropped_at_translation`): G6 both flavors + G7 dropped at load; translation counts pinned by `test_translation_audit_surface`; per-reason counts from `ac_rules_drop_census` |
+| L2 step descent | `oriented` in `try_rules_at` + the rebuild gate in `rewrite_pass` | `SIMPLIPY_AC_TRACE=1` logs every accepted fire and every rebuild decision (refused, or committed as a composite step) |
 | L5/T-wf ($\mu$ literal component) | `mu_rat`/`mu_numeric_str` inside `complexity` | `tests/test_unified_measure.py` + `tests/test_mu_prime.py`: the weight table and the codeword pins against independently computed expectations; the dyadic chain ascends up to the float cap's onset and its members settle |
 | composite acceptance | the exploration branch in `rewrite_pass` (one level, private memo) | two-spelling convergence test: the distribution-refusal specimen and its pre-simplified spelling reach the SAME form |
 | T6 defense-in-depth | `STEP_CAP` in `rewrite_pass`; `max_passes` loop in `ac_simplify_ex` | by T6 a binding bound proves an implementation bug; each binding of the step cap is counted (`step_cap_binds`, pinned at 0 on the corpus in every mode); fixpoint break covered by idempotence gates |
-| L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 at head |
+| L6 premises | `stable()` debug assert; fixpoint break | corpus idempotence gate: 0/400 |
 | ordering exactness | `Rat::cmp_exact` (256-bit) | Euclidean-oracle fuzz (60k pairs, 3 magnitude regimes) + transitivity triples |
 
 ## 8. Relation to the published TRS, and what a new proof must contain
@@ -776,7 +814,7 @@ fires and rebuilds remain `oriented`-gated, so L2–T6 hold verbatim in permissi
 |---|---|---|
 | terms: binary prefix trees | canonical bags (I1–I4) | redefinition required (done here, §2) |
 | cancellation procedure outside the TRS | $\mathrm{nf}$ (§3), much larger | same architectural role; L1 replaces the informal argument |
-| rule conditions: $\mathrm{Vars}(\rho) \subseteq \mathrm{Vars}(\ell)$, $|\rho| < |\ell|$, non-duplication | G6; G7; (non-duplication measured on asset `acj-4`: 5,337/5,338, not required) | **the static proof device does not transfer** — $c$ is non-additive and fires renormalize (§5), so orientation is enforced per instance instead |
+| rule conditions: $\mathrm{Vars}(\rho) \subseteq \mathrm{Vars}(\ell)$, $|\rho| < |\ell|$, non-duplication | G6; G7; (non-duplication measured on the f64 file of `acj-5-4-llm`: 138,640 of 138,651 rows, not required) | **the static proof device does not transfer** — $c$ is non-additive and fires renormalize (§5), so orientation is enforced per instance instead |
 | termination: length is a reduction order | T-wf/T6: the pair $(\mu, \mathrm{cmp\_ex})$ is a well-founded strict total order (no separate literal-size tier — literal content lives in $\mu$, §5) | **new proof, done here, unconditional** |
 | iteration cap $K = 5$ | `max_passes` | demoted to defense-in-depth: T6 guarantees the fixpoint in finitely many passes |
 | syntactic matching | AC sub-multiset matching with remainder | Peterson–Stickel extension rules; matching soundness is the matcher's contract |
@@ -798,7 +836,7 @@ well-foundedness would need re-establishing for the new order.
 
 | If you change… | You must re-establish… |
 |---|---|
-| the rule asset | nothing — G1–G7 re-vet on every load (drops are counted, visible in `ac_rules_info`) |
+| the rule asset | nothing — the translation gates re-vet on every load (drops are counted by reason, visible in `ac_rules_info_in_mode` and `ac_rules_drop_census`) |
 | the $\mu$ weight table or `cmp_ex` | T-wf (well-foundedness of the new pair — L5's finite-level-set argument must survive, including the numeric-string-leaf clause); G7 re-vets every asset on load; re-run the corpus gates AND the unit-sensitivity grid: the *reachable* normal forms change |
 | a constructor (`add`/`mul`/`pow`/`fun`) | L1 (check any new self-call has a decreasing measure), I1–I4; the fold needs no descent premise (it is `oriented`-gated at the pass); then the corpus gates |
 | the matcher | the step-relation definition of §4 (binding soundness); L2 is unaffected (orientation checks the result, not the match) |
