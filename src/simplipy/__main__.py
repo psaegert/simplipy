@@ -14,10 +14,12 @@ def main(argv: str = None) -> None:
     parser = argparse.ArgumentParser(description='SimpliPy CLI Tool')
     subparsers = parser.add_subparsers(dest='command_name', required=True)
 
-    find_simplifications_parser = subparsers.add_parser("find-rules")
+    find_simplifications_parser = subparsers.add_parser(
+        "find-rules",
+        help="Mine an engine's three rule files (f64, real, permissive), each in its own mode")
     find_simplifications_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
     )
     find_simplifications_parser.add_argument('-c', '--config', type=str, required=True, help='Path to the rule-finding configuration file')
     find_simplifications_parser.add_argument(
@@ -25,24 +27,28 @@ def main(argv: str = None) -> None:
         help='Path of the f64 rules file (convention: rules_f64.json). The real/permissive '
              'siblings are derived from it with the _f64 marker replaced: '
              'rules_f64.json writes rules_real.json and rules_permissive.json beside it')
-    find_simplifications_parser.add_argument('-s', '--save-every', type=int, default=100_000, help='Save the simplifications every n rules')
+    find_simplifications_parser.add_argument(
+        '-s', '--save-every', type=int, default=100_000,
+        help='Deprecated and ignored: a mine checkpoints after every completed length')
     find_simplifications_parser.add_argument('--reset-rules', action='store_true', help='Reset the rules before finding new ones')
     find_simplifications_parser.add_argument('-v', '--verbose', action='store_true', help='Print a progress bar')
 
     # Prune-rules command
-    prune_covered_rules_parser = subparsers.add_parser("prune-covered-rules", help="Remove rules that the remaining rules cover behaviorally")
+    prune_covered_rules_parser = subparsers.add_parser(
+        "prune-covered-rules",
+        help="Remove the f64 rules that the remaining f64 rules cover behaviorally")
     prune_covered_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
     )
-    prune_covered_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned rules json file')
+    prune_covered_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the pruned f64 rules json file')
     prune_covered_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
     # Resolve-rules command
     resolve_rules_parser = subparsers.add_parser("resolve-rules", help="Replace <constant> with actual numeric values in all-numeric rules")
     resolve_rules_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file'
+        help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file'
     )
     resolve_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the resolved rules json file')
     resolve_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
@@ -55,18 +61,18 @@ def main(argv: str = None) -> None:
                                     help="The mode the file serves ('default' is another name for f64)")
     verify_mine_parser.add_argument(
         '-e', '--engine', type=str, required=True,
-        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file (its operators)')
+        help='Name of an official engine (e.g., acj-5-4-llm) or a local path to an engine configuration file (its operators)')
     verify_mine_parser.add_argument('--judge-processes', type=int, default=4, help='Worker processes of the contract judge')
     verify_mine_parser.add_argument('--report', type=str, default=None, help='Write the full report as JSON here')
 
     # Install command
     install_parser = subparsers.add_parser("install", help="Install an official asset from Hugging Face")
-    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-4)')
+    install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-5-4-llm)')
     install_parser.add_argument('--force', action='store_true', help='Force reinstall even if already installed')
 
     # Remove command
     remove_parser = subparsers.add_parser("remove", help="Remove an installed asset")
-    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. acj-4)')
+    remove_parser.add_argument('name', type=str, help='Name of the asset to remove (e.g. acj-5-4-llm)')
 
     # List command
     list_parser = subparsers.add_parser("list", help="List available or installed assets")
@@ -143,11 +149,6 @@ def main(argv: str = None) -> None:
                 promote_sorts=rule_finding_config.get('promote_sorts', True),
                 symbolic_gate=rule_finding_config.get('symbolic_gate', True),
                 interval_node_budget=rule_finding_config.get('interval_node_budget', None),
-                # REQUIRED when the vocabulary omits `mult{k}`/`div{k}`: the cancellation emit
-                # site would otherwise intern `mult3` as an undefined overlay token, because its
-                # factor ceiling comes from the `pow\d+` operators but it spells the ADDITIVE
-                # class with `mult{k}`. Mining with a reduced vocabulary and this flag off
-                # produces expressions no consumer can parse.
                 # Ladder re-use: {source_length: path} emits the shorter cells of the same
                 # `j` as the climb passes through them. Paths are resolved relative to the
                 # output file's directory so a config stays portable across boxes.
