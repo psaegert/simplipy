@@ -635,22 +635,24 @@ class TestInversePairsCollapse:
         return SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[])
 
     def test_total_pairs_collapse_only_within_the_f64_BAND(self, bare) -> None:
-        """Genuine bijections of the EXTENDED LINE -- and not of f64, which is why they
+        """Genuine bijections of the EXTENDED LINE -- and not of f64, which is why most
         carry magnitude licences, each derived from the realised 8-ULP criterion (S3,
-        task 46). Unbounded argument: refused. Provably licensed argument: collapses,
-        because the licence is a proof obligation, not a blanket ban. The sin vehicle
-        (range [-1, 1]) satisfies every CEILING but sweeps through 0 -- so it still
-        collapses only for the pairs without a flat point there: the sinh pairs (clean,
-        worst 4 ULP measured over the whole band) and atanh o tanh (compression is at
-        the HIGH end). For log o exp and acosh o cosh, 0 is the flat point itself and
-        the sin vehicle is REFUSED; their collapse needs a proven floor."""
+        task 46) wherever nothing overflows or underflows. Argument outside a band:
+        refused. Provably licensed argument: collapses, because the licence is a proof
+        obligation, not a blanket ban. The sin vehicle (range [-1, 1]) satisfies every
+        CEILING but sweeps through 0 -- so it still collapses only for the pairs without a
+        flat point there: the sinh pairs (clean, worst 4 ULP measured within |t| <= 710)
+        and atanh o tanh (compression is at the HIGH end). For log o exp and acosh o cosh,
+        0 is the flat point itself and the sin vehicle is REFUSED; their collapse needs a
+        proven floor. asinh o sinh needs nothing: worst 2 ULP wherever sinh does not
+        overflow, and where it does the collapse gives the true value."""
         from simplipy import Mode
-        for pair in (['log', 'exp'], ['asinh', 'sinh'], ['sinh', 'asinh'],
-                     ['atanh', 'tanh']):
+        for pair in (['log', 'exp'], ['sinh', 'asinh'], ['atanh', 'tanh']):
             unbounded = pair + ['x0']
             assert bare.simplify(list(unbounded)) == unbounded, unbounded
             # LOSSY answers to no external evaluator, so it still collapses
             assert bare.simplify(list(unbounded), mode=Mode.permissive) == ['x0'], unbounded
+        assert bare.simplify(['asinh', 'sinh', 'x0']) == ['x0']
         for pair in (['asinh', 'sinh'], ['sinh', 'asinh'], ['atanh', 'tanh']):
             bounded = pair + ['sin', 'x0']
             assert bare.simplify(list(bounded)) == ['sin', 'x0'], bounded
@@ -658,6 +660,25 @@ class TestInversePairsCollapse:
         # a literal with a proven floor collapses.
         assert bare.simplify(['log', 'exp', 'sin', 'x0']) == ['log', 'exp', 'sin', 'x0']
         assert bare.simplify(['log', 'exp', '2']) == ['2']
+
+    def test_an_overflow_cuts_no_band(self, bare) -> None:
+        """Where the inner function overflows or underflows (exp past 709.78 or below
+        -708.4, sinh and cosh past 710.48), a rewrite may give the evaluator's value or the
+        true one; the collapse gives the true one, so no pair is refused for an overflow.
+        The floors stay: they are rounding (compression at a flat point), not overflow."""
+        assert bare.simplify(['log', 'exp', '800']) == ['800']
+        assert bare.simplify(['log', 'exp', '-800']) == ['-800']
+        assert bare.simplify(['asinh', 'sinh', '800']) == ['800']
+        assert bare.simplify(['acosh', 'cosh', '-800']) == ['800']
+        # A proven floor with no ceiling at all: cosh(x0) >= 1.
+        assert bare.simplify(['log', 'exp', 'cosh', 'x0']) == ['cosh', 'x0']
+        assert bare.simplify(['acosh', 'cosh', '*', '2', 'cosh', 'x0']) == \
+            ['*', '2', 'cosh', 'x0']
+        assert bare.simplify(['asinh', 'sinh', 'exp', 'x0']) == ['exp', 'x0']
+        # sinh o asinh never overflows short of the top of the range; its 710 ceiling is
+        # rounding (first breach past 8 ULP measured at |t| ~ 4.4e6), and stays.
+        assert bare.simplify(['sinh', 'asinh', 'exp', 'x0']) == ['sinh', 'asinh', 'exp', 'x0']
+        assert bare.simplify(['atanh', 'tanh', 'exp', 'x0']) == ['atanh', 'tanh', 'exp', 'x0']
 
     def test_the_two_axes_are_INDEPENDENT_which_no_bool_could_express(self, bare) -> None:
         """`Cx` used to carry `lossy: bool`, which can only ask "may I skip

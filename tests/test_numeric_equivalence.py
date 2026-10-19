@@ -345,7 +345,10 @@ class TestCorpusGate:
         # that is NaN at every constant folds to NaN: rows 205 (`acosh(cos(c)/5)`, -136,229) and
         # 343 (`acos(cosh(c))`, finite only at c = 0; -241,087) are NaN. Both used to keep the
         # family read as a free constant, `acosh(c)` and `acos(c)`, which is defined.
-        assert walk['complexity_out'] == 54750550, walk['complexity_out']
+        # AN OVERFLOW CUTS NO BAND (2026-10-19): 54,750,550 -> 54,718,550. Where sinh overflows
+        # the collapse of `asinh(sinh(t))` gives the true value, so f64 collapses it for every
+        # t: row 380 rests 32,000 milli-bits cheaper.
+        assert walk['complexity_out'] == 54718550, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

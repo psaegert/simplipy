@@ -188,7 +188,9 @@ Neither rule is "more sound" than the other, so there is no rung to put them on,
 between modes raises `TypeError`.
 
 - **`Mode.f64`** (the default) is sound as the deployed f64 evaluator computes. Use it
-  whenever the output will be evaluated in floating point.
+  whenever the output will be evaluated in floating point. Where an operation overflows or
+  underflows, an answer may hold the evaluator's value there or the true one:
+  `log(exp(800))` is `800`, where f64 computes `inf`.
 
 - **`Mode.real`** is sound as mathematics defines, independent of any float format. Use it
   when a rewrite must hold symbolically.

@@ -283,6 +283,17 @@ model predictions.
   (5,890 cheaper, 270 dearer); the dearer ones are literals combined from several landed literals,
   each landing moving less than an ulp, which can end farther from the single rounding. No answer
   changes on a second call, and `f64` and `real` do not change.
+- **An overflow cuts no `f64` collapse band.** Where an operation overflows or underflows, an `f64`
+  answer may hold the evaluator's value there or the true one, so the inverse pairs collapse past
+  the overflow too: `log(exp(800))` is `800` and `asinh(sinh(x0))` is `x0` (0.14.7 kept both),
+  and `log(exp(t))` and `acosh(cosh(t))` collapse for every `t` proven at least 1 in magnitude,
+  `log(exp(cosh(x0)))` included. The bands that rounding sets stay: `log∘exp` and `acosh∘cosh`
+  keep their floor of 1 (`log(exp(t))` is 19 ulps from `t` at `t = 0.0137`, where nothing
+  overflows), `sinh(asinh(t))` keeps its ceiling of 710 (past 8 ulps from about `t = 4.4e6`,
+  where nothing overflows either), and `atanh(tanh(t))` keeps its ceiling of 2 (saturation is not
+  overflow). On a tenth of the training-data inputs 2 `f64` answers change, each now collapsing an
+  `asinh(sinh(.))` (16,000 and 19,000 milli-bits cheaper); srbf's ground truths and predictions do
+  not change, `real` and `permissive` do not change, and no answer changes on a second call.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

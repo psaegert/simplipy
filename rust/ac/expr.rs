@@ -1579,12 +1579,12 @@ impl<'a> Cx<'a> {
     /// hazard) -- the discipline `certainly_nonneg` already follows. Integer arithmetic
     /// throughout: this guard must not acquire an f64 reading of a `Rat`.
     ///
-    /// EXISTS because the f64 evaluator saturates where the extended real line does not:
-    /// `tanh` attains exactly 1.0 from 18.990341103219276, `exp` overflows from
-    /// 709.782713 and underflows to +0 below -745.133219, `cosh`/`sinh` overflow from
-    /// 710.475860. An inverse pair that is a total bijection on the extended line is NOT
-    /// one under the deployed arithmetic past those points, which is precisely the gap
-    /// the contract judge cannot see (it models the extended reals, not f64).
+    /// EXISTS because the f64 evaluator rounds where the extended real line does not: an
+    /// inverse pair that is a total bijection on the extended line drifts past the realised
+    /// bar under the deployed arithmetic outside a band (`tanh` compresses its argument
+    /// approaching +-1, `asinh`'s rounding returns as relative error through `sinh`), which
+    /// is precisely the gap the contract judge cannot see (it models the extended reals,
+    /// not f64). An overflow cuts no band (`inverse_pair_collapse`).
     fn magnitude_ceiling(&self, e: &Ex) -> Option<i128> {
         match e {
             Ex::Num(r) => r.ceil_abs(),
@@ -1743,30 +1743,33 @@ impl<'a> Cx<'a> {
         let i = self.view.resolve_owned(inner);
         match (o.as_str(), i.as_str()) {
             // TOTAL on the extended real line -- but NOT under the deployed f64 algebra
-            // outside the bands below, so each carries the band its own inner function
-            // survives. MODE-AWARE, and the guard asks the F64 question, not the recall
-            // one (owner ruling 2026-08-19). These identities are TOTAL over the reals --
-            // atanh(tanh x) = x for every real x -- and each band is derived from the
-            // REALISED criterion (`_ulp_gap <= REALISED_ULP = 8`, verify._contract), not
-            // from where the inner function attains its limit. The two are different
-            // diseases: OVERFLOW caps the HIGH end of `log o exp` and the sinh/cosh
-            // pairs (709/710, bisected to the ulp against the deployed evaluator), and
-            // COMPRESSION near a flat point of the inner function eats the LOW end --
-            // exp rounds a small argument into the neighbourhood of 1 and cosh is
-            // quadratically flat at 0, so `log o exp` breaches the 8-ULP bar for all
-            // |t| < ~0.0625 (worst 6.7e7 ULP at 1e-8) and `acosh o cosh` for all
-            // |t| < ~0.25 (worst ~4.5e18), while inside |t| >= 1 the measured worst is
-            // 0 and 1 ULP -- hence their `certainly_at_least(t, 1)` floor (task 46).
-            // The sinh pairs are clean over their whole bands, worst 2 ULP measured
-            // for asinh o sinh and 4 for sinh o asinh, and carry no floor. `atanh o tanh` fails by the same COMPRESSION but at the
-            // HIGH end -- tanh loses
-            // ~2|t|/ln2 bits of the argument approaching +-1, so the roundtrip drifts
-            // past 8 ULP at |t| ~ 2.7 (first breach measured 2.677 audit host / 2.808
-            // this host, libm-dependent; by |t|=18 the drift is ~0.03-0.06 ABSOLUTE),
-            // eleven-plus band-widths before saturation at 18.99 -- which is what the
-            // old attainment-derived band of 18 measured, and why it was wrong (S3).
-            // The integer bound below is the last magnitude ceiling on the SAFE side of
-            // every measured breach, with >= 2x margin on both hosts. So:
+            // everywhere, so each carries the band where its rounding stays within the
+            // REALISED criterion (`_ulp_gap <= REALISED_ULP = 8`, verify._contract).
+            // MODE-AWARE, and the guard asks the F64 question, not the recall one (owner
+            // ruling 2026-08-19). These identities are TOTAL over the reals -- atanh(tanh x)
+            // = x for every real x. OVERFLOW and UNDERFLOW cut no band: where the inner
+            // function overflows or underflows (exp past 709.78 or below -708.4, sinh and
+            // cosh past 710.48), a rewrite may give the evaluator's value or the true one,
+            // and the collapse gives the true one. ROUNDING does cut bands. COMPRESSION near
+            // a flat point of the inner function eats the LOW end -- exp rounds a small
+            // argument into the neighbourhood of 1 and cosh is quadratically flat at 0, so
+            // `log o exp` breaches the 8-ULP bar for all |t| < ~0.0625 (worst 6.7e7 ULP at
+            // 1e-8) and `acosh o cosh` for all |t| < ~0.25 (worst ~4.5e18),
+            // while at |t| >= 1 the measured worst wherever nothing overflows or underflows
+            // is 0 and 1 ULP -- hence their `certainly_at_least(t, 1)` floor (task 46).
+            // `asinh o sinh` is clean wherever sinh does not overflow, worst 2 ULP measured,
+            // and carries no band. `sinh o asinh` never overflows short of the top of the
+            // range, but asinh's ~|ln 2t| of absolute rounding returns as RELATIVE error
+            // through sinh: worst 4 ULP for |t| <= 710, first breach past 8 ULP measured at
+            // |t| ~ 4.4e6, so it keeps the 710 ceiling. `atanh o tanh` fails by COMPRESSION
+            // at the HIGH end -- tanh loses ~2|t|/ln2 bits of the argument approaching +-1,
+            // so the roundtrip drifts past 8 ULP at |t| ~ 2.7 (first breach measured 2.677
+            // audit host / 2.808 this host, libm-dependent; by |t|=18 the drift is
+            // ~0.03-0.06 ABSOLUTE), eleven-plus band-widths before saturation at 18.99 --
+            // which is what the old attainment-derived band of 18 measured, and why it was
+            // wrong (S3); saturation is not overflow, so the band stays. Each integer bound
+            // below is the last magnitude ceiling on the SAFE side of every measured breach,
+            // with >= 2x margin on both hosts. So:
             //   f64    -- band REQUIRED: the deployed evaluator is the authority.
             //   real   -- band SKIPPED: mathematics has no saturation to protect against,
             //             and requiring it here would refuse a rewrite that is simply true.
@@ -1777,21 +1780,14 @@ impl<'a> Cx<'a> {
             ("atanh", "tanh") if !self.f64_semantics() || self.certainly_in_band(t, 2) => {
                 Some(t.clone())
             }
-            ("log", "exp")
-                if !self.f64_semantics()
-                    || (self.certainly_in_band(t, 709) && self.certainly_at_least(t, 1)) =>
-            {
+            ("log", "exp") if !self.f64_semantics() || self.certainly_at_least(t, 1) => {
                 Some(t.clone())
             }
-            ("asinh", "sinh") | ("sinh", "asinh")
-                if !self.f64_semantics() || self.certainly_in_band(t, 710) =>
-            {
+            ("asinh", "sinh") => Some(t.clone()),
+            ("sinh", "asinh") if !self.f64_semantics() || self.certainly_in_band(t, 710) => {
                 Some(t.clone())
             }
-            ("acosh", "cosh")
-                if !self.f64_semantics()
-                    || (self.certainly_in_band(t, 710) && self.certainly_at_least(t, 1)) =>
-            {
+            ("acosh", "cosh") if !self.f64_semantics() || self.certainly_at_least(t, 1) => {
                 Some(fun(self.view.intern("abs"), vec![t.clone()], self))
             }
             ("exp", "log") if self.certainly_nonneg(t) => Some(t.clone()),

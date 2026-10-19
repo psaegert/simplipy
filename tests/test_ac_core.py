@@ -865,8 +865,8 @@ class TestAtanhTanhBandIsPrecisionDerived:
     holds every rule to) the roundtrip first breaches at |t| ~ 2.7 (2.677 audit host,
     2.808 this host, libm-dependent; by |t| = 18 the drift is ~0.03-0.06 ABSOLUTE).
     The band is now 2: the last integer magnitude ceiling on the safe side of every
-    measured breach. The overflow-derived bands (log/exp 709, sinh/cosh 710) are a
-    different disease and keep their attainment thresholds."""
+    measured breach. Saturation is not overflow: the band stays, where the overflow
+    cut-offs of log o exp and the sinh/cosh pairs are gone."""
 
     def test_collapses_inside_the_band(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['atanh', 'tanh', 'sin', 'x0']) == ['sin', 'x0']
@@ -892,9 +892,10 @@ class TestFlatPointCollapseFloors:
     neighbourhood of 1, and cosh is quadratically flat at 0. Measured against
     `_ulp_gap <= REALISED_ULP = 8`: log(exp(t)) breaches for ALL |t| < ~0.0625
     (worst 6.7e7 ULP at 1e-8) and acosh(cosh(t)) for all |t| < ~0.25 (worst ~4.5e18),
-    while inside |t| >= 1 the measured worst is 0 and 1 ULP. Both arms now carry a
-    proven magnitude floor of 1 next to their ceiling; asinh(sinh(t)) measured clean
-    over its whole band (worst 2 ULP) and carries none."""
+    while at |t| >= 1 the measured worst is 0 and 1 ULP wherever nothing overflows or
+    underflows. Both arms carry a proven magnitude floor of 1 (and no ceiling: an overflow
+    cuts no band); asinh(sinh(t)) measured clean wherever sinh does not overflow (worst
+    2 ULP) and carries none."""
 
     def test_collapses_with_a_proven_floor(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['log', 'exp', '2']) == ['2']
@@ -914,9 +915,9 @@ class TestFlatPointCollapseFloors:
         assert engine.simplify(['acosh', 'cosh', 'sin', 'x0']) == \
             ['acosh', 'cosh', 'sin', 'x0']
 
-    def test_the_clean_pair_keeps_its_ceiling_only_licence(
-            self, engine: SimpliPyEngine) -> None:
+    def test_the_clean_pair_needs_no_licence(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['asinh', 'sinh', 'sin', 'x0']) == ['sin', 'x0']
+        assert engine.simplify(['asinh', 'sinh', 'x0']) == ['x0']
 
 
 class TestTranscendentalAtomEnclosures:

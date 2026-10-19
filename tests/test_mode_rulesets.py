@@ -192,7 +192,8 @@ class TestAbsentFilesAreANoOp:
         the default mode's answer token for token -- and that is now FALSE, because the
         CONSTRUCTOR is mode-aware: `real` skips the f64 saturation bands and never folds a
         transcendental. Measured on an artifact where `real` names no set at all, the
-        served sets are identical and the ANSWERS still differ on 4 of 400 corpus rows.
+        served sets are identical and the ANSWERS still differ on 3 of 400 corpus rows (4
+        while f64 refused `asinh(sinh(t))` past sinh's overflow, which cuts no band now).
         `atanh(tanh 30)` is the whole story: f64 gives inf, real gives 30, with zero rules
         loaded either way.
 
@@ -212,11 +213,12 @@ class TestAbsentFilesAreANoOp:
         assert e._core.ac_served_rules_in_mode(rule_mode='real') == \
             e._core.ac_served_rules_in_mode(rule_mode='default')
         # what is NOT: the answer, because the constructor is mode-aware. Pinned as a
-        # bounded, explained divergence rather than asserted away.
+        # bounded, explained divergence rather than asserted away. Row 380's `asinh(sinh(.))`
+        # collapses in both modes since an overflow cuts no band.
         differ = [row for row in rows
                   if e._core.ac_simplify_in_mode(row, 48, 'tagged', 0, rule_mode='real')
                   != e._core.ac_simplify_in_mode(row, 48, 'tagged', 0, rule_mode='default')]
-        assert len(differ) == 4, len(differ)
+        assert len(differ) == 3, len(differ)
         bare = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
                               rules=[])
         bare._core.set_mode_rules('real', [])
