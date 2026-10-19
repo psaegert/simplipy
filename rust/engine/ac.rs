@@ -1005,10 +1005,8 @@ impl Engine {
 
     pub fn ac_canonical_key(&self, tokens: &[String], mode: RuleMode) -> Option<Vec<String>> {
         let ctx = SimplifyCtx::new(self.tokens.len());
-        Some(
-            self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx, mode)
-                .pop()??,
-        )
+        self.ac_canonical_keys_in(&[tokens.to_vec()], &ctx, mode)
+            .pop()?
     }
 
     /// [`Engine::ac_canonical_key`] over a BATCH, sharing one context (and therefore one

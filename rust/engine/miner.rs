@@ -655,7 +655,9 @@ impl Engine {
         // `<constant>` count differ (`* x0 x0` vs `pow2 x0`) are NEVER dropped: their
         // guard behaviour is not interchangeable, and the byte-identity gate only
         // certifies the dominated class.
-        let mut keeper: std::collections::HashMap<(Vec<String>, Vec<String>, usize), (u64, usize)> =
+        // (canonical key, sorted variables, `<constant>` count) -> (mu, library index)
+        type ClassKey = (Vec<String>, Vec<String>, usize);
+        let mut keeper: std::collections::HashMap<ClassKey, (u64, usize)> =
             std::collections::HashMap::new();
         let sig = |c: &[String]| -> (Vec<String>, usize) {
             let mut vars: Vec<String> = c

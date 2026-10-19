@@ -1903,7 +1903,7 @@ fn certify_candidate(
         let tv = if is_resolution {
             crate::interval::value_set(&target, ops, &crate::interval::Vs::reals())
         } else {
-            cand.reals_vs.clone()
+            cand.reals_vs
         };
         let same_class = tv.is_some_and(|cv| cv.cls() == sv.cls());
         if !same_class {
