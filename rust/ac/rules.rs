@@ -871,10 +871,10 @@ fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
 /// run; when it binds, the pass completes descent-free, which is sound.
 const STEP_CAP: u64 = 1_000_000;
 
-/// One top-down rewrite pass. The protocol at each node: fire site on the node as-is ->
-/// fold fallback -> recurse into children + canonical rebuild -> re-enter on an ORIENTED
-/// rebuild (else give the rebuild its one COMPOSITE chance, else refuse it) -> normal
-/// form.
+/// One top-down rewrite pass. The protocol at each node ([`visit`]): fire site on the node
+/// as-is -> fold fallback -> recurse into children + canonical rebuild -> re-enter on an
+/// ORIENTED rebuild (else give the rebuild its one COMPOSITE chance, else refuse it) ->
+/// normal form.
 ///
 /// Every state change strictly descends the reduction ordering (`ordered_below`) at this
 /// node: fires and rebuilds are gated explicitly (a composite step is gated on its
@@ -889,185 +889,86 @@ const STEP_CAP: u64 = 1_000_000;
 /// step cap has bound: a capped walk skipped fire sites, so its results are not certified
 /// normal forms (the cap is permanent for the call, so this is hygiene of the memo's
 /// meaning, not a behavioral necessity).
+///
+/// The owned loop re-enters on every accepted step, so fire chains iterate instead of
+/// recursing; [`rewrite_pass_opt`] is the borrow-side entry the child walk uses.
 pub fn rewrite_pass(e: Ex, p: &PassCtx) -> Ex {
     let mut node = e;
     loop {
-        if matches!(
-            node,
-            Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
-        ) {
-            return node; // literal leaves: nothing to do
+        match visit(&node, p) {
+            Visit::Normal => return node,
+            Visit::Folded(x) => return x,
+            Visit::Step(next) => node = next,
         }
-        if p.normal.borrow().contains(&node) {
-            if trace_memo() {
-                memo_log("HIT", &node);
-            }
-            return node;
-        }
-
-        // First fire site. Every accepted fire strictly descends the reduction ordering at
-        // this node (gated inside `try_rules_at`); the step cap bounds the tier the descent
-        // argument leaves open (see STEP_CAP).
-        if p.fires.get() < STEP_CAP {
-            if let Some(next) = try_rules_at(&node, p) {
-                p.fires.set(p.fires.get() + 1);
-                node = next;
-                continue;
-            }
-        }
-        // Fold fallback, GOVERNED BY THE MEASURE (stage 2; owner 2026-07-31, option
-        // (a)): the fold fires exactly when its result descends the reduction
-        // ordering. (Full rationale in the original site: literal bits are priced, so
-        // `exp 1` refuses its ~105-unit decimal while exact small arithmetic folds.)
-        if let Some(folded) = (p.fold)(&node) {
-            if oriented(&folded, &node, p) {
-                return folded;
-            }
-        }
-
-        // Recurse into children, CLONE-ON-CHANGE (the B1 restructure): an unchanged child
-        // is never cloned and an unchanged node never re-runs its canonical constructor.
-        // Skipping the constructor on unchanged children is sound because constructors
-        // are idempotent on canonical input -- every node in this walk IS constructor
-        // output under this same `cx` (from_prefix+canon at entry, constructors
-        // everywhere after), so re-running them reproduces the node; the old code
-        // computed that reproduction and compared. The normal-form memo already relies
-        // on the same fact when it returns marked subtrees untouched.
-        let rebuilt: Option<Ex> = match &node {
-            Ex::Add(v) => rewrite_children(v, p).map(|k| add(k, p.cx)),
-            Ex::Mul(v) => rewrite_children(v, p).map(|k| mul(k, p.cx)),
-            Ex::Pow(b, ex) => {
-                let nb = rewrite_pass_opt(b, p);
-                let nx = rewrite_pass_opt(ex, p);
-                if nb.is_none() && nx.is_none() {
-                    None
-                } else {
-                    Some(super::expr::pow(
-                        nb.unwrap_or_else(|| (**b).clone()),
-                        nx.unwrap_or_else(|| (**ex).clone()),
-                        p.cx,
-                    ))
-                }
-            }
-            Ex::Fun(f, v) => {
-                let f = *f;
-                rewrite_children(v, p).map(|k| super::expr::fun(f, k, p.cx))
-            }
-            _ => None, // Leaf: no children
-        };
-
-        let rebuilt = match rebuilt {
-            None => {
-                // A true fixpoint of one full walk: children unchanged, no fire, no fold.
-                if p.fires.get() < STEP_CAP {
-                    if trace_memo() {
-                        memo_log("INSERT(fixpoint)", &node);
-                    }
-                    p.normal.borrow_mut().insert(node.clone());
-                }
-                return node;
-            }
-            Some(r) => r,
-        };
-
-        // A rebuild that changed anything must re-enter the full walk: the canonical
-        // constructors can MINT new subterms during the rebuild (an integer power
-        // distributing over a product, collection merging terms), and only a fresh
-        // top-down walk visits them. The re-entry must satisfy the SAME reduction
-        // ordering as a rule fire (a disoriented rebuild is REFUSED): see the composite
-        // step below for the one-level endpoint exploration.
-        if rebuilt != node {
-            if p.fires.get() < STEP_CAP && oriented(&rebuilt, &node, p) {
-                p.fires.set(p.fires.get() + 1);
-                node = rebuilt;
-                continue;
-            }
-            // COMPOSITE-STEP acceptance (docs/formal.md, step relation): judge the
-            // SETTLED ENDPOINT of the rebuilt candidate under a one-level, private-memo
-            // walk, and commit iff the endpoint strictly descends.
-            if p.explore && p.fires.get() < STEP_CAP {
-                let sub = PassCtx {
-                    rules: p.rules,
-                    cx: p.cx,
-                    mcx: p.mcx,
-                    fold: p.fold,
-                    fires: Cell::new(p.fires.get()),
-                    normal: RefCell::new(FxHashSet::default()),
-                    explore: false,
-                    suppressed: p.suppressed,
-                };
-                let endpoint = rewrite_pass(rebuilt, &sub);
-                p.fires.set(sub.fires.get());
-                if p.fires.get() < STEP_CAP && oriented(&endpoint, &node, p) {
-                    p.fires.set(p.fires.get() + 1);
-                    if trace_fires() {
-                        eprintln!(
-                            "AC composite step committed:\n  node={node:?}\n  endpoint={endpoint:?}"
-                        );
-                    }
-                    node = endpoint;
-                    continue;
-                }
-                if trace_fires() {
-                    eprintln!(
-                        "AC rebuild refused (endpoint not below):\n  node={node:?}\n  endpoint={endpoint:?}"
-                    );
-                }
-            } else if trace_fires() {
-                eprintln!(
-                    "AC rebuild refused (disoriented):\n  node={node:?}\n  rebuilt={rebuilt:?}"
-                );
-            }
-            if p.fires.get() < STEP_CAP {
-                if trace_memo() {
-                    memo_log("INSERT(refused-rebuild)", &node);
-                }
-                p.normal.borrow_mut().insert(node.clone());
-            }
-            return node;
-        }
-
-        // rebuilt == node with changed children: the constructor undid the child moves
-        // (equality decided on the representation). A fixpoint by decision, as before.
-        if p.fires.get() < STEP_CAP {
-            if trace_memo() {
-                memo_log("INSERT(fixpoint)", &node);
-            }
-            p.normal.borrow_mut().insert(node.clone());
-        }
-        return node;
     }
 }
 
 /// Borrow-side single visit: `None` = this subtree is unchanged by the pass (no clone was
 /// made, no constructor was run); `Some(x)` = it rewrote to `x` (strictly below in the
-/// reduction ordering, by the same gates as [`rewrite_pass`]). The owned iterative loop
-/// handles everything past the first change, so fire chains never recurse.
+/// reduction ordering, by the same gates as [`rewrite_pass`]). The owned loop handles
+/// everything past the first change, so fire chains never recurse.
 pub fn rewrite_pass_opt(node0: &Ex, p: &PassCtx) -> Option<Ex> {
+    match visit(node0, p) {
+        Visit::Normal => None,
+        Visit::Folded(x) => Some(x),
+        Visit::Step(next) => Some(rewrite_pass(next, p)),
+    }
+}
+
+/// What one visit of a node decided.
+enum Visit {
+    /// The node is a normal form of this pass (memo-marked unless the cap has bound).
+    Normal,
+    /// The numeric fold replaced the node by a leaf: final, no re-entry.
+    Folded(Ex),
+    /// An accepted descent step (a fire, an oriented rebuild, or a committed composite
+    /// step): the walk re-enters on the new node.
+    Step(Ex),
+}
+
+/// THE PER-NODE PROTOCOL, written once for both entries ([`rewrite_pass`],
+/// [`rewrite_pass_opt`]); see [`rewrite_pass`] for the ordering argument. Inlined into
+/// both, so the walk's recursion keeps the frame layout of the former two copies.
+#[inline(always)]
+fn visit(node: &Ex, p: &PassCtx) -> Visit {
     if matches!(
-        node0,
+        node,
         Ex::Num(_) | Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const
     ) {
-        return None;
+        return Visit::Normal; // literal leaves: nothing to do
     }
-    if p.normal.borrow().contains(node0) {
+    if p.normal.borrow().contains(node) {
         if trace_memo() {
-            memo_log("HIT", node0);
+            memo_log("HIT", node);
         }
-        return None;
+        return Visit::Normal;
     }
+
+    // First fire site. Every accepted fire strictly descends the reduction ordering at this
+    // node (gated inside `try_rules_at`); the step cap bounds the tier the descent argument
+    // leaves open (see STEP_CAP).
     if p.fires.get() < STEP_CAP {
-        if let Some(next) = try_rules_at(node0, p) {
+        if let Some(next) = try_rules_at(node, p) {
             p.fires.set(p.fires.get() + 1);
-            return Some(rewrite_pass(next, p));
+            return Visit::Step(next);
         }
     }
-    if let Some(folded) = (p.fold)(node0) {
-        if oriented(&folded, node0, p) {
-            return Some(folded);
+    // Fold fallback, GOVERNED BY THE MEASURE (stage 2; owner 2026-07-31, option (a)): the
+    // fold fires exactly when its result descends the reduction ordering (literal bits are
+    // priced, so `exp 1` refuses its ~105-unit decimal while exact small arithmetic folds).
+    if let Some(folded) = (p.fold)(node) {
+        if oriented(&folded, node, p) {
+            return Visit::Folded(folded);
         }
     }
-    let rebuilt: Option<Ex> = match node0 {
+
+    // Recurse into children, CLONE-ON-CHANGE: an unchanged child is never cloned and an
+    // unchanged node never re-runs its canonical constructor. Skipping the constructor on
+    // unchanged children is sound because constructors are idempotent on canonical input --
+    // every node in this walk IS constructor output under this same `cx` (from_prefix+canon
+    // at entry, constructors everywhere after), so re-running them reproduces the node. The
+    // normal-form memo relies on the same fact when it returns marked subtrees untouched.
+    let rebuilt: Option<Ex> = match node {
         Ex::Add(v) => rewrite_children(v, p).map(|k| add(k, p.cx)),
         Ex::Mul(v) => rewrite_children(v, p).map(|k| mul(k, p.cx)),
         Ex::Pow(b, ex) => {
@@ -1087,70 +988,82 @@ pub fn rewrite_pass_opt(node0: &Ex, p: &PassCtx) -> Option<Ex> {
             let f = *f;
             rewrite_children(v, p).map(|k| super::expr::fun(f, k, p.cx))
         }
-        _ => None,
+        _ => None, // Leaf: no children
     };
-    let rebuilt = match rebuilt {
-        None => {
-            if p.fires.get() < STEP_CAP {
-                if trace_memo() {
-                    memo_log("INSERT(fixpoint)", node0);
-                }
-                p.normal.borrow_mut().insert(node0.clone());
-            }
-            return None;
-        }
-        Some(r) => r,
-    };
-    if rebuilt != *node0 {
-        if p.fires.get() < STEP_CAP && oriented(&rebuilt, node0, p) {
-            p.fires.set(p.fires.get() + 1);
-            return Some(rewrite_pass(rebuilt, p));
-        }
-        if p.explore && p.fires.get() < STEP_CAP {
-            let sub = PassCtx {
-                rules: p.rules,
-                cx: p.cx,
-                mcx: p.mcx,
-                fold: p.fold,
-                fires: Cell::new(p.fires.get()),
-                normal: RefCell::new(FxHashSet::default()),
-                explore: false,
-                suppressed: p.suppressed,
-            };
-            let endpoint = rewrite_pass(rebuilt, &sub);
-            p.fires.set(sub.fires.get());
-            if p.fires.get() < STEP_CAP && oriented(&endpoint, node0, p) {
+
+    match rebuilt {
+        // A true fixpoint of one full walk: children unchanged, no fire, no fold.
+        None => mark_normal(node, p, "INSERT(fixpoint)"),
+        // A rebuild that changed anything must re-enter the full walk: the canonical
+        // constructors can MINT new subterms during the rebuild (an integer power
+        // distributing over a product, collection merging terms), and only a fresh top-down
+        // walk visits them. The re-entry must satisfy the SAME reduction ordering as a rule
+        // fire (a disoriented rebuild is REFUSED), with the composite step as its one
+        // second chance.
+        Some(rebuilt) if rebuilt != *node => {
+            if p.fires.get() < STEP_CAP && oriented(&rebuilt, node, p) {
                 p.fires.set(p.fires.get() + 1);
-                if trace_fires() {
-                    eprintln!(
-                        "AC composite step committed:\n  node={node0:?}\n  endpoint={endpoint:?}"
-                    );
-                }
-                return Some(rewrite_pass(endpoint, p));
+                return Visit::Step(rebuilt);
             }
-            if trace_fires() {
-                eprintln!(
-                    "AC rebuild refused (endpoint not below):\n  node={node0:?}\n  endpoint={endpoint:?}"
-                );
+            if let Some(endpoint) = composite_step(rebuilt, node, p) {
+                return Visit::Step(endpoint);
             }
-        } else if trace_fires() {
-            eprintln!("AC rebuild refused (disoriented):\n  node={node0:?}\n  rebuilt={rebuilt:?}");
+            mark_normal(node, p, "INSERT(refused-rebuild)")
         }
-        if p.fires.get() < STEP_CAP {
-            if trace_memo() {
-                memo_log("INSERT(refused-rebuild)", node0);
-            }
-            p.normal.borrow_mut().insert(node0.clone());
+        // rebuilt == node with changed children: the constructor undid the child moves
+        // (equality decided on the representation). A fixpoint by decision.
+        Some(_) => mark_normal(node, p, "INSERT(fixpoint)"),
+    }
+}
+
+/// COMPOSITE-STEP acceptance (docs/formal.md, step relation) for a rebuild that failed the
+/// immediate ordering test: judge the SETTLED ENDPOINT of the rebuilt candidate under a
+/// one-level, private-memo walk, and commit iff the endpoint strictly descends below
+/// `node`. `None` = refused (or exploration is off at this level, or the cap has bound).
+#[inline(always)]
+fn composite_step(rebuilt: Ex, node: &Ex, p: &PassCtx) -> Option<Ex> {
+    if !(p.explore && p.fires.get() < STEP_CAP) {
+        if trace_fires() {
+            eprintln!("AC rebuild refused (disoriented):\n  node={node:?}\n  rebuilt={rebuilt:?}");
         }
         return None;
     }
-    if p.fires.get() < STEP_CAP {
-        if trace_memo() {
-            memo_log("INSERT(fixpoint)", node0);
+    let sub = PassCtx {
+        rules: p.rules,
+        cx: p.cx,
+        mcx: p.mcx,
+        fold: p.fold,
+        fires: Cell::new(p.fires.get()),
+        normal: RefCell::new(FxHashSet::default()),
+        explore: false,
+        suppressed: p.suppressed,
+    };
+    let endpoint = rewrite_pass(rebuilt, &sub);
+    p.fires.set(sub.fires.get());
+    if p.fires.get() < STEP_CAP && oriented(&endpoint, node, p) {
+        p.fires.set(p.fires.get() + 1);
+        if trace_fires() {
+            eprintln!("AC composite step committed:\n  node={node:?}\n  endpoint={endpoint:?}");
         }
-        p.normal.borrow_mut().insert(node0.clone());
+        return Some(endpoint);
+    }
+    if trace_fires() {
+        eprintln!(
+            "AC rebuild refused (endpoint not below):\n  node={node:?}\n  endpoint={endpoint:?}"
+        );
     }
     None
+}
+
+/// Mark `node` a normal form of this pass (unless the step cap has bound) and report it so.
+fn mark_normal(node: &Ex, p: &PassCtx, why: &str) -> Visit {
+    if p.fires.get() < STEP_CAP {
+        if trace_memo() {
+            memo_log(why, node);
+        }
+        p.normal.borrow_mut().insert(node.clone());
+    }
+    Visit::Normal
 }
 
 /// Rewrite a bag's members clone-on-change: `None` = no member moved (nothing allocated).
