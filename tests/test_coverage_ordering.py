@@ -205,3 +205,44 @@ class TestProposalVerdictHonesty:
         assert outcomes == {
             "certified": 0, "already_covered": 1, "rejected": 0, "duplicate": 0,
             "certified_then_dropped": 0}
+
+
+_SENTINEL_OPS = {
+    "/": {"realization": "simplipy.operators.div", "alias": [], "inverse": "*", "arity": 2, "precedence": 2, "commutative": False},
+    "*": {"realization": "*", "alias": [], "inverse": "/", "arity": 2, "precedence": 2, "commutative": True},
+    "sin": {"realization": "np.sin", "alias": [], "inverse": "asin", "arity": 1, "precedence": 3, "commutative": False},
+}
+
+
+class TestPruneProbesWhatTheSlotBinds:
+    """Coverage is asked on the instances a rule's slots bind in the mode it is pruned in."""
+
+    SENTINEL = (('/', '$0', '$0'), ('1',))
+
+    def _engine(self):
+        engine = SimpliPyEngine(operators=_SENTINEL_OPS, rules=[self.SENTINEL])
+        engine.real_simplification_rules = [self.SENTINEL]
+        engine.permissive_simplification_rules = [self.SENTINEL]
+        engine._replace_rules(engine.simplification_rules)
+        return engine
+
+    def test_permissive_keeps_the_mask_sentinel(self) -> None:
+        """Permissive binds every slot to any subtree, a non-finite literal included, and
+        takes `inf/inf` to `nan` without the rule: `$0 / $0 -> 1` is not covered there
+        (the mask-sentinel doctrine), whatever its generic instance says."""
+        engine = self._engine()
+        inf_mask = ['*', '/', 'float("inf")', 'float("inf")', 'x0']
+        assert engine.simplify(inf_mask, mode='permissive') == ['x0']
+        assert engine.prune_covered_rules(rule_mode='permissive') == 0
+        assert engine.simplify(inf_mask, mode='permissive') == ['x0']
+
+    def test_a_dollar_slot_is_instantiated(self) -> None:
+        """In f64 the `$` slot binds a variable and a certified composite, and the
+        constructor already cancels both (`inf/inf` is folded before any rule): the rule
+        is covered, and pruning it changes no answer."""
+        engine = self._engine()
+        probes = [['/', 'x0', 'x0'], ['/', 'sin', 'x0', 'sin', 'x0'],
+                  ['*', '/', 'float("inf")', 'float("inf")', 'x0']]
+        before = [engine.simplify(p) for p in probes]
+        assert engine.prune_covered_rules(rule_mode='default') == 1
+        assert [engine.simplify(p) for p in probes] == before

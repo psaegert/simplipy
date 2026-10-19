@@ -20,8 +20,12 @@ _OPERATORS = {
 }
 
 SOURCE = ['*', 'exp', 'x0', 'exp', 'x0']
-FIRST = ['exp', '+', 'x0', 'x0']      # the scan's first accepted candidate
-SECOND = ['exp', '*', '2', 'x0']      # the next one, once FIRST is excluded
+
+# A source with two accepted candidates of DIFFERENT classes (equal on the reals, both
+# realised by f64 on the mining sample), in scan order.
+WITNESS = ['sinh', 'asinh', 'x0']
+FIRST = ['x0']
+SECOND = ['tan', 'atan', 'x0']
 
 
 @pytest.fixture(scope='module')
@@ -29,11 +33,18 @@ def eng() -> SimpliPyEngine:
     return SimpliPyEngine(operators=_OPERATORS, rules=[])
 
 
-def _scan(eng, sources, mode='default'):
+@pytest.fixture(scope='module')
+def acj() -> SimpliPyEngine:
+    from conftest import acj_config_path, require_or_skip
+    require_or_skip(acj_config_path(), 'needs the acj vocabulary')
+    return SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'], rules=[])
+
+
+def _scan(eng, mode='default'):
     """`mine(batch, indices, exclusions)` over a library of hand-picked candidates."""
-    x = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(7))
+    x = RuleMiner(eng)._mining_sample_x(512, 1, np.random.default_rng(7))
     lib = eng._core.build_candidate_library(
-        [FIRST, ['pow2', 'exp', 'x0'], SECOND, ['x0'], ['exp', 'x0']], ['x0'],
+        [FIRST, ['*', '1', 'x0'], ['sin', 'x0'], SECOND], ['x0'],
         x.flatten(order='C').tolist(), x.shape[0], rule_mode=mode)
 
     def mine(batch, indices, exclusions):
@@ -42,33 +53,35 @@ def _scan(eng, sources, mode='default'):
     return mine
 
 
-def test_the_premise_two_accepted_candidates_in_scan_order(eng) -> None:
-    mine = _scan(eng, [SOURCE])
-    assert mine([SOURCE], None, None) == [(0, SOURCE, FIRST)]
-    assert mine([SOURCE], None, {0: [FIRST]}) == [(0, SOURCE, SECOND)]
-    assert mine([SOURCE], None, {0: [FIRST, SECOND]}) == []
+def test_the_premise_two_classes_in_scan_order_and_exclusion_by_class(acj) -> None:
+    mine = _scan(acj)
+    assert mine([WITNESS], None, None) == [(0, WITNESS, FIRST)]
+    assert mine([WITNESS], None, {0: [FIRST]}) == [(0, WITNESS, SECOND)]
+    # an exclusion names a CLASS: another spelling of the refused target excludes it too
+    assert mine([WITNESS], None, {0: [['*', '1', 'x0']]}) == [(0, WITNESS, SECOND)]
+    assert mine([WITNESS], None, {0: [FIRST, SECOND]}) == []
 
 
-def test_a_refused_pick_yields_to_the_next_licensed_candidate(eng) -> None:
+def test_a_refused_pick_yields_to_the_next_licensed_candidate(acj) -> None:
     """NO SHADOWING: the judge files the cheapest pick under another mode, and the loop
     must return the next candidate the mode licenses -- not drop the source."""
-    refused = (('*', 'exp', '?0', 'exp', '?0'), ('exp', '+', '?0', '?0'))
+    refused = (('sinh', 'asinh', '?0'), ('?0',))
 
-    def judge(pairs):
-        return ['real' if tuple(map(tuple, p)) == refused else 'core' for p in pairs]
+    def judge_as(tier):
+        return lambda pairs: [tier if tuple(map(tuple, p)) == refused else 'core' for p in pairs]
 
-    found, stats = RuleMiner(eng)._mine_length([SOURCE], _scan(eng, [SOURCE]), 'default',
-                                               judge, {}, ['x0'])
-    assert found == [(SOURCE, SECOND)]
+    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'default',
+                                               judge_as('real'), {}, ['x0'])
+    assert found == [(WITNESS, SECOND)]
     assert stats['judge_rounds'] == 2
-    assert stats['excluded'] == [[SOURCE, FIRST]]
-    # `real` licenses the refused tier: no exclusion, the first pick stands
-    found, stats = RuleMiner(eng)._mine_length([SOURCE], _scan(eng, [SOURCE], 'real'), 'real',
-                                               judge, {}, ['x0'])
-    assert found == [(SOURCE, FIRST)] and stats['judge_rounds'] == 1
+    assert stats['excluded'] == [[WITNESS, FIRST]]
+    # a tier f64 licenses: no exclusion, the first pick stands
+    found, stats = RuleMiner(acj)._mine_length([WITNESS], _scan(acj), 'default',
+                                               judge_as('f64'), {}, ['x0'])
+    assert found == [(WITNESS, FIRST)] and stats['judge_rounds'] == 1
 
 
-def test_the_judge_memo_is_consulted_before_the_judge(eng) -> None:
+def test_the_judge_memo_is_consulted_before_the_judge(acj) -> None:
     calls = []
 
     def judge(pairs):
@@ -76,32 +89,35 @@ def test_the_judge_memo_is_consulted_before_the_judge(eng) -> None:
         return ['core'] * len(pairs)
 
     judged: dict = {}
-    miner = RuleMiner(eng)
-    miner._mine_length([SOURCE], _scan(eng, [SOURCE]), 'default', judge, judged, ['x0'])
-    miner._mine_length([SOURCE], _scan(eng, [SOURCE]), 'default', judge, judged, ['x0'])
+    miner = RuleMiner(acj)
+    miner._mine_length([WITNESS], _scan(acj), 'default', judge, judged, ['x0'])
+    miner._mine_length([WITNESS], _scan(acj), 'default', judge, judged, ['x0'])
     assert len(calls) == 1 and judged
 
 
-def test_two_shards_equal_one_shot(eng) -> None:
+def test_two_shards_equal_one_shot(acj) -> None:
     """The scan of a source is a function of its GLOBAL index (its seed, its exclusions),
     never of the batch it arrives in: two shards with `index_offset` -- or explicit
     `indices` -- reproduce the one-shot mine, exclusions included."""
-    sources = [SOURCE, ['pow2', 'exp', 'x0'], ['*', 'exp', 'x0', 'exp', 'x0']]
-    x = RuleMiner(eng)._mining_sample_x(256, 1, np.random.default_rng(7))
-    lib = eng._core.build_candidate_library(
-        [FIRST, ['pow2', 'exp', 'x0'], SECOND, ['x0'], ['exp', 'x0']], ['x0'],
-        x.flatten(order='C').tolist(), x.shape[0], rule_mode='default')
-
-    def run(batch, **kw):
-        return eng._core.mine_one_length(batch, lib, None, 16, 16, 7, 1e-9, 1e-12, None, True,
-                                         rule_mode='default', **kw)
-
+    mine = _scan(acj)
+    sources = [WITNESS, WITNESS, WITNESS]
     excl = {2: [FIRST]}
-    one_shot = run(sources, exclusions=excl)
+    one_shot = mine(sources, None, excl)
     assert [t for _, _, t in one_shot] == [FIRST, FIRST, SECOND]
-    shards = run(sources[:2], exclusions=excl) + run(sources[2:], index_offset=2, exclusions=excl)
+    shards = mine(sources[:2], None, excl) + mine(sources[2:], [2], excl)
     assert shards == one_shot
-    assert run(sources[2:], indices=[2], exclusions=excl) == one_shot[2:]
+    assert _offset_scan(acj, sources[2:], 2, excl) == one_shot[2:]
+
+
+def _offset_scan(eng, batch, offset, exclusions):
+    """The shard by `index_offset` rather than explicit `indices`."""
+    x = RuleMiner(eng)._mining_sample_x(512, 1, np.random.default_rng(7))
+    lib = eng._core.build_candidate_library(
+        [FIRST, ['*', '1', 'x0'], ['sin', 'x0'], SECOND], ['x0'],
+        x.flatten(order='C').tolist(), x.shape[0], rule_mode='default')
+    return eng._core.mine_one_length(batch, lib, None, 16, 16, 7, 1e-9, 1e-12, None, True,
+                                     rule_mode='default', index_offset=offset,
+                                     exclusions=exclusions)
 
 
 PROBE = ['pow2', 'exp', 'x0']

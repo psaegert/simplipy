@@ -145,8 +145,9 @@ pub(crate) struct Acceptor<'a> {
     mark: Mark,
     vars: &'a [String],
     confirm: Option<&'a ConfirmSet>,
-    /// Targets the judge loop refused for this source (`Refusal::Excluded`): the scan yields
-    /// to the next candidate, so another tier's pick can never shadow a licensed one.
+    /// The canonical keys (in the mine's mode) of the targets the judge loop refused for
+    /// this source (`Refusal::Excluded`): the scan yields to the next candidate of another
+    /// class, so another tier's pick can never shadow a licensed one.
     excluded: &'a [Vec<String>],
 }
 
@@ -200,8 +201,13 @@ impl<'a> Acceptor<'a> {
     /// changes a DEFINED extended-real value there (the a.e. pole-mirror family, otherwise
     /// gate-invisible).
     pub(crate) fn license(&self, t: &[String]) -> Result<(), MineRefusal> {
-        // The scan is deterministic, so an excluded pick recurs in exactly its spelling.
-        if self.excluded.iter().any(|e| e.as_slice() == t) {
+        // BY CLASS: the library keeps spellings of one class apart where their guards
+        // differ (`* 1 x0` beside `x0`), and the judge's verdict is the class's.
+        if !self.excluded.is_empty()
+            && self
+                .excluded
+                .contains(&self.eng.excluded_key(t, self.spec.mode))
+        {
             return Err(MineRefusal::Excluded);
         }
         if let Some(r) = super::refusals::mint_refusals(self.src, &self.mark.tokens, t, self.vars) {
@@ -776,6 +782,12 @@ impl Engine {
     /// never enumerates). Strict mode still loses one-step shortcuts relative to relaxed
     /// where the walk genuinely descends part-way (degenerate constant collapses like
     /// `C * acos(np.e) -> <constant>`).
+    /// The class an excluded target stands for: its canonical key in `mode` (the dedup
+    /// key), or its spelling when it has none.
+    fn excluded_key(&self, t: &[String], mode: RuleMode) -> Vec<String> {
+        self.ac_canonical_key(t, mode).unwrap_or_else(|| t.to_vec())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn mine_one_length(
         &self,
@@ -805,7 +817,12 @@ impl Engine {
                     Some(ix) => ix[k],
                     None => index_offset.wrapping_add(k as u64),
                 };
-                let excluded = exclusions.get(&idx).unwrap_or(&none);
+                let excluded: Vec<Vec<String>> = exclusions
+                    .get(&idx)
+                    .unwrap_or(&none)
+                    .iter()
+                    .map(|t| self.excluded_key(t, spec.mode))
+                    .collect();
                 // AC-JUDGED Kruskal prune: the arbiter is the engine that will SERVE the
                 // rules. A source the AC engine already strictly reduces -- by exact
                 // arithmetic, bag collection, or the rules mined so far -- is skipped
@@ -854,7 +871,7 @@ impl Engine {
                     } else {
                         // An atomic mark ends the search even under relaxed Kruskal
                         // (`Acceptor::new`).
-                        Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, excluded)
+                        Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &excluded)
                             .and_then(|acc| {
                                 match acc.scan(lib, max_target, seed.wrapping_add(idx)) {
                                     Ok(Some(target)) => Some((idx, src.clone(), target)),

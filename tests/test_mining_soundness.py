@@ -2123,6 +2123,23 @@ class TestTheFinalGate:
         kept, dropped = miner._final_gate('real', judge, {})
         assert kept == [] and dropped == [[list(a[0]), list(a[1]), 'f64']]
 
+    def test_the_loop_judges_a_picks_file_spelling_too(self) -> None:
+        """The judge loop asks the judge about the pattern the file will carry as well as
+        the entries the mode serves from it: a pick whose served respelling judges clean
+        but whose own spelling does not is excluded there, not dropped at the end."""
+        from simplipy.mining import RuleMiner
+        miner = RuleMiner(SimpliPyEngine(operators=_OPERATORS, rules=[]))
+        pick = (['+', 'tanh', 'log', '9', 'x0'], ['+', 'inv', '1.025', 'x0'])
+        pattern = (('+', 'tanh', 'log', '9', '?0'), ('+', 'inv', '1.025', '?0'))
+
+        def judge(pairs):
+            return ['real' if tuple(map(tuple, p)) == pattern else 'core' for p in pairs]
+
+        judged: dict = {}
+        assert miner._unlicensed({3: pick}, 'default', judge, judged, ['x0']) == {3}
+        assert judged[pattern] == 'real' and len(judged) > 1, 'vacuous: one spelling judged'
+        assert miner._unlicensed({3: pick}, 'real', judge, {}, ['x0']) == set()
+
     def test_a_pick_the_mode_does_not_serve_is_licensed_nowhere(self) -> None:
         """Never infer a licence for something the matcher never saw: `cos 0 -> 1` is dead
         in f64 (its reading folds the LHS) and alive in real."""

@@ -48,35 +48,47 @@ except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
 
 
 def _is_slot_token(token: str) -> bool:
-    """A sorted-rule slot token: a sort sigil (``_`` / ``?`` / ``!``) followed by digits."""
-    return bool(token) and token[0] in '_?!' and token[1:].isdigit()
+    """A sorted-rule slot token: a sort sigil (``_`` / ``?`` / ``!`` / ``$``) followed by
+    digits."""
+    return bool(token) and token[0] in '_?!$' and token[1:].isdigit()
+
+
+#: The values outside a variable's generic reading. Permissive binds every slot to any
+#: subtree, a literal included, and its constructor reads a variable as finite and nonzero
+#: almost everywhere -- which says nothing about these three.
+_NON_FINITE_LITERALS = ('float("inf")', 'float("-inf")', 'float("nan")')
 
 
 def _coverage_variants(
         lhs: tuple[str, ...],
-        rhs: tuple[str, ...]) -> list[tuple[list[str], list[str]]]:
-    """Instantiation variants a rule must survive to count as covered.
+        rhs: tuple[str, ...],
+        rule_mode: str) -> list[tuple[list[str], list[str]]]:
+    """Instantiation variants a rule must survive to count as covered in ``rule_mode``:
+    the instances its slots bind there.
 
     Every slot in ``lhs`` is instantiated as a distinct variable leaf ``x{i}``;
     ``<constant>`` stays LITERAL (substituting a numeral would let native constant
     folding fake coverage). Additionally, every subset of up to 3 wide slots
-    (``_``/``!`` sigils) is probed with the composite ``sin(x{i})``: leaf-only
-    instantiation under-tests what a wide slot claims to match.
+    (``_``/``!``/``$`` sigils, which bind composites) is probed with the composite
+    ``sin(x{i})``: leaf-only instantiation under-tests what a wide slot claims to match.
+    In ``permissive``, where every slot binds any subtree, each non-finite literal is a
+    variant too (all slots at once): `$0 / $0 -> 1` is what takes `inf/inf` to `1` there,
+    which the constructor takes to `nan`. (In ``f64`` and ``real`` the ground fold reads
+    such an instance before any rule.)
     """
     slots = list(dict.fromkeys(t for t in lhs if _is_slot_token(t)))
-    wide = [s for s in slots if s[0] in '_!'][:3]
-    variants = []
+    wide = [s for s in slots if s[0] in '_!$'][:3]
+    bindings_list = []
     for mask in product((0, 1), repeat=len(wide)):
         bindings = {s: ['x' + s[1:]] for s in slots}
         for slot, composite in zip(wide, mask):
             if composite:
                 bindings[slot] = ['sin', 'x' + slot[1:]]
-
-        def substitute(tokens: tuple[str, ...]) -> list[str]:
-            return [out for t in tokens for out in bindings.get(t, [t])]
-
-        variants.append((substitute(lhs), substitute(rhs)))
-    return variants
+        bindings_list.append(bindings)
+    if rule_mode == 'permissive' and slots:
+        bindings_list += [{s: [value] for s in slots} for value in _NON_FINITE_LITERALS]
+    return [([out for t in lhs for out in b.get(t, [t])],
+             [out for t in rhs for out in b.get(t, [t])]) for b in bindings_list]
 
 
 # The core serialization language's arities (config-independent built-ins): the
@@ -976,7 +988,7 @@ class SimpliPyEngine:
                 return False
 
             return all(fulfilled(variant_lhs, variant_rhs)
-                       for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs))
+                       for variant_lhs, variant_rhs in _coverage_variants(lhs, rhs, rule_mode))
 
         kept = set(full)
         for wave_length in range(max(len(lhs) for lhs, _ in full), 2, -1):
