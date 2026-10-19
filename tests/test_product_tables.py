@@ -175,7 +175,16 @@ def test_a_divisor_product_is_decided_with_its_quotient(eng, mode, effort, a, b,
     x = list(eng.simplify(a.split(), mode=mode, effort=effort))
     y = list(eng.simplify(b.split(), mode=mode, effort=effort))
     assert eng.to_prefix(x) == eng.to_prefix(y)
-    assert list(eng.simplify(x, mode=mode, effort=effort)) == x
+
+
+@pytest.mark.parametrize('effort', (0, None))
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('a, b', DIVISORS)
+def test_a_divisor_product_answer_reads_back_as_itself(eng, mode, effort, a, b):
+    # Apart from the decision above, so the sign placement waiting for D1 masks no fixed point.
+    for src in (a, b):
+        x = list(eng.simplify(src.split(), mode=mode, effort=effort))
+        assert list(eng.simplify(x, mode=mode, effort=effort)) == x, src
 
 
 # A negative power is zero only where its base is infinite, so the inverse of a quotient distributes as the quotient's

@@ -241,6 +241,15 @@ def test_an_odd_function_of_a_negation_reads_as_the_negated_term(eng, mode, fn, 
     assert list(eng.simplify(src, mode=mode)) == want
 
 
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('fn', ['sin', 'atan'])
+def test_an_odd_function_of_a_negation_reads_back_as_itself(eng, mode, fn):
+    # Apart from the reading above, so the sign placement waiting for D1 masks no fixed point.
+    for src in (f'* - {fn} x1 x1 + x1 {fn} neg x1', f'neg pow - x1 {fn} x1 2'):
+        ans = list(eng.simplify(src.split(), mode=mode))
+        assert list(eng.simplify(ans, mode=mode)) == ans, src
+
+
 # A second read of an answer gives the answer back. A negated sum the sign folds into (one holding an infinity) is
 # joined as `mul()` joins it, and a pinned class freezes only the sites that may vanish at its zero (a sum with a pole
 # of its own there, `(x9 - 1)^(-1/4) - x9`, flips exactly).
