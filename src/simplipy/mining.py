@@ -1013,7 +1013,25 @@ class RuleMiner:
                                            for k, v in sorted(_routed.items())},
                         'census': {b: len(ids) for b, ids in _buckets.items()},
                         'kept': len(self._mode_rules(rule_mode))}
+            # THE FILE IS WHAT THIS MODE LICENSES (miner.md 2.11): the final gate judges the
+            # file's own spellings AND the entries the mode serves from them, with the loop's
+            # judge and memo, and drops what the mode does not license, counted. It judges
+            # BEFORE EACH PRUNE, so a prune only ever leans on licensed rules (a rule pruned as
+            # covered by one the gate then dropped would be lost), and once more at the end,
+            # on what ships: the post-pass (promotion) respells and re-sorts, so the per-length
+            # verdicts describe an earlier set.
+            gate: dict = {'unlicensed': [], 'preempted': []}
+
+            def _final_gate() -> None:
+                if not (symbolic_gate and self._mode_rules(rule_mode) and not interrupted()):
+                    return
+                kept, off = self._final_gate(rule_mode, judge, judged)
+                if off:
+                    gate['unlicensed'] += off
+                    self._install(rule_mode, kept)
+                    _note_drops('final_gate', lambda _identity: 'unlicensed-or-preempted')
             if prune == 'covered':
+                _final_gate()
                 self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                 # F94: the prune removes only rules the REMAINING set already reaches,
                 # so a certified proposal dropped here is still served compositionally
@@ -1057,6 +1075,7 @@ class RuleMiner:
                 # redundant instances; genuinely novel ground rules (`cos 0 -> 1`)
                 # have no wildcard cover and survive.
                 if prune == 'covered':
+                    _final_gate()
                     self.engine.prune_covered_rules(verbose=verbose, rule_mode=rule_mode)
                     _note_drops('prune_covered_post_promotion',
                                 lambda _identity: 'behaviourally-covered-by-remaining-rules')
@@ -1076,25 +1095,19 @@ class RuleMiner:
             # alike) and fails closed on a certified pair that is neither present nor
             # attributable -- a census that can advertise an absent rule is exactly the
             # defect this reconciliation exists to make impossible.
-            # THE FILE IS WHAT THIS MODE LICENSES (miner.md 2.11): the final gate judges the
-            # file's own spellings AND the entries the mode serves from them -- the
-            # post-pass (promotion) respells and re-sorts, so the per-length verdicts
-            # describe an earlier set -- with the loop's judge and memo, and drops what the
-            # mode does not license, counted. Then the preemption gate: a ground rule the
-            # mode's constructor already performs cannot fire; expected 0, since the mark
-            # contains the constructor.
+            # The final gate on what ships (see `_final_gate` above), then the preemption
+            # gate: a ground rule the mode's constructor already performs cannot fire;
+            # expected 0, since the mark contains the constructor.
+            _final_gate()
             final = self._mode_rules(rule_mode)
-            gate: dict = {'unlicensed': [], 'preempted': []}
-            if symbolic_gate and final and not interrupted():
-                final, gate['unlicensed'] = self._final_gate(rule_mode, judge, judged)
             _kept = []
             for lhs, rhs in final:
                 if _preempted_by(self.engine, lhs, rhs, file_mode):
                     gate['preempted'].append([list(lhs), list(rhs)])
                 else:
                     _kept.append((lhs, rhs))
-            final = _kept
-            if gate['unlicensed'] or gate['preempted']:
+            if gate['preempted']:
+                final = _kept
                 self._install(rule_mode, final)
                 _note_drops('final_gate', lambda _identity: 'unlicensed-or-preempted')
             if _watch:

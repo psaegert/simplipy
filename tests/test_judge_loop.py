@@ -440,6 +440,35 @@ def test_the_rounds_cap_is_per_source(acj, monkeypatch) -> None:
     assert stats['stubborn'] == [[WITNESS, [FIRST, SECOND]]], stats
 
 
+def test_the_final_gate_judges_before_every_prune_and_what_ships(tmp_path, monkeypatch) -> None:
+    """S7: a prune leans only on licensed rules (a rule pruned as covered by one the final gate
+    then drops would be lost), and the final gate judges the set that ships."""
+    events = []
+    real_gate, real_prune = RuleMiner._final_gate, SimpliPyEngine.prune_covered_rules
+
+    def gate(self, rule_mode, judge, judged):
+        events.append(('gate', rule_mode, len(self._mode_rules(rule_mode))))
+        return real_gate(self, rule_mode, judge, judged)
+
+    def prune(self, verbose=False, *, rule_mode):
+        events.append(('prune', rule_mode, None))
+        return real_prune(self, verbose, rule_mode=rule_mode)
+
+    monkeypatch.setattr(RuleMiner, '_final_gate', gate)
+    monkeypatch.setattr(SimpliPyEngine, 'prune_covered_rules', prune)
+    # (`sin`: the prune probes a wide slot with `sin(x_i)`, so its vocabulary needs one)
+    ops = dict({k: v for k, v in _OPERATORS.items() if k != 'pow2'},
+               sin={"realization": "np.sin", "alias": [], "arity": 1, "precedence": 3,
+                    "commutative": False})
+    engine = SimpliPyEngine(operators=ops, rules=[])
+    engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4, dummy_variables=1,
+                      X=np.random.default_rng(1).normal(size=(128, 1)), seed=7, prune='covered',
+                      judge=lambda pairs: ['core'] * len(pairs))
+    f64 = [kind for kind, mode, _ in events if mode == 'default']
+    assert f64 == ['gate', 'prune', 'gate', 'prune', 'gate'], events
+    assert events[[e[1] for e in events].index('real') - 1][0] == 'gate'
+
+
 def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path, monkeypatch) -> None:
     import simplipy.mining
     monkeypatch.setattr(simplipy.mining, '_JUDGE_ROUNDS_MAX', 1)
