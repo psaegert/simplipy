@@ -716,9 +716,49 @@ pub fn infix_to_prefix(
     ops: &Operators,
     strict: bool,
 ) -> Result<Vec<String>, String> {
-    let tokens = tokenize_infix(infix_expression);
+    read_infix_tokens(infix_expression, ops, strict, false)
+}
+
+/// The legacy CALL spellings of the identity and the reciprocal: `pow1(a)` is `a` and
+/// `pow_1(a)` is `inv(a)`. They are rewritten where they are called -- a name followed by `(` --
+/// so a bare `pow_1` stays the symbol it spells, as every name does (`x0*pow_1` is the product
+/// of two symbols, as `x0*pow_2` is; a token-wise rename read it as `* x0 inv`, an operator
+/// with no operand). A dropped `pow1` hands its spacing to its `(`.
+fn rewrite_legacy_calls(tokens: Vec<Token>) -> Vec<Token> {
+    let mut out: Vec<Token> = Vec::with_capacity(tokens.len());
+    let mut it = tokens.into_iter().peekable();
+    while let Some(mut t) = it.next() {
+        let called = it.peek().is_some_and(|n| n.text == "(");
+        match t.text.as_str() {
+            "pow1" if called => {
+                if let Some(paren) = it.peek_mut() {
+                    paren.touching = t.touching;
+                    paren.spaced = t.spaced;
+                }
+                continue;
+            }
+            "pow_1" if called => t.text = "inv".to_string(),
+            _ => {}
+        }
+        out.push(t);
+    }
+    out
+}
+
+/// [`infix_to_prefix`]'s reader; `legacy_calls` reads the legacy call spellings
+/// ([`rewrite_legacy_calls`]), after the strict refusal of undeclared calls.
+fn read_infix_tokens(
+    infix_expression: &str,
+    ops: &Operators,
+    strict: bool,
+    legacy_calls: bool,
+) -> Result<Vec<String>, String> {
+    let mut tokens = tokenize_infix(infix_expression);
     if strict {
         refuse_undeclared_calls(&tokens, infix_expression, ops)?;
+    }
+    if legacy_calls {
+        tokens = rewrite_legacy_calls(tokens);
     }
     let (mut tokens, mut apps): (Vec<String>, Vec<bool>) =
         insert_implicit_products(tokens, ops)?.into_iter().unzip();
@@ -1317,8 +1357,8 @@ fn build_chain(ops_list: &[String], current_operand: Ir) -> Ir {
 
 // ---- parse --------------------------------------------------------------------------------------
 
-/// `parse`: `infix_to_prefix` -> (if `convert`) `convert_expression`
-/// -> (if `mask_numbers`) `numbers_to_constant` -> ALWAYS `remove_pow1`. The high-level entry that
+/// `parse`: `infix_to_prefix` reading the legacy call spellings ([`rewrite_legacy_calls`]) -> (if
+/// `convert`) `convert_expression` -> (if `mask_numbers`) `numbers_to_constant`. The high-level entry that
 /// closes `simplify(str)` and the flash-ansr canonicalization path. `Err` propagates a
 /// `convert_expression` raise. `strict` refuses a call of an undeclared name (the reading of
 /// every entry that knows only declared operators); without it the call is kept as written.
@@ -1329,7 +1369,7 @@ pub fn parse(
     mask_numbers: bool,
     strict: bool,
 ) -> Result<Vec<String>, String> {
-    let parsed = infix_to_prefix(infix_expression, ops, strict)?;
+    let parsed = read_infix_tokens(infix_expression, ops, strict, true)?;
     // H-043/D4: the tokenize + shunting stages above are iterative, but
     // `convert_expression` below recurses (its IR flatten) -- cap the TOKENIZED length
     // exactly like the token-list boundary caps its input, or a deep infix string
@@ -1362,12 +1402,11 @@ pub fn parse(
     } else {
         parsed
     };
-    let parsed = if mask_numbers {
+    Ok(if mask_numbers {
         crate::utils::numbers_to_constant(&parsed)
     } else {
         parsed
-    };
-    Ok(crate::utils::remove_pow1(&parsed))
+    })
 }
 
 #[cfg(test)]
@@ -1816,7 +1855,17 @@ mod tests {
             p("3.14 * x1 + 2", true, true),
             v(&["+", "*", "<constant>", "x1", "<constant>"])
         );
-        // convert=False -> raw infix_to_prefix + remove_pow1 (no ** conversion).
+        // convert=False -> raw infix_to_prefix (no ** conversion).
         assert_eq!(p("x1 + x2", false, false), v(&["+", "x1", "x2"]));
+        // The legacy call spellings are read where they are called; a bare name is a symbol.
+        for c in [true, false] {
+            assert_eq!(p("pow_1(x0)", c, false), v(&["inv", "x0"]));
+            assert_eq!(p("x1*pow1(x0)", c, false), v(&["*", "x1", "x0"]));
+            assert_eq!(p("x0*pow_1", c, false), v(&["*", "x0", "pow_1"]));
+            assert_eq!(
+                p("pow_1 + pow_1(x1)", c, false),
+                v(&["+", "pow_1", "inv", "x1"])
+            );
+        }
     }
 }

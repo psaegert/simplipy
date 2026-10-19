@@ -346,7 +346,7 @@ impl Engine {
     }
 
     /// `parse`: infix string -> standardized prefix expression
-    /// (infix_to_prefix -> convert_expression -> numbers_to_constant -> remove_pow1).
+    /// (infix_to_prefix with the legacy call spellings -> convert_expression -> numbers_to_constant).
     /// `strict` refuses a call of a name no operator declares.
     pub fn parse(
         &self,

@@ -68,6 +68,16 @@ class TestTheContractTheNameStates:
         # the tolerant reader keeps the call as written
         assert engine._core.parse('sqrt(x1)', strict=False) == ['sqrt', 'x1']
 
+    def test_legacy_spellings_are_read_where_they_are_called(
+            self, engine: SimpliPyEngine) -> None:
+        """`pow_1(a)` and `pow1(a)` are the legacy reciprocal and identity; a bare `pow_1` is a
+        symbol, as `pow_2` is (review F7: it read as `* x0 inv`, an operator with no operand)."""
+        assert engine.read_infix('pow_1(x0)') == ['inv', 'x0']
+        assert engine.read_infix('x1*pow1(x0)') == ['*', 'x1', 'x0']
+        assert engine.read_infix('x0*pow_1') == ['*', 'x0', 'pow_1']
+        assert engine.read_infix('x0*pow_2') == ['*', 'x0', 'pow_2']
+        assert engine.simplify('x0*pow_1') == engine.simplify('x0*pow_2').replace('pow_2', 'pow_1')
+
     def test_preserves_spelling_does_not_canonicalise(
             self, engine: SimpliPyEngine) -> None:
         """The contrast the docstring is required to state, verbatim.
