@@ -76,9 +76,13 @@ def sweep(rules, report_path=None, build_path=None, judge_timeout_s=JUDGE_TIMEOU
     # it without restore leaks our handler past this call (audit Tier-2, 2026-08-03).
     # MAIN THREAD ONLY: `signal.signal` raises anywhere else, which made every
     # off-main-thread mine crash in its finalize gate (hardening H-010, 2026-08-03).
-    # Off the main thread the sweep runs with timeouts DISARMED (judge_timeout_s=0
-    # makes every per-rule `signal.alarm(0)` a harmless cancel; arming a real alarm
-    # off-main would deliver SIGALRM to an unhandled main thread and kill the process).
+    # Off the main thread the sweep runs with timeouts DISARMED, as with no timeout asked:
+    # arming a real alarm off-main would deliver SIGALRM to an unhandled main thread and
+    # kill the process. WITH NO TIMEOUT (`judge_timeout_s=0`, as a mine judges) the sweep
+    # touches no alarm at all: it neither arms one nor replaces the handler nor cancels an
+    # alarm the process has pending.
+    if not judge_timeout_s:
+        return _sweep_inner(rules, report_path, build_path, 0, announce_report)
     import threading
     on_main = threading.current_thread() is threading.main_thread()
     if not on_main:
@@ -100,7 +104,8 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
                'UNRESOLVED-COVERAGE': [], 'UNSUPPORTED-SHAPE': [], 'JUDGE-TIMEOUT': []}
     detail = []
     for idx, (lhs, rhs) in enumerate(rules):
-        signal.alarm(judge_timeout_s)
+        if judge_timeout_s:
+            signal.alarm(judge_timeout_s)
         try:
             r = judge_rule(list(lhs), list(rhs))
         except _JudgeTimeout:
@@ -108,7 +113,8 @@ def _sweep_inner(rules, report_path, build_path, judge_timeout_s, announce_repor
         except Exception as ex:
             r = {'verdict': 'NO-WITNESS', 'detail': f'judge error {type(ex).__name__}: {ex}'}
         finally:
-            signal.alarm(0)
+            if judge_timeout_s:
+                signal.alarm(0)
         r['idx'] = idx
         r['lhs'] = ' '.join(lhs)
         r['rhs'] = ' '.join(rhs)

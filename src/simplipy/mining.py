@@ -235,70 +235,76 @@ class _JudgmentOverrun(BaseException):
     so the sweep's per-rule ``except Exception`` cannot file it as a verdict."""
 
 
+def _raise_in_thread(ident: int, exc: Any) -> None:
+    """Raise ``exc`` in the thread ``ident`` at its next bytecode (``None`` withdraws one not
+    yet raised): CPython's ``PyThreadState_SetAsyncExc``, which reaches any thread, the main
+    one included, without a signal handler."""
+    import ctypes
+    ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(ident), ctypes.py_object(exc) if exc is not None else ctypes.c_void_p())
+
+
 def _watched_judgments(pairs: list, warn_s: float = JUDGE_WARN_S,
                        fail_s: float = JUDGE_FAIL_S) -> list[dict]:
     """The contract judge's verdict record of each ``(lhs, rhs)`` pair, in order, judged one at
     a time with NO wall-clock timeout: a timeout would file a verdict the machine's load
     decided, and the mine memoises verdicts into its checkpoint. A WATCHDOG instead logs a
     judgment still running after ``warn_s`` seconds and fails the mine (``RuntimeError``,
-    naming the rule) when one runs past ``fail_s``: on the main thread the judgment is
-    interrupted there, elsewhere the mine fails as soon as it returns."""
-    import _thread
+    naming the rule) when one runs past ``fail_s``, by interrupting the judgment in the
+    thread that runs it, whichever thread that is."""
     import contextlib
     import io
     import logging
     from .verify import verify_ruleset
     log = logging.getLogger(__name__)
-    on_main = threading.current_thread() is threading.main_thread()
-
-    def _overrun(signum: int, frame: Any) -> None:
-        raise _JudgmentOverrun
-
-    previous = signal.signal(signal.SIGUSR1, _overrun) if on_main else None
+    judging = threading.get_ident()
     out: list[dict] = []
-    try:
-        for idx, (lhs, rhs) in enumerate(pairs):
-            rule = f"{' '.join(lhs)} -> {' '.join(rhs)}"
-            done = threading.Event()
-            fired = threading.Event()
+    for idx, (lhs, rhs) in enumerate(pairs):
+        rule = f"{' '.join(lhs)} -> {' '.join(rhs)}"
+        # `done` and `fired` change only under `lock`, so the watchdog interrupts a judgment
+        # that is still running and never the code after it.
+        lock = threading.Lock()
+        done = threading.Event()
+        fired = threading.Event()
 
-            def _watch(rule: str = rule, done: threading.Event = done,
-                       fired: threading.Event = fired) -> None:
-                if done.wait(warn_s):
-                    return
-                log.warning('simplipy mine: the judgment of %s is still running after %g s',
-                            rule, warn_s)
-                if done.wait(max(fail_s - warn_s, 0.0)):
-                    return
-                fired.set()
-                if on_main:
-                    _thread.interrupt_main(signal.SIGUSR1)
+        def _watch(rule: str = rule, lock: Any = lock, done: threading.Event = done,
+                   fired: threading.Event = fired) -> None:
+            if done.wait(warn_s):
+                return
+            log.warning('simplipy mine: the judgment of %s is still running after %g s',
+                        rule, warn_s)
+            if done.wait(max(fail_s - warn_s, 0.0)):
+                return
+            with lock:
+                if not done.is_set():
+                    fired.set()
+                    _raise_in_thread(judging, _JudgmentOverrun)
 
-            watchdog = threading.Thread(target=_watch, daemon=True)
-            started = time.monotonic()
+        watchdog = threading.Thread(target=_watch, daemon=True)
+        started = time.monotonic()
+        try:
+            watchdog.start()
             try:
-                watchdog.start()
-                try:
-                    # The sweep prints its CLI report; the mine's record is the sidecar.
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        report = verify_ruleset([[list(lhs), list(rhs)]], judge_timeout_s=0)
-                finally:
+                # The sweep prints its CLI report; the mine's record is the sidecar.
+                with contextlib.redirect_stdout(io.StringIO()):
+                    report = verify_ruleset([[list(lhs), list(rhs)]], judge_timeout_s=0)
+            finally:
+                with lock:
                     done.set()
-                    watchdog.join()
-                if fired.is_set():
-                    raise _JudgmentOverrun
-            except _JudgmentOverrun:
-                raise RuntimeError(
-                    f'the judgment of {rule} ran past {fail_s:g} s (judge_fail_s); the mine '
-                    f'fails rather than file a verdict the clock decided') from None
-            elapsed = time.monotonic() - started
-            if elapsed > warn_s:
-                log.warning('simplipy mine: the judgment of %s took %.1f s', rule, elapsed)
-            detail = dict(report['detail'][0], idx=idx)
-            out.append(detail)
-    finally:
-        if on_main:
-            signal.signal(signal.SIGUSR1, previous)
+                watchdog.join()
+            if fired.is_set():
+                # Withdraw the watchdog's exception if it is still pending (it may arrive
+                # right here instead, and the handler below takes either).
+                _raise_in_thread(judging, None)
+                raise _JudgmentOverrun
+        except _JudgmentOverrun:
+            raise RuntimeError(
+                f'the judgment of {rule} ran past {fail_s:g} s (judge_fail_s); the mine '
+                f'fails rather than file a verdict the clock decided') from None
+        elapsed = time.monotonic() - started
+        if elapsed > warn_s:
+            log.warning('simplipy mine: the judgment of %s took %.1f s', rule, elapsed)
+        out.append(dict(report['detail'][0], idx=idx))
     return out
 
 

@@ -705,8 +705,10 @@ model predictions.
 - **No judge timeout inside a mine.** The judge's 30 s wall-clock timeout filed a slow
   judgment as a rejection, so a mined file depended on machine load. A mine now judges with no
   timeout under a watchdog: a judgment past `judge_warn_s` (60 s) is logged, one past
-  `judge_fail_s` (600 s) fails the mine with the rule's name. Both are new `find_rules`
-  parameters, recorded in the sidecar.
+  `judge_fail_s` (600 s) is interrupted in the thread that runs it, whichever thread that is,
+  and fails the mine with the rule's name. Both are new `find_rules` parameters, recorded in
+  the sidecar. A judgment with no timeout leaves the process's own alarm and its handler
+  alone. Outside a mine, `verify_ruleset` keeps its 30 s timeout.
 - **Checkpoints resume only their own mine.** The key now also holds the operator table, the
   content of X and of the confirm matrix, the numeric environment (python, numpy, scipy,
   mpmath, libc, the libm fingerprint) and the `SIMPLIPY_*` switches. A resumed mine keeps its

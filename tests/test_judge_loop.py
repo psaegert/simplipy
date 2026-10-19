@@ -486,3 +486,62 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
     ckpt = json.load(open(out + '.checkpoint.json'))
     assert ckpt['completed_length'] == 3
     assert [['log', 'exp', 'log', '?0'], ['log', '?0'], 'real'] in ckpt['judged']
+
+
+def test_the_watchdog_fails_the_mine_from_any_thread(monkeypatch) -> None:
+    """A mine may run off the main thread, and a judgment that never returns must still fail
+    it at `fail_s`: the watchdog interrupts the judgment in its own thread, not only when it
+    returns."""
+    import threading
+    import time
+    import simplipy.verify
+    from simplipy.mining import judge_tiers
+    real_verify = simplipy.verify.verify_ruleset
+
+    def stuck_verify(rules, **kwargs):
+        if rules[0][0] == ['exp', 'log', '?0']:
+            for _ in range(1000):  # 10 s, far past `fail_s`
+                time.sleep(0.01)
+        return real_verify(rules, **kwargs)
+
+    monkeypatch.setattr(simplipy.verify, 'verify_ruleset', stuck_verify)
+    rule, stuck = (['log', 'exp', '?0'], ['?0']), (['exp', 'log', '?0'], ['?0'])
+    outcome: dict = {}
+
+    def mine() -> None:
+        started = time.monotonic()
+        try:
+            judge_tiers([rule, stuck], processes=1, warn_s=0.1, fail_s=0.3)
+        except RuntimeError as error:
+            outcome['error'] = str(error)
+        outcome['elapsed'] = time.monotonic() - started
+        # the thread carries no exception the watchdog left behind
+        outcome['after'] = judge_tiers([rule], processes=1, warn_s=0.1, fail_s=0.3)
+
+    worker = threading.Thread(target=mine)
+    worker.start()
+    worker.join(30)
+    assert not worker.is_alive()
+    assert 'exp log ?0 -> ?0 ran past 0.3 s' in outcome.get('error', ''), outcome
+    assert outcome['elapsed'] < 2.0, 'the watchdog waited for the judgment to return'
+    assert outcome['after'] == judge_tiers([rule], processes=1)
+
+
+def test_a_judgment_without_a_timeout_leaves_the_alarm_alone() -> None:
+    """The mine judges with no wall-clock alarm, and it neither arms one nor cancels or
+    replaces the process's own: a SIGALRM handler and a pending alarm survive a judgment."""
+    import signal
+    from simplipy.verify import verify_ruleset
+
+    def handler(signum, frame):
+        raise AssertionError('the test alarm fired')
+
+    previous = signal.signal(signal.SIGALRM, handler)
+    try:
+        signal.alarm(100)
+        verify_ruleset([[['log', 'exp', '?0'], ['?0']]], judge_timeout_s=0)
+        assert signal.getsignal(signal.SIGALRM) is handler
+        assert signal.alarm(0) > 0, 'the pending alarm was cancelled'
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
