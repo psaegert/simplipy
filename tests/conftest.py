@@ -17,6 +17,7 @@ input-language tests and the chain-combining caps -- go through here instead, so
 the refusal stays total on the public surface and no test downloads a legacy asset.
 """
 import os
+import tempfile
 
 import pytest
 
@@ -29,6 +30,23 @@ _FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 _ACJ_REPO_DIR = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines', 'acj-4')
 _ACJ_CACHE_DIR = os.path.join(os.path.expanduser('~'), '.cache', 'simplipy', 'engines', 'acj-4')
+
+
+@pytest.fixture(autouse=True, scope='session')
+def _temporary_files_stay_in_the_pytest_tree(tmp_path_factory):
+    """Every temporary file a test makes -- itself or through library code and spawned
+    workers (``tempfile``, ``TMPDIR``) -- lands in pytest's own tmp tree, never in the
+    system temp dir, and is cleaned up with it."""
+    scratch = str(tmp_path_factory.mktemp('tempfile'))
+    old_env, old_tempdir = os.environ.get('TMPDIR'), tempfile.tempdir
+    os.environ['TMPDIR'] = scratch
+    tempfile.tempdir = scratch
+    yield
+    tempfile.tempdir = old_tempdir
+    if old_env is None:
+        os.environ.pop('TMPDIR', None)
+    else:
+        os.environ['TMPDIR'] = old_env
 
 
 def acj_asset_dir() -> str:

@@ -109,11 +109,15 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     if mode is not None and mode not in MODE_TIERS:
         raise ValueError(
             f"unknown mode {mode!r}: expected one of {sorted(MODE_TIERS)}")
-    tmp = report_path or os.path.join(tempfile.mkdtemp(), 'gate_report.json')
-    code = _gate.sweep(_load(rules), report_path=tmp, build_path=build_path,
-                       judge_timeout_s=judge_timeout_s,
-                       announce_report=report_path is not None)
-    report = json.load(open(tmp))
+    # Without a `report_path` the sweep's report is read back from a scratch directory
+    # that is removed afterwards (it used to stay behind in the system temp dir).
+    with tempfile.TemporaryDirectory() as scratch:
+        tmp = report_path or os.path.join(scratch, 'gate_report.json')
+        code = _gate.sweep(_load(rules), report_path=tmp, build_path=build_path,
+                           judge_timeout_s=judge_timeout_s,
+                           announce_report=report_path is not None)
+        with open(tmp) as fh:
+            report = json.load(fh)
     # D36 carve-out (`effective_tier`, also the mine's judge): the multi-`<constant>`
     # family's soundness authority is the Const-channel chain, not the contract, so
     # the judge's non-jurisdiction sentinel (UNSUPPORTED-SHAPE + CONST_CHANNEL_DETAIL)

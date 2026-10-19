@@ -45,7 +45,6 @@ Importable API:
 import json
 import os
 import re
-import tempfile
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 
@@ -1570,15 +1569,11 @@ def build_engine(rules, config_path):
 
     `config_path` is the deployed engine config the monitor realizes against; the driver
     passes the path in. `rules` is a list of (lhs, rhs) token-sequence pairs (empty for the
-    rules-empty baseline engine)."""
+    rules-empty baseline engine), and it is the engine's whole rule set: no mode names a set
+    of its own. Built in memory from the config's operator table, so nothing is written to
+    disk."""
     base = yaml.safe_load(open(config_path))
-    d = tempfile.mkdtemp(prefix='monitor_')
-    with open(os.path.join(d, 'rules.json'), 'w') as fh:
-        json.dump([[list(l), list(r)] for l, r in rules], fh)
-    base['rules'] = 'rules.json'
-    with open(os.path.join(d, 'config.yaml'), 'w') as fh:
-        yaml.safe_dump(base, fh)
-    return SimpliPyEngine.from_config(os.path.join(d, 'config.yaml'))
+    return SimpliPyEngine(operators=base['operators'], rules=[(tuple(l), tuple(r)) for l, r in rules])
 
 
 def make_corpus(eng, n, rng, adversarial=None, leaves=None):
