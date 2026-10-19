@@ -148,7 +148,7 @@ def eng():
 
 
 def c(eng, tokens):
-    return eng._core.ac_complexity(list(tokens))
+    return eng._core.ac_complexity(list(tokens), rule_mode='default')
 
 
 class TestMuValues:

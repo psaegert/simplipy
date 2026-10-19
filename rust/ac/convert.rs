@@ -20,8 +20,6 @@
 //! fraction or decimal token. String-level round-trip
 //! `to_prefix . from_prefix . to_prefix == to_prefix` holds by construction.
 
-use std::sync::OnceLock;
-
 use crate::tokens::{Tok, TokenView};
 
 use super::expr::{add, canon, fun, mul, mul_undecided, pow, raised_members, Cx, Ex, FlipScope};
@@ -1301,15 +1299,9 @@ fn num_token(r: &Rat) -> String {
 }
 
 /// Largest |numerator| and denominator of a DECIMAL the TAGGED form spells structurally
-/// (`0.2` is `<mul> 1 <div> 5 </mul>`); a decimal beyond it stays one token. Overridable.
+/// (`0.2` is `<mul> 1 <div> 5 </mul>`); a decimal beyond it stays one token.
 fn tagged_fraction_bound() -> i128 {
-    static BOUND: OnceLock<i128> = OnceLock::new();
-    *BOUND.get_or_init(|| {
-        std::env::var(crate::env_switches::TAGGED_FRACTION_MAX)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(10)
-    })
+    10
 }
 
 /// Does `r` spell structurally in the tagged form? Every non-integer whose one token would be a

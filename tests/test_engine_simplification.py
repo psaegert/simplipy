@@ -478,7 +478,7 @@ class TestFindRules:
         compiled core, so mining (and everything else) is always available."""
         engine = SimpliPyEngine(operators=_FIND_RULES_OPERATORS)
         assert engine._core is not None
-        assert engine._core.ac_simplify_in_mode(['+', 'x0', 'x0'], 48, 'default', 'explicit') == \
+        assert engine._core.ac_simplify_in_mode(['+', 'x0', 'x0'], 48, 'explicit', rule_mode='default') == \
             ['*', '2', 'x0']
 
     def test_default_mine_ships_promoted_seeds(self, tmp_path) -> None:
@@ -1131,8 +1131,8 @@ class TestConc12CopyOnWrite:
         engine.compile_rules()
         assert engine._core is not old_core, 'compile_rules must swap, not mutate in place'
         # a reader that captured the old core keeps a consistent (old) view
-        assert old_core.ac_rules_info()[0] == 0
-        assert engine._core.ac_rules_info()[0] == 1
+        assert old_core.ac_rules_info_in_mode(rule_mode='default')[0] == 0
+        assert engine._core.ac_rules_info_in_mode(rule_mode='default')[0] == 1
 
     def test_failed_mutator_push_leaves_rules_unchanged(self, monkeypatch) -> None:
         engine = SimpliPyEngine(

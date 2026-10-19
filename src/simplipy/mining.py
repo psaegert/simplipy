@@ -242,6 +242,69 @@ def _mode_tiers(rule_mode: str) -> frozenset:
     return MODE_TIERS[_file_mode(rule_mode)]
 
 
+def _twin_shadow_owners(census: list) -> set[int]:
+    """The rows TWIN-SHADOW REMOVAL drops, read off a shadow census: the owner of each
+    ``(victim, owner, False, 'twin-shadow')`` entry whose victim stays -- the victim's own
+    orientation twin carries the owner's canonical rewrite, so with the owner gone it mints
+    in its place and the served set is unchanged. Lowest rows first, so of a mutual pair
+    the earlier row stays."""
+    gone: set[int] = set()
+    for victim, owner, owner_was_twin, kind in sorted(census):
+        if kind == 'twin-shadow' and not owner_was_twin and victim != owner and victim not in gone:
+            gone.add(owner)
+    return gone
+
+
+#: `SIMPLIPY_*` variables that change no artifact: the diagnostics (`*_TRACE`), the
+#: test-asset switch, the build stamp, the progress cadence and the trusted-module list.
+_INERT_ENV = ('SIMPLIPY_TEST_REQUIRE_ASSETS', 'SIMPLIPY_BUILD', 'SIMPLIPY_MINE_PROGRESS_INTERVAL',
+              'SIMPLIPY_TRUSTED_MODULES')
+
+
+def env_overrides(environ: Any = None) -> dict[str, str]:
+    """Every ``SIMPLIPY_*`` variable set in ``environ`` (default: this process) that is not
+    inert: the declared switches (:data:`ARTIFACT_ENV_SWITCHES`, empty since 0.15) and any
+    other, so a switch a later build reads, or a stale one, is recorded rather than assumed
+    harmless. A mine records it in its sidecar; ``simplipy verify-mine`` requires it empty."""
+    environ = os.environ if environ is None else environ
+    return {key: value for key, value in sorted(environ.items())
+            if key.startswith('SIMPLIPY_') and not key.endswith('_TRACE')
+            and key not in _INERT_ENV}
+
+
+def code_digest() -> dict[str, str]:
+    """The code a mine runs: the sha256 of the compiled core and of the package's Python
+    sources. A checkpoint resumes only under the digest it was written with."""
+    import simplipy
+    from simplipy import _core
+    root = os.path.dirname(os.path.abspath(simplipy.__file__))
+    python = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(filenames):
+            if name.endswith('.py'):
+                path = os.path.join(dirpath, name)
+                python.update(os.path.relpath(path, root).encode())
+                with open(path, 'rb') as file:
+                    python.update(file.read())
+    with open(_core.__file__, 'rb') as file:
+        core = hashlib.sha256(file.read()).hexdigest()
+    return {'core': core, 'python': python.hexdigest()}
+
+
+def _near_miss_frac() -> float:
+    """The high-precision re-judgement's near-miss gate, as the core declares it."""
+    from simplipy import _core
+    return float(_core.NEAR_MISS_FRAC)
+
+
+def _judge_digest() -> str:
+    """The sha256 of the contract judge's source (`verify/_contract.py`)."""
+    from .verify import _contract
+    with open(_contract.__file__, 'rb') as file:
+        return hashlib.sha256(file.read()).hexdigest()
+
+
 #: Slot sigils. A pattern carrying one matches many instances, and the constructor may
 #: reach the endpoint on the PATTERN while refusing it on some of them.
 _SLOT_SIGILS = ('_', '?', '!', '$', '<')
@@ -380,7 +443,7 @@ class RuleMiner:
         release verification reads; the served entries are what fires.
         -> (kept rules, [[lhs, rhs, tier] per dropped row])."""
         final = self._mode_rules(rule_mode)
-        served = self.engine._core.ac_served_rules_in_mode(rule_mode)
+        served = self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode)
         todo = list(dict.fromkeys(final + [(tuple(lhs), tuple(rhs)) for lhs, rhs, _ in served]))
         new = [pair for pair in todo if pair not in judged]
         for pair, tier in zip(new, judge(new) if new else []):
@@ -406,12 +469,7 @@ class RuleMiner:
         while True:
             self.engine._core.set_mode_rules(rule_mode, [(list(lhs), list(rhs))
                                                          for lhs, rhs in rules])
-            gone: set = set()
-            for victim, owner, owner_was_twin, kind in sorted(
-                    self.engine._core.ac_shadow_census(rule_mode=rule_mode)):
-                if kind == 'twin-shadow' and not owner_was_twin and victim != owner \
-                        and victim not in gone:
-                    gone.add(owner)
+            gone = _twin_shadow_owners(self.engine._core.ac_shadow_census(rule_mode=rule_mode))
             if not gone:
                 return rules, dropped
             dropped += [rules[i] for i in sorted(gone)]
@@ -511,7 +569,8 @@ class RuleMiner:
     def _certify_one(self, source: tuple[str, ...], hint: Any, library: Any, vocabulary: set,
                      max_target_pattern_length: int | None, fit: dict[str, Any], seed: int,
                      confirm: dict[str, Any],
-                     rule_mode: str) -> tuple[list[str] | None, str | None, str | None]:
+                     rule_mode: str,
+                     excluded: Any = ()) -> tuple[list[str] | None, str | None, str | None]:
         """THE certification chain for one proposed source, shared by :meth:`certify_rules`
         and the proposal channel of :meth:`find_rules`.
 
@@ -525,11 +584,15 @@ class RuleMiner:
         NO TOKEN-LENGTH BAR on a hint (owner ruling 2026-08-18: "Only 'remove' the length
         gate for the LLM proposed rules"): descent is decided by the serve ordering, the
         predicate G7 and the serve-time `oriented` check apply.
+
+        ``excluded``: the targets the judge loop refused for this source; both arms skip
+        their class (a hint of an excluded class is refused as ``'excluded'``).
         """
+        exclusions = [list(t) for t in excluded]
         core = self.engine._core
         assert core is not None
         target = core.find_rule_lib(list(source), library, max_target_pattern_length, seed=seed,
-                                    rule_mode=rule_mode, **fit, **confirm)
+                                    rule_mode=rule_mode, exclusions=exclusions, **fit, **confirm)
         if target is not None:
             return list(target), 'minimal', None
         if hint is None:
@@ -538,7 +601,7 @@ class RuleMiner:
         if not _tokens_in_vocabulary(hint, vocabulary) or not self.engine.is_valid(hint):
             return None, None, 'vocabulary'
         ok, why = core.judge_hint(list(source), hint, library, seed=seed,
-                                  rule_mode=rule_mode, **fit, **confirm)
+                                  rule_mode=rule_mode, exclusions=exclusions, **fit, **confirm)
         return (hint, 'verified', None) if ok else (None, None, why)
 
     def _mine_tier_with_progress(self, length: int, n_sources: int, mine_call: Callable, verbose: bool) -> Any:
@@ -740,14 +803,16 @@ class RuleMiner:
             # An explicitly-given EMPTY batch still runs (and records all-zero outcome
             # counts): the sidecar must show the channel ran, not silently omit it.
             if proposal_entries is not None and not interrupted():
-                outcomes, trail = self._certify_proposals(
+                outcomes, trail, judge_loop = self._certify_proposals(
                     proposal_entries, library,
                     leaf_nodes if leaf_nodes is not None else list(dummy_variables),
                     dummy_variables, X_data, X_confirm, max_target_pattern_length,
                     constants_fit_challenges, constants_fit_retries, rtol, atol,
-                    min_informative, mine_seed, confirm_seed, verbose, rule_mode)
+                    min_informative, mine_seed, confirm_seed, verbose, rule_mode,
+                    judge, judged)
                 if prov is not None and 'proposals' in prov:
                     prov['proposals']['outcomes'] = outcomes
+                    prov['proposals']['judge_loop'] = judge_loop
                     # The per-candidate verdict trail travels WITH the artifact: an aggregate
                     # tally cannot be audited (it never says which candidate died at which gate).
                     prov['proposals']['trail'] = trail
@@ -783,7 +848,7 @@ class RuleMiner:
                 # later engine mints a different closure, which is exactly what an artifact
                 # cannot promise. Judging the served set also judges the DEPLOYED spelling
                 # (the canonical projection) rather than the mine's.
-                _served = self.engine._core.ac_served_rules_in_mode(rule_mode)
+                _served = self.engine._core.ac_served_rules_in_mode(rule_mode=rule_mode)
                 _rep = verify_ruleset([[list(lhs), list(rhs)] for lhs, rhs, _ in _served])
                 _detail = _rep['detail'] if isinstance(_rep, dict) else _rep
                 # EVERY fatal bucket drops, not only KILL (audit B7): a rule the judge
@@ -960,6 +1025,18 @@ class RuleMiner:
                     json.dump([[list(lhs), list(rhs)] for lhs, rhs in final], file, indent=4)
                 if prov is not None:
                     prov['mode'] = file_mode
+                    # How this file's mine accepted a pick: its tolerances, whether a near
+                    # miss is re-judged at high precision (every mode but f64) and the gate
+                    # that admits it, the judged tiers the file may hold, and the judge.
+                    _rescue = rule_mode != 'default'
+                    prov['acceptance'] = {
+                        'rtol': (prov.get('params') or {}).get('rtol'),
+                        'atol': (prov.get('params') or {}).get('atol'),
+                        'rescue': _rescue,
+                        'near_miss_frac': _near_miss_frac() if _rescue else None,
+                        'tiers': sorted(_mode_tiers(rule_mode)),
+                        'judge_digest': _judge_digest(),
+                    }
                     prov['gates'] = {'unlicensed': gate['unlicensed'],
                                      'preempted': gate['preempted'],
                                      'file': os.path.basename(_path)}
@@ -982,19 +1059,16 @@ class RuleMiner:
 
         snapshot_at = dict(snapshot_at or {})
 
-        # SOUNDNESS PROVENANCE, first half: the node-budget override, if any, and every
-        # set artifact-affecting switch. Recorded up front so interrupted mines carry it.
+        # SOUNDNESS PROVENANCE, first half: every set switch (`env_overrides`; the node
+        # budget is a parameter). Recorded up front so interrupted mines carry it.
         _ivl_baseline = (self.engine._core.interval_horizon_misses(),
                          self.engine._core.interval_node_budget_misses(),
                          self.engine._core.interval_unanalyzable_misses())
         if provenance is not None:
             provenance['soundness'] = {
-                'node_budget_env': os.environ.get('SIMPLIPY_IVL_NODE_BUDGET'),
-                # EVERY set entry of the artifact-affecting switch registry, raw (H-042):
-                # a default run records {}, any override is visible verbatim.
-                'env_overrides': {
-                    var: os.environ[var]
-                    for var in ARTIFACT_ENV_SWITCHES if var in os.environ},
+                # EVERY set non-inert SIMPLIPY_* variable, raw (H-042): a default run
+                # records {}, any override is visible verbatim.
+                'env_overrides': env_overrides(),
                 'interval_undecided': None,  # filled at finalize (deltas over this mine)
                 'ac_classes': None,  # filled per length as the climb proceeds
             }
@@ -1013,6 +1087,7 @@ class RuleMiner:
         judged: dict = {}
         checkpoint_fp = hashlib.sha256(json.dumps(
             {'params': (provenance or {}).get('params'), 'rule_mode': rule_mode,
+             'code': code_digest(),
              'universe': {str(k): len(v) for k, v in sorted(expressions_of_length.items())},
              'initial': [[list(lhs), list(rhs)] for lhs, rhs in rules],
              'other_sets': [getattr(self.engine, _RULES_ATTR[m]) for m, _ in _MINE_MODES
@@ -1022,7 +1097,15 @@ class RuleMiner:
         if out_file is not None and os.path.exists(out_file + '.checkpoint.json'):
             with open(out_file + '.checkpoint.json') as file:
                 ckpt = json.load(file)
-            if ckpt.get('fingerprint') == checkpoint_fp:
+            if ckpt.get('fingerprint') != checkpoint_fp:
+                # A checkpoint of ANOTHER mine -- other parameters, mode, universe, starting
+                # sets, or code (the compiled core or the package's sources) -- is never
+                # resumed and never silently overwritten.
+                raise RuntimeError(
+                    f"'{out_file}.checkpoint.json' was written by a different mine (its "
+                    f"parameters, mode, universe, starting rules or code differ); remove it "
+                    f"to mine from the start")
+            else:
                 resumed_at = ckpt['completed_length']
                 rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in ckpt['rules']]
                 per_length = {int(k): v for k, v in ckpt['per_length'].items()}
@@ -1259,7 +1342,8 @@ class RuleMiner:
             confirm: bool,
             relaxed_kruskal: bool,
             prune: bool | str,
-            reset_rules: bool) -> dict:
+            reset_rules: bool,
+            interval_node_budget: int | None) -> dict:
         """Assemble the mined artifact's PROVENANCE record: the mine must
         be reproducible from its sidecar alone. Everything that determines the mine is
         recorded: parameters, seeds, the X specification (seed-derived, or content-hashed
@@ -1316,6 +1400,8 @@ class RuleMiner:
             # config carries this value as its `requires_simplipy` key.
             'requires_simplipy': requires_simplipy_specifier(_simplipy_version),
             'core_build': _core_build,
+            # The code that minted the file: the compiled core's and the package's digests.
+            'code_digest': code_digest(),
             'environment': environment,
             'measure': self.engine._measure_fingerprint(),
             'params': {
@@ -1330,6 +1416,7 @@ class RuleMiner:
                 'confirm': confirm,
                 'relaxed_kruskal': relaxed_kruskal,
                 'prune': prune, 'reset_rules': reset_rules,
+                'interval_node_budget': interval_node_budget,
             },
             'X': x_spec,
             'universe': {
@@ -1542,7 +1629,9 @@ class RuleMiner:
             mine_seed: int,
             confirm_seed: int,
             verbose: bool,
-            rule_mode: str = 'default') -> tuple[dict[str, int], list[dict[str, Any]]]:
+            rule_mode: str,
+            judge: Callable,
+            judged: dict) -> tuple[dict[str, int], list[dict[str, Any]], dict[str, Any]]:
         """The proposal channel of :meth:`find_rules`: certify externally proposed rules
         against the just-mined rule state and merge the survivors.
 
@@ -1566,7 +1655,14 @@ class RuleMiner:
         The certified pairs then join the ruleset through the same
         :func:`~simplipy.utils.deduplicate_rules` path as mined rules (shortest target
         per canonical source). Mutates the engine in place (rules, compiled state, core
-        rules) and returns ``(counts, trail)``.
+        rules) and returns ``(counts, trail, judge_loop)``.
+
+        THE JUDGE LOOP, AS ONE EXTRA LENGTH (miner.md 2.11): the certified targets go to the
+        mine's judge exactly as a length's picks do; a target the mode does not license is
+        excluded and its proposal certified again without it, so the hint or a scan
+        alternative of another class can still certify. A proposal left without a licensed
+        target reads ``rejected`` at stage ``judge``. ``judge_loop`` records the rounds and
+        the exclusions.
 
         ``counts`` is the per-outcome tally for the provenance sidecar: ``certified`` /
         ``already_covered`` / ``rejected`` / ``duplicate`` (certified, but canonically
@@ -1615,10 +1711,9 @@ class RuleMiner:
                           'verdict': verdict, 'stage': stage, 'certificate': certificate})
             return len(trail) - 1
 
-        for source, hint in proposal_entries:
+        pending: dict[int, dict[str, Any]] = {}
+        for index, (source, hint) in enumerate(proposal_entries):
             if not _tokens_in_vocabulary(source, vocabulary) or not self.engine.is_valid(list(source)):
-                counts['rejected'] += 1
-                record(source, None, 'rejected', 'vocabulary')
                 continue
             # The engine's own result is the MARK TO BEAT, never a reason to skip
             # (finding F2): the serve-time ordering acceptance rides the candidate
@@ -1637,14 +1732,45 @@ class RuleMiner:
             # randomises str hashing per process).
             offset = int.from_bytes(
                 hashlib.blake2b(' '.join(source).encode(), digest_size=7).digest(), 'little')
-            target, certificate, refusal = self._certify_one(
-                source, hint, library, vocabulary, max_target_pattern_length, fit,
-                mine_seed + offset, confirm, rule_mode)
+            pending[index] = {'reduces': engine_reduces, 'seed': mine_seed + offset,
+                              'result': self._certify_one(
+                                  source, hint, library, vocabulary, max_target_pattern_length,
+                                  fit, mine_seed + offset, confirm, rule_mode)}
+
+        excluded: dict[int, list] = {}
+        rounds = 0
+        while True:
+            rounds += 1
+            picks = {i: (list(proposal_entries[i][0]), list(p['result'][0]))
+                     for i, p in pending.items() if p['result'][0] is not None}
+            bad = self._unlicensed(picks, rule_mode, judge, judged, dummy_variables) if picks else set()
+            if not bad:
+                break
+            if rounds >= _JUDGE_ROUNDS_MAX:
+                raise RuntimeError(
+                    f'the proposals\' judge loop did not converge in {_JUDGE_ROUNDS_MAX} rounds '
+                    f'({len(bad)} targets still unlicensed in mode {rule_mode})')
+            for i in sorted(bad):
+                excluded.setdefault(i, []).append(list(pending[i]['result'][0]))
+                source, hint = proposal_entries[i]
+                pending[i]['result'] = self._certify_one(
+                    source, hint, library, vocabulary, max_target_pattern_length, fit,
+                    pending[i]['seed'], confirm, rule_mode, excluded=excluded[i])
+
+        for index, (source, hint) in enumerate(proposal_entries):
+            if index not in pending:
+                counts['rejected'] += 1
+                record(source, None, 'rejected', 'vocabulary')
+                continue
+            target, certificate, refusal = pending[index]['result']
             if target is None:
-                if refusal == 'unconfirmed':
+                if index in excluded:
+                    counts['rejected'] += 1
+                    record(source, None, 'rejected', 'judge')
+                elif refusal == 'unconfirmed':
                     counts['rejected'] += 1
                     record(source, hint, 'rejected', 'confirm')
-                elif engine_reduces:
+                elif pending[index]['reduces']:
                     counts['already_covered'] += 1
                     record(source, None, 'already_covered', 'covered')
                 else:
@@ -1655,6 +1781,9 @@ class RuleMiner:
             certified_pairs.append((tuple(source), tuple(target)))
             if verbose:
                 print(f'Proposal certified ({certificate}): {list(source)} -> {list(target)}')
+        judge_loop = {'judge_rounds': rounds,
+                      'excluded': [[list(proposal_entries[i][0]), target]
+                                   for i, targets in sorted(excluded.items()) for target in targets]}
 
         # Per-proposal accounting that mirrors the deduplicate_rules fold EXACTLY (keep
         # first canonical source unless a target strictly below it in the mode's ordering
@@ -1687,7 +1816,7 @@ class RuleMiner:
             print(f"Proposals: {len(proposal_entries)} processed -> "
                   f"{counts['certified']} certified, {counts['already_covered']} already covered, "
                   f"{counts['rejected']} rejected, {counts['duplicate']} duplicate")
-        return counts, trail
+        return counts, trail, judge_loop
 
     def find_rules(
             self,
@@ -1714,7 +1843,8 @@ class RuleMiner:
             symbolic_gate: bool = True,
             snapshot_at: dict[int, str] | None = None,
             judge: Callable | None = None,
-            judge_processes: int = 4) -> None:
+            judge_processes: int = 4,
+            interval_node_budget: int | None = None) -> None:
         """Systematically discovers new simplification rules.
 
         This powerful method automates the discovery of simplification rules.
@@ -1847,6 +1977,11 @@ class RuleMiner:
             :func:`judge_tiers` (the contract judge) with ``judge_processes`` workers.
         judge_processes : int, optional
             Worker processes of the default judge. Verdicts do not depend on it.
+        interval_node_budget : int or None, optional
+            The interval layer's subdivision node budget for this mine (``None``: the
+            default, 400,000). An exhausted search is undecided and refuses its candidate;
+            raise it when the sidecar's ``interval_undecided`` counters flag systematic
+            exhaustion. Set for the mine only, and recorded in the sidecar's parameters.
 
         Notes
         -----
@@ -1962,7 +2097,8 @@ class RuleMiner:
             rtol=rtol, atol=atol, min_informative=min_informative,
             seed=seed, mine_seed=mine_seed, confirm_seed=confirm_seed,
             confirm=confirm,
-            relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules)
+            relaxed_kruskal=relaxed_kruskal, prune=prune, reset_rules=reset_rules,
+            interval_node_budget=interval_node_budget)
         if proposal_record is not None:
             # The sidecar pins the proposal batch (file + sha256 + count); the per-outcome
             # counts are filled in by the proposal pass itself (_find_rules_native).
@@ -1992,6 +2128,8 @@ class RuleMiner:
         if threading.current_thread() is threading.main_thread():
             old_handler = signal.signal(signal.SIGINT, signal_handler)
             handler_installed = True
+        from simplipy import _core as _core_module
+        previous_budget = _core_module.set_interval_node_budget(interval_node_budget)
         try:
             initial_rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in self.engine.simplification_rules]
             if reset_rules:
@@ -2042,9 +2180,82 @@ class RuleMiner:
                 self.engine.permissive_simplification_rules = finals.get('permissive')
                 self.engine._replace_rules(finals['default'])
         finally:
+            _core_module.set_interval_node_budget(previous_budget)
             if handler_installed:
                 signal.signal(signal.SIGINT, old_handler)
             _MINE_LOCK.release()
+
+
+#: The file modes `verify_mine` takes, with the rule mode each is read in.
+_FILE_TO_RULE_MODE = {file_mode: rule_mode for rule_mode, file_mode in _MINE_MODES}
+
+
+def verify_mine(rules_path: str, mode: str, operators: dict, *,
+                judge: Callable | None = None, judge_processes: int = 4) -> dict:
+    """THE RE-MINE GATES of one mined file, in its own mode (miner.md 3).
+
+    ``rules_path`` is a rule file a mine wrote, read beside its provenance sidecar;
+    ``mode`` the mode it serves (``'f64'``, ``'real'`` or ``'permissive'``); ``operators``
+    the engine's operator table. Each gate holds or names what breaks it:
+
+    - ``twin_shadow``: no row the mode's load would mint anyway (a twin-shadow owner);
+    - ``engine_owned_law``: no rule that is an instance of a law the engine owns
+      (``law_instance``: the distributive law, the sign orbit);
+    - ``unlicensed``: every file spelling and every entry the mode serves from it carries
+      a judged tier the mode licenses (the mine's final gate, with ``judge``);
+    - ``preempted``: no ground rule the mode's constructor already performs;
+    - ``translation``: the mode's load subsumes and drops nothing;
+    - ``fingerprint``: the sidecar's measure record prices every probe as this engine does;
+    - ``env_switches``: the mine ran with no ``SIMPLIPY_*`` switch set, and so does this
+      check.
+
+    Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}}``.
+    """
+    from .engine import SimpliPyEngine
+    if mode not in _FILE_TO_RULE_MODE:
+        raise ValueError(f'unknown mode {mode!r}: expected one of {sorted(_FILE_TO_RULE_MODE)}')
+    rule_mode = _FILE_TO_RULE_MODE[mode]
+    with open(rules_path) as file:
+        rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(file)]
+    sidecar_path = rules_path + '.provenance.json'
+    sidecar: dict = {}
+    if os.path.exists(sidecar_path):
+        with open(sidecar_path) as file:
+            sidecar = json.load(file)
+    engine = SimpliPyEngine(operators=operators, rules=[])
+    miner = RuleMiner(engine)
+    miner._install(rule_mode, rules)
+    core = engine._core
+    gates: dict[str, list] = {}
+    gates['twin_shadow'] = [
+        [list(rules[owner][0]), list(rules[owner][1])]
+        for owner in sorted(_twin_shadow_owners(core.ac_shadow_census(rule_mode=rule_mode)))]
+    gates['engine_owned_law'] = [
+        [list(lhs), list(rhs), law] for lhs, rhs in rules
+        if (law := core.law_instance(list(lhs), list(rhs), rule_mode=rule_mode)) is not None]
+    gates['unlicensed'] = miner._final_gate(
+        rule_mode, judge if judge is not None else functools.partial(
+            judge_tiers, processes=judge_processes), {})[1]
+    gates['preempted'] = [[list(lhs), list(rhs)] for lhs, rhs in rules
+                          if _preempted_by(engine, lhs, rhs, mode)]
+    _, subsumed, dropped, _ = core.ac_rules_info_in_mode(rule_mode=rule_mode)
+    gates['translation'] = ([{'subsumed': subsumed, 'dropped': dropped}]
+                            if subsumed or dropped else [])
+    recorded = sidecar.get('measure')
+    if isinstance(recorded, dict):
+        moved, _ = engine._measure_drift(recorded)
+        gates['fingerprint'] = [[probe, old, now] for probe, (old, now) in sorted(moved.items())]
+    else:
+        gates['fingerprint'] = [['no measure record in the sidecar', None, None]]
+    recorded_env = (sidecar.get('soundness') or {}).get('env_overrides')
+    gates['env_switches'] = (
+        [['the sidecar records no env_overrides', None]] if recorded_env is None else
+        [[key, value] for key, value in sorted(recorded_env.items())]
+        + [[key, value] for key, value in env_overrides().items()])
+    report = {name: {'ok': not found, 'count': len(found), 'examples': found[:10]}
+              for name, found in gates.items()}
+    return {'file': rules_path, 'mode': mode, 'ok': all(g['ok'] for g in report.values()),
+            'gates': report}
 
 
 def cross_mode_complexity(engine: Any, tokens: Any, mode: Any) -> int:
@@ -2058,8 +2269,7 @@ def cross_mode_complexity(engine: Any, tokens: Any, mode: Any) -> int:
     f64-canon pricing.
     """
     from .engine import _RULE_MODE, _coerce_mode
-    return int(engine._core.ac_complexity_certified(
-        list(tokens), _RULE_MODE[_coerce_mode(mode)], 'default'))
+    return int(engine._core.ac_complexity_certified(list(tokens), 'default', rule_mode=_RULE_MODE[_coerce_mode(mode)]))
 
 
 def assert_permissive_dominates(engine: Any, expressions: Any) -> list:

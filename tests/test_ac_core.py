@@ -445,7 +445,7 @@ class TestContracts:
         (tmp_path / "config.yaml").write_text(yaml.safe_dump(cfg))
         (tmp_path / "rules.json").write_text(json.dumps(rules))
         e = SimpliPyEngine.from_config(str(tmp_path / "config.yaml"))
-        kept, _, dropped, _ = e._core.ac_rules_info()
+        kept, _, dropped, _ = e._core.ac_rules_info_in_mode(rule_mode='default')
         assert kept == 1 and dropped == 3
         # The subjects the poison rules would have matched simplify without panicking or
         # growing, and the well-formed control still fires.
@@ -475,20 +475,18 @@ class TestContracts:
         # "below"; under the triple it is above.
         small_lit = ["*", "x0", "pow", "3", "-1"]           # x0 * 1/3
         big_lit = ["*", "x0", "pow", "1000000007", "-1"]    # x0 * 1/1000000007
-        assert engine._core.ac_ordered_below(small_lit, big_lit) is True
-        assert engine._core.ac_ordered_below(big_lit, small_lit) is False
+        assert engine._core.ac_ordered_below_in(small_lit, big_lit, rule_mode='default') is True
+        assert engine._core.ac_ordered_below_in(big_lit, small_lit, rule_mode='default') is False
         # At equal size, exact value order still decides (2 and 3 are both 2 bits).
-        assert engine._core.ac_ordered_below(["*", "2", "x0"], ["*", "3", "x0"]) is True
-        assert engine._core.ac_ordered_below(["*", "3", "x0"], ["*", "2", "x0"]) is False
+        assert engine._core.ac_ordered_below_in(["*", "2", "x0"], ["*", "3", "x0"], rule_mode='default') is True
+        assert engine._core.ac_ordered_below_in(["*", "3", "x0"], ["*", "2", "x0"], rule_mode='default') is False
         # STAGE 2 INVERSION (the measure's point): under the old triple a 54-bit
         # literal was "strictly simpler" than `x0 + 2` by node count alone. Under mu
         # the literal pays its bits (54 > 18), so the small symbolic expression is
         # below the huge literal -- the exact asymmetry that minted coefficient
         # materializations is gone at the ordering itself.
-        assert engine._core.ac_ordered_below(
-            ["9007199254740993"], ["+", "x0", "2"]) is False
-        assert engine._core.ac_ordered_below(
-            ["+", "x0", "2"], ["9007199254740993"]) is True
+        assert engine._core.ac_ordered_below_in(["9007199254740993"], ["+", "x0", "2"], rule_mode='default') is False
+        assert engine._core.ac_ordered_below_in(["+", "x0", "2"], ["9007199254740993"], rule_mode='default') is True
 
     def test_composite_step_heals_the_distribution_refusal(self, engine: SimpliPyEngine) -> None:
         # docs/formal.md, the composite rebuild case. In 2*(log(1) - c*sinh(x2))^2 the
@@ -565,7 +563,7 @@ class TestContracts:
             assert engine.simplify(oa) == oa
 
     def test_translation_audit_surface(self, engine: SimpliPyEngine) -> None:
-        kept, subsumed, dropped, _ = engine._core.ac_rules_info()
+        kept, subsumed, dropped, _ = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert kept > 400
         # An AC-JUDGED artifact carries zero arithmetic redundancy AT MINE TIME: the miner
         # never mints what the engine computes. Subsumption at LOAD therefore measures how
@@ -611,7 +609,7 @@ class TestMatcherAssignmentCompleteness:
             acj_config_path())
 
     def test_factoring_reach_is_alpha_invariant(self, fresh_engine: SimpliPyEngine) -> None:
-        fresh_engine._core.set_rules([self.FACTOR_VARS])
+        fresh_engine._core.set_mode_rules('default', [self.FACTOR_VARS])
         # The same shape t*a + t*b under different variable names. Canonical bag order
         # sorts the shared factor first in some spellings and last in others; every one
         # must factor.
@@ -627,7 +625,7 @@ class TestMatcherAssignmentCompleteness:
             assert shared in out, (expr, out)
 
     def test_factoring_reach_composite_shared_factor(self, fresh_engine: SimpliPyEngine) -> None:
-        fresh_engine._core.set_rules([self.FACTOR_ANY])
+        fresh_engine._core.set_mode_rules('default', [self.FACTOR_ANY])
         # The shared factor is a composite (sin x0), which sorts after plain variables in
         # the subject Mul bags.
         expr = ["+", "*", "sin", "x0", "x1", "*", "sin", "x0", "x2"]
@@ -1389,7 +1387,7 @@ class TestC36DropCensus:
         assert census.get('unbound-rhs-wildcard') == 1, census
         assert census.get('not-ordered-below', 0) >= 1, census
         assert census.get('arithmetic-subsumed', 0) >= 1, census
-        kept, subsumed, dropped, _ = engine._core.ac_rules_info()
+        kept, subsumed, dropped, _ = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert dropped == sum(v for k, v in census.items()
                               if k not in ('arithmetic-subsumed', 'registry-pole-class-change')), \
             'census must reconcile with the aggregate counter'

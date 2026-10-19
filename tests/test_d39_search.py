@@ -24,8 +24,7 @@ D39 scaffolding's own surface (ledger D39 B7: the public ``effort=`` API is
 deliberately not wired to it yet), so the gap is scoped rather than accidental --
 but a ``real``-mode explore regression would not be caught here.
 
-``Engine._core.ac_simplify_explore(tokens, max_passes, wildcard_all, form,
-explore_budget)`` -- ``ac_simplify``'s signature plus the trailing budget,
+``Engine._core.ac_simplify_explore(tokens, max_passes, form, explore_budget, rule_mode=('permissive' if wildcard_all else 'default'))`` -- ``ac_simplify``'s signature plus the trailing budget,
 budget 0 the default. Tests observe from OUTSIDE through that entry point;
 no switch exists inside the production chain.
 
@@ -88,13 +87,13 @@ def tok(engine: SimpliPyEngine, s: str) -> list[str]:
 
 def fix(engine: SimpliPyEngine, s: str, lossy: bool = False) -> list[str]:
     """Today's greedy fixpoint, tagged form -- the chain the theorems cover."""
-    return engine._core.ac_simplify(tok(engine, s), 48, lossy, 'tagged')
+    return engine._core.ac_simplify_in_mode(tok(engine, s), 48, 'tagged', rule_mode=('permissive' if lossy else 'default'))
 
 
 def explore(engine: SimpliPyEngine, tokens: list[str], budget: int,
             lossy: bool = False, form: str = 'tagged') -> list[str]:
     """The B1 entry point under test (does not exist at HEAD -- red)."""
-    return engine._core.ac_simplify_explore(tokens, 48, lossy, form, budget)
+    return engine._core.ac_simplify_explore(tokens, 48, form, budget, rule_mode=('permissive' if lossy else 'default'))
 
 
 class TestRow156Hill:
@@ -109,20 +108,20 @@ class TestRow156Hill:
         assert hill != valley, "row-156 stopped being a hill: D39's premise moved"
         # The falsifiable claim, in the engine's own ordering: a strictly
         # lower endpoint EXISTS and the greedy chain did not reach it.
-        assert engine._core.ac_ordered_below(valley, hill) is True
+        assert engine._core.ac_ordered_below_in(valley, hill, rule_mode='default') is True
 
     def test_powsplit_hill(self, engine: SimpliPyEngine) -> None:
         hill = fix(engine, POWSPLIT)
         valley = fix(engine, POWSPLIT_VALLEY)
         assert hill != valley
-        assert engine._core.ac_ordered_below(valley, hill) is True
+        assert engine._core.ac_ordered_below_in(valley, hill, rule_mode='default') is True
 
     def test_gated_hill_in_both_modes(self, engine: SimpliPyEngine) -> None:
         for lossy in (False, True):
             hill = fix(engine, GATED, lossy)
             valley = fix(engine, GATED_VALLEY, lossy)
             assert hill != valley
-            assert engine._core.ac_ordered_below(valley, hill) is True
+            assert engine._core.ac_ordered_below_in(valley, hill, rule_mode='default') is True
 
 
 class TestRow156Falsifier:
@@ -134,12 +133,12 @@ class TestRow156Falsifier:
         for spelling in (ROW156, ROW156_SOOSE):
             out = explore(engine, tok(engine, spelling), BUDGET)
             assert out == valley
-            assert engine._core.ac_ordered_below(out, hill) is True
+            assert engine._core.ac_ordered_below_in(out, hill, rule_mode='default') is True
 
     def test_powsplit_reaches_the_valley(self, engine: SimpliPyEngine) -> None:
         out = explore(engine, tok(engine, POWSPLIT), BUDGET)
         assert out == fix(engine, POWSPLIT_VALLEY)
-        assert engine._core.ac_ordered_below(out, fix(engine, POWSPLIT)) is True
+        assert engine._core.ac_ordered_below_in(out, fix(engine, POWSPLIT), rule_mode='default') is True
 
     def test_certificates_gate_the_moves(self, engine: SimpliPyEngine) -> None:
         # SOUND: log(x1) carries no finite-a.e. licence -- the moves are
@@ -157,7 +156,7 @@ class TestRow156Falsifier:
         assert explore(engine, valley, BUDGET) == valley
         # And the valley is a fixpoint of the plain chain (the endpoint is a
         # chain state, not a new kind of state).
-        assert engine._core.ac_simplify(valley, 48, False, 'tagged') == valley
+        assert engine._core.ac_simplify_in_mode(valley, 48, 'tagged', rule_mode='default') == valley
 
     def test_deterministic(self, engine: SimpliPyEngine) -> None:
         for s in BATTERY:
@@ -174,7 +173,7 @@ class TestRow156Falsifier:
                 for budget in (1, BUDGET):
                     out = explore(engine, tok(engine, s), budget, lossy)
                     assert out == f or \
-                        engine._core.ac_ordered_below(out, f) is True
+                        engine._core.ac_ordered_below_in(out, f, rule_mode='default') is True
 
     def test_budget_zero_is_byte_identical(self, engine: SimpliPyEngine) -> None:
         # The ledger's effort=0 semantics: unused exploration leaves every
@@ -184,24 +183,23 @@ class TestRow156Falsifier:
             for lossy in (False, True):
                 for form in ('tagged', 'explicit'):
                     assert explore(engine, t, 0, lossy, form) \
-                        == engine._core.ac_simplify(t, 48, lossy, form)
+                        == engine._core.ac_simplify_in_mode(t, 48, form, rule_mode=('permissive' if lossy else 'default'))
 
     def test_budget_zero_is_the_default(self, engine: SimpliPyEngine) -> None:
         t = tok(engine, ROW156)
-        assert engine._core.ac_simplify_explore(t) \
-            == engine._core.ac_simplify(t, 48, False, 'tagged')
+        assert engine._core.ac_simplify_explore(t, rule_mode='default') \
+            == engine._core.ac_simplify_in_mode(t, 48, 'tagged', rule_mode='default')
 
     def test_boundary_contracts_match_ac_simplify(self, engine: SimpliPyEngine) -> None:
         # Empty input: the documented `simplify([]) == []` contract (H-003).
-        assert engine._core.ac_simplify_explore([], 48, False, 'tagged', BUDGET) == []
+        assert engine._core.ac_simplify_explore([], 48, 'tagged', BUDGET, rule_mode='default') == []
         # Malformed input: ValueError, exactly as ac_simplify (fail loudly,
         # never pass garbage through).
         with pytest.raises(ValueError):
-            engine._core.ac_simplify_explore(['+', 'x0'], 48, False, 'tagged', BUDGET)
+            engine._core.ac_simplify_explore(['+', 'x0'], 48, 'tagged', BUDGET, rule_mode='default')
         with pytest.raises(ValueError):
             # unclosed tagged bag: the AC parser is the arbiter (H-003 sibling)
-            engine._core.ac_simplify_explore(['<add>', 'x0'], 48, False,
-                                             'tagged', BUDGET)
+            engine._core.ac_simplify_explore(['<add>', 'x0'], 48, 'tagged', BUDGET, rule_mode='default')
 
 
 class TestFactorMove:
@@ -216,7 +214,7 @@ class TestFactorMove:
     def test_the_chain_stops_on_the_hill(self, engine: SimpliPyEngine) -> None:
         hill, valley = fix(engine, self.HILL), fix(engine, self.VALLEY)
         assert hill != valley
-        assert engine._core.ac_ordered_below(valley, hill) is True
+        assert engine._core.ac_ordered_below_in(valley, hill, rule_mode='default') is True
 
     def test_exploration_factors_and_cancels(self, engine: SimpliPyEngine) -> None:
         for lossy in (False, True):

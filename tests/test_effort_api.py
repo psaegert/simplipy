@@ -82,10 +82,8 @@ class TestEffortValidation:
         # The pre-effort core entry is the reference: the new dispatch at budget 0
         # must reproduce it byte-for-byte, tokens and rendering alike.
         tokens = engine.to_prefix(HILL)
-        via_plain = engine._core.ac_simplify(
-            [str(t) for t in engine.to_tagged(tokens)], 48, False, "explicit")
-        assert via_plain == engine._core.ac_simplify_in_mode(
-            [str(t) for t in engine.to_tagged(tokens)], 48, "default", "explicit", 0)
+        via_plain = engine._core.ac_simplify_in_mode([str(t) for t in engine.to_tagged(tokens)], 48, "explicit", rule_mode='default')
+        assert via_plain == engine._core.ac_simplify_in_mode([str(t) for t in engine.to_tagged(tokens)], 48, "explicit", 0, rule_mode="default")
         # The RULED default (owner 2026-10-06; 4 from 2026-08-24): None -- the default
         # call explores until a round finds nothing, and explicitly asking for the
         # chain alone differs on a mu-hill.

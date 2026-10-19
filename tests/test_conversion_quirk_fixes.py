@@ -200,7 +200,7 @@ class TestEvaluateConstants:
         against the expression's 11,000; `asin 1e-08` folds where folding is allowed."""
         from conftest import require_triple
         require_triple()
-        assert eng._core.mode_rules_len('real') is not None, 'the artifact must ship one'
+        assert eng._core.mode_rules_len(rule_mode='real') is not None, 'the artifact must ship one'
         for mode in (Mode.f64, Mode.real, Mode.permissive):
             assert eng.simplify(['tan', '1'], mode=mode) == ['tan', '1'], mode
         assert eng.simplify(['asin', '1e-08'], mode=Mode.f64) == ['1e-8']

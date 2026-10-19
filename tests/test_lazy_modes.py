@@ -131,8 +131,8 @@ class TestLazyMachinery:
         core_before = e._core
         e.simplify(['sin', 'x0'], mode='real')
         assert e._core is core_before
-        assert e._core.mode_rules_len('permissive') == 3
-        assert e._core.mode_rules_len('real') == 2
+        assert e._core.mode_rules_len(rule_mode='permissive') == 3
+        assert e._core.mode_rules_len(rule_mode='real') == 2
 
     def test_unload_then_reload_round_trips(self, tmp_path):
         e = _quiet_from_config(_lazy_triple(tmp_path), modes=('f64',))
@@ -141,7 +141,7 @@ class TestLazyMachinery:
         e.unload_mode('real')
         # File-backed: the parsed list is dropped with the core structures...
         assert e.real_simplification_rules is None
-        assert e._core.mode_rules_len('real') is None
+        assert e._core.mode_rules_len(rule_mode='real') is None
         # ...and the next use rebuilds from the recorded file, announced again.
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -169,7 +169,7 @@ class TestLazyMachinery:
         assert e.simplify(lhs, mode='real') == rhs
         e.unload_mode('real')
         assert e.real_simplification_rules is not None  # the sole recipe stays
-        assert e._core.mode_rules_len('real') is None  # the built structures went
+        assert e._core.mode_rules_len(rule_mode='real') is None  # the built structures went
         buf = io.StringIO()
         with redirect_stdout(buf):
             assert e.simplify(lhs, mode='real') == rhs  # rebuilt from the list
@@ -182,7 +182,7 @@ class TestLazyMachinery:
         e = SimpliPyEngine(operators=config['operators'], rules=[list(P_ALL)],
                            rules_real=[list(P_REAL)], modes=('f64',))
         assert e.real_simplification_rules is not None
-        assert e._core.mode_rules_len('real') is None
+        assert e._core.mode_rules_len(rule_mode='real') is None
         lhs, rhs = instantiate(P_REAL)
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -234,7 +234,7 @@ class TestLazyMachinery:
         e = _quiet_from_config(_lazy_triple(tmp_path), modes=('f64', 'permissive'))
         e.compile_rules()
         assert e.real_simplification_rules is None  # still deferred
-        assert e._core.mode_rules_len('permissive') == 3  # still loaded
+        assert e._core.mode_rules_len(rule_mode='permissive') == 3  # still loaded
         lhs, rhs = instantiate(P_REAL)
         assert e.simplify(lhs, mode='real') == rhs  # and still lazily loadable
 
@@ -390,5 +390,5 @@ class TestTheIdentity:
             for mode in (Mode.real, Mode.permissive):
                 lean.simplify(['sin', 'x0'], mode=mode)
         for rule_mode in ('default', 'real', 'permissive'):
-            assert (lean._core.mode_rules_len(rule_mode)
-                    == eager._core.mode_rules_len(rule_mode))
+            assert (lean._core.mode_rules_len(rule_mode=rule_mode)
+                    == eager._core.mode_rules_len(rule_mode=rule_mode))

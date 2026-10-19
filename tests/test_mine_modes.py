@@ -65,3 +65,30 @@ def test_the_miner_refuses_the_law_the_load_refuses(tmp_path, eng, mode):
          'rules_real': 'rules.json', 'rules_permissive': 'rules.json'}))
     loaded = SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
     assert loaded._core.ac_rules_drop_census(rule_mode=mode).get('engine-owned-law') == 1
+
+
+@pytest.mark.parametrize('name,args', [
+    ('ac_simplify_in_mode', (['x0'],)), ('ac_simplify_infix_in_mode', (['x0'],)),
+    ('ac_simplify_explore', (['x0'],)), ('prettify', (['x0'],)), ('ac_complexity', (['x0'],)),
+    ('ac_complexity_certified', (['x0'],)), ('ac_rules_info_in_mode', ()),
+    ('ac_served_rules_in_mode', ()), ('mode_rules_len', ()),
+    ('find_rule', (['x0'], 1, None, [['x0']], ['x0'], [1.0], 1)),
+    ('ac_simplify_suppressed', (['x0'],)),
+])
+def test_every_mode_taking_entry_names_its_mode(eng, name, args):
+    """No hidden default in the FFI: every entry that reads a mode takes it explicitly."""
+    with pytest.raises(TypeError, match='rule_mode'):
+        getattr(eng._core, name)(*args)
+
+
+def test_the_mode_less_twins_are_retired(eng):
+    """One entry per question: the mode-less twins of the `_in`/`_in_mode` entries are gone,
+    and no signature in the extension defaults a mode."""
+    import os
+    import re
+    for name in ('ac_simplify', 'ac_simplify_infix', 'ac_ordered_below', 'ac_rules_info',
+                 'ac_served_rules', 'set_rules'):
+        assert not hasattr(eng._core, name), name
+    lib = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            'rust', 'lib.rs')).read()
+    assert not re.findall(r'signature = \([^)]*(rule_mode="|wildcard_all=)', lib)

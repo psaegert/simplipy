@@ -80,7 +80,7 @@ class TestLoadConsumer:
         # The earlier comment here justified the pin with the 2026-08-18 dedup (6602 ->
         # 5553, an artifact of 6,594 rows, complexity 294,730,680). Every one of those
         # numbers is false for the artifact under test.
-        kept, subsumed, dropped, twins = eng._core.ac_rules_info()
+        kept, subsumed, dropped, twins = eng._core.ac_rules_info_in_mode(rule_mode='default')
         assert eng._core.ac_registry_dropped() == 0
         # 5553 -> 5558 at the INVERSE-PAIR BAND (2026-08-19): five rules the
         # constructor used to fold away now survive translation, because the band

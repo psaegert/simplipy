@@ -69,7 +69,7 @@ const RM: RoundingMode = RoundingMode::ToEven;
 /// infinite) is a point of the denominator, and a failing infinite row is a failing point
 /// like a finite one. A pair with no variable has ONE point however many rows repeat it;
 /// "at most half the points, rounded up" then escalates it, at the cost of one row.
-const NEAR_MISS_FRAC: f64 = 0.5;
+pub const NEAR_MISS_FRAC: f64 = 0.5;
 
 /// Verdict of one row at one precision. `Extend` = source nonfinite (domain-extendable),
 /// exactly `allclose_extends`' semantics lifted to `p` bits.

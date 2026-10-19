@@ -403,7 +403,9 @@ impl Engine {
 
     /// The library scan for ONE source (the proposals' channel): the mark is computed
     /// here, from `spec`, so this channel and the batch mine share one acceptance. An
-    /// atomic mark mints nothing.
+    /// atomic mark mints nothing. `excluded`: the targets the judge loop refused for this
+    /// source, by class, as in [`Engine::mine_one_length`].
+    #[allow(clippy::too_many_arguments)]
     pub fn find_rule_lib(
         &self,
         src: &[String],
@@ -412,11 +414,13 @@ impl Engine {
         spec: &MineSpec,
         confirm: Option<&ConfirmSet>,
         seed: u64,
+        excluded: &[Vec<String>],
     ) -> Result<Option<Vec<String>>, String> {
         let mark = self
             .mine_mark(src, spec.mode)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
-        match Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &[]) {
+        let excluded = self.excluded_keys(excluded, spec.mode);
+        match Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &excluded) {
             None => Ok(None),
             Some(acc) => acc.scan(lib, max_target, seed),
         }
@@ -427,7 +431,8 @@ impl Engine {
     /// confirmation. `seed` is the source's scan seed, so the hint is certified exactly as
     /// the scan would certify it as a library candidate. `Ok(None)` is acceptance;
     /// `Ok(Some(reason))` names the first refusal (`atomic_mark` when the engine already
-    /// folds the source to an atom).
+    /// folds the source to an atom; `excluded` when the judge loop refused the hint's class).
+    #[allow(clippy::too_many_arguments)]
     pub fn judge_hint(
         &self,
         src: &[String],
@@ -436,11 +441,14 @@ impl Engine {
         spec: &MineSpec,
         confirm: Option<&ConfirmSet>,
         seed: u64,
+        excluded: &[Vec<String>],
     ) -> Result<Option<&'static str>, String> {
         let mark = self
             .mine_mark(src, spec.mode)
             .ok_or_else(|| "invalid or malformed prefix expression".to_string())?;
-        let Some(acc) = Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &[]) else {
+        let excluded = self.excluded_keys(excluded, spec.mode);
+        let Some(acc) = Acceptor::new(self, spec, src, mark, lib.var_names(), confirm, &excluded)
+        else {
             return Ok(Some("atomic_mark"));
         };
         if let Err(r) = acc.license(hint) {
@@ -788,6 +796,14 @@ impl Engine {
         self.ac_canonical_key(t, mode).unwrap_or_else(|| t.to_vec())
     }
 
+    /// [`Engine::excluded_key`] of each excluded target.
+    fn excluded_keys(&self, excluded: &[Vec<String>], mode: RuleMode) -> Vec<Vec<String>> {
+        excluded
+            .iter()
+            .map(|t| self.excluded_key(t, mode))
+            .collect()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn mine_one_length(
         &self,
@@ -817,12 +833,7 @@ impl Engine {
                     Some(ix) => ix[k],
                     None => index_offset.wrapping_add(k as u64),
                 };
-                let excluded: Vec<Vec<String>> = exclusions
-                    .get(&idx)
-                    .unwrap_or(&none)
-                    .iter()
-                    .map(|t| self.excluded_key(t, spec.mode))
-                    .collect();
+                let excluded = self.excluded_keys(exclusions.get(&idx).unwrap_or(&none), spec.mode);
                 // AC-JUDGED Kruskal prune: the arbiter is the engine that will SERVE the
                 // rules. A source the AC engine already strictly reduces -- by exact
                 // arithmetic, bag collection, or the rules mined so far -- is skipped

@@ -145,14 +145,14 @@ class TestTranslationCountGate:
         rule = (('pow', '+', '?0', '<constant>', '2'),
                 ('+', '<constant>', '*', '<constant>', '?0'))
         engine = SimpliPyEngine(operators=self._OPS, rules=[rule])
-        kept, subsumed, dropped, twins = engine._core.ac_rules_info()
+        kept, subsumed, dropped, twins = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert (kept, subsumed, dropped, twins) == (0, 0, 1, 0)
 
     def test_count_preserving_rule_loads(self) -> None:
         """Control: the servable Const algebra (1 -> 1) passes the count gate."""
         rule = (('pow', 'exp', '<constant>', 'np.pi'), ('<constant>',))
         engine = SimpliPyEngine(operators=self._OPS, rules=[rule])
-        kept, subsumed, dropped, twins = engine._core.ac_rules_info()
+        kept, subsumed, dropped, twins = engine._core.ac_rules_info_in_mode(rule_mode='default')
         assert (kept, subsumed, dropped, twins) == (1, 0, 0, 0)
 
 

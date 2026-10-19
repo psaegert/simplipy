@@ -668,7 +668,8 @@ class TestProvenance:
         sound = side["soundness"]
         assert "kill_switches" not in sound
         assert sound["env_overrides"] == {}
-        assert sound["node_budget_env"] is None  # default budget, no override
+        assert "node_budget_env" not in sound  # the budget is a parameter now
+        assert side["params"]["interval_node_budget"] is None  # the default budget
         undecided = sound["interval_undecided"]
         assert set(undecided) == {"horizon", "node_budget", "unanalyzable"}
         assert all(isinstance(v, int) and v >= 0 for v in undecided.values())
@@ -986,8 +987,8 @@ class TestEmitParseClosure:
 
     def test_ordering_judge_reads_own_output(self, engine) -> None:
         _, _, ac_out = engine._core.ac_judge(["*", "exp", "x0", "exp", "x0"], 48)
-        assert engine._core.ac_ordered_below(["exp", "+", "x0", "x0"], ac_out) is True
-        assert engine._core.ac_ordered_below(["pow2", "exp", "x0"], ac_out) is False
+        assert engine._core.ac_ordered_below_in(["exp", "+", "x0", "x0"], ac_out, rule_mode='default') is True
+        assert engine._core.ac_ordered_below_in(["pow2", "exp", "x0"], ac_out, rule_mode='default') is False
 
 
 @pytest.fixture(scope="module")
@@ -1304,7 +1305,7 @@ class TestProposalTargetAllowance:
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in eng.simplification_rules}
         assert (("+", "*", "?0", "?1", "*", "?0", "?2"), ("*", "?0", "+", "?1", "?2")) not in rules
         endpoint = eng.simplify(list(src))
-        assert eng._core.ac_ordered_below(endpoint, src), \
+        assert eng._core.ac_ordered_below_in(endpoint, src, rule_mode='default'), \
             "the engine must reduce the source at serve time"
 
     def test_true_but_non_descending_long_target_is_rejected(self, tmp_path) -> None:
@@ -1326,7 +1327,7 @@ class TestProposalTargetAllowance:
         assert sidecar["proposals"]["trail"][-1]["stage"] == "search"
         assert eng._core is not None
         _, _, endpoint = eng._core.ac_judge(src, 48)
-        assert not eng._core.ac_ordered_below(tgt, endpoint), \
+        assert not eng._core.ac_ordered_below_in(tgt, endpoint, rule_mode='default'), \
             "the specimen must be refused BY THE ORDERING (or it belongs in the certify pin above)"
         assert not any(tuple(rhs) == ("pow", "*", "?0", "?1", "2")
                        for _, rhs in eng.simplification_rules)
@@ -1350,8 +1351,8 @@ class TestProposalTargetAllowance:
         assert sidecar["proposals"]["trail"][-1]["stage"] == "search"
         assert eng._core is not None
         _, _, endpoint = eng._core.ac_judge(src, 48)
-        assert not eng._core.ac_ordered_below(tgt, endpoint), "tie: not below"
-        assert not eng._core.ac_ordered_below(endpoint, tgt), "tie: not above either"
+        assert not eng._core.ac_ordered_below_in(tgt, endpoint, rule_mode='default'), "tie: not below"
+        assert not eng._core.ac_ordered_below_in(endpoint, tgt, rule_mode='default'), "tie: not above either"
 
 
 class TestLadderSnapshots:
@@ -1774,9 +1775,9 @@ class TestProposalHintLengthAllowance:
         # the ONE gate it fails -- and it fails it in both directions of the ordering:
         # the engine's own endpoint sits strictly BELOW the proposed target, so the
         # hint is an ASCENT, not a reduction.
-        assert not core.ac_ordered_below(list(self.COS_TGT), endpoint), \
+        assert not core.ac_ordered_below_in(list(self.COS_TGT), endpoint, rule_mode='default'), \
             "the ordering must be the gate that refuses this pair"
-        assert core.ac_ordered_below(endpoint, list(self.COS_TGT))
+        assert core.ac_ordered_below_in(endpoint, list(self.COS_TGT), rule_mode='default')
 
         _, sidecar, _ = self._mine(
             str(tmp_path / "mine"), [{"source": self.COS_SRC, "target": self.COS_TGT}])
@@ -1801,7 +1802,7 @@ class TestProposalHintLengthAllowance:
         assert [(tuple(s), tuple(t), c) for s, t, c in out] \
             == [(tuple(self.LONG_SRC), tuple(self.LONG_TGT), "verified")]
         _, _, endpoint = core.ac_judge(list(self.LONG_SRC), 48)
-        assert core.ac_ordered_below(list(self.LONG_TGT), endpoint), \
+        assert core.ac_ordered_below_in(list(self.LONG_TGT), endpoint, rule_mode='default'), \
             "the specimen certifies BECAUSE it descends, not because it is long"
 
     def test_equal_measure_respell_still_ties_and_dies(self, tmp_path) -> None:
@@ -1815,8 +1816,8 @@ class TestProposalHintLengthAllowance:
         assert core is not None
         assert len(self.TIE_TGT) < len(self.TIE_SRC), "the retired gate would have passed this"
         _, _, endpoint = core.ac_judge(list(self.TIE_SRC), 48)
-        assert not core.ac_ordered_below(list(self.TIE_TGT), endpoint), "tie: not below"
-        assert not core.ac_ordered_below(endpoint, list(self.TIE_TGT)), "tie: not above either"
+        assert not core.ac_ordered_below_in(list(self.TIE_TGT), endpoint, rule_mode='default'), "tie: not below"
+        assert not core.ac_ordered_below_in(endpoint, list(self.TIE_TGT), rule_mode='default'), "tie: not above either"
         assert eng.certify_rules([self.TIE_SRC], [self.TIE_TGT], dummy_variables=1,
                                  extra_internal_terms=["1", "2", "<constant>"],
                                  max_target_pattern_length=3, X=256, seed=7) == []
@@ -1875,7 +1876,7 @@ class TestProposalHintLengthAllowance:
                           X=256, seed=7, verbose=False, promote_sorts=False)
         assert engine.simplification_rules, "the control mine produced nothing to check"
         offenders = [(lhs, rhs) for lhs, rhs in engine.simplification_rules
-                     if not engine._core.ac_ordered_below(list(rhs), list(lhs))]
+                     if not engine._core.ac_ordered_below_in(list(rhs), list(lhs), rule_mode='default')]
         assert not offenders, offenders
 
 
@@ -2096,7 +2097,7 @@ class TestTheFinalGate:
         b = (('+', 'exp', '?0', 'neg', 'exp', '?0'), ('0',))
         engine, miner = self._miner([a, b])
         assert a not in {(tuple(lhs), tuple(rhs)) for lhs, rhs, _ in
-                         engine._core.ac_served_rules_in_mode('default')}, \
+                         engine._core.ac_served_rules_in_mode(rule_mode='default')}, \
             'vacuous: the file spelling is also served'
 
         def judge(pairs):
@@ -2113,7 +2114,7 @@ class TestTheFinalGate:
         a = (('+', 'tanh', 'log', '9', '_0'), ('+', 'inv', '1.025', '_0'))
         engine, miner = self._miner([a])
         served = {(tuple(lhs), tuple(rhs))
-                  for lhs, rhs, _ in engine._core.ac_served_rules_in_mode('default')}
+                  for lhs, rhs, _ in engine._core.ac_served_rules_in_mode(rule_mode='default')}
         assert served and a not in served, 'vacuous: the served spelling is the file spelling'
 
         def judge(pairs):
@@ -2418,7 +2419,7 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         # NOT wiped: the shipped artifact's own real set is the thing permissive has to
         # dominate. Emptying it first made the check trivial.
         engine = SimpliPyEngine.from_config(acj_config_path())
-        assert engine._core.mode_rules_len('real') is not None
+        assert engine._core.mode_rules_len(rule_mode='real') is not None
         rows = default_corpus()[:120]
         assert assert_permissive_dominates(engine, rows) == []
 
@@ -2484,7 +2485,7 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         for mode in ('f64', 'real', 'permissive'):
             assert cross_mode_complexity(engine, e, mode) == 19170, mode
         assert cross_mode_complexity(engine, e, 'real') == \
-            engine._core.ac_complexity_certified(e, 'real', 'default')
+            engine._core.ac_complexity_certified(e, 'default', rule_mode='real')
 
 
 class TestThePruneIsInstanceSafe:

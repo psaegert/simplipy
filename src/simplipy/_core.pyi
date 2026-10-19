@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 __build__: str
 DEFAULT_WORK: int | None
+NEAR_MISS_FRAC: float
 ARTIFACT_ENV_SWITCHES: list[str]
 
 class CandidateLibrary:
@@ -22,21 +23,15 @@ class CandidateLibrary:
 class Engine:
     @staticmethod
     def from_strs(config_yaml: str, rules_json: str) -> Engine: ...
-    def ac_simplify(
-        self,
-        tokens: list[str],
-        max_passes: int = ...,
-        wildcard_all: bool = ...,
-        form: Literal["tagged", "explicit"] = ...,
-    ) -> list[str]: ...
     def ac_simplify_in_mode(
         self,
         tokens: list[str],
         max_passes: int = ...,
-        rule_mode: Literal["default", "real", "permissive"] = ...,
         form: Literal["tagged", "explicit"] = ...,
         explore_budget: int | None = ...,  # None: until a round finds nothing
         work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
+        *,
+        rule_mode: Literal["default", "real", "permissive"],
     ) -> list[str]: ...
     #: DEFAULT-mode simplify with artifact rows (and their minted orientation twins)
     #: suppressed at the matcher's fire site -- behaviorally the engine built without
@@ -51,39 +46,35 @@ class Engine:
         *,
         rule_mode: str,
     ) -> list[str]: ...
-    def ac_simplify_infix(
-        self,
-        tokens: list[str],
-        max_passes: int = ...,
-        wildcard_all: bool = ...,
-    ) -> str: ...
     def ac_simplify_infix_in_mode(
         self,
         tokens: list[str],
         max_passes: int = ...,
-        rule_mode: Literal["default", "real", "permissive"] = ...,
         explore_budget: int | None = ...,  # None: until a round finds nothing
         work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
+        *,
+        rule_mode: Literal["default", "real", "permissive"],
     ) -> str: ...
     def prettify(
         self,
         tokens: list[str],
         digits: int = ...,
         form: Literal["infix", "explicit", "tagged"] = ...,
-        rule_mode: Literal["default", "real", "permissive"] = ...,
         resimplify: bool = ...,  # rule 11: simplify the display once and display that
         explore_budget: int | None = ...,
         work_budget: int | None = ...,
+        *,
+        rule_mode: Literal["default", "real", "permissive"],
     ) -> str | list[str]: ...
     def ac_simplify_explore(
         self,
         tokens: list[str],
         max_passes: int = ...,
-        wildcard_all: bool = ...,
         form: Literal["tagged", "explicit"] = ...,
         explore_budget: int = ...,
+        *,
+        rule_mode: Literal["default", "real", "permissive"],
     ) -> list[str]: ...
-    def ac_ordered_below(self, a: list[str], b: list[str]) -> bool: ...
     def ac_ordered_below_in(self, a: list[str], b: list[str], *, rule_mode: str) -> bool: ...
     def ac_judge(
         self, tokens: list[str], max_passes: int
@@ -97,18 +88,16 @@ class Engine:
         self, rules: list[tuple[list[str], list[str]]], *, rule_mode: str
     ) -> list[tuple[list[str], list[str], int]]: ...
     def law_instance(self, lhs: list[str], rhs: list[str], *, rule_mode: str) -> str | None: ...
-    def ac_complexity(self, tokens: list[str], rule_mode: Literal["default", "real", "permissive"] = ..., canon: Literal["default", "mode"] = ...) -> int: ...
-    def ac_complexity_certified(self, tokens: list[str], rule_mode: Literal["default", "real", "permissive"] = ..., canon: Literal["default", "mode"] = ...) -> int: ...
-    def ac_rules_info(self) -> tuple[int, int, int, int]: ...
-    def ac_rules_info_in_mode(self, rule_mode: str = ...) -> tuple[int, int, int, int]: ...
-    def mode_rules_len(self, rule_mode: str = ...) -> int | None: ...
-    def ac_served_rules_in_mode(
-        self, rule_mode: str = ...
-    ) -> list[tuple[list[str], list[str], int]]: ...
-    def ac_registry_dropped(self) -> int: ...
+    def ac_complexity(self, tokens: list[str], canon: Literal["default", "mode"] = ..., *, rule_mode: Literal["default", "real", "permissive"]) -> int: ...
+    def ac_complexity_certified(self, tokens: list[str], canon: Literal["default", "mode"] = ..., *, rule_mode: Literal["default", "real", "permissive"]) -> int: ...
+    def ac_rules_info_in_mode(self, *, rule_mode: str) -> tuple[int, int, int, int]: ...
+    def mode_rules_len(self, *, rule_mode: str) -> int | None: ...
     #: (lhs, rhs, source_index) per SERVED rule -- the matcher's own set, including the
     #: orientation twins minted at load, which no artifact row corresponds to.
-    def ac_served_rules(self) -> list[tuple[list[str], list[str], int]]: ...
+    def ac_served_rules_in_mode(
+        self, *, rule_mode: str
+    ) -> list[tuple[list[str], list[str], int]]: ...
+    def ac_registry_dropped(self) -> int: ...
     def ac_rules_drop_census(self, *, rule_mode: str) -> dict[str, int]: ...
     #: The shadow census: every translate-time skip caused by cross-rule state, as
     #: (victim_row, owner_row, owner_was_twin, kind) -- kind is "inverse",
@@ -268,7 +257,6 @@ class Engine:
         *,
         rule_mode: str,
     ) -> tuple[bool, str]: ...
-    def set_rules(self, rules: list[tuple[list[str], list[str]]]) -> None: ...
     def set_mode_rules(
         self, rule_mode: str, rules: list[tuple[list[str], list[str]]] | None
     ) -> None: ...
@@ -321,3 +309,5 @@ class Engine:
     ) -> bool: ...
 
 def core_serialization_ops() -> dict[str, dict[str, Any]]: ...
+#: Set the interval layer's node budget (None: the default); returns the previous one.
+def set_interval_node_budget(budget: int | None) -> int: ...

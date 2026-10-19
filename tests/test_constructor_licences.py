@@ -1011,6 +1011,6 @@ class TestCorpusTakesTheBestOfBoth:
                  ['+', 'tan', '1', 'tan', '1'], ['log', 'exp', '30'], ['exp', '0'],
                  ['+', 'asin', '1e-08', 'asin', '1e-08']]
         for t in cases:
-            mu = {m: bare._core.ac_complexity(bare.simplify(list(t), mode=m))
+            mu = {m: bare._core.ac_complexity(bare.simplify(list(t), mode=m), rule_mode='default')
                   for m in (Mode.f64, Mode.real, Mode.permissive)}
             assert mu[Mode.permissive] <= min(mu[Mode.f64], mu[Mode.real]), (t, mu)

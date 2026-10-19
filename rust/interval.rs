@@ -2521,18 +2521,25 @@ pub fn domain_extension_p(
 /// Bounds the n-dimensional subdivision searches. Unreachable at n=1 with the DEFAULT horizon (a
 /// 14-deep binary tree visits <= 2^15 nodes); constant-derived horizons deepen the tree, so
 /// exhaustion is possible. FAIL-CLOSED: an exhausted search that found no witness returns
-/// `None` (undecided) and the gate REJECTS -- it never reads as "no extension". Raise
-/// per-stratum via `SIMPLIPY_IVL_NODE_BUDGET` when the counters flag systematic exhaustion.
-const DEFAULT_NODES_BUDGET: u32 = 400_000;
+/// `None` (undecided) and the gate REJECTS -- it never reads as "no extension". A mine raises
+/// it per stratum through `find_rules(interval_node_budget=...)`, which records the value in
+/// the artifact's parameters, when the counters flag systematic exhaustion.
+pub const DEFAULT_NODES_BUDGET: u32 = 400_000;
+
+static NODES_BUDGET: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(DEFAULT_NODES_BUDGET);
 
 fn max_nodes_budget() -> u32 {
-    static B: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *B.get_or_init(|| {
-        std::env::var(crate::env_switches::IVL_NODE_BUDGET)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_NODES_BUDGET)
-    })
+    NODES_BUDGET.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Set the subdivision node budget (`None`: the default) and return the previous one. The
+/// miner sets it for the duration of a mine and restores it after.
+pub fn set_max_nodes_budget(budget: Option<u32>) -> u32 {
+    NODES_BUDGET.swap(
+        budget.unwrap_or(DEFAULT_NODES_BUDGET),
+        std::sync::atomic::Ordering::Relaxed,
+    )
 }
 
 /// Number of subdivision searches that exhausted the node budget WITHOUT finding a witness --

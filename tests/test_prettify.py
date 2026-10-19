@@ -157,7 +157,7 @@ REROUND = 'x3 + (1815963197375679774584911*x1/1.1784e19)^(9000000000000000000001
 
 def test_p1_check_fails_without_rule_11(eng):
     c = list(eng.simplify(eng._core.parse(REROUND, strict=True)))
-    raw = eng._core.prettify(c, 3, 'infix', 'default', False)
+    raw = eng._core.prettify(c, 3, 'infix', False, rule_mode='default')
     assert raw == 'x3 + (154104.1409857162*x1)^3'
     assert eng.prettify(eng.simplify(raw)) != raw  # the P1 check catches it
     p = eng.prettify(c, form='infix')

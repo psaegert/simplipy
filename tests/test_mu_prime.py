@@ -122,7 +122,7 @@ def eng():
 
 
 def c(eng, tokens):
-    return eng._core.ac_complexity(list(tokens))
+    return eng._core.ac_complexity(list(tokens), rule_mode='default')
 
 
 class TestSpellingInvariance:
@@ -509,9 +509,9 @@ class TestOneMeasurePerMode:
         for e in self.SPECIMENS:
             for mode, rule_mode in (('f64', 'default'), ('real', 'real'), ('permissive', 'permissive')):
                 assert eng.complexity(e, mode=mode) == \
-                    eng._core.ac_complexity_certified(e, rule_mode, 'mode'), (e, mode)
+                    eng._core.ac_complexity_certified(e, 'mode', rule_mode=rule_mode), (e, mode)
                 assert eng.complexity(e, certified=False, mode=mode) == \
-                    eng._core.ac_complexity(e, rule_mode, 'mode'), (e, mode)
+                    eng._core.ac_complexity(e, 'mode', rule_mode=rule_mode), (e, mode)
 
     def test_f64_is_unchanged(self, eng):
         # f64's own reading IS the cross-mode yardstick for an f64 answer: no number moves.

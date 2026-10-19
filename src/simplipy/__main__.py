@@ -46,6 +46,18 @@ def main(argv: str = None) -> None:
     resolve_rules_parser.add_argument('-o', '--output-file', type=str, required=True, help='Path to save the resolved rules json file')
     resolve_rules_parser.add_argument('-v', '--verbose', action='store_true', help='Print progress information')
 
+    # Verify-mine command
+    verify_mine_parser = subparsers.add_parser(
+        "verify-mine", help="Check a mined rule file against the re-mine gates in its own mode")
+    verify_mine_parser.add_argument('rules_file', type=str, help='The mined rule file (its provenance sidecar beside it)')
+    verify_mine_parser.add_argument('--mode', required=True, choices=['f64', 'real', 'permissive'],
+                                    help='The mode the file serves')
+    verify_mine_parser.add_argument(
+        '-e', '--engine', type=str, required=True,
+        help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file (its operators)')
+    verify_mine_parser.add_argument('--judge-processes', type=int, default=4, help='Worker processes of the contract judge')
+    verify_mine_parser.add_argument('--report', type=str, default=None, help='Write the full report as JSON here')
+
     # Install command
     install_parser = subparsers.add_parser("install", help="Install an official asset from Hugging Face")
     install_parser.add_argument('name', type=str, help='Name of the asset to install (e.g. acj-4)')
@@ -92,7 +104,7 @@ def main(argv: str = None) -> None:
                 'constants_fit_challenges', 'constants_fit_retries', 'rtol', 'atol',
                 'min_informative', 'seed', 'confirm',
                 'relaxed_kruskal', 'prune', 'proposals',
-                'promote_sorts', 'symbolic_gate', 'snapshot_at'}
+                'promote_sorts', 'symbolic_gate', 'snapshot_at', 'interval_node_budget'}
             unknown_keys = sorted(set(rule_finding_config) - known_keys)
             if unknown_keys:
                 print(f'Error: unknown key(s) in {args.config}: {", ".join(unknown_keys)}. '
@@ -126,6 +138,7 @@ def main(argv: str = None) -> None:
                 proposals=proposals,
                 promote_sorts=rule_finding_config.get('promote_sorts', True),
                 symbolic_gate=rule_finding_config.get('symbolic_gate', True),
+                interval_node_budget=rule_finding_config.get('interval_node_budget', None),
                 # REQUIRED when the vocabulary omits `mult{k}`/`div{k}`: the cancellation emit
                 # site would otherwise intern `mult3` as an undefined overlay token, because its
                 # factor ceiling comes from the `pow\d+` operators but it spells the ADDITIVE
@@ -143,6 +156,24 @@ def main(argv: str = None) -> None:
                 reset_rules=args.reset_rules,
                 prune=rule_finding_config.get('prune', False),
                 verbose=args.verbose)
+
+        case 'verify-mine':
+            from simplipy.mining import verify_mine
+            try:
+                engine_config_path = get_path(args.engine)
+            except (FileNotFoundError, ValueError, RuntimeError) as e:
+                print(f'Error: {e}', file=sys.stderr)
+                sys.exit(1)
+            report = verify_mine(args.rules_file, args.mode, load_config(engine_config_path)['operators'],
+                                 judge_processes=args.judge_processes)
+            for name, gate in report['gates'].items():
+                print(f'{"ok  " if gate["ok"] else "FAIL"} {name}: {gate["count"]}'
+                      + ('' if gate['ok'] else f'  e.g. {gate["examples"][:3]}'))
+            if args.report:
+                with open(args.report, 'w') as f:
+                    json.dump(report, f, indent=2)
+            print(f'{args.rules_file} ({args.mode}): ' + ('all gates hold' if report['ok'] else 'GATES FAIL'))
+            sys.exit(0 if report['ok'] else 1)
 
         case 'prune-covered-rules':
             try:

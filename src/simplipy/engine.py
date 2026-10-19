@@ -1435,7 +1435,7 @@ class SimpliPyEngine:
             # the rewrite loop, so this is a pure well-formedness question; malformed
             # input fails the parse and the FFI raises, which is the False verdict.
             try:
-                self._core.ac_simplify(tokens, 0, False, 'tagged')
+                self._core.ac_simplify_in_mode(tokens, 0, 'tagged', rule_mode='default')
             except ValueError:
                 if verbose:
                     self._explain_invalid(tokens)
@@ -2135,7 +2135,7 @@ class SimpliPyEngine:
             form = 'tagged'
         else:
             form = 'explicit'
-        if mode is Mode.real and self._core.mode_rules_len('real') is None:
+        if mode is Mode.real and self._core.mode_rules_len(rule_mode='real') is None:
             # FAIL CLOSED. A mode naming no set of its own falls back to the default
             # set, which is right for `permissive` (its divergence is search semantics, so
             # the fallback reproduces today's LOSSY exactly) and WRONG for `real`, whose
@@ -2157,9 +2157,9 @@ class SimpliPyEngine:
         # for it by name, so the two output paths cannot end up serving different sets.
         rule_mode = _RULE_MODE[mode]
         if form == 'infix':
-            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, rule_mode, effort, work)
+            return self._core.ac_simplify_infix_in_mode(tokens, max_passes, effort, work, rule_mode=rule_mode)
 
-        out = self._core.ac_simplify_in_mode(tokens, max_passes, rule_mode, form, effort, work)
+        out = self._core.ac_simplify_in_mode(tokens, max_passes, form, effort, work, rule_mode=rule_mode)
         return self._denormalize(out, expression)
 
     def prettify(
@@ -2233,7 +2233,7 @@ class SimpliPyEngine:
         if mode is not Mode.f64:
             self._ensure_mode_loaded(_RULE_MODE[mode])
         self._await_no_pending_push()
-        if mode is Mode.real and self._core.mode_rules_len('real') is None:
+        if mode is Mode.real and self._core.mode_rules_len(rule_mode='real') is None:
             raise ValueError("mode='real' needs a ruleset mined for it, and this artifact has none")
         in_form, tokens = self._conversion_input(expression)
         target = form or ('infix' if in_form == 'infix' else 'tagged' if in_form == 'tagged' else 'explicit')
@@ -2242,7 +2242,7 @@ class SimpliPyEngine:
         if not tokens:
             return '' if target == 'infix' else []
         work = DEFAULT_WORK if mode is Mode.permissive else None
-        return self._core.prettify(tokens, int(digits), target, _RULE_MODE[mode], True, DEFAULT_EFFORT, work)
+        return self._core.prettify(tokens, int(digits), target, True, DEFAULT_EFFORT, work, rule_mode=_RULE_MODE[mode])
 
     def complexity(
             self,
@@ -2290,8 +2290,8 @@ class SimpliPyEngine:
         self._ensure_mode_loaded(rule_mode)
         self._await_no_pending_push()
         if certified:
-            return self._core.ac_complexity_certified(tokens, rule_mode, 'mode')
-        return self._core.ac_complexity(tokens, rule_mode, 'mode')
+            return self._core.ac_complexity_certified(tokens, 'mode', rule_mode=rule_mode)
+        return self._core.ac_complexity(tokens, 'mode', rule_mode=rule_mode)
 
     def _denormalize(
             self,
@@ -2393,7 +2393,7 @@ class SimpliPyEngine:
         for tokens in self._MEASURE_PROBES:
             try:
                 probes[' '.join(tokens)] = int(
-                    self._core.ac_complexity_certified(list(tokens), _RULE_MODE[mode], 'mode'))
+                    self._core.ac_complexity_certified(list(tokens), 'mode', rule_mode=_RULE_MODE[mode]))
             except ValueError:  # a config that cannot express a probe records it as absent
                 probes[' '.join(tokens)] = None
         return {

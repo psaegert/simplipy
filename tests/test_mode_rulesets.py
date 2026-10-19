@@ -62,7 +62,7 @@ def instantiate(rule: list) -> tuple[list[str], list[str]]:
 def fires(engine: SimpliPyEngine, rule: list, mode: str) -> bool:
     """Does this mode serve a set containing `rule`?"""
     lhs, rhs = instantiate(rule)
-    return engine._core.ac_simplify_in_mode(lhs, 48, mode, 'explicit') == rhs
+    return engine._core.ac_simplify_in_mode(lhs, 48, 'explicit', rule_mode=mode) == rhs
 
 
 #: The config keys that name a mode's own rule set. `rules_corpus` is the pre-rename
@@ -176,13 +176,13 @@ class TestAbsentFilesAreANoOp:
         e = SimpliPyEngine.from_config(os.path.join(d, 'config.yaml'))
         assert e.real_simplification_rules is None
         assert e.permissive_simplification_rules is None
-        assert e._core.mode_rules_len('real') is None
-        assert e._core.mode_rules_len('permissive') is None
-        assert e._core.mode_rules_len('default') == len(e.simplification_rules)
-        base = e._core.ac_rules_info()
+        assert e._core.mode_rules_len(rule_mode='real') is None
+        assert e._core.mode_rules_len(rule_mode='permissive') is None
+        assert e._core.mode_rules_len(rule_mode='default') == len(e.simplification_rules)
+        base = e._core.ac_rules_info_in_mode(rule_mode='default')
         for mode in MODES:
-            assert e._core.ac_rules_info_in_mode(mode) == base
-            assert e._core.ac_served_rules_in_mode(mode) == e._core.ac_served_rules()
+            assert e._core.ac_rules_info_in_mode(rule_mode=mode) == base
+            assert e._core.ac_served_rules_in_mode(rule_mode=mode) == e._core.ac_served_rules_in_mode(rule_mode='default')
 
     def test_a_mode_with_no_set_selects_the_default_SET_not_the_default_ANSWER(self):
         """The no-op is about RULE SELECTION, and only that.
@@ -206,15 +206,15 @@ class TestAbsentFilesAreANoOp:
         # legitimately differ -- it stayed green only because the corpus was truncated to
         # the first 150 rows, and rows 210, 370 and 380 diverge.
         e = SimpliPyEngine.from_config(_default_only_config())
-        assert e._core.mode_rules_len('real') is None
+        assert e._core.mode_rules_len(rule_mode='real') is None
         # what IS a no-op: the set the mode selects
-        assert e._core.ac_served_rules_in_mode('real') == \
-            e._core.ac_served_rules_in_mode('default')
+        assert e._core.ac_served_rules_in_mode(rule_mode='real') == \
+            e._core.ac_served_rules_in_mode(rule_mode='default')
         # what is NOT: the answer, because the constructor is mode-aware. Pinned as a
         # bounded, explained divergence rather than asserted away.
         differ = [row for row in rows
-                  if e._core.ac_simplify_in_mode(row, 48, 'real', 'tagged')
-                  != e._core.ac_simplify_in_mode(row, 48, 'default', 'tagged')]
+                  if e._core.ac_simplify_in_mode(row, 48, 'tagged', rule_mode='real')
+                  != e._core.ac_simplify_in_mode(row, 48, 'tagged', rule_mode='default')]
         assert len(differ) == 4, len(differ)
         bare = SimpliPyEngine(operators=yaml.safe_load(open(acj_config_path()))['operators'],
                               rules=[])
@@ -303,9 +303,9 @@ class TestEachModeServesExactlyItsOwnFile:
             'permissive': json.load(open(os.path.join(d, 'rules_permissive.json'))),
         }
         for mode in MODES:
-            assert e._core.mode_rules_len(mode) == len(on_disk[mode])
-            assert e._core.ac_rules_info_in_mode(mode)[0] == len(on_disk[mode])
-            served = e._core.ac_served_rules_in_mode(mode)
+            assert e._core.mode_rules_len(rule_mode=mode) == len(on_disk[mode])
+            assert e._core.ac_rules_info_in_mode(rule_mode=mode)[0] == len(on_disk[mode])
+            served = e._core.ac_served_rules_in_mode(rule_mode=mode)
             assert len(served) == len(on_disk[mode])
             # ...and provenance indexes THAT MODE'S OWN file, with no tier offsets.
             assert [src for _, _, src in served] == list(range(len(on_disk[mode])))
@@ -337,15 +337,15 @@ class TestEachModeServesExactlyItsOwnFile:
         Pinned at the core entry and through the convert-then-simplify route."""
         e = SimpliPyEngine.from_config(triple)
         lhs, _ = instantiate(P_CORPUS)
-        assert 'tan' in e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
-        assert e._core.ac_simplify_infix_in_mode(lhs, 48, 'default') != \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
+        assert 'tan' in e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='permissive')
+        assert e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='default') != \
+            e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='permissive')
         # The old `form='infix'` shim is removed in 0.14.0; CONVERTING first is the
         # documented equivalent, and it must still select by mode identically.
         assert e.simplify(e.to_infix(lhs), mode=Mode.permissive) == \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, 'permissive')
+            e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='permissive')
         assert e.simplify(e.to_infix(lhs), mode=Mode.f64) == \
-            e._core.ac_simplify_infix_in_mode(lhs, 48, 'default')
+            e._core.ac_simplify_infix_in_mode(lhs, 48, rule_mode='default')
 
 
 class TestAnEmptySetIsNotAnAbsentOne:
@@ -359,8 +359,8 @@ class TestAnEmptySetIsNotAnAbsentOne:
         cfg = write_artifact(tmp_path, rules=[P_DEFAULT], real=[])
         e = SimpliPyEngine.from_config(cfg)
         assert e.real_simplification_rules == []
-        assert e._core.mode_rules_len('real') == 0
-        assert e._core.ac_rules_info_in_mode('real')[0] == 0
+        assert e._core.mode_rules_len(rule_mode='real') == 0
+        assert e._core.ac_rules_info_in_mode(rule_mode='real')[0] == 0
         assert not fires(e, P_DEFAULT, 'real')
         # ...while the modes that name no set still serve the default one.
         assert fires(e, P_DEFAULT, 'default')
@@ -370,10 +370,10 @@ class TestAnEmptySetIsNotAnAbsentOne:
         require_or_skip(acj_rules_path(), 'acj-4-3 rules not staged')
         e = SimpliPyEngine.from_config(acj_config_path())
         e._core.set_mode_rules('real', [])
-        assert e._core.mode_rules_len('real') == 0
+        assert e._core.mode_rules_len(rule_mode='real') == 0
         e._core.set_mode_rules('real', None)
-        assert e._core.mode_rules_len('real') is None
-        assert e._core.ac_rules_info_in_mode('real') == e._core.ac_rules_info()
+        assert e._core.mode_rules_len(rule_mode='real') is None
+        assert e._core.ac_rules_info_in_mode(rule_mode='real') == e._core.ac_rules_info_in_mode(rule_mode='default')
 
 
 class TestTheSetsSurviveEveryRebuild:
@@ -400,8 +400,8 @@ class TestTheSetsSurviveEveryRebuild:
     def test_compile_rules_does_not_retract_them(self, triple):
         e = SimpliPyEngine.from_config(triple)
         e.compile_rules()
-        assert e._core.mode_rules_len('real') == 2
-        assert e._core.mode_rules_len('permissive') == 3
+        assert e._core.mode_rules_len(rule_mode='real') == 2
+        assert e._core.mode_rules_len(rule_mode='permissive') == 3
         assert fires(e, P_CORPUS, 'permissive')
         assert not fires(e, P_CORPUS, 'default')
 
@@ -425,11 +425,11 @@ class TestTheModeSurfaceRefusesNonsense:
         e = SimpliPyEngine.from_config(acj_config_path())
         for bad in ('lossy', 'sound', 'Default', ''):  # retired spellings refuse (0.14.0)
             with pytest.raises(ValueError, match='unknown rule_mode'):
-                e._core.ac_simplify_in_mode(['x0'], 48, bad, 'tagged')
+                e._core.ac_simplify_in_mode(['x0'], 48, 'tagged', rule_mode=bad)
             with pytest.raises(ValueError, match='unknown rule_mode'):
-                e._core.ac_rules_info_in_mode(bad)
+                e._core.ac_rules_info_in_mode(rule_mode=bad)
             with pytest.raises(ValueError, match='unknown rule_mode'):
-                e._core.mode_rules_len(bad)
+                e._core.mode_rules_len(rule_mode=bad)
 
     def test_mode_sets_face_the_same_load_gates(self, tmp_path):
         """A mode relaxes what a rule may CLAIM about the deployed engine, never what
@@ -440,7 +440,7 @@ class TestTheModeSurfaceRefusesNonsense:
         bad = [[['sin', '_0'], ['log', '_0']], [['sin', '_0'], ['tan', '_0']]]
         cfg = write_artifact(tmp_path, rules=[P_DEFAULT], corpus=bad)
         e = SimpliPyEngine.from_config(cfg)
-        assert e._core.mode_rules_len('permissive') == 2
-        assert e._core.ac_rules_info_in_mode('permissive')[0] == 0
-        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'permissive', 'explicit') \
+        assert e._core.mode_rules_len(rule_mode='permissive') == 2
+        assert e._core.ac_rules_info_in_mode(rule_mode='permissive')[0] == 0
+        assert e._core.ac_simplify_in_mode(['sin', 'x0'], 48, 'explicit', rule_mode='permissive') \
             == ['sin', 'x0']

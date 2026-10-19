@@ -239,7 +239,7 @@ def test_a_twin_shadowed_row_is_dropped_and_nothing_it_served_is_lost() -> None:
 
     def served():
         return sorted((tuple(lhs), tuple(rhs))
-                      for lhs, rhs, _ in engine._core.ac_served_rules_in_mode('default'))
+                      for lhs, rhs, _ in engine._core.ac_served_rules_in_mode(rule_mode='default'))
 
     before = served()
     assert engine._core.ac_shadow_census(rule_mode='default'), 'vacuous: no twin-shadow'
@@ -247,3 +247,103 @@ def test_a_twin_shadowed_row_is_dropped_and_nothing_it_served_is_lost() -> None:
     assert kept == [sib[0]] and dropped == [sib[1]]
     assert engine._core.ac_shadow_census(rule_mode='default') == []
     assert served() == before
+
+
+def _crashing_mine(directory, crash_at=None, **kw):
+    """A small mine in `directory`; with `crash_at`, it dies inside that f64 length."""
+    calls: list = []
+    original = RuleMiner._mine_length
+
+    def spy(self, sources, mine_, rule_mode, judge_, judged, dummy_variables):
+        if rule_mode == 'default':
+            calls.append(len(calls))
+            if crash_at is not None and len(calls) == crash_at:
+                raise KeyboardInterrupt('simulated crash')
+        return original(self, sources, mine_, rule_mode, judge_, judged, dummy_variables)
+
+    directory.mkdir(exist_ok=True)
+    (directory / 'rules.json').write_text('[]')
+    (directory / 'config.yaml').write_text(yaml.safe_dump(
+        {'engine_generation': 2, 'operators': _OPERATORS, 'rules': 'rules.json'}))
+    engine = SimpliPyEngine.from_config(str(directory / 'config.yaml'))
+    RuleMiner._mine_length = spy  # type: ignore[method-assign]
+    try:
+        engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4,
+                          dummy_variables=1, extra_internal_terms=['2'], X=256, seed=7,
+                          promote_sorts=False, verbose=False,
+                          output_file=str(directory / 'mined.json'), **kw)
+    finally:
+        RuleMiner._mine_length = original  # type: ignore[method-assign]
+    return calls
+
+
+def test_a_resume_across_code_changes_refuses(tmp_path, monkeypatch) -> None:
+    """A checkpoint resumes only the mine that wrote it: other code (the compiled core or
+    the package's sources) or other parameters refuse, loudly, and leave it in place."""
+    import simplipy.mining as mining
+    with pytest.raises(KeyboardInterrupt):
+        _crashing_mine(tmp_path / 'a', crash_at=4)
+    checkpoint = tmp_path / 'a' / 'mined.json.checkpoint.json'
+    assert checkpoint.exists()
+    real_digest = mining.code_digest()
+    monkeypatch.setattr(mining, 'code_digest', lambda: dict(real_digest, core='0' * 64))
+    with pytest.raises(RuntimeError, match='different mine'):
+        _crashing_mine(tmp_path / 'a')
+    assert checkpoint.exists(), 'a refused checkpoint is never overwritten'
+    monkeypatch.setattr(mining, 'code_digest', lambda: real_digest)
+    with pytest.raises(RuntimeError, match='different mine'):
+        _crashing_mine(tmp_path / 'a', interval_node_budget=12345)
+    assert len(_crashing_mine(tmp_path / 'a')) == 1, 'the same mine resumes'
+
+
+def test_a_mine_sets_the_node_budget_for_itself(tmp_path) -> None:
+    """`interval_node_budget` is the mine's, recorded in its parameters, and restored after."""
+    from simplipy import _core
+    seen: list = []
+    original = RuleMiner._mine_length
+
+    def spy(self, sources, mine_, rule_mode, judge_, judged, dummy_variables):
+        previous = _core.set_interval_node_budget(None)
+        _core.set_interval_node_budget(previous)
+        seen.append(previous)
+        return original(self, sources, mine_, rule_mode, judge_, judged, dummy_variables)
+
+    RuleMiner._mine_length = spy  # type: ignore[method-assign]
+    try:
+        _crashing_mine(tmp_path / 'b', interval_node_budget=12345)
+    finally:
+        RuleMiner._mine_length = original  # type: ignore[method-assign]
+    assert set(seen) == {12345}
+    assert _core.set_interval_node_budget(None) == 400_000
+    side = json.load(open(tmp_path / 'b' / 'mined.json.provenance.json'))
+    assert side['params']['interval_node_budget'] == 12345
+
+
+def test_a_proposal_whose_target_the_mode_refuses_reads_rejected_at_the_judge(tmp_path) -> None:
+    """THE PROPOSALS ARE ONE MORE LENGTH OF THE JUDGE LOOP (miner.md 2.11): the certified
+    target of `* exp x0 exp x0` goes to the mine's judge, which files its class `real`;
+    the f64 mine excludes it, finds no other class, and the trail says why."""
+    proposal = {'source': SOURCE, 'target': ['exp', '*', '2', 'x0']}
+    refused_lhs = ('*', 'exp', '?0', 'exp', '?0')
+
+    def judge(pairs):
+        return ['real' if tuple(p[0]) == refused_lhs else 'core' for p in pairs]
+
+    (tmp_path / 'rules.json').write_text('[]')
+    (tmp_path / 'config.yaml').write_text(yaml.safe_dump(
+        {'engine_generation': 2, 'operators': _OPERATORS, 'rules': 'rules.json'}))
+    engine = SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
+    engine.find_rules(max_source_pattern_length=2, max_target_pattern_length=4,
+                      dummy_variables=1, extra_internal_terms=['2'], X=256, seed=7,
+                      promote_sorts=False, verbose=False, proposals=[proposal], judge=judge,
+                      output_file=str(tmp_path / 'mined.json'))
+    side = {mode: json.load(open(tmp_path / f'mined{suffix}.json.provenance.json'))
+            for mode, suffix in (('f64', ''), ('real', '_real'))}
+    entry, = side['f64']['proposals']['trail']
+    assert (entry['verdict'], entry['stage']) == ('rejected', 'judge'), entry
+    loop = side['f64']['proposals']['judge_loop']
+    assert loop['judge_rounds'] == 2 and len(loop['excluded']) == 1, loop
+    # `real` licenses the tier: the proposal certifies there in one round
+    entry, = side['real']['proposals']['trail']
+    assert entry['verdict'] == 'certified', entry
+    assert side['real']['proposals']['judge_loop'] == {'judge_rounds': 1, 'excluded': []}

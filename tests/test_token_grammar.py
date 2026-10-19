@@ -99,7 +99,7 @@ class TestReservedSpellingsRefused:
         with pytest.raises(ValueError, match="reserved numeric spelling"):
             engine._core.ac_judge(["inf"], 48)
         with pytest.raises(ValueError, match="reserved numeric spelling"):
-            engine._core.ac_complexity(["nan"])
+            engine._core.ac_complexity(["nan"], rule_mode='default')
 
     def test_parse_normalizes_lowercase_nonfinites(self, engine: SimpliPyEngine) -> None:
         # The infix tokenizer maps lowercase `inf`/`nan` to the CANONICAL spellings:
@@ -225,9 +225,9 @@ class TestRecursionCapEveryEntry:
             lambda: core.find_rule_lib(deep, lib, rule_mode='default'),
             lambda: core.exist_constants_fit(deepc, ["x0"], [1.0] * 8, 8, [1.0] * 8),
             lambda: core.exist_constants_fit_linear(deepc, ["x0"], [1.0] * 8, 8, [1.0] * 8),
-            lambda: core.set_rules([(deep, ["x0"])]),
+            lambda: core.set_mode_rules('default', [(deep, ["x0"])]),
             lambda: core.mine_one_length([deep], lib, rule_mode='default'),
-            lambda: core.ac_ordered_below(deep, ["x0"]),
+            lambda: core.ac_ordered_below_in(deep, ["x0"], rule_mode='default'),
             lambda: core.ac_judge(deep, 48),
             lambda: core.parse("neg(" * 100_000 + "x0" + ")" * 100_000, True, False),
         ]

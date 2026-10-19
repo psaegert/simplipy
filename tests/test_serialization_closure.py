@@ -168,7 +168,7 @@ class TestPrefixClosureExhaustive:
             judged = engine._core.ac_judge(list(src), 48)
             assert judged is not None, f"ac_judge failed on in-vocabulary source {src}"
             out = judged[2]
-            assert engine._core.ac_ordered_below(list(out), list(out)) is False, (
+            assert engine._core.ac_ordered_below_in(list(out), list(out), rule_mode='default') is False, (
                 f"acceptance cannot read the engine's own output {out} (source {src})"
             )
 
@@ -420,17 +420,12 @@ class TestProvenanceRecordsTheMeasure:
         moved = hashlib.sha256(repr(sorted(perturbed.items())).encode()).hexdigest()[:16]
         assert moved != fp['digest']
 
-    def test_the_tagged_fraction_bound_is_a_recorded_switch(self) -> None:
-        # It changes MINED output, so an artifact must record it; it was missing from the
-        # list while every other ordering-affecting switch was present.
-        from simplipy.engine import ARTIFACT_ENV_SWITCHES
-        assert 'SIMPLIPY_TAGGED_FRACTION_MAX' in ARTIFACT_ENV_SWITCHES
-
     def test_the_registry_is_what_the_core_reads(self) -> None:
         """The core declares the artifact-affecting switches and reads each through that
         declaration; every other `SIMPLIPY_*` variable it reads by name is a diagnostic
         trace or the test-asset switch. A new switch read as a bare literal fails here
-        until it is declared."""
+        until it is declared. Since 0.15 there is none: the interval node budget is a
+        recorded `find_rules` argument and the tagged fraction bound a constant."""
         import os
         import re
         from simplipy.engine import ARTIFACT_ENV_SWITCHES
@@ -440,10 +435,10 @@ class TestProvenanceRecordsTheMeasure:
         literal = {m for src in sources for m in re.findall(r'env::var(?:_os)?\(\s*"(SIMPLIPY_\w+)"', src)}
         assert literal == {'SIMPLIPY_AC_TRACE', 'SIMPLIPY_AC_MEMO_TRACE', 'SIMPLIPY_GATE_TRACE',
                            'SIMPLIPY_BATTERY_TRACE', 'SIMPLIPY_TEST_REQUIRE_ASSETS'}
-        assert ARTIFACT_ENV_SWITCHES == ('SIMPLIPY_IVL_NODE_BUDGET', 'SIMPLIPY_TAGGED_FRACTION_MAX')
+        assert ARTIFACT_ENV_SWITCHES == ()
         declared = {m for src in sources
                     for m in re.findall(r'env::var\(\s*crate::env_switches::(\w+)\)', src)}
-        assert declared == {'IVL_NODE_BUDGET', 'TAGGED_FRACTION_MAX'}
+        assert declared == set()
 
 
 class TestCoreTableHasOneSource:

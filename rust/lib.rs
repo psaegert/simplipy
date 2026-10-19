@@ -488,39 +488,6 @@ impl PyEngine {
         })
     }
 
-    /// Simplify through the AC CORE: n-ary add/mul bags with exact rational coefficients,
-    /// rules widened to sub-multiset matching, coefficient arithmetic as computation.
-    /// `form` selects the output projection: "tagged" (default -- the strict delimited
-    /// prefix form, `<add> ... </add>`), "explicit" (sugared old-token diagnostic form),
-    /// Input accepts both the old grammar and
-    /// the tagged form. `max_passes` bounds the number of outer REWRITE PASSES (not nodes);
-    /// the chain stops early at its fixpoint, which measures at 2-4 passes against this
-    /// default of 48. `wildcard_all` is the LOSSY switch, exactly as in `simplify`.
-    #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false, form="tagged"))]
-    fn ac_simplify(
-        &self,
-        py: Python<'_>,
-        tokens: Vec<String>,
-        max_passes: usize,
-        wildcard_all: bool,
-        form: &str,
-    ) -> PyResult<Py<PyList>> {
-        // THE MAP, and the only one on this boundary: today's two-valued `simplipy.Mode`
-        // becomes a three-valued rule mode here. SOUND -> the default set, LOSSY -> the
-        // permissive set. Renaming `Mode` to `f64`/`real`/`permissive` retires this entry in
-        // favour of `ac_simplify_in_mode` below; nothing under it has to move.
-        ac_simplify_impl(
-            &self.inner,
-            py,
-            tokens,
-            max_passes,
-            engine::RuleMode::from_wildcard_all(wildcard_all),
-            parse_ac_form(form)?,
-            0,
-            None,
-        )
-    }
-
     /// `ac_simplify` addressing the rule mode DIRECTLY -- `"default"` (`rules.json`),
     /// `"real"` (`rules_real.json`) or `"permissive"` (`rules_permissive.json`). Each mode serves
     /// ONE DISTINCT, COMPLETE set; `"default"`/`"permissive"` are exactly what
@@ -533,17 +500,17 @@ impl PyEngine {
     /// (see [`explore_budget_of`]: `None` explores until a round finds nothing). 0 (the
     /// default here) routes to the chain's own entry, byte-identical behaviour.
     /// `work_budget` bounds each search's work in `ac::work` units (`None`: unbounded).
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", form="tagged", explore_budget=Some(0), work_budget=None))]
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=Some(0), work_budget=None, *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn ac_simplify_in_mode(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
-        rule_mode: &str,
         form: &str,
         explore_budget: Option<usize>,
         work_budget: Option<u64>,
+        rule_mode: &str,
     ) -> PyResult<Py<PyList>> {
         ac_simplify_impl(
             &self.inner,
@@ -616,68 +583,42 @@ impl PyEngine {
     /// entry stays as the B1 scaffolding surface its falsifier suite drives. It opens no work
     /// budget, so the search runs unbounded. Contracts (empty input, malformed input, forms)
     /// exactly as `ac_simplify`.
-    #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false, form="tagged", explore_budget=0))]
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=0, *, rule_mode))]
     fn ac_simplify_explore(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
-        wildcard_all: bool,
         form: &str,
         explore_budget: usize,
+        rule_mode: &str,
     ) -> PyResult<Py<PyList>> {
         let form = parse_ac_form(form)?;
+        let mode = parse_rule_mode(rule_mode)?;
         if tokens.is_empty() {
             return Ok(PyList::empty(py).into());
         }
         ensure_ac_well_formed(&self.inner, &tokens)?;
         let out = py
             .detach(|| {
-                self.inner.ac_explore_proj(
-                    &tokens,
-                    max_passes,
-                    engine::RuleMode::from_wildcard_all(wildcard_all),
-                    form,
-                    explore_budget,
-                )
+                self.inner
+                    .ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
             })
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))?;
         Ok(PyList::new(py, out)?.into())
     }
 
-    /// The PRETTY INFIX rendering of the AC-simplified expression:
-    /// `x8 + 1.2*x3`, `-x0/3`, `(x0 + 1)^2`, `sin(x0)`. Round-trips through `parse`
-    /// (the reserved constant names `pi`/`e`/`inf`/`nan` read back as constants).
-    #[pyo3(signature = (tokens, max_passes=48, wildcard_all=false))]
-    fn ac_simplify_infix(
-        &self,
-        py: Python<'_>,
-        tokens: Vec<String>,
-        max_passes: usize,
-        wildcard_all: bool,
-    ) -> PyResult<String> {
-        ac_simplify_infix_impl(
-            &self.inner,
-            py,
-            tokens,
-            max_passes,
-            engine::RuleMode::from_wildcard_all(wildcard_all),
-            0,
-            None,
-        )
-    }
-
     /// `ac_simplify_infix` addressing the rule mode directly (see `ac_simplify_in_mode`,
     /// whose `explore_budget` this reads the same way).
-    #[pyo3(signature = (tokens, max_passes=48, rule_mode="default", explore_budget=Some(0), work_budget=None))]
+    #[pyo3(signature = (tokens, max_passes=48, explore_budget=Some(0), work_budget=None, *, rule_mode))]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
-        rule_mode: &str,
         explore_budget: Option<usize>,
         work_budget: Option<u64>,
+        rule_mode: &str,
     ) -> PyResult<String> {
         ac_simplify_infix_impl(
             &self.inner,
@@ -688,18 +629,6 @@ impl PyEngine {
             explore_budget_of(explore_budget),
             work_budget,
         )
-    }
-
-    /// Semantic complexity of an expression, measured on its CANONICAL form (the functional
-    /// the AC simplify search minimizes): weighted structural count -- atoms 1, k-member bags
-    /// k-1, signs free, coefficients +1, powers/functions 1 + operands.
-    /// SERVE-TIME ORDERING (internal, for the mining acceptance gate): is `a` strictly
-    /// below `b` in the reduction ordering the rewrite pass fires under?
-    fn ac_ordered_below(&self, py: Python<'_>, a: Vec<String>, b: Vec<String>) -> PyResult<bool> {
-        ensure_tokens_are_tokens(&a)?;
-        ensure_tokens_are_tokens(&b)?;
-        py.detach(|| self.inner.ac_ordered_below(&a, &b))
-            .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
     /// The serve ordering in `rule_mode`: both sides read in the mode's serving context,
@@ -846,7 +775,7 @@ impl PyEngine {
     /// (search budget `explore_budget`, work budget `work_budget`, read as in
     /// `ac_simplify_in_mode`) and that answer is displayed. Display only: nothing in the engine
     /// calls this or reads what it returns.
-    #[pyo3(signature = (tokens, digits=3, form="infix", rule_mode="default", resimplify=true, explore_budget=None, work_budget=None))]
+    #[pyo3(signature = (tokens, digits=3, form="infix", resimplify=true, explore_budget=None, work_budget=None, *, rule_mode))]
     #[allow(clippy::too_many_arguments)]
     fn prettify(
         &self,
@@ -854,10 +783,10 @@ impl PyEngine {
         tokens: Vec<String>,
         digits: usize,
         form: &str,
-        rule_mode: &str,
         resimplify: bool,
         explore_budget: Option<usize>,
         work_budget: Option<u64>,
+        rule_mode: &str,
     ) -> PyResult<Py<PyAny>> {
         let form = engine::PrettyForm::parse(form).ok_or_else(|| {
             PyValueError::new_err(format!(
@@ -882,13 +811,13 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
+    #[pyo3(signature = (tokens, canon="default", *, rule_mode))]
     fn ac_complexity(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
-        rule_mode: &str,
         canon: &str,
+        rule_mode: &str,
     ) -> PyResult<u64> {
         ensure_ac_well_formed(&self.inner, &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
@@ -902,13 +831,13 @@ impl PyEngine {
     /// theorem under this pricing, unlike the bare `ac_complexity`. `canon="mode"` routes
     /// the canon through `rule_mode` itself (each mode's own measure, what `complexity()`
     /// prices); `canon="default"` pins it to f64's canon (the mode's parse is kept).
-    #[pyo3(signature = (tokens, rule_mode="default", canon="default"))]
+    #[pyo3(signature = (tokens, canon="default", *, rule_mode))]
     fn ac_complexity_certified(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
-        rule_mode: &str,
         canon: &str,
+        rule_mode: &str,
     ) -> PyResult<u64> {
         ensure_ac_well_formed(&self.inner, &tokens)?;
         let mode = parse_rule_mode(rule_mode)?;
@@ -920,27 +849,11 @@ impl PyEngine {
         .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
-    /// AC translation audit: (rules kept incl. minted orientation twins, rules subsumed by
-    /// exact arithmetic, rules dropped as untranslatable/degenerate, orientation twins
-    /// minted). Forces the lazy translation.
-    fn ac_rules_info(&self, py: Python<'_>) -> PyResult<(usize, usize, usize, usize)> {
-        Ok(py.detach(|| self.inner.ac_rules_info()))
-    }
-
-    /// The SERVED rule set -- asset rules AND load-minted orientation twins -- as
-    /// `(lhs, rhs, source)` triples in the explicit projection, where `source` indexes the
-    /// artifact ruleset. The audit surface for "judge what the engine serves, not what the
-    /// artifact says": the twins exist only after translation, so a sweep that reads
-    /// `rules.json` never sees them. Forces the lazy translation.
-    fn ac_served_rules(&self, py: Python<'_>) -> PyResult<Vec<ServedRule>> {
-        Ok(py.detach(|| self.inner.ac_served_rules()))
-    }
-
     /// The four translation counts for ANY mode's served set (`"default"` / `"real"` /
     /// `"permissive"`). `ac_rules_info` stays the DEFAULT mode's tuple, unwidened -- it is
     /// pinned by the corpus gate, and answering it must never force another mode's index
     /// to be built. Forces the named mode's lazy translation, and only that one.
-    #[pyo3(signature = (rule_mode="default"))]
+    #[pyo3(signature = (*, rule_mode))]
     fn ac_rules_info_in_mode(
         &self,
         py: Python<'_>,
@@ -952,7 +865,7 @@ impl PyEngine {
 
     /// [`PyEngine::ac_served_rules`] for ANY mode: what that mode actually fires, with
     /// `source` indexing THAT MODE'S OWN file. The judge surface for the triple.
-    #[pyo3(signature = (rule_mode="default"))]
+    #[pyo3(signature = (*, rule_mode))]
     fn ac_served_rules_in_mode(
         &self,
         py: Python<'_>,
@@ -968,7 +881,7 @@ impl PyEngine {
     /// `None` vs `Some(0)` is the load-side statement the whole design rests on: "this
     /// mode names no set" vs "this mode names an EMPTY set and serves nothing". Builds no
     /// index -- it is a count of raw loaded pairs.
-    #[pyo3(signature = (rule_mode="default"))]
+    #[pyo3(signature = (*, rule_mode))]
     fn mode_rules_len(&self, rule_mode: &str) -> PyResult<Option<usize>> {
         Ok(self.inner.mode_rules_len(parse_rule_mode(rule_mode)?))
     }
@@ -1574,7 +1487,8 @@ impl PyEngine {
     /// mark mints nothing. With `confirm_x` (row-major, `confirm_rows` rows), every numeric
     /// pick must also certify on those rows (stage 2, at a per-pair seed off `confirm_seed`),
     /// and an unconfirmed pick yields to the next candidate.
-    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
+    /// `exclusions`: targets the judge loop refused for this source (by class).
+    #[pyo3(signature = (source, library, max_target=None, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![]))]
     #[allow(clippy::too_many_arguments)]
     fn find_rule_lib(
         &self,
@@ -1593,6 +1507,7 @@ impl PyEngine {
         confirm_rows: usize,
         confirm_min_informative: Option<usize>,
         confirm_seed: u64,
+        exclusions: Vec<Vec<String>>,
     ) -> PyResult<Option<Vec<String>>> {
         ensure_tokens_are_tokens(&source)?;
         let spec = mine_spec(
@@ -1613,8 +1528,15 @@ impl PyEngine {
             confirm_seed,
         )?;
         py.detach(|| {
-            self.inner
-                .find_rule_lib(&source, lib, max_target, &spec, confirm.as_ref(), seed)
+            self.inner.find_rule_lib(
+                &source,
+                lib,
+                max_target,
+                &spec,
+                confirm.as_ref(),
+                seed,
+                &exclusions,
+            )
         })
         .map_err(PyValueError::new_err)
     }
@@ -1623,7 +1545,9 @@ impl PyEngine {
     /// acceptance: the licences against the engine's mark, `judge_pair` on the library's
     /// rows at the source's scan `seed`, then stage 2 on `confirm_x` when given. Returns
     /// `(accepted, reason)`; `reason` is `"accepted"` or the first refusal's name.
-    #[pyo3(signature = (source, hint, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0))]
+    /// `exclusions`: targets the judge loop refused for this source; a hint of their class
+    /// reads `"excluded"`.
+    #[pyo3(signature = (source, hint, library, challenges=16, retries=16, seed=0, rtol=1e-9, atol=1e-12, min_informative=None, *, rule_mode, confirm_x=None, confirm_rows=0, confirm_min_informative=None, confirm_seed=0, exclusions=vec![]))]
     #[allow(clippy::too_many_arguments)]
     fn judge_hint(
         &self,
@@ -1642,6 +1566,7 @@ impl PyEngine {
         confirm_rows: usize,
         confirm_min_informative: Option<usize>,
         confirm_seed: u64,
+        exclusions: Vec<Vec<String>>,
     ) -> PyResult<(bool, String)> {
         ensure_tokens_are_tokens(&source)?;
         ensure_tokens_are_tokens(&hint)?;
@@ -1664,8 +1589,15 @@ impl PyEngine {
         )?;
         let verdict = py
             .detach(|| {
-                self.inner
-                    .judge_hint(&source, &hint, lib, &spec, confirm.as_ref(), seed)
+                self.inner.judge_hint(
+                    &source,
+                    &hint,
+                    lib,
+                    &spec,
+                    confirm.as_ref(),
+                    seed,
+                    &exclusions,
+                )
             })
             .map_err(PyValueError::new_err)?;
         Ok(match verdict {
@@ -1721,20 +1653,6 @@ impl PyEngine {
         })
     }
 
-    /// OFFLINE (mine driver): replace the engine's rules (recompile) -- grows the Kruskal-prune
-    /// rule set length-by-length during a mine. `rules` = the canonicalized (wildcard) rule list.
-    fn set_rules(&mut self, rules: Vec<(Vec<String>, Vec<String>)>) -> PyResult<()> {
-        // H-043/D4: rule compile parses each side into a tree (recursive); cap + alphabet
-        // per side, like every other token-taking entry.
-        for (lhs, rhs) in &rules {
-            ensure_tokens_are_tokens(lhs)?;
-            ensure_tokens_are_tokens(rhs)?;
-        }
-        self.pushed_rules_digest = pushed_rules_digest(&rules);
-        self.inner.set_rules(rules);
-        Ok(())
-    }
-
     /// Install ONE MODE'S OWN COMPLETE RULE SET -- `"real"` (`rules_real.json`) or
     /// `"permissive"` (`rules_permissive.json`), each a self-contained file carrying the core
     /// rules AND that mode's own, never a supplement to `rules.json`.
@@ -1744,8 +1662,8 @@ impl PyEngine {
     /// serves nothing. Do not collapse them -- the distinction is what makes "the mode's
     /// set is exactly the file it names" a statement rather than an inference.
     ///
-    /// `rule_mode="default"` routes to `set_rules`, so there is one way to replace the
-    /// default set and it keeps that path's digest bookkeeping.
+    /// `rule_mode="default"` replaces the default set (the mine grows its Kruskal-prune set
+    /// this way, length by length) and keeps the pushed-rules digest (`rules_in_sync`).
     ///
     /// The base-rule digest (`rules_in_sync`) deliberately does NOT cover these sets: it
     /// answers "does the core hold the DEFAULT recipe it was pushed", and the other two
@@ -1767,14 +1685,17 @@ impl PyEngine {
             }
         }
         if mode == engine::RuleMode::Default {
-            return self.set_rules(rules.unwrap_or_default());
+            let rules = rules.unwrap_or_default();
+            self.pushed_rules_digest = pushed_rules_digest(&rules);
+            self.inner.set_rules(rules);
+            return Ok(());
         }
         self.inner.set_mode_rules(mode, rules);
         Ok(())
     }
 
     /// C1.9: does `rules` match what was last PUSHED into this core (`from_strs` or
-    /// `set_rules`)? The Python shim's `__getstate__` calls this with the current
+    /// `set_mode_rules("default", ..)`)? The Python shim's `__getstate__` calls this with the current
     /// `simplification_rules` and refuses to pickle on a mismatch -- a pickle rebuilds
     /// the worker from the LIST, so a diverged parent would otherwise silently spawn
     /// workers running different rules.
@@ -1919,6 +1840,15 @@ impl PyEngine {
 /// tidiness problem but a soundness one -- the masking walk treated an unknown operator as
 /// a LEAF, so its operands inherited the enclosing bag's role and a `pow` exponent could be
 /// masked, the exact accident the role API exists to prevent.
+/// Set the interval layer's subdivision node budget (`None`: the default, 400,000) and
+/// return the previous one. `find_rules(interval_node_budget=...)` sets it for the mine and
+/// restores it after; the value is recorded in the artifact's parameters.
+#[pyfunction]
+#[pyo3(signature = (budget))]
+fn set_interval_node_budget(budget: Option<u32>) -> u32 {
+    crate::interval::set_max_nodes_budget(budget)
+}
+
 #[pyfunction]
 fn core_serialization_ops(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let out = PyDict::new(py);
@@ -1937,8 +1867,12 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
     m.add_class::<PyCandidateLibrary>()?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
+    m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
     m.add("DEFAULT_WORK", engine::DEFAULT_WORK)?;
+    // The near-miss gate of the high-precision re-judgement (real and permissive): the
+    // fraction of a pair's points that may fail f64 for it to escalate. Recorded per mine.
+    m.add("NEAR_MISS_FRAC", hiprec::NEAR_MISS_FRAC)?;
     m.add(
         "ARTIFACT_ENV_SWITCHES",
         env_switches::ARTIFACT_ENV_SWITCHES.to_vec(),
