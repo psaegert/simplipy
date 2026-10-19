@@ -34,6 +34,10 @@ organised by who you are, then the highlights, then every change in detail.
 
 **`f64` and `real` users**
 
+- **What `f64` promises.** `f64` promises the deployed evaluator's value wherever no operation
+  overflows or underflows. Where one does, a rewrite may give the true value instead, as the
+  constructors always have (`exp(x0)/exp(x0)` is `1`), and the rule judge now reads f64 rules by
+  the same standard.
 - **Factoring is a move of the search.** No rule states the distributive law, so factored and
   expanded answers change. `effort=0`, the chain alone, does not factor (in `real` it did,
   through four common-factor rules).
@@ -302,6 +306,19 @@ model predictions.
   at points the contract tolerates as null events, as realised in f64: `/ $0 $0 -> 1` is `core`
   (served in every mode), not `real`. A NaN hole on positive measure, or at a point the contract
   does not tolerate, still keeps a rule out of f64.
+  Overflow and underflow are the same kind of special case: f64 promises the evaluator's value
+  wherever nothing overflows or underflows. Where an operation overflows or underflows, the
+  constructors give the true value (`exp(x1)/exp(x1)` is `1`, `rootn(exp(800.5), 2)` is
+  `exp(1601/4)`), and the judge now accepts the true value at such a point as well as the
+  evaluator's: `rootn(exp(x0), 2) -> exp(x0/2)` and `exp(x0)/exp(x0) -> 1` are `core`, not
+  `real`. A pole is not an overflow (`atanh(1)` is infinite exactly) and an exact zero is not an
+  underflow (`log(1)`). Every other point is compared as before, so a rule that gives neither
+  value at a range event (`exp(1000) -> 5`) or disagrees where nothing leaves the range stays
+  out of f64: `atanh(tanh(x0)) -> x0`, since `tanh` saturates inside the range, and
+  `log(exp(x0)) -> x0`, 34 ULP apart at `x0 = 0.0137421`, where `exp` rounds its argument into
+  the neighbourhood of 1. The verdict counts the points read this way (`out_of_range`). The
+  miner's numeric check in f64 compares the evaluator's values on every row of its matrix,
+  overflowing rows included, so an f64 mine does not mint these rules.
 - **Permissive keeps the sign of an infinity.** Its search distributed a product over a sum under
   permissive's "finite almost everywhere" licence even when a factor was an infinity:
   `-inf*(x1 - 1/2)` became `-inf*x1 + inf`, undefined wherever `x1 > 0`, and then `inf`, wrong for

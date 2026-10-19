@@ -183,7 +183,9 @@ floating point and mathematically false:
 Neither rule is "more sound" than the other, so there is no rung to put them on, and `<`
 between modes raises `TypeError`.
 
-- **`Mode.f64`** (the default) is sound as the deployed f64 evaluator computes. Use it
+- **`Mode.f64`** (the default) is sound as the deployed f64 evaluator computes, wherever no
+  operation overflows or underflows (see [What `f64` mode does and does not
+  promise](#what-f64-mode-does-and-does-not-promise)). Use it
   whenever the output will be evaluated in floating point.
 
 - **`Mode.real`** is sound as mathematics defines, independent of any float format. Use it
@@ -257,11 +259,28 @@ engine.simplify('atanh(tanh(30))', mode=Mode.real)  # -> '30'    what is true
 
 ### What `f64` mode does and does not promise
 
-It promises that **every rule it applies** has been checked against the deployed evaluator
-itself. Both sides of the rewrite are evaluated in floating point across the verifier's
-battery and grid, and a rule enters the `f64` set only where they agree to within 8 ULP. That bound is derived rather than chosen: a
-rewrite has two sides, each a composition of up to four implementation-defined library
-calls whose errors are independent and can oppose.
+It promises the deployed evaluator's value **wherever no operation overflows or
+underflows**, and **every rule it applies** has been checked against that evaluator itself.
+Both sides of the rewrite are evaluated in floating point across the verifier's battery and
+grid, and a rule enters the `f64` set only where they agree to within 8 ULP. That bound is
+derived rather than chosen: a rewrite has two sides, each a composition of up to four
+implementation-defined library calls whose errors are independent and can oppose.
+
+Overflow and underflow are a special case. An operation overflows when its operands and its
+exact value are finite but its float is `±inf` (`exp(800)`), and underflows when its exact
+value is nonzero but its float is zero or subnormal (`exp(-800)`). At a point where an
+operation of either side does, a rewrite may give the true value instead of the evaluator's,
+which is what the canonical constructors have always done:
+
+```python
+engine.simplify('exp(x0)/exp(x0)')        # -> '1'    (inf/inf is nan in float64 past x0 = 709.78)
+engine.simplify('x0*x1/x1')               # -> 'x0'   (x0*x1 can overflow first)
+engine.simplify('rootn(exp(800.5), 2)')   # -> 'exp(1601/4)'
+```
+
+A pole is not an overflow (`atanh(1)` and `log(0)` are infinite exactly), and saturation is
+not one either: `tanh(20)` is exactly `1.0` in float64 without leaving the range, so
+`atanh(tanh(x0))` keeps the evaluator's `inf` and `f64` does not rewrite it to `x0`.
 
 It does **not** promise that a *sequence* of rewrites carries the same bound. Each rule
 carries it individually; simplification composes rules, and floating-point error composes

@@ -560,6 +560,109 @@ class TestTheRealisationBound:
         assert C.REALISED_ULP == 8
 
 
+class TestTheF64RangeStandard:
+    """f64 promises the evaluator's value wherever nothing overflows or underflows;
+    overflows are a special case. The constructors give the true value where an
+    intermediate leaves the range (`x1*x2/x2 -> x1`, `exp(x1)/exp(x1) -> 1`), so at a point
+    where an operation of either side overflows or underflows the judge's deployed lane
+    accepts the true value as well as the evaluator's, and it compares every other point
+    with the same bar as before."""
+
+    F64 = v.MODE_TIERS['f64']
+
+    def test_a_rule_that_differs_only_out_of_range_is_f64(self) -> None:
+        """`rootn(exp(x), 2) -> exp(x/2)` and `exp(x)/exp(x) -> 1` are true on R and
+        computed by f64 at every point where exp stays in range; they differed only past
+        exp's overflow (709.78) and underflow (-745.13), which made them ENGINE-MISALIGN,
+        tier `real`, and kept them out of the f64 set. Their ground instances, which the
+        constructors perform (`rootn(exp(800.5), 2) -> exp(1601/4)`), are f64 too."""
+        for lhs, rhs in ((['rootn', 'exp', '?0', '2'], ['exp', '/', '?0', '2']),
+                         (['rootn', 'exp', '?0', '2'], ['exp', '*', '0.5', '?0']),
+                         (['/', 'exp', '?0', 'exp', '?0'], ['1']),
+                         (['rootn', 'exp', '800.5', '2'], ['exp', '400.25']),
+                         (['/', 'exp', '800', 'exp', '800'], ['1']),
+                         (['log', 'exp', '1000'], ['1000'])):
+            got = judge_rule(lhs, rhs)
+            assert (got['verdict'], got['realised'], got['tier']) \
+                == ('CERTIFIED', True, 'core'), (lhs, rhs, got)
+            assert got['out_of_range'] > 0, got
+        assert v.verify_ruleset([[['rootn', 'exp', 'x0', '2'], ['exp', '/', 'x0', '2']],
+                                 [['/', '1', 'exp', 'x0'], ['exp', 'neg', 'x0']]],
+                                mode='f64')['is_clean'] is True
+
+    def test_at_a_range_event_only_the_two_values_are_accepted(self) -> None:
+        """The special case admits the true value beside the evaluator's, nothing else.
+        `exp(1000) -> 5` gives neither and stays `reject`; the evaluator's own value stays
+        realised, whether true (`exp(1000) -> inf` is the extended reading) or not
+        (`exp(sinh(-10))` is 1e-4783, and f64 computes 0.0)."""
+        got = judge_rule(['exp', '1000'], ['5'])
+        assert (got['tier'], got['out_of_range']) == ('reject', 0), got
+        assert judge_rule(['exp', '1000'], ['float("inf")'])['tier'] in self.F64
+        got = judge_rule(['exp', 'sinh', '(-10)'], ['0'])
+        assert (got['verdict'], got['realised'], got['tier']) == ('KILL', True, 'f64'), got
+
+    def test_saturation_inside_the_range_is_still_compared(self) -> None:
+        """`tanh` attains exactly 1.0 from 18.99 without leaving the range, and
+        `atanh(1.0)` is a pole, not an overflow: no point is a range event, and f64 still
+        refuses `atanh(tanh(x)) -> x`."""
+        got = judge_rule(['atanh', 'tanh', '?0'], ['?0'])
+        assert (got['verdict'], got['tier'], got['out_of_range']) \
+            == ('ENGINE-MISALIGN', 'real', 0), got
+        assert got['tier'] not in self.F64
+
+    def test_a_difference_at_an_ordinary_point_still_refuses(self) -> None:
+        """Accepting the true value at a range event removes none of the bar elsewhere.
+        `log(exp(x)) -> x` gives the true value past exp's overflow and underflow, and is
+        still refused in f64: exp rounds a small argument into the neighbourhood of 1, so
+        at the grid point 0.0137421 the deployed sides differ by 34 ULP, with nothing out
+        of range."""
+        from simplipy.verify import _contract as C
+        got = judge_rule(['log', 'exp', '?0'], ['?0'])
+        assert got['out_of_range'] > 0
+        assert (got['verdict'], got['realised'], got['tier']) == ('CERTIFIED', False, 'real')
+        x = C.F(0.0137421)
+        in_range = [True]
+        with np.errstate(all='ignore'):
+            lhs = C.d_eval(C.parse(['log', 'exp', '?0']), {'?0': x}, in_range)
+        assert in_range[0] and C._ulp_gap(float(lhs), float(x)) > C.REALISED_ULP
+        assert judge_rule(['sin', '?0'], ['?0'])['tier'] == 'reject'
+
+    def test_real_reads_the_contract_alone(self) -> None:
+        """The contract lane is untouched: every rule above is true on R, so each stays
+        licensed in `real` (and in `permissive`), and a false one stays out."""
+        for lhs, rhs in ((['rootn', 'exp', '?0', '2'], ['exp', '/', '?0', '2']),
+                         (['log', 'exp', '?0'], ['?0']), (['atanh', 'tanh', '?0'], ['?0'])):
+            tier = judge_rule(lhs, rhs)['tier']
+            assert tier in v.MODE_TIERS['real'] and tier in v.MODE_TIERS['permissive']
+        assert judge_rule(['sin', '?0'], ['?0'])['tier'] not in v.MODE_TIERS['real']
+
+    @pytest.mark.parametrize('op, args, out', [
+        ('exp', (800.0,), True), ('exp', (-800.0,), True), ('exp', (-740.0,), True),
+        ('*', (1e200, 1e200), True), ('*', (1e-200, 1e-200), True),
+        ('+', (1e308, 1e308), True), ('pow', (10.0, 400.0), True),
+        ('inv', (1e308,), True), ('cosh', (800.0,), True), ('rootn', (5e-324, -1.0), True),
+        # poles: an exact infinity is what the operator computes
+        ('atanh', (1.0,), False), ('log', (0.0,), False), ('/', (1.0, 0.0), False),
+        ('pow', (0.0, -1.0), False), ('rootn', (0.0, -2.0), False), ('inv', (0.0,), False),
+        # exact zeros are not underflows
+        ('-', (0.5, 0.5), False), ('log', (1.0,), False), ('acos', (1.0,), False),
+        ('*', (0.0, 1e-200), False),
+        # saturation inside the range, and non-finite operands
+        ('tanh', (20.0,), False), ('exp', (math.inf,), False), ('exp', (700.0,), False),
+    ])
+    def test_the_operation_classifier(self, op, args, out) -> None:
+        from simplipy.verify import _contract as C
+        with np.errstate(all='ignore'):
+            value = C.F(C.DEP_OPS[op](*[C.F(a) for a in args]))
+        assert C.out_of_range(op, [C.F(a) for a in args], value) is out, (op, args, value)
+
+    def test_the_classifier_covers_the_whole_vocabulary(self) -> None:
+        """An operator outside the classifier's tables is never read as out of range, so a
+        new operator must be placed in them on purpose."""
+        from simplipy.verify import _contract as C
+        assert C._RANGE_KNOWN == frozenset(C.ARITY)
+
+
 class TestCleanlinessIsPerMode:
     """Before the triple there was one rule set and one contract, so "clean" could mean
     "no fatal bucket". That is now wrong in both directions, and R3 ("0.14.0 is sound,

@@ -271,7 +271,9 @@ class Mode(Enum):
     do not compare with ``<``.
 
     - ``f64`` (the default; also spelled ``'default'``): preserves what the deployed
-      float64 evaluator computes. This is the inference and scoring mode: a rewrite in it
+      float64 evaluator computes, wherever no operation overflows or underflows. Where one
+      does, a rewrite may give the true value instead (``exp(x)/exp(x)`` is ``1`` also
+      past ``exp``'s overflow). This is the inference and scoring mode: a rewrite in it
       is safe for a model that is evaluated in float64.
     - ``real``: preserves the function as mathematics defines it, independent of any
       float format. Use it when the rewrite must hold symbolically (proofs,
@@ -2307,7 +2309,10 @@ class SimpliPyEngine:
 
         Each mode reads an expression into its own canonical form, because the modes accept
         different simplifications as true: ``f64`` follows the deployed float evaluator
-        (``1/exp(5132.3)`` is ``0``), ``real`` exact real arithmetic (it is not), and
+        wherever no operation overflows or underflows (``1/exp(5132.3)`` is ``0``, the
+        evaluator's value; past an overflow the true value is accepted as well, so
+        ``exp(x)/exp(x)`` is ``1``), ``real`` exact real arithmetic (``1/exp(5132.3)`` is
+        not ``0``), and
         ``permissive`` also what holds only up to sign or domain (``(x^2)^(1/2)`` is ``x``,
         where ``f64`` and ``real`` give ``abs(x)``).
         This prices that form, on the
