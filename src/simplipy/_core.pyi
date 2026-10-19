@@ -76,6 +76,8 @@ class Engine:
         rule_mode: Literal["default", "real", "permissive"],
     ) -> list[str]: ...
     def ac_ordered_below_in(self, a: list[str], b: list[str], *, rule_mode: str) -> bool: ...
+    #: Census of the nodes `mu` charges, over the bare canonical forms of a batch.
+    def ac_node_census(self, exprs: list[list[str]]) -> dict[str, int]: ...
     def ac_canonical_keys(
         self, exprs: list[list[str]], *, rule_mode: str
     ) -> list[list[str] | None]: ...
@@ -117,12 +119,12 @@ class Engine:
         var_names: list[str],
         x_flat: list[float],
         n_rows: int,
-        challenges: int,
-        retries: int,
-        seed: int,
-        rtol: float,
-        atol: float,
-        min_informative: int | None,
+        challenges: int = ...,
+        retries: int = ...,
+        seed: int = ...,
+        rtol: float = ...,
+        atol: float = ...,
+        min_informative: int | None = ...,
         *,
         rule_mode: str,
     ) -> list[str] | None: ...
