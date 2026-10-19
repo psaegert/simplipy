@@ -196,7 +196,6 @@ fn ac_simplify_impl(
     mode: engine::RuleMode,
     form: engine::AcForm,
     explore_budget: usize,
-    work_budget: Option<u64>,
     own_set: bool,
 ) -> PyResult<Py<PyList>> {
     // ONE read guard for the whole call, taken with the GIL released: the fail-closed check,
@@ -214,7 +213,6 @@ fn ac_simplify_impl(
         ensure_ac_well_formed(&inner, &tokens)?;
         // Budget 0 takes the chain's own entry, so unused exploration is byte-identical
         // BY ROUTING, not by trusting the explore path's early return (D39 effort=0).
-        let _work = crate::ac::work::search_budget_scope(work_budget);
         if explore_budget > 0 {
             inner.ac_explore_proj(&tokens, max_passes, mode, form, explore_budget)
         } else {
@@ -226,7 +224,6 @@ fn ac_simplify_impl(
 }
 
 /// The infix twin of [`ac_simplify_impl`], behind `ac_simplify_infix_in_mode`.
-#[allow(clippy::too_many_arguments)]
 fn ac_simplify_infix_impl(
     core: &PyEngine,
     py: Python<'_>,
@@ -234,7 +231,6 @@ fn ac_simplify_infix_impl(
     max_passes: usize,
     mode: engine::RuleMode,
     explore_budget: usize,
-    work_budget: Option<u64>,
     own_set: bool,
 ) -> PyResult<String> {
     // One read guard, GIL released, as in `ac_simplify_impl`.
@@ -247,7 +243,6 @@ fn ac_simplify_infix_impl(
         }
         ensure_ac_well_formed(&inner, &tokens)?;
         // Same routing doctrine as `ac_simplify_impl`: budget 0 is the chain's own entry.
-        let _work = crate::ac::work::search_budget_scope(work_budget);
         if explore_budget > 0 {
             inner.ac_simplify_infix_explore(&tokens, max_passes, mode, explore_budget)
         } else {
@@ -602,11 +597,10 @@ impl PyEngine {
     /// `explore_budget` is the public `effort=`
     /// (see [`explore_budget_of`]: `None`, the default here as in `simplify`, explores until
     /// a round finds nothing). 0 routes to the chain's own entry, byte-identical behaviour.
-    /// `work_budget` bounds each search's work in `ac::work` units (`None`: unbounded).
     /// `own_set=True` serves only the mode's OWN set: where the core holds none for the mode,
     /// the call raises `MissingModeSet` instead of serving the default set ([`ensure_own_set`],
     /// decided under the call's own read guard).
-    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, work_budget=None, *, rule_mode, own_set=false))]
+    #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=None, *, rule_mode, own_set=false))]
     #[allow(clippy::too_many_arguments)]
     fn ac_simplify_in_mode(
         &self,
@@ -615,7 +609,6 @@ impl PyEngine {
         max_passes: usize,
         form: &str,
         explore_budget: Option<usize>,
-        work_budget: Option<u64>,
         rule_mode: &str,
         own_set: bool,
     ) -> PyResult<Py<PyList>> {
@@ -627,7 +620,6 @@ impl PyEngine {
             parse_rule_mode(rule_mode)?,
             parse_ac_form(form)?,
             explore_budget_of(explore_budget),
-            work_budget,
             own_set,
         )
     }
@@ -687,8 +679,7 @@ impl PyEngine {
     /// `explore_budget` counts candidate descents; 0 (the default here) never enters the
     /// search, so this entry is then byte-identical to `ac_simplify_in_mode` with
     /// `explore_budget=0`. The public `effort=` rides `ac_simplify_in_mode`'s
-    /// `explore_budget` instead. This entry opens no work budget, so the search runs
-    /// unbounded. Contracts (empty input, malformed input, forms) exactly as
+    /// `explore_budget` instead. Contracts (empty input, malformed input, forms) exactly as
     /// `ac_simplify_in_mode`.
     #[pyo3(signature = (tokens, max_passes=48, form="tagged", explore_budget=0, *, rule_mode))]
     fn ac_simplify_explore(
@@ -716,16 +707,14 @@ impl PyEngine {
     }
 
     /// `ac_simplify_in_mode`'s answer as pretty infix text (see `ac_simplify_in_mode`, whose
-    /// `explore_budget`, `work_budget` and `own_set` this reads the same way).
-    #[pyo3(signature = (tokens, max_passes=48, explore_budget=None, work_budget=None, *, rule_mode, own_set=false))]
-    #[allow(clippy::too_many_arguments)]
+    /// `explore_budget` and `own_set` this reads the same way).
+    #[pyo3(signature = (tokens, max_passes=48, explore_budget=None, *, rule_mode, own_set=false))]
     fn ac_simplify_infix_in_mode(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         max_passes: usize,
         explore_budget: Option<usize>,
-        work_budget: Option<u64>,
         rule_mode: &str,
         own_set: bool,
     ) -> PyResult<String> {
@@ -736,7 +725,6 @@ impl PyEngine {
             max_passes,
             parse_rule_mode(rule_mode)?,
             explore_budget_of(explore_budget),
-            work_budget,
             own_set,
         )
     }
@@ -799,7 +787,7 @@ impl PyEngine {
     }
 
     /// OFFLINE miner: the MARK a mine of `rule_mode` sets for `source` -- the mode's serve
-    /// answer (`simplify(source, mode)` at the default effort and work budget, with the
+    /// answer (`simplify(source, mode)` at the default effort, with the
     /// mode's rules installed) in the explicit projection (`Engine::mine_mark`).
     #[pyo3(signature = (source, *, rule_mode))]
     fn mine_mark(
@@ -869,26 +857,20 @@ impl PyEngine {
             .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
     }
 
-    /// `prettify`: the DISPLAY of an expression's canonical state under
-    /// the digit budget `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`,
-    /// `"tagged"`). With `resimplify`, the display is simplified once in `rule_mode`
-    /// (search budget `explore_budget`, work budget `work_budget`, read as in
-    /// `ac_simplify_in_mode`) and that answer is displayed. Display only: nothing in the engine
-    /// calls this or reads what it returns.
-    /// `own_set` reads as in `ac_simplify_in_mode`.
-    #[pyo3(signature = (tokens, digits=3, form="infix", resimplify=true, explore_budget=None, work_budget=None, *, rule_mode, own_set=false))]
-    #[allow(clippy::too_many_arguments)]
+    /// `prettify`: the DISPLAY of an expression's canonical state under the digit budget
+    /// `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`, `"tagged"`), a float
+    /// shown with `precision` significant digits (`None`: the shortest decimal of its float64),
+    /// its numbers read in `rule_mode`'s number domain. Display only: it simplifies nothing, and
+    /// nothing in the engine calls this or reads what it returns.
+    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, rule_mode))]
     fn prettify(
         &self,
         py: Python<'_>,
         tokens: Vec<String>,
         digits: usize,
         form: &str,
-        resimplify: bool,
-        explore_budget: Option<usize>,
-        work_budget: Option<u64>,
+        precision: Option<usize>,
         rule_mode: &str,
-        own_set: bool,
     ) -> PyResult<Py<PyAny>> {
         let form = engine::PrettyForm::parse(form).ok_or_else(|| {
             PyValueError::new_err(format!(
@@ -899,14 +881,14 @@ impl PyEngine {
         if digits == 0 {
             return Err(PyValueError::new_err("digits must be at least 1"));
         }
-        let budget = resimplify.then(|| explore_budget_of(explore_budget));
+        if precision == Some(0) {
+            return Err(PyValueError::new_err("precision must be at least 1"));
+        }
         let out = py.detach(|| {
             let inner = self.inner();
-            ensure_own_set(&inner, mode, own_set)?;
             ensure_ac_well_formed(&inner, &tokens)?;
-            let _work = crate::ac::work::search_budget_scope(work_budget);
             inner
-                .ac_prettify(&tokens, digits, form, mode, budget)
+                .ac_prettify(&tokens, digits, precision, form, mode)
                 .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
         })?;
         Ok(match out {
@@ -2007,7 +1989,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
     m.add_function(wrap_pyfunction!(range_event, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
-    m.add("DEFAULT_WORK", engine::DEFAULT_WORK)?;
     // The near-miss gate of the high-precision re-judgement (real and permissive): the
     // fraction of a pair's points that may fail f64 for it to escalate. Recorded per mine.
     m.add("NEAR_MISS_FRAC", hiprec::NEAR_MISS_FRAC)?;

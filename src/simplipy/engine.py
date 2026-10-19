@@ -38,13 +38,11 @@ try:
     # hard error at engine construction.
     from simplipy._core import Engine as _RustEngine  # type: ignore[attr-defined]
     from simplipy._core import core_serialization_ops as _core_serialization_ops  # type: ignore[attr-defined]
-    from simplipy._core import DEFAULT_WORK as _CORE_DEFAULT_WORK  # type: ignore[attr-defined]
     from simplipy._core import MissingModeSet as _MissingModeSet  # type: ignore[attr-defined]
     _CORE_IMPORT_ERROR: Exception | None = None
 except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
     _RustEngine = None  # type: ignore[assignment, misc]
     _core_serialization_ops = None  # type: ignore[assignment]
-    _CORE_DEFAULT_WORK = None
     _MissingModeSet = LookupError  # type: ignore[assignment, misc]
     _CORE_IMPORT_ERROR = _exc
 
@@ -247,14 +245,6 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
-
-#: The WORK BUDGET each search ``simplify()`` runs under when ``work`` is not given: ``None``, in
-#: every mode -- the search runs until a round finds nothing. ``work=k`` is an opt-in cap in
-#: deterministic units (one step of the AC matcher or one canonical-constructor call), so it cuts
-#: the same walk at the same place on every machine and under any load; a search that spends it
-#: returns its best answer so far. It ends a search early and never changes which algorithm runs.
-#: The compiled core declares it (the miner's marks run under the same budget).
-DEFAULT_WORK: int | None = _CORE_DEFAULT_WORK
 
 
 #: Leaves that denote a VALUE rather than a free variable.
@@ -1226,8 +1216,9 @@ class SimpliPyEngine:
             behavior. Under a lean selection (e.g. ``modes=('f64', 'permissive')``)
             a config-named set outside it is not even read here -- its resolved
             path is recorded and the file loads on the mode's first use. See the
-            class docstring's ``modes`` entry for the full contract and measured
-            RSS numbers, and :meth:`unload_mode` for the explicit drop.
+            class docstring's ``modes`` entry for the full contract and the peak RSS
+            measured on the acj-5-4-llm artifact, and :meth:`unload_mode` for the
+            explicit drop.
         trusted_modules : list[str] or None, optional
             Extra module roots the config is allowed to import (see
             :mod:`simplipy.trust`). Deliberately an argument HERE and not a key in
@@ -1410,7 +1401,8 @@ class SimpliPyEngine:
             is the historical behavior, a lean selection such as
             ``modes=('f64', 'permissive')`` defers the rest to first use. See
             :meth:`from_config` and the class docstring's ``modes`` entry (with the
-            measured RSS numbers); :meth:`unload_mode` is the paired explicit drop.
+            peak RSS measured on the acj-5-4-llm artifact); :meth:`unload_mode` is the
+            paired explicit drop.
         trusted_modules : list[str] or None, optional
             Extra module roots the fetched config is allowed to import (see
             :mod:`simplipy.trust`). A hosted asset is third-party input like any
@@ -1784,8 +1776,7 @@ class SimpliPyEngine:
         return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'explicit'), tokens
 
     def evaluate_constants(
-            self, expression: str | list[str] | tuple[str, ...] | np.ndarray,
-            form: str | None = None) -> str | list[str]:
+            self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str | list[str]:
         """Fold every variable-free subtree to its f64 value -- EXPLICITLY, on request.
 
         This is the front door for the numeric evaluation :meth:`simplify` refuses to
@@ -1811,9 +1802,10 @@ class SimpliPyEngine:
         non-finite guard into flash-ansr; refusing is the safe direction and the caller
         can still evaluate the expression themselves.
 
-        NEVER called by :meth:`simplify`, in any mode. Returns the input's dialect (infix
-        text for a ``str``, otherwise the tagged or binary-prefix tokens it was given)
-        unless ``form`` names another: ``'tagged'``, ``'explicit'`` or ``'infix'``.
+        NEVER called by :meth:`simplify`, in any mode. Returns the input's dialect: infix
+        text for a ``str``, otherwise the tagged or binary-prefix tokens it was given. To
+        change the notation, convert the answer (:meth:`to_infix`, :meth:`to_tagged`,
+        :meth:`to_prefix`).
         """
         in_form, tokens = self._read_input(expression)
         if not tokens:
@@ -1854,14 +1846,11 @@ class SimpliPyEngine:
             out.append(prefix[i])
             i += 1
 
-        target = form or in_form
-        if target == 'explicit':
-            return out
-        if target == 'tagged':
+        if in_form == 'tagged':
             return cast(list, self.to_tagged(out))
-        if target == 'infix':
+        if in_form == 'infix':
             return cast(str, self.to_infix(out))
-        raise ValueError(f"unknown form {form!r}: expected 'tagged', 'explicit' or 'infix'")
+        return out
 
     def to_infix(self, expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str:
         """Convert an expression to the INFIX form -- NOTATION ONLY.
@@ -2025,8 +2014,7 @@ class SimpliPyEngine:
             *,
             max_passes: int | None = None,
             mode: Mode | str = Mode.f64,
-            effort: int | None = None,
-            work: int | None | str = 'default') -> str | list[str] | tuple[str, ...] | np.ndarray:
+            effort: int | None = None) -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
         The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
@@ -2044,8 +2032,8 @@ class SimpliPyEngine:
         computation rather than mined rules. Every mode runs one walk: its chain of rules and
         constructors, then the search, in its own canonical form and rules. The output is
         idempotent (``simplify(simplify(x)) == simplify(x)``) when the search runs until a
-        round finds nothing, the default in every mode; a search that an ``effort`` cap or a
-        ``work`` budget stops can continue on a second call.
+        round finds nothing, the default in every mode; a search that an ``effort`` cap
+        stops can continue on a second call.
 
         .. note::
             Pair this engine with sort-promoted rulesets, which every published engine
@@ -2078,20 +2066,14 @@ class SimpliPyEngine:
             STRICTLY below it in the serve-time reduction ordering.
             ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
             nothing, so a second call returns the answer unchanged (up to the residual
-            classes listed in ``docs/formal.md``, and a search a ``work`` budget stopped);
+            classes listed in ``docs/formal.md``);
             an int caps the search at that many candidate descents, after which
             a second call can continue it; ``0`` never enters the phase and is byte-identical to the plain chain
             (rules and constructors), which does not factor.
             Every guarantee survives any budget: soundness (same certificates), never-worse
             (strictly-below acceptance: never above the input, and never above the answer at a
-            smaller ``effort`` with the same ``work``), termination (well-founded ordering,
+            smaller ``effort``), termination (well-founded ordering,
             independent of the budget) and deterministic output.
-        work : int, None or 'default', optional
-            An opt-in WORK BUDGET for the search, in deterministic units (one AC-matcher step
-            or one canonical-constructor call). ``'default'`` is ``DEFAULT_WORK``, no bound in
-            every mode; ``None`` is the same (the search runs until a round finds nothing). A
-            search that spends its budget returns its best answer so far; the guarantees above
-            hold at every budget, and the budget never changes which algorithm runs.
 
         Returns
         -------
@@ -2173,25 +2155,7 @@ class SimpliPyEngine:
                 raise ValueError(f"effort must be non-negative, got {effort}")
             if effort > 2 ** 63 - 1:
                 effort = None  # beyond the index range no cap binds: the uncapped search
-        if isinstance(work, str):
-            if work != 'default':
-                raise ValueError(f"work must be None, an int >= 0 or 'default', not {work!r}")
-        elif work is not None:
-            if isinstance(work, bool):
-                raise TypeError(f"work must be None or an int >= 0, not bool ({work!r})")
-            try:
-                work = work.__index__()
-            except AttributeError:
-                raise TypeError(
-                    f"work must be None or an int >= 0, not {type(work).__name__} ({work!r})") from None
-            if work < 0:
-                raise ValueError(f"work must be non-negative, got {work}")
-            if work > 2 ** 64 - 1:
-                work = None  # beyond the counter's range no budget binds
         mode = _coerce_mode(mode)
-
-        if work == 'default':
-            work = DEFAULT_WORK
 
         # DIALECT-PRESERVING (owner ruling 2026-08-18): `simplify` only simplifies and
         # answers in the form it was handed -- a str is infix, a token sequence carrying
@@ -2211,9 +2175,9 @@ class SimpliPyEngine:
         own_set = mode is Mode.real
         if form == 'infix':
             return self._serve(mode, lambda core: core.ac_simplify_infix_in_mode(
-                tokens, max_passes, effort, work, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
+                tokens, max_passes, effort, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
         out = self._serve(mode, lambda core: core.ac_simplify_in_mode(
-            tokens, max_passes, form, effort, work, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
+            tokens, max_passes, form, effort, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
         return self._denormalize(out, expression)
 
     def prettify(
@@ -2221,21 +2185,24 @@ class SimpliPyEngine:
             expression: str | list[str] | tuple[str, ...] | np.ndarray,
             *,
             digits: int = 3,
+            precision: int | None = None,
             form: str | None = None,
             mode: Mode | str = Mode.f64) -> str | list[str]:
-        """Write an expression for a READER: numbers rounded to a digit budget, the state untouched.
+        """Write an expression for a READER: each number written to a digit budget, nothing else decided.
 
         :meth:`simplify` returns the canonical form, whose numbers are exact
         (``2.14583142772210003669120562399025*x1`` stays as long as it was given). ``prettify``
         is the display of that form: it decides how each number is WRITTEN and leaves the
-        structure as it is. Nothing inside SimpliPy calls it or reads what it returns, so
-        call it where people read expressions, on the answer of :meth:`simplify`::
+        structure as it is. It evaluates nothing and simplifies nothing, so what the canonical
+        form keeps, the display shows. Nothing inside SimpliPy calls it or reads what it
+        returns; call it where people read expressions, on the answer of :meth:`simplify`::
 
             engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
             # '2.1458314277221002*x1'
             engine.prettify(engine.simplify('x1*5/21'))        # 'x1/4.2'
             engine.prettify(engine.simplify('1/(2*3.141592653589793)'))
             # '1/(2*3.141592653589793)'
+            engine.prettify(engine.simplify('x1*exp(-381/2)'))  # 'x1*exp(-190.5)'
 
         The rules, at the digit budget ``D = digits`` (every digit a spelling writes counts,
         a numerator of 1 included: ``1/12`` counts 3):
@@ -2245,20 +2212,38 @@ class SimpliPyEngine:
           ``x1/2`` stays ``x1/2``).
         * Otherwise the value is the float64 nearest to it, in its shortest form, as a
           multiplier (``x1/1024`` is ``9.765625e-4*x1``). A value a hair from a short
-          number shows as that number (``1.000000000000000000003*x1`` is ``x1``).
+          number shows as that number (``1.000000000000000000003*x1`` is ``x1``). With
+          ``precision=k`` such a float shows ``k`` significant digits instead
+          (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), the pi literal and
+          a divisor of the next rules included; a fraction that fits ``D`` is not affected.
         * pi is the literal ``3.141592653589793``: a value that is a fitting fraction times
           or over it is written with the literal factored out (``3*x0^2/(20*3.141592653589793*x1*x2)``).
         * A float whose reciprocal float64 holds as written stays a divisor where the
-          denominator has another factor; a bare ``x1/0.225147640565301`` is
+          product has another divisor; a bare ``x1/0.225147640565301`` is
           ``4.441529999999994*x1``.
-        * A function of numbers folds to one float only when every number inside would
-          itself be a float (``sin(sin(9463/890))`` is ``-0.8045036621463277``, ``sin(2)``
-          stays). Nothing folds or combines to inf, 0 or a subnormal.
+        * A function of numbers stays a function, its numbers written by these rules
+          (``x1*exp(-381/2)`` is ``x1*exp(-190.5)``). No numbers combine to inf, 0 or a
+          subnormal.
         * Exponents follow the same rules; ``x^(1/n)`` and ``x^(-1/n)`` are written
           ``rootn(x, n)`` and ``1/rootn(x, n)`` for even ``n``.
+        * One slash: every divisor of a product joins one denominator, functions and sums
+          included (``x1/x2/exp(x3)`` is ``x1/(x2*exp(x3))``, ``x1/sin(x3)/(x2 + 1)`` is
+          ``x1/(sin(x3)*(x2 + 1))``). The display is of the product reading it back builds:
+          the same whether the canonical form holds a reciprocal per factor or one of their
+          product, its factors in canonical order and a sign the denominator holds kept there
+          (``x3/(-(x11 + x9))``). Tagged tokens write a section member per reciprocal, so a
+          reciprocal of a product with a sum or a function stays one bag in the section.
         * Scientific notation from ``1e6`` and below ``1e-3``.
-        * The display is simplified once more (in ``mode``) and that answer is displayed,
-          so displaying the simplified display gives the display back.
+
+        At the default ``precision=None`` a number is written exactly or as the float64
+        nearest to it, so the display reads back to the same float64 values: it evaluates as
+        the expression does, up to the order of its operations. With a ``precision`` it does
+        not: a float shortened to ``k`` digits reads back as another number. Displaying a
+        display gives it back
+        (``prettify(prettify(x)) == prettify(x)``), except where writing numbers as their
+        floats lets reading the display collect or compute what the expression keeps apart:
+        the display of ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``sin(x1) - sin(x1)``,
+        whose own display is ``0``.
 
         Parameters
         ----------
@@ -2267,12 +2252,15 @@ class SimpliPyEngine:
             Its canonical state is displayed; pass the answer of :meth:`simplify`.
         digits : int, optional
             The digit budget ``D`` (default 3).
+        precision : int or None, optional
+            The significant digits a number written as a float shows. ``None`` (the default)
+            writes the shortest decimal that reads back as the same float64.
         form : str, optional
             ``'infix'``, ``'explicit'`` or ``'tagged'``; by default the input's dialect, as
             :meth:`simplify` answers.
         mode : Mode | str, optional
-            The mode whose numbers are read and whose rules the extra simplification uses
-            (default ``f64``; the display rules are designed for it).
+            The mode whose number domain reads the expression's numbers (default ``f64``, for
+            which the display rules are designed). No rules are used.
 
         Returns
         -------
@@ -2284,21 +2272,21 @@ class SimpliPyEngine:
             raise TypeError(f"digits must be an int >= 1, not {type(digits).__name__} ({digits!r})")
         if digits < 1:
             raise ValueError(f"digits must be at least 1, got {digits}")
+        if precision is not None:
+            if isinstance(precision, bool) or not isinstance(precision, (int, np.integer)):
+                raise TypeError(
+                    f"precision must be None or an int >= 1, not {type(precision).__name__} ({precision!r})")
+            if precision < 1:
+                raise ValueError(f"precision must be at least 1, got {precision}")
+            precision = int(precision)
         mode = _coerce_mode(mode)
-        refusal = "mode='real' needs a ruleset mined for it, and this artifact has none"
-        if mode is Mode.real and not self._names_mode_set('real'):
-            raise ValueError(refusal)
         in_form, tokens = self._read_input(expression)
         target = form or in_form
         if target not in ('infix', 'explicit', 'tagged'):
             raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
         if not tokens:
             return '' if target == 'infix' else []
-        work = DEFAULT_WORK  # the one default of every mode, as in simplify
-        rule_mode = _RULE_MODE[mode]
-        return self._serve(mode, lambda core: core.prettify(
-            tokens, int(digits), target, True, DEFAULT_EFFORT, work, rule_mode=rule_mode,
-            own_set=mode is Mode.real), refusal)
+        return self._core.prettify(tokens, int(digits), target, precision, rule_mode=_RULE_MODE[mode])
 
     def complexity(
             self,

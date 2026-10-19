@@ -3,7 +3,7 @@
 `simplify` returns the canonical form, and its numbers are exact: a literal keeps every digit
 it was given, and a coefficient that combines several literals is their exact product.
 `prettify` is the display of that form. It decides how each number is written for a reader and
-leaves the expression's structure as it is.
+leaves the expression's structure as it is: it evaluates nothing and simplifies nothing.
 
 ```python
 import simplipy as sp
@@ -50,6 +50,17 @@ engine.prettify(engine.simplify("1.000000000000000000003*x1"))
 # -> 'x1'
 ```
 
+**Precision.** `precision=k` shows a number written as a float with `k` significant digits
+instead of its shortest float64 form; a fraction that fits the digit budget is not affected.
+The default, `precision=None`, writes floats in full.
+
+```python
+engine.prettify(answer, precision=3)
+# -> '2.15*x1'
+engine.prettify(engine.simplify("x1*5/21"), precision=1)
+# -> 'x1/4.2'
+```
+
 **pi** is the literal `3.141592653589793`. A value that is a fitting fraction times pi, or over
 it, is written with the literal factored out.
 
@@ -58,15 +69,32 @@ engine.prettify(engine.simplify("3*x0^2/(20*3.141592653589793*x1*x2)"))
 # -> '3*x0^2/(20*3.141592653589793*x1*x2)'
 ```
 
-**Divisors.** A float whose reciprocal float64 holds as written stays a divisor where the
-denominator has another factor; a bare `x1/0.225147640565301` becomes a multiplier (above).
-
-**Functions of numbers** fold to one float only when every number inside would itself be
-written as a float. Nothing folds or combines to inf, 0 or a subnormal.
+**Divisors.** Every divisor of a product joins one denominator, functions and sums included:
+one slash. The display is of the product reading it back builds, so it is the same whether the
+canonical form holds a reciprocal per factor or one of their product. A float whose reciprocal
+float64 holds as written stays a divisor where the product has another divisor; a bare
+`x1/0.225147640565301` becomes a multiplier (above).
 
 ```python
+engine.prettify(engine.simplify("x1/x2/exp(x3)"))
+# -> 'x1/(x2*exp(x3))'
+engine.prettify(engine.simplify("x1/sin(x3)/(x2 + 1)"))
+# -> 'x1/(sin(x3)*(x2 + 1))'
+engine.prettify(engine.simplify("x1/243/x2"))
+# -> 'x1/(243*x2)'
+```
+
+Tagged tokens write a section member per reciprocal, as the tagged form reads them, so there a
+reciprocal of a product holding a sum or a function stays one bag in the section.
+
+**Functions of numbers** stay functions, their numbers written by the same rules: what `simplify`
+keeps, the display shows. No numbers combine to inf, 0 or a subnormal.
+
+```python
+engine.prettify(engine.simplify("x1*exp(-381/2)"))
+# -> 'x1*exp(-190.5)'
 engine.prettify(engine.simplify("sin(sin(9463/890))"))
-# -> '-0.8045036621463277'
+# -> 'sin(sin(10.632584269662921))'
 engine.prettify(engine.simplify("x1 + sin(2)"))
 # -> 'x1 + sin(2)'
 ```
@@ -99,16 +127,20 @@ engine.prettify(tokens, form="tagged")
 # -> ['<mul>', '1', '<div>', '2', '3.141592653589793', '</mul>']
 ```
 
-Rounding a number can make another form of the expression cheaper (an exponent a hair above 3
-becomes 3, and the power then multiplies out). `prettify` therefore simplifies its display once
-more, in `mode` (default `f64`), and displays that answer. Displaying the simplified display
-gives the display back:
+At the default `precision=None` a number is written exactly or as the float64 nearest to it,
+so the display reads back to the same float64 values: it evaluates as the expression does, up to
+the order of its operations. A display at a `precision` does not read back to them.
+Displaying a display gives it back:
 
 ```python
 shown = engine.prettify(answer)
-engine.prettify(engine.simplify(shown)) == shown
+engine.prettify(shown) == shown
 # -> True
 ```
 
-Reading the display back changes no value beyond rounding a number to its float64 and the
-folded functions. The display rules are designed for `f64` mode.
+The exception is a display in which writing numbers as their floats makes parts alike that the
+expression keeps apart. `prettify` does not decide that they are alike, and it does not simplify
+what it wrote, so the display of `sin(1.00000000000000000001*x1) - sin(x1)` is
+`sin(x1) - sin(x1)` (whose own display is `0`), and an exponent a hair above 3 is written `3`
+without multiplying the power out. `mode` (default `f64`) is the mode whose number domain reads
+the numbers; the display rules are designed for `f64`.

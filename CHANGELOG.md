@@ -54,10 +54,10 @@ organised by who you are, then the highlights, then every change in detail.
   `<mantissa>e<exponent>` outside that range where that is shorter (`1e-5*x1`, was
   `0.00001*x1`).
 - **Throughput.** The uncapped search does more work on long inputs. Where time matters, bound a
-  call with `effort=k`, `effort=0` (the chain alone) or a `work=` budget, which counts
-  deterministic units and cuts the same walk at the same place on every machine.
+  call with `effort=k` or `effort=0` (the chain alone).
 - **New errors.** `simplify(max_passes=0)` raises `ValueError` (it ran one pass; one pass
-  reaches the fixpoint, so pass 1). `complexity(..., canon=)` raises `TypeError` (see Removed).
+  reaches the fixpoint, so pass 1). `complexity(..., canon=)` and
+  `evaluate_constants(..., form=)` raise `TypeError` (see Removed).
   An unknown `mode` raises `ValueError` in `complexity` as in `simplify` (it raised `KeyError`).
   A malformed numeral token (`1/0`, `--5`, `2x`) raises `ValueError` at every boundary. In
   infix text, two operands separated only by whitespace raise `ValueError` (`x0 x1`: write the
@@ -73,12 +73,11 @@ organised by who you are, then the highlights, then every change in detail.
   land on whichever of the two floats around them prints shorter.
 - **The ground fold is a step of the chain**, kept only where it is cheaper (`asin(1e-8)` is
   `1e-8`).
-- **No default work budget.** The search runs until a round finds nothing; bound it with
-  `work=` or `effort=` where time matters.
 - **The sign of an infinity is kept**: distributing over an infinity needs certified
   finiteness, as in `f64` and `real` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
 - **The lean profile.** A worker that needs inference and corpus canonicalisation only loads
-  `modes=('f64', 'permissive')`, about 0.7 GB; `real` then builds on its first use.
+  `modes=('f64', 'permissive')`, about 0.7 GB with `acj-5-4-llm`; `real` then builds on its
+  first use.
 
 **Publishers of rule files**
 
@@ -109,7 +108,8 @@ organised by who you are, then the highlights, then every change in detail.
   resumes from; the rerun takes a mode whose file is already final as it is.
 - New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`),
   `find_rules(judge=, judge_processes=)` and `find_rules(offer_final_rules=)`. `save_every=`
-  (CLI `-s`) is accepted and ignored: the rule file is written once, when the mode's mine ends.
+  (CLI `-s/--save-every`) is removed: the rule file is written once, when the mode's mine ends
+  (see Removed).
 - `prune_covered_rules`, `utils.deduplicate_rules` and `promotion.promote` take a required
   keyword `rule_mode` (`'f64'` or its alias `'default'`, `'real'`, `'permissive'`), and
   deduplication keeps the target lower in that mode's serve ordering, not the shorter one.
@@ -143,21 +143,23 @@ model predictions.
   `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or
   explicit or tagged tokens. A fraction that fits the digit budget stays a fraction (`x1/4.2`,
   `22*x1/7`), any other number is its float64 in shortest form (`9.765625e-4*x1`,
-  `2.1458314277221002*x1` for a 33-digit literal), pi is factored out as the literal
-  `3.141592653589793` where the rest fits (`1/(2*3.141592653589793)`), functions of numbers that
-  are all floats fold, and even roots read `rootn(x, n)`. The display is simplified once more
-  and redisplayed, so displaying the simplified display gives the display back: on the release
-  corpus, srbf's 6,531 ground truths, 1,000 of its predictions and 3,000 fuzz rows, in all three
-  forms. Nothing inside SimpliPy calls it; see the guide "Displaying expressions".
+  `2.1458314277221002*x1` for a 33-digit literal), or with `k` significant digits at
+  `precision=k` (`2.15*x1`). pi is factored out as the literal `3.141592653589793` where the
+  rest fits (`1/(2*3.141592653589793)`), even roots read `rootn(x, n)`, and every divisor of a
+  product joins one denominator, functions and sums included (`x1/(x2*exp(x3))`,
+  `x1/(sin(x3)*(x2 + 1))`). It writes numbers and decides no value: a function of numbers stays
+  a function (`x1*exp(-190.5)`), and the display is not simplified again, so it never collects
+  what it wrote alike (`sin(1.00000000000000000001*x1) - sin(x1)` shows as
+  `sin(x1) - sin(x1)`). At the default `precision=None` a number is written exactly or as its
+  float64, so the display reads back to the same float64 values, and displaying a display gives
+  it back: on the release corpus and srbf's 6,531 ground truths in all three forms, and on 1,000
+  of its predictions, except where writing numbers as floats lets reading the display collect or
+  compute what the expression keeps apart (the display of `sin(x1) - sin(x1)` is `0`). Nothing
+  inside SimpliPy calls it; see the guide "Displaying expressions".
 <!-- TO BE MEASURED AFTER THE RE-MINE: the speed of 0.15.0 against 0.14.7, per mode, on the
      simplify inputs of flash-ansr's training-data generator, srbf's ground truths and its model
      predictions. The entry that stood here ("Fast in every mode") no longer holds: on the
      400-row corpus f64 takes 26% more time than 0.14.7, real 14% more, permissive 52% less. -->
-- **An opt-in work budget for the search.** `simplify()` takes `work`: a budget for the search in
-  deterministic units (one step of the matcher or one canonical-constructor call), so a budget cuts
-  the same walk at the same place on every machine and under any load. A search that spends it
-  returns its best answer so far, and a budget never changes which algorithm runs. No mode has one
-  by default (`simplipy.DEFAULT_WORK` is `None`): the search runs until a round finds nothing.
 - **Faster canonical forms.** Placing the signs of a nested sum asked the same flip four times per
   nesting level, so an expression nested `d` deep cost `4^d` flips: even with the faster products
   below, `x1*(x1 + (N + 1)/x1)` nested 10 deep took 23.5 s in `f64` with the search off, and a
@@ -719,6 +721,15 @@ model predictions.
 
 ### Removed
 
+Each removal is a hard cut: the removed keyword or name raises instead of warning.
+
+- **`find_rules(..., save_every=)` and the CLI's `find-rules -s/--save-every`.** The rule file
+  and its sidecar are written once, when the mode's mine ends, and progress survives in the
+  per-length checkpoint, so nothing reads the interval. Passing the keyword raises `TypeError`
+  and the CLI refuses the flag; drop the argument.
+- **`evaluate_constants(..., form=)`.** `evaluate_constants` answers in the input's dialect, as
+  `simplify` does; passing the keyword raises `TypeError`. For another notation, convert the
+  answer with `to_infix`, `to_tagged` or `to_prefix`.
 - **`complexity(..., canon=)`.** `complexity()` prices each mode in its own reading, and the
   keyword that priced a mode's parse in `f64`'s canon is gone (passing it raises `TypeError`). To
   compare answers of different modes on one scale, use `simplipy.mining.cross_mode_complexity`.
@@ -754,8 +765,8 @@ model predictions.
   `interval_entire_analytic_composition`, `interval_zero_set_null_generic_const` and
   `registry_pole_refusals`. New on `Engine`: `ac_ordered_below_in`, `ac_translate_preview`,
   `judge_hint`, `judge_pair`, `law_instance`, `mine_mark`, `mine_sources`, `prettify` and
-  `step_cap_binds`; new in the module: `ARTIFACT_ENV_SWITCHES`, `DEFAULT_WORK`,
-  `NEAR_MISS_FRAC`, `is_numeric_string`, `reserved_numeric_spelling` and
+  `step_cap_binds`; new in the module: `ARTIFACT_ENV_SWITCHES`,
+  `NEAR_MISS_FRAC`, `is_numeric_string`, `range_event`, `reserved_numeric_spelling` and
   `set_interval_node_budget`. The simplify entries default `explore_budget` to the public effort
   (`None`), not 0.
 
@@ -845,9 +856,9 @@ model predictions.
   is: `read_infix('x0*pow_1')` returned the malformed `['*', 'x0', 'inv']`.
 - **`import simplipy` succeeds without the compiled core**, and constructing an engine raises the
   `ImportError` that names the failure; an unguarded import in `simplipy.utils` failed the import
-  itself. For code that calls `simplipy._core` directly: the simplify, infix and `prettify`
-  entries take a keyword `own_set`, which raises the new `simplipy._core.MissingModeSet` where the
-  mode holds no set of its own.
+  itself. For code that calls `simplipy._core` directly: the simplify and infix entries take a
+  keyword `own_set`, which raises the new `simplipy._core.MissingModeSet` where the mode holds no
+  set of its own.
 - **The mining calls name their mode.** `prune_covered_rules`, `deduplicate_rules` and
   `promote` take a required keyword `rule_mode`: `'f64'` (also spelled `'default'`, the core's
   name for the f64 set), `'real'` or `'permissive'`. The CLI's `prune-covered-rules` prunes the
@@ -921,9 +932,6 @@ model predictions.
   stating the distributive law), and `inverse-of-earlier-rule` and `twin-inverse` are gone,
   their rows dropped as `not-ordered-below`, the reason they always also had. Served rules do
   not change.
-- **`find_rules(save_every=)` and the CLI's `-s/--save-every` are deprecated and ignored.** The
-  rule file and its sidecar are written once, when the mode's mine ends, and progress survives
-  in the per-length checkpoint. Drop the argument.
 
 ## 0.14.7 (2026-10-01)
 

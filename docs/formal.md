@@ -790,7 +790,7 @@ search proposes the same candidates in the same order, which descend to the same
 and are refused again. Two further premises: the step cap does not bind (a capped walk
 skips fire sites), and the descent of a candidate does not depend on the memo's contents
 (the memo only marks fixpoints). A capped search (`effort=k`) can stop between two accepted
-valleys, and the re-run then continues it, as can a search its work budget stops [EMPIRICAL:
+valleys, and the re-run then continues it [EMPIRICAL:
 srbf's 125,127 model predictions change on a second call 1,632 times in `f64` at cap 4, the former
 default, every one to a cheaper form (`real` the same); uncapped, never, in `f64` and `real`, on these and on
 srbf's ground truths and the training-data generator's inputs]. Where

@@ -115,12 +115,6 @@ has nothing left to continue. `simplify(expr, effort=64)` caps the search at 64 
 descents, and `effort=0` never enters the phase — byte-identical to the chain alone. Pass
 `effort=0` on throughput-critical paths.
 
-The second knob is `work`, an opt-in budget for the search in deterministic units, one step of
-the matcher or one canonical-constructor call, so a budget cuts the same walk at the same place on
-every machine and under any load. A search that spends its budget returns its best answer so far.
-No mode has one by default (`simplipy.DEFAULT_WORK` is `None`): a budget ends the search early
-and never changes which algorithm runs.
-
 A cap counts every candidate tried, refused ones included, over the whole expression, so
 the cap a search needs grows with the expression: one of srbf's model predictions needs 5
 candidates to reach its uncapped answer, a sum of two copies of it 10 and of six 30, so no fixed
@@ -166,8 +160,8 @@ below it (the result is never worse than the fixpoint, hence never costlier than
 input), both
 phases move only on strict descent of a well-founded ordering
 (termination, independent of the budget), and the walk order is deterministic
-(reproducibility; a work budget counts units, not time). Idempotence needs the search to run
-until a round finds nothing, the default in every mode: a cap or a work budget can stop it
+(reproducibility). Idempotence needs the search to run
+until a round finds nothing, the default in every mode: a cap can stop it
 between two improvements, which a second call then continues.
 
 ## Soundness modes

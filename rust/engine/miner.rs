@@ -47,12 +47,6 @@ impl MineSpec {
     }
 }
 
-/// The work budget `simplify` runs a mode's searches under by default: the shared
-/// `DEFAULT_WORK`, the same in every mode (none).
-pub fn serve_work(_mode: RuleMode) -> Option<u64> {
-    super::DEFAULT_WORK
-}
-
 /// The engine's own answer for a source: the bar every target must beat. `mu` is `None`
 /// only for a state the measure cannot price; the scan then keeps its token bound.
 pub struct Mark {
@@ -358,13 +352,11 @@ impl<'a> Acceptor<'a> {
 
 impl Engine {
     /// The MARK for a source in `mode`: the engine's own SERVE answer, priced -- the
-    /// entry `simplify(s, mode)` takes (`effort=None`, the mode's default work budget),
-    /// with the mode's rules installed so far. `None` on malformed input.
+    /// entry `simplify(s, mode)` takes (`effort=None`), with the mode's rules installed so
+    /// far. `None` on malformed input.
     pub fn mine_mark(&self, src: &[String], mode: RuleMode) -> Option<Mark> {
-        let tokens = {
-            let _work = crate::ac::work::search_budget_scope(serve_work(mode));
-            self.ac_explore_proj(src, 48, mode, crate::engine::AcForm::Explicit, usize::MAX)?
-        };
+        let tokens =
+            self.ac_explore_proj(src, 48, mode, crate::engine::AcForm::Explicit, usize::MAX)?;
         let mu = self.mine_price(&tokens, mode);
         Some(Mark { tokens, mu })
     }
