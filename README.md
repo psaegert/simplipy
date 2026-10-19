@@ -96,6 +96,8 @@ More examples can be found in the [documentation](https://simplipy.readthedocs.i
 
 # Performance
 
+<!-- TO BE RE-MEASURED after the re-mine: the table and the figure below were measured
+     with acj-5-4-llm at effort=4 under 0.14.x; re-run the benchmark for 0.15.0. -->
 On a 65,536-expression symbolic-regression benchmark, paired per-row against SymPy's `simplify` (serial single-core, 1 s cap):
 
 | | SimpliPy | SymPy |
@@ -134,6 +136,7 @@ pytest tests --cov src --cov-report html -m "not integration"
 ```
 
 # Citation
+<!-- RELEASE: set `version = {0.15.0}` in the @software entry below at the 0.15.0 tag. -->
 ```bibtex
 @inproceedings{saegert2026breakingsimplificationbottleneckamortized,
   title   = {Breaking the Simplification Bottleneck in Amortized Neural Symbolic Regression},
