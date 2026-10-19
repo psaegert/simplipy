@@ -1,11 +1,12 @@
-"""Every surface removed in 0.14.0, pinned as ABSENT.
+"""Every surface removed in 0.14.0 and 0.15.0, pinned as ABSENT.
 
 Owner ruling 2026-08-20: everything ships in 0.14.0, no deferrals. These names each had
 a deprecation shim and a test asserting the shim warned; those tests are replaced by
 these, because a removal needs pinning exactly as much as a deprecation did -- otherwise
 a future refactor can quietly reintroduce an alias nobody meant to keep.
 
-The migration for each is in the CHANGELOG's "Upgrading from 0.13.x" section.
+The migration for each is in the CHANGELOG's "Upgrading from 0.13.x" section, and for the
+0.15.0 removals under that release's "Removed".
 """
 import importlib
 
@@ -89,3 +90,25 @@ class TestRemovedParameters:
     def test_load_has_no_path(self) -> None:
         with pytest.raises(TypeError, match='path'):
             SimpliPyEngine.load(path='acj-4-3')
+
+
+class TestRemovedIn015:
+    """0.15.0 removes without an alias cycle: a removed keyword raises ``TypeError``."""
+
+    def test_simplify_has_no_work_budget(self, eng) -> None:
+        for work in (None, 'default', 10_000):
+            with pytest.raises(TypeError, match='work'):
+                eng.simplify('x0 + 0', work=work)
+        assert eng.simplify('x0 + 0', effort=0) == 'x0', 'effort= stays the search bound'
+
+    def test_the_work_default_is_gone(self) -> None:
+        from simplipy import _core
+        assert not hasattr(simplipy, 'DEFAULT_WORK')
+        assert 'DEFAULT_WORK' not in simplipy.__all__
+        assert not hasattr(importlib.import_module('simplipy.engine'), 'DEFAULT_WORK')
+        assert not hasattr(_core, 'DEFAULT_WORK')
+
+    @pytest.mark.parametrize('entry', ['ac_simplify_in_mode', 'ac_simplify_infix_in_mode'])
+    def test_the_core_takes_no_work_budget(self, eng, entry) -> None:
+        with pytest.raises(TypeError, match='work_budget'):
+            getattr(eng._core, entry)(['x0'], work_budget=10, rule_mode='default')

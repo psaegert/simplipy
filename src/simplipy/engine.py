@@ -38,13 +38,11 @@ try:
     # hard error at engine construction.
     from simplipy._core import Engine as _RustEngine  # type: ignore[attr-defined]
     from simplipy._core import core_serialization_ops as _core_serialization_ops  # type: ignore[attr-defined]
-    from simplipy._core import DEFAULT_WORK as _CORE_DEFAULT_WORK  # type: ignore[attr-defined]
     from simplipy._core import MissingModeSet as _MissingModeSet  # type: ignore[attr-defined]
     _CORE_IMPORT_ERROR: Exception | None = None
 except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
     _RustEngine = None  # type: ignore[assignment, misc]
     _core_serialization_ops = None  # type: ignore[assignment]
-    _CORE_DEFAULT_WORK = None
     _MissingModeSet = LookupError  # type: ignore[assignment, misc]
     _CORE_IMPORT_ERROR = _exc
 
@@ -247,14 +245,6 @@ DEFAULT_ENGINE_REVISION: str | None = None
 #: Callers on throughput-critical paths pin ``effort=0``
 #: explicitly; ``effort=k`` caps the search at ``k`` candidate descents.
 DEFAULT_EFFORT: int | None = None
-
-#: The WORK BUDGET each search ``simplify()`` runs under when ``work`` is not given: ``None``, in
-#: every mode -- the search runs until a round finds nothing. ``work=k`` is an opt-in cap in
-#: deterministic units (one step of the AC matcher or one canonical-constructor call), so it cuts
-#: the same walk at the same place on every machine and under any load; a search that spends it
-#: returns its best answer so far. It ends a search early and never changes which algorithm runs.
-#: The compiled core declares it (the miner's marks run under the same budget).
-DEFAULT_WORK: int | None = _CORE_DEFAULT_WORK
 
 
 #: Leaves that denote a VALUE rather than a free variable.
@@ -2023,8 +2013,7 @@ class SimpliPyEngine:
             *,
             max_passes: int | None = None,
             mode: Mode | str = Mode.f64,
-            effort: int | None = None,
-            work: int | None | str = 'default') -> str | list[str] | tuple[str, ...] | np.ndarray:
+            effort: int | None = None) -> str | list[str] | tuple[str, ...] | np.ndarray:
         """Simplify through the AC CORE: the n-ary associative-commutative engine.
 
         The AC core represents ``+`` and ``*`` as flat, sorted n-ary bags with EXACT rational
@@ -2042,8 +2031,8 @@ class SimpliPyEngine:
         computation rather than mined rules. Every mode runs one walk: its chain of rules and
         constructors, then the search, in its own canonical form and rules. The output is
         idempotent (``simplify(simplify(x)) == simplify(x)``) when the search runs until a
-        round finds nothing, the default in every mode; a search that an ``effort`` cap or a
-        ``work`` budget stops can continue on a second call.
+        round finds nothing, the default in every mode; a search that an ``effort`` cap
+        stops can continue on a second call.
 
         .. note::
             Pair this engine with sort-promoted rulesets, which every published engine
@@ -2076,20 +2065,14 @@ class SimpliPyEngine:
             STRICTLY below it in the serve-time reduction ordering.
             ``None`` (the default, ``DEFAULT_EFFORT``) searches until a round finds
             nothing, so a second call returns the answer unchanged (up to the residual
-            classes listed in ``docs/formal.md``, and a search a ``work`` budget stopped);
+            classes listed in ``docs/formal.md``);
             an int caps the search at that many candidate descents, after which
             a second call can continue it; ``0`` never enters the phase and is byte-identical to the plain chain
             (rules and constructors), which does not factor.
             Every guarantee survives any budget: soundness (same certificates), never-worse
             (strictly-below acceptance: never above the input, and never above the answer at a
-            smaller ``effort`` with the same ``work``), termination (well-founded ordering,
+            smaller ``effort``), termination (well-founded ordering,
             independent of the budget) and deterministic output.
-        work : int, None or 'default', optional
-            An opt-in WORK BUDGET for the search, in deterministic units (one AC-matcher step
-            or one canonical-constructor call). ``'default'`` is ``DEFAULT_WORK``, no bound in
-            every mode; ``None`` is the same (the search runs until a round finds nothing). A
-            search that spends its budget returns its best answer so far; the guarantees above
-            hold at every budget, and the budget never changes which algorithm runs.
 
         Returns
         -------
@@ -2171,25 +2154,7 @@ class SimpliPyEngine:
                 raise ValueError(f"effort must be non-negative, got {effort}")
             if effort > 2 ** 63 - 1:
                 effort = None  # beyond the index range no cap binds: the uncapped search
-        if isinstance(work, str):
-            if work != 'default':
-                raise ValueError(f"work must be None, an int >= 0 or 'default', not {work!r}")
-        elif work is not None:
-            if isinstance(work, bool):
-                raise TypeError(f"work must be None or an int >= 0, not bool ({work!r})")
-            try:
-                work = work.__index__()
-            except AttributeError:
-                raise TypeError(
-                    f"work must be None or an int >= 0, not {type(work).__name__} ({work!r})") from None
-            if work < 0:
-                raise ValueError(f"work must be non-negative, got {work}")
-            if work > 2 ** 64 - 1:
-                work = None  # beyond the counter's range no budget binds
         mode = _coerce_mode(mode)
-
-        if work == 'default':
-            work = DEFAULT_WORK
 
         # DIALECT-PRESERVING (owner ruling 2026-08-18): `simplify` only simplifies and
         # answers in the form it was handed -- a str is infix, a token sequence carrying
@@ -2209,9 +2174,9 @@ class SimpliPyEngine:
         own_set = mode is Mode.real
         if form == 'infix':
             return self._serve(mode, lambda core: core.ac_simplify_infix_in_mode(
-                tokens, max_passes, effort, work, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
+                tokens, max_passes, effort, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
         out = self._serve(mode, lambda core: core.ac_simplify_in_mode(
-            tokens, max_passes, form, effort, work, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
+            tokens, max_passes, form, effort, rule_mode=rule_mode, own_set=own_set), _REAL_NEEDS_A_SET)
         return self._denormalize(out, expression)
 
     def prettify(
@@ -2292,10 +2257,9 @@ class SimpliPyEngine:
             raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
         if not tokens:
             return '' if target == 'infix' else []
-        work = DEFAULT_WORK  # the one default of every mode, as in simplify
         rule_mode = _RULE_MODE[mode]
         return self._serve(mode, lambda core: core.prettify(
-            tokens, int(digits), target, True, DEFAULT_EFFORT, work, rule_mode=rule_mode,
+            tokens, int(digits), target, True, DEFAULT_EFFORT, rule_mode=rule_mode,
             own_set=mode is Mode.real), refusal)
 
     def complexity(

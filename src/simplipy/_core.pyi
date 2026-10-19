@@ -8,7 +8,6 @@ surface (and the module constants) visible to mypy/pyright downstream and in thi
 from typing import Any, Literal
 
 __build__: str
-DEFAULT_WORK: int | None
 NEAR_MISS_FRAC: float
 ARTIFACT_ENV_SWITCHES: list[str]
 
@@ -30,7 +29,6 @@ class Engine:
         max_passes: int = ...,
         form: Literal["tagged", "explicit"] = ...,
         explore_budget: int | None = ...,  # None: until a round finds nothing
-        work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
         *,
         rule_mode: Literal["default", "real", "permissive"],
         own_set: bool = ...,  # serve only the mode's own set: MissingModeSet where it has none
@@ -53,7 +51,6 @@ class Engine:
         tokens: list[str],
         max_passes: int = ...,
         explore_budget: int | None = ...,  # None: until a round finds nothing
-        work_budget: int | None = ...,  # per search, in ac::work units; None: unbounded
         *,
         rule_mode: Literal["default", "real", "permissive"],
         own_set: bool = ...,
@@ -65,7 +62,6 @@ class Engine:
         form: Literal["infix", "explicit", "tagged"] = ...,
         resimplify: bool = ...,  # simplify the display once and display that
         explore_budget: int | None = ...,
-        work_budget: int | None = ...,
         *,
         rule_mode: Literal["default", "real", "permissive"],
         own_set: bool = ...,

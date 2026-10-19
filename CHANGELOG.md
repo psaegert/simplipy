@@ -50,8 +50,7 @@ organised by who you are, then the highlights, then every change in detail.
   `<mantissa>e<exponent>` outside that range where that is shorter (`1e-5*x1`, was
   `0.00001*x1`).
 - **Throughput.** The uncapped search does more work on long inputs. Where time matters, bound a
-  call with `effort=k`, `effort=0` (the chain alone) or a `work=` budget, which counts
-  deterministic units and cuts the same walk at the same place on every machine.
+  call with `effort=k` or `effort=0` (the chain alone).
 - **New errors.** `simplify(max_passes=0)` raises `ValueError` (it ran one pass; one pass
   reaches the fixpoint, so pass 1). `complexity(..., canon=)` raises `TypeError` (see Removed).
   An unknown `mode` raises `ValueError` in `complexity` as in `simplify` (it raised `KeyError`).
@@ -68,8 +67,6 @@ organised by who you are, then the highlights, then every change in detail.
 - **Literals are rounded once**, to their float, where they land (`3*(1/3 + 1e-20)` is `1`).
 - **The ground fold is a step of the chain**, kept only where it is cheaper (`asin(1e-8)` is
   `1e-8`).
-- **No default work budget.** The search runs until a round finds nothing; bound it with
-  `work=` or `effort=` where time matters.
 - **The sign of an infinity is kept**: distributing over an infinity needs certified
   finiteness, as in `f64` and `real` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
 - **The lean profile.** A worker that needs inference and corpus canonicalisation only loads
@@ -148,11 +145,6 @@ model predictions.
      simplify inputs of flash-ansr's training-data generator, srbf's ground truths and its model
      predictions. The entry that stood here ("Fast in every mode") no longer holds: on the
      400-row corpus f64 takes 26% more time than 0.14.7, real 14% more, permissive 52% less. -->
-- **An opt-in work budget for the search.** `simplify()` takes `work`: a budget for the search in
-  deterministic units (one step of the matcher or one canonical-constructor call), so a budget cuts
-  the same walk at the same place on every machine and under any load. A search that spends it
-  returns its best answer so far, and a budget never changes which algorithm runs. No mode has one
-  by default (`simplipy.DEFAULT_WORK` is `None`): the search runs until a round finds nothing.
 - **Faster canonical forms.** Placing the signs of a nested sum asked the same flip four times per
   nesting level, so an expression nested `d` deep cost `4^d` flips: even with the faster products
   below, `x1*(x1 + (N + 1)/x1)` nested 10 deep took 23.5 s in `f64` with the search off, and a
@@ -646,7 +638,7 @@ model predictions.
   `interval_entire_analytic_composition`, `interval_zero_set_null_generic_const` and
   `registry_pole_refusals`. New on `Engine`: `ac_ordered_below_in`, `ac_translate_preview`,
   `judge_hint`, `judge_pair`, `law_instance`, `mine_mark`, `mine_sources`, `prettify` and
-  `step_cap_binds`; new in the module: `ARTIFACT_ENV_SWITCHES`, `DEFAULT_WORK`,
+  `step_cap_binds`; new in the module: `ARTIFACT_ENV_SWITCHES`,
   `NEAR_MISS_FRAC`, `is_numeric_string`, `reserved_numeric_spelling` and
   `set_interval_node_budget`. The simplify entries default `explore_budget` to the public effort
   (`None`), not 0.

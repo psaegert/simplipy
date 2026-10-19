@@ -18,9 +18,6 @@ use std::cell::Cell;
 thread_local! {
     static WORK: Cell<u64> = const { Cell::new(0) };
     static LIMIT: Cell<u64> = const { Cell::new(u64::MAX) };
-    /// The per-search budget the current call runs under (`u64::MAX`: unbounded), set at the
-    /// FFI boundary for one simplify call ([`search_budget_scope`]).
-    static SEARCH_BUDGET: Cell<u64> = const { Cell::new(u64::MAX) };
 }
 
 /// Count `n` units of work.
@@ -56,21 +53,8 @@ pub fn limit(budget: u64) -> LimitGuard {
     LimitGuard(LIMIT.with(|l| l.replace(l.get().min(ceiling))))
 }
 
-/// The per-search budget of the current call.
+/// The per-search budget: none (`u64::MAX`). No caller sets one, so the ceiling the search
+/// arms with it never binds.
 pub fn search_budget() -> u64 {
-    SEARCH_BUDGET.with(|b| b.get())
-}
-
-/// Restores the previous per-search budget when dropped.
-pub struct BudgetGuard(u64);
-
-impl Drop for BudgetGuard {
-    fn drop(&mut self) {
-        SEARCH_BUDGET.with(|b| b.set(self.0));
-    }
-}
-
-/// Run under a per-search budget (`None`: unbounded) until the guard drops.
-pub fn search_budget_scope(budget: Option<u64>) -> BudgetGuard {
-    BudgetGuard(SEARCH_BUDGET.with(|b| b.replace(budget.unwrap_or(u64::MAX))))
+    u64::MAX
 }
