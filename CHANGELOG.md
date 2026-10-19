@@ -241,6 +241,22 @@ model predictions.
   priced a bit above `f64`'s now matches `f64`'s price. The measure fingerprint gains three sign
   probes (`-2`, `neg x0`, `* neg x0 x1`); sidecars that predate them do not record them, so
   loading stays silent.
+- **The engine folds the NaN facts the rule files carried.** A root whose index is a ground
+  constant that is no integer is NaN at every radicand (`rootn(-5, asinh(tanh(4)))`,
+  `rootn(x1, log(8))`), and a family of `<constant>` values that is NaN at every constant is NaN
+  (`acosh(acos(cosh(c)))`; the value-set fold used to read such a family as a free constant,
+  `acosh(cos(c)/5)` as `acosh(c)`, which is defined). Both now fold in every mode, the index
+  decided by its rigorous
+  interval: where that holds an integer the root stays (`rootn(x1, acos(cos(1)))`). The interval
+  also reads a positive base under a non-integer exponent by its corner powers, so
+  `acosh(1/pi^(1/6))` is NaN. The published `acj-5-4-llm` files hold 110,122 rules with a NaN
+  answer in `f64` (110,135 in each other mode), 106,130 of them about roots. With every one of
+  them removed, the engine alone answers 108,323 of them NaN in `f64` (108,365 in `real`,
+  108,470 in `permissive`); the rest are roots whose index is exactly an integer that the float
+  evaluator rounds off it, or families the interval cannot bound. Answers do not change on
+  srbf's ground truths and on a tenth of the training-data inputs, in any mode, with or without
+  those rules, nor on a tenth of the model predictions; without them the engine holds 215 MB
+  after loading every mode, where the published files take 839 MB.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

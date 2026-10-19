@@ -341,7 +341,11 @@ class TestCorpusGate:
         # nothing), so the measure moved: the previous answers price 55,158,451 under it. 67 walk
         # rows move; 11 rest cheaper (7, 18, 46, 67, 83, 95, 133, 149, 262, 327, 373: -30,585 in
         # all), none dearer, and 56 respell at an equal price, the sign key placing their signs.
-        assert walk['complexity_out'] == 55127866, walk['complexity_out']
+        # GROUND NaN FACTS (2026-10-19): 55,127,866 -> 54,750,550. A family of `<constant>` values
+        # that is NaN at every constant folds to NaN: rows 205 (`acosh(cos(c)/5)`, -136,229) and
+        # 343 (`acos(cosh(c))`, finite only at c = 0; -241,087) are NaN. Both used to keep the
+        # family read as a free constant, `acosh(c)` and `acos(c)`, which is defined.
+        assert walk['complexity_out'] == 54750550, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

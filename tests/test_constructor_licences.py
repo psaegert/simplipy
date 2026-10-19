@@ -89,7 +89,7 @@ class TestPowDistributionLicence:
         assert eng.simplify('pow / * -1 x0 3 -1'.split()) == out
         assert eng.simplify('inv * -3 pow x0 2'.split()) == eng.simplify('neg / 1 * 3 pow x0 2'.split())
         # provably nonvanishing factors have no pole: distribution stays licensed
-        # (`1/exp(x1)` and `exp(-x1)` cost the same, and the first has fewer signs.)
+        # (`exp(-x1)` is two bits cheaper than `1/exp(x1)`.)
         lo = check(eng, 'pow * -3 exp x1 -1'.split())
         assert lo == eng.simplify('neg / inv exp x1 3'.split()), lo
         assert eng.simplify('pow / neg x0 3 -1'.split(), mode=Mode.permissive) == \
@@ -111,6 +111,49 @@ class TestPowDistributionLicence:
                    'pow <mul> x8 <div> x16 <mul> 5 x16 asin x8 </mul> </mul> 0.5'):
             o1 = eng.simplify(sk.split())
             assert eng.simplify(list(o1)) == o1
+
+
+@pytest.fixture(scope='module')
+def rules_free(tmp_path_factory):
+    """The acj-4 operators with an empty rule file per mode: what the core does on its own."""
+    import json
+    from simplipy.io import load_config
+    d = tmp_path_factory.mktemp('rules_free')
+    for f in ('rules.json', 'rules_real.json', 'rules_permissive.json'):
+        (d / f).write_text(json.dumps([]))
+    (d / 'config.yaml').write_text(yaml.safe_dump({
+        'engine_generation': 2, 'operators': load_config(CONFIG)['operators'], 'rules': 'rules.json',
+        'rules_real': 'rules_real.json', 'rules_permissive': 'rules_permissive.json'}))
+    return SimpliPyEngine.from_config(str(d / 'config.yaml'))
+
+
+class TestGroundNanFolds:
+    """The engine folds a ground NaN fact itself, in every mode, where the published rule files
+    carried them as rules (about 106,000 of the f64 file's 138,651): a root whose index is a
+    ground non-integer, and a family of `<constant>` values that is NaN at every constant. The
+    index's value is decided by the interval layer and fails closed where its enclosure holds an
+    integer."""
+
+    @pytest.mark.parametrize('mode', [Mode.f64, Mode.real, Mode.permissive])
+    @pytest.mark.parametrize('source', [
+        'rootn x1 asinh tanh 4',     # index 0.8807...: NaN at every radicand
+        'rootn -5 asinh tanh 4',     # a ground radicand: the ground classification
+        '+ x2 rootn x1 acos 0',      # index pi/2, inside a sum
+        'rootn x1 log 1',            # index 0: the invalid operation
+        'acosh rootn np.pi -6',      # 1/pi^(1/6) < 1, which acosh does not take
+        'acosh acos cosh <constant>',  # NaN for every value of the constant
+    ])
+    def test_the_core_folds_the_fact(self, rules_free, mode, source):
+        assert rules_free.simplify(source.split(), mode=mode) == ['float("nan")']
+
+    def test_an_index_whose_enclosure_holds_an_integer_stays(self, rules_free):
+        # acos(cos 1) is exactly 1 and 2 + sin(pi) exactly 2: no proof that the index is no
+        # integer, so the root stays (in f64 too, where the evaluator's acos(cos 1) is not 1)
+        for mode in (Mode.f64, Mode.real, Mode.permissive):
+            assert rules_free.simplify('rootn x1 acos cos 1'.split(), mode=mode) == \
+                ['rootn', 'x1', 'acos', 'cos', '1']
+        assert rules_free.simplify('rootn x1 + 2 sin np.pi'.split(), mode=Mode.real) == \
+            ['rootn', 'x1', '+', 'sin', 'np.pi', '2']
 
 
 class TestSymbolicExponentMergeLicence:

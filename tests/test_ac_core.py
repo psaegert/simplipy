@@ -992,9 +992,9 @@ class TestSignDistributionCanonicalUniqueness:
              'sinh', '-', 'x2', 'exp', 'float("inf")']
         out = engine.simplify(engine.to_tagged(list(x)))
         assert engine.simplify(list(out)) == out, out
-        # The one-call answer must already be the reduced fixpoint (both signs cancel).
-        assert out == ['acos', '<add>', 'tanh', 'acos', '<constant>',
-                       'float("inf")', '</add>'], out
+        # The one-call answer must already be the reduced fixpoint (both signs cancel), and it
+        # is NaN: `acos(tanh(acos(c)) + inf)` is the acos of +inf at every constant.
+        assert out == ['float("nan")'], out
 
     def test_fuzz_row_7333_explicit_fixpoint(self, engine: SimpliPyEngine) -> None:
         x = ['/', '-', 'float("-inf")', 'acosh', '*', '1.111', 'atanh', 'x2', 'inv', '-2']

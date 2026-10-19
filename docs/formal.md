@@ -419,7 +419,16 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   coefficient merging, integer/rational `pow`, exact roots, the two determined reciprocal arms
   $0^{-k} = +\infty$ and $(\pm\infty)^{-k} = 0$), and a ground composite whose rigorous
   interval *class* is non-finite folds to that class literal in every mode (a class is an
-  exact fact — no finite value is read, so no rounding can occur). Where a finite value would
+  exact fact — no finite value is read, so no rounding can occur). Two shapes beside it fold to
+  `nan` the same way: a `rootn` whose index is ground and whose rigorous value set reaches no
+  nonzero integer is `nan` at every radicand (`rootn(x1, asinh(tanh(4)))`, the ground form of
+  the constructor's literal arm `rootn(x1, 2.5)`; an index whose enclosure holds an integer
+  stays, so `rootn(x1, acos(cos(1)))` is kept even in `f64`, whose evaluator rounds that index
+  off 1), and a variable-free composite holding a $\diamond$ whose class over every value of its
+  constants is `nan` (`acosh(acos(cosh(c)))`, the class dropping a finite part on a null set of
+  the constants as for any family). The interval layer reads a positive base under a
+  non-integer exponent by its four corner powers, so `acosh(1/pi^(1/6))` classifies as `nan`.
+  Where a finite value would
   be read, the modes differ, because each reads a different function. *`real` evaluates
   nothing*: a finite transcendental identity (`cos(0)` $\to$ `1`, `cos(pi)` $\to$ `-1`,
   `exp(-inf)` $\to$ `0`) arrives as a mined, symbolically certified *rule*, and `asin(1e-8)`,

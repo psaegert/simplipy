@@ -1775,6 +1775,44 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
         }
         return z;
     }
+    // A POSITIVE base under a finite exponent range (all but a constant integer exponent, the
+    // branch below): `a^b = exp(b ln a)` is monotone in each argument on (0, inf) x R, so its
+    // image over a box is the hull of the four corner powers, bracketed (libm, H-019); a closed
+    // hull over an open end only widens. The general branch below reports the whole half-line
+    // here, so a ground `1/pi^(1/6)` (a root of even index, as the canon spells it, its exponent
+    // the enclosure of 1/6) could not be read as the number below 1 it is, and `acos` of its
+    // reciprocal never classified as NaN.
+    let integer_point = b.is_const() && b.lo.fract() == 0.0;
+    if a.has_fin
+        && !a.nan
+        && !a.pinf
+        && !a.ninf
+        && a.lo > 0.0
+        && a.hi.is_finite()
+        && b.has_fin
+        && !b.nan
+        && !b.pinf
+        && !b.ninf
+        && b.lo.is_finite()
+        && b.hi.is_finite()
+        && !integer_point
+    {
+        let corners = [
+            a.lo.powf(b.lo),
+            a.lo.powf(b.hi),
+            a.hi.powf(b.lo),
+            a.hi.powf(b.hi),
+        ];
+        let lo = corners.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = corners.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if lo.is_normal() && hi.is_finite() {
+            let mut z = Vs::empty();
+            z.merge_pt(out_lo(lo, ULP_LIBM));
+            z.merge_pt(out_hi(hi, ULP_LIBM));
+            z.fin_null = a.fin_null;
+            return z;
+        }
+    }
     // CONST INTEGER EXPONENT, finite-capable base: the exact interval power (2026-08-03
     // vocabulary completion). The retired unary pow2..pow5/inv evaluators bounded their
     // ranges by monotonicity; their binary replacement fell to the generic branch below,
@@ -1977,9 +2015,17 @@ fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
         // `rootn(x, n)`: IEEE-754 rootn, honest for EVERY integer index:
         // odd = the signed root, even = the principal root, 1 = identity, negative =
         // reciprocal. Sound only when the index is a KNOWN nonzero-integer point (a
-        // literal in the serialized form); any uncertainty in the index fails closed like
-        // an unknown operator.
+        // literal in the serialized form); any other uncertainty in the index fails closed
+        // like an unknown operator. An index that can reach NO nonzero integer (a range
+        // strictly between two integers, 0, an infinity, NaN) is the invalid operation at
+        // every value: the root is NaN whatever the radicand (`rootn(-5, asinh(tanh 4))`,
+        // whose index is 0.8807...).
         "rootn" => {
+            if !index_reaches_a_nonzero_integer(b) {
+                let mut r = Vs::empty();
+                r.nan = true;
+                return Some(r);
+            }
             let point = b.has_fin
                 && !b.nan
                 && !b.pinf
@@ -2006,6 +2052,31 @@ fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
         }
         _ => return None,
     })
+}
+
+/// May a value of the set `b` be a NONZERO INTEGER (the indices at which `rootn` is a root)? Only
+/// the finite part can: an infinity and NaN are no integers. The finite part reaches one unless it
+/// lies strictly between two consecutive integers (an open end at an integer excludes it) or is
+/// the point 0. Outward-rounded bounds only widen the range, so a `false` is a proof.
+pub(crate) fn index_reaches_a_nonzero_integer(b: &Vs) -> bool {
+    if !b.has_fin {
+        return false;
+    }
+    if !b.lo.is_finite() || !b.hi.is_finite() {
+        return true; // an unbounded finite part holds every integer beyond some point
+    }
+    // The least integer the range holds (the bound itself where it is a closed integer).
+    let first = if b.lo.fract() == 0.0 && !b.lo_open {
+        b.lo
+    } else {
+        b.lo.floor() + 1.0
+    };
+    let holds = |n: f64| n < b.hi || (n == b.hi && !b.hi_open);
+    if !holds(first) {
+        return false;
+    }
+    // `first` is the only integer when the next one is out of range; it must then be nonzero.
+    first != 0.0 || holds(first + 1.0)
 }
 
 /// Index of a variable leaf (`_0`/`x0` -> 0), or `None` if `t` is not a variable.
@@ -4137,6 +4208,64 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// A root's index decides it: an index that reaches no nonzero integer is NaN at every
+    /// radicand, and an index range that holds one stays unanalyzable (fail closed).
+    #[test]
+    fn a_root_index_that_reaches_no_integer_is_nan() {
+        let pt = |x: f64| Vs::interval(x, x, false, false);
+        assert!(!index_reaches_a_nonzero_integer(&Vs::interval(
+            0.88, 0.89, false, false
+        )));
+        assert!(!index_reaches_a_nonzero_integer(&pt(0.0)));
+        assert!(!index_reaches_a_nonzero_integer(&Vs::interval(
+            -0.5, 0.5, false, false
+        )));
+        assert!(!index_reaches_a_nonzero_integer(&Vs::interval(
+            1.0, 2.0, true, true
+        )));
+        assert!(index_reaches_a_nonzero_integer(&Vs::interval(
+            1.0, 2.0, true, false
+        )));
+        assert!(index_reaches_a_nonzero_integer(&Vs::interval(
+            -1.2, -0.8, false, false
+        )));
+        assert!(index_reaches_a_nonzero_integer(&pt(3.0)));
+        assert!(index_reaches_a_nonzero_integer(&pt(1e300)));
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        for src in [
+            &["rootn", "(-1)", "acos", "0"][..],
+            &["rootn", "x0", "asinh", "tanh", "4"],
+            &["rootn", "2", "log", "1"],
+        ] {
+            assert_eq!(value_class(&s(src), ops), Some(Class::Nan), "{src:?}");
+        }
+        // an index whose enclosure holds an integer: no verdict
+        assert_eq!(
+            value_class(&s(&["rootn", "2", "+", "1", "sin", "np.pi"]), ops),
+            None
+        );
+    }
+
+    /// A positive base under a non-integer exponent is bounded by its corner powers: a ground
+    /// `1/pi^(1/6)` reads as the number below 1 it is, so `acosh` of it classifies as NaN.
+    #[test]
+    fn a_positive_base_power_is_bounded_by_its_corners() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let v = value_set(&s(&["pow", "np.pi", "/", "1", "6"]), ops, &Vs::reals()).unwrap();
+        let want = std::f64::consts::PI.powf(1.0 / 6.0);
+        assert!(v.lo <= want && want <= v.hi && v.hi - v.lo < 1e-12, "{v:?}");
+        assert_eq!(
+            value_class(&s(&["acosh", "inv", "pow", "np.pi", "/", "1", "6"]), ops),
+            Some(Class::Nan)
+        );
     }
 
     /// The domain gate splits the inverse round-trips exactly where mathematics does: composing

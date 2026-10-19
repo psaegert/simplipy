@@ -88,6 +88,17 @@ fn contains_bracket_poisoned_pow(e: &Ex, view: &TokenView) -> bool {
 
 /// Recursively GROUND: no `<constant>` and no variable leaf anywhere (numeric-string
 /// leaves are literals and qualify). The certified-absorption arm's scope guard.
+/// Is `e` free of variables (a ground value, or a family of `<constant>` values)? Like
+/// [`is_ground`] with `<constant>` admitted.
+fn variable_free(e: &Ex, view: &TokenView) -> bool {
+    match e {
+        Ex::Const => true,
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().all(|x| variable_free(x, view)),
+        Ex::Pow(b, ex) => variable_free(b, view) && variable_free(ex, view),
+        leaf => is_ground(leaf, view),
+    }
+}
+
 fn is_ground(e: &Ex, view: &TokenView) -> bool {
     match e {
         Ex::Const => false,
@@ -729,6 +740,61 @@ impl Engine {
             };
             class_memo.borrow_mut().insert(flat, verdict.clone());
             return verdict;
+        }
+        // A ROOT WHOSE INDEX IS NO INTEGER is the invalid operation at every radicand, so a
+        // `rootn` over a ground index whose rigorous value set reaches no nonzero integer is NaN
+        // whatever its radicand (`rootn(x1, asinh(tanh 4))`, index 0.8807...): the ground index
+        // generalisation of the constructor's literal arm (`rootn(x1, 2.5)`). An index whose
+        // enclosure holds an integer stays symbolic (fail closed). A ground radicand is the
+        // ground classification above, which reads the same index through the interval layer.
+        if let Ex::Fun(op, args) = e {
+            if args.len() == 2
+                && view.tok_is(*op, "rootn")
+                && matches!(
+                    &args[1],
+                    Ex::Add(_) | Ex::Mul(_) | Ex::Fun(..) | Ex::Pow(..)
+                )
+                && is_ground(&args[1], &view)
+                && !contains_bracket_poisoned_pow(&args[1], &view)
+            {
+                let strs = self.resolve_seq(&to_prefix(&args[1], &bare), ctx);
+                let index = crate::interval::value_set(
+                    &strs,
+                    &self.operators,
+                    &crate::interval::Vs::reals(),
+                );
+                if index.is_some_and(|vs| !crate::interval::index_reaches_a_nonzero_integer(&vs)) {
+                    return Some(Ex::NaN);
+                }
+            }
+        }
+        // A FAMILY OF `<constant>` VALUES THAT IS NaN AT EVERY CONSTANT is NaN: a variable-free
+        // composite holding a `<constant>` whose value class over every value of its constants is
+        // NaN (`acosh(acos(cosh C))`; the class drops a finite part supported on a null set of
+        // the constants, `acos(cosh 0) = 0`, the licence every mined nan fact of this shape
+        // used). The ground classification above, with the constants ranging over the reals.
+        // Before the absorptions below, which would read the family as a `<constant>`.
+        if is_composite
+            && e.contains_const()
+            && variable_free(e, &view)
+            && !contains_bracket_poisoned_pow(e, &view)
+        {
+            let flat = to_prefix(e, &bare);
+            let hit = class_memo.borrow().get(&flat).cloned();
+            let verdict = match hit {
+                Some(v) => v,
+                None => {
+                    let strs = self.resolve_seq(&flat, ctx);
+                    let v = (crate::interval::value_class(&strs, &self.operators)
+                        == Some(crate::interval::Class::Nan))
+                    .then_some(Ex::NaN);
+                    class_memo.borrow_mut().insert(flat, v.clone());
+                    v
+                }
+            };
+            if verdict.is_some() {
+                return verdict;
+            }
         }
         // GENERALIZED CONST-SHIFT ABSORPTION (P3', owner-approved 2026-08-02): an
         // Add/Mul bag holding a `<constant>` absorbs any GROUND member whose
