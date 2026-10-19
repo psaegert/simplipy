@@ -1861,12 +1861,28 @@ fn core_serialization_ops(py: Python<'_>) -> PyResult<Py<PyDict>> {
     Ok(out.into())
 }
 
+/// THE NUMERAL GRAMMAR (`utils::is_numeric_string`), the one definition every reader
+/// shares; `simplipy.utils.is_numeric_string` calls it.
+#[pyfunction]
+fn is_numeric_string(token: &str) -> bool {
+    crate::utils::is_numeric_string(token)
+}
+
+/// H-007's reserved numeric spellings (`utils::reserved_numeric_spelling`), refused at
+/// every semantic boundary; `simplipy.utils.reserved_numeric_spelling` calls it.
+#[pyfunction]
+fn reserved_numeric_spelling(token: &str) -> bool {
+    crate::utils::reserved_numeric_spelling(token)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
     m.add_class::<PyCandidateLibrary>()?;
     m.add_function(wrap_pyfunction!(core_serialization_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_interval_node_budget, m)?)?;
+    m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
+    m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
     m.add("DEFAULT_WORK", engine::DEFAULT_WORK)?;
     // The near-miss gate of the high-precision re-judgement (real and permissive): the

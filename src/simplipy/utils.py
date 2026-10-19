@@ -18,6 +18,13 @@ from copy import deepcopy
 from tqdm import tqdm
 import numpy as np
 
+# The numeral grammar and the reserved numeric spellings have ONE definition, in the core
+# (`rust/utils.rs`); the functions below call it rather than keep a copy in sync.
+from simplipy._core import (  # type: ignore[attr-defined]
+    is_numeric_string as _core_is_numeric_string,
+    reserved_numeric_spelling as _core_reserved_numeric_spelling,
+)
+
 # The declared public surface of this module (D11 column R18, owner-ratified
 # 2026-08-16): the evidence-backed names. Everything else here is reachable
 # but carries no stability promise (see the compatibility policy).
@@ -640,14 +647,10 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
     return list(deduplicated_rules.values())
 
 
-_DECIMAL_NUMERAL = re.compile(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?')
-_FRACTION_NUMERAL = re.compile(r'[+-]?[0-9]+/[0-9]*[1-9][0-9]*')
-
-
 def is_numeric_string(s: str) -> bool:
     """Check if a string is a numeral of the engine's grammar.
 
-    THE NUMERAL GRAMMAR, shared with the Rust core (``utils::is_numeric_string``): a
+    THE NUMERAL GRAMMAR, defined once in the compiled core (``utils::is_numeric_string``): a
     decimal ``[+-]? (D+ (. D*)? | . D+) ([eE] [+-]? D+)?`` or an exact fraction
     ``[+-]? D+ / D+`` with a nonzero denominator, D an ASCII digit. Value-free:
     ``1e400`` is a numeral although no float holds it.
@@ -675,9 +678,7 @@ def is_numeric_string(s: str) -> bool:
     >>> is_numeric_string("abc")
     False
     """
-    if not isinstance(s, str):
-        return False
-    return bool(_DECIMAL_NUMERAL.fullmatch(s) or _FRACTION_NUMERAL.fullmatch(s))
+    return isinstance(s, str) and _core_is_numeric_string(s)
 
 
 _INTEGER_NUMERAL = re.compile(r'[+-]?[0-9]+')
@@ -721,7 +722,7 @@ def evaluator_literal(token: str) -> str:
             return repr(float(value))
         except OverflowError:
             return 'float("-inf")' if value < 0 else 'float("inf")'
-    if _FRACTION_NUMERAL.fullmatch(bare):
+    if '/' in bare and is_numeric_string(bare):
         p, q = bare.split('/')
         try:
             float(int(p) / int(q))
@@ -743,37 +744,25 @@ def literal_float(token: str) -> float | None:
     The mining oracles read literals here, so a fraction token or a huge integer reads the way
     the compiled expression does (:func:`evaluator_literal`).
     """
-    if _DECIMAL_NUMERAL.fullmatch(token):
+    if not is_numeric_string(token):
+        return None
+    if '/' not in token:
         value = float(token)
         # an integer spelling is an `int` to the compiled evaluator, so `-0` is +0.0
         return 0.0 if value == 0 and _INTEGER_NUMERAL.fullmatch(token) else value
-    if _FRACTION_NUMERAL.fullmatch(token):
-        p, q = token.split('/')
-        try:
-            return int(p) / int(q)
-        except OverflowError:
-            return -math.inf if p.startswith('-') else math.inf
-        except ValueError:  # beyond Python's integer-string limit
-            return None
-    return None
-
-
-def _looks_numeric(t: str) -> bool:
-    """A token that starts like a number: after one optional pair of parentheses and any
-    run of signs, a digit or ``.`` (mirror of the Rust ``looks_numeric``)."""
-    if t.startswith('(') and t.endswith(')'):
-        t = t[1:-1]
-    t = t.lstrip('+-')
-    return bool(t) and (t[0] in '0123456789.')
-
-
-_RADIX_DIGITS = {'0x': '0123456789abcdef', '0o': '01234567', '0b': '01'}
+    p, q = token.split('/')
+    try:
+        return int(p) / int(q)
+    except OverflowError:
+        return -math.inf if p.startswith('-') else math.inf
+    except ValueError:  # beyond Python's integer-string limit
+        return None
 
 
 def reserved_numeric_spelling(t: str) -> bool:
     """H-007: a spelling a STANDARD numeric reader interprets but the engine's symbolic
-    core does not -- refused at every semantic boundary (kept in sync with the Rust
-    ``reserved_numeric_spelling``).
+    core does not -- refused at every semantic boundary (defined once in the compiled core,
+    ``utils::reserved_numeric_spelling``).
 
     Such a token has two contradictory readings: the AC canon would treat it as a free
     symbol and apply symbol algebra (``inf - inf -> 0``) while Python ``float()`` reads a
@@ -785,37 +774,7 @@ def reserved_numeric_spelling(t: str) -> bool:
     (``5``, ``+5``, ``1e-05``, ``1/3``, ``np.pi``, ``float("inf")``) and genuine free
     symbols (``x0``, ``_0``, ``x_0``) are NOT reserved.
     """
-    core = t[1:] if t[:1] in '+-' else t
-    # Family 1: textual non-finites.
-    if core.lower() in ('inf', 'infinity', 'nan'):
-        return True
-    # Family 3: base-prefixed integer literals (loose underscore grouping: fail closed).
-    lower = core.lower()
-    for prefix, digits_ok in _RADIX_DIGITS.items():
-        if lower.startswith(prefix):
-            digits = lower[len(prefix):].replace('_', '')
-            if digits and all(c in digits_ok for c in digits):
-                return True
-    # Family 2: underscore digit groupings -- every ``_`` strictly between two ASCII
-    # digits (Python's float-literal placement rule), and the cleaned spelling must be
-    # a float literal (non-finite words were handled above).
-    if '_' in t:
-        placed = all(
-            0 < i < len(t) - 1 and t[i - 1].isdigit() and t[i + 1].isdigit()
-            for i, c in enumerate(t) if c == '_'
-        )
-        if placed:
-            try:
-                float(t.replace('_', ''))
-                return True
-            except ValueError:
-                pass
-    # Family 4: malformed numerals.
-    if _looks_numeric(t):
-        inner = t[1:-1] if t.startswith('(') and t.endswith(')') else t
-        if not is_numeric_string(inner):
-            return True
-    return False
+    return _core_reserved_numeric_spelling(t)
 
 
 def factorize_to_at_most(p: int, max_factor: int, max_iter: int = 1000) -> list[int]:
