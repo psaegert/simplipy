@@ -106,9 +106,9 @@ def verify_ruleset(rules: list | str, *, mode: str | None = None,
     """
     import tempfile
     import os
-    if mode is not None and mode not in MODE_TIERS:
-        raise ValueError(
-            f"unknown mode {mode!r}: expected one of {sorted(MODE_TIERS)}")
+    if mode is not None:
+        from ..engine import _coerce_mode
+        mode = _coerce_mode(mode).name
     # Without a `report_path` the sweep's report is read back from a scratch directory
     # that is removed afterwards (it used to stay behind in the system temp dir).
     with tempfile.TemporaryDirectory() as scratch:

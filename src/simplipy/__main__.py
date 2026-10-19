@@ -51,8 +51,8 @@ def main(argv: str = None) -> None:
     verify_mine_parser = subparsers.add_parser(
         "verify-mine", help="Check a mined rule file against the re-mine gates in its own mode")
     verify_mine_parser.add_argument('rules_file', type=str, help='The mined rule file (its provenance sidecar beside it)')
-    verify_mine_parser.add_argument('--mode', required=True, choices=['f64', 'real', 'permissive'],
-                                    help='The mode the file serves')
+    verify_mine_parser.add_argument('--mode', required=True, choices=['f64', 'default', 'real', 'permissive'],
+                                    help="The mode the file serves ('default' is another name for f64)")
     verify_mine_parser.add_argument(
         '-e', '--engine', type=str, required=True,
         help='Name of an official engine (e.g., acj-4) or a local path to an engine configuration file (its operators)')
@@ -176,7 +176,7 @@ def main(argv: str = None) -> None:
             if args.report:
                 with open(args.report, 'w') as f:
                     json.dump(report, f, indent=2)
-            print(f'{args.rules_file} ({args.mode}): ' + ('all gates hold' if report['ok'] else 'GATES FAIL'))
+            print(f'{args.rules_file} ({report["mode"]}): ' + ('all gates hold' if report['ok'] else 'GATES FAIL'))
             sys.exit(0 if report['ok'] else 1)
 
         case 'prune-covered-rules':
@@ -188,7 +188,7 @@ def main(argv: str = None) -> None:
 
             engine = SimpliPyEngine.from_config(engine_config_path)
             n_before = len(engine.simplification_rules)
-            n_pruned = engine.prune_covered_rules(verbose=args.verbose, rule_mode='default')
+            n_pruned = engine.prune_covered_rules(verbose=args.verbose, rule_mode='f64')
 
             output_dir = os.path.dirname(args.output_file)
             if output_dir and not os.path.exists(output_dir):

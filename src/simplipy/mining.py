@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 # D11 column R30 (owner-ratified 2026-08-16): the miner is this module's
 # power-user surface; the module helpers (_MINE_LOCK, ...) are private.
-__all__ = ['RuleMiner']
+__all__ = ['RuleMiner', 'verify_mine', 'cross_mode_complexity']
 
 
 # THE ARTIFACT-AFFECTING SWITCH REGISTRY: every environment variable that can change a
@@ -2185,17 +2185,13 @@ class RuleMiner:
             _MINE_LOCK.release()
 
 
-#: The file modes `verify_mine` takes, with the rule mode each is read in.
-_FILE_TO_RULE_MODE = {file_mode: rule_mode for rule_mode, file_mode in _MINE_MODES}
-
-
-def verify_mine(rules_path: str, mode: str, operators: dict, *,
+def verify_mine(rules_path: str, mode: Any, operators: dict, *,
                 judge: Callable | None = None, judge_processes: int = 4) -> dict:
     """THE RE-MINE GATES of one mined file, in its own mode (miner.md 3).
 
     ``rules_path`` is a rule file a mine wrote, read beside its provenance sidecar;
-    ``mode`` the mode it serves (``'f64'``, ``'real'`` or ``'permissive'``); ``operators``
-    the engine's operator table. Each gate holds or names what breaks it:
+    ``mode`` the mode it serves (``'f64'``, also ``'default'``, ``'real'``, ``'permissive'``
+    or a :class:`~simplipy.Mode` member); ``operators`` the engine's operator table. Each gate holds or names what breaks it:
 
     - ``twin_shadow``: no row the mode's load would mint anyway (a twin-shadow owner);
     - ``engine_owned_law``: no rule that is an instance of a law the engine owns
@@ -2210,10 +2206,9 @@ def verify_mine(rules_path: str, mode: str, operators: dict, *,
 
     Returns ``{'file', 'mode', 'ok', 'gates': {name: {'ok', 'count', 'examples'}}}``.
     """
-    from .engine import SimpliPyEngine
-    if mode not in _FILE_TO_RULE_MODE:
-        raise ValueError(f'unknown mode {mode!r}: expected one of {sorted(_FILE_TO_RULE_MODE)}')
-    rule_mode = _FILE_TO_RULE_MODE[mode]
+    from .engine import SimpliPyEngine, _RULE_MODE, _coerce_mode
+    mode = _coerce_mode(mode).name
+    rule_mode = _RULE_MODE[_coerce_mode(mode)]
     with open(rules_path) as file:
         rules = [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.load(file)]
     sidecar_path = rules_path + '.provenance.json'
@@ -2258,14 +2253,15 @@ def verify_mine(rules_path: str, mode: str, operators: dict, *,
 
 
 def cross_mode_complexity(engine: Any, tokens: Any, mode: Any) -> int:
-    """THE CROSS-MODE YARDSTICK: the price of an answer of ``mode`` on a scale shared by
-    all three modes.
+    """The price of an answer of ``mode`` on a scale shared by all three modes.
 
     Each mode's own :meth:`~simplipy.SimpliPyEngine.complexity` prices that mode's
-    reading, so prices in different modes are not comparable. Answers of different modes
-    are compared in one declared reading instead: the answer is parsed as its own mode
-    reads it and priced, certified, in f64's canon. This is the one use of the core's
-    f64-canon pricing.
+    reading, so prices in different modes are not comparable. This compares answers of
+    different modes in one declared reading instead: ``tokens`` (the answer as a prefix
+    token list, explicit or tagged) is parsed as ``mode`` reads it and priced, certified,
+    in f64's canon. ``mode`` is ``'f64'`` (also ``'default'``), ``'real'``,
+    ``'permissive'`` or a :class:`~simplipy.Mode` member. Returns the price in
+    milli-bits, the unit of :meth:`~simplipy.SimpliPyEngine.complexity`.
     """
     from .engine import _RULE_MODE, _coerce_mode
     return int(engine._core.ac_complexity_certified(list(tokens), 'default', rule_mode=_RULE_MODE[_coerce_mode(mode)]))

@@ -46,11 +46,14 @@ def promote(rules, engine, *, run_positive_controls=True, verbose=False, progres
     reporter (see :mod:`simplipy.progress`). Promotion is the longest single-threaded stage
     of a mine and scales worse than linearly in the rule count, so it reports by default
     whenever the mine is verbose.
-    ``rule_mode`` is the mode the rules serve in: the derivability refund asks that mode's
-    engine.
+    ``rule_mode`` is the mode the rules serve in (``'f64'``, also ``'default'``, ``'real'``,
+    ``'permissive'`` or a :class:`~simplipy.Mode` member): the derivability refund asks that
+    mode's engine.
     Returns ``(kept_rules, report)`` where ``kept_rules`` is a list of ``[lhs, rhs]`` lists.
     """
+    from ..engine import _coerce_rule_mode
     from ..progress import Progress
+    rule_mode = _coerce_rule_mode(rule_mode)
     prog = progress if progress is not None else Progress(verbose, prefix="  [promote] ")
     _f64_eval.configure(engine)
     rules = [(tuple(l), tuple(r)) for l, r in rules]

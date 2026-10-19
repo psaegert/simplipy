@@ -589,31 +589,27 @@ def dedup_target_wins(engine: Any, new: Any, kept: Any, rule_mode: str) -> bool:
         return False
 
 
-def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any, rule_mode: str) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]], dummy_variables: list[str], verbose: bool = False, variable_prefix: str = '?', *, engine: Any, rule_mode: Any) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     """Deduplicate a list of simplification rules by canonicalizing variables.
 
     This function processes a list of (source, target) simplification rules. It
-    standardizes the variables in each rule to a canonical form and then
-
-    removes duplicates. If multiple rules simplify to different targets from
-    the same canonical source, it keeps the one with the shortest target.
+    standardizes the variables in each rule to a canonical form and then removes
+    duplicates. If several rules rewrite the same canonical source to different targets,
+    it keeps the rule whose target is lower in ``rule_mode``'s serve ordering (the order
+    the rewrite pass fires under), not the one with fewer tokens; the whole pair is kept,
+    so a source is never crossed with another rule's target.
 
     Two rules are the SAME rule when ``engine`` translates their sources into the same
-    internal pattern -- not when they are spelled alike (owner ruling 2026-08-18,
-    "instead of comparing spelling, compare internal form"). ``* (-1) asin _0`` and
-    ``* asin _0 (-1)`` are one rule; keying on the spelling shipped both, and the second
-    could never fire because the first already owns every subject it matches.
+    internal pattern, not when they are spelled alike: ``* (-1) asin _0`` and
+    ``* asin _0 (-1)`` are one rule. Keying on the spelling would keep both, and the
+    second could never fire because the first already matches every subject it matches.
 
-    The key is the BARE-context canonical form -- the one
-    :func:`~simplipy._core.Engine.ac_canonical_keys` computes, which is literally what
-    the rule loader builds for a rule side. It is deliberately NOT
+    The key is the canonical form as ``rule_mode`` reads a rule side, which is what the
+    rule loader builds for it. It is deliberately NOT
     :meth:`~simplipy.engine.SimpliPyEngine.to_prefix`/``to_tagged``: those run the
-    rewrite pass under the LOADED ruleset and the full certificate context, so on an
-    engine holding acj-4-3 ``to_prefix(['*','(-1)','asin','_0'])`` returns
-    ``asin neg _0`` -- that rule's own target -- while a rules-less engine over the same
-    vocabulary returns ``neg asin _0``. A dedup key that depends on the ruleset being
-    deduplicated is circular; this one is a pure function of the operator table and
-    returns the same answer on both engines.
+    rewrite pass under the LOADED ruleset, so a rule's source could come back as that
+    rule's own target. A key that depends on the ruleset being deduplicated would be
+    circular; this one depends only on the operator table and the mode.
 
     Parameters
     ----------
@@ -627,12 +623,19 @@ def deduplicate_rules(rules_list: list[tuple[tuple[str, ...], tuple[str, ...]]],
         REQUIRED, keyword-only: the engine whose operator table defines the internal
         form. Keyword-only on purpose -- a positional third argument would have
         silently swallowed an existing caller's positional ``verbose``.
+    rule_mode : str or Mode
+        REQUIRED, keyword-only: the mode the rules serve in, ``'f64'`` (also
+        ``'default'``), ``'real'``, ``'permissive'`` or a :class:`~simplipy.Mode` member.
+        It decides how a rule side is read (the key) and which target wins (its serve
+        ordering).
 
     Returns
     -------
     list[tuple[tuple[str, ...], tuple[str, ...]]]
-        The deduplicated and optimized list of simplification rules.
+        The deduplicated list of simplification rules, in first-seen order of their keys.
     """
+    from .engine import _coerce_rule_mode
+    rule_mode = _coerce_rule_mode(rule_mode)
     deduplicated_rules: dict[_DedupKey, tuple[tuple[str, ...], tuple[str, ...]]] = {}
     for key, pair in _dedup_keyed_rules(rules_list, dummy_variables, engine, variable_prefix, verbose,
                                         rule_mode=rule_mode):

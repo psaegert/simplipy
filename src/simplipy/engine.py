@@ -307,24 +307,37 @@ class Mode(Enum):
 _RULE_MODE: dict[Mode, str] = {Mode.f64: 'default', Mode.real: 'real', Mode.permissive: 'permissive'}
 
 
-def _coerce_mode(mode: 'Mode | str') -> Mode:
-    """A :class:`Mode` member, or its name in any case; anything else raises.
+#: Every name a mode answers to, matched case-insensitively. ``'default'`` is the f64
+#: mode's second name: the rule-file entries (``rule_mode=``) have always used it.
+_MODE_NAMES: dict[str, Mode] = {
+    'f64': Mode.f64, 'default': Mode.f64, 'real': Mode.real, 'permissive': Mode.permissive}
+_MODE_CHOICES = "'f64' (also 'default'), 'real' or 'permissive'"
 
-    A string must coerce rather than compare unequal to the enum, and a bare int must
-    not bind: only members and their names select a mode.
+
+def _coerce_mode(mode: 'Mode | str') -> Mode:
+    """A :class:`Mode` member, or one of its names in any case; anything else raises.
+
+    The one coercion every entry that takes a mode uses (``mode=``, ``modes=``,
+    ``rule_mode=``): ``'f64'`` and ``'default'`` name the same mode. A bare int does not
+    bind: only members and their names select a mode.
     """
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, str):
-        match = {m.name.lower(): m for m in Mode}.get(mode.strip().lower())
+        match = _MODE_NAMES.get(mode.strip().lower())
         if match is None:
             raise ValueError(
-                f"unknown mode {mode!r}: expected one of "
-                f"{[m.name for m in Mode]} (or a simplipy.Mode)")
+                f"unknown mode {mode!r}: expected {_MODE_CHOICES} (or a simplipy.Mode)")
         return match
     raise TypeError(
-        f"mode must be a simplipy.Mode or one of "
-        f"{[m.name for m in Mode]}, not {type(mode).__name__} ({mode!r})")
+        f"mode must be a simplipy.Mode or one of {_MODE_CHOICES}, "
+        f"not {type(mode).__name__} ({mode!r})")
+
+
+def _coerce_rule_mode(mode: 'Mode | str') -> str:
+    """The core's name for a mode's rule set (``'default'``, ``'real'``, ``'permissive'``),
+    from any spelling :func:`_coerce_mode` accepts."""
+    return _RULE_MODE[_coerce_mode(mode)]
 
 
 #: The wrapper attribute carrying each NON-DEFAULT rule mode's own set -- the two sets
@@ -555,12 +568,7 @@ class SimpliPyEngine:
         names = {'f64'}
         for m in modes:
             if isinstance(m, str):
-                match = {mm.name.lower(): mm for mm in Mode}.get(m.strip().lower())
-                if match is None:
-                    raise ValueError(
-                        f"unknown mode {m!r} in modes=...: expected one of "
-                        f"{[mm.name for mm in Mode]} (or a simplipy.Mode)")
-                m = match
+                m = _coerce_mode(m)
             elif not isinstance(m, Mode):
                 raise TypeError(
                     f"modes entries must be mode names or simplipy.Mode members, "
@@ -806,7 +814,8 @@ class SimpliPyEngine:
         ----------
         mode : Mode or str
             The mode to unload, as a :class:`Mode` member or its name
-            (``'real'``, ``'permissive'``). ``Mode.f64`` raises ``ValueError``.
+            (``'real'``, ``'permissive'``). ``Mode.f64`` (``'f64'``, ``'default'``)
+            raises ``ValueError``.
         """
         mode = _coerce_mode(mode)
         if mode is Mode.f64:
@@ -844,7 +853,7 @@ class SimpliPyEngine:
                 m for m in _MODE_RULES_ATTR
                 if getattr(self, _MODE_RULES_ATTR[m]) is not None}
 
-    def prune_covered_rules(self, verbose: bool = False, *, rule_mode: str) -> int:
+    def prune_covered_rules(self, verbose: bool = False, *, rule_mode: 'Mode | str') -> int:
         """Remove rules that the remaining rules already cover behaviorally.
 
         A rule ``(lhs, rhs)`` is *covered* if the engine WITHOUT it still
@@ -890,9 +899,9 @@ class SimpliPyEngine:
         ----------
         verbose : bool, optional
             If True, prints per-wave progress and a summary. Defaults to False.
-        rule_mode : str
-            The mode whose own set is pruned (``'default'``, ``'real'``, ``'permissive'``).
-            Coverage is asked of that mode's engine: its serve answer (the miner's mark) and
+        rule_mode : str or Mode
+            The mode whose own set is pruned: ``'f64'`` (also ``'default'``), ``'real'``,
+            ``'permissive'``, or a :class:`Mode` member. Coverage is asked of that mode's engine: its serve answer (the miner's mark) and
             its serve ordering, with the kept rules installed as its set.
 
         Returns
@@ -903,6 +912,7 @@ class SimpliPyEngine:
         from .progress import Progress
         prog = Progress(verbose, prefix='  [prune] ')
 
+        rule_mode = _coerce_rule_mode(rule_mode)
         attr = 'simplification_rules' if rule_mode == 'default' else _MODE_RULES_ATTR[rule_mode]
         full = [(tuple(lhs), tuple(rhs)) for lhs, rhs in (getattr(self, attr) or [])]
         if not full:
