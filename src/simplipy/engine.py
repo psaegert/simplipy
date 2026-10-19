@@ -1214,8 +1214,9 @@ class SimpliPyEngine:
             behavior. Under a lean selection (e.g. ``modes=('f64', 'permissive')``)
             a config-named set outside it is not even read here -- its resolved
             path is recorded and the file loads on the mode's first use. See the
-            class docstring's ``modes`` entry for the full contract and measured
-            RSS numbers, and :meth:`unload_mode` for the explicit drop.
+            class docstring's ``modes`` entry for the full contract and the peak RSS
+            measured on the acj-5-4-llm artifact, and :meth:`unload_mode` for the
+            explicit drop.
         trusted_modules : list[str] or None, optional
             Extra module roots the config is allowed to import (see
             :mod:`simplipy.trust`). Deliberately an argument HERE and not a key in
@@ -1398,7 +1399,8 @@ class SimpliPyEngine:
             is the historical behavior, a lean selection such as
             ``modes=('f64', 'permissive')`` defers the rest to first use. See
             :meth:`from_config` and the class docstring's ``modes`` entry (with the
-            measured RSS numbers); :meth:`unload_mode` is the paired explicit drop.
+            peak RSS measured on the acj-5-4-llm artifact); :meth:`unload_mode` is the
+            paired explicit drop.
         trusted_modules : list[str] or None, optional
             Extra module roots the fetched config is allowed to import (see
             :mod:`simplipy.trust`). A hosted asset is third-party input like any

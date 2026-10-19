@@ -509,3 +509,24 @@ class TestTheIdentity:
         for rule_mode in ('default', 'real', 'permissive'):
             assert (lean._core.mode_rules_len(rule_mode=rule_mode)
                     == eager._core.mode_rules_len(rule_mode=rule_mode))
+
+
+class TestTheDefaultAndItsMeasuredFootprint:
+    """``modes='all'`` stays the default of every loading entry, and every memory figure
+    the loading docstrings publish names the artifact it was measured on: the figures
+    belong to that artifact and are re-measured when the default artifact changes."""
+
+    @pytest.mark.parametrize('entry', ['__init__', 'from_config', 'load'])
+    def test_all_is_the_default(self, entry):
+        import inspect
+        assert inspect.signature(getattr(SimpliPyEngine, entry)).parameters['modes'].default == 'all'
+
+    @pytest.mark.parametrize('owner', ['class', 'from_config', 'load', 'unload_mode'])
+    def test_every_memory_figure_names_its_artifact(self, owner):
+        import re
+        doc = SimpliPyEngine.__doc__ if owner == 'class' else getattr(SimpliPyEngine, owner).__doc__
+        figure = re.compile(r'\d\s*[GM]B\b|\bRSS\b')
+        paragraphs = [p for p in re.split(r'\n\s*\n', doc) if figure.search(p)]
+        assert paragraphs, f'{owner} states no memory figure'
+        for p in paragraphs:
+            assert 'acj-5-4-llm' in p, p

@@ -71,7 +71,8 @@ organised by who you are, then the highlights, then every change in detail.
 - **The sign of an infinity is kept**: distributing over an infinity needs certified
   finiteness, as in `f64` and `real` (`1 + tanh(inf*(x1 - 1/2))` is no longer `0`).
 - **The lean profile.** A worker that needs inference and corpus canonicalisation only loads
-  `modes=('f64', 'permissive')`, about 0.7 GB; `real` then builds on its first use.
+  `modes=('f64', 'permissive')`, about 0.7 GB with `acj-5-4-llm`; `real` then builds on its
+  first use.
 
 **Publishers of rule files**
 
