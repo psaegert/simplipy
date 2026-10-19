@@ -198,15 +198,6 @@ def _fulfills_constant_promise(pattern: list[str], subject: list[str],
     return walk(0, 0) == (len(pattern), len(subject))
 
 
-def _validate_ndarray_input(expression: 'np.ndarray') -> None:
-    """The ndarray input contract for ``simplify`` (engine.py): 1-D, string-like dtype.
-    Validated BEFORE the core call so malformed inputs fail with a clean ValueError."""
-    if expression.ndim != 1:
-        raise ValueError('`simplify` expects a one-dimensional numpy array of tokens')
-    if expression.dtype.kind not in {'U', 'S', 'O'}:
-        raise ValueError('`simplify` expects a numpy array of string-like tokens')
-
-
 # C23a (D27): the mine half lives in `simplipy.mining` as RuleMiner; the
 # engine keeps `find_rules`/`certify_rules` as thin delegators so the public
 # API does not move. These aliases keep the module surface stable (tests and
@@ -1387,7 +1378,7 @@ class SimpliPyEngine:
                 self._core.ac_simplify_in_mode(tokens, 0, 'tagged', rule_mode='default')
             except ValueError:
                 if verbose:
-                    self._explain_invalid(tokens)
+                    self._explain_invalid(tokens, 'tagged')
                 return False
             return True
         # EXPLICIT (and everything else): the verdict ALWAYS comes from the compiled core
@@ -1398,7 +1389,7 @@ class SimpliPyEngine:
         # as it did.
         valid = self._core.is_valid(tokens)
         if verbose and not valid:
-            self._explain_invalid(tokens)
+            self._explain_invalid(tokens, 'explicit')
         return valid
 
     def _validation_tokens(
@@ -1423,15 +1414,16 @@ class SimpliPyEngine:
             f'is_valid expects an infix str or a token sequence '
             f'(list, tuple or 1-D ndarray), not {type(expression).__name__}')
 
-    def _explain_invalid(self, prefix_expression: list[str]) -> None:
-        """Print WHY an expression failed :meth:`is_valid` (diagnostics only, no verdict)."""
+    def _explain_invalid(self, prefix_expression: list[str], form: str) -> None:
+        """Print WHY an expression in ``form`` failed :meth:`is_valid` (diagnostics only,
+        no verdict)."""
         stack: list[str] = []
-        tagged = _TAGGED_DIALECT_TOKENS.intersection(prefix_expression)
-        if tagged:
-            # Without this check the walk below misreads the bag delimiters as variables
+        if form == 'tagged':
+            # Without this branch the walk below misreads the bag delimiters as variables
             # and prints 'Variable must be leaf node' -- actively misleading (B1). is_valid
-            # now READS this dialect, so reaching here means the sequence is malformed AS
+            # READS this dialect, so reaching here means the sequence is malformed AS
             # tagged, not that the dialect was refused.
+            tagged = _TAGGED_DIALECT_TOKENS.intersection(prefix_expression)
             print(f'Invalid expression {prefix_expression}: malformed '
                   f'tagged-serialization sequence (carries {sorted(tagged)}). Every '
                   f'section must open and close in order and every operator must get '
@@ -1612,41 +1604,45 @@ class SimpliPyEngine:
 
         return self._core.parse(infix_expression, convert_expression, mask_numbers)
 
-    def _conversion_input(
+    def _read_input(
             self, expression: str | list[str] | tuple[str, ...] | np.ndarray
     ) -> tuple[str, list[str]]:
-        """``(form, tokens)`` -- the shared input reading of the conversion API.
+        """``(form, tokens)``: THE reading of an expression argument, shared by
+        :meth:`simplify`, :meth:`complexity`, :meth:`prettify`, the conversion API and
+        :mod:`simplipy.normalization`.
 
-        A ``str`` is INFIX and is read with the tolerant reader; a list, tuple or 1-D
-        ``ndarray`` is a token sequence, TAGGED when it carries a bag delimiter or an
-        inverse-section marker and the explicit binary PREFIX otherwise. Any other type
-        refuses loudly. The reading does not validate -- each conversion validates
-        through the one arbiter, the syntactic parser in ``rust/forms.rs``.
+        A ``str`` is INFIX and is read strictly into explicit prefix tokens. A list, tuple
+        or 1-D ``ndarray`` of string-like tokens is a token sequence: TAGGED when it
+        carries a bag delimiter or an inverse-section marker, EXPLICIT binary prefix
+        otherwise. A sequence written in REALIZATION notation (each operator spelled as
+        the callable it runs, ``simplipy.operators.neg`` for ``neg``) is read back to
+        operator tokens first: it is a notation of the same expression. Only
+        realizations that differ from their operator token identify it, and those are
+        dotted names no operator vocabulary contains, so it is detected, never guessed.
+
+        Refuses loudly: an ``ndarray`` that is not 1-D or not string-like raises
+        ``ValueError``, any other type ``TypeError``. The reading does not validate;
+        each consumer validates through the core.
         """
         if isinstance(expression, str):
             return 'infix', self._core.parse(expression, strict=True)
         if isinstance(expression, np.ndarray):
             if expression.ndim != 1:
-                raise ValueError('conversion expects a one-dimensional numpy array of tokens')
+                raise ValueError('expected a one-dimensional numpy array of tokens, '
+                                 f'got {expression.ndim} dimensions')
             if expression.dtype.kind not in {'U', 'S', 'O'}:
-                raise ValueError('conversion expects a numpy array of string-like tokens')
-            tokens = [str(t) for t in expression.tolist()]
+                raise ValueError('expected a numpy array of string-like tokens, '
+                                 f'got dtype {expression.dtype}')
+            tokens = [str(t) for t in expression.astype(str).tolist()]
         elif isinstance(expression, (list, tuple)):
             tokens = [str(t) for t in expression]
         else:
             raise TypeError(
-                f'conversion expects an infix str or a token sequence '
+                f'expected an infix str or a token sequence '
                 f'(list, tuple or 1-D ndarray), not {type(expression).__name__}')
-        # REALIZATION is a fourth NOTATION, not a fourth semantics: the same expression
-        # with each operator spelled as the callable it runs (`neg` ->
-        # `simplipy.operators.neg`). Detected, never guessed -- only realizations that
-        # DIFFER from their operator token can identify the form, and those are dotted
-        # names no operator vocabulary contains. Operators realized as themselves (`+`,
-        # `-`, `*`) make the two spellings identical, so there is nothing to detect and
-        # nothing to get wrong.
         if self._realization_only_tokens().intersection(tokens):
             tokens = self.realizations_to_operators(tokens)
-        return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'prefix'), tokens
+        return ('tagged' if _TAGGED_DIALECT_TOKENS.intersection(tokens) else 'explicit'), tokens
 
     def evaluate_constants(
             self, expression: str | list[str] | tuple[str, ...] | np.ndarray,
@@ -1681,10 +1677,10 @@ class SimpliPyEngine:
         text for a ``str``, otherwise the tagged or binary-prefix tokens it was given)
         unless ``form`` names another: ``'tagged'``, ``'explicit'`` or ``'infix'``.
         """
-        in_form, tokens = self._conversion_input(expression)
+        in_form, tokens = self._read_input(expression)
         if not tokens:
             return '' if in_form == 'infix' else []
-        # an infix `str` was already read (strictly) by `_conversion_input`
+        # an infix `str` was already read (strictly) by `_read_input`
         prefix = self._core.to_prefix_syntactic(tokens) if in_form == 'tagged' else tokens
         self._core.check_form(prefix)
 
@@ -1718,8 +1714,7 @@ class SimpliPyEngine:
             out.append(prefix[i])
             i += 1
 
-        target = form or ('infix' if in_form == 'infix' else
-                          'tagged' if in_form == 'tagged' else 'explicit')
+        target = form or in_form
         if target == 'explicit':
             return out
         if target == 'tagged':
@@ -1746,7 +1741,7 @@ class SimpliPyEngine:
         (conversions are strict; :meth:`read_infix` stays the tolerant reader),
         ``TypeError`` on a non-expression type.
         """
-        form, tokens = self._conversion_input(expression)
+        form, tokens = self._read_input(expression)
         if form == 'infix':
             if tokens:
                 self._core.check_form(tokens)
@@ -1774,7 +1769,7 @@ class SimpliPyEngine:
         inverts each member individually -- only a left chain spells that without
         inventing the product ``c*d``.
         """
-        form, tokens = self._conversion_input(expression)
+        form, tokens = self._read_input(expression)
         if not tokens:
             return []
         if form == 'tagged':
@@ -1798,7 +1793,7 @@ class SimpliPyEngine:
         nonzero certificate. A lone group inverse keeps its unary spelling (``neg x0``,
         ``inv x0``): the grammar has no one-member bag.
         """
-        form, tokens = self._conversion_input(expression)
+        form, tokens = self._read_input(expression)
         if not tokens:
             return []
         return cast(list, self._core.to_tagged_syntactic(tokens))
@@ -2062,25 +2057,12 @@ class SimpliPyEngine:
         if mode is not Mode.f64:
             self._ensure_mode_loaded(_RULE_MODE[mode])
 
-        if isinstance(expression, str):
-            tokens = self._core.parse(expression, strict=True)
-        elif isinstance(expression, np.ndarray):
-            _validate_ndarray_input(expression)
-            tokens = expression.tolist()
-        else:
-            tokens = list(expression)
-
         # DIALECT-PRESERVING (owner ruling 2026-08-18): `simplify` only simplifies and
         # answers in the form it was handed -- a str is infix, a token sequence carrying
         # a bag delimiter is tagged, anything else is the explicit binary prefix. This is
         # what closed the old "tagged leak" (a prefix-in token list used to come back
         # tagged); to change the NOTATION, convert: `simplify(to_tagged(x))`.
-        if isinstance(expression, str):
-            form = 'infix'
-        elif _TAGGED_DIALECT_TOKENS.intersection(tokens):
-            form = 'tagged'
-        else:
-            form = 'explicit'
+        form, tokens = self._read_input(expression)
         if mode is Mode.real and self._core.mode_rules_len(rule_mode='real') is None:
             # FAIL CLOSED. A mode naming no set of its own falls back to the default
             # set, which is right for `permissive` (its divergence is search semantics, so
@@ -2180,8 +2162,8 @@ class SimpliPyEngine:
             self._ensure_mode_loaded(_RULE_MODE[mode])
         if mode is Mode.real and self._core.mode_rules_len(rule_mode='real') is None:
             raise ValueError("mode='real' needs a ruleset mined for it, and this artifact has none")
-        in_form, tokens = self._conversion_input(expression)
-        target = form or ('infix' if in_form == 'infix' else 'tagged' if in_form == 'tagged' else 'explicit')
+        in_form, tokens = self._read_input(expression)
+        target = form or in_form
         if target not in ('infix', 'explicit', 'tagged'):
             raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
         if not tokens:
@@ -2222,12 +2204,7 @@ class SimpliPyEngine:
         signs and magnitude-1 coefficient/exponent slots are free, literals pay their
         description length on the exact value, symbols pay one symbol unit.
         """
-        if isinstance(expression, str):
-            tokens = self._core.parse(expression, strict=True)
-        elif isinstance(expression, np.ndarray):
-            tokens = expression.tolist()
-        else:
-            tokens = list(expression)
+        _, tokens = self._read_input(expression)
         rule_mode = _RULE_MODE[_coerce_mode(mode)]
         # LAZY MODES (task #88): same first-use hook as `simplify` -- the mode
         # argument reaches the core below, so a deferred set must be built first.

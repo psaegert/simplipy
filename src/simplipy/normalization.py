@@ -80,10 +80,7 @@ from typing import cast
 
 import numpy as np
 
-# The tag delimiters, from the ONE place they are defined (the engine names the
-# dialect with this set in its own diagnostics); a second copy of a doctrine
-# constant is a second thing to keep in sync.
-from .engine import SimpliPyEngine, _TAGGED_DIALECT_TOKENS
+from .engine import SimpliPyEngine
 
 __all__ = ["normalize_variable_token", "to_expression", "to_skeleton"]
 
@@ -151,7 +148,7 @@ def to_expression(expression: str | list[str] | tuple[str, ...] | np.ndarray | N
     """
     if expression is None:
         return None
-    dialect = _input_dialect(expression)
+    dialect, _ = engine._read_input(expression)
     return _render(_canonical_expression(expression, engine), dialect, engine)
 
 
@@ -180,35 +177,11 @@ def to_skeleton(expression: str | list[str] | tuple[str, ...] | np.ndarray | Non
     """
     if expression is None:
         return None
-    dialect = _input_dialect(expression)
+    dialect, _ = engine._read_input(expression)
     canonical = _canonical_expression(expression, engine)
     # Nothing to mask, and the role walk refuses an empty sequence outright.
     masked = cast("list[str]", engine.mask(canonical, "all")) if canonical else canonical
     return _render(masked, dialect, engine)
-
-
-def _input_dialect(expression: str | list[str] | tuple[str, ...] | np.ndarray) -> str:
-    """Which external form ``expression`` is written in -- the conversion API's
-    own detection (design D2): a ``str`` is INFIX; a token sequence is TAGGED when
-    it carries a bag delimiter or an inverse-section marker, and the explicit
-    binary PREFIX otherwise.
-
-    ``neg``/``inv`` are legal in BOTH token dialects and carry no delimiter, so a
-    sequence spelled only with them reads as explicit. That is a call about the
-    OUTPUT SPELLING only: the content is decided in the canonical state, so it is
-    the same skeleton either way.
-    """
-    if isinstance(expression, str):
-        return "infix"
-    if isinstance(expression, np.ndarray):
-        tokens = [str(t) for t in expression.ravel().tolist()]
-    elif isinstance(expression, (list, tuple)):
-        tokens = [str(t) for t in expression]
-    else:
-        raise TypeError(
-            f"expected an infix str or a token sequence (list, tuple or 1-D "
-            f"ndarray), not {type(expression).__name__}")
-    return "tagged" if _TAGGED_DIALECT_TOKENS.intersection(tokens) else "explicit"
 
 
 def _canonical_expression(expression: str | list[str] | tuple[str, ...] | np.ndarray,

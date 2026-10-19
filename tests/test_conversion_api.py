@@ -197,3 +197,27 @@ class TestErrors:
     def test_2d_ndarray_raises_value_error(self, engine: SimpliPyEngine) -> None:
         with pytest.raises(ValueError):
             engine.to_infix(np.array([PREFIX, PREFIX]))
+
+
+class TestOneReading:
+    """Every entry that takes an expression reads it the same way (`_read_input`)."""
+
+    @pytest.mark.parametrize("entry", ['simplify', 'complexity', 'to_prefix', 'to_infix'])
+    @pytest.mark.parametrize("bad", [
+        pytest.param(np.array([['x1']]), id='2d-ndarray'),
+        pytest.param(np.array([1.0, 2.0]), id='float-ndarray'),
+    ])
+    def test_a_bad_ndarray_is_a_clean_value_error(self, engine: SimpliPyEngine, entry, bad) -> None:
+        with pytest.raises(ValueError, match='numpy array'):
+            getattr(engine, entry)(bad)
+
+    @pytest.mark.parametrize("entry", ['simplify', 'complexity', 'to_prefix'])
+    def test_a_wrong_type_is_the_same_type_error(self, engine: SimpliPyEngine, entry) -> None:
+        with pytest.raises(TypeError, match='expected an infix str or a token sequence'):
+            getattr(engine, entry)(42)
+
+    def test_simplify_reads_realization_notation_like_to_prefix(self, engine: SimpliPyEngine) -> None:
+        realized = ['simplipy.operators.neg', 'x1']
+        assert engine.to_prefix(realized) == ['neg', 'x1']
+        assert engine.simplify(realized) == engine.simplify(['neg', 'x1'])
+        assert engine.complexity(realized) == engine.complexity(['neg', 'x1'])

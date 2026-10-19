@@ -114,5 +114,5 @@ class TestTheCompilePipelineIsTerminal:
 
     def test_a_callable_is_not_accepted_as_conversion_input(self, eng) -> None:
         f = eng.as_callable('x0 + 1')
-        with pytest.raises(TypeError, match='conversion expects'):
+        with pytest.raises(TypeError, match='expected an infix str or a token sequence'):
             eng.to_prefix(f)
