@@ -37,9 +37,10 @@ def test_the_mark_is_the_serve_answer_of_the_mode(eng):
 def test_sources_are_the_canonical_projections_of_the_mode(eng):
     enumerated = [['+', 'cos', '0', 'sin', 'x0'], ['+', '1', 'sin', 'x0'],
                   ['atanh', 'tanh', 'x0'], ['cos', '0']]
-    # f64 reads `cos 0` as 1: one class for the first two, and `cos 0` is an atom
+    # no reading folds `cos 0` (f64's walk does, as a step); f64 keeps `atanh tanh x0`
     assert eng._core.mine_sources(enumerated, rule_mode='default') == [
-        ['+', 'sin', 'x0', '1'], ['atanh', 'tanh', 'x0']]
+        ['+', 'cos', '0', 'sin', 'x0'], ['+', 'sin', 'x0', '1'], ['atanh', 'tanh', 'x0'],
+        ['cos', '0']]
     # real keeps `cos 0`, and `atanh tanh x0` is the atom x0
     assert eng._core.mine_sources(enumerated, rule_mode='real') == [
         ['+', 'cos', '0', 'sin', 'x0'], ['+', 'sin', 'x0', '1'], ['cos', '0']]
@@ -47,9 +48,10 @@ def test_sources_are_the_canonical_projections_of_the_mode(eng):
 
 @pytest.mark.parametrize('mode', MODES)
 def test_rules_are_read_in_the_mode(eng, mode):
-    # f64 folds `cos 0` in the pattern too, so the rule states what the constructor does
-    served = eng._core.ac_translate_preview([(['*', 'cos', '0', '?0'], ['?0'])], rule_mode=mode)
-    assert (served == []) == (mode == 'default'), served
+    # real reads `atanh(tanh(t))` as `t` in the pattern too, so the rule states what its
+    # constructor does; f64 keeps the pattern (tanh saturates in floats), and so does permissive
+    served = eng._core.ac_translate_preview([(['atanh', 'tanh', '?0'], ['?0'])], rule_mode=mode)
+    assert (served == []) == (mode == 'real'), served
 
 
 @pytest.mark.parametrize('mode', MODES)

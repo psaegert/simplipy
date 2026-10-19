@@ -31,7 +31,8 @@ sound, never costlier than the input in the measure the chain itself descends �
 mode's own canonical pricing — and idempotent at any fixpoint run. `complexity(e,
 mode=m)` is that measure: each mode reads an expression into its own canonical form,
 because the modes accept different simplifications as true (`f64` follows the float
-evaluator, so `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not;
+evaluator, so `atanh(tanh(x))` is not `x`, as `tanh` saturates to `1` in floats; `real` follows
+exact arithmetic, so it is;
 `permissive` also what holds only up to sign or domain, so `(x^2)^(1/2)` is `x`, where `f64`
 and `real` give `abs(x)`), and prices
 that form. So
@@ -136,10 +137,12 @@ walk. On srbf's predictions it spends 15% more matcher steps and constructor cal
 follows the default.
 
 `permissive` is one walk, like every mode: its chain to a fixpoint, then the search, in its own
-canon and rules. Its constructors never fold a transcendental, so a constructor identity always
-sees the shape it reads (`atanh(tanh(30))` is `30`); its ground fold is a step of the chain instead,
+canon and rules. No constructor folds a transcendental, so a constructor identity always
+sees the shape it reads (`atanh(tanh(30))` is `30`); its ground fold is a step of the chain,
 tried after the rules at each node and kept only when it is cheaper (`asin(1e-8)` is `1e-8`, and
-`exp(9.55893790547399)` is `14170.787488305119`). Its literals are exact and rounded once, where
+`exp(9.55893790547399)` is `14170.787488305119`), as in `f64`, where the fold reads a whole ground
+node before its parts (`rootn(exp(19.11787581094798), 2)` is `14170.787488305119`, not the root
+of `200811218.03870487`). Its literals are exact and rounded once, where
 they land: a literal that becomes a constant term, a coefficient, a function's argument or a
 power's operand beside a non-literal moves to the float nearest to it when that float's
 shortest spelling is cheaper (`3*(1/3 + 1e-20)` is `1`, `x1*0.0766…` with 64 digits is
@@ -215,7 +218,7 @@ is used where it is shorter than the two integers, outside exponents: short frac
 ```python
 engine.simplify('1/(2*3.141592653589793)')               # -> '1/6.283185307179586'
 engine.simplify('3*x0/(20*3.141592653589793)')           # -> '3*x0/62.83185307179586'
-engine.simplify('x0*rootn(1/(2*3.141592653589793), 2)')  # -> 'x0*rootn(1/6.283185307179586, 2)'
+engine.simplify('x0*rootn(x1/(2*3.141592653589793), 2)') # -> 'x0*rootn(x1/6.283185307179586, 2)'
 engine.simplify('5/8')                                   # -> '5/8'
 ```
 

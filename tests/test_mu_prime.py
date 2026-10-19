@@ -57,7 +57,7 @@ ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 ACJ_UNRECORDED_PROBES = [
     '0.0766541268471677307861497420516056347394916180597539647375669841',
     '-2', 'neg x0', '* neg x0 x1',
-    'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1']
+    'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', 'atanh tanh x0', '/ x0 * x0 x1']
 
 
 def L(n) -> int:
@@ -521,14 +521,15 @@ class TestOneMeasurePerMode:
             assert eng.complexity(e) == cross_mode_complexity(eng, e, 'f64'), e
 
     def test_the_modes_read_one_expression_differently(self, eng):
-        # The float evaluator reads exp(5132.3) as inf, so f64 folds 1/exp(5132.3) to 0; real
-        # keeps it (the value is finite). Real keeps `log <literal>` unfolded where f64 folds it.
+        # f64 reads atanh(tanh(x0)) as written (tanh saturates in floats), real as x0. A ground
+        # constant is read as written in every mode: the float evaluator reads exp(5132.3) as
+        # inf, and f64's WALK folds 1/exp(5132.3) to 0, while its reading keeps it.
+        e = ['atanh', 'tanh', 'x0']
+        assert eng.complexity(e, mode='f64') > eng.complexity(['x0'], mode='f64')
+        assert eng.complexity(e, mode='real') == eng.complexity(['x0'], mode='real')
         e = ['+', 'x0', '/', '1', 'exp', '5132.277024704901']
-        assert eng.complexity(e, mode='f64') == eng.complexity(['x0'], mode='f64')
-        assert eng.complexity(e, mode='real') > eng.complexity(['x0'], mode='real')
-        e = ['inv', 'log', '1.60604019536491']
-        from simplipy.mining import cross_mode_complexity
-        assert eng.complexity(e, mode='real') != cross_mode_complexity(eng, e, 'real')
+        assert eng.complexity(e, mode='f64') == eng.complexity(e, mode='real')
+        assert list(eng.simplify(list(e), mode='f64')) == ['x0']
 
     def test_simplify_never_prices_above_its_input_in_its_mode(self, eng):
         from simplipy.engine import Mode
@@ -584,12 +585,14 @@ class TestFingerprintAndArtifactLoad:
             '-2': 3585,                       # selector + L(2) + sign
             'neg x0': MU_LEAF + MILLI,              # the leaf and one bit
             '* neg x0 x1': 3 * MILLI + MILLI + 2 * MU_LEAF,   # Mul 3 + sign + two leaves
-            # the readings, in f64's: (x0^2)^(1/2) stays a power of a power, asin(1e-08)
-            # is its float 1e-08, 1/exp(5132.3) is 0, and x0 cancels from x0/(x0*x1)
+            # the readings, in f64's: (x0^2)^(1/2) stays a power of a power, a ground constant
+            # is read as written (its float is a step of the walk, not of the reading), x0
+            # cancels from x0/(x0*x1), and atanh(tanh(x0)) stays (tanh saturates in floats)
             'pow pow x0 2 0.5': 20170,
-            'asin 1e-08': 5170,
-            '* inv exp 5132.3 x0': 2 * MILLI,
+            'asin 1e-08': 13170,
+            '* inv exp 5132.3 x0': 33647,
             '/ x0 * x0 x1': 9 * MILLI,
+            'atanh tanh x0': 22 * MILLI,
         }
         assert fp['mode'] == 'f64'
         assert fp['digest'] != ACJ_MINED_DIGEST
@@ -597,14 +600,15 @@ class TestFingerprintAndArtifactLoad:
     def test_each_mode_prices_the_readings_in_its_own(self, eng):
         """The compound probes are priced in each mode's reading, so a change to one
         mode's canonical forms moves that mode's fingerprint (measured values)."""
-        compound = ('pow x0 2', 'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1')
+        compound = ('pow x0 2', 'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1',
+                    'atanh tanh x0')
         readings = {m: {k: eng._measure_fingerprint(m)['probes'][k] for k in compound}
                     for m in ('f64', 'real', 'permissive')}
-        assert readings['f64'] == {'pow x0 2': 11585, 'pow pow x0 2 0.5': 20170, 'asin 1e-08': 5170,
-                                   '* inv exp 5132.3 x0': 2000, '/ x0 * x0 x1': 9000}
-        # real: asin(1e-08) is not its float, 1/exp(5132.3) is not 0
-        assert readings['real'] == dict(readings['f64'], **{'asin 1e-08': 13170,
-                                                            '* inv exp 5132.3 x0': 33647})
+        assert readings['f64'] == {'pow x0 2': 11585, 'pow pow x0 2 0.5': 20170, 'asin 1e-08': 13170,
+                                   '* inv exp 5132.3 x0': 33647, '/ x0 * x0 x1': 9000,
+                                   'atanh tanh x0': 22000}
+        # real: atanh(tanh(x0)) is x0
+        assert readings['real'] == dict(readings['f64'], **{'atanh tanh x0': 6000})
         # permissive also reads (x0^2)^(1/2) as x0
         assert readings['permissive'] == dict(readings['real'], **{'pow pow x0 2 0.5': 6000})
         for m in ('f64', 'real', 'permissive'):

@@ -1548,14 +1548,14 @@ class TestMeasureFingerprintAtLoad:
         # in f64's reading and stays silent: like is compared with like.
         (tmp_path / "own").mkdir()
         records = self._own(tmp_path)
-        assert records["f64"]["probes"]["asin 1e-08"] != records["permissive"]["probes"]["asin 1e-08"]
+        assert records["f64"]["probes"]["pow pow x0 2 0.5"] != records["permissive"]["probes"]["pow pow x0 2 0.5"]
         _, warned = self._load(self._asset(tmp_path, {"permissive": records["f64"]}))
         assert warned == []
         # without its mode the permissive record would read as the earlier f64 layout
         # and its readings would differ
         legacy = {k: v for k, v in records["permissive"].items() if k != "mode"}
         _, warned = self._load(self._asset(tmp_path, {"permissive": legacy}))
-        assert len(warned) == 1 and "'asin 1e-08'" in warned[0], warned
+        assert len(warned) == 1 and "'pow pow x0 2 0.5'" in warned[0], warned
 
     def test_an_unrecorded_probe_is_not_a_mismatch(self, tmp_path) -> None:
         (tmp_path / "own").mkdir()
@@ -2143,21 +2143,22 @@ class TestTheFinalGate:
         assert miner._unlicensed({3: pick}, 'real', judge, {}, ['x0']) == set()
 
     def test_a_pick_the_mode_does_not_serve_is_licensed_nowhere(self) -> None:
-        """Never infer a licence for something the matcher never saw: `cos 0 -> 1` is dead
-        in f64 (its reading folds the LHS) and alive in real."""
+        """Never infer a licence for something the matcher never saw: `atanh(tanh(x0)) -> x0`
+        is dead in real (its reading collapses the LHS) and alive in f64, where `tanh`
+        saturates."""
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import RuleMiner
         import yaml
         require_or_skip(acj_config_path(), 'needs the acj vocabulary')
         ops = yaml.safe_load(open(acj_config_path()))['operators']
         miner = RuleMiner(SimpliPyEngine(operators=ops, rules=[]))
-        picks = {7: (['cos', '0'], ['1'])}
+        picks = {7: (['atanh', 'tanh', 'x0'], ['x0'])}
 
         def judge(pairs):
             return ['core'] * len(pairs)
 
-        assert miner._unlicensed(picks, 'default', judge, {}, ['x0']) == {7}
-        assert miner._unlicensed(picks, 'real', judge, {}, ['x0']) == set()
+        assert miner._unlicensed(picks, 'real', judge, {}, ['x0']) == {7}
+        assert miner._unlicensed(picks, 'default', judge, {}, ['x0']) == set()
 
 
 class TestTheGateRoutesInsteadOfDeleting:
@@ -2474,19 +2475,20 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
 
     def test_the_yardstick_is_f64s_certified_canon(self) -> None:
         """One declared cross-mode scale: each answer parsed by its own mode and priced,
-        certified, in f64's canon. Where a mode's own reading prices an answer
-        differently, the yardstick does not follow it."""
+        certified, in f64's canon. The parse is the mode's own: f64 reads `atanh(tanh(x1))`
+        as written, real and permissive as `x1`."""
         from conftest import acj_config_path, require_or_skip
         from simplipy.mining import cross_mode_complexity
         require_or_skip(acj_config_path(), 'needs the acj-4 asset')
         engine = SimpliPyEngine.from_config(acj_config_path())
-        e = ['+', '*', 'asin', '1e-08', 'x1', 'asin', '1e-08']
-        assert engine.complexity(e, mode='real') == 38340      # real's own reading
-        assert engine.complexity(e, mode='f64') == 19170
-        for mode in ('f64', 'real', 'permissive'):
-            assert cross_mode_complexity(engine, e, mode) == 19170, mode
-        assert cross_mode_complexity(engine, e, 'real') == \
-            engine._core.ac_complexity_certified(e, 'default', rule_mode='real')
+        e = ['+', 'atanh', 'tanh', 'x1', 'x2']
+        assert engine.complexity(e, mode='f64') == 31000
+        assert engine.complexity(e, mode='real') == 15000
+        for mode, rule_mode, price in (('f64', 'default', 31000), ('real', 'real', 15000),
+                                       ('permissive', 'permissive', 15000)):
+            assert cross_mode_complexity(engine, e, mode) == price, mode
+            assert cross_mode_complexity(engine, e, mode) == \
+                engine._core.ac_complexity_certified(e, 'default', rule_mode=rule_mode)
 
 
 class TestThePruneIsInstanceSafe:

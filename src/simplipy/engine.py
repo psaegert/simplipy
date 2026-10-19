@@ -2307,9 +2307,11 @@ class SimpliPyEngine:
 
         Each mode reads an expression into its own canonical form, because the modes accept
         different simplifications as true: ``f64`` follows the deployed float evaluator
-        (``1/exp(5132.3)`` is ``0``), ``real`` exact real arithmetic (it is not), and
-        ``permissive`` also what holds only up to sign or domain (``(x^2)^(1/2)`` is ``x``,
-        where ``f64`` and ``real`` give ``abs(x)``).
+        (``atanh(tanh(x))`` is not ``x``: in floats ``tanh`` saturates to ``1``), ``real`` exact
+        real arithmetic (it is ``x``), and ``permissive`` also what holds only up to sign or
+        domain (``(x^2)^(1/2)`` is ``x``, where ``f64`` and ``real`` give ``abs(x)``). A ground
+        constant is read as written in every mode: folding it to its float is a step of
+        :meth:`simplify`'s walk in ``f64`` and ``permissive``, not part of the reading.
         This prices that form, on the
         CERTIFIED canonical state (the same certificate-carrying canonicalization the
         simplify chain runs on), with the one codebook (the unified measure mu). It is the
@@ -2413,8 +2415,9 @@ class SimpliPyEngine:
         # a change to a mode's canonical forms moves its fingerprint. Each mode prices
         # every probe in its own reading; the comments give where the readings differ.
         ('pow', 'pow', 'x0', '2', '0.5'),        # (x0^2)^(1/2): x0 only in permissive
-        ('asin', '1e-08'),                       # its float is 1e-08 in f64 only
-        ('*', 'inv', 'exp', '5132.3', 'x0'),     # 1/exp(5132.3) is 0 in f64 only
+        ('asin', '1e-08'),                       # ground constants are read as written in
+        ('*', 'inv', 'exp', '5132.3', 'x0'),     # every mode (the float fold is a walk step)
+        ('atanh', 'tanh', 'x0'),                 # x0 except in f64, where tanh saturates
         ('/', 'x0', '*', 'x0', 'x1'),            # a shared factor cancels in every mode
     )
 

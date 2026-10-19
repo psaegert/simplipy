@@ -432,18 +432,18 @@ shipped row satisfies $J \in L_m$ in its file spelling and in every entry $m$ se
   be read, the modes differ, because each reads a different function. *`real` evaluates
   nothing*: a finite transcendental identity (`cos(0)` $\to$ `1`, `cos(pi)` $\to$ `-1`,
   `exp(-inf)` $\to$ `0`) arrives as a mined, symbolically certified *rule*, and `asin(1e-8)`,
-  `sin(-1)` and `exp(9.55893790547399)` stay as written. *`f64` folds in the constructor*, not
-  in this step: one of the fourteen unary transcendentals of a literal becomes the value the
-  deployed evaluator computes (the system libm, at the literal's nearest float), where that
-  value is finite and its shortest decimal costs less than the call. So `asin(1e-8)` is `1e-8`
-  and `sin(91618929858.17857)` is `-0.9807991153359534`, while `sin(1)` stays (its float costs
-  more); and since the constructors work bottom-up, `atanh(tanh(30))` is `inf`, as the
-  evaluator computes it. *`permissive` folds in this step* and never in a constructor: a ground
-  node no rule rewrote is evaluated by the deployed f64 evaluator and offered as the shortest
-  decimal that reads back as a normal (or zero) result, kept only where it descends. The pass
-  reaches an enclosing node before its children, so `rootn(exp(19.11787581094798), 2)` is
-  `14170.787488305119` and `atanh(tanh(30))` is `30` (the constructor identity reads the shape
-  first); `asin(1e-8)` is `1e-8`, and `sin(1)` stays. Respelling one exact symbol as another is
+  `sin(-1)` and `exp(9.55893790547399)` stay as written. *`f64` and `permissive` fold in this
+  step*, and no constructor folds a transcendental in any mode: a ground node no rule rewrote is
+  evaluated by the deployed f64 evaluator (the system libm, each literal at its nearest float)
+  and offered as the shortest decimal that reads back as a normal (or zero) result, kept only
+  where it descends. The pass reaches an enclosing node before its children, so
+  `rootn(exp(19.11787581094798), 2)` is `14170.787488305119` (in `f64` too: the constructor fold
+  it replaces made the inner `exp` a 9-digit literal first); `asin(1e-8)` is `1e-8`,
+  `sin(91618929858.17857)` is `-0.9807991153359534`, and `sin(1)` stays (its float costs more).
+  `atanh(tanh(30))` is `30` in `permissive`, whose constructor identity reads the shape first,
+  and `inf` in `f64`, where the identity does not hold (`tanh` saturates): the whole node's float
+  is no number, so the fold moves on to `tanh(30)`, whose float is `1`, as the evaluator computes
+  it. `complexity` prices the reading, so a ground constant is priced as written in every mode. Respelling one exact symbol as another is
   a constructor's job in every mode: `exp(1)` $\to$ `e` chooses between two exact names for
   one value and nothing is rounded;
 - **(rebuild)** at a node $u$ whose children were rewritten: $u' = \mathrm{nf}(u[\text{new
@@ -792,7 +792,8 @@ premise: each accepted candidate's descent reaches its fixpoint within `max_pass
 `permissive` is one walk like every mode (its chain, then the search, in its own canon and
 rules), so L3, L6 and the prefix argument for `effort` cover it as they cover every mode. Its
 two steps of its own are ordinary steps: the ground fold is the pass's fold (tried after the
-rules at a node, kept only when the result descends, so L3 holds), and the
+rules at a node, kept only when the result descends, so L3 holds; `f64` takes the same step), and
+the
 landing rounding ρ moves a literal to its float only where the float's shortest spelling is
 cheaper as an exact codeword, which the float cap prices alike (mu-neutral, so the descent
 arguments and T6 are unchanged; idempotent, since a float's shortest spelling is never moved). Its

@@ -525,11 +525,16 @@ class TestPowerOfExpIsExp:
         # forbids at ZERO measure tolerance.  `Ex::Num` is finite by construction, so the
         # fold condition excludes it without needing a licence -- pinned here because a
         # future widening of the gate would silently reopen it.
+        # In `f64` the walk folds the ground `exp(-inf)` to the evaluator's 0 first, so no
+        # composition sees it there; `real` keeps the powers.
+        from simplipy import Mode
         bare = SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[])
-        for tokens in (['pow', 'exp', 'float("-inf")', 'x0'],
-                       ['pow', 'exp', 'float("-inf")', '2'],
-                       ['rootn', 'exp', 'float("-inf")', '2']):
-            assert bare.simplify(list(tokens)) == tokens, tokens
+        bare._core.set_mode_rules('real', [])
+        for tokens, f64 in ((['pow', 'exp', 'float("-inf")', 'x0'], ['pow', '0', 'x0']),
+                            (['pow', 'exp', 'float("-inf")', '2'], ['0']),
+                            (['rootn', 'exp', 'float("-inf")', '2'], ['0'])):
+            assert bare.simplify(list(tokens), mode=Mode.real) == tokens, tokens
+            assert bare.simplify(list(tokens)) == f64, tokens
 
     def test_it_does_not_fire_without_an_e_base_or_without_exp(self, eng) -> None:
         assert eng.simplify(['rootn', 'x0', '2']) == ['rootn', 'x0', '2']
@@ -813,12 +818,12 @@ class TestReciprocalBaseAndDeterminedInfinitePower:
         # the half that already worked
         assert bare.simplify(['pow', '2', 'float("inf")']) == ['float("inf")']
         assert bare.simplify(['pow', '0.5', 'float("-inf")']) == ['float("inf")']
-        # deliberately OUT: |b| = 1, b = 0, and every symbolic base (the spike-flattener's
-        # subject -- a symbolic base can straddle the step)
-        # (the literal re-spells `(-1)` as `-1`; the point is that it does not FOLD)
-        assert bare.simplify(['pow', '(-1)', 'float("inf")']) == ['pow', '-1', 'float("inf")']
-        for tokens in (['pow', '0', 'float("inf")'], ['pow', 'x0', 'float("inf")']):
-            assert bare.simplify(list(tokens)) == tokens, tokens
+        # deliberately OUT of the arm: |b| = 1, b = 0, and every symbolic base (the
+        # spike-flattener's subject -- a symbolic base can straddle the step). The f64 walk
+        # folds the two ground ones to the evaluator's floats.
+        assert bare.simplify(['pow', '(-1)', 'float("inf")']) == ['1']
+        assert bare.simplify(['pow', '0', 'float("inf")']) == ['0']
+        assert bare.simplify(['pow', 'x0', 'float("inf")']) == ['pow', 'x0', 'float("inf")']
 
     def test_the_two_paid_for_exclusions(self, bare) -> None:
         # `-inf` as a base: judge KILLs `pow (-inf) neg _0 -> pow 0 _0` (bc-positive-measure,
@@ -1005,6 +1010,20 @@ class TestCorpusTakesTheBestOfBoth:
         assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.f64) == ['float("inf")']
         assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.real) == ['30']
         assert bare.simplify(['atanh', 'tanh', '30'], mode=Mode.permissive) == ['30']
+
+    def test_f64_folds_a_whole_ground_node_before_its_parts(self, bare) -> None:
+        """The f64 fold is a step of the walk, as permissive's is: the walk reaches an enclosing
+        node first, so the root of `exp(19.1...)` folds whole, where a constructor fold made
+        the `exp` a 9-digit literal first and left its root (66,912 milli-bits)."""
+        from simplipy import Mode
+        source = ['rootn', 'exp', '19.11787581094798', '2']
+        for mode in (Mode.f64, Mode.permissive):
+            assert bare.simplify(list(source), mode=mode) == ['14170.787488305119'], mode
+        assert bare.complexity(['14170.787488305119'], mode=Mode.f64) == 58354
+        assert bare.simplify(list(source), mode=Mode.real) == ['exp', '9.55893790547399']
+        # the reading complexity prices keeps a ground constant as written in every mode
+        assert bare.complexity(['asin', '1e-08'], mode=Mode.f64) == \
+            bare.complexity(['asin', '1e-08'], mode=Mode.real)
 
     def test_corpus_still_folds_where_real_cannot(self, bare) -> None:
         """The other half: `real` leaves `asin(1e-8)` alone because no literal spells the

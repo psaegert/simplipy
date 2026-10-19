@@ -449,6 +449,28 @@ fn desugar(name: &str, op: Tok, mut args: Vec<Ex>, cx: &Cx) -> Ex {
     }
 }
 
+thread_local! {
+    /// Set while [`to_prefix_literal_tokens`] prints: every literal one token (`emit_num`).
+    static LITERAL_TOKENS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`to_prefix`] with every literal ONE token denoting its exact value (an integer, a decimal or
+/// `p/q`): the spelling an evaluator reads each literal from at its nearest float, correctly
+/// rounded, where the structural `/ p q` divides two separately rounded components. The
+/// ground fold evaluates this spelling, so a literal argument folds as the float nearest to it
+/// (`sin(2e29/426738538271436458205631863649)`).
+pub fn to_prefix_literal_tokens(e: &Ex, cx: &Cx) -> Vec<Tok> {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            LITERAL_TOKENS.with(|f| f.set(false));
+        }
+    }
+    LITERAL_TOKENS.with(|f| f.set(true));
+    let _reset = Reset;
+    to_prefix(e, cx)
+}
+
 /// Serialize a canonical AC expression back to prefix tokens in the old token language --
 /// the EXPLICIT form (literal coefficients, no hyper-operators).
 pub fn to_prefix(e: &Ex, cx: &Cx) -> Vec<Tok> {
@@ -909,6 +931,10 @@ fn emit_bin_structural(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
 /// and `0.625`, the spelling mu prices HIGHER.
 fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
     let view = cx.view;
+    if LITERAL_TOKENS.with(std::cell::Cell::get) {
+        out.push(view.intern(&num_token(r)));
+        return;
+    }
     if r.is_integer() {
         out.push(view.intern(&r.numer_token()));
         return;

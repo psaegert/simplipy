@@ -257,6 +257,22 @@ model predictions.
   srbf's ground truths and on a tenth of the training-data inputs, in any mode, with or without
   those rules, nor on a tenth of the model predictions; without them the engine holds 215 MB
   after loading every mode, where the published files take 839 MB.
+- **`f64` folds a ground constant as a step of the walk.** The constructor folded a function of
+  one literal to its float, bottom-up, so an enclosing node never saw the expression it came from:
+  `rootn(exp(19.11787581094798), 2)` was `rootn(200811218.03870487, 2)` (66,912 milli-bits). The
+  fold is now the pass's step, as in `permissive`: tried after the rules at each node, enclosing
+  nodes first, and kept only where it is cheaper, so that expression is `14170.787488305119`
+  (58,354). The value folded is the deployed evaluator's, each literal read at the float nearest
+  to it, and it now reaches every ground node, not only a function of one literal: `cos(pi)` is
+  `-1` and `acos(0)/pi` is `1/2` by the walk, so an `f64` mine no longer needs them as rules, as a
+  `permissive` mine did not. Every reading prices a ground constant as written now:
+  `complexity(['asin', '1e-08'], mode='f64')` is 13,170 (was 5,170), and `simplify` still answers
+  `1e-8`; the readings the mine's sources and the rule load use keep `cos(0)` too. The measure
+  fingerprint gains the probe `atanh tanh x0`, which `f64` reads apart from the other modes. On
+  srbf's ground truths 22 `f64` answers change, all cheaper; on a tenth of the training-data
+  inputs 241 (164 cheaper, 6 dearer: a whole ground node folded where folding its parts first
+  reached a cheaper exact form) and on a tenth of the predictions 51 (50 cheaper). `real` and
+  `permissive` answers do not change, and none changes on a second call.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
@@ -383,7 +399,7 @@ model predictions.
   single rounding), sign placement, `inf` beside a signed zero, and the search's walk order.
 - **One complexity measure per mode.** `complexity(e, mode=m)` prices `e` as mode `m` reads it:
   the modes accept different simplifications as true (`f64` follows the float evaluator, so
-  `1/exp(5132.3)` is `0`; `real` follows exact arithmetic, so it is not; `permissive` also what
+  `atanh(tanh(x))` is not `x`; `real` follows exact arithmetic, so it is; `permissive` also what
   holds only up to sign or domain, so `(x^2)^(1/2)` is `x`, where `f64` and `real` give `abs(x)`),
   and each mode's `simplify` descends its own reading. So
   `complexity(simplify(e, mode=m), mode=m) <= complexity(e, mode=m)` in every mode (no answer

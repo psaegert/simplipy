@@ -906,7 +906,11 @@ class TestFlatPointCollapseFloors:
         ULP. All three collapsed under the ceiling-only licence."""
         assert engine.simplify(['log', 'exp', 'sin', 'x0']) == \
             ['log', 'exp', 'sin', 'x0']
-        assert engine.simplify(['log', 'exp', '0.5']) == ['log', 'exp', '/', '1', '2']
+        # A ground argument is the walk's to fold, to the float the evaluator computes, kept
+        # only where it is cheaper: exactly 0.5 for 0.5, while 0.0137 comes back 34 ULP off
+        # (0.013700000000000468), dearer than the expression.
+        assert engine.simplify(['log', 'exp', '0.5']) == ['/', '1', '2']
+        assert engine.simplify(['log', 'exp', '0.0137']) == ['log', 'exp', '0.0137']
         assert engine.simplify(['acosh', 'cosh', 'sin', 'x0']) == \
             ['acosh', 'cosh', 'sin', 'x0']
 
@@ -963,9 +967,8 @@ class TestTranscendentalAtomEnclosures:
         require_triple()
         assert engine.simplify(engine.to_tagged(['inv', '*', 'np.pi', 'x1'])) != \
             ['inv', '<mul>', 'np.pi', 'x1', '</mul>']  # some reduction happened
-        # sin(pi)+2 is certainly nonzero; in `real` the exact rule folds it to 2. In
-        # `f64` the fold is declined (see R1) and the enclosure must STILL not
-        # blanket-refuse -- which is the property this test exists for.
+        # sin(pi)+2 is certainly nonzero; in `real` the exact rule folds it to 2. In `f64` the
+        # walk folds it to its float, which is 2.0 too (sin(pi) is 1.2e-16 there).
         from simplipy import Mode
         out = engine.simplify(['inv', '*', '+', 'sin', 'np.pi', '2', 'inv', 'x1'],
                               mode=Mode.real)
@@ -974,7 +977,7 @@ class TestTranscendentalAtomEnclosures:
         # fired is the property, and `!= input` is true of every subject whether the
         # enclosure certifies or blanket-refuses.
         f64_out = engine.simplify(['inv', '*', '+', 'sin', 'np.pi', '2', 'inv', 'x1'])
-        assert f64_out == ['/', 'x1', '+', 'sin', 'np.pi', '2'], f64_out
+        assert f64_out == ['/', 'x1', '2'], f64_out
 
 
 class TestSignDistributionCanonicalUniqueness:

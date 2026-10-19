@@ -101,7 +101,8 @@ class TestF64SeesWhatTheEvaluatorSees:
 
     def test_parity_beyond_2_53_is_unknown(self, engine: SimpliPyEngine) -> None:
         odd = 'pow -1 9007199254740993'
-        assert simplify(engine, odd, 'f64') == odd.split()
+        # no parity fold in f64; the walk folds the ground node to the evaluator's float
+        assert simplify(engine, odd, 'f64') == ['1']
         assert simplify(engine, odd, 'real') == ['-1']
         # the evaluator reads the exponent as the even float 2^53
         assert constant(engine, odd.split()) == 1.0
@@ -235,7 +236,8 @@ class TestReviewFindings:
 
     def test_a_leaf_read_as_inf_or_zero_does_not_cancel_in_f64_mode(self, engine: SimpliPyEngine) -> None:
         for prefix in ('/ 1e400 1e400', '/ 1e-400 1e-400'):
-            assert simplify(engine, prefix, 'f64') == prefix.split()
+            out = simplify(engine, prefix, 'f64')
+            assert out != ['1'] and np.isnan(constant(engine, out)), out
             assert np.isnan(constant(engine, prefix.split()))
             assert simplify(engine, prefix, 'real') == ['1']
 

@@ -618,10 +618,11 @@ impl Engine {
         None
     }
 
-    /// THE PERMISSIVE GROUND FOLD (G, 0.15 rebuild): a ground composite (no variable, no
+    /// THE GROUND FOLD (G, `f64` and `permissive`): a ground composite (no variable, no
     /// `<constant>`) whose class is not decided above is evaluated by the deployed f64
-    /// evaluator (`numeric::evaluate_constant_subtree`: libm kernels, `np.pi` and `np.e` as their
-    /// floats, the bag in its printed order) and offered as the literal of the shortest decimal
+    /// evaluator (`numeric::evaluate_constant_subtree`: libm kernels, every literal at the float
+    /// nearest to it, `np.pi` and `np.e` as their floats, the bag in its printed order;
+    /// `to_prefix_literal_tokens`) and offered as the literal of the shortest decimal
     /// that reads back as that float, read as the walk reads that decimal written: in the f64
     /// number domain (`rat::number_domain`). So a float whose shortest decimal leaves the domain
     /// stays symbolic, as the written decimal does -- a subnormal, a value beyond 2^1022, and a
@@ -630,12 +631,11 @@ impl Engine {
     ///
     /// It is the pass's fold, so it is tried at a node only after no rule fired there, the pass
     /// visits an enclosing node before its children, and the result is accepted only when it
-    /// descends (`oriented`): no fold destroys a rule redex or a constructor identity
-    /// (`atanh(tanh 30)` reads as `30` because the constructor never folds in permissive), and
-    /// a literal dearer than its expression is refused (`sin 1` stays). It subsumes the
-    /// constructor fold of one literal (`asin(1e-8)`), the old literal fold's ground fold of
-    /// `Pow(Num, Num)` and all-literal bags, and folds a whole ground node neither got
-    /// (`exp(9.55893790547399)`). `f64` and `real` keep their own folds (owner question P3).
+    /// descends (`oriented`): no fold destroys a rule redex or a constructor identity (no
+    /// constructor folds a transcendental, so `atanh(tanh 30)` reads as `30` in permissive),
+    /// and a literal dearer than its expression is refused (`sin 1` stays). A whole ground node
+    /// folds before its children, so `rootn(exp(19.11787581094798), 2)` is
+    /// `14170.787488305119` and not the root of a 9-digit literal. `real` never folds.
     fn ground_fold(&self, strs: &[String]) -> Option<Ex> {
         let tok = crate::numeric::evaluate_constant_subtree(strs, &self.operators)?;
         let y = crate::numeric::leaf_value(&tok)?;
@@ -651,6 +651,7 @@ impl Engine {
         e: &Ex,
         ctx: &SimplifyCtx,
         lossy: bool,
+        fold_f64: bool,
         class_memo: &RefCell<FxHashMap<Vec<crate::tokens::Tok>, Option<Ex>>>,
     ) -> Option<Ex> {
         let children: Vec<&Ex> = match e {
@@ -733,9 +734,13 @@ impl Engine {
                     _ => None,
                 },
             };
-            // THE PERMISSIVE GROUND FOLD (G): a finite ground node folds to its float.
+            // THE GROUND FOLD (G): a finite ground node folds to its float, in `f64` and in
+            // `permissive`.
             let verdict = match verdict {
-                None if lossy => self.ground_fold(&strs),
+                None if lossy || fold_f64 => {
+                    let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
+                    self.ground_fold(&self.resolve_seq(&literal, ctx))
+                }
                 v => v,
             };
             class_memo.borrow_mut().insert(flat, verdict.clone());
@@ -1536,7 +1541,7 @@ impl Engine {
         };
         let class_memo: RefCell<FxHashMap<Vec<crate::tokens::Tok>, Option<Ex>>> =
             RefCell::new(FxHashMap::default());
-        let fold = |e: &Ex| self.ac_fold(e, &ctx, wildcard_all, &class_memo);
+        let fold = |e: &Ex| self.ac_fold(e, &ctx, wildcard_all, fold_tr, &class_memo);
         let pass = PassCtx {
             // MODE SELECTION, half of it: the pass serves the mode's OWN complete set.
             // The twin below (phase 2) is the other half and MUST agree -- leaving the
@@ -2394,7 +2399,8 @@ mod tests {
     /// Phase 2c (design review H3): in f64 mode an integer beyond 2^53 has no known parity --
     /// the deployed evaluator reads it as an even float -- so a parity fold refuses. Main folded
     /// `(-1)^9007199254740993` to -1 where the evaluator computes 1.0. Real mode keeps the exact
-    /// parity (`h045_...`, `h051_...`, run in real mode).
+    /// parity (`h045_...`, `h051_...`, run in real mode). The walk's ground fold reads the node
+    /// as the evaluator does, so `f64` answers 1.
     #[test]
     fn f64_parity_beyond_2_53_is_unknown() {
         let Some(e) = engine() else { return };
@@ -2403,7 +2409,7 @@ mod tests {
                 .unwrap()
         };
         let odd = "9007199254740993"; // 2^53 + 1
-        assert_eq!(s(&["pow", "(-1)", odd]), t(&["pow", "-1", odd]));
+        assert_eq!(s(&["pow", "(-1)", odd]), t(&["1"]));
         assert_eq!(s(&["pow", "(-1)", "9007199254740992"]), t(&["1"])); // 2^53: exact
         assert_eq!(s(&["pow", "(-1)", "9007199254740991"]), t(&["-1"]));
         let big_odd = "10000000000000000001";
@@ -3629,7 +3635,7 @@ mod tests {
             "zero-free bag distributes"
         );
         // End-to-end: a reciprocal under `exp` distributes too (`exp(-3/x0)` is 0 at x0 = 0 in
-        // every spelling).
+        // every spelling). The ground root folds to the float the evaluator computes for it.
         let row = t(&[
             "pow",
             "cos",
@@ -3656,9 +3662,7 @@ mod tests {
                 "pow",
                 "cos",
                 "*",
-                "rootn",
-                "9007199254740991",
-                "3",
+                "208063.83068357568",
                 "+",
                 "x1",
                 "3",

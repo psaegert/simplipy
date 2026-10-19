@@ -189,16 +189,19 @@ class TestExactCollapsesMint:
 
     def test_bare_exact_collapses_mint(self, mined):
         rules = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.simplification_rules}
-        # The ground evaluation answers in the engine's own spelling, `-1` (one
-        # canonical key with the alphabet's `(-1)`).
-        assert (('cos', 'np.pi'), ('-1',)) in rules, sorted(rules)
-        assert (('log', 'np.e'), ('1',)) in rules, sorted(rules)
+        # In f64 the walk folds a ground node to the float the evaluator computes, here exactly
+        # -1 and 1, so the f64 mine has nothing to mint for them; the real mine mints them.
+        assert list(mined.simplify(['cos', 'np.pi'])) == ['-1']
+        assert list(mined.simplify(['log', 'np.e'])) == ['1']
+        assert (('cos', 'np.pi'), ('-1',)) not in rules, sorted(rules)
         # `sin(np.pi) -> 0` is exactly true and f64 computes 1.2246467991473532e-16: the judge
         # files it `real`, so the f64 mine, whose set the engine holds in its default slot,
         # leaves it to the modes that license it; the real mine mints it.
         assert (('sin', 'np.pi'), ('0',)) not in rules, sorted(rules)
         real = {(tuple(lhs), tuple(rhs)) for lhs, rhs in mined.real_simplification_rules or []}
         assert (('sin', 'np.pi'), ('0',)) in real, sorted(real)
+        assert (('cos', 'np.pi'), ('-1',)) in real, sorted(real)
+        assert (('log', 'np.e'), ('1',)) in real, sorted(real)
 
     def test_mined_engine_serves_the_collapse(self, mined):
         # The owner's ask, end to end: cos(pi) simplifies to -1 (via the mined rule).

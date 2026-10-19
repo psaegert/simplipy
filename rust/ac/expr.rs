@@ -1141,12 +1141,13 @@ pub struct Cx<'a> {
     /// certificate ON, and no boolean can say that. Both old readings are derived below,
     /// so the mode stays the single representation.
     pub mode: RuleMode,
-    /// Whether the constructor may fold a ground transcendental to its f64 value.
-    /// DERIVED from the mode (`f64` only) by `Cx::folds_for`; the miner sets it explicitly
-    /// (it canonicalises unfolded). Permissive never folds at construction: folding is
-    /// bottom-up, so `tanh 30` would become `1` before `atanh` sees it. Its ground fold is a
-    /// step of the pass instead, tried after the rules at each node (`Engine::ground_fold`),
-    /// which gives it both `atanh(tanh 30) -> 30` and `asin(1e-8) -> 1e-8`.
+    /// Whether the walk folds a ground node to the float the deployed evaluator computes for
+    /// it (`Engine::ground_fold`), in `f64`. DERIVED from the mode by `Cx::folds_for`; the
+    /// miner sets it explicitly (it canonicalises unfolded). No constructor folds a
+    /// transcendental: folding is bottom-up there, so `exp(19.1...)` would become a 9-digit
+    /// literal before the root over it is read, and `tanh 30` would become `1` before `atanh`
+    /// sees it. The fold is a step of the pass, tried after the rules at each node and kept
+    /// only where it descends; `permissive` always folds so (its lossy reading).
     pub fold_f64: bool,
     /// SENTINEL EXPIRY (H-015 class (a), 2026-08-04): lossy parse deliberately keeps
     /// `inv(inf)`-class reciprocals unfolded so the mul bag can find their `$`-cancel
@@ -1162,9 +1163,9 @@ pub struct Cx<'a> {
 }
 
 impl<'a> Cx<'a> {
-    /// THE DERIVATION of `fold_f64` from a mode: only `f64` folds transcendentals at
-    /// construction. `real` cannot (the result is not representable -- `tan(1)` is
-    /// irrational and no literal spells it), and `permissive` folds in its pass instead.
+    /// THE DERIVATION of `fold_f64` from a mode: `f64` folds a ground node to its float in the
+    /// pass. `real` cannot (the result is not representable -- `tan(1)` is irrational and no
+    /// literal spells it), and `permissive` folds in its pass by its lossy reading.
     #[inline]
     pub fn folds_for(mode: RuleMode) -> bool {
         matches!(mode, RuleMode::Default)
@@ -8280,72 +8281,6 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     Ex::Pow(Box::new(base), Box::new(exp))
 }
 
-/// THE f64 GROUND FOLD (`fun`, f64 mode only): fold a function of one literal to the float64
-/// the deployed evaluator computes for it, but ONLY when that literal is cheaper.
-///
-/// An f64 evaluation can land exactly on a cheap literal while the true value differs at
-/// 1e-17; that is the f64/real distinction the modes represent. In `f64` the deployed
-/// evaluator is the authority, so its answer is exact BY DEFINITION of the mode. In `real`
-/// this never runs: `tan(1)` is irrational and no literal in the grammar spells it at any
-/// precision, so exact rational arithmetic is not a policy there but the only representable
-/// thing. (`permissive` folds ground terms in its pass instead; see the body.)
-///
-/// mu MAKES IT SELF-LIMITING, which is what makes "fold everything" safe to say:
-///     mu(tan 1)      = 11000   vs its float 58877  -> refused, `tan 1` survives
-///     mu(asin 1e-08) = 14170   vs its float  6170  -> folded
-/// so the canon does not fill with 17-digit literals; it folds exactly where the literal
-/// is genuinely the simpler object.
-///
-/// Two refusals carried over from `evaluate_constants`, both load-bearing: a non-finite
-/// result is never injected (that is the defect class that put a guard into flash-ansr),
-/// and anything that is not an exact rational operand is left alone (a `<constant>` is a
-/// fitted degree of freedom, not a value). A value whose shortest decimal is no number of
-/// the f64 domain (numerator or denominator beyond 2^1022, see `rat::number_domain`) also
-/// refuses -- fail-closed, and it costs only results of extreme magnitude.
-fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
-    // f64 ONLY. Corpus was included at first and it cost `atanh(tanh 30)`: f64 tanh(30)
-    // attains exactly 1.0, mu folds `tanh 30 -> 1`, and the literal-provenance arm then
-    // reads a WRITTEN atanh(1) as a limit and yields inf. In f64 that inf is CORRECT --
-    // np.arctanh(np.tanh(30.0)) really is inf -- but corpus is the beautification path,
-    // and turning a finite, mathematically-true 30 into a non-finite token is the exact
-    // defect class that put a guard into flash-ansr. Permissive folds in its pass instead
-    // (`Engine::ground_fold`, after the rules at each node), which lets it keep 30 AND fold
-    // where real cannot.
-    if !cx.fold_f64 {
-        return None;
-    }
-    let [Ex::Num(r)] = args else { return None };
-    // The argument the deployed evaluator sees is the f64 NEAREST to the literal (Python
-    // reads `p/q` and decimals correctly rounded). `to_f64` rounds p and q separately and
-    // lands an ulp or two off once either leaves 53 bits, which the function then
-    // amplifies: `sin(91618929858.17857)` folded 3e-6 away from the evaluator's value.
-    let x = r.to_f64_nearest();
-    // `TokenView` compares by interned id, so the vocabulary is spelled out rather than
-    // matched on a &str.
-    const UNARY: [&str; 14] = [
-        "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh",
-        "atanh", "exp", "log",
-    ];
-    let which = UNARY.iter().position(|n| cx.view.tok_is(op, n))?;
-    // The SAME kernels the deployed evaluator and the offline folder use (the system libm):
-    // Rust's `f64::atanh` is its own composition and drifts from libm by up to 1.5e13 ulps
-    // near the domain edges (`numeric.rs`, `cmath`), so the fold must not use std's methods.
-    let y = crate::numeric::unary_fn(UNARY[which])?(x);
-    if !y.is_finite() {
-        return None;
-    }
-    // Rust's `{:?}` for f64 is the shortest string that round-trips, which is precisely
-    // the spelling whose f64 reading is this value again.
-    let folded = Rat::parse_decimal(&format!("{y:?}"))?;
-    let before = complexity(&Ex::Fun(op, args.to_vec()), cx.view);
-    let after = complexity(&Ex::Num(folded.clone()), cx.view);
-    if after < before {
-        Some(Ex::Num(folded))
-    } else {
-        None
-    }
-}
-
 /// THE PERMISSIVE LITERAL FOLD. An exact rational the constructors produced -- the quotient of two
 /// 16-digit decimals, a coefficient cleared into `p/q`, a 30-digit integer -- prices under
 /// mu' as the rational codeword alone once its expansion stops terminating, and the
@@ -8360,7 +8295,7 @@ fn f64_fold(op: Tok, args: &[Ex], cx: &Cx) -> Option<Ex> {
 /// any 17-digit float; a literal that already IS a shortest f64 spelling is its own fold
 /// and never moves, so the drawn constants of a training stream are untouched, and the fold
 /// is idempotent. It is applied where a literal lands ([`land`]). Values whose shortest
-/// spelling is no number of the f64 domain refuse (fail-closed, exactly as `f64_fold`);
+/// spelling is no number of the f64 domain refuse (fail-closed, as the ground fold does);
 /// non-finite values
 /// never fold.
 pub fn lossy_literal(r: &Rat) -> Option<Rat> {
@@ -8368,7 +8303,8 @@ pub fn lossy_literal(r: &Rat) -> Option<Rat> {
     if !y.is_finite() {
         return None;
     }
-    // Rust's `{:?}` for f64 is the shortest string that round-trips (see `f64_fold`).
+    // Rust's `{:?}` for f64 is the shortest string that round-trips, which is precisely the
+    // spelling whose f64 reading is this value again.
     let snapped = Rat::parse_decimal(&format!("{y:?}"))?;
     if snapped == *r {
         return None;
@@ -8426,9 +8362,6 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     } else {
         args
     };
-    if let Some(folded) = f64_fold(op, &args, cx) {
-        return folded;
-    }
     // `exp(1) -> E`. The two spellings denote the SAME constant exactly -- this is a
     // choice of symbol, not an evaluation, so the rules-pass doctrine above does not
     // cover it (nothing is rounded and no exact rule can be preempted; `exp(0) -> 1`
