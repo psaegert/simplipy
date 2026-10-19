@@ -691,6 +691,39 @@ model predictions.
 - **The promotion refund reads the constructor's dedup** instead of a copy of it ("shortest
   target"), which disagreed with the serve-ordering tie-break and sent every probe to the slow
   rebuild.
+- **The search keeps a one-signed pole joined** in `f64` and `real`, where a pole is read by its
+  limit. Distributing `(1 + x3 - x1 + 5/3*exp(x2))/abs(x3)` gave
+  `5/3*exp(x2)*abs(1/x3) + (x3 + 1 - x1)*abs(1/x3)`, which is `inf - inf` at `x3 = 0` wherever
+  `1 < x1 < 1 + 5/3*exp(x2)`, where the expression is `+inf`. A factor is now distributed only
+  where at most one of the terms it lands in keeps its pole, where its poles are two-signed
+  (`1/x`, `1/sin(x)`), or where the terms it multiplies keep one sign. Answers change on 4 of
+  srbf's 6,531 ground truths and 11 of a tenth of the T8.1 inputs in each of the two modes, none
+  priced lower; `permissive` keeps no value at a pole and is unchanged.
+- **`mode='real'` is never served the f64 set, also while another thread unloads it.** The
+  fail-closed check runs inside the core call, under the read guard the answer is computed
+  under. A call that finds the set unloaded rebuilds it and answers, where it used to raise
+  `ValueError` or, rarely, answer from the f64 set.
+- **No call waits for the engine with the GIL held.** A call queued behind a rule push
+  (`set_mode_rules`, a deferred set's first build) froze every other Python thread until the push
+  landed (14.9 s measured); every entry now waits with the GIL released.
+- **Permissive answers holding tiny numbers are fixpoints.** `x1 + 5/1.7976931348623157e308`
+  folded to `2.781342323134002e-308`, a literal the reader keeps as a symbol, so a second call
+  reordered the sum. A folded float whose shortest decimal is outside the f64 number range stays
+  unfolded, as the written decimal does.
+- **`to_tagged` bags every quotient.** `to_tagged(['exp', '1/2'])` is
+  `['exp', '<mul>', '1', '<div>', '2', '</mul>']` and `to_tagged(['inv', 'x0'])` is
+  `['<mul>', '1', '<div>', 'x0', '</mul>']`. Such a sequence carried no bag, so `simplify` read it
+  as explicit prefix and answered in explicit prefix. A lone negation stays `neg x0`.
+- **A token that is neither a string nor a number is refused** with `ValueError`:
+  `simplify(['+', 'x1', True])` read `True` as the symbol `'True'`, and `None` as `'None'`.
+- **`read_infix` reads `pow1` and `pow_1` as the legacy operators only where they are called.**
+  `read_infix('pow_1(x0)')` is still `['inv', 'x0']`, and a bare `pow_1` is a symbol, as `pow_2`
+  is: `read_infix('x0*pow_1')` returned the malformed `['*', 'x0', 'inv']`.
+- **`import simplipy` succeeds without the compiled core**, and constructing an engine raises the
+  `ImportError` that names the failure; an unguarded import in `simplipy.utils` failed the import
+  itself. For code that calls `simplipy._core` directly: the simplify, infix and `prettify`
+  entries take a keyword `own_set`, which raises the new `simplipy._core.MissingModeSet` where the
+  mode holds no set of its own.
 - **The mining calls name their mode.** `prune_covered_rules`, `deduplicate_rules` and
   `promote` take a required keyword `rule_mode`: `'f64'` (also spelled `'default'`, the core's
   name for the f64 set), `'real'` or `'permissive'`. The CLI's `prune-covered-rules` prunes the
