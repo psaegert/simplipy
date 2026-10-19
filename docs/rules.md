@@ -79,7 +79,11 @@ seed, and a source's seed and exclusions follow its global index, so a length mi
 shards equals the length mined at once. A mine writes `<file>.checkpoint.json` after every
 completed length; a rerun of the same mine (the same parameters, mode, universe, starting
 rules and code) resumes after the last completed length, any other mine refuses to start
-over it, and the checkpoint is removed once the file is final.
+over it, and the checkpoint is removed once the file is final. A final file is not mined
+again: its sidecar records the mine's key (`resume.key`, the checkpoint's) and the file's
+sha256 (`resume.rules_sha256`), and a rerun of the same mine takes an unchanged file as it
+is, its ladder snapshots included. So a crash in a later mode costs only that mode; another
+mine, or a file edited after the mine, mines the mode anew.
 
 Each file has a **provenance sidecar** (`<file>.provenance.json`) recording every parameter
 (`interval_node_budget` included), the derived seeds, the evaluation-matrix specification,

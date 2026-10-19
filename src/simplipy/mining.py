@@ -102,6 +102,30 @@ def _rules_sha256(rules: Any) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def _finished_cell(path: str, key: str) -> list | None:
+    """The rules of a cell this mine already finished, or ``None``: the file and its sidecar
+    exist, the sidecar records a final, uninterrupted mine whose resume key is ``key`` (the
+    checkpoint's fingerprint: parameters, mode, code, operators, data, numeric environment,
+    universe, starting and other sets), and the file holds the bytes it recorded."""
+    sidecar = path + '.provenance.json'
+    if not (os.path.exists(path) and os.path.exists(sidecar)):
+        return None
+    try:
+        with open(sidecar) as file:
+            side = json.load(file)
+        with open(path, 'rb') as file:
+            raw = file.read()
+    except (OSError, ValueError):
+        return None
+    progress = side.get('progress') or {}
+    resume = side.get('resume') or {}
+    if (progress.get('final') is not True or progress.get('interrupted')
+            or resume.get('key') != key
+            or resume.get('rules_sha256') != hashlib.sha256(raw).hexdigest()):
+        return None
+    return [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.loads(raw)]
+
+
 def _reconcile_proposal_census(
         outcomes: dict, trail: list, watch: dict, drops: dict,
         rules: Any, dummy_variables: list[str]) -> None:
@@ -1211,6 +1235,8 @@ class RuleMiner:
                     prov['gates'] = {'unlicensed': gate['unlicensed'],
                                      'preempted': gate['preempted'],
                                      'file': os.path.basename(_path)}
+                    # A rerun of this mine reuses the file as it is (`_finished_cell`).
+                    prov['resume'] = {'key': checkpoint_fp, 'rules_sha256': _rules_sha256(final)}
                 # An interrupted mine still writes what it has, but it is NOT final: the
                 # lengths after the interrupt were never mined and the proposal channel,
                 # the gates and sort promotion above were skipped. The sidecar says so.
@@ -1277,6 +1303,30 @@ class RuleMiner:
              'other_sets': [getattr(self.engine, _RULES_ATTR[m]) for m, _ in _MINE_MODES
                             if m != rule_mode]},
             sort_keys=True, default=str).encode()).hexdigest()
+        # RESUME FROM DISK FIRST, A FINISHED MODE: a file this mine already finished -- its
+        # sidecar records this mine's key and the file's sha256 -- is taken as it is, with
+        # every ladder cell the climb wrote, and nothing is mined again. So a crash in a
+        # later mode costs only that mode; another mine, or an edited file, mines anew.
+        if out_file is not None:
+            cell_files: dict[str | None, str] = {output_file: out_file}
+            cell_files.update({snapshot_at[length]: _triple_paths(snapshot_at[length])[file_mode]
+                               for length in snapshot_at if length < max_source_pattern_length})
+            done: dict[str | None, list] = {}
+            for cell, path in cell_files.items():
+                found = _finished_cell(path, checkpoint_fp)
+                if found is None:
+                    break
+                done[cell] = found
+            else:
+                self._install(rule_mode, done[output_file])
+                if finals is not None:
+                    finals[rule_mode] = done[output_file]
+                if cells is not None:
+                    for cell, found_rules in done.items():
+                        cells[(rule_mode, cell)] = found_rules
+                if verbose:
+                    print(f'=== the {file_mode} file is finished: reusing {out_file}')
+                return
         resumed_at = 0
         if out_file is not None and os.path.exists(out_file + '.checkpoint.json'):
             with open(out_file + '.checkpoint.json') as file:

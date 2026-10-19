@@ -105,7 +105,7 @@ organised by who you are, then the highlights, then every change in detail.
 
 - `find_rules` mines `rules_f64.json`, `rules_real.json` and `rules_permissive.json` each in its
   own mode, and writes a checkpoint after every completed length, which a rerun of the same mine
-  resumes from.
+  resumes from; the rerun takes a mode whose file is already final as it is.
 - New keywords: `find_rules(interval_node_budget=)` (it replaces `SIMPLIPY_IVL_NODE_BUDGET`),
   `find_rules(judge=, judge_processes=)` and `find_rules(offer_final_rules=)`. `save_every=`
   (CLI `-s`) is accepted and ignored: the rule file is written once, when the mode's mine ends.
@@ -621,7 +621,10 @@ model predictions.
   every completed length and a rerun of the same mine resumes after the last one; a
   checkpoint written by another mine — other parameters, mode, universe, starting rules, or
   code (the compiled core or the package's sources) — refuses to start, and is never
-  overwritten. The rule file and its sidecar are written once, when the mode's mine ends.
+  overwritten. The rule file and its sidecar are written once, when the mode's mine ends. A
+  rerun of the same mine does not mine a finished file again: the sidecar records the mine's
+  key and the file's sha256 (`resume`), and an unchanged file is taken as it is, its ladder
+  snapshots included, so a crash in the permissive mine costs only the permissive mine.
 - **`simplipy verify-mine <file> --mode m -e <engine>`** (and `simplipy.mining.verify_mine`)
   checks a mined file against the re-mine gates in its own mode: no twin-shadowed row, no
   engine-owned law, every spelling licensed, nothing preempted (no ground fact the rule-less

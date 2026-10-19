@@ -548,3 +548,78 @@ def test_a_judgment_without_a_timeout_leaves_the_alarm_alone() -> None:
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous)
+
+
+def _mode_mine(directory, crash_in=None, **kw):
+    """A small three-mode mine in `directory`, recording which mode each mined length
+    belongs to; with `crash_in`, it dies when that mode's first length starts."""
+    modes: list = []
+    original = RuleMiner._mine_length
+
+    def spy(self, sources, mine_, rule_mode, judge_, judged, dummy_variables):
+        modes.append(rule_mode)
+        if rule_mode == crash_in:
+            raise KeyboardInterrupt('simulated crash')
+        return original(self, sources, mine_, rule_mode, judge_, judged, dummy_variables)
+
+    directory.mkdir(exist_ok=True)
+    (directory / 'rules.json').write_text('[]')
+    (directory / 'config.yaml').write_text(yaml.safe_dump(
+        {'engine_generation': 2, 'operators': _OPERATORS, 'rules': 'rules.json'}))
+    engine = SimpliPyEngine.from_config(str(directory / 'config.yaml'))
+    RuleMiner._mine_length = spy  # type: ignore[method-assign]
+    try:
+        engine.find_rules(max_source_pattern_length=4, max_target_pattern_length=4,
+                          dummy_variables=1, extra_internal_terms=['2'], X=256, seed=7,
+                          promote_sorts=False, verbose=False,
+                          output_file=str(directory / 'mined.json'), **kw)
+    finally:
+        RuleMiner._mine_length = original  # type: ignore[method-assign]
+    return modes, engine
+
+
+_FILES = ('mined.json', 'mined_real.json', 'mined_permissive.json')
+
+
+def test_a_crash_in_a_later_mode_reuses_the_finished_files(tmp_path) -> None:
+    """RESUME FROM DISK FIRST, a finished mode: the f64 and real files are final when the
+    permissive mine dies, and their sidecars record this mine's key and each file's sha256.
+    The rerun takes both as they are and mines permissive alone, to the files a one-shot mine
+    writes."""
+    import hashlib
+    once, _ = _mode_mine(tmp_path / 'once')
+    assert set(once) == {'default', 'real', 'permissive'}
+    with pytest.raises(KeyboardInterrupt):
+        _mode_mine(tmp_path / 'crashed', crash_in='permissive')
+    finished = {name: (tmp_path / 'crashed' / name).read_bytes() for name in _FILES[:2]}
+    assert json.loads(finished['mined.json']), 'vacuous: an empty f64 file'
+    side = json.load(open(tmp_path / 'crashed' / 'mined.json.provenance.json'))
+    assert side['resume']['rules_sha256'] == hashlib.sha256(finished['mined.json']).hexdigest()
+    rerun, engine = _mode_mine(tmp_path / 'crashed')
+    assert set(rerun) == {'permissive'}, rerun
+    for name in _FILES:
+        assert (tmp_path / 'once' / name).read_bytes() == \
+            (tmp_path / 'crashed' / name).read_bytes(), name
+    for name, raw in finished.items():
+        assert (tmp_path / 'crashed' / name).read_bytes() == raw, name
+    # the engine ends holding the three files, as after a one-shot mine
+    assert [(tuple(lhs), tuple(rhs)) for lhs, rhs in engine.simplification_rules] == \
+        [(tuple(lhs), tuple(rhs)) for lhs, rhs in json.loads(finished['mined.json'])]
+
+
+def test_a_finished_file_is_reused_only_by_its_own_mine(tmp_path) -> None:
+    """The reuse is a resume, so it answers to the mine's key and the file's bytes: other
+    parameters, or a file edited after the mine, mine the mode again."""
+    _mode_mine(tmp_path / 'a')
+    again, _ = _mode_mine(tmp_path / 'a')
+    assert again == [], 'vacuous: the same mine reuses all three files'
+    other, _ = _mode_mine(tmp_path / 'a', interval_node_budget=12345)
+    assert set(other) == {'default', 'real', 'permissive'}, other
+    rules = json.load(open(tmp_path / 'a' / 'mined.json'))
+    assert rules, 'vacuous: an empty file edits to the same bytes'
+    (tmp_path / 'a' / 'mined.json').write_text(json.dumps(rules[1:], indent=4))
+    edited, _ = _mode_mine(tmp_path / 'a', interval_node_budget=12345)
+    # f64 mines again, to the same rules: the later modes' inputs are unchanged, so they are
+    # reused
+    assert set(edited) == {'default'}, edited
+    assert json.load(open(tmp_path / 'a' / 'mined.json')) == rules
