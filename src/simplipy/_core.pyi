@@ -97,9 +97,9 @@ class Engine:
     def ac_registry_dropped(self) -> int: ...
     def ac_rules_drop_census(self, *, rule_mode: str) -> dict[str, int]: ...
     #: The shadow census: every translate-time skip caused by cross-rule state, as
-    #: (victim_row, owner_row, owner_was_twin, kind) -- kind is "inverse",
-    #: "twin-shadow" or "twin-inverse". Removing an owner row resurrects its victims'
-    #: entries; see `ac_simplify_suppressed`.
+    #: (victim_row, owner_row, owner_was_twin, kind) -- kind is "inverse" or
+    #: "twin-shadow". Removing an owner row resurrects its victims' entries; see
+    #: `ac_simplify_suppressed`.
     def ac_shadow_census(self, *, rule_mode: str) -> list[tuple[int, int, bool, str]]: ...
     def ac_odd_neg_carriers(
         self, tokens: list[str], max_passes: int

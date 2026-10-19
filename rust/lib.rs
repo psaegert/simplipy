@@ -939,10 +939,9 @@ impl PyEngine {
 
     /// The SHADOW CENSUS: every translate-time skip caused by CROSS-RULE state, as
     /// `(victim_row, owner_row, owner_was_twin, kind)` tuples -- `kind` is `"inverse"`
-    /// (asset rule dropped as the reversed pair of the owner's), `"twin-shadow"` (the
+    /// (asset rule dropped as the reversed pair of the owner's) or `"twin-shadow"` (the
     /// victim's orientation twin skipped because the owner already carries the identical
-    /// rewrite) or `"twin-inverse"` (the victim's twin skipped as the owner's exact
-    /// inverse). Removing an OWNER row from the artifact resurrects its victims'
+    /// rewrite). Removing an OWNER row from the artifact resurrects its victims'
     /// entries, which is exactly what fire-site suppression (`ac_simplify_suppressed`)
     /// cannot reproduce -- a consumer that needs "the engine without rule i" consults
     /// this census to learn for which rows suppression alone is not a rebuild. Forces

@@ -147,9 +147,10 @@ pub struct AcRules {
     ///     already owns its reversed pair (`seen_pairs`),
     ///   - `"twin-shadow"`  -- the orientation twin of `victim_row` skipped because
     ///     `owner_row`'s entry (its asset rule, or its own twin when `owner_was_twin`)
-    ///     already carries the identical pair (`seen_rules`),
-    ///   - `"twin-inverse"` -- the twin of `victim_row` skipped as the exact inverse of
-    ///     `owner_row`'s entry (`seen_pairs`).
+    ///     already carries the identical pair (`seen_rules`).
+    ///
+    /// A twin is never skipped as the reverse of a loaded rule: the twin's own G7 check
+    /// refuses it first (`ordered_below` is a strict total order).
     ///
     /// Twin victims are recorded only when every OTHER admission gate passes, so an
     /// entry states "removing the owner resurrects this rewrite", not merely "a hash
@@ -462,21 +463,20 @@ impl AcRules {
             }
             // The KB orientation genuinely can differ from the source rule's at
             // complexity ties (the tie-break is a total order, not sign-invariant):
-            // a twin that does not orient is dropped, conservative.
+            // a twin that does not orient is dropped, conservative. The order is strict
+            // and total, so this gate also keeps the reverse of every loaded rule out.
             if !ordered_below(&tr, &tl, view) {
                 continue;
             }
+            debug_assert!(
+                !ordered_below(&tl, &tr, view),
+                "G7 must refuse the reverse of an admitted twin"
+            );
             if let Some(&(owner, owner_was_twin)) = seen_rules.get(&(tl.clone(), tr.clone())) {
                 // The asset (or an earlier twin) already carries this exact rewrite;
                 // removing its owner would mint this twin instead -- census.
                 out.shadow_census
                     .push((out.src[i], owner, owner_was_twin, "twin-shadow"));
-                continue;
-            }
-            if let Some(&(owner, owner_was_twin)) = seen_pairs.get(&(tr.clone(), tl.clone())) {
-                // The exact inverse of a loaded rule: ping-pong fuel -- census.
-                out.shadow_census
-                    .push((out.src[i], owner, owner_was_twin, "twin-inverse"));
                 continue;
             }
             let idx = out.rules.len();
@@ -485,9 +485,6 @@ impl AcRules {
                 Ex::Mul(_) => out.mul_idx.push(idx),
                 _ => continue, // unreachable given `absorbed`; fail closed
             }
-            seen_pairs
-                .entry((tl.clone(), tr.clone()))
-                .or_insert((out.src[i], true));
             seen_rules
                 .entry((tl.clone(), tr.clone()))
                 .or_insert((out.src[i], true));
