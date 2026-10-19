@@ -262,3 +262,30 @@ SECOND_READ = ['* / x8 - x8 + x8 - - x13 x16 x8 - * x8 - - log + - x16 x14 x14 *
 def test_an_answer_reads_back_as_itself(eng, mode, src):
     ans = list(eng.simplify(src.split(), mode=mode))
     assert list(eng.simplify(ans, mode=mode)) == ans
+
+
+# The search's distributive law keeps a one-signed pole joined where splitting it would leave two
+# addends infinite at the pole with signs that differ (review P3): `(1 + x3 - x1 + 5/3 exp(x2))/abs(x3)`
+# split as `5/3 exp(x2) abs(1/x3) + (x3 + 1 - x1) abs(1/x3)` is NaN at `x3 = 0` on the whole slab
+# `1 < x1 < 1 + 5/3 exp(x2)`, where the product is `+inf`. A lossy mode keeps no value at a pole.
+POLE_DISTRIBUTIONS = ['(8.3921 + (x3 - x1)*8.3921 + 8.3921*exp(x2)*5/3)/abs(x3)',
+                      '(8.3921 + (x3 - x1)*8.3921 + 8.3921*exp(x2)*5/3)/x3^2']
+
+
+@pytest.mark.parametrize('mode', ('f64', 'real'))
+@pytest.mark.parametrize('src', POLE_DISTRIBUTIONS)
+def test_the_search_keeps_a_one_signed_pole_joined(eng, mode, src):
+    t = eng.to_prefix(src)
+    ans = simp(eng, src, mode)
+    f_src = eng.as_callable(t, ['x1', 'x2', 'x3'])
+    f_ans = eng.as_callable(ans, ['x1', 'x2', 'x3'])
+    with np.errstate(all='ignore'):
+        for x1 in (0.5, 1.5, 2.5):  # 1 + x3 - x1 + 5/3 exp(x2) > 0 at x2 = x3 = 0
+            assert f_src(x1, 0.0, 0.0) == math.inf
+            assert f_ans(x1, 0.0, 0.0) == math.inf, ' '.join(ans)
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_the_search_still_splits_a_pole_one_addend_cancels(eng, mode):
+    # `x2*x2^-1` is 1: one addend keeps the pole, and the sum takes the product's value there.
+    assert simp(eng, '(x1 + x2 + x3)/x2', mode) == simp(eng, '(x1 + x3)/x2 + 1', mode)

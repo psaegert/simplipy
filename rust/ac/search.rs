@@ -289,11 +289,16 @@ fn local_moves(e: &Ex, cx: &Cx, power: Option<&Rat>, out: &mut Vec<Ex>) {
                             .filter(|&(k, _)| k != ti)
                             .map(|(_, x)| x.clone())
                             .collect();
+                        let left = add(left, cx);
                         let mut a = rest.clone();
-                        a.push(add(left, cx));
+                        a.push(left.clone());
                         let mut b = rest.clone();
                         b.push(t.clone());
-                        out.push(add(vec![mul(a, cx), mul(b, cx)], cx));
+                        let (a, b) = (mul(a, cx), mul(b, cx));
+                        if splits_a_pole(&rest, &[(&left, &a), (t, &b)], cx) {
+                            continue;
+                        }
+                        out.push(add(vec![a, b], cx));
                     }
                 }
             }
@@ -695,6 +700,167 @@ fn licensed(f: &Ex, cx: &Cx) -> bool {
     }
 }
 
+/// READING A AT A DISTRIBUTED POLE (review P3): does moving the product of `piece` into the
+/// addends it `meets` -- each as `(co-piece, the addend built)` -- split a pole whose limit the
+/// product keeps? In the sound modes a pole is read by its limit. `P*(a + b)` keeps `P`'s
+/// one-signed limit (`1/x^2`, `abs(1/x)`, `log(x)`, `x^(-1/2)`) times `sign(a + b)`, while
+/// `P*a + P*b` is `inf - inf`, NaN, wherever `a` and `b` differ in sign there:
+/// `(1 + x3 - x1 + 5/3*exp(x2))/abs(x3)` split as
+/// `5/3*exp(x2)*abs(1/x3) + (x3 + 1 - x1)*abs(1/x3)` is NaN at `x3 = 0` on the whole slab
+/// `1 < x1 < 1 + 5/3*exp(x2)`, where the product is `+inf`. The pole is split only where two or
+/// more addends keep it: an addend whose co-piece cancelled it is certainly finite
+/// (`(x1 + x2 + x3)/x2` is `(x1 + x3)/x2 + 1`), and where one addend holds the pole the sum takes
+/// that addend's value there, which is the product's. Where two or more hold it, the piece carries
+/// two-signed poles only ([`two_signed_poles`]), whose product keeps no limit, or the co-pieces of
+/// those addends keep one strict sign ([`strict_sign`]), which each then takes at the pole. A
+/// lossy mode keeps no value at a pole.
+///
+/// FACTOR runs the law the other way and needs no such licence: the joined product keeps the
+/// limit wherever the quotients' sum is nonzero at the pole, and where the quotients differ in
+/// sign there the unjoined sum was NaN.
+fn splits_a_pole(piece: &[Ex], meets: &[(&Ex, &Ex)], cx: &Cx) -> bool {
+    if cx.lossy() {
+        return false;
+    }
+    let held: Vec<&Ex> = meets
+        .iter()
+        .filter(|(_, addend)| holds_a_pole_of(addend, piece, cx))
+        .map(|(co, _)| *co)
+        .collect();
+    if held.len() < 2 || two_signed_poles(piece, cx) {
+        return false;
+    }
+    let first = strict_sign(held[0], cx);
+    first.is_none() || !held[1..].iter().all(|co| strict_sign(co, cx) == first)
+}
+
+/// Are all the poles of the product of `members` two-signed, so that it keeps no limit at any?
+/// Every member is certainly finite (`Cx::certainly_finite`) or a negative odd power of a
+/// certainly finite base that changes sign at its zeros -- a variable, a sum (as the class
+/// reading takes a sum to change sign there), or `sin`, `cos`, `sinh`, `tanh`, `atan` or `asinh`
+/// of one -- an odd pole at its zero, and no member shares a variable with another's pole, since a
+/// factor vanishing there, or a second pole there, can make the product even (`sin(x)/x^3`).
+/// Anything else may hold a one-signed pole: an even or fractional power, `abs`, `log`, a
+/// function of something not finite.
+fn two_signed_poles(members: &[Ex], cx: &Cx) -> bool {
+    // A base that changes sign at its zeros: a variable, a sum, or an odd function or cosine of
+    // one (simple zeros; `sin(x2^2)` touches zero without changing sign, so its argument is a
+    // variable or a sum).
+    let crossing = |b: &Ex| match b {
+        Ex::Leaf(_) | Ex::Add(_) => true,
+        Ex::Fun(op, args) => {
+            args.len() == 1
+                && matches!(&args[0], Ex::Leaf(_) | Ex::Add(_))
+                && ["sin", "cos", "sinh", "tanh", "atan", "asinh"]
+                    .iter()
+                    .any(|n| cx.view.tok_is(*op, n))
+        }
+        _ => false,
+    };
+    let odd_pole = |f: &Ex| match f {
+        Ex::Pow(b, k) => {
+            matches!(&**k, Ex::Num(r) if r.is_negative() && r.is_odd_integer())
+                && crossing(b)
+                && cx.certainly_finite(b)
+        }
+        _ => false,
+    };
+    let mut poles: Vec<usize> = Vec::new();
+    for (i, f) in members.iter().enumerate() {
+        if odd_pole(f) {
+            poles.push(i);
+        } else if !cx.certainly_finite(f) {
+            return false;
+        }
+    }
+    poles.iter().all(|&p| {
+        let Ex::Pow(b, _) = &members[p] else {
+            unreachable!("an odd pole is a power")
+        };
+        members
+            .iter()
+            .enumerate()
+            .all(|(i, f)| i == p || !shares_a_variable(f, b))
+    })
+}
+
+/// Does `addend`, built from the product of `pieces` and a co-piece, still hold one of their
+/// poles: a member that is not certainly finite, or, for a negative power, a negative power of
+/// the same base? A co-piece that cancelled the pole leaves none (`x2*x2^-1` is `1`), and a pole
+/// of the co-piece's own is not the pieces'.
+fn holds_a_pole_of(addend: &Ex, pieces: &[Ex], cx: &Cx) -> bool {
+    let factors: &[Ex] = match addend {
+        Ex::Mul(fs) => fs,
+        other => std::slice::from_ref(other),
+    };
+    fn inverse_base(f: &Ex) -> Option<&Ex> {
+        match f {
+            Ex::Pow(b, k) if matches!(&**k, Ex::Num(r) if r.is_negative()) => Some(&**b),
+            _ => None,
+        }
+    }
+    pieces
+        .iter()
+        .filter(|f| !cx.certainly_finite(f))
+        .any(|f| match inverse_base(f) {
+            Some(b) => factors.iter().any(|g| inverse_base(g) == Some(b)),
+            None => factors.contains(f),
+        })
+}
+
+/// Do `a` and `b` hold a common leaf?
+fn shares_a_variable(a: &Ex, b: &Ex) -> bool {
+    fn leaves<'e>(e: &'e Ex, out: &mut Vec<&'e Ex>) {
+        match e {
+            Ex::Leaf(_) => out.push(e),
+            Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().for_each(|c| leaves(c, out)),
+            Ex::Pow(x, y) => {
+                leaves(x, out);
+                leaves(y, out);
+            }
+            _ => {}
+        }
+    }
+    let (mut la, mut lb) = (Vec::new(), Vec::new());
+    leaves(a, &mut la);
+    leaves(b, &mut lb);
+    la.iter().any(|x| lb.contains(x))
+}
+
+/// The one sign `e` takes wherever it is defined, finite and nonzero (`Some(true)`: negative),
+/// read syntactically: a nonzero literal, `pi`, `e`, `exp` or `cosh` of something certainly
+/// finite, and the products, integer powers and sums of such. `None` where that is not read.
+fn strict_sign(e: &Ex, cx: &Cx) -> Option<bool> {
+    match e {
+        Ex::Num(r) => (!r.is_zero()).then(|| r.is_negative()),
+        Ex::Pi | Ex::E => Some(false),
+        Ex::Fun(op, args)
+            if args.len() == 1
+                && (cx.view.tok_is(*op, "exp") || cx.view.tok_is(*op, "cosh"))
+                && cx.certainly_finite(&args[0]) =>
+        {
+            Some(false)
+        }
+        Ex::Mul(fs) => fs
+            .iter()
+            .try_fold(false, |neg, f| Some(neg ^ strict_sign(f, cx)?)),
+        Ex::Pow(b, k) => match &**k {
+            Ex::Num(r) if r.is_integer() => {
+                let s = strict_sign(b, cx)?;
+                Some(s && r.is_odd_integer())
+            }
+            _ => None,
+        },
+        Ex::Add(ts) => {
+            let first = strict_sign(ts.first()?, cx)?;
+            ts.iter()
+                .all(|t| strict_sign(t, cx) == Some(first))
+                .then_some(first)
+        }
+        _ => None,
+    }
+}
+
 /// RECIPROCAL JOIN (permissive): the product's reciprocal sums, joined and distributed inside.
 /// Permissive's `pow` distributes a reciprocal over a product unconditionally, so `c/(A*B)` is
 /// held as `c * A^-1 * B^-1`: no DISTRIBUTE can reach the product inside the reciprocal, and the
@@ -839,6 +1005,7 @@ fn distribute_product(factors: &[Ex], cx: &Cx) -> Option<Ex> {
         return None;
     }
     // The cartesian picks, in canonical bag order (deterministic).
+    let rest_len = rest.len();
     let mut picks: Vec<Vec<Ex>> = vec![rest];
     for v in &adds {
         let mut next = Vec::with_capacity(picks.len() * v.len());
@@ -851,7 +1018,37 @@ fn distribute_product(factors: &[Ex], cx: &Cx) -> Option<Ex> {
         }
         picks = next;
     }
-    Some(add(picks.into_iter().map(|p| mul(p, cx)).collect(), cx))
+    let addends: Vec<Ex> = picks.iter().map(|p| mul(p.clone(), cx)).collect();
+    // Reading A at a pole ([`splits_a_pole`]): the pieces that end up in more than one addend,
+    // the ones `<constant>` independence asks about above. Over one sum the other factors meet
+    // its terms; over several, a piece in more than one addend meets several co-pieces, so where
+    // two or more addends hold a pole it carries two-signed poles only.
+    let rest = &picks[0][..rest_len];
+    if let [v] = adds.as_slice() {
+        let meets: Vec<(&Ex, &Ex)> = v.iter().zip(&addends).collect();
+        if splits_a_pole(rest, &meets, cx) {
+            return None;
+        }
+    } else if !cx.lossy() {
+        let pieces: Vec<Ex> = rest
+            .iter()
+            .chain(adds.iter().copied().flatten())
+            .cloned()
+            .collect();
+        let held = addends
+            .iter()
+            .filter(|a| holds_a_pole_of(a, &pieces, cx))
+            .count();
+        let duplicated_pole = |v: &&Vec<Ex>| {
+            count / v.len() > 1
+                && v.iter()
+                    .any(|t| !two_signed_poles(std::slice::from_ref(t), cx))
+        };
+        if held > 1 && (!two_signed_poles(rest, cx) || adds.iter().any(duplicated_pole)) {
+            return None;
+        }
+    }
+    Some(add(addends, cx))
 }
 
 #[cfg(test)]

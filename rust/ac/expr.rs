@@ -1207,7 +1207,7 @@ impl<'a> Cx<'a> {
     /// or fractional powers, ...) is never certain here -- it goes through `cert_fin`, the real
     /// interval machinery. A conservative subset by construction: syntactic certainty may say
     /// "no" where the certificate would say "yes", never the reverse.
-    fn certainly_finite(&self, e: &Ex) -> bool {
+    pub(crate) fn certainly_finite(&self, e: &Ex) -> bool {
         match e {
             Ex::Num(_) | Ex::Pi | Ex::E | Ex::Const => true,
             // A numeral leaf beyond float64's range denotes a finite real (H-052), but in f64
