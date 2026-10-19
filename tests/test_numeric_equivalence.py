@@ -336,7 +336,12 @@ class TestCorpusGate:
         # walk rows move. Eight rest cheaper, the sign traded where it costs least: 32 and 86
         # (-3,000 each), 160 and 233 (-2,000), 180 and 336 (-1,000), 256 (-6,000), 319 (-5,000).
         # Two rest dearer by 3,000, 97 and 274, by the search's path.
-        assert walk['complexity_out'] == 55795451, walk['complexity_out']
+        # ONE PRICE FOR A SIGN (2026-10-19): 55,795,451 -> 55,127,866. A sign costs one bit
+        # wherever it sits (a negation standing alone paid a `Mul` head, a -1 beside other factors
+        # nothing), so the measure moved: the previous answers price 55,158,451 under it. 67 walk
+        # rows move; 11 rest cheaper (7, 18, 46, 67, 83, 95, 133, 149, 262, 327, 373: -30,585 in
+        # all), none dearer, and 56 respell at an equal price, the sign key placing their signs.
+        assert walk['complexity_out'] == 55127866, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

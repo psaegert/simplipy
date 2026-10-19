@@ -2328,8 +2328,11 @@ class SimpliPyEngine:
         certified default closes exactly this).
 
         Invariant in every case: mu prices structure and information, not spelling --
-        signs and magnitude-1 coefficient/exponent slots are free, literals pay their
-        description length on the exact value, symbols pay one symbol unit.
+        a sign costs one bit wherever it sits (a literal's sign, a coefficient -1, a
+        negation standing alone, which is a sign and not a product: ``-x1`` costs one bit
+        more than ``x1``, ``x1 - x2`` one bit more than ``x1 + x2``), a coefficient +1 is
+        free and an exponent -1 is division, literals pay their description length on the
+        exact value, symbols pay their entry of the symbol table.
 
         A literal costs at most what its float costs: the evaluator reads every literal as
         its nearest float64, so a literal's price is capped at the price of that float's
@@ -2403,6 +2406,9 @@ class SimpliPyEngine:
         ('sin', 'x0'),              # an elementary head
         ('asin', 'x0'),             # a transcendental head
         ('float("inf")',),          # the infinities
+        # the SIGN, one bit wherever it sits: a literal's sign, a negation standing alone (a
+        # sign, not a product, so no `Mul` head), the coefficient -1 beside other factors
+        ('-2',), ('neg', 'x0'), ('*', 'neg', 'x0', 'x1'),
         # THE READINGS: compound probes whose price depends on how a mode reads them, so
         # a change to a mode's canonical forms moves its fingerprint. Each mode prices
         # every probe in its own reading; the comments give where the readings differ.

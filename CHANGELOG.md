@@ -213,12 +213,34 @@ model predictions.
   exponent and an infinity carry none, and a sign inside a function's constant argument belongs to
   that constant. An odd function of a literal multiple, a bare or negated argument included, trades
   its sign wherever it stands, alone too. So `sin(-x1)` is `-sin(x1)`, `x1 + sin(-x1)` is
-  `x1 - sin(x1)` and `-sin(x1 - x2)` is `sin(x2 - x1)`, while `-sin(2)` is `sin(-2)`; and where
-  the trade is cheaper it is taken: `x2*sin(-x1)` is `-x2*sin(x1)`, 3 bits cheaper. On srbf's
+  `x1 - sin(x1)` and `-sin(x1 - x2)` is `sin(x2 - x1)`, while `-sin(2)` is `sin(-2)`, and
+  `x2*sin(-x1)` is `-x2*sin(x1)`. On srbf's
   ground truths, every spelling that writes an odd function `f(u)` as `-f(-u)` gets the
   original's answer (2,660 such spellings of 1,780 ground truths, in every mode). Mined rules that
   only move a sign at an odd function have one canonical state on both sides and are refused at
   load as subsumed.
+- **A sign costs one bit wherever it sits.** A negative number paid one bit for its sign (`-2`,
+  `-3*x1`, the exponent of `1/x1^2`), while the coefficient -1 of a product beside other factors
+  was free (`-x1*tanh(3)` cost what `x1*tanh(3)` does) and a negation standing alone paid a whole
+  product node, three bits (`-x1`, the `-x2` of `x1 - x2`). Each now costs one bit: a negation is
+  a sign, not a product, so `-x1` costs `x1` and one bit and `x1 - x2` one bit more than
+  `x1 + x2`; `+1` is no sign, and a reciprocal is division, not a sign. Where a sign stands is
+  then never a matter of price, and the rule above decides it: `-x1*tanh(3)` and `x1*tanh(-3)`
+  cost the same, and the answer is `x1*tanh(-3)`. `exp(-x1)` is now two bits cheaper than
+  `1/exp(x1)` (they cost the same before, and the reciprocal had fewer signs). Against the same
+  code with the old prices, at the default effort: on srbf's ground truths 675 answers change in
+  `f64` (143 cheaper, 12 dearer, the rest the same price), 703 in `real` (166, 13) and 905 in
+  `permissive` (257, 49); on a tenth of the training-data inputs 2,540 in `f64` (666, 16), 2,562
+  in `real` (670, 17) and 2,858 in `permissive` (908, 31); on a tenth of the model predictions
+  2,111 in `f64` (166, 15), 2,113 in `real` (169, 16) and 2,720 in `permissive` (332, 33). No
+  answer changes on a second call. The dearer answers are the search ending at another local
+  minimum, or a cancellation the shipped rule files reach only through the old spelling
+  (`exp(u)/exp(u)` cancels, `exp(u)*exp(-u)` does not), which the re-mine under these prices
+  addresses. The staged `acj-4` asset's f64 file loses 2 rows to the load gate (their sides now
+  climb: `-exp(-x)` is cheaper than `-1/exp(x)`). The permissive answer on the corpus row where it
+  priced a bit above `f64`'s now matches `f64`'s price. The measure fingerprint gains three sign
+  probes (`-2`, `neg x0`, `* neg x0 x1`); sidecars that predate them do not record them, so
+  loading stays silent.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

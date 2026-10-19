@@ -1353,11 +1353,17 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
                        '</add>', '</mul>'], out
         assert engine.simplify(list(out), mode=Mode.permissive) == out
 
-    def test_neg_one_coefficient_joins_inside(self, engine: SimpliPyEngine) -> None:
+    def test_neg_one_coefficient_stands_outside_the_join(self, engine: SimpliPyEngine) -> None:
+        # The -1 inside the joined base and the negation outside it cost the same (a sign is
+        # one bit wherever it sits), so the sign key places it outermost.
         x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'pow', 'x3', 'x4'])
         out = engine.simplify(list(x), mode=Mode.permissive)
-        assert out == ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3',
+        assert out == ['neg', 'inv', '<mul>', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3',
                        'x4', '</add>', '</mul>'], out
+        inside = ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3', 'x4', '</add>',
+                  '</mul>']
+        assert engine.complexity(out, mode=Mode.permissive) == \
+            engine.complexity(inside, mode=Mode.permissive)
         assert engine.simplify(list(out), mode=Mode.permissive) == out
 
 

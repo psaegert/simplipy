@@ -248,15 +248,11 @@ class TestMuValues:
         # mu(2) == mu(-2) -- the measure could not tell a number from its negation, which
         # a description length may not do. `Rat` normalises to q > 0 with the sign on the
         # numerator, so the bit is unambiguous and charged exactly once, in the atom.
-        # A magnitude-1 coefficient is still a BARE SIGN carrying no literal, so `x - y`
-        # keeps its old relation to `x + y`. The negation WRAPPER is separate: mu is
-        # measured on the canonical TREE ("never on a serialization"), and `x - y` is
-        # canonically Add[x, Mul[-1, y]] -- the wrapper Mul is a real structural node
-        # at `MU_MUL`, so subtraction prices one Mul head above addition. (Delta from
-        # the pre-mu table's blanket sign-free row; operationally inert -- the
-        # ordering only compares EQUIVALENT states, and sign wrappers on the same
-        # value canonicalize identically -- but pinned here so it is a decision, not
-        # an accident.)
+        # ONE PRICE FOR A SIGN: the same bit wherever the sign sits. The coefficient -1 of a
+        # product beside other factors costs it (it was free), and a negation standing alone
+        # is a sign, not a product: `x - y` is canonically Add[x, Mul[-1, y]], and the
+        # negation pays y and one bit, no `Mul` head (it paid the head, three bits). So where
+        # a sign stands is never a matter of price.
         assert c(eng, ['*', '-2.5', 'x0']) == c(eng, ['*', '2.5', 'x0']) + MILLI
         # At the one-bit floor mu(2) clears the clamp, so the sign now costs its FULL
         # bit here -- under the two-bit floor the clamp absorbed all but 0.585 of it.
@@ -265,7 +261,11 @@ class TestMuValues:
         # mu(1) sits on the floor; mu(-1) now clears it by its sign bit (see
         # `test_atoms`), so the measure tells them apart.
         assert c(eng, ['(-1)']) == c(eng, ['1']) + MILLI
-        assert c(eng, ['-', 'x0', 'x1']) == c(eng, ['+', 'x0', 'x1']) + MU_MUL
+        assert c(eng, ['-', 'x0', 'x1']) == c(eng, ['+', 'x0', 'x1']) + MILLI
+        assert c(eng, ['neg', 'x0']) == c(eng, ['x0']) + MILLI
+        assert c(eng, ['*', 'neg', 'x0', 'x1']) == c(eng, ['*', 'x0', 'x1']) + MILLI
+        # a reciprocal is division, not a sign
+        assert c(eng, ['inv', 'x0']) == c(eng, ['x0']) + MU_POW
 
 
 class TestB22AstronomicSaturation:

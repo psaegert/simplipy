@@ -115,10 +115,9 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   product's coefficient slot and an odd function's literal argument is decided by ONE
   shared pricing orbit on every construction route (the sign-trade owner): $\mu$ picks the cheaper spelling, an exact tie goes
   to the sign key (§3), which leaves a constant's sign on its literal. So $-1 \cdot \sin(2)$ files as $\sin(-2)$ (the product
-  node itself dissolves) and $-5 \cdot \sin(2)$ as $5 \cdot \sin(-2)$ — while a
-  magnitude-1 coefficient beside *other* factors keeps the sign, because it rides
-  $\mu$-free where the literal's sign bit would cost ($-1 \cdot x_0 \cdot \sin(2)$ is
-  canonical as spelled).
+  node itself dissolves), $-5 \cdot \sin(2)$ as $5 \cdot \sin(-2)$, and
+  $-1 \cdot x_0 \cdot \sin(2)$ as $x_0 \cdot \sin(-2)$: a sign costs one bit wherever it sits
+  (§5), so the placements tie and the sign key decides.
   **An EVEN index is canonical**: `rootn(t, 2)` and `rootn(t, 4)` are normal forms, not reducible ones --
   `rootn` is the canonical spelling of a principal even root and $\mu$ ties it with
   $\mathrm{Pow}(t, 1/k)$, so neither orientation is forced.
@@ -191,7 +190,7 @@ per-term signs are carried by the serialization sections, so every negation spel
 the same function lands in the same flat bag. Probed with a 2,000-case orientation fuzz
 (every sum against its negated-flip spelling): zero divergence. Two conventions coexist knowingly: a finite
 mixed-orientation sum files in whichever of its two orientations prices LOWER under
-$\mu$ — the $-1$ wrapper appears exactly when the wrapped spelling is the cheaper one.
+$\mu$ — the $-1$ wrapper (a negation, one bit) appears exactly when the wrapped spelling is the cheaper one.
 By design, mirrored subtractions score equal, and a strictly larger expression
 never scores the same as a smaller one through a hidden wrapper surcharge.
 Infinity-bearing sums never wrap; each family has a single representative, so no
@@ -500,7 +499,7 @@ entering a comparison. In bits, each grammar symbol carries its own price -- the
 | variable leaf | 6 | | $\pi$, $e$ | 4 |
 | `Add`, `Mul`, `Pow` bag or head | 3 | | $\pm\infty$, NaN | 8 |
 | elementary head (`exp log abs sin cos tan rootn`) | 6 | | any other head | 8 |
-| inverse/hyperbolic head (`asin acos atan sinh cosh tanh asinh acosh atanh`) | 8 | | | |
+| inverse/hyperbolic head (`asin acos atan sinh cosh tanh asinh acosh atanh`) | 8 | | a sign | 1 |
 
 The entries are read against the $1/8$-bit unit and scale with it, so the
 symbol-vs-literal *ratio* — the sensitivity axis that matters — is independent of the unit. Two of them are fixed by
@@ -530,9 +529,16 @@ is a genuine prefix code. An integer, and a value whose decimal codeword is the 
 one, prints from the same decomposition $\pm m \cdot 10^{k}$ (`Rat::decimal_parts`): positionally for
 $10^{-4} \leq |v| < 10^{16}$, and as `<m>e<exponent>` with one digit before the point
 outside that range where that is shorter (`1e-300`, `1e16`, `2.5e-21`; `0.001`, `1000` and
-`12345678901234567890` keep their digits). A magnitude-$1$
-coefficient or rational-exponent slot is a bare sign and costs $0$, every other such
-slot pays its literal cost; a numeric literal that is no number to the engine (beyond the
+`12345678901234567890` keep their digits). **A sign costs one bit wherever it sits**: the
+sign bit of a literal (a number, a coefficient, an exponent), the coefficient $-1$ of a
+product beside its other factors ($-x_1 x_2$ costs a bit more than $x_1 x_2$), and a negation
+standing alone, which is a sign and not a product: $-x$ pays $x$ and one bit, and no `Mul`
+head ($x_1 - x_2$ costs a bit more than $x_1 + x_2$). The bit is absolute, like a literal's,
+and does not scale with the symbol unit. So where a sign may stand is never a question of
+price, and the sign key decides it ($-x_1 \tanh(3)$ and $x_1 \tanh(-3)$ cost the same; the
+second is filed). The coefficient $+1$ is no sign and costs $0$, and a rational exponent of
+magnitude $1$ is a reciprocal, priced as division ($x^{-1}$ is the `Pow` head and $x$); every
+other coefficient or rational-exponent slot pays its literal cost; a numeric literal that is no number to the engine (beyond the
 cap, or in f64 mode not admissible) lives as a token string and pays the same two-codeword
 rule parsed from its canonical print (`mu_numeric_str`, monotone in significand and
 scale within each codeword, with the astronomic knee at scale $2^{32}$ keeping the
@@ -602,9 +608,10 @@ were not scanned].
 
 **Lemma L5 (finite level sets)** [THEOREM]. For every $\mu_0$, only finitely many
 canonical terms $t$ have $\mu(t) = \mu_0$. *Proof.* $\mu$ bounds the node count
-(every node and leaf contributes $\geq 2$ bits except at most one zero-cost coefficient
-slot per bag and one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \leq \mu_0$
-in bits — the carrier being milli-bits scales both sides by $1000$),
+(every node and leaf contributes $\geq 1$ bit -- a negation standing alone is one bit, every
+other node and leaf $\geq 2$ -- except at most one zero-cost coefficient slot $+1$ per bag and
+one zero-cost exponent slot per `Pow`, so $\#\mathrm{nodes} \leq \mu_0$ in bits — the carrier
+being milli-bits scales both sides by $1000$),
 hence finitely many shapes; the non-leaf alphabet (operators) and the variable/special
 vocabulary are finite; and there are finitely many numbers at all: a number's numerator
 and denominator have at most 1,100 bits each. $\mu_0$ does not bound a number's codeword

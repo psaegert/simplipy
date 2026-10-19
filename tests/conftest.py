@@ -95,13 +95,17 @@ def require_triple(why: str = 'the acj-4 triple is not staged') -> None:
 
 
 # INTERIM PINS (2026-10-18), until the acj-4 re-mine, which resets both lists to empty. The sign
-# key (fewest signs, then outermost) moved the canon past the staged acj-4 asset, which was mined
-# under the earlier order, and the f64 load refuses exactly these rows of it:
+# key (fewest signs, then outermost) and the one-bit sign moved the canon and the measure past the
+# staged acj-4 asset, which was mined under the earlier ones, and the f64 load refuses exactly
+# these rows of it:
 #   * SUBSUMED (gate G2): a sign moved at an odd function, which the canon now places itself, so
 #     both sides are one canonical state;
-#   * UPHILL (gate G7): none. G7 refuses only a rule whose sides climb in price; the rules whose
-#     two spellings cost the same and which the sign key orders the other way load, and the
-#     runtime gate fires them only where an application descends.
+#   * UPHILL (gate G7): two rows whose sides now climb in price. A sign costs one bit wherever it
+#     sits, so a negation standing alone pays no `Mul` head: `-exp(-x)` is cheaper than
+#     `-1/exp(x)` and `-log(acos(x))` than `log(1/acos(x))`, where the two sides cost the same
+#     before. G7 refuses only a rule whose sides climb; the rules whose two spellings cost the same
+#     and which the sign key orders the other way load, and the runtime gate fires them only where
+#     an application descends.
 # The suites pin the counts and these rows, so any other drift still fails.
 ACJ4_INTERIM_SUBSUMED = (
     ('neg asin _0', 'asin neg _0'), ('neg asinh _0', 'asinh neg _0'),
@@ -113,7 +117,9 @@ ACJ4_INTERIM_SUBSUMED = (
     ('neg rootn _0 3', 'rootn neg _0 3'), ('neg rootn _0 5', 'rootn neg _0 5'),
     ('neg rootn _0 7', 'rootn neg _0 7'), ('neg rootn _0 9', 'rootn neg _0 9'),
 )
-ACJ4_INTERIM_UPHILL = ()
+ACJ4_INTERIM_UPHILL = (
+    ('neg exp neg !0', 'inv neg exp !0'), ('neg log acos _0', 'log inv acos _0'),
+)
 
 
 def acj4_refused_rows(engine: SimpliPyEngine) -> tuple[list, list]:
@@ -135,20 +141,9 @@ def acj4_refused_rows(engine: SimpliPyEngine) -> tuple[list, list]:
     return subsumed, other
 
 
-# INTERIM KNOWN VIOLATION (2026-10-18) of the permissive-dominance sweep over the shipped
-# corpus. On this row f64 found a cheaper answer, 136,171 -> 135,171: an odd root of a quotient is
-# now a sign-trade site, so `asin(rootn(x13/x11, 5) - 1)` is `-asin(rootn(-x13/x11, 5) + 1)`, a bit
-# cheaper. Permissive keeps 136,171: in its reciprocal join the joined base takes that orientation
-# and hands its sign to the rest of the product, the signed join loses to the distributed working
-# state, and that state prices a bit above the unsigned join on f64's yardstick -- a join the
-# projection cannot ship, since its re-parse would not re-derive it. Removed when the permissive
-# answer reaches f64's here.
-PERMISSIVE_DOMINANCE_KNOWN = (
-    {'expression': ['*', '/', '1', '2', '/', 'pow', '*', '/', '1', '4', '+', 'acosh', '-', 'x3',
-                    'asinh', 'x3', '*', 'x3', 'atanh', 'x14', '5', '*', 'asin', '-', 'rootn', '/',
-                    'x13', 'x11', '5', '/', 'x11', 'x11', 'x13'],
-     'mu': {'f64': 135171, 'real': 135171, 'permissive': 136171}},
-)
+# Known violations of the permissive-dominance sweep over the shipped corpus (rows where the
+# permissive answer prices above f64's on f64's yardstick): none.
+PERMISSIVE_DOMINANCE_KNOWN: tuple = ()
 
 
 def construct_legacy_table() -> SimpliPyEngine:

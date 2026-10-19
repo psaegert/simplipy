@@ -44,11 +44,11 @@ def test_every_mode_runs_unbounded_by_default(engine, mode) -> None:
 
 
 def test_a_budget_binds_when_asked_and_stays_sound(engine) -> None:
-    # In f64 the budget is opt-in; 10,000 units cut this search short of the settled form,
+    # In f64 the budget is opt-in; 5,000 units cut this search short of the settled form,
     # and the cut answer is still never costlier than the input.
     t = ladder(10)
     settled = engine.simplify(t, mode='f64', work=None)
-    cut = engine.simplify(t, mode='f64', work=10_000)
+    cut = engine.simplify(t, mode='f64', work=5_000)
     assert cut != settled
     assert price(engine, settled, 'f64') < price(engine, cut, 'f64') <= price(engine, t, 'f64')
 

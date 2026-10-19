@@ -95,9 +95,11 @@ class TestLoadConsumer:
         # nothing is subsumed: pristine (5347, 0, 0, 9) again. (Read in f64's folded canon,
         # `atanh pow (-10) (-9) -> -1e-09` was subsumed: (5346, 1, 0, 9).)
         # INTERIM (2026-10-18), until the re-mine restores (5347, 0, 0, 9): the sign key
-        # makes the 16 rows pinned in conftest subsumed, and two twins more orient.
+        # makes the 16 rows pinned in conftest subsumed, and the one-bit sign makes the 2 rows
+        # pinned there climb; the twins go 9 -> 44 (a negation no longer pays a `Mul` head, so
+        # fewer of them climb).
         assert (subsumed, dropped) == (len(ACJ4_INTERIM_SUBSUMED), len(ACJ4_INTERIM_UPHILL))
-        assert (kept, subsumed, dropped, twins) == (5333, 16, 0, 11)
+        assert (kept, subsumed, dropped, twins) == (5364, 16, 2, 44)
 
     def test_poisoned_artifact_dropped_and_inert(self, tmp_path):
         # END-TO-END Part-4 falsifier: an artifact carrying the mirror rule loads

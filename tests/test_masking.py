@@ -113,12 +113,12 @@ class TestMaskOnce:
     rather than a defect -- but it is pinned so the property cannot drift silently."""
 
     def test_a_second_pass_invents_a_degree_of_freedom(self, engine: SimpliPyEngine) -> None:
-        # The `<sub>` section is STRUCTURE. Collect moves the negation inside `atan` (an
-        # odd function), where it becomes an explicit `-1` coefficient -- structure
-        # wearing a literal's clothes. A second pass abstracts it into a free constant
-        # the original never had. Measured at ~0.15% of skeletons over 20k corpus rows.
-        expr = ["<add>", "<sub>", "atan", "<mul>", "pow", "x4", "3", "pow", "abs", "x4", "3",
-                "</mul>", "sin", "<mul>", "0", "log", "x4", "</mul>", "</add>"]
+        # The `neg` is STRUCTURE. Collect re-builds the product, where the negation becomes an
+        # explicit `-1` coefficient -- structure wearing a literal's clothes. A second pass
+        # abstracts it into a free constant the original never had. (srbf ground truth 957;
+        # 59 of srbf's 6,531 ground truths invent one so.)
+        expr = ["neg", "<mul>", "x1", "cos", "<add>", "rootn", "x1", "2", "<sub>", "7.68787",
+                "</add>", "</mul>"]
         once = masking.mask(expr, engine, masking.mask_fittable)
         twice = masking.mask(once, engine, masking.mask_fittable)
         assert expr.count("<constant>") == 0

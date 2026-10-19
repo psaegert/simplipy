@@ -47,7 +47,7 @@ _PROPOSAL_OPS = {
 class TestPruneStateCoverage:
     def test_tie_tier_rule_survives_prune(self) -> None:
         """The E5a witness: a strict serve-ordering descent whose complexity score is a
-        TIE (signs are free). The score judge pruned it; the state judge must not --
+        TIE. The score judge pruned it; the state judge must not --
         nothing else performs the rewrite, so pruning it lengthens serving output.
 
         WITNESS REPLACED 2026-08-07. It was `abs neg ?0 -> abs ?0` until the parity
@@ -55,13 +55,16 @@ class TestPruneStateCoverage:
         `prune_covered_rules` was right to prune it and the test was asserting a
         premise the engine had outgrown -- "nothing else performs the rewrite" is the
         load-bearing clause, and it stopped being true. The successor is the same KIND
-        of fact (sign placement, free under mu) still owned by a rule. The sign at an odd
-        function became the canon's own decision too; the successor is `exp(-x) -> 1/exp(x)`,
-        15,000 either way, which the sign key orders (fewer signs) and no constructor
-        performs."""
-        rule = (("exp", "neg", "?0"), ("inv", "exp", "?0"))
+        of fact still owned by a rule. The sign at an odd function became the canon's own
+        decision too, and `exp(-x) -> 1/exp(x)` followed it until a sign cost one bit wherever
+        it sits (the negation is now two bits cheaper). The successor is
+        `1/abs(x) -> abs(1/x)`, 15,000 either way, which the structural order decides and no
+        constructor performs."""
+        rule = (("inv", "abs", "?0"), ("abs", "inv", "?0"))
         engine = SimpliPyEngine(operators=_PRUNE_OPS, rules=[rule])
-        assert engine.simplify(["exp", "neg", "x0"]) == ["inv", "exp", "x0"]
+        assert engine.simplify(["inv", "abs", "x0"]) == ["abs", "inv", "x0"]
+        assert SimpliPyEngine(operators=_PRUNE_OPS, rules=[]).simplify(["inv", "abs", "x0"]) \
+            == ["inv", "abs", "x0"]
 
         assert engine.prune_covered_rules(rule_mode='default') == 0
         assert engine.simplification_rules == [rule]

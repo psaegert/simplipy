@@ -516,6 +516,7 @@ class TestTheMeasureFingerprintReadsTheWholeMeasure:
             'Pow': ['pow', 'x0', '2'], 'Pi': ['np.pi'], 'E': ['np.e'],
             'elementary head': ['sin', 'x0'], 'transcendental head': ['asin', 'x0'],
             'infinity': ['float("inf")'], 'free constant': ['<constant>'],
+            'sign standing alone': ['neg', 'x0'], 'sign beside other factors': ['*', 'neg', 'x0', 'x1'],
         }
         missing = [k for k, toks in kinds.items() if toks not in probes]
         assert not missing, f'no fingerprint probe exercises: {missing}'

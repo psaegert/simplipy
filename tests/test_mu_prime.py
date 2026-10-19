@@ -50,12 +50,13 @@ MU_FREE_PRIME = 67 * MILLI   # the re-derived c_free' (TestCfreePrimeDerivation 
 #: mismatch test can differ FROM.
 ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 
-#: The probes the shipped acj-4 cell's sidecar does not record: the float cap's probe and
-#: the compound reading probes were added to the battery after it was mined. Unrecorded
+#: The probes the shipped acj-4 cell's sidecar does not record: the float cap's probe, the
+#: sign probes and the compound reading probes were added to the battery after it was mined. Unrecorded
 #: is not moved, so loading the cell is silent; `test_acj_load_compares_what_was_recorded`
 #: pins exactly this set, so a re-mine that records them fails there and is noticed.
 ACJ_UNRECORDED_PROBES = [
     '0.0766541268471677307861497420516056347394916180597539647375669841',
+    '-2', 'neg x0', '* neg x0 x1',
     'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', '/ x0 * x0 x1']
 
 
@@ -578,6 +579,11 @@ class TestFingerprintAndArtifactLoad:
             'sin x0': 6 * MILLI + MU_LEAF,       # elementary head
             'asin x0': 8 * MILLI + MU_LEAF,      # transcendental head
             'float("inf")': 8 * MILLI,
+            # a sign, one bit wherever it sits: on a literal, a negation standing alone (no
+            # Mul head), the coefficient -1 beside other factors
+            '-2': 3585,                       # selector + L(2) + sign
+            'neg x0': MU_LEAF + MILLI,              # the leaf and one bit
+            '* neg x0 x1': 3 * MILLI + MILLI + 2 * MU_LEAF,   # Mul 3 + sign + two leaves
             # the readings, in f64's: (x0^2)^(1/2) stays a power of a power, asin(1e-08)
             # is its float 1e-08, 1/exp(5132.3) is 0, and x0 cancels from x0/(x0*x1)
             'pow pow x0 2 0.5': 20170,

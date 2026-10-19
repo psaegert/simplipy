@@ -144,15 +144,15 @@ impl Ex {
 /// | numeric literal p/q (exact VALUE)  | max(2, bits(p)+bits(q)-1) | its description      |
 /// |   (spelling-free: `0.5` == `1/2`)  |                  | length; implicit /1 is free   |
 /// | bag coefficient slot, magnitude!=1 | the literal cost | the slot PAYS (removes the    |
-/// |   (magnitude 1: a bare sign, 0)    |                  | coefficient-rides-free        |
+/// |   (magnitude 1: a bare sign)       |                  | coefficient-rides-free        |
 /// |                                    |                  | asymmetry that minted the     |
 /// |                                    |                  | materialization fork)         |
 /// | rational `Pow` exponent            | as coefficient   | `x^-1` = division = structure |
 /// | `<constant>`                       | c_free = 128     | a free real dof; the priciest |
 /// |                                    |                  | atom (owner floor: >= special)|
 ///
-/// SIGN IS FREE throughout (`|p|`; a magnitude-1 coefficient or exponent costs 0):
-/// `x - y` is not more complex than `x + y` -- standing doctrine, not revoked by mu.
+/// (The sign rows of this preamble are superseded: a sign costs ONE BIT wherever it sits,
+/// `mu_sign` below. A magnitude-1 exponent is division, not a sign, and stays free.)
 /// The literal formula `max(2, bits(|p|) + bits(q) - 1)` is the unique reading
 /// consistent with the ratified doc's worked examples: cost(2)=2 (T4: mu(2x)=18),
 /// cost(5/2)=4 (T5: mu(2.5*pi)=20), a 52-bit dyadic ~105 (T1/T2), mu(0)=mu(1)=2 (T3).
@@ -239,10 +239,30 @@ pub fn mu_add() -> u64 {
     sym_bits(MU_BITS_ADD)
 }
 
-/// The `Mul` bag head -- also the negation WRAPPER `Mul[-1, .]` that spells `x - y`.
+/// The `Mul` bag head. A negation `Mul[-1, x]` is no product and pays no head: it is a sign
+/// (`mu_sign`).
 #[inline]
 pub fn mu_mul() -> u64 {
     sym_bits(MU_BITS_MUL)
+}
+
+/// A SIGN, in milli-bits: ONE BIT wherever it sits. The sign of a literal (`-2`, a coefficient
+/// `-3`, an exponent `-2`), the coefficient -1 of a product beside its other factors
+/// (`-x1*x2`), and a negation standing alone (`-x1`, the `-x2` of `x1 - x2`), which is a sign
+/// and not a product, so it pays its operand and this bit and no `Mul` head. `+1` is no sign
+/// and costs nothing, and a reciprocal (`Pow[y, -1]`) is division, not a sign.
+///
+/// A description length must tell a number from its negation, and one bit is what that
+/// distinction costs; pricing it the same everywhere is what makes the placement of a sign
+/// a question the sign key decides rather than the price (`-x1*tanh(3)` and
+/// `x1*tanh(-3)` cost the same). An absolute bit, like a literal's, not a symbol-table
+/// entry: it does not scale with `MU_SYM_UNIT`.
+pub const MU_SIGN: u64 = MU_MILLI;
+
+/// See [`MU_SIGN`].
+#[inline]
+pub fn mu_sign() -> u64 {
+    MU_SIGN
 }
 
 /// The `Pow` head -- also the division wrapper `Pow[y, -1]` that spells `x / y`.
@@ -600,7 +620,7 @@ fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
 }
 
 fn mu_rat_codeword_totals_uncached(r: &Rat) -> (u64, Option<u64>) {
-    let sign = if r.is_negative() { MU_MILLI } else { 0 };
+    let sign = if r.is_negative() { MU_SIGN } else { 0 };
     let (pb, qb) = match r.small_parts() {
         Some((p, q)) => (l_millibits(p.unsigned_abs()), l_millibits(q as u128)),
         None => {
@@ -697,7 +717,7 @@ const MU_SCALE_KNEE_COST: u64 = MU_SCALE_KNEE * L10_MILLI;
 pub fn mu_numeric_str(s: &str) -> u64 {
     let negative = s.starts_with('-');
     let body = s.strip_prefix('-').unwrap_or(s);
-    let sign = if negative { MU_MILLI } else { 0 };
+    let sign = if negative { MU_SIGN } else { 0 };
     // Every priced numeric leaf pays the one selector bit on top of its cheapest
     // codeword total; each total carries the sign and the codeword floor itself,
     // mirroring `mu_rat_codeword_totals` exactly -- the SAME `MU_RAT_FLOOR`, or the
@@ -890,11 +910,12 @@ pub fn eq_mod_nums(a: &Ex, b: &Ex, view: &TokenView) -> bool {
 // decrease, so two totals pinned at the ceiling can only ever REFUSE.
 /// CENSUS of the nodes `complexity` actually CHARGES, keyed by kind.
 ///
-/// Mirrors the pricing arms exactly, including their silences: a +-1 rational coefficient
-/// inside a `Mul` bag is free, so it is not counted; a degenerate all-coefficient bag is
-/// the literal itself. Counting serialized TOKENS instead gets this wrong in both
-/// directions -- `-` and `/` are not nodes (they are an inverted member of an Add/Mul
-/// bag), and an n-ary bag is ONE node however many `+` the spelling shows.
+/// Mirrors the pricing arms exactly, including their silences: a +1 rational coefficient
+/// inside a `Mul` bag is free, so it is not counted; a -1 coefficient is a `Sign`, and a
+/// negation standing alone (`Mul[-1, x]`) is a `Sign` and no `Mul`; a degenerate
+/// all-coefficient bag is the literal itself. Counting serialized TOKENS instead gets this
+/// wrong in both directions -- `-` and `/` are not nodes (they are an inverted member of an
+/// Add/Mul bag), and an n-ary bag is ONE node however many `+` the spelling shows.
 pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap<String, u64>) {
     let mut bump = |k: &str| *out.entry(k.to_string()).or_insert(0) += 1;
     match e {
@@ -913,11 +934,17 @@ pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap
             }
         }
         Ex::Mul(v) => {
-            bump("Mul");
+            if !is_negation(v) {
+                bump("Mul");
+            }
             for f in v {
-                // The free +-1 coefficient slot is NOT charged, so it is not counted.
+                // The free +1 coefficient slot is NOT charged, so it is not counted; -1 is a sign.
                 if let Ex::Num(r) = f {
-                    if r.is_one() || *r == Rat::NEG_ONE {
+                    if r.is_one() {
+                        continue;
+                    }
+                    if *r == Rat::NEG_ONE {
+                        *out.entry("Sign".to_string()).or_insert(0) += 1;
                         continue;
                     }
                 }
@@ -937,6 +964,14 @@ pub fn node_census(e: &Ex, view: &TokenView, out: &mut std::collections::HashMap
             }
         }
     }
+}
+
+/// Is this product a NEGATION standing alone, `Mul[-1, x]` (a sign, not a product)?
+fn is_negation(v: &[Ex]) -> bool {
+    v.len() == 2
+        && v.iter()
+            .any(|f| matches!(f, Ex::Num(r) if *r == Rat::NEG_ONE))
+        && v.iter().any(|f| !matches!(f, Ex::Num(_)))
 }
 
 pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
@@ -972,12 +1007,15 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
             let mut members = 0u64;
             for f in v {
                 match f {
-                    // The rational coefficient slot: magnitude 1 is a bare sign (free);
-                    // any other magnitude pays its description length -- THE stage-2
-                    // decision (an `E` factor at 8 now undercuts a `2.718...` coefficient
-                    // at ~109 instead of riding free below it).
+                    // The rational coefficient slot: +1 is no sign (free), -1 is a bare sign
+                    // (`mu_sign`, one bit, as a literal's sign); any other magnitude pays its
+                    // description length, its sign bit included -- THE stage-2 decision (an
+                    // `E` factor at 8 now undercuts a `2.718...` coefficient at ~109 instead
+                    // of riding free below it).
                     Ex::Num(r) => {
-                        if !(r.is_one() || *r == Rat::NEG_ONE) {
+                        if *r == Rat::NEG_ONE {
+                            total = total.saturating_add(mu_sign());
+                        } else if !r.is_one() {
                             total = total.saturating_add(mu_rat(r));
                         }
                     }
@@ -990,6 +1028,10 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
             if members == 0 {
                 // Degenerate all-coefficient bag: the literal (or bare Const) itself.
                 return (total - head).max(2);
+            }
+            if is_negation(v) {
+                // A negation standing alone is a sign, not a product: its operand and one bit.
+                return total - head;
             }
             total
         }
@@ -2499,8 +2541,7 @@ fn term_join(c: Rat, key: Ex, cx: &Cx) -> Ex {
     // fixpoints for one value, construction-history dependence).
     if c.is_one() {
         // A UNIT coefficient still decides the orientation of the key's sign-trade sites:
-        // the sign of a coefficient of magnitude 1 is free while any other one costs, so a
-        // key oriented for its old coefficient (`k * (-a - b) * x` keeps the negated sum: at
+        // a key oriented for its old coefficient (`k * (-a - b) * x` keeps the negated sum: at
         // |k| != 1 it ties with `-k * (a + b) * x`, and the tie goes to the positive
         // coefficient) is not the cheapest spelling once the coefficient is 1 -- `mul()`
         // reads `(-a - b) * x` as `-(a + b) * x`. Returned raw, the term printed
@@ -3279,7 +3320,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     // (b), owner ruling 2026-08-08: the filed orientation is the mu-CHEAPER one ("the
     // mirrors score equal; the bigger expression scores bigger"); the historical
     // first-in-sort-positive lex rule survives only as the exact-tie breaker. For a
-    // content-1 sum the flip's wrapper cost is one Mul head (the `-1 x Add` wrapper exists
+    // content-1 sum the flip's wrapper cost is one sign (the negation `-1 x Add` exists
     // only in the flipped spelling); for a non-unit content the wrapper exists in BOTH
     // spellings and the flip pays only the coefficient's sign bit -- and the per-term
     // deltas must then be priced on the DIVIDED terms (the candidates actually stored),
@@ -3287,7 +3328,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
     let sign_neg = if terms.iter().any(term_absorbs_negation) {
         false
     } else if g.is_one() {
-        flipped_orientation_wins(&terms, mu_mul() as i128, Tie::Keep, cx)
+        flipped_orientation_wins(&terms, Wrapper::Flipped, Tie::Keep, cx)
     } else {
         let Some(ng) = g.checked_neg() else {
             return Ex::Add(terms);
@@ -3295,7 +3336,7 @@ fn primitive_sum(terms: Vec<Ex>, cx: &Cx) -> Ex {
         match divide_terms(&terms, &g, cx) {
             Some(divided_pos) => {
                 let wsd = mu_rat(&ng) as i128 - mu_rat(&g) as i128;
-                flipped_orientation_wins(&divided_pos, wsd, Tie::Keep, cx)
+                flipped_orientation_wins(&divided_pos, Wrapper::Both(wsd), Tie::Keep, cx)
             }
             None => return Ex::Add(terms),
         }
@@ -3411,16 +3452,30 @@ enum Tie {
     Lex,
 }
 
-fn flipped_orientation_wins(terms: &[Ex], wrapper_sign_delta: i128, tie: Tie, cx: &Cx) -> bool {
-    // (b), owner ruling 2026-08-08: the mu-CHEAPER orientation wins. `wrapper_sign_delta`
-    // is what the flip costs at the wrapper itself, signed from the caller's side:
-    // +mu_mul (the wrapper IS a `Mul[-1, .]` node, priced by the symbol table) in
-    // `primitive_sum` for a content-1 sum (the wrapper exists only in the
-    // flipped spelling), NEGATIVE mu_mul in `mul()`'s distribution arm (the wrapper
-    // exists only in the CURRENT spelling), the coefficient sign-bit delta for a
-    // non-unit content (wrapper in both spellings). The two callers' deltas are exact
-    // mirrors, so their decisions cannot ping-pong.
-    let mut delta = wrapper_sign_delta;
+/// Where the wrapper of a sum's flipped orientation stands (`flipped_orientation_wins`).
+#[derive(Clone, Copy)]
+enum Wrapper {
+    /// In neither spelling: a free-orientation site (an even power's base, an even function's
+    /// argument), where both orientations are bare.
+    Neither,
+    /// In the flipped spelling only: a content-1 sum, whose flip is the negation `Mul[-1, .]`,
+    /// one sign (`mu_sign`).
+    Flipped,
+    /// In both: a non-unit content `g`, written `g x .` and flipped `-g x .`; the flip pays the
+    /// price of `-g` over `g`.
+    Both(i128),
+}
+
+fn flipped_orientation_wins(terms: &[Ex], wrapper: Wrapper, tie: Tie, cx: &Cx) -> bool {
+    // (b), owner ruling 2026-08-08: the mu-CHEAPER orientation wins. The wrapper's own price
+    // delta, from the caller's side: one sign for a content-1 sum (the negation exists only
+    // in the flipped spelling), the coefficient's sign-bit delta for a non-unit content
+    // (wrapper in both spellings), nothing at a free-orientation site.
+    let mut delta = match wrapper {
+        Wrapper::Neither => 0,
+        Wrapper::Flipped => mu_sign() as i128,
+        Wrapper::Both(d) => d,
+    };
     let mut flipped: Vec<Ex> = Vec::with_capacity(terms.len());
     for t in terms {
         match negate_term(t, cx) {
@@ -3446,10 +3501,10 @@ fn flipped_orientation_wins(terms: &[Ex], wrapper_sign_delta: i128, tie: Tie, cx
     let (current, flip) = match tie {
         Tie::Lex => (terms_key(terms, 1), terms_key(&flipped, 1)),
         _ => {
-            let depth = if wrapper_sign_delta == mu_mul() as i128 {
-                1
-            } else {
+            let depth = if matches!(wrapper, Wrapper::Both(_)) {
                 2
+            } else {
+                1
             };
             let (c, s) = terms_key(&flipped, 2);
             (terms_key(terms, depth), (c + 1, s + 1))
@@ -6544,13 +6599,9 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
             .collect();
         let factor_price = |f: &Ex| -> u64 {
             match f {
-                Ex::Num(r) => {
-                    if r.is_one() || *r == Rat::NEG_ONE {
-                        0
-                    } else {
-                        mu_rat(r)
-                    }
-                }
+                Ex::Num(r) if r.is_one() => 0,
+                Ex::Num(r) if *r == Rat::NEG_ONE => mu_sign(),
+                Ex::Num(r) => mu_rat(r),
                 _ => complexity(f, cx.view),
             }
         };
@@ -7214,7 +7265,7 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
         // the odd-literal fusion parks signs inside function arguments where no
         // coefficient shows them (measured: 5 corpus rows + 4 rust pins regressed
         // under mixed-sign counting).
-        if flipped_orientation_wins(&out, mu_mul() as i128, Tie::Keep, cx) {
+        if flipped_orientation_wins(&out, Wrapper::Flipped, Tie::Keep, cx) {
             return None;
         }
         out.sort_by(|a, b| add_term_cmp(a, b, cx.view));
@@ -7312,7 +7363,7 @@ fn literal_multiple_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
 // sign-placement owner breaks on `cmp_ex` -- the ONE canonical total order, which
 // compares Leaf/Fun tokens by their STRINGS. The dedicated `ex_struct_cmp` this
 // replaced compared them by raw token ID, i.e. by INTERNING ORDER, so on a fully
-// mu-tied orbit (a -1 coefficient rides mu-free) the winner was a function of which
+// mu-tied orbit (the two mirror pairings price alike) the winner was a function of which
 // literal the input stream interned first: `-1 * (a-b)*(c-d)` and its factor-swapped
 // spelling picked OPPOSITE mirror pairings (extreme-lane P2 rows 829655/866090, the
 // two 1M regressions of the F62..F71 window).
@@ -8174,7 +8225,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             && !ts.iter().any(Ex::contains_const)
             && !ts.iter().any(term_absorbs_negation)
             && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
-            && flipped_orientation_wins(ts, 0, Tie::Lex, cx)
+            && flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
         {
             if let Some(mut flipped) = ts
                 .iter()
@@ -8183,7 +8234,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             {
                 // FILES-BARE gate (same rule as sign_trade_flip): only adopt an
                 // orientation primitive_sum itself would file bare.
-                if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
+                if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                     flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                     return pow(Ex::Add(flipped), exp, cx);
                 }
@@ -8202,14 +8253,14 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if !ts.iter().any(Ex::contains_const)
                 && !ts.iter().any(term_absorbs_negation)
                 && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
-                && flipped_orientation_wins(ts, 0, Tie::Lex, cx)
+                && flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
             {
                 if let Some(mut flipped) = ts
                     .iter()
                     .map(|t| negate_term(t, cx))
                     .collect::<Option<Vec<Ex>>>()
                 {
-                    if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
+                    if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         let mut args = args.clone();
                         args[0] = Ex::Add(flipped);
@@ -8458,7 +8509,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             if !ts.iter().any(Ex::contains_const)
                 && !ts.iter().any(term_absorbs_negation)
                 && !ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
-                && flipped_orientation_wins(ts, 0, Tie::Lex, cx)
+                && flipped_orientation_wins(ts, Wrapper::Neither, Tie::Lex, cx)
             {
                 if let Some(mut flipped) = ts
                     .iter()
@@ -8466,7 +8517,7 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
                     .collect::<Option<Vec<Ex>>>()
                 {
                     // FILES-BARE gate (same rule as sign_trade_flip).
-                    if !flipped_orientation_wins(&flipped, mu_mul() as i128, Tie::Keep, cx) {
+                    if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         return fun(op, vec![Ex::Add(flipped)], cx);
                     }
@@ -9351,6 +9402,55 @@ mod tests {
         });
     }
 
+    /// ONE PRICE FOR A SIGN: one bit wherever it sits -- on a literal, on a product's
+    /// coefficient beside other factors, or a negation standing alone (a sign, not a product,
+    /// so no `Mul` head). `+1` is no sign, and a reciprocal is division, not a sign.
+    #[test]
+    fn a_sign_costs_one_bit_wherever_it_sits() {
+        with_view(|view| {
+            let cx = Cx::bare(view);
+            let c = |e: &Ex| super::complexity(e, view);
+            let (x_, y_) = (x(view), y(view));
+            let neg = |e: Ex| mul(vec![Ex::int(-1), e], &cx);
+            let sin = |e: Ex| fun(view.intern("sin"), vec![e], &cx);
+            // a negation standing alone: its operand and one bit
+            assert_eq!(c(&neg(x_.clone())), c(&x_) + 1_000);
+            assert_eq!(c(&neg(x_.clone())), 7_000);
+            // the term of a difference
+            let diff = add(vec![x_.clone(), neg(y_.clone())], &cx);
+            let sum = add(vec![x_.clone(), y_.clone()], &cx);
+            assert_eq!(c(&diff), c(&sum) + 1_000);
+            // the -1 coefficient of a product beside other factors
+            let prod = mul(vec![x_.clone(), y_.clone()], &cx);
+            assert_eq!(c(&neg(prod.clone())), c(&prod) + 1_000);
+            // the sign of a literal, a coefficient and an exponent: unchanged, one bit each
+            assert_eq!(c(&Ex::int(-2)), c(&Ex::int(2)) + 1_000);
+            let three_x = mul(vec![Ex::int(3), x_.clone()], &cx);
+            let minus_three_x = mul(vec![Ex::int(-3), x_.clone()], &cx);
+            assert_eq!(c(&minus_three_x), c(&three_x) + 1_000);
+            assert_eq!(
+                c(&pow(x_.clone(), Ex::int(-2), &cx)),
+                c(&pow(x_.clone(), Ex::int(2), &cx)) + 1_000
+            );
+            // a reciprocal is division, not a sign
+            assert_eq!(c(&pow(x_.clone(), Ex::int(-1), &cx)), 9_000);
+            // so the two placements of a constant's sign cost the same, and the sign key
+            // decides: the sign stays on the constant's literal
+            let outside = Ex::Mul(vec![
+                Ex::int(-1),
+                x_.clone(),
+                Ex::Fun(view.intern("sin"), vec![Ex::int(3)]),
+            ]);
+            let inside = Ex::Mul(vec![
+                x_.clone(),
+                Ex::Fun(view.intern("sin"), vec![Ex::int(-3)]),
+            ]);
+            assert_eq!(c(&outside), c(&inside));
+            let built = mul(vec![Ex::int(-1), x_.clone(), sin(Ex::int(3))], &cx);
+            assert_eq!(built, inside);
+        });
+    }
+
     #[test]
     fn complexity_weight_table() {
         // The mu weight table in MILLI-BITS, at the SYMBOL TABLE (2026-08-21): a leaf 6
@@ -9365,8 +9465,8 @@ mod tests {
         with_view(|view| {
             let cx = Cx::bare(view);
             let c = |e: &Ex| super::complexity(e, view);
-            // x - y = 18: Add(3) + x(6) + the sign-wrapper Mul (3, a real structural
-            // node of the canonical tree; the -1 slot itself is free) + y(6).
+            // x - y = 16: Add(3) + x(6) + the negation of y (a sign, one bit, and no Mul
+            // head) + y(6).
             // x*y = 15; x/y = 18 (the Pow(y, -1) wrapper at 3, exponent -1 free).
             let x_ = x(view);
             let y_ = y(view);
@@ -9374,7 +9474,7 @@ mod tests {
                 vec![x_.clone(), mul(vec![Ex::int(-1), y_.clone()], &cx)],
                 &cx,
             );
-            assert_eq!(c(&x_minus_y), 18_000);
+            assert_eq!(c(&x_minus_y), 16_000);
             assert_eq!(c(&mul(vec![x_.clone(), y_.clone()], &cx)), 15_000);
             let x_over_y = mul(vec![x_.clone(), pow(y_.clone(), Ex::int(-1), &cx)], &cx);
             assert_eq!(c(&x_over_y), 18_000);
@@ -9737,8 +9837,8 @@ mod tests {
     }
 
     /// F72: the sign-placement tie-break is a function of CONTENT, never of token
-    /// interning order. The mu-tied orbit of `-1 * (a-b) * (c-d)` (a -1 coefficient
-    /// rides mu-free, so every mask ties) must land on the same resolved spelling
+    /// interning order. The mu-tied orbit of `-1 * (a-b) * (c-d)` (its two mirror
+    /// pairings price alike) must land on the same resolved spelling
     /// when the same four opaque literals are interned in OPPOSITE orders and the
     /// factors arrive swapped -- the pre-F72 `ex_struct_cmp` compared `Leaf`/`Fun`
     /// tokens by raw id and flipped the mirror decision with the interning (extreme

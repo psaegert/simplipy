@@ -2657,10 +2657,13 @@ mod tests {
             "AC translation: kept={kept} subsumed={subsumed} dropped={dropped} twins={twins}"
         );
         assert!(kept > 0, "no rules survived translation");
+        // INTERIM, until the re-mine resets the count to 0: a sign costs one bit wherever it
+        // sits, so 2 rows of the staged asset climb in price and G7 refuses them
+        // (`tests/conftest.py`, `ACJ4_INTERIM_UPHILL`); any other count still fails here.
         assert_eq!(
-            dropped, 0,
-            "published asset must translate loss-free; a drop means it lags the engine -- \
-             republish, do not re-pin"
+            dropped, 2,
+            "published asset must translate loss-free but for the interim rows; a drop means it \
+             lags the engine -- republish, do not re-pin"
         );
         // INTERIM (2026-10-18), until the re-mine resets the count to 0: the sign key (fewest
         // signs, then outermost) makes the canon place a sign at an odd function itself, so 16
@@ -3127,10 +3130,41 @@ mod tests {
                 // family -- a mid-build over-wide site definition briefly let the fold
                 // fire (and this pin briefly moved); the bare-infinity-term exclusion
                 // restored the refusal, and this pin now also guards it.
+                // Re-pinned at one bit per sign: the boundary fold `atanh(1) -> inf` now
+                // descends, 3 bits: `inf` costs what the `atanh` head does, the literal `-1`
+                // (3 bits) goes, and the sign moves from the product's coefficient to the
+                // negated power, one bit either way (a negation cost a whole `Mul` head, which
+                // tied the two). The term is `(inf - (x0^x2)^x3) * (..)`, the same value, and
+                // the infinity carries the sum's orientation itself (no wrapper).
                 &[
-                    "<add>", "2", "<sub>", "<mul>", "<add>", "atanh", "-1", "pow", "pow", "x0",
-                    "x2", "x3", "</add>", "<add>", "pow", "x0", "cos", "x0", "1", "<sub>", "<mul>",
-                    "2", "x3", "<div>", "3", "</mul>", "</add>", "</mul>", "</add>",
+                    "<add>",
+                    "<mul>",
+                    "<add>",
+                    "float(\"inf\")",
+                    "<sub>",
+                    "pow",
+                    "pow",
+                    "x0",
+                    "x2",
+                    "x3",
+                    "</add>",
+                    "<add>",
+                    "pow",
+                    "x0",
+                    "cos",
+                    "x0",
+                    "1",
+                    "<sub>",
+                    "<mul>",
+                    "2",
+                    "x3",
+                    "<div>",
+                    "3",
+                    "</mul>",
+                    "</add>",
+                    "</mul>",
+                    "2",
+                    "</add>",
                 ],
             ),
             (
@@ -3271,7 +3305,7 @@ mod tests {
             "joined output must equal sound's refusal form"
         );
         // Pow(3) + Mul(3) + [acos(8) + Mul(3) + inf(8) + leaf(6)] + [atan(8) + asinh(8)
-        // + leaf(6)] = 53; the -1 exponent slot is a bare sign and free.
+        // + leaf(6)] = 53; the -1 exponent is division and free.
         assert_eq!(
             e.ac_complexity(&lossy, RuleMode::Default, RuleMode::Default),
             Some(53_000)
@@ -3369,14 +3403,29 @@ mod tests {
             "the sign must survive the projection: {l:?}"
         );
         // Non-Const class (fuzz row 147398): the -1 SURVIVES as a member of the
-        // joined base, so the negative completion is re-derivable and fires --
-        // lossy reaches sound's `inv(-1 * pi * rootn(3, x1))` refusal form exactly.
+        // joined base, so the negative completion is re-derivable -- and it prices
+        // exactly as the join with the sign outside, `-1/(pi * rootn(3, x1))`, since a
+        // sign costs one bit inside the base or standing alone. The sign key places it
+        // outermost. Sound keeps its refusal form `inv(-1 * pi * rootn(3, x1))`: where
+        // the base's zero set is not certified null, its reading tells `1/(-P)` from
+        // `-1/P` at the zeros, which the lossy projection reads alike. One price.
         let nonconst = t(&["inv", "*", "neg", "np.pi", "rootn", "3", "x1"]);
         let ns = e.ac_simplify(&nonconst, 48, RuleMode::Default).unwrap();
         let nl = e.ac_simplify(&nonconst, 48, RuleMode::Permissive).unwrap();
         assert_eq!(
-            nl, ns,
-            "re-derivable negative completion must join to sound's form"
+            ns,
+            t(&["inv", "<mul>", "-1", "np.pi", "rootn", "3", "x1", "</mul>"]),
+            "sound's refusal form"
+        );
+        assert_eq!(
+            nl,
+            t(&["neg", "inv", "<mul>", "np.pi", "rootn", "3", "x1", "</mul>"]),
+            "the negative completion joins with its sign outermost"
+        );
+        assert_eq!(
+            e.ac_complexity(&nl, RuleMode::Default, RuleMode::Default),
+            e.ac_complexity(&ns, RuleMode::Default, RuleMode::Default),
+            "at sound's price"
         );
         let nl2 = e.ac_simplify(&nl, 48, RuleMode::Permissive).unwrap();
         assert_eq!(nl2, nl, "and stay idempotent: {nonconst:?}");
@@ -3486,8 +3535,9 @@ mod tests {
             "positive twin distributes"
         );
         // A sign-trade site beside the coefficient sign -- still licensed. The pole at x1 = 5
-        // is two-signed, so the inverse's orientation is the product's choice (reading A): it
-        // keeps the sum and the sign, a bit cheaper than `inv(5 - x1)/2`.
+        // is two-signed, so the inverse's orientation is the product's choice (reading A): the
+        // sign goes into the sum, a bit cheaper than `-inv(x1 - 5)/2` (`5 - x1` and `x1 - 5`
+        // cost the same, and the coefficient `1/2` a bit less than `-1/2`).
         assert_eq!(
             e.ac_simplify_proj(
                 &t(&["inv", "*", "-2", "-", "x1", "5"]),
@@ -3496,11 +3546,11 @@ mod tests {
                 crate::engine::AcForm::Explicit
             )
             .unwrap(),
-            t(&["/", "neg", "inv", "-", "x1", "5", "2"]),
+            t(&["/", "inv", "-", "5", "x1", "2"]),
             "traded sign distributes"
         );
-        // Zero-free co-factors (exp of a finite arg) have no exceptional point. (`1/exp(x1)` and
-        // `exp(-x1)` cost the same; the one with fewer signs is the answer.)
+        // Zero-free co-factors (exp of a finite arg) have no exceptional point. (`exp(-x1)` is two
+        // bits cheaper than `1/exp(x1)`: the negation is one bit, the reciprocal a `Pow` head.)
         assert_eq!(
             e.ac_simplify_proj(
                 &t(&["inv", "*", "-3", "exp", "x1"]),
@@ -3509,7 +3559,7 @@ mod tests {
                 crate::engine::AcForm::Explicit
             )
             .unwrap(),
-            t(&["/", "neg", "inv", "exp", "x1", "3"]),
+            t(&["/", "neg", "exp", "neg", "x1", "3"]),
             "zero-free bag distributes"
         );
         // End-to-end: a reciprocal under `exp` distributes too (`exp(-3/x0)` is 0 at x0 = 0 in
@@ -3783,23 +3833,15 @@ mod tests {
                 .ac_complexity(&lossy, RuleMode::Default, RuleMode::Default)
                 .expect("lossy parses");
             // Permissive rewrites more, so on f64's yardstick its answer is never dearer
-            // than f64's (measured: on every corpus row but the interim known violation).
+            // than f64's.
             if cl > cs {
                 dearer.push((expr.join(" "), cl, cs));
             }
         }
-        // INTERIM KNOWN VIOLATION (2026-10-18; the cause is written out beside its pin in
-        // `tests/conftest.py`, `PERMISSIVE_DOMINANCE_KNOWN`): f64 found a cheaper answer through an
-        // odd root of a quotient, a new sign-trade site, and permissive's projection cannot ship
-        // the unsigned join that would match it. Removed when the permissive answer reaches f64's.
-        let known = [(
-            "* / 1 2 / pow * / 1 4 + acosh - x3 asinh x3 * x3 atanh x14 5 * asin - rootn / x13 x11 \
-             5 / x11 x11 x13"
-                .to_string(),
-            136171,
-            135171,
-        )];
-        assert_eq!(dearer, known, "permissive answers dearer than f64's");
+        assert!(
+            dearer.is_empty(),
+            "permissive answers dearer than f64's: {dearer:?}"
+        );
     }
 
     /// The step cap never binds on the corpus: every row in every mode, through the
