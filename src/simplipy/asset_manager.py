@@ -9,6 +9,7 @@ and resolve an asset name or local path to a concrete entrypoint file
 (:func:`get_path`).
 """
 import json
+import logging
 import shutil
 from pathlib import Path
 from typing import Literal
@@ -23,6 +24,8 @@ from filelock import FileLock
 
 # --- Configuration ---
 # The central manifest file defining all official assets.
+_log = logging.getLogger(__name__)
+
 HF_MANIFEST_REPO = "psaegert/simplipy-assets"
 HF_MANIFEST_FILENAME = "manifest.json"
 
@@ -99,9 +102,24 @@ def fetch_manifest(repo_id: str | None = None, manifest_filename: str | None = N
         with open(manifest_path, 'r') as f:
             return json.load(f)
     except Exception:
-        print(f"Error: Could not download the asset manifest from Hugging Face "
-              f"({online_error}), and no cached copy exists.")
+        _log.error("could not download the asset manifest from Hugging Face (%s), and no "
+                   "cached copy exists", online_error)
         return {}
+
+
+def _cached_manifest(repo_id: str | None = None, manifest_filename: str | None = None) -> dict:
+    """The last manifest copy in the local hub cache, without touching the network, or ``{}``
+    when there is none (any failure to read it counts as none, as in :func:`fetch_manifest`)."""
+    from huggingface_hub import hf_hub_download
+    try:
+        manifest_path = hf_hub_download(
+            repo_id=repo_id or HF_MANIFEST_REPO, filename=manifest_filename or HF_MANIFEST_FILENAME,
+            repo_type="dataset", local_files_only=True)
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+    except Exception:  # noqa: BLE001 -- no readable cached copy: the caller goes online
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
 
 
 def _asset_files_present(local_dir: Path, asset_info: dict) -> bool:
@@ -220,6 +238,19 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
     if Path(asset).exists():
         return asset
 
+    if local_dir is None:
+        local_dir = get_default_cache_dir()
+    elif isinstance(local_dir, str):
+        local_dir = Path(local_dir)
+
+    # An INSTALLED asset resolves from the local cache alone: the manifest copy it was
+    # installed with names its files and digests, so no load needs the network. The hub is
+    # asked only when the asset is not installed (or the cache holds no manifest).
+    cached_info = _cached_manifest(repo_id=repo_id, manifest_filename=manifest_filename).get(asset)
+    if cached_info and _asset_files_present(local_dir, cached_info):
+        _verify_asset_digests(local_dir, cached_info)  # R6: raises on a corrupted cache
+        return str(_asset_root(local_dir, cached_info) / cached_info['entrypoint'])
+
     # Otherwise, treat 'asset' as an official asset name
     manifest = fetch_manifest(repo_id=repo_id, manifest_filename=manifest_filename)
     if not manifest:
@@ -230,11 +261,6 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
         list_assets(asset_type='all')
         raise ValueError(f"Error: Unknown asset: '{asset}'. See above for available assets.")
 
-    if local_dir is None:
-        local_dir = get_default_cache_dir()
-    elif isinstance(local_dir, str):
-        local_dir = Path(local_dir)
-
     entrypoint_path = _asset_root(local_dir, asset_info) / asset_info['entrypoint']
 
     if _asset_files_present(local_dir, asset_info):
@@ -242,7 +268,7 @@ def get_path(asset: str, install: bool = False, local_dir: Path | str | None = N
         return str(entrypoint_path)
 
     if install:
-        print(f"Asset '{asset}' is not installed. Installing.")
+        _log.info("asset '%s' is not installed; installing", asset)
         if install_asset(asset, local_dir=local_dir, repo_id=repo_id, manifest_filename=manifest_filename):
             return str(entrypoint_path)
         else:
@@ -286,7 +312,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
 
     asset_info = manifest.get(asset)
     if not asset_info:
-        print(f"Error: Unknown asset: '{asset}'.")
+        _log.error("unknown asset: '%s'", asset)
         list_assets(asset_type='all')
         return False
 
@@ -305,18 +331,18 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
     with FileLock(lock_path):
         # Re-check INSIDE the lock: another process may have just completed the install.
         if _asset_files_present(local_dir, asset_info) and not force:
-            print(f"Asset '{asset}' is already installed at {local_path}.")
-            print("Use force=True or --force to reinstall.")
+            _log.info("asset '%s' is already installed at %s; use force=True or --force to "
+                      "reinstall", asset, local_path)
             return True
 
         if local_path.exists() and force:
-            print(f"Force option specified. Removing existing version of '{asset}'...")
+            _log.info("force: removing the existing version of '%s'", asset)
             uninstall_asset(asset, quiet=True, local_dir=local_dir)
         elif local_path.exists():
             # A prior attempt left a PARTIAL install (dir present, files incomplete) -> clear it.
             shutil.rmtree(local_path, ignore_errors=True)
 
-        print(f"Installing asset '{asset}' to {local_path}.")
+        _log.info("installing asset '%s' to %s", asset, local_path)
         from huggingface_hub import hf_hub_download
         try:
             for file in asset_info['files']:
@@ -335,7 +361,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
             # hub raises HTTP, offline and connection errors from different families, and
             # catching only HfHubHTTPError let the others escape raw and leave a partial
             # download behind (the class `fetch_manifest` already handles this way).
-            print(f"Error downloading asset '{asset}': {e!r}")
+            _log.error("error downloading asset '%s': %r", asset, e)
             # Clean up only THIS asset's partial download -- never the shared cache root
             # (rmtree(local_dir) would delete other assets / other workers' caches).
             if local_path.exists():
@@ -350,7 +376,7 @@ def install_asset(asset: str, force: bool = False, local_dir: Path | str | None 
             if local_path.exists():
                 shutil.rmtree(local_path, ignore_errors=True)
             raise
-        print(f"Successfully installed '{asset}'.")
+        _log.info("installed '%s'", asset)
         return True
 
 
@@ -408,17 +434,17 @@ def uninstall_asset(asset: str, quiet: bool = False, local_dir: Path | str | Non
 
     if not local_path.exists():
         if not quiet:
-            print(f"Asset '{asset}' is not installed.")
+            _log.info("asset '%s' is not installed", asset)
         return True
 
     try:
         shutil.rmtree(local_path)
         if not quiet:
-            print(f"Successfully removed '{asset}'.")
+            _log.info("removed '%s'", asset)
         return True
     except OSError as e:
         if not quiet:
-            print(f"Error removing '{asset}': {e}")
+            _log.error("error removing '%s': %s", asset, e)
         return False
 
 

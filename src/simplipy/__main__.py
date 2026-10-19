@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import sys
 import os
 from simplipy import SimpliPyEngine
@@ -73,6 +74,9 @@ def main(argv: str = None) -> None:
     list_parser.add_argument('--installed', action='store_true', help='List only installed assets')
 
     args = parser.parse_args(argv)
+    # The CLI is the application, so it shows the library's log records (install progress
+    # included) on stderr; a library caller configures logging itself.
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
 
     # Execute the command
     match args.command_name:

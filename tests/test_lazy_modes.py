@@ -16,11 +16,12 @@ byte-identical ``simplify`` outputs per mode, because all three paths install th
 same file into the same core through the same ``set_mode_rules`` entry.
 """
 import io
+import logging
 import os
 import pickle
 import threading
 import warnings
-from contextlib import redirect_stdout
+from contextlib import contextmanager
 
 import pytest
 import yaml
@@ -40,6 +41,18 @@ def _lazy_triple(tmp_path) -> str:
         rules=[P_ALL, P_DEFAULT],
         real=[P_ALL, P_REAL],
         corpus=[P_ALL, P_REAL, P_CORPUS])
+
+
+@contextmanager
+def _announcements(buf: io.StringIO):
+    """Capture the `simplipy` logger's records (the first-use announcement) into `buf`."""
+    handler = logging.StreamHandler(buf)
+    logger = logging.getLogger('simplipy')
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
 
 
 def _quiet_from_config(*args, **kwargs) -> SimpliPyEngine:
@@ -96,7 +109,7 @@ class TestLazyMachinery:
         e = _quiet_from_config(_lazy_triple(tmp_path), modes=('f64',))
         lhs, rhs = instantiate(P_CORPUS)
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             first = e.simplify(lhs, mode='permissive')
         assert first == rhs
         assert buf.getvalue().count('simplipy:') == 1
@@ -104,14 +117,14 @@ class TestLazyMachinery:
         # The set is now materialized -- and the second use is silent.
         assert len(e.permissive_simplification_rules) == 3
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             assert e.simplify(lhs, mode='permissive') == rhs
         assert buf.getvalue() == ''
 
     def test_complexity_triggers_the_build_too(self, tmp_path):
         e = _quiet_from_config(_lazy_triple(tmp_path), modes=('f64',))
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             e.complexity(['sin', 'x0'], mode='real')
         assert buf.getvalue().count('simplipy:') == 1
         assert e.real_simplification_rules is not None
@@ -119,7 +132,7 @@ class TestLazyMachinery:
     def test_modes_all_never_logs_at_call_time(self, tmp_path):
         e = _quiet_from_config(_lazy_triple(tmp_path))
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             for mode in (Mode.f64, Mode.real, Mode.permissive):
                 e.simplify(['sin', 'x0'], mode=mode)
         assert buf.getvalue() == ''
@@ -144,7 +157,7 @@ class TestLazyMachinery:
         assert e._core.mode_rules_len(rule_mode='real') is None
         # ...and the next use rebuilds from the recorded file, announced again.
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             again = e.simplify(lhs, mode='real')
         assert again == first == rhs
         assert buf.getvalue().count('simplipy:') == 1
@@ -171,7 +184,7 @@ class TestLazyMachinery:
         assert e.real_simplification_rules is not None  # the sole recipe stays
         assert e._core.mode_rules_len(rule_mode='real') is None  # the built structures went
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             assert e.simplify(lhs, mode='real') == rhs  # rebuilt from the list
         assert 'in-memory recipe' in buf.getvalue()
 
@@ -185,7 +198,7 @@ class TestLazyMachinery:
         assert e._core.mode_rules_len(rule_mode='real') is None
         lhs, rhs = instantiate(P_REAL)
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             assert e.simplify(lhs, mode='real') == rhs
         assert buf.getvalue().count('simplipy:') == 1
 
@@ -244,7 +257,7 @@ class TestLazyMachinery:
         assert back.real_simplification_rules is None  # deferred travelled deferred
         lhs, rhs = instantiate(P_REAL)
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             assert back.simplify(lhs, mode='real') == rhs  # loads from the recorded file
         assert buf.getvalue().count('simplipy:') == 1
         # A pickle taken AFTER the load carries the materialized set eagerly.
@@ -260,7 +273,7 @@ class TestLazyMachinery:
             results.append(tuple(e.simplify(lhs, mode='permissive')))
 
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with _announcements(buf):
             threads = [threading.Thread(target=call) for _ in range(4)]
             for t in threads:
                 t.start()
@@ -286,7 +299,7 @@ class TestLazyMachinery:
         try:
             lhs, rhs = instantiate(P_REAL)
             buf = io.StringIO()
-            with redirect_stdout(buf):
+            with _announcements(buf):
                 assert e.simplify(lhs, mode='real') == rhs
             assert buf.getvalue().count('simplipy:') == 1
         finally:
@@ -359,11 +372,11 @@ class TestTheIdentity:
         buf = io.StringIO()
         for expression in _BATTERY:
             expected = eager.simplify(expression, mode=mode)
-            with redirect_stdout(buf):
+            with _announcements(buf):
                 assert lean.simplify(expression, mode=mode) == expected
             # ...in the infix rendering too (the other output path).
             infix = eager.to_infix(expression)
-            with redirect_stdout(buf):
+            with _announcements(buf):
                 assert lean.simplify(infix, mode=mode) == eager.simplify(
                     infix, mode=mode)
         # However many probes ran, the mode's set was built at most ONCE.
@@ -375,7 +388,7 @@ class TestTheIdentity:
         cycled = _quiet_from_config(cfg, modes=('f64',))
         for mode in (Mode.real, Mode.permissive):
             expected = [eager.simplify(x, mode=mode) for x in _BATTERY]
-            with redirect_stdout(io.StringIO()):
+            with _announcements(io.StringIO()):
                 first = [cycled.simplify(x, mode=mode) for x in _BATTERY]
                 cycled.unload_mode(mode)
                 again = [cycled.simplify(x, mode=mode) for x in _BATTERY]
@@ -386,7 +399,7 @@ class TestTheIdentity:
         """Beyond outputs: once built, the lean engine's per-mode serve counts equal
         the eager engine's -- the same files landed in both cores."""
         eager, lean, _ = identity_engines
-        with redirect_stdout(io.StringIO()):
+        with _announcements(io.StringIO()):
             for mode in (Mode.real, Mode.permissive):
                 lean.simplify(['sin', 'x0'], mode=mode)
         for rule_mode in ('default', 'real', 'permissive'):

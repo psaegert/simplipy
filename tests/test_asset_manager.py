@@ -382,6 +382,26 @@ class TestC51OfflineResolution:
         assert am.install_asset('toy', local_dir=tmp_path) is False
         assert not (tmp_path / 'engines' / 'toy').exists(), 'the partial download must be cleaned up'
 
+    def test_an_installed_asset_never_reaches_the_hub(self, tmp_path, monkeypatch):
+        """P18: an installed asset resolves from the local cache alone -- the manifest copy it
+        was installed with -- so a load makes no network request at all."""
+        import json as _json
+        from simplipy import asset_manager as am
+        d = tmp_path / 'cache' / 'engines' / 'toy'
+        d.mkdir(parents=True)
+        (d / 'config.yaml').write_text('operators: {}\n')
+        manifest = {'toy': {'type': 'engine', 'repo_id': 'x/y', 'directory': 'engines/toy',
+                            'files': ['config.yaml'], 'entrypoint': 'config.yaml'}}
+        cached = tmp_path / 'cached_manifest.json'
+        cached.write_text(_json.dumps(manifest))
+
+        def local_only(repo_id, filename, repo_type, **kw):
+            assert kw.get('local_files_only'), 'an installed asset must not reach the hub'
+            return str(cached)
+
+        monkeypatch.setattr(hf_hub, 'hf_hub_download', local_only)
+        assert am.get_path('toy', local_dir=tmp_path / 'cache').endswith('config.yaml')
+
     def test_cold_cache_offline_stays_loud(self, tmp_path, monkeypatch):
         from simplipy import asset_manager as am
 

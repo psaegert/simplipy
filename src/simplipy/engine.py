@@ -9,6 +9,7 @@ the compiled core is REQUIRED; there is no pure-Python fallback.
 import builtins
 import hashlib
 import importlib
+import logging
 import os
 import threading
 import warnings
@@ -44,6 +45,11 @@ except Exception as _exc:  # pragma: no cover  (missing/unbuilt extension)
     _core_serialization_ops = None  # type: ignore[assignment]
     _CORE_DEFAULT_WORK = None
     _CORE_IMPORT_ERROR = _exc
+
+#: The library's announcements (the implicit default engine, a deferred set's first-use
+#: build) are WARNING records on the ``simplipy`` logger: visible without any logging
+#: setup, silenced with ``logging.getLogger('simplipy').setLevel(logging.ERROR)``.
+_log = logging.getLogger(__name__)
 
 
 def _is_slot_token(token: str) -> bool:
@@ -370,8 +376,8 @@ class SimpliPyEngine:
         mode names or :class:`Mode` members (e.g. ``modes=('f64', 'permissive')``)
         builds exactly those; a set NOT named builds LAZILY on its mode's first use
         (any ``simplify``/``complexity`` call addressing it) -- once,
-        lock-guarded, announced with one loud log line on the same channel as the
-        default-engine announcement in :meth:`load`, and with a pause of a few
+        lock-guarded, announced with one WARNING record on the ``simplipy`` logger
+        like the default-engine announcement in :meth:`load`, and with a pause of a few
         seconds for a large artifact while the set loads and compiles. The machinery
         is ADDITIVE-ONLY: a lazy build never evicts another mode's structures, and
         nothing is ever dropped implicitly -- dropping is :meth:`unload_mode`, an
@@ -728,8 +734,8 @@ class SimpliPyEngine:
         non-default mode; the fast path is one set-membership test. The slow path
         runs ONCE per set (lock-guarded, so two threads' first calls cannot
         double-build), is ADDITIVE-ONLY (it installs into the live core and evicts
-        nothing), and announces itself with one loud line on the same channel as
-        :meth:`load`'s default-engine announcement, because the build pauses the
+        nothing), and announces itself with one WARNING record on the ``simplipy``
+        logger, like :meth:`load`'s default-engine announcement, because the build pauses the
         call for a few seconds on a large artifact.
         """
         if rule_mode not in _MODE_RULES_ATTR or rule_mode in self._core_loaded_modes:
@@ -747,16 +753,16 @@ class SimpliPyEngine:
                     # Marking it loaded makes every later call take the fast path.
                     self._core_loaded_modes.add(rule_mode)
                     return
-                print(f"simplipy: building the {rule_mode!r} rule set on first use "
-                      f"from '{source}' (deferred by modes={self._modes!r}); "
-                      f"expect a pause while it loads and compiles")
+                _log.warning("simplipy: building the %r rule set on first use from '%s' "
+                             "(deferred by modes=%r); expect a pause while it loads and "
+                             "compiles", rule_mode, source, self._modes)
                 with open(source, 'r') as f:
                     rules = self._normalized_mode_rules(json.load(f))
                 setattr(self, attr, rules)
             else:
-                print(f"simplipy: building the {rule_mode!r} rule set on first use "
-                      f"from its in-memory recipe (deferred by "
-                      f"modes={self._modes!r}); expect a pause while it compiles")
+                _log.warning("simplipy: building the %r rule set on first use from its "
+                             "in-memory recipe (deferred by modes=%r); expect a pause while "
+                             "it compiles", rule_mode, self._modes)
             self._push_mode_rules(rule_mode, rules)
             self._core_loaded_modes.add(rule_mode)
 
@@ -1259,7 +1265,8 @@ class SimpliPyEngine:
             The NAME of an official engine artifact (e.g. ``'acj-4'``). Defaults to
             :data:`simplipy.DEFAULT_ENGINE`, the artifact this simplipy version was
             built and tested against; when it is used implicitly, the choice is
-            announced, because a silent default is one a user cannot reproduce.
+            announced (a WARNING record on the ``simplipy`` logger), because a silent
+            default is one a user cannot reproduce.
             Replaces the old ``path`` argument, which named neither a path nor a
             version.
         install : bool, optional
@@ -1295,9 +1302,10 @@ class SimpliPyEngine:
             from . import __version__
             # ANNOUNCED, and only on the implicit path. A default a user did not choose
             # is one they cannot reproduce unless they are told which it was.
-            print(f"simplipy: loading the default engine {engine!r}"
-                  + (f" @ {DEFAULT_ENGINE_REVISION}" if DEFAULT_ENGINE_REVISION else "")
-                  + f" (simplipy {__version__}); pass engine=... to choose another")
+            _log.warning(
+                "simplipy: loading the default engine %r%s (simplipy %s); pass engine=... to "
+                "choose another", engine,
+                f" @ {DEFAULT_ENGINE_REVISION}" if DEFAULT_ENGINE_REVISION else "", __version__)
         # Known generation-1 names refuse BEFORE any download (the config-level gate
         # in from_config covers everything else, including local paths).
         if not os.path.exists(engine):
