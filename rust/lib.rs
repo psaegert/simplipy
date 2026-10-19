@@ -1002,11 +1002,9 @@ impl PyEngine {
     /// The canon `rule_mode`'s set is read in (the one it was certified in): `"legacy"` or a
     /// rule mode's name. A mode with no set of its own reports the default set's.
     #[pyo3(signature = (*, rule_mode))]
-    fn mode_rules_canon(&self, rule_mode: &str) -> PyResult<&'static str> {
-        Ok(self
-            .inner()
-            .mode_rules_canon(parse_rule_mode(rule_mode)?)
-            .name())
+    fn mode_rules_canon(&self, py: Python<'_>, rule_mode: &str) -> PyResult<&'static str> {
+        let mode = parse_rule_mode(rule_mode)?;
+        Ok(py.detach(|| self.inner().mode_rules_canon(mode).name()))
     }
 
     /// The licence registry's load check: rules refused at AC load by the
