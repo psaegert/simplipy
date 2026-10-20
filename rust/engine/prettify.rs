@@ -1,12 +1,36 @@
 //! The engine side of `prettify`: read an expression's canonical state in a mode's number domain
-//! and display it (`ac::prettify`). It simplifies nothing, and nothing in the engine calls it.
+//! and display it (`ac::prettify`), writing every number so that the display reads back to the
+//! state's structure. It applies no rules, and nothing in the engine calls it.
+//!
+//! **Numbers that would change the structure.** The display writes a number as its short
+//! spelling: exactly where that fits the digit budget, else as its float (`k` significant digits
+//! at a precision). A short spelling that changes the number's value can change what reading the
+//! display back builds: the number becomes 1 and a multiplier or an exponent drops, an integer
+//! where a non-integer exponent stood, or equal to another number so that parts collect, cancel
+//! or merge. Such a number is written as its short spelling and the rest to its value, `s + r`
+//! or `s - r`, the rest written by the same rules (`sin((1 + 1e-20)*x1) - sin(x1)`).
+//!
+//! The condition is the one general test, not a list of cases: the display reads back through
+//! the canonical constructors alone to a state whose SHAPE (`ac::prettify::shape`: the tree with
+//! its numbers abstracted and the display's own notation undone) is not the shape of the state
+//! after the display's intended folds of functions of floats. Only where a short spelling
+//! changes some number's value is that read-back made. Where the shapes differ, the numbers are
+//! decided one at a time in the order the display writes them, each with every later one still
+//! written at its value: its short spelling where the shape holds, else split, else (at a
+//! precision) split with the rest in full, else split with the rest written exactly (which
+//! writes the number at its value). Of two numbers that the
+//! short spellings make equal, the one written first keeps its short spelling and the other is
+//! written as it plus its rest.
 
 use super::ac::RuleMode;
 use super::memo::SimplifyCtx;
 use super::Engine;
 use crate::ac::convert::from_prefix;
 use crate::ac::expr::{canon, Cx};
-use crate::ac::prettify::{to_infix, to_prefix, to_tagged, Display, Layout, Node};
+use crate::ac::prettify::{
+    shape, to_infix, to_prefix, to_tagged, Choice, Choices, Display, Layout, Node,
+};
+use crate::ac::rat::Rat;
 
 /// The output form of `prettify`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,28 +75,24 @@ fn render(node: &Node, form: PrettyForm) -> Pretty {
 }
 
 impl Engine {
-    /// The display tree of an expression's canonical state, read in `mode`'s number domain with
-    /// the certificate-free context every projection uses. `None` on malformed input.
-    fn display_node(
-        &self,
-        tokens: &[String],
-        digits: usize,
-        precision: Option<usize>,
-        mode: RuleMode,
-        layout: Layout,
-    ) -> Option<Node> {
+    /// The shape of the state a display reads back as, read exactly as `prettify` reads its
+    /// input: infix text through the strict infix parse, tokens as they stand, then the
+    /// canonical constructors in `mode`'s number domain.
+    fn read_shape(&self, shown: &Pretty, mode: RuleMode) -> Option<String> {
+        let tokens = self.read_display(shown)?;
         let ctx = SimplifyCtx::new(self.tokens.len());
-        let toks = self.intern_seq(tokens, &ctx);
+        let toks = self.intern_seq(&tokens, &ctx);
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let state = canon(from_prefix(&toks, &bare)?, &bare);
-        Some(Display::new(&bare, digits, precision, layout).node(&state))
+        Some(shape(&state, &bare))
     }
 
     /// `prettify`: the display of `tokens` (any dialect) under the digit budget `digits`, a
     /// float shown with `precision` significant digits (`None`: the shortest decimal of its
-    /// float64), its numbers read in `mode`'s number domain. `None` on malformed input.
+    /// float64), its numbers read in `mode`'s number domain, every number written so that the
+    /// display keeps the structure (see the module documentation). `None` on malformed input.
     pub fn ac_prettify(
         &self,
         tokens: &[String],
@@ -81,7 +101,114 @@ impl Engine {
         form: PrettyForm,
         mode: RuleMode,
     ) -> Option<Pretty> {
-        let node = self.display_node(tokens, digits, precision, mode, form.layout())?;
-        Some(render(&node, form))
+        self.ac_prettify_structure(tokens, digits, precision, form, mode, false)
+            .map(|(shown, _)| shown)
+    }
+
+    /// [`Engine::ac_prettify`] and whether its display reads back to the shape of the state
+    /// after the display's folds. Where no number changes its value that is not checked unless
+    /// `verify` asks (and answers `true`).
+    ///
+    /// At a precision the display is of the state its shortened numbers read back as. Rounding to
+    /// `k` digits can change the order in which reading puts the factors of a product or the
+    /// orientation it gives a sum (`(1 - 27/(4*x1))*(27*log(x1)/4 - 91/2)` reads back as
+    /// `(91/2 - 27*log(x1)/4)*(27/(4*x1) - 1)`), so the display of that state, whose shape is
+    /// checked to be the same, is the one that is its own display. At full precision rounding to
+    /// the nearest float keeps every order, and the display needs no second look.
+    pub fn ac_prettify_structure(
+        &self,
+        tokens: &[String],
+        digits: usize,
+        precision: Option<usize>,
+        form: PrettyForm,
+        mode: RuleMode,
+        verify: bool,
+    ) -> Option<(Pretty, bool)> {
+        let (shown, kept, reference) =
+            self.display_keeping(tokens, digits, precision, form, mode, verify)?;
+        if precision.is_none() || !kept {
+            return Some((shown, kept));
+        }
+        let Some(read) = self.read_display(&shown) else {
+            return Some((shown, kept));
+        };
+        match self.display_keeping(&read, digits, precision, form, mode, true) {
+            Some((again, true, _)) if self.read_shape(&again, mode) == reference => {
+                Some((again, true))
+            }
+            _ => Some((shown, kept)),
+        }
+    }
+
+    /// The tokens a display is read back from, as `prettify` reads its input: infix text through
+    /// the strict infix parse, tokens as they stand.
+    fn read_display(&self, shown: &Pretty) -> Option<Vec<String>> {
+        match shown {
+            Pretty::Text(s) => self.parse(s, true, false, true).ok(),
+            Pretty::Tokens(t) => Some(t.clone()),
+        }
+    }
+
+    /// One display of `tokens` with every number written so that the structure stays, whether
+    /// it does, and the shape it keeps.
+    fn display_keeping(
+        &self,
+        tokens: &[String],
+        digits: usize,
+        precision: Option<usize>,
+        form: PrettyForm,
+        mode: RuleMode,
+        verify: bool,
+    ) -> Option<(Pretty, bool, Option<String>)> {
+        let ctx = SimplifyCtx::new(self.tokens.len());
+        let toks = self.intern_seq(tokens, &ctx);
+        let view = self.view(&ctx);
+        let bare = Cx::bare(&view);
+        let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
+        let state = canon(from_prefix(&toks, &bare)?, &bare);
+        let pass = |choices: &Choices| -> (Pretty, Vec<Rat>) {
+            let display =
+                Display::new(&bare, digits, precision, form.layout()).with_choices(choices.clone());
+            let node = display.node(&state);
+            (render(&node, form), display.changed())
+        };
+        let reference = Some(
+            Display::new(&bare, digits, precision, form.layout())
+                .with_choices(Choices::all(Choice::Exact))
+                .kept_shape(&state),
+        );
+        let kept = |p: &Pretty| self.read_shape(p, mode) == reference;
+        let (shown, changed) = pass(&Choices::default());
+        if changed.is_empty() {
+            // Every number is written at its value.
+            let held = !verify || kept(&shown);
+            return Some((shown, held, reference));
+        }
+        if kept(&shown) {
+            return Some((shown, true, reference));
+        }
+        let mut choices = Choices::all(Choice::Exact);
+        // At full precision a split's rest is already written in full.
+        let order: &[Choice] = if precision.is_some() {
+            &[
+                Choice::Short,
+                Choice::Split,
+                Choice::SplitFull,
+                Choice::SplitExact,
+            ]
+        } else {
+            &[Choice::Short, Choice::Split, Choice::SplitExact]
+        };
+        for a in changed {
+            for &choice in order {
+                choices.set(a.clone(), choice);
+                if choice == Choice::SplitExact || kept(&pass(&choices).0) {
+                    break;
+                }
+            }
+        }
+        let shown = pass(&choices).0;
+        let held = kept(&shown);
+        Some((shown, held, reference))
     }
 }

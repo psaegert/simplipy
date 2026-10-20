@@ -3,7 +3,8 @@
 `simplify` returns the canonical form, and its numbers are exact: a literal keeps every digit
 it was given, and a coefficient that combines several literals is their exact product.
 `prettify` is the display of that form. It decides how each number is written for a reader and
-leaves the expression's structure as it is: it simplifies nothing.
+leaves the expression's structure as it is: it changes how a number is written, never the
+structure, and applies no rules.
 
 ```python
 import simplipy as sp
@@ -51,8 +52,25 @@ engine.prettify(engine.simplify("x1/1024"))
 # -> '9.765625e-4*x1'
 engine.prettify(engine.simplify("x1/0.225147640565301"))
 # -> '4.441529999999994*x1'
+engine.prettify(engine.simplify("x1 + 1.000000000000000000003"))
+# -> 'x1 + 1'
+```
+
+**The structure stays.** Where writing a number by these rules would change the expression's
+structure -- the number would be 1 and a multiplier or an exponent would drop, an integer where
+a non-integer exponent stood, or equal to another number so that parts collect or cancel -- it
+is written as that spelling and the rest to its value, `s + r` or `s - r`, the rest written by
+the same rules. Of two numbers that would be equal, the one written first keeps its spelling.
+
+```python
 engine.prettify(engine.simplify("1.000000000000000000003*x1"))
-# -> 'x1'
+# -> '(1 + 3e-21)*x1'
+engine.prettify(engine.simplify("sin(1.00000000000000000001*x1) - sin(x1)"))
+# -> 'sin((1 + 1e-20)*x1) - sin(x1)'
+engine.prettify(engine.simplify("x3 + (154104.1409857162*x1)^(3.00000000000000000001)"))
+# -> 'x3 + (154104.1409857162*x1)^(3 + 1e-20)'
+engine.prettify(engine.simplify("sin(1.0001*x1) - sin(x1)"), precision=3)
+# -> 'sin((1 + 1e-4)*x1) - sin(x1)'
 ```
 
 **Precision.** `precision=k` shows a number written as a float with `k` significant digits
@@ -145,7 +163,7 @@ engine.prettify(tokens, form="tagged")
 At the default `precision=None` a number is written exactly or as the float64 nearest to it,
 so the display reads back to the same float64 values: it evaluates as the expression does, up to
 the order of its operations. A display at a `precision` does not read back to them.
-Displaying a display gives it back:
+The display keeps the structure, and displaying a display gives it back, at every precision:
 
 ```python
 shown = engine.prettify(answer)
@@ -153,9 +171,5 @@ engine.prettify(shown) == shown
 # -> True
 ```
 
-The exception is a display in which writing numbers as their floats makes parts alike that the
-expression keeps apart. `prettify` does not decide that they are alike, and it does not simplify
-what it wrote, so the display of `sin(1.00000000000000000001*x1) - sin(x1)` is
-`sin(x1) - sin(x1)` (whose own display is `0`), and an exponent a hair above 3 is written `3`
-without multiplying the power out. `mode` (default `f64`) is the mode whose number domain reads
-the numbers; the display rules are designed for `f64`.
+`mode` (default `f64`) is the mode whose number domain reads the numbers; the display rules are
+designed for `f64`.

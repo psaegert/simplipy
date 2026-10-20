@@ -4,8 +4,9 @@
 //! of the canonical expression and a digit budget `D`, and nothing inside the engine calls it or
 //! reads what it writes (a source guard in the test suite holds that line). The display keeps
 //! the state's structure -- its bags, divisors and function applications -- and decides only
-//! how each NUMBER is written. It simplifies nothing: what the display writes alike is not
-//! collected. The one value it computes is a function of numbers all shown as floats (rule 6).
+//! how each NUMBER is written, never the structure: a number whose spelling would let reading
+//! the display build another structure is written with its rest (rule 3). The one value it
+//! computes is a function of numbers all shown as floats (rule 6).
 //!
 //! 1. **Digit budget.** A spelling's digits are every digit it writes, a numerator of 1
 //!    included (`1/12` counts 3, `3/123` counts 4, `0.05` counts 3).
@@ -21,13 +22,17 @@
 //!    With a precision `k`, the float shows `k` significant digits instead (round half to
 //!    even), and that number is written by these rules as every number is (`0.175` is 7/40,
 //!    written `7/40`), so the display reads back as itself.
+//!    Where that spelling changes the value so that reading the display would build another
+//!    structure, the number is written as the spelling and the rest, `s + r` or `s - r`
+//!    ([`Choice`]; `engine::prettify` decides, by the [`shape`] the display reads back to).
 //! 4. **pi** is the literal `3.141592653589793`, recognised by exact arithmetic: when `c / pi`
 //!    or `c * pi` is written exactly within `D` (pi's digits not counted), the value is written
 //!    with the literal factored out (`1/(2*3.141592653589793)`). Only at full precision: a
 //!    shortened literal would read back as another number.
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
 //!    joins the denominator (`x1/(243*x2)`); only a bare `x/float` becomes a multiplier
-//!    (`x1/243` is `0.00411522633744856*x1`).
+//!    (`x1/243` is `0.00411522633744856*x1`). The divisor is written in full, so with a
+//!    precision only where it has no more digits than the precision.
 //! 6. **Functions of floats.** A function of numbers that would all be shown as floats is one
 //!    float: its float64 as the deployed evaluator computes it (`numeric::apply_op`), written as
 //!    every float is, at the display's precision (`x1*exp(-381/2)` is
@@ -53,7 +58,7 @@
 //!    10^-3 with a lowercase `e`.
 //! 9. **Range**: no numbers combine to inf, 0 or a subnormal.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 
 use num_bigint::BigUint;
@@ -117,6 +122,13 @@ enum Spelling {
         num: Option<String>,
         den: Option<String>,
     },
+    /// `s + r` or `s - r`: the short spelling of a number and the rest to its value, where the
+    /// short spelling alone would change the expression's structure.
+    Split {
+        s: Box<Spelling>,
+        r: Box<Spelling>,
+        minus: bool,
+    },
 }
 
 impl Spelling {
@@ -129,7 +141,9 @@ impl Spelling {
             None => Some(Rat::ONE),
         };
         Some(match self {
-            Spelling::Exact(_) | Spelling::Float(_) => (value.clone(), Rat::ONE),
+            Spelling::Exact(_) | Spelling::Float(_) | Spelling::Split { .. } => {
+                (value.clone(), Rat::ONE)
+            }
             Spelling::Frac { num, den } => (part(num)?, Rat::parse_decimal(den)?),
             Spelling::PiNum { num, den } => (part(num)?.checked_mul(pi_value())?, part(den)?),
             Spelling::PiDen { num, den } => (part(num)?, part(den)?.checked_mul(pi_value())?),
@@ -153,7 +167,79 @@ impl Spelling {
                 bottom.push(pi());
                 (n(num), bottom)
             }
+            Spelling::Split { s, r, minus } => {
+                let node = |sp: &Spelling| {
+                    let (num, den) = sp.parts(PI_LITERAL);
+                    one_number(num, den)
+                };
+                (
+                    vec![Node::Sum(vec![(false, node(s)), (*minus, node(r))])],
+                    vec![],
+                )
+            }
         }
+    }
+}
+
+/// The node of a number written as numerator and denominator parts.
+fn one_number(mut num: Vec<Node>, den: Vec<Node>) -> Node {
+    if den.is_empty() && num.len() == 1 {
+        return num.pop().unwrap();
+    }
+    Node::Prod {
+        neg: false,
+        num,
+        den,
+        den_neg: false,
+    }
+}
+
+/// How a number whose short spelling changes its value is written (keyed by its magnitude):
+/// its short spelling, exactly, or split into the short spelling and the rest to its value --
+/// the rest written by the same rules, at full precision, or exactly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Choice {
+    #[default]
+    Short,
+    Exact,
+    Split,
+    SplitFull,
+    SplitExact,
+}
+
+/// How the rest of a split is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rest {
+    /// By the display's rules, at its precision.
+    Short,
+    /// By the display's rules at full precision: its float's shortest decimal.
+    Full,
+    /// Exactly.
+    Exact,
+}
+
+/// The choice for each number, and the choice of every number not named.
+#[derive(Clone, Debug, Default)]
+pub struct Choices {
+    named: rustc_hash::FxHashMap<Rat, Choice>,
+    rest: Choice,
+}
+
+impl Choices {
+    /// `choice` for every number.
+    pub fn all(choice: Choice) -> Self {
+        Choices {
+            named: Default::default(),
+            rest: choice,
+        }
+    }
+
+    pub fn set(&mut self, magnitude: Rat, choice: Choice) {
+        self.named.insert(magnitude, choice);
+    }
+
+    fn get(&self, magnitude: &Rat) -> Choice {
+        self.named.get(magnitude).copied().unwrap_or(self.rest)
     }
 }
 
@@ -258,6 +344,13 @@ fn writable(y: f64) -> bool {
     y.is_finite() && y.abs() >= f64::MIN_POSITIVE
 }
 
+/// How a coefficient is written: as rule 5's divisor (its node and the reciprocal it writes),
+/// or by a spelling and the value it reads back as.
+enum Written {
+    Divisor(Node, Rat),
+    Spelled(Spelling, Rat),
+}
+
 /// How a product's divisors are laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
@@ -276,6 +369,13 @@ pub struct Display<'a, 'v> {
     layout: Layout,
     /// Set while rebuilding when a sum keeps terms apart that its rebuild would collect.
     kept_apart: Cell<bool>,
+    /// How each number whose short spelling changes its value is written.
+    choices: Choices,
+    /// The values a split writes where its rest is shortened: written split as well, so a
+    /// rebuilt coefficient keeps the split.
+    derived: RefCell<rustc_hash::FxHashMap<Rat, Choice>>,
+    /// The magnitudes whose short spelling changes their value, in the order first written.
+    changed: RefCell<Vec<Rat>>,
 }
 
 impl<'a, 'v> Display<'a, 'v> {
@@ -286,12 +386,121 @@ impl<'a, 'v> Display<'a, 'v> {
             precision,
             layout,
             kept_apart: Cell::new(false),
+            choices: Choices::default(),
+            derived: RefCell::new(Default::default()),
+            changed: RefCell::new(Vec::new()),
         }
     }
 
-    /// The spelling of a positive value at `place` and the value that spelling reads back as
-    /// (rules 2-4).
+    /// The display with `choices` for the numbers whose short spelling changes their value.
+    pub fn with_choices(mut self, choices: Choices) -> Self {
+        self.choices = choices;
+        self
+    }
+
+    /// The magnitudes whose short spelling changes their value, in the order first written.
+    pub fn changed(&self) -> Vec<Rat> {
+        self.changed.borrow().clone()
+    }
+
+    /// The structure the display keeps: the shape of `e` after the display's folds of functions
+    /// of floats (rule 6) and, with one denominator, its layout (rule 8: the product reading the
+    /// one-slash display back builds, its numbers as the choices write them).
+    pub fn kept_shape(&self, e: &Ex) -> String {
+        let folded = self.folded(e);
+        match self.layout {
+            Layout::OneDenominator => shape(&self.rebuild(&folded), self.cx),
+            Layout::Sections => shape(&folded, self.cx),
+        }
+    }
+
+    /// The spelling of a positive value at `place` and the value that spelling reads back as:
+    /// its short spelling (rules 2-4), or, where that changes its value, as the choices say.
     fn spell(&self, a: &Rat, place: NumberPlace) -> (Spelling, Rat) {
+        let short = self.spell_short(a, place);
+        self.choose(a, short)
+    }
+
+    /// Note `a` as a number whose short spelling changes its value.
+    fn note(&self, a: &Rat) {
+        if !self.changed.borrow().contains(a) {
+            self.changed.borrow_mut().push(a.clone());
+        }
+    }
+
+    /// The choice for the number `a`.
+    fn choice(&self, a: &Rat) -> Choice {
+        let derived = self.derived.borrow().get(a).copied();
+        derived.unwrap_or_else(|| self.choices.get(a))
+    }
+
+    /// The spelling of `a > 0` given its short spelling: that spelling where it keeps `a`'s
+    /// value, else as the choices say.
+    fn choose(&self, a: &Rat, short: (Spelling, Rat)) -> (Spelling, Rat) {
+        if short.1 == *a {
+            return short;
+        }
+        self.note(a);
+        match self.choice(a) {
+            Choice::Short => short,
+            Choice::Exact => (self.exact_spelling(a), a.clone()),
+            Choice::Split => self
+                .split(a, short, Rest::Short)
+                .unwrap_or_else(|| (self.exact_spelling(a), a.clone())),
+            Choice::SplitFull => self
+                .split(a, short, Rest::Full)
+                .unwrap_or_else(|| (self.exact_spelling(a), a.clone())),
+            Choice::SplitExact => self
+                .split(a, short, Rest::Exact)
+                .unwrap_or_else(|| (self.exact_spelling(a), a.clone())),
+        }
+    }
+
+    /// `a` written as its short spelling `s` and the rest `r = a - s`, the rest written as
+    /// `rest` says. A rest that is shortened leaves the split's value apart from `a`; that value
+    /// is written split as well.
+    fn split(&self, a: &Rat, short: (Spelling, Rat), rest: Rest) -> Option<(Spelling, Rat)> {
+        let _exact = number_domain(false);
+        let (s, s_value) = short;
+        let r = a.checked_add(&s_value.checked_neg()?)?;
+        if r.is_zero() || s_value.is_zero() {
+            return None;
+        }
+        let magnitude = r.abs();
+        let (r_spelling, r_value) = match rest {
+            Rest::Exact => (self.exact_spelling(&magnitude), magnitude),
+            Rest::Short => self.spell_short(&magnitude, NumberPlace::Alone),
+            Rest::Full => Display::new(self.cx, self.digits, None, self.layout)
+                .spell_short(&magnitude, NumberPlace::Alone),
+        };
+        let minus = r.is_negative();
+        let value = if minus {
+            s_value.checked_add(&r_value.checked_neg()?)?
+        } else {
+            s_value.checked_add(&r_value)?
+        };
+        if value.is_negative() || value.is_zero() {
+            return None;
+        }
+        if value != *a {
+            let choice = match rest {
+                Rest::Short => Choice::Split,
+                Rest::Full => Choice::SplitFull,
+                Rest::Exact => Choice::SplitExact,
+            };
+            self.derived.borrow_mut().insert(value.clone(), choice);
+        }
+        let spelling = Spelling::Split {
+            s: Box::new(s),
+            r: Box::new(r_spelling),
+            minus,
+        };
+        Some((spelling, value))
+    }
+
+    /// The short spelling of a positive value at `place` and the value it reads back as (rules
+    /// 2-4).
+    fn spell_short(&self, a: &Rat, place: NumberPlace) -> (Spelling, Rat) {
         let _exact = number_domain(false);
         if let Some(f) = exact_fit(a, self.digits, place) {
             return (f.spelling(), a.clone());
@@ -313,7 +522,7 @@ impl<'a, 'v> Display<'a, 'v> {
         // back as itself (`0.175` is 7/40, written `7/40`).
         let shown = self.shortened(&s).unwrap_or(s);
         if shown != *a {
-            return self.spell(&shown, place);
+            return self.spell_short(&shown, place);
         }
         float_spelling(shown)
     }
@@ -509,7 +718,7 @@ impl<'a, 'v> Display<'a, 'v> {
                     }
                     let _exact = number_domain(false);
                     let full = Display::new(self.cx, self.digits, None, self.layout);
-                    let (_, shown) = full.spell(&base.abs(), NumberPlace::Alone);
+                    let (_, shown) = full.spell_short(&base.abs(), NumberPlace::Alone);
                     let shown = if base.is_negative() {
                         shown.checked_neg()?
                     } else {
@@ -543,7 +752,7 @@ impl<'a, 'v> Display<'a, 'v> {
     fn shown_as_float(&self, r: &Rat) -> bool {
         let full = Display::new(self.cx, self.digits, None, self.layout);
         matches!(
-            full.spell(&r.abs(), NumberPlace::Alone).0,
+            full.spell_short(&r.abs(), NumberPlace::Alone).0,
             Spelling::Float(_)
         )
     }
@@ -738,14 +947,10 @@ impl<'a, 'v> Display<'a, 'v> {
         match coefficient(&numbers, &divisors) {
             Some(c) => {
                 neg = c.is_negative();
-                let place = NumberPlace::Coefficient {
-                    plain: !num.is_empty(),
-                };
-                let (sp, value) = self.spell(&c.abs(), place);
-                if !value.is_one() {
-                    match self.divisor(&sp, &c.abs(), &value, !den.is_empty()) {
-                        Some((d, _)) => lead_den.push(d),
-                        None => {
+                match self.coefficient(&c.abs(), !num.is_empty(), !den.is_empty()) {
+                    Written::Divisor(d, _) => lead_den.push(d),
+                    Written::Spelled(sp, value) => {
+                        if !value.is_one() {
                             let (n, d) = sp.parts(&self.pi_text());
                             lead = n;
                             lead_den = d;
@@ -845,14 +1050,31 @@ impl<'a, 'v> Display<'a, 'v> {
     /// The exact numerator and denominator a coefficient `a > 0` is written with: its spelling's
     /// parts, or rule 5's divisor. `plain`: the product has a factor beside it.
     fn written(&self, a: &Rat, plain: bool, has_den: bool) -> Option<(Rat, Rat)> {
-        let (sp, value) = self.spell(a, NumberPlace::Coefficient { plain });
-        if value.is_one() {
-            return Some((Rat::ONE, Rat::ONE));
+        match self.coefficient(a, plain, has_den) {
+            Written::Divisor(_, inv) => Some((Rat::ONE, inv)),
+            Written::Spelled(_, value) if value.is_one() => Some((Rat::ONE, Rat::ONE)),
+            Written::Spelled(sp, value) => sp.values(&value),
         }
-        if let Some((_, inv)) = self.divisor(&sp, a, &value, has_den) {
-            return Some((Rat::ONE, inv));
+    }
+
+    /// How a coefficient `a > 0` is written: rule 5's divisor, or a spelling. `plain`: the
+    /// product has a factor beside it; `has_den`: it has a divisor. A divisor that writes `a`
+    /// at its value is no change of it; one that writes a shortened value is the short choice.
+    fn coefficient(&self, a: &Rat, plain: bool, has_den: bool) -> Written {
+        let short = self.spell_short(a, NumberPlace::Coefficient { plain });
+        if !short.1.is_one() {
+            if let Some((node, inv)) = self.divisor(&short.0, a, has_den) {
+                let kept = inv.checked_inv().is_some_and(|w| w == *a);
+                if !kept {
+                    self.note(a);
+                }
+                if kept || self.choice(a) == Choice::Short {
+                    return Written::Divisor(node, inv);
+                }
+            }
         }
-        sp.values(&value)
+        let (sp, value) = self.choose(a, short);
+        Written::Spelled(sp, value)
     }
 
     /// Is a joined reciprocal with these members taken apart into the denominator? Always with
@@ -889,17 +1111,15 @@ impl<'a, 'v> Display<'a, 'v> {
     }
 
     /// Rule 5: a float coefficient whose reciprocal float64 holds as written joins the
-    /// denominator as that decimal, when the product has one. With a precision the coefficient
-    /// is the `value` it is written as, and its reciprocal must hold within the precision, so
-    /// the divisor reads back as that value.
-    fn divisor(&self, sp: &Spelling, mag: &Rat, value: &Rat, has_den: bool) -> Option<(Node, Rat)> {
+    /// denominator as that decimal, when the product has one. The divisor is written in full,
+    /// so it reads back as the coefficient; with a precision only where it has no more digits.
+    fn divisor(&self, sp: &Spelling, mag: &Rat, has_den: bool) -> Option<(Node, Rat)> {
         let Spelling::Float(_) = sp else { return None };
-        let base = if self.precision.is_some() { value } else { mag };
-        if !has_den || base.is_integer() {
+        if !has_den || mag.is_integer() {
             return None;
         }
         let _exact = number_domain(false);
-        let inv = base.checked_inv()?;
+        let inv = mag.checked_inv()?;
         inv.decimal_parts()?;
         let y = inv.to_f64_nearest();
         if !(writable(y) && Rat::shortest_reading_as(y).as_ref() == Some(&inv)) {
@@ -927,7 +1147,13 @@ impl<'a, 'v> Display<'a, 'v> {
             None => numbers,
         };
         for c in &constants {
-            terms.push(split_neg(self.number(c).0));
+            // A number written as `s + r` is two terms of the sum, as it reads back.
+            match split_neg(self.number(c).0) {
+                (neg, Node::Sum(parts)) => {
+                    terms.extend(parts.into_iter().map(|(minus, t)| (minus ^ neg, t)))
+                }
+                term => terms.push(term),
+            }
         }
         if terms.is_empty() {
             return Node::Num("0".to_string());
@@ -1124,6 +1350,118 @@ fn split_neg(node: Node) -> (bool, Node) {
             },
         ),
         other => (false, other),
+    }
+}
+
+/// The SHAPE of a canonical expression: what reading it builds with its numbers abstracted and
+/// the display's own notation undone, so that two expressions have one shape exactly where they
+/// differ in their numbers only. The members of a sum and of a product are a set: whether a
+/// product has a coefficient or a sum a constant term, not how many numbers spell it. A product
+/// is taken with its reciprocals apart and an integer power of a product as the power of each
+/// member (the one-slash layout writes a joined reciprocal), an even root as the power it is
+/// (`rootn(x, 2)` is written for `x^(1/2)`), and a power of a number as a number. An exponent
+/// says whether it is an integer, since `x^3` and `x^(3 + 1e-20)` are different powers although
+/// their trees look alike: the first distributes over a product and takes negative bases.
+pub fn shape(e: &Ex, cx: &Cx) -> String {
+    match e {
+        Ex::Mul(_) | Ex::Pow(..) => {
+            let mut members = Vec::new();
+            product_members(e, &Rat::ONE, cx, &mut members);
+            members.sort();
+            members.dedup_by(|a, b| *a == "#" && *b == "#");
+            if members.len() == 1 {
+                members.pop().unwrap()
+            } else {
+                format!("*[{}]", members.join(","))
+            }
+        }
+        Ex::Add(v) => {
+            let mut terms: Vec<String> = v.iter().map(|t| shape(t, cx)).collect();
+            terms.sort();
+            terms.dedup_by(|a, b| *a == "#" && *b == "#");
+            format!("+[{}]", terms.join(","))
+        }
+        Ex::Num(_) => "#".to_string(),
+        Ex::Fun(f, args) => match args.as_slice() {
+            [base, Ex::Num(n)] if cx.view.tok_is(*f, "rootn") && n.is_even_integer() => {
+                format!("^({},#f)", shape(base, cx))
+            }
+            _ => {
+                let inner: Vec<String> = args.iter().map(|a| shape(a, cx)).collect();
+                format!("{}({})", cx.view.resolve_owned(*f), inner.join(","))
+            }
+        },
+        Ex::Pi => "pi".to_string(),
+        Ex::E => "e".to_string(),
+        Ex::PosInf => "inf".to_string(),
+        Ex::NegInf => "-inf".to_string(),
+        Ex::NaN => "nan".to_string(),
+        Ex::Const => "<constant>".to_string(),
+        Ex::Leaf(t) => cx.view.resolve_owned(*t),
+    }
+}
+
+/// The members of the product `e^k`: each factor with its exponent times `k`, a product raised
+/// to an integer taken member by member, an even root as the power it is, a number as a number,
+/// and the sign `-1` as no member (a sign is no structure: reading a display can trade it across
+/// an odd function or a joined reciprocal).
+fn product_members(e: &Ex, k: &Rat, cx: &Cx, out: &mut Vec<String>) {
+    match e {
+        Ex::Mul(v) => v.iter().for_each(|f| product_members(f, k, cx, out)),
+        Ex::Num(r) if *r == Rat::NEG_ONE => {}
+        Ex::Num(_) => out.push("#".to_string()),
+        Ex::Pow(b, x) => match &**x {
+            Ex::Num(j) => {
+                let _exact = number_domain(false);
+                match j.checked_mul(k) {
+                    Some(jk) => raised(b, &jk, cx, out),
+                    None => out.push(format!("^({},#)", shape(b, cx))),
+                }
+            }
+            _ => {
+                let power = format!("^({},{})", shape(b, cx), shape(x, cx));
+                out.push(if k.is_one() {
+                    power
+                } else {
+                    format!("^({power},{})", exponent_class(k))
+                });
+            }
+        },
+        other => raised(other, k, cx, out),
+    }
+}
+
+/// The members of `b^k` in a product.
+fn raised(b: &Ex, k: &Rat, cx: &Cx, out: &mut Vec<String>) {
+    let _exact = number_domain(false);
+    match b {
+        Ex::Num(_) => out.push("#".to_string()),
+        Ex::Mul(_) if k.is_integer() => product_members(b, k, cx, out),
+        Ex::Fun(f, args) => match args.as_slice() {
+            [base, Ex::Num(n)] if cx.view.tok_is(*f, "rootn") && n.is_even_integer() => {
+                match n.checked_inv().and_then(|inv| inv.checked_mul(k)) {
+                    Some(e) => raised(base, &e, cx, out),
+                    None => out.push(power_shape(b, k, cx)),
+                }
+            }
+            _ => out.push(power_shape(b, k, cx)),
+        },
+        _ => out.push(power_shape(b, k, cx)),
+    }
+}
+
+fn power_shape(b: &Ex, k: &Rat, cx: &Cx) -> String {
+    if k.is_one() {
+        return shape(b, cx);
+    }
+    format!("^({},{})", shape(b, cx), exponent_class(k))
+}
+
+fn exponent_class(k: &Rat) -> &'static str {
+    if k.is_integer() {
+        "#i"
+    } else {
+        "#f"
     }
 }
 
@@ -1534,5 +1872,73 @@ mod tests {
             to_prefix(&tree(true)).join(" "),
             "/ * -22 x1 * -7 * x2 + x1 1"
         );
+    }
+
+    /// The shape of a prefix expression read by the canonical constructors.
+    fn shape_of(tokens: &str) -> String {
+        use crate::operators::{OperatorSpec, Operators};
+        use crate::tokens::{TokenOverlay, TokenTable, TokenView};
+        use std::cell::RefCell;
+        let mut order = Vec::new();
+        let mut specs: rustc_hash::FxHashMap<String, OperatorSpec> = Default::default();
+        for (n, a) in [
+            ("+", 2u8),
+            ("-", 2),
+            ("*", 2),
+            ("/", 2),
+            ("pow", 2),
+            ("neg", 1),
+            ("inv", 1),
+            ("sin", 1),
+            ("tan", 1),
+            ("rootn", 2),
+        ] {
+            order.push(n.to_string());
+            specs.insert(
+                n.to_string(),
+                OperatorSpec {
+                    realization: String::new(),
+                    alias: vec![],
+                    inverse: None,
+                    arity: a,
+                    precedence: None,
+                    commutative: n == "+" || n == "*",
+                },
+            );
+        }
+        let ops = Operators::from_specs(order.clone(), specs);
+        let table = TokenTable::build(&order, &ops);
+        let overlay = RefCell::new(TokenOverlay::new(table.len()));
+        let view = TokenView::new(&table, &overlay);
+        let cx = Cx::bare(&view);
+        let _domain = number_domain(true);
+        let toks: Vec<_> = tokens.split(' ').map(|t| view.intern(t)).collect();
+        let e = crate::ac::expr::canon(crate::ac::convert::from_prefix(&toks, &cx).unwrap(), &cx);
+        shape(&e, &cx)
+    }
+
+    /// The shape changes where reading builds another structure: a coefficient or an exponent
+    /// of 1 that drops, a sign that becomes a coefficient, an integer exponent for a non-integer
+    /// one, parts that collect or cancel. It does not change with the numbers alone, nor with
+    /// the display's notation: a joined or a split reciprocal, `rootn(x, 2)` for `x^(1/2)`, a
+    /// sign traded across an odd function.
+    #[test]
+    fn the_shape_changes_with_the_structure_and_not_with_numbers_or_notation() {
+        let same = |a: &str, b: &str| assert_eq!(shape_of(a), shape_of(b), "{a} | {b}");
+        let apart = |a: &str, b: &str| assert_ne!(shape_of(a), shape_of(b), "{a} | {b}");
+        same("* 2 x1", "* 3.5 x1");
+        same("pow x1 2.5", "pow x1 0.7");
+        same("/ x1 * x2 sin x3", "/ / x1 x2 sin x3");
+        same("rootn x1 2", "pow x1 0.5");
+        same("inv rootn x1 4", "pow x1 -0.25");
+        same("tan neg x1", "neg tan x1");
+        same("- sin * 1.1 x1 sin x1", "- sin * 1.2 x1 sin x1");
+        apart("* 1.0000001 x1", "x1");
+        apart("* -1.0000001 x1", "neg x1");
+        apart("pow x1 1.0000001", "x1");
+        apart("pow x1 3.0000001", "pow x1 3");
+        apart("pow * 2.5 x1 3.0000001", "pow * 2.5 x1 3");
+        apart("- sin * 1.1 x1 sin x1", "- sin x1 sin x1");
+        apart("+ sin * 1.1 x1 sin x1", "+ sin x1 sin x1");
     }
 }

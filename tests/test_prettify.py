@@ -2,12 +2,15 @@
 
 Pinned here:
 * the expected-output table at D = 3, row by row, plus the token forms;
-* display only: prettify writes numbers and simplifies nothing -- a function of numbers that
-  are all shown as floats is one float, computed as the evaluator computes it, rounded to the
-  precision, never 0, inf or a subnormal; any other function stays; the display is not
-  simplified again;
+* display only: prettify changes how a number is written, never the structure -- a number
+  whose short spelling would change it is written as `s + r`; a function of numbers that are
+  all shown as floats is one float, computed as the evaluator computes it, rounded to the
+  precision, never 0, inf or a subnormal; any other function stays;
 * P1, idempotence: `prettify(prettify(c)) == prettify(c)` in all three forms on the release
-  corpus, and the display does not depend on how the state holds its reciprocals;
+  corpus and a fold fuzz, at full precision and at a precision, and the display does not depend
+  on how the state holds its reciprocals;
+* the structure: the display reads back to the shape of the state after the display's folds,
+  in all three forms on the corpus and the fold fuzz, at full precision and at a precision;
 * P2, the read-back: every number of the display reads back as the float64 of the value it
   stands for -- the display evaluates as the state does on the corpus, and a one-ulp change to
   a displayed float is caught;
@@ -133,11 +136,9 @@ def test_token_forms(eng, text, explicit, tagged):
 
 def test_long_literals_show_their_float(eng):
     """An exact literal longer than a float shows as the float64 nearest to it; one a hair from
-    a short number shows as that number, coefficient 1 included."""
+    a short number shows as that number where the structure stays."""
     assert show(eng, '2.14583142772210003669120562399025*x1') == '2.1458314277221002*x1'
-    assert show(eng, '1.000000000000000000003*x1') == 'x1'
     assert show(eng, 'x1 + 1.000000000000000000003') == 'x1 + 1'
-    assert show(eng, 'x1^(600000000000000000001/300000000000000000000)') == 'x1^2'
     assert show(eng, 'x1^(300000000000000000001/600000000000000000000)') == 'rootn(x1, 2)'
 
 
@@ -146,12 +147,13 @@ def test_long_literals_show_their_float(eng):
     ('2.14583142772210003669120562399025*x1', 3, '2.15*x1'),
     ('2.14583142772210003669120562399025*x1', 1, '2*x1'),
     ('x1/1024', 2, '9.8e-4*x1'),
-    ('(x2 + 0.5)^(500000000000000/4427)', 3, '(x2 + 1/2)^1.13e11'),
+    # 1.13e11 would be an integer exponent, and so would its three-digit rest: the rest in full
+    ('(x2 + 0.5)^(500000000000000/4427)', 3, '(x2 + 1/2)^(1.13e11 - 5.669753783600633e7)'),
     ('x1*sin(9463/890)', 4, '-0.9348*x1'),
     ('x1*exp(-381/2)', 3, '1.85e-83*x1'),
     ('x1*exp(-381/2)', None, '1.8488479557720672e-83*x1'),
     ('9.9999*x1', 2, '10*x1'),
-    ('1.000000000000000000003*x1', 3, 'x1'),
+    ('1.000000000000000000003*x1', 3, '(1 + 3e-21)*x1'),
     ('x1/0.225147640565301', 3, '4.44*x1'),
     # a shortened float is written as the number it reads back as: no pi literal, no divisor
     # unless its reciprocal holds within the precision, and an exact number as the core writes it
@@ -234,15 +236,48 @@ def test_any_other_function_of_numbers_stays(eng, text, expected):
     assert show(eng, text) == expected
 
 
-# The display rounds `1.00000000000000000001` to `1` and the exponent `3 + 1e-22` to `3`; it does
-# not simplify what it wrote, so the display neither collapses to `0` nor multiplies out.
-@pytest.mark.parametrize('text,expected', [
-    ('sin(1.00000000000000000001*x1) - sin(x1)', 'sin(x1) - sin(x1)'),
+# prettify changes how a number is written, never the structure. A number whose short spelling
+# would let reading the display build another structure -- a multiplier or an exponent of 1 that
+# drops, an integer where a non-integer exponent stood, two parts made alike -- is written as its
+# short spelling and the rest, `s + r` or `s - r`, the rest by the same rules.
+SPLITS = [
+    ('sin(1.00000000000000000001*x1) - sin(x1)', None, 'sin((1 + 1e-20)*x1) - sin(x1)'),
+    ('x3 + (154104.1409857162*x1)^(3.00000000000000000001)', None,
+     'x3 + (154104.1409857162*x1)^(3 + 1e-20)'),
+    ('sin(1.0001*x1) - sin(x1)', 3, 'sin((1 + 1e-4)*x1) - sin(x1)'),
+    ('sin(1.0001*x1) - sin(x1)', None, 'sin(1.0001*x1) - sin(x1)'),
+    ('2.14583142772210003669120562399025*x1', None, '2.1458314277221002*x1'),
+    ('2.14583142772210003669120562399025*x1', 3, '2.15*x1'),
+    # two numbers with one float: the one written first keeps it, the other is it plus its rest
+    ('sin(2.14583142772210003669120562399025*x1) - sin(2.1458314277221002*x1)', None,
+     'sin((2.1458314277221002 - 1.6330879437600975e-16)*x1) - sin(2.1458314277221002*x1)'),
+    ('0.99999999999999999999*x1', None, '(1 - 1e-20)*x1'),
+    ('1.000000000000000000003*x1', None, '(1 + 3e-21)*x1'),
+    ('x1^(3.00000000000000000001)', None, 'x1^(3 + 1e-20)'),
+    ('x1^(1.00000000000000000001)*x2', None, 'x1^(1 + 1e-20)*x2'),
+    ('x1^(600000000000000000001/300000000000000000000)', None, 'x1^(2 + 3.3333333333333333e-21)'),
     ('x3 + (1815963197375679774584911*x1/1.1784e19)^(9000000000000000000001/3000000000000000000000)',
-     'x3 + (154104.1409857162*x1)^3'),
-])
-def test_the_display_is_not_simplified(eng, text, expected):
-    assert show(eng, text) == expected
+     None, 'x3 + (154104.1409857162*x1)^(3 + 3.333333333333333e-22)'),
+    # a constant term written as `s + r` is two terms of its sum
+    ('(1.12345*x1 + 111.0001)*(1.12346*x1 + 111.0002)', 3, '(1.12*x1 + 111)*(1.12*x1 + 111 + 2e-4)'),
+]
+
+
+@pytest.mark.parametrize('text,precision,expected', SPLITS, ids=[f'{t}-{p}' for t, p, _ in SPLITS])
+def test_a_number_that_would_change_the_structure_is_written_with_its_rest(
+        eng, text, precision, expected):
+    assert show(eng, text, precision=precision) == expected
+    assert eng.prettify(expected, precision=precision) == expected
+    shown, kept = structure(eng, eng.simplify(text), precision)
+    assert (shown, kept) == (expected, True)
+
+
+def test_the_rest_in_the_token_forms(eng):
+    c = eng._core.parse(eng.simplify('sin(1.00000000000000000001*x1) - sin(x1)'), True, False, True)
+    assert eng.prettify(c) == ['-', 'sin', '*', '+', '1', '1e-20', 'x1', 'sin', 'x1']
+    assert eng.prettify(eng.to_tagged(c)) == [
+        '<add>', 'sin', '<mul>', '<add>', '1', '1e-20', '</add>', 'x1', '</mul>', '<sub>', 'sin', 'x1',
+        '</add>']
 
 
 def test_divisors(eng):
@@ -300,14 +335,22 @@ def in_form(eng, c, form):
     return eng.to_infix(c) if form == 'infix' else eng.to_tagged(c) if form == 'tagged' else c
 
 
-def displays_that_move(eng, rows, form):
-    """The rows whose display is not its own display: `prettify(p) != p`."""
+def displays_that_move(eng, rows, form, display=None):
+    """The rows whose display is not its own display: `display(p) != p`."""
+    display = display or eng.prettify
     moved = []
     for row in rows:
-        p = eng.prettify(in_form(eng, eng.simplify(row), form))
-        if eng.prettify(p) != p:
-            moved.append((row, p, eng.prettify(p)))
+        p = display(in_form(eng, eng.simplify(row), form))
+        if display(p) != p:
+            moved.append((row, p, display(p)))
     return moved
+
+
+def structure(eng, expression, precision=None):
+    """`(display, kept)`: whether the display reads back, through the canonical constructors, to
+    the shape of the state after the display's folds."""
+    form, tokens = eng._read_input(expression)
+    return eng._core.prettify(tokens, 3, form, precision, rule_mode='default', check_structure=True)
 
 
 @pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
@@ -385,10 +428,37 @@ def test_p1_displaying_a_display_gives_it_back_at_a_precision_on_the_corpus(eng,
 
 
 def test_p1_check_catches_a_display_that_moves(eng):
-    """The gate can fail. Writing a number as its float can make two terms of the display alike
-    that the state keeps apart; reading the display then collects them."""
+    """The gate can fail. A display that wrote the short spelling alone would make the two sines
+    alike, and reading it back collects them."""
     row = 'sin(1.00000000000000000001*x1) - sin(x1)'
-    assert displays_that_move(eng, [row], 'infix') == [(row, 'sin(x1) - sin(x1)', '0')]
+
+    def short(expression):
+        return eng.prettify(expression).replace('(1 + 1e-20)*', '')
+
+    assert displays_that_move(eng, [row], 'infix', short) == [(row, 'sin(x1) - sin(x1)', '0')]
+    assert displays_that_move(eng, [row], 'infix') == []
+
+
+@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+@pytest.mark.parametrize('precision', [None, 3])
+def test_the_structure_is_kept_on_the_corpus(eng, form, precision):
+    lost = []
+    for row in corpus():
+        shown, kept = structure(eng, in_form(eng, eng.simplify(row), form), precision)
+        if not kept:
+            lost.append((row, shown))
+    assert not lost, lost[:5]
+
+
+@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+@pytest.mark.parametrize('precision', [None, 3])
+def test_the_structure_is_kept_on_a_fold_fuzz(eng, fuzz_states, form, precision):
+    lost = []
+    for c in fuzz_states:
+        shown, kept = structure(eng, in_form(eng, c, form), precision)
+        if not kept:
+            lost.append((eng.to_infix(c), shown))
+    assert not lost, lost[:5]
 
 
 # Joined reciprocals of numbers, variables and their powers and roots: alike in every form.

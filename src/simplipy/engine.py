@@ -2193,8 +2193,8 @@ class SimpliPyEngine:
         :meth:`simplify` returns the canonical form, whose numbers are exact
         (``2.14583142772210003669120562399025*x1`` stays as long as it was given). ``prettify``
         is the display of that form: it decides how each number is WRITTEN and leaves the
-        structure as it is. It simplifies nothing, so what the canonical form keeps apart, the
-        display shows apart. Nothing inside SimpliPy calls it or reads what it returns; call it
+        structure as it is: it changes how a number is written, never the structure, and
+        applies no rules. Nothing inside SimpliPy calls it or reads what it returns; call it
         where people read expressions, on the answer of :meth:`simplify`::
 
             engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
@@ -2214,7 +2214,7 @@ class SimpliPyEngine:
           ``x1/4.2``, ``22/7`` stays ``22*x1/7``, ``x1/2`` stays ``x1/2``).
         * Otherwise the value is the float64 nearest to it, in its shortest form, as a
           multiplier (``x1/1024`` is ``9.765625e-4*x1``). A value a hair from a short
-          number shows as that number (``1.000000000000000000003*x1`` is ``x1``). With
+          number shows as that number (``x1 + 1.000000000000000000003`` is ``x1 + 1``). With
           ``precision=k`` such a float shows ``k`` significant digits instead
           (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), and that number is
           written by these rules as every number is, so the display reads back as itself
@@ -2223,6 +2223,13 @@ class SimpliPyEngine:
           ``D`` times or over it is written with the literal factored out
           (``x0/(2*3.141592653589793)``, ``0.15*x0^2/(3.141592653589793*x1*x2)``), at full
           precision only.
+        * Where writing a number so would change the structure -- it would be 1 and a
+          multiplier or an exponent would drop, an integer where a non-integer exponent stood,
+          or equal to another number so that parts collect or cancel -- it is written as that
+          spelling and the rest to its value, the rest by the same rules
+          (``1.000000000000000000003*x1`` is ``(1 + 3e-21)*x1``,
+          ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``sin((1 + 1e-20)*x1) - sin(x1)``).
+          Of two numbers that would be equal, the one written first keeps its spelling.
         * A float whose reciprocal float64 holds as written stays a divisor where the
           product has another divisor; a bare ``x1/0.225147640565301`` is
           ``4.441529999999994*x1``.
@@ -2246,12 +2253,9 @@ class SimpliPyEngine:
         At the default ``precision=None`` a number is written exactly or as the float64
         nearest to it, so the display reads back to the same float64 values: it evaluates as
         the expression does, up to the order of its operations. With a ``precision`` it does
-        not: a float shortened to ``k`` digits reads back as another number. Displaying a
-        display gives it back
-        (``prettify(prettify(x)) == prettify(x)``), except where writing numbers as their
-        floats lets reading the display collect or compute what the expression keeps apart:
-        the display of ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``sin(x1) - sin(x1)``,
-        whose own display is ``0``.
+        not: a float shortened to ``k`` digits reads back as another number. At every
+        precision the display reads back to the expression's structure, and displaying a
+        display gives it back (``prettify(prettify(x)) == prettify(x)``).
 
         Parameters
         ----------
