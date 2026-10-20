@@ -27,8 +27,9 @@
 //!    ([`Choice`]; `engine::prettify` decides, by the [`shape`] the display reads back to).
 //! 4. **pi** is the literal `3.141592653589793`, recognised by exact arithmetic: when `c / pi`
 //!    or `c * pi` is written exactly within `D` (pi's digits not counted), the value is written
-//!    with the literal factored out (`1/(2*3.141592653589793)`). Only at full precision: a
-//!    shortened literal would read back as another number.
+//!    with the literal factored out (`1/(2*3.141592653589793)`), at every precision: the literal
+//!    is never shortened, so the display reads back to the same multiple of it, and a
+//!    precision applies to the other numbers only.
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
 //!    joins the denominator (`x1/(243*x2)`); only a bare `x/float` becomes a multiplier
 //!    (`x1/243` is `0.00411522633744856*x1`). The divisor is written in full, so with a
@@ -67,8 +68,14 @@ use super::convert::{infix_number_parts, NumberPlace};
 use super::expr::{add, fun, mul, mul_factor_cmp, negate_term, pow, Cx, Ex};
 use super::rat::{number_domain, Rat};
 
-/// The literal pi is written as (the float64 nearest to pi, in its shortest form).
+/// The literal pi is recognised as (the float64 nearest to pi, in its shortest form).
 pub const PI_LITERAL: &str = "3.141592653589793";
+
+/// How the display writes the pi factored out of a number (rule 4): the one place that spells
+/// it.
+fn factored_pi() -> Node {
+    Node::Num(PI_LITERAL.to_string())
+}
 
 fn pi_value() -> &'static Rat {
     static PI: OnceLock<Rat> = OnceLock::new();
@@ -150,9 +157,9 @@ impl Spelling {
         })
     }
 
-    /// The numerals of the numerator and of the denominator, the literal pi written `pi`.
-    fn parts(&self, pi: &str) -> (Vec<Node>, Vec<Node>) {
-        let pi = || Node::Num(pi.to_string());
+    /// The numerals of the numerator and of the denominator, pi written as [`factored_pi`].
+    fn parts(&self) -> (Vec<Node>, Vec<Node>) {
+        let pi = factored_pi;
         let n = |s: &Option<String>| s.iter().map(|t| Node::Num(t.clone())).collect::<Vec<_>>();
         match self {
             Spelling::Exact(s) | Spelling::Float(s) => (vec![Node::Num(s.clone())], vec![]),
@@ -169,7 +176,7 @@ impl Spelling {
             }
             Spelling::Split { s, r, minus } => {
                 let node = |sp: &Spelling| {
-                    let (num, den) = sp.parts(PI_LITERAL);
+                    let (num, den) = sp.parts();
                     one_number(num, den)
                 };
                 (
@@ -505,12 +512,10 @@ impl<'a, 'v> Display<'a, 'v> {
         if let Some(f) = exact_fit(a, self.digits, place) {
             return (f.spelling(), a.clone());
         }
-        // pi is recognised by exact arithmetic, so only where floats are written in full: a
-        // shortened literal is another number, which reads back as itself.
-        if self.precision.is_none() {
-            if let Some(sp) = self.pi_fit(a, place) {
-                return (sp, a.clone());
-            }
+        // pi is recognised by exact arithmetic and written in full at every precision, so the
+        // display reads back to the same multiple of it.
+        if let Some(sp) = self.pi_fit(a, place) {
+            return (sp, a.clone());
         }
         let y = a.to_f64_nearest();
         let Some(s) = Rat::shortest_reading_as(y).filter(|_| writable(y)) else {
@@ -534,11 +539,6 @@ impl<'a, 'v> Display<'a, 'v> {
         let k = self.precision?;
         let r = significant(s, k)?;
         writable(r.to_f64_nearest()).then_some(r)
-    }
-
-    /// The pi literal, written in full: pi is factored out only at full precision.
-    fn pi_text(&self) -> String {
-        PI_LITERAL.to_string()
     }
 
     /// Rule 4: `a` with the literal pi factored out, when the rest is written exactly within
@@ -596,7 +596,7 @@ impl<'a, 'v> Display<'a, 'v> {
             return (Node::Num("0".to_string()), Rat::ZERO);
         }
         let (sp, value) = self.spell(&r.abs(), place);
-        let (num, den) = sp.parts(&self.pi_text());
+        let (num, den) = sp.parts();
         let node = if den.is_empty() && num.len() == 1 {
             num.into_iter().next().unwrap()
         } else {
@@ -951,7 +951,7 @@ impl<'a, 'v> Display<'a, 'v> {
                     Written::Divisor(d, _) => lead_den.push(d),
                     Written::Spelled(sp, value) => {
                         if !value.is_one() {
-                            let (n, d) = sp.parts(&self.pi_text());
+                            let (n, d) = sp.parts();
                             lead = n;
                             lead_den = d;
                         }

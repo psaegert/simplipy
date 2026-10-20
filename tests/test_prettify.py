@@ -155,10 +155,8 @@ def test_long_literals_show_their_float(eng):
     ('9.9999*x1', 2, '10*x1'),
     ('1.000000000000000000003*x1', 3, '(1 + 3e-21)*x1'),
     ('x1/0.225147640565301', 3, '4.44*x1'),
-    # a shortened float is written as the number it reads back as: no pi literal, no divisor
-    # unless its reciprocal holds within the precision, and an exact number as the core writes it
-    (f'1/(2*{PI})', 3, '0.159'),
-    (f'3*x0^2/(20*{PI}*x1*x2)', 3, '0.0477*x0^2/(x1*x2)'),
+    # a shortened float is written as the number it reads back as: no divisor unless its
+    # reciprocal holds within the precision, and an exact number as the core writes it
     ('(3.44153*x2 + x1)/(0.225147640565301*(x1 + sin(x2)))', 3,
      '4.44*(x1 + 3.44*x2)/(x1 + sin(x2))'),
     ('sin(x1 + sin(1219/6934))', 3, 'sin(x1 + 7/40)'),
@@ -173,6 +171,32 @@ def test_precision(eng, text, precision, expected):
 @pytest.mark.parametrize('text', ['x1*5/21', 'x1/12', '22/7*x1', 'x1^(5/21)', '3*x0^2/(20*x1*x2)'])
 def test_precision_leaves_the_fractions_digits_keeps(eng, text):
     assert show(eng, text, precision=1) == show(eng, text)
+
+
+# pi is factored out at every precision as at full precision, and never shortened: a precision
+# applies to the other numbers only.
+PI_ROWS = [
+    (f'1/(2*{PI})', f'1/(2*{PI})'),
+    (f'x0/(2*{PI})', f'x0/(2*{PI})'),
+    (f'3*x0^2/(20*{PI}*x1*x2)', f'0.15*x0^2/({PI}*x1*x2)'),
+    (f'0.3*{PI}*x1', f'0.3*{PI}*x1'),
+    (f'x1^(2*{PI})', f'x1^(2*{PI})'),
+    (f'sin(x1/(2*{PI})) - sin(x1/(3*{PI}))', f'sin(x1/(2*{PI})) - sin(x1/(3*{PI}))'),
+]
+
+
+@pytest.mark.parametrize('precision', [None, 3, 1])
+@pytest.mark.parametrize('text,expected', PI_ROWS, ids=[t for t, _ in PI_ROWS])
+def test_pi_stays_pi_at_every_precision(eng, text, expected, precision):
+    assert show(eng, text, precision=precision) == expected
+    assert eng.prettify(expected, precision=precision) == expected
+    assert structure(eng, eng.simplify(text), precision) == (expected, True)
+
+
+def test_a_precision_shortens_the_numbers_beside_pi(eng):
+    text = f'2.14583142772210003669120562399025*x1 + x2/(2*{PI})'
+    assert show(eng, text, precision=3) == f'2.15*x1 + x2/(2*{PI})'
+    assert show(eng, text) == f'2.1458314277221002*x1 + x2/(2*{PI})'
 
 
 def test_digit_budget(eng):

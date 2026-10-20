@@ -2223,8 +2223,9 @@ class SimpliPyEngine:
           (``0.175`` is 7/40, written ``7/40``); a number written exactly is not affected.
         * pi is the literal ``3.141592653589793``: a value that is an exact number within
           ``D`` times or over it is written with the literal factored out
-          (``x0/(2*3.141592653589793)``, ``0.15*x0^2/(3.141592653589793*x1*x2)``), at full
-          precision only.
+          (``x0/(2*3.141592653589793)``, ``0.15*x0^2/(3.141592653589793*x1*x2)``), at every
+          precision: the literal is never shortened, and a precision applies to the other
+          numbers only.
         * Where writing a number so would change the structure -- it would be 1 and a
           multiplier or an exponent would drop, an integer where a non-integer exponent stood,
           or equal to another number so that parts collect or cancel -- it is written as that
