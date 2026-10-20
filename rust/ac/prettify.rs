@@ -25,11 +25,17 @@
 //!    Where that spelling changes the value so that reading the display would build another
 //!    structure, the number is written as the spelling and the rest, `s + r` or `s - r`
 //!    ([`Choice`]; `engine::prettify` decides, by the [`shape`] the display reads back to).
-//! 4. **pi** is the literal `3.141592653589793`, recognised by exact arithmetic: when `c / pi`
+//! 4. **pi**: the literal `3.141592653589793` is recognised by exact arithmetic: when `c / pi`
 //!    or `c * pi` is written exactly within `D` (pi's digits not counted), the value is written
-//!    with the literal factored out (`1/(2*3.141592653589793)`), at every precision: the literal
-//!    is never shortened, so the display reads back to the same multiple of it, and a
-//!    precision applies to the other numbers only.
+//!    with pi factored out as the symbol, `pi` (the engine's own token in the token forms):
+//!    `1/(2*pi)`. In `f64` the symbol is that float, so the display reads back to the same
+//!    float64 values, and the structure counts pi as a number ([`shape`]). It holds at every
+//!    precision: pi is never shortened, and a precision applies to the other numbers only.
+//!    The literal is written instead where the symbol would read back as another structure
+//!    (`sin(x1 + 3.141592653589793)`: the canonical constructors build `sin(x1 + pi)` as
+//!    `-sin(x1)`), decided as every spelling that can change the structure is (rule 3), and
+//!    where the expression holds the symbol pi itself (`3.141592653589793*pi*x1`): written
+//!    alike, the two would read back as one.
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
 //!    joins the denominator (`x1/(243*x2)`); only a bare `x/float` becomes a multiplier
 //!    (`x1/243` is `0.00411522633744856*x1`). The divisor is written in full, so with a
@@ -71,10 +77,30 @@ use super::rat::{number_domain, Rat};
 /// The literal pi is recognised as (the float64 nearest to pi, in its shortest form).
 pub const PI_LITERAL: &str = "3.141592653589793";
 
-/// How the display writes the pi factored out of a number (rule 4): the one place that spells
-/// it.
-fn factored_pi() -> Node {
-    Node::Num(PI_LITERAL.to_string())
+/// The symbol pi, as each form writes it: `pi` in infix, the engine's own token in the token
+/// forms.
+fn pi_symbol() -> Node {
+    Node::Name("pi".to_string(), "np.pi".to_string())
+}
+
+/// How the pi factored out of a number is written (rule 4), the one place that spells it: the
+/// symbol, or the literal.
+fn factored_pi(symbol: bool) -> Node {
+    if symbol {
+        pi_symbol()
+    } else {
+        Node::Num(PI_LITERAL.to_string())
+    }
+}
+
+/// Does `e` hold the symbol pi?
+fn holds_pi(e: &Ex) -> bool {
+    match e {
+        Ex::Pi => true,
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().any(holds_pi),
+        Ex::Pow(b, x) => holds_pi(b) || holds_pi(x),
+        _ => false,
+    }
 }
 
 fn pi_value() -> &'static Rat {
@@ -119,15 +145,17 @@ enum Spelling {
     Float(String),
     /// `num/den`, `num` omitted when it is 1.
     Frac { num: Option<String>, den: String },
-    /// `num*pi/den`.
+    /// `num*pi/den`, pi written as the symbol or as the literal.
     PiNum {
         num: Option<String>,
         den: Option<String>,
+        symbol: bool,
     },
     /// `num/(den*pi)`.
     PiDen {
         num: Option<String>,
         den: Option<String>,
+        symbol: bool,
     },
     /// `s + r` or `s - r`: the short spelling of a number and the rest to its value, where the
     /// short spelling alone would change the expression's structure.
@@ -152,26 +180,25 @@ impl Spelling {
                 (value.clone(), Rat::ONE)
             }
             Spelling::Frac { num, den } => (part(num)?, Rat::parse_decimal(den)?),
-            Spelling::PiNum { num, den } => (part(num)?.checked_mul(pi_value())?, part(den)?),
-            Spelling::PiDen { num, den } => (part(num)?, part(den)?.checked_mul(pi_value())?),
+            Spelling::PiNum { num, den, .. } => (part(num)?.checked_mul(pi_value())?, part(den)?),
+            Spelling::PiDen { num, den, .. } => (part(num)?, part(den)?.checked_mul(pi_value())?),
         })
     }
 
-    /// The numerals of the numerator and of the denominator, pi written as [`factored_pi`].
+    /// The numerals of the numerator and of the denominator.
     fn parts(&self) -> (Vec<Node>, Vec<Node>) {
-        let pi = factored_pi;
         let n = |s: &Option<String>| s.iter().map(|t| Node::Num(t.clone())).collect::<Vec<_>>();
         match self {
             Spelling::Exact(s) | Spelling::Float(s) => (vec![Node::Num(s.clone())], vec![]),
             Spelling::Frac { num, den } => (n(num), vec![Node::Num(den.clone())]),
-            Spelling::PiNum { num, den } => {
+            Spelling::PiNum { num, den, symbol } => {
                 let mut top = n(num);
-                top.push(pi());
+                top.push(factored_pi(*symbol));
                 (top, n(den))
             }
-            Spelling::PiDen { num, den } => {
+            Spelling::PiDen { num, den, symbol } => {
                 let mut bottom = n(den);
-                bottom.push(pi());
+                bottom.push(factored_pi(*symbol));
                 (n(num), bottom)
             }
             Spelling::Split { s, r, minus } => {
@@ -184,6 +211,31 @@ impl Spelling {
                     vec![],
                 )
             }
+        }
+    }
+
+    /// Does the spelling write pi as the symbol?
+    fn writes_pi_symbol(&self) -> bool {
+        matches!(
+            self,
+            Spelling::PiNum { symbol: true, .. } | Spelling::PiDen { symbol: true, .. }
+        )
+    }
+
+    /// The spelling with pi written as the literal.
+    fn with_pi_literal(self) -> Spelling {
+        match self {
+            Spelling::PiNum { num, den, .. } => Spelling::PiNum {
+                num,
+                den,
+                symbol: false,
+            },
+            Spelling::PiDen { num, den, .. } => Spelling::PiDen {
+                num,
+                den,
+                symbol: false,
+            },
+            other => other,
         }
     }
 }
@@ -383,6 +435,10 @@ pub struct Display<'a, 'v> {
     derived: RefCell<rustc_hash::FxHashMap<Rat, Choice>>,
     /// The magnitudes whose short spelling changes their value, in the order first written.
     changed: RefCell<Vec<Rat>>,
+    /// The expression displayed holds the symbol pi (rule 4).
+    holds_pi: Cell<bool>,
+    /// A number is written with pi factored out as the symbol.
+    wrote_pi_symbol: Cell<bool>,
 }
 
 impl<'a, 'v> Display<'a, 'v> {
@@ -396,6 +452,8 @@ impl<'a, 'v> Display<'a, 'v> {
             choices: Choices::default(),
             derived: RefCell::new(Default::default()),
             changed: RefCell::new(Vec::new()),
+            holds_pi: Cell::new(false),
+            wrote_pi_symbol: Cell::new(false),
         }
     }
 
@@ -403,6 +461,12 @@ impl<'a, 'v> Display<'a, 'v> {
     pub fn with_choices(mut self, choices: Choices) -> Self {
         self.choices = choices;
         self
+    }
+
+    /// Does the display write a number with pi factored out as the symbol? The symbol reads
+    /// back as a factor, which takes its own place in the canonical order of a sum's terms.
+    pub fn pi_symbol_written(&self) -> bool {
+        self.wrote_pi_symbol.get()
     }
 
     /// The magnitudes whose short spelling changes their value, in the order first written.
@@ -444,6 +508,7 @@ impl<'a, 'v> Display<'a, 'v> {
     /// The spelling of `a > 0` given its short spelling: that spelling where it keeps `a`'s
     /// value, else as the choices say.
     fn choose(&self, a: &Rat, short: (Spelling, Rat)) -> (Spelling, Rat) {
+        let short = self.pi_written(a, short);
         if short.1 == *a {
             return short;
         }
@@ -460,6 +525,28 @@ impl<'a, 'v> Display<'a, 'v> {
             Choice::SplitExact => self
                 .split(a, short, Rest::Exact)
                 .unwrap_or_else(|| (self.exact_spelling(a), a.clone())),
+        }
+    }
+
+    /// A short spelling with pi factored out, as it is written (rule 4). The symbol reads back as
+    /// a multiple of pi, which the canonical constructors can build otherwise than the number
+    /// (`sin(x1 + pi)` is `-sin(x1)`), so a number written with it is decided as one whose
+    /// short spelling changes its value: the symbol as its short spelling, the literal
+    /// otherwise. Where the expression holds the symbol itself, the literal.
+    fn pi_written(&self, a: &Rat, (sp, value): (Spelling, Rat)) -> (Spelling, Rat) {
+        if !sp.writes_pi_symbol() {
+            return (sp, value);
+        }
+        if self.holds_pi.get() {
+            return (sp.with_pi_literal(), value);
+        }
+        self.note(a);
+        match self.choice(a) {
+            Choice::Short => {
+                self.wrote_pi_symbol.set(true);
+                (sp, value)
+            }
+            _ => (sp.with_pi_literal(), value),
         }
     }
 
@@ -564,11 +651,19 @@ impl<'a, 'v> Display<'a, 'v> {
         match (over, times) {
             (Some(o), t) if t.as_ref().is_none_or(|t| o.digits < t.digits) => {
                 let (num, den) = unit(o);
-                Some(Spelling::PiNum { num, den })
+                Some(Spelling::PiNum {
+                    num,
+                    den,
+                    symbol: true,
+                })
             }
             (_, Some(t)) => {
                 let (num, den) = unit(t);
-                Some(Spelling::PiDen { num, den })
+                Some(Spelling::PiDen {
+                    num,
+                    den,
+                    symbol: true,
+                })
             }
             _ => None,
         }
@@ -618,6 +713,7 @@ impl<'a, 'v> Display<'a, 'v> {
     /// with one denominator, the display of the expression reading that display back builds
     /// ([`Display::rebuild`]).
     pub fn node(&self, e: &Ex) -> Node {
+        self.holds_pi.set(holds_pi(e));
         let e = self.folded(e);
         match self.layout {
             Layout::OneDenominator => self.write(&self.rebuild(&e)),
@@ -821,7 +917,7 @@ impl<'a, 'v> Display<'a, 'v> {
         let name = |i: &str, t: &str| Node::Name(i.to_string(), t.to_string());
         match e {
             Ex::Num(r) => self.number(r).0,
-            Ex::Pi => name("pi", "np.pi"),
+            Ex::Pi => pi_symbol(),
             Ex::E => name("e", "np.e"),
             Ex::PosInf => name("inf", "float(\"inf\")"),
             Ex::NegInf => Node::Neg(Box::new(name("inf", "float(\"inf\")"))),
@@ -1361,8 +1457,13 @@ fn split_neg(node: Node) -> (bool, Node) {
 /// member (the one-slash layout writes a joined reciprocal), an even root as the power it is
 /// (`rootn(x, 2)` is written for `x^(1/2)`), and a power of a number as a number. An exponent
 /// says whether it is an integer, since `x^3` and `x^(3 + 1e-20)` are different powers although
-/// their trees look alike: the first distributes over a product and takes negative bases.
+/// their trees look alike: the first distributes over a product and takes negative bases. pi
+/// counts as a number, the literal it is written for: a sum, product or power of numbers and pi
+/// is a number, and an exponent that is one is taken at its value.
 pub fn shape(e: &Ex, cx: &Cx) -> String {
+    if is_number(e) {
+        return "#".to_string();
+    }
     match e {
         Ex::Mul(_) | Ex::Pow(..) => {
             let mut members = Vec::new();
@@ -1381,7 +1482,6 @@ pub fn shape(e: &Ex, cx: &Cx) -> String {
             terms.dedup_by(|a, b| *a == "#" && *b == "#");
             format!("+[{}]", terms.join(","))
         }
-        Ex::Num(_) => "#".to_string(),
         Ex::Fun(f, args) => match args.as_slice() {
             [base, Ex::Num(n)] if cx.view.tok_is(*f, "rootn") && n.is_even_integer() => {
                 format!("^({},#f)", shape(base, cx))
@@ -1391,7 +1491,7 @@ pub fn shape(e: &Ex, cx: &Cx) -> String {
                 format!("{}({})", cx.view.resolve_owned(*f), inner.join(","))
             }
         },
-        Ex::Pi => "pi".to_string(),
+        Ex::Num(_) | Ex::Pi => "#".to_string(),
         Ex::E => "e".to_string(),
         Ex::PosInf => "inf".to_string(),
         Ex::NegInf => "-inf".to_string(),
@@ -1410,15 +1510,15 @@ fn product_members(e: &Ex, k: &Rat, cx: &Cx, out: &mut Vec<String>) {
         Ex::Mul(v) => v.iter().for_each(|f| product_members(f, k, cx, out)),
         Ex::Num(r) if *r == Rat::NEG_ONE => {}
         Ex::Num(_) => out.push("#".to_string()),
-        Ex::Pow(b, x) => match &**x {
-            Ex::Num(j) => {
+        Ex::Pow(b, x) => match number_value(x) {
+            Some(j) => {
                 let _exact = number_domain(false);
                 match j.checked_mul(k) {
                     Some(jk) => raised(b, &jk, cx, out),
                     None => out.push(format!("^({},#)", shape(b, cx))),
                 }
             }
-            _ => {
+            None => {
                 let power = format!("^({},{})", shape(b, cx), shape(x, cx));
                 out.push(if k.is_one() {
                     power
@@ -1435,8 +1535,16 @@ fn product_members(e: &Ex, k: &Rat, cx: &Cx, out: &mut Vec<String>) {
 fn raised(b: &Ex, k: &Rat, cx: &Cx, out: &mut Vec<String>) {
     let _exact = number_domain(false);
     match b {
-        Ex::Num(_) => out.push("#".to_string()),
+        b if is_number(b) => out.push("#".to_string()),
         Ex::Mul(_) if k.is_integer() => product_members(b, k, cx, out),
+        // An integer power of a power whose exponent is a number of pi: the power of their
+        // product, as the canonical constructors build it for a number.
+        Ex::Pow(inner, x) if k.is_integer() && !matches!(&**x, Ex::Num(_)) => {
+            match number_value(x).and_then(|j| j.checked_mul(k)) {
+                Some(jk) => raised(inner, &jk, cx, out),
+                None => out.push(power_shape(b, k, cx)),
+            }
+        }
         Ex::Fun(f, args) => match args.as_slice() {
             [base, Ex::Num(n)] if cx.view.tok_is(*f, "rootn") && n.is_even_integer() => {
                 match n.checked_inv().and_then(|inv| inv.checked_mul(k)) {
@@ -1447,6 +1555,37 @@ fn raised(b: &Ex, k: &Rat, cx: &Cx, out: &mut Vec<String>) {
             _ => out.push(power_shape(b, k, cx)),
         },
         _ => out.push(power_shape(b, k, cx)),
+    }
+}
+
+/// Is `e` a number to the shape: numbers and pi under sums, products and powers?
+fn is_number(e: &Ex) -> bool {
+    match e {
+        Ex::Num(_) | Ex::Pi => true,
+        Ex::Add(v) | Ex::Mul(v) => v.iter().all(is_number),
+        Ex::Pow(b, x) => is_number(b) && is_number(x),
+        _ => false,
+    }
+}
+
+/// The exact value of numbers and pi (the literal it is written for) under sums, products and
+/// integer powers; `None` for anything else.
+fn number_value(e: &Ex) -> Option<Rat> {
+    let _exact = number_domain(false);
+    match e {
+        Ex::Num(r) => Some(r.clone()),
+        Ex::Pi => Some(pi_value().clone()),
+        Ex::Add(v) => v
+            .iter()
+            .try_fold(Rat::ZERO, |acc, t| acc.checked_add(&number_value(t)?)),
+        Ex::Mul(v) => v
+            .iter()
+            .try_fold(Rat::ONE, |acc, t| acc.checked_mul(&number_value(t)?)),
+        Ex::Pow(b, x) => match &**x {
+            Ex::Num(k) if k.is_integer() => number_value(b)?.checked_pow_integer(k),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -1940,5 +2079,21 @@ mod tests {
         apart("pow * 2.5 x1 3.0000001", "pow * 2.5 x1 3");
         apart("- sin * 1.1 x1 sin x1", "- sin x1 sin x1");
         apart("+ sin * 1.1 x1 sin x1", "+ sin x1 sin x1");
+    }
+
+    /// pi counts as a number, the literal it is written for: a product, sum or power of numbers
+    /// and pi is a number, and an exponent of pi is taken at its value, under an integer power
+    /// too.
+    #[test]
+    fn pi_counts_as_a_number_in_the_shape() {
+        let same = |a: &str, b: &str| assert_eq!(shape_of(a), shape_of(b), "{a} | {b}");
+        let apart = |a: &str, b: &str| assert_ne!(shape_of(a), shape_of(b), "{a} | {b}");
+        same("/ 1 * 2 np.pi", "0.15915494309189535");
+        same("* x1 * 2 np.pi", "* 6.283185307179586 x1");
+        same("+ x1 + * 2 np.pi 1e-20", "+ x1 6.28318530717958600000001");
+        same("pow x1 * 2 np.pi", "pow x1 6.283185307179586");
+        same("inv pow x1 * 2 np.pi", "pow x1 -6.283185307179586");
+        apart("pow x1 np.pi", "pow x1 3");
+        apart("* np.pi x1", "x1");
     }
 }

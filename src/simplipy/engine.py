@@ -2202,8 +2202,7 @@ class SimpliPyEngine:
             engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
             # '2.1458314277221002*x1'
             engine.prettify(engine.simplify('x1*5/21'))        # 'x1/4.2'
-            engine.prettify(engine.simplify('1/(2*3.141592653589793)'))
-            # '1/(2*3.141592653589793)'
+            engine.prettify(engine.simplify('1/(2*3.141592653589793)'))   # '1/(2*pi)'
             engine.prettify(engine.simplify('x1*exp(-381/2)'))
             # '1.8488479557720672e-83*x1'
 
@@ -2221,11 +2220,14 @@ class SimpliPyEngine:
           (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), and that number is
           written by these rules as every number is, so the display reads back as itself
           (``0.175`` is 7/40, written ``7/40``); a number written exactly is not affected.
-        * pi is the literal ``3.141592653589793``: a value that is an exact number within
-          ``D`` times or over it is written with the literal factored out
-          (``x0/(2*3.141592653589793)``, ``0.15*x0^2/(3.141592653589793*x1*x2)``), at every
-          precision: the literal is never shortened, and a precision applies to the other
-          numbers only.
+        * pi: a value that is an exact number within ``D`` times or over the literal
+          ``3.141592653589793`` is written with pi factored out as the symbol ``pi``
+          (``np.pi`` in the token forms): ``x0/(2*pi)``, ``0.15*x0^2/(pi*x1*x2)``. In ``f64``
+          the symbol is that float. It holds at every precision: pi is never shortened, and a
+          precision applies to the other numbers only. The literal is written instead where
+          the symbol would read back as another expression (reading ``sin(x1 + pi)`` builds
+          ``-sin(x1)``, so ``sin(x1 + 3.141592653589793)`` keeps the literal), and where the
+          expression holds the symbol pi itself.
         * Where writing a number so would change the structure -- it would be 1 and a
           multiplier or an exponent would drop, an integer where a non-integer exponent stood,
           or equal to another number so that parts collect or cancel -- it is written as that

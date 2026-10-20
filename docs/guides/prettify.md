@@ -84,18 +84,30 @@ engine.prettify(answer, precision=3)
 engine.prettify(engine.simplify("x1*5/21"), precision=1)
 # -> 'x1/4.2'
 engine.prettify(engine.simplify("x0/(2*3.141592653589793)"), precision=3)
-# -> 'x0/(2*3.141592653589793)'
+# -> 'x0/(2*pi)'
 ```
 
-**pi** is the literal `3.141592653589793`. A value that is a number written exactly times pi,
-or over it, is written with the literal factored out, at every precision: the literal is never
-shortened, and a precision applies to the other numbers only.
+**pi.** A value that is a number written exactly times the literal `3.141592653589793`, or over
+it, is written with pi factored out as the symbol `pi` (`np.pi` in the token forms), at every
+precision: pi is never shortened, and a precision applies to the other numbers only. In `f64`
+the symbol is that float, so the display evaluates as the literal does.
 
 ```python
 engine.prettify(engine.simplify("x0/(2*3.141592653589793)"))
-# -> 'x0/(2*3.141592653589793)'
+# -> 'x0/(2*pi)'
 engine.prettify(engine.simplify("3*x0^2/(20*3.141592653589793*x1*x2)"))
-# -> '0.15*x0^2/(3.141592653589793*x1*x2)'
+# -> '0.15*x0^2/(pi*x1*x2)'
+```
+
+The literal stays where the symbol would read back as another expression: reading
+`sin(x1 + pi)` builds `-sin(x1)`. It also stays where the expression holds the symbol pi
+itself, so the two are not read back as one.
+
+```python
+engine.prettify(engine.simplify("sin(x1 + 3.141592653589793)"))
+# -> 'sin(x1 + 3.141592653589793)'
+engine.prettify(engine.simplify("sin(pi*x1) - sin(3.141592653589793*x1)"))
+# -> 'sin(pi*x1) - sin(3.141592653589793*x1)'
 ```
 
 **Divisors.** Every divisor of a product joins one denominator, functions and sums included:
@@ -153,11 +165,11 @@ tokens for tokens. `form=` chooses one: `'infix'`, `'explicit'` or `'tagged'`.
 ```python
 tokens = engine.simplify(["/", "1", "*", "2", "3.141592653589793"])
 engine.prettify(tokens)
-# -> ['/', '1', '*', '2', '3.141592653589793']
+# -> ['/', '1', '*', '2', 'np.pi']
 engine.prettify(tokens, form="infix")
-# -> '1/(2*3.141592653589793)'
+# -> '1/(2*pi)'
 engine.prettify(tokens, form="tagged")
-# -> ['<mul>', '1', '<div>', '2', '3.141592653589793', '</mul>']
+# -> ['<mul>', '1', '<div>', '2', 'np.pi', '</mul>']
 ```
 
 At the default `precision=None` a number is written exactly or as the float64 nearest to it,

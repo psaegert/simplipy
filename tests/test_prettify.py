@@ -48,12 +48,12 @@ def show(eng, text, **kw):
 
 # The plan's table (NUMBER_SPELLING_PLAN.md section 1, D = 3), row by row.
 TABLE = [
-    (f'1/(2*{PI})', f'1/(2*{PI})'),
-    (f'3/(2*{PI})', f'3/(2*{PI})'),
-    (f'x0/(2*{PI})', f'x0/(2*{PI})'),
+    (f'1/(2*{PI})', '1/(2*pi)'),
+    (f'3/(2*{PI})', '3/(2*pi)'),
+    (f'x0/(2*{PI})', 'x0/(2*pi)'),
     (f'exp(-x0^2/2)/rootn(2*{PI}, 2)', '0.3989422804014327*exp(-x0^2/2)'),  # Feynman I.6.2a
     # Feynman 58: the rest beside pi is written as `simplify` writes 3/20
-    (f'3*x0^2/(20*{PI}*x1*x2)', f'0.15*x0^2/({PI}*x1*x2)'),
+    (f'3*x0^2/(20*{PI}*x1*x2)', '0.15*x0^2/(pi*x1*x2)'),
     ('x1/2', 'x1/2'),
     ('x1/12', 'x1/12'),
     ('x1/3.7', 'x1/3.7'),
@@ -96,8 +96,8 @@ def test_the_plans_table(eng, text, expected):
     ('355/113*x1', '3.1415929203539825*x1'),
     ('x1/200', '0.005*x1'),
     ('x1^(3/10)', 'x1^0.3'),
-    (f'0.3*{PI}*x1', f'0.3*{PI}*x1'),
-    (f'x1/(2*{PI})', f'x1/(2*{PI})'),
+    (f'0.3*{PI}*x1', '0.3*pi*x1'),
+    (f'x1/(2*{PI})', 'x1/(2*pi)'),
 ])
 def test_an_exact_number_is_written_as_simplify_writes_it(eng, text, expected):
     assert show(eng, text) == expected
@@ -122,7 +122,7 @@ def test_within_the_budget_the_display_is_simplifys_text(eng):
 
 
 @pytest.mark.parametrize('text,explicit,tagged', [
-    (f'1/(2*{PI})', ['/', '1', '*', '2', PI], ['<mul>', '1', '<div>', '2', PI, '</mul>']),
+    (f'1/(2*{PI})', ['/', '1', '*', '2', 'np.pi'], ['<mul>', '1', '<div>', '2', 'np.pi', '</mul>']),
     ('22/7*x1', ['/', '*', '22', 'x1', '7'], ['<mul>', '22', 'x1', '<div>', '7', '</mul>']),
     ('-x1/12', ['/', 'neg', 'x1', '12'], ['<mul>', '-1', 'x1', '<div>', '12', '</mul>']),
     ('x1/1024', ['*', '9.765625e-4', 'x1'], ['<mul>', '9.765625e-4', 'x1', '</mul>']),
@@ -173,15 +173,25 @@ def test_precision_leaves_the_fractions_digits_keeps(eng, text):
     assert show(eng, text, precision=1) == show(eng, text)
 
 
-# pi is factored out at every precision as at full precision, and never shortened: a precision
-# applies to the other numbers only.
+# pi is factored out at every precision as at full precision, written as the symbol, and never
+# shortened: a precision applies to the other numbers only.
 PI_ROWS = [
-    (f'1/(2*{PI})', f'1/(2*{PI})'),
-    (f'x0/(2*{PI})', f'x0/(2*{PI})'),
-    (f'3*x0^2/(20*{PI}*x1*x2)', f'0.15*x0^2/({PI}*x1*x2)'),
-    (f'0.3*{PI}*x1', f'0.3*{PI}*x1'),
-    (f'x1^(2*{PI})', f'x1^(2*{PI})'),
-    (f'sin(x1/(2*{PI})) - sin(x1/(3*{PI}))', f'sin(x1/(2*{PI})) - sin(x1/(3*{PI}))'),
+    (f'1/(2*{PI})', '1/(2*pi)'),
+    (f'x0/(2*{PI})', 'x0/(2*pi)'),
+    (f'3*x0^2/(20*{PI}*x1*x2)', '0.15*x0^2/(pi*x1*x2)'),
+    (f'0.3*{PI}*x1', '0.3*pi*x1'),
+    (f'3*{PI}*x1/4', '3*pi*x1/4'),
+    (PI, 'pi'),
+    (f'x1 + 2*{PI}', 'x1 + 2*pi'),
+    (f'x1^(2*{PI})', 'x1^(2*pi)'),
+    (f'x1^(-2*{PI})', '1/x1^(2*pi)'),
+    (f'x1^{PI}', 'x1^pi'),
+    (f'x1*sin(x2/(2*{PI}))', 'x1*sin(x2/(2*pi))'),
+    (f'sin(x1/(2*{PI})) - sin(x1/(3*{PI}))', 'sin(x1/(2*pi)) - sin(x1/(3*pi))'),
+    (f'exp(-x0^2/2)/(2*{PI}*x1)', 'exp(-x0^2/2)/(2*pi*x1)'),
+    # read back, a term with the symbol takes its place in the canonical order of the sum
+    (f'{PI}*x2 + sin(x1)', 'sin(x1) + pi*x2'),
+    (f'sin(x1 + 2*{PI}) + x2/(2*{PI})', 'sin(x1 + 2*pi) + x2/(2*pi)'),
 ]
 
 
@@ -195,8 +205,59 @@ def test_pi_stays_pi_at_every_precision(eng, text, expected, precision):
 
 def test_a_precision_shortens_the_numbers_beside_pi(eng):
     text = f'2.14583142772210003669120562399025*x1 + x2/(2*{PI})'
-    assert show(eng, text, precision=3) == f'2.15*x1 + x2/(2*{PI})'
-    assert show(eng, text) == f'2.1458314277221002*x1 + x2/(2*{PI})'
+    assert show(eng, text, precision=3) == '2.15*x1 + x2/(2*pi)'
+    assert show(eng, text) == '2.1458314277221002*x1 + x2/(2*pi)'
+
+
+@pytest.mark.parametrize('text,explicit,tagged', [
+    (f'x1/(2*{PI})', ['/', 'x1', '*', '2', 'np.pi'], ['<mul>', 'x1', '<div>', '2', 'np.pi', '</mul>']),
+    (f'0.3*{PI}*x1', ['*', '0.3', '*', 'np.pi', 'x1'], ['<mul>', '0.3', 'np.pi', 'x1', '</mul>']),
+])
+def test_the_token_forms_write_the_engines_pi_token(eng, text, explicit, tagged):
+    c = eng._core.parse(eng.simplify(text), True, False, True)
+    assert eng.prettify(c) == explicit
+    assert eng.prettify(eng.to_tagged(c)) == tagged
+    for shown in (explicit, tagged):
+        assert eng.prettify(shown) == shown
+
+
+@pytest.mark.parametrize('text', [f'x1/(2*{PI})', f'3*x0^2/(20*{PI}*x1*x2)', f'x1^(2*{PI})',
+                                  f'x1*sin(x2/(2*{PI})) + x2/(3*{PI})'])
+def test_pi_reads_back_as_the_literals_float64(eng, text):
+    """The symbol evaluates to the float64 the literal reads as, exactly, so the display
+    evaluates as the state does up to the order of its operations."""
+    import numpy as np
+    c = list(eng.simplify(eng._core.parse(text, strict=True)))
+    p = list(eng.prettify(c))
+    assert 'np.pi' in p and PI not in p
+    literal = [PI if t == 'np.pi' else t for t in p]
+    names = sorted({t for t in c + p if re.fullmatch(r'x\d+', t)})
+    xs = np.random.default_rng(3).uniform(0.5, 2.0, size=(32, len(names)))
+    assert np.array_equal(values(eng, p, names, xs), values(eng, literal, names, xs))
+    assert np.allclose(values(eng, c, names, xs), values(eng, p, names, xs), rtol=P2_RTOL, atol=0)
+
+
+# The literal is written where the symbol would read back as another structure: the canonical
+# constructors build `sin(x1 + pi)` as `-sin(x1)`. And where the expression itself holds the symbol
+# pi, a multiple of the literal keeps the literal: written alike, the two would read back as one
+# (two sines that cancel, `pi*pi` that is `pi^2`).
+MIXED = [
+    (f'sin(x1 + {PI})', f'sin(x1 + {PI})'),
+    (f'cos(x1 + {PI})*x2', f'x2*cos(x1 + {PI})'),
+    (f'sin(pi*x1) - sin({PI}*x1)', f'sin(pi*x1) - sin({PI}*x1)'),
+    (f'pi*x1*{PI}', f'{PI}*pi*x1'),
+    (f'x1^pi + x1^{PI}', f'x1^{PI} + x1^pi'),
+    (f'x1/pi + x1/(2*{PI})', f'x1/(2*{PI}) + x1/pi'),
+    ('pi*x1', 'pi*x1'),
+]
+
+
+@pytest.mark.parametrize('precision', [None, 3])
+@pytest.mark.parametrize('text,expected', MIXED, ids=[t for t, _ in MIXED])
+def test_beside_the_symbol_pi_the_literal_stays(eng, text, expected, precision):
+    assert show(eng, text, precision=precision) == expected
+    assert eng.prettify(expected, precision=precision) == expected
+    assert structure(eng, eng.simplify(text), precision) == (expected, True)
 
 
 def test_digit_budget(eng):

@@ -8,17 +8,23 @@
 //! display back builds: the number becomes 1 and a multiplier or an exponent drops, an integer
 //! where a non-integer exponent stood, or equal to another number so that parts collect, cancel
 //! or merge. Such a number is written as its short spelling and the rest to its value, `s + r`
-//! or `s - r`, the rest written by the same rules (`sin((1 + 1e-20)*x1) - sin(x1)`).
+//! or `s - r`, the rest written by the same rules (`sin((1 + 1e-20)*x1) - sin(x1)`). A number
+//! written with pi factored out as the symbol is decided the same way, since the symbol reads
+//! back as a multiple of pi, which the canonical constructors can build otherwise than the
+//! number (`sin(x1 + pi)` is `-sin(x1)`): where it would change the structure, the literal
+//! `3.141592653589793` is written.
 //!
 //! The condition is the one general test, not a list of cases: the display reads back through
 //! the canonical constructors alone to a state whose SHAPE (`ac::prettify::shape`: the tree with
-//! its numbers abstracted and the display's own notation undone) is not the shape of the state
-//! after the display's intended folds of functions of floats. Only where a short spelling
-//! changes some number's value is that read-back made. Where the shapes differ, the numbers are
+//! its numbers abstracted, pi counted as a number, and the display's own notation undone) is not
+//! the shape of the state after the display's intended folds of functions of floats. Only where
+//! a short spelling changes some number's value, or writes the symbol pi, is that read-back
+//! made. Where the shapes differ, the numbers are
 //! decided one at a time in the order the display writes them, each with every later one still
 //! written at its value: its short spelling where the shape holds, else split, else (at a
 //! precision) split with the rest in full, else split with the rest written exactly (which
-//! writes the number at its value). Of two numbers that the
+//! writes the number at its value); a number written with the symbol pi has the literal as its
+//! one other spelling. Of two numbers that the
 //! short spellings make equal, the one written first keeps its short spelling and the other is
 //! written as it plus its rest.
 
@@ -64,6 +70,17 @@ impl PrettyForm {
 pub enum Pretty {
     Text(String),
     Tokens(Vec<String>),
+}
+
+/// One display with every number written so that the structure stays.
+struct Kept {
+    shown: Pretty,
+    /// Whether it reads back to the kept shape.
+    kept: bool,
+    /// The shape it keeps.
+    reference: Option<String>,
+    /// Whether it writes a number with pi factored out as the symbol.
+    pi_symbol: bool,
 }
 
 fn render(node: &Node, form: PrettyForm) -> Pretty {
@@ -113,8 +130,11 @@ impl Engine {
     /// `k` digits can change the order in which reading puts the factors of a product or the
     /// orientation it gives a sum (`(1 - 27/(4*x1))*(27*log(x1)/4 - 91/2)` reads back as
     /// `(91/2 - 27*log(x1)/4)*(27/(4*x1) - 1)`), so the display of that state, whose shape is
-    /// checked to be the same, is the one that is its own display. At full precision rounding to
-    /// the nearest float keeps every order, and the display needs no second look.
+    /// checked to be the same, is the one that is its own display. The symbol pi does the same
+    /// at every precision: it reads back as a factor, with its own place in the canonical order
+    /// of a sum's terms (`3.141592653589793*x2 + sin(x1)` reads back from `pi*x2 + sin(x1)` as
+    /// `sin(x1) + pi*x2`). At full precision with no symbol pi written, rounding to the nearest
+    /// float keeps every order, and the display needs no second look.
     pub fn ac_prettify_structure(
         &self,
         tokens: &[String],
@@ -124,19 +144,18 @@ impl Engine {
         mode: RuleMode,
         verify: bool,
     ) -> Option<(Pretty, bool)> {
-        let (shown, kept, reference) =
-            self.display_keeping(tokens, digits, precision, form, mode, verify)?;
-        if precision.is_none() || !kept {
-            return Some((shown, kept));
+        let first = self.display_keeping(tokens, digits, precision, form, mode, verify)?;
+        if (precision.is_none() && !first.pi_symbol) || !first.kept {
+            return Some((first.shown, first.kept));
         }
-        let Some(read) = self.read_display(&shown) else {
-            return Some((shown, kept));
+        let Some(read) = self.read_display(&first.shown) else {
+            return Some((first.shown, first.kept));
         };
         match self.display_keeping(&read, digits, precision, form, mode, true) {
-            Some((again, true, _)) if self.read_shape(&again, mode) == reference => {
-                Some((again, true))
+            Some(again) if again.kept && self.read_shape(&again.shown, mode) == first.reference => {
+                Some((again.shown, true))
             }
-            _ => Some((shown, kept)),
+            _ => Some((first.shown, first.kept)),
         }
     }
 
@@ -159,18 +178,22 @@ impl Engine {
         form: PrettyForm,
         mode: RuleMode,
         verify: bool,
-    ) -> Option<(Pretty, bool, Option<String>)> {
+    ) -> Option<Kept> {
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
         let bare = Cx::bare(&view);
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let state = canon(from_prefix(&toks, &bare)?, &bare);
-        let pass = |choices: &Choices| -> (Pretty, Vec<Rat>) {
+        let pass = |choices: &Choices| -> (Pretty, Vec<Rat>, bool) {
             let display =
                 Display::new(&bare, digits, precision, form.layout()).with_choices(choices.clone());
             let node = display.node(&state);
-            (render(&node, form), display.changed())
+            (
+                render(&node, form),
+                display.changed(),
+                display.pi_symbol_written(),
+            )
         };
         let reference = Some(
             Display::new(&bare, digits, precision, form.layout())
@@ -178,14 +201,24 @@ impl Engine {
                 .kept_shape(&state),
         );
         let kept = |p: &Pretty| self.read_shape(p, mode) == reference;
-        let (shown, changed) = pass(&Choices::default());
+        let (shown, changed, pi_symbol) = pass(&Choices::default());
         if changed.is_empty() {
             // Every number is written at its value.
             let held = !verify || kept(&shown);
-            return Some((shown, held, reference));
+            return Some(Kept {
+                shown,
+                kept: held,
+                reference,
+                pi_symbol,
+            });
         }
         if kept(&shown) {
-            return Some((shown, true, reference));
+            return Some(Kept {
+                shown,
+                kept: true,
+                reference,
+                pi_symbol,
+            });
         }
         let mut choices = Choices::all(Choice::Exact);
         // At full precision a split's rest is already written in full.
@@ -207,8 +240,13 @@ impl Engine {
                 }
             }
         }
-        let shown = pass(&choices).0;
+        let (shown, _, pi_symbol) = pass(&choices);
         let held = kept(&shown);
-        Some((shown, held, reference))
+        Some(Kept {
+            shown,
+            kept: held,
+            reference,
+            pi_symbol,
+        })
     }
 }
