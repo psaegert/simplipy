@@ -152,10 +152,15 @@ def test_long_literals_show_their_float(eng):
     ('x1*exp(-381/2)', None, '1.8488479557720672e-83*x1'),
     ('9.9999*x1', 2, '10*x1'),
     ('1.000000000000000000003*x1', 3, 'x1'),
-    (f'1/(2*{PI})', 3, '1/(2*3.14)'),
     ('x1/0.225147640565301', 3, '4.44*x1'),
+    # a shortened float is written as the number it reads back as: no pi literal, no divisor
+    # unless its reciprocal holds within the precision, and an exact number as the core writes it
+    (f'1/(2*{PI})', 3, '0.159'),
+    (f'3*x0^2/(20*{PI}*x1*x2)', 3, '0.0477*x0^2/(x1*x2)'),
     ('(3.44153*x2 + x1)/(0.225147640565301*(x1 + sin(x2)))', 3,
-     '(x1 + 3.44*x2)/(0.225*(x1 + sin(x2)))'),
+     '4.44*(x1 + 3.44*x2)/(x1 + sin(x2))'),
+    ('sin(x1 + sin(1219/6934))', 3, 'sin(x1 + 7/40)'),
+    ('x1/sinh(log(90805/4514))/(x2 + 1)', 3, '0.0997*x1/(x2 + 1)'),
 ])
 def test_precision(eng, text, precision, expected):
     """`precision=k` shows a number written as a float with k significant digits; `None` keeps
@@ -308,6 +313,74 @@ def displays_that_move(eng, rows, form):
 @pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
 def test_p1_displaying_a_display_gives_it_back_on_the_corpus(eng, form):
     moved = displays_that_move(eng, corpus(), form)
+    assert not moved, moved[:5]
+
+
+FUNS = ['sin', 'cos', 'exp', 'log', 'tanh', 'atan', 'sinh', 'asinh', 'cosh']
+
+
+def fold_fuzz(n, seed=11):
+    """Expressions whose canonical state keeps a function of numbers, in the shapes of a product,
+    a sum, a quotient, a reciprocal of a product, a function argument and an exponent."""
+    import random
+    rng = random.Random(seed)
+
+    def number():
+        kind = rng.random()
+        if kind < 0.4:
+            return f'{rng.randint(1, 99999)}/{rng.randint(7, 9999)}'
+        if kind < 0.7:
+            return repr(rng.uniform(-50, 50))
+        if kind < 0.85:
+            return str(rng.randint(-9, 9))
+        return f'{rng.randint(1, 9)}/{rng.choice([2, 3, 5, 10])}'
+
+    def ground(depth):
+        if depth == 0:
+            return number()
+        inner = ground(depth - 1) if rng.random() < 0.6 else number()
+        if rng.random() < 0.3:
+            inner = f'{inner} + {number()}'
+        return f'{rng.choice(FUNS)}({inner})'
+
+    out = []
+    for _ in range(n):
+        g = ground(rng.randint(1, 3))
+        out.append([f'x1*{g}', f'x1 + {g}', f'x1/{g}/x2', f'x1/({g}*(x2 + 1))', f'sin(x1 + {g})',
+                    f'{g}*{ground(1)}*x1 + x2', f'x1^({g})'][rng.randint(0, 6)])
+    return out
+
+
+@pytest.fixture(scope='module')
+def fuzz_states(eng):
+    states = []
+    for text in fold_fuzz(400):
+        try:
+            states.append(list(eng.simplify(eng._core.parse(text, True, False))))
+        except ValueError:
+            continue
+    assert len(states) > 300
+    return states
+
+
+@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+@pytest.mark.parametrize('precision', [None, 3])
+def test_p1_displaying_a_display_gives_it_back_on_a_fold_fuzz(eng, fuzz_states, form, precision):
+    moved = []
+    for c in fuzz_states:
+        p = eng.prettify(in_form(eng, c, form), precision=precision)
+        if eng.prettify(p, precision=precision) != p:
+            moved.append((eng.to_infix(c), p))
+    assert not moved, moved[:5]
+
+
+@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+def test_p1_displaying_a_display_gives_it_back_at_a_precision_on_the_corpus(eng, form):
+    moved = []
+    for row in corpus():
+        p = eng.prettify(in_form(eng, eng.simplify(row), form), precision=3)
+        if eng.prettify(p, precision=3) != p:
+            moved.append((row, p))
     assert not moved, moved[:5]
 
 

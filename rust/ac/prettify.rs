@@ -19,10 +19,12 @@
 //!    multiplier. The display writes the value that float reads back as, so a coefficient a
 //!    hair from 1 shows as no coefficient and an exponent a hair from 1/2 as a square root.
 //!    With a precision `k`, the float shows `k` significant digits instead (round half to
-//!    even), the pi literal and a divisor of rule 5 included.
+//!    even), and that number is written by these rules as every number is (`0.175` is 7/40,
+//!    written `7/40`), so the display reads back as itself.
 //! 4. **pi** is the literal `3.141592653589793`, recognised by exact arithmetic: when `c / pi`
 //!    or `c * pi` is written exactly within `D` (pi's digits not counted), the value is written
-//!    with the literal factored out (`1/(2*3.141592653589793)`).
+//!    with the literal factored out (`1/(2*3.141592653589793)`). Only at full precision: a
+//!    shortened literal would read back as another number.
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
 //!    joins the denominator (`x1/(243*x2)`); only a bare `x/float` becomes a multiplier
 //!    (`x1/243` is `0.00411522633744856*x1`).
@@ -294,22 +296,26 @@ impl<'a, 'v> Display<'a, 'v> {
         if let Some(f) = exact_fit(a, self.digits, place) {
             return (f.spelling(), a.clone());
         }
-        if let Some(sp) = self.pi_fit(a, place) {
-            return (sp, a.clone());
+        // pi is recognised by exact arithmetic, so only where floats are written in full: a
+        // shortened literal is another number, which reads back as itself.
+        if self.precision.is_none() {
+            if let Some(sp) = self.pi_fit(a, place) {
+                return (sp, a.clone());
+            }
         }
         let y = a.to_f64_nearest();
         let Some(s) = Rat::shortest_reading_as(y).filter(|_| writable(y)) else {
             // Rule 9: no float can stand for it (only exact-domain values get here).
             return (self.exact_spelling(a), a.clone());
         };
-        if let Some(shown) = self.shortened(&s) {
-            return float_spelling(shown);
+        // The value the display writes: the float's shortest decimal, or its `k` significant
+        // digits. It is written as that number is, by these same rules, so the display reads
+        // back as itself (`0.175` is 7/40, written `7/40`).
+        let shown = self.shortened(&s).unwrap_or(s);
+        if shown != *a {
+            return self.spell(&shown, place);
         }
-        if s != *a {
-            // The display writes the value its float reads back as.
-            return self.spell(&s, place);
-        }
-        float_spelling(s)
+        float_spelling(shown)
     }
 
     /// A float `s` (an exact decimal) at the display's precision: `k` significant digits.
@@ -321,12 +327,9 @@ impl<'a, 'v> Display<'a, 'v> {
         writable(r.to_f64_nearest()).then_some(r)
     }
 
-    /// The pi literal at the display's precision.
+    /// The pi literal, written in full: pi is factored out only at full precision.
     fn pi_text(&self) -> String {
-        match self.shortened(pi_value()) {
-            Some(r) => float_text(&r),
-            None => PI_LITERAL.to_string(),
-        }
+        PI_LITERAL.to_string()
     }
 
     /// Rule 4: `a` with the literal pi factored out, when the rest is written exactly within
@@ -740,7 +743,7 @@ impl<'a, 'v> Display<'a, 'v> {
                 };
                 let (sp, value) = self.spell(&c.abs(), place);
                 if !value.is_one() {
-                    match self.divisor(&sp, &c.abs(), !den.is_empty()) {
+                    match self.divisor(&sp, &c.abs(), &value, !den.is_empty()) {
                         Some((d, _)) => lead_den.push(d),
                         None => {
                             let (n, d) = sp.parts(&self.pi_text());
@@ -846,7 +849,7 @@ impl<'a, 'v> Display<'a, 'v> {
         if value.is_one() {
             return Some((Rat::ONE, Rat::ONE));
         }
-        if let Some((_, inv)) = self.divisor(&sp, a, has_den) {
+        if let Some((_, inv)) = self.divisor(&sp, a, &value, has_den) {
             return Some((Rat::ONE, inv));
         }
         sp.values(&value)
@@ -886,21 +889,26 @@ impl<'a, 'v> Display<'a, 'v> {
     }
 
     /// Rule 5: a float coefficient whose reciprocal float64 holds as written joins the
-    /// denominator as that decimal, when the product has one.
-    fn divisor(&self, sp: &Spelling, mag: &Rat, has_den: bool) -> Option<(Node, Rat)> {
+    /// denominator as that decimal, when the product has one. With a precision the coefficient
+    /// is the `value` it is written as, and its reciprocal must hold within the precision, so
+    /// the divisor reads back as that value.
+    fn divisor(&self, sp: &Spelling, mag: &Rat, value: &Rat, has_den: bool) -> Option<(Node, Rat)> {
         let Spelling::Float(_) = sp else { return None };
-        if !has_den || mag.is_integer() {
+        let base = if self.precision.is_some() { value } else { mag };
+        if !has_den || base.is_integer() {
             return None;
         }
         let _exact = number_domain(false);
-        let inv = mag.checked_inv()?;
+        let inv = base.checked_inv()?;
         inv.decimal_parts()?;
         let y = inv.to_f64_nearest();
         if !(writable(y) && Rat::shortest_reading_as(y).as_ref() == Some(&inv)) {
             return None;
         }
-        let shown = self.shortened(&inv).unwrap_or_else(|| inv.clone());
-        Some((Node::Num(float_text(&shown)), inv))
+        if self.shortened(&inv).is_some_and(|r| r != inv) {
+            return None;
+        }
+        Some((Node::Num(float_text(&inv)), inv))
     }
 
     fn sum(&self, v: &[Ex]) -> Node {

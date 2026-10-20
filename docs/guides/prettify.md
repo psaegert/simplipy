@@ -56,14 +56,18 @@ engine.prettify(engine.simplify("1.000000000000000000003*x1"))
 ```
 
 **Precision.** `precision=k` shows a number written as a float with `k` significant digits
-instead of its shortest float64 form; a number written exactly is not affected. The default,
-`precision=None`, writes floats in full.
+instead of its shortest float64 form; a number written exactly is not affected. The shortened
+number is written as every number is, so the display reads back as itself: `0.175` is 7/40,
+written `7/40`, and pi is factored out only at full precision. The default, `precision=None`,
+writes floats in full.
 
 ```python
 engine.prettify(answer, precision=3)
 # -> '2.15*x1'
 engine.prettify(engine.simplify("x1*5/21"), precision=1)
 # -> 'x1/4.2'
+engine.prettify(engine.simplify("x0/(2*3.141592653589793)"), precision=3)
+# -> '0.159*x0'
 ```
 
 **pi** is the literal `3.141592653589793`. A value that is a number written exactly times pi,

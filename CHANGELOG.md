@@ -145,8 +145,9 @@ model predictions.
   `simplify` writes it (`0.3*x1`, `x1/4.2`, `22*x1/7`, `x2 + 1/2`), any other number is its
   float64 in shortest form (`9.765625e-4*x1`,
   `2.1458314277221002*x1` for a 33-digit literal), or with `k` significant digits at
-  `precision=k` (`2.15*x1`). pi is factored out as the literal `3.141592653589793` where the
-  rest fits (`1/(2*3.141592653589793)`), even roots read `rootn(x, n)`, and every divisor of a
+  `precision=k` (`2.15*x1`), written as that number is so that the display reads back as itself.
+  At full precision pi is factored out as the literal `3.141592653589793` where the rest fits
+  (`1/(2*3.141592653589793)`); even roots read `rootn(x, n)`, and every divisor of a
   product joins one denominator, functions and sums included (`x1/(x2*log(x3))`,
   `x1/(sin(x3)*(x2 + 1))`). A function of numbers that would all be written as floats is one
   float, computed as the evaluator computes it and rounded to the precision

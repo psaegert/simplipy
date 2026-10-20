@@ -2216,11 +2216,13 @@ class SimpliPyEngine:
           multiplier (``x1/1024`` is ``9.765625e-4*x1``). A value a hair from a short
           number shows as that number (``1.000000000000000000003*x1`` is ``x1``). With
           ``precision=k`` such a float shows ``k`` significant digits instead
-          (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), the pi literal and
-          a divisor of the next rules included; a number written exactly is not affected.
+          (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), and that number is
+          written by these rules as every number is, so the display reads back as itself
+          (``0.175`` is 7/40, written ``7/40``); a number written exactly is not affected.
         * pi is the literal ``3.141592653589793``: a value that is an exact number within
           ``D`` times or over it is written with the literal factored out
-          (``x0/(2*3.141592653589793)``, ``0.15*x0^2/(3.141592653589793*x1*x2)``).
+          (``x0/(2*3.141592653589793)``, ``0.15*x0^2/(3.141592653589793*x1*x2)``), at full
+          precision only.
         * A float whose reciprocal float64 holds as written stays a divisor where the
           product has another divisor; a bare ``x1/0.225147640565301`` is
           ``4.441529999999994*x1``.
