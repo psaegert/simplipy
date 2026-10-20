@@ -4,9 +4,8 @@
 //! of the canonical expression and a digit budget `D`, and nothing inside the engine calls it or
 //! reads what it writes (a source guard in the test suite holds that line). The display keeps
 //! the state's structure -- its bags, divisors and function applications -- and decides only
-//! how each NUMBER is written. It evaluates nothing and simplifies nothing: a function of
-//! numbers stays a function (`x1*exp(-190.5)`), and what the display writes alike is not
-//! collected.
+//! how each NUMBER is written. It simplifies nothing: what the display writes alike is not
+//! collected. The one value it computes is a function of numbers all shown as floats (rule 6).
 //!
 //! 1. **Digit budget.** A spelling's digits are every digit it writes, a numerator of 1
 //!    included (`1/12` counts 3, `3/123` counts 4, `0.05` counts 3).
@@ -27,8 +26,17 @@
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
 //!    joins the denominator (`x1/(243*x2)`); only a bare `x/float` becomes a multiplier
 //!    (`x1/243` is `0.00411522633744856*x1`).
-//! 6. **Exponents** are numbers like any other.
-//! 7. **Even roots**: `x^(1/n)` is `rootn(x, n)` and `x^(-1/n)` is `1/rootn(x, n)` for even `n`.
+//! 6. **Functions of floats.** A function of numbers that would all be shown as floats is one
+//!    float: its float64 as the deployed evaluator computes it (`numeric::apply_op`), written as
+//!    every float is, at the display's precision (`x1*exp(-381/2)` is
+//!    `1.8488479557720672e-83*x1`, `1.85e-83*x1` at precision 3). It is judged bottom up, on its
+//!    parts as the display writes them: `asinh(atan(c) + 0.4)` is a function of one float once
+//!    `atan(c)` folds and combines with `0.4`. A function of a number written
+//!    exactly stays (`sin(2)`), and so does one whose float is 0, infinite or subnormal. An
+//!    integer power of a float the state keeps for its size is that float's power, exactly.
+//!    Exponents and root indices are not numbers inside it.
+//! 7. **Exponents** are numbers like any other; `x^(1/n)` is `rootn(x, n)` and `x^(-1/n)` is
+//!    `1/rootn(x, n)` for even `n`.
 //! 8. **Layout**: one coefficient in front and ONE SLASH: every divisor of a product joins a
 //!    single denominator product (`x1/(x2*exp(x3))`, `x1/(sin(x3)*(x2 + 1))`). The text
 //!    `n/(d1*d2)` reads back as one joined reciprocal, so the display writes the product the
@@ -394,13 +402,147 @@ impl<'a, 'v> Display<'a, 'v> {
         }
     }
 
-    /// The display of a canonical expression. With one denominator it is the display of the
-    /// expression reading that display back builds ([`Display::rebuild`]).
+    /// The display of a canonical expression: its functions of floats folded (rule 6), then,
+    /// with one denominator, the display of the expression reading that display back builds
+    /// ([`Display::rebuild`]).
     pub fn node(&self, e: &Ex) -> Node {
+        let e = self.folded(e);
         match self.layout {
-            Layout::OneDenominator => self.write(&self.rebuild(e)),
-            Layout::Sections => self.write(e),
+            Layout::OneDenominator => self.write(&self.rebuild(&e)),
+            Layout::Sections => self.write(&e),
         }
+    }
+
+    /// `e` with its functions of floats folded (rule 6), bottom up: a subexpression is judged
+    /// with its parts as the display writes them, so a function of a sum whose own function
+    /// folded and combined with a float (`asinh(atan(c) + 0.4)`) is a function of one float.
+    /// A changed expression is built again by the canonical constructors, as reading the
+    /// display back builds it; a sum's numbers combine only under rule 9, and a sum that its
+    /// constructor would collect further keeps its terms apart.
+    fn folded(&self, e: &Ex) -> Ex {
+        let cx = self.cx;
+        let all = |v: &[Ex]| -> Vec<Ex> { v.iter().map(|x| self.folded(x)).collect() };
+        let inner = match e {
+            Ex::Fun(f, args) => {
+                let w = all(args);
+                if w == *args {
+                    e.clone()
+                } else {
+                    fun(*f, w, cx)
+                }
+            }
+            Ex::Pow(b, x) => {
+                let (b2, x2) = (self.folded(b), self.folded(x));
+                if b2 == **b && x2 == **x {
+                    e.clone()
+                } else {
+                    pow(b2, x2, cx)
+                }
+            }
+            Ex::Mul(v) => {
+                let w = all(v);
+                if w == *v {
+                    e.clone()
+                } else {
+                    mul(w, cx)
+                }
+            }
+            Ex::Add(v) => {
+                let w = all(v);
+                if w == *v {
+                    e.clone()
+                } else {
+                    self.folded_sum(w)
+                }
+            }
+            other => other.clone(),
+        };
+        match self.fold(&inner) {
+            Some(v) => Ex::Num(v),
+            None => inner,
+        }
+    }
+
+    /// A sum of folded terms: its numbers combined into one under rule 9, then built by the
+    /// canonical constructor unless that would collect its terms further.
+    fn folded_sum(&self, w: Vec<Ex>) -> Ex {
+        let (numbers, mut terms): (Vec<Ex>, Vec<Ex>) =
+            w.into_iter().partition(|t| matches!(t, Ex::Num(_)));
+        let values: Vec<Rat> = numbers
+            .iter()
+            .filter_map(|t| match t {
+                Ex::Num(r) => Some(r.clone()),
+                _ => None,
+            })
+            .collect();
+        match combine(&values, Rat::checked_add) {
+            Some(c) if values.len() > 1 => terms.push(Ex::Num(c)),
+            _ => terms.extend(numbers),
+        }
+        let built = add(terms.clone(), self.cx);
+        let kept = match &built {
+            Ex::Add(t) => t.len(),
+            Ex::Num(z) if z.is_zero() => 0,
+            _ => 1,
+        };
+        if kept == terms.len() {
+            built
+        } else {
+            Ex::Add(terms)
+        }
+    }
+
+    /// Rule 6: the number a ground expression stands for when it holds a function and every
+    /// number inside it would be shown as a float; `None` where it does not fold, and where its
+    /// float is 0, infinite or subnormal (rule 9).
+    fn fold(&self, e: &Ex) -> Option<Rat> {
+        if let Ex::Pow(b, x) = e {
+            if let (Ex::Num(base), Ex::Num(k)) = (&**b, &**x) {
+                if k.is_integer() {
+                    // A power the state keeps for its size: once its base is shown as a float,
+                    // the power of that float is a number like any other, combined exactly.
+                    if base.is_zero() || !self.shown_as_float(base) {
+                        return None;
+                    }
+                    let _exact = number_domain(false);
+                    let full = Display::new(self.cx, self.digits, None, self.layout);
+                    let (_, shown) = full.spell(&base.abs(), NumberPlace::Alone);
+                    let shown = if base.is_negative() {
+                        shown.checked_neg()?
+                    } else {
+                        shown
+                    };
+                    let v = shown.checked_pow_integer(k)?;
+                    return writable(v.to_f64_nearest()).then_some(v);
+                }
+            }
+        }
+        if matches!(e, Ex::Num(_)) || !ground(e) || !holds_function(e) {
+            return None;
+        }
+        let mut numbers = Vec::new();
+        numbers_inside(e, self.cx, &mut numbers);
+        if numbers.is_empty()
+            || numbers
+                .iter()
+                .any(|r| r.is_zero() || !self.shown_as_float(r))
+        {
+            return None;
+        }
+        let y = evaluate(e, self.cx)?;
+        if !writable(y) {
+            return None;
+        }
+        Rat::shortest_reading_as(y)
+    }
+
+    /// Would the number `r` be shown as a float (rule 3), at any precision?
+    fn shown_as_float(&self, r: &Rat) -> bool {
+        let full = Display::new(self.cx, self.digits, None, self.layout);
+        matches!(
+            full.spell(&r.abs(), NumberPlace::Alone).0,
+            Spelling::Float(_)
+        )
     }
 
     /// The expression reading its one-denominator display back builds: bottom up, every product
@@ -800,10 +942,78 @@ fn combine(numbers: &[Rat], op: fn(&Rat, &Rat) -> Option<Rat>) -> Option<Rat> {
     for r in rest {
         acc = op(&acc, r)?;
     }
-    if numbers.len() > 1 && !acc.is_zero() && !writable(acc.to_f64_nearest()) {
+    if numbers.len() > 1 && !writable(acc.to_f64_nearest()) {
         return None;
     }
     Some(acc)
+}
+
+/// Is `e` ground: numbers, operators and functions only, no variable, symbol, fitted constant,
+/// infinity or nan?
+fn ground(e: &Ex) -> bool {
+    match e {
+        Ex::Num(_) => true,
+        Ex::Pi | Ex::E | Ex::PosInf | Ex::NegInf | Ex::NaN | Ex::Const | Ex::Leaf(_) => false,
+        Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => v.iter().all(ground),
+        Ex::Pow(b, x) => ground(b) && ground(x),
+    }
+}
+
+/// Does `e` hold a function: a function application, or a power with an exponent that is not
+/// an integer?
+fn holds_function(e: &Ex) -> bool {
+    match e {
+        Ex::Fun(..) => true,
+        Ex::Pow(b, x) => !matches!(&**x, Ex::Num(r) if r.is_integer()) || holds_function(b),
+        Ex::Add(v) | Ex::Mul(v) => v.iter().any(holds_function),
+        _ => false,
+    }
+}
+
+/// The numbers inside a ground expression that rule 6 reads: every number but the exponents
+/// of powers and the indices of roots.
+fn numbers_inside(e: &Ex, cx: &Cx, out: &mut Vec<Rat>) {
+    match e {
+        Ex::Num(r) => out.push(r.clone()),
+        Ex::Add(v) | Ex::Mul(v) => v.iter().for_each(|x| numbers_inside(x, cx, out)),
+        Ex::Fun(f, v) if cx.view.tok_is(*f, "rootn") => {
+            if let Some(x) = v.first() {
+                numbers_inside(x, cx, out);
+            }
+        }
+        Ex::Fun(_, v) => v.iter().for_each(|x| numbers_inside(x, cx, out)),
+        Ex::Pow(b, x) => {
+            numbers_inside(b, cx, out);
+            if !matches!(&**x, Ex::Num(_)) {
+                numbers_inside(x, cx, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The float64 value of a ground expression as the deployed evaluator computes it: each number
+/// is the float64 nearest to it, and every operation runs in float64 (`numeric::apply_op`).
+fn evaluate(e: &Ex, cx: &Cx) -> Option<f64> {
+    match e {
+        Ex::Num(r) => Some(r.to_f64_nearest()),
+        Ex::Add(v) => v
+            .iter()
+            .try_fold(0.0, |acc, x| Some(acc + evaluate(x, cx)?)),
+        Ex::Mul(v) => v
+            .iter()
+            .try_fold(1.0, |acc, x| Some(acc * evaluate(x, cx)?)),
+        Ex::Pow(b, x) => {
+            let (b, x) = (evaluate(b, cx)?, evaluate(x, cx)?);
+            crate::numeric::apply_op("pow", &[b, x])
+        }
+        Ex::Fun(f, args) => {
+            let name = cx.view.resolve_owned(*f);
+            let vals: Option<Vec<f64>> = args.iter().map(|a| evaluate(a, cx)).collect();
+            crate::numeric::apply_op(&name, &vals?)
+        }
+        _ => None,
+    }
 }
 
 /// The coefficient of a product: its numbers over the numbers of its joined reciprocals, exact

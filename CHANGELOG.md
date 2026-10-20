@@ -148,9 +148,11 @@ model predictions.
   `precision=k` (`2.15*x1`). pi is factored out as the literal `3.141592653589793` where the
   rest fits (`1/(2*3.141592653589793)`), even roots read `rootn(x, n)`, and every divisor of a
   product joins one denominator, functions and sums included (`x1/(x2*log(x3))`,
-  `x1/(sin(x3)*(x2 + 1))`). It writes numbers and decides no value: a function of numbers stays
-  a function (`x1*exp(-190.5)`), and the display is not simplified again, so it never collects
-  what it wrote alike (`sin(1.00000000000000000001*x1) - sin(x1)` shows as
+  `x1/(sin(x3)*(x2 + 1))`). A function of numbers that would all be written as floats is one
+  float, computed as the evaluator computes it and rounded to the precision
+  (`1.8488479557720672e-83*x1` for `x1*exp(-381/2)`), and never 0, inf or a subnormal; a function
+  of a number written exactly stays (`sin(2)`). The display is not simplified again, so it never
+  collects what it wrote alike (`sin(1.00000000000000000001*x1) - sin(x1)` shows as
   `sin(x1) - sin(x1)`). At the default `precision=None` a number is written exactly or as its
   float64, so the display reads back to the same float64 values, and displaying a display gives
   it back: on the release corpus and srbf's 6,531 ground truths in all three forms, and on 1,000

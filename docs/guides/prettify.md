@@ -3,7 +3,7 @@
 `simplify` returns the canonical form, and its numbers are exact: a literal keeps every digit
 it was given, and a coefficient that combines several literals is their exact product.
 `prettify` is the display of that form. It decides how each number is written for a reader and
-leaves the expression's structure as it is: it evaluates nothing and simplifies nothing.
+leaves the expression's structure as it is: it simplifies nothing.
 
 ```python
 import simplipy as sp
@@ -94,14 +94,18 @@ engine.prettify(engine.simplify("x1/243/x2"))
 Tagged tokens write a section member per reciprocal, as the tagged form reads them, so there a
 reciprocal of a product holding a sum or a function stays one bag in the section.
 
-**Functions of numbers** stay functions, their numbers written by the same rules: what `simplify`
-keeps, the display shows. No numbers combine to inf, 0 or a subnormal.
+**A function of floats is one float.** A function of numbers that would all be written as
+floats is written as its float64, computed as SimpliPy's evaluator computes it and shown at the
+`precision`. A function of a number written exactly stays a function, and so does one whose
+float would be 0, infinite or subnormal. No numbers combine to inf, 0 or a subnormal.
 
 ```python
 engine.prettify(engine.simplify("x1*exp(-381/2)"))
-# -> 'x1*exp(-190.5)'
+# -> '1.8488479557720672e-83*x1'
+engine.prettify(engine.simplify("x1*exp(-381/2)"), precision=3)
+# -> '1.85e-83*x1'
 engine.prettify(engine.simplify("sin(sin(9463/890))"))
-# -> 'sin(sin(10.632584269662921))'
+# -> '-0.8045036621463277'
 engine.prettify(engine.simplify("x1 + sin(2)"))
 # -> 'x1 + sin(2)'
 ```

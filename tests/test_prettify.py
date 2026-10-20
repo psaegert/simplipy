@@ -2,8 +2,10 @@
 
 Pinned here:
 * the expected-output table at D = 3, row by row, plus the token forms;
-* display only: prettify writes numbers and decides no value -- a function of numbers stays a
-  function, and the display is not simplified again;
+* display only: prettify writes numbers and simplifies nothing -- a function of numbers that
+  are all shown as floats is one float, computed as the evaluator computes it, rounded to the
+  precision, never 0, inf or a subnormal; any other function stays; the display is not
+  simplified again;
 * P1, idempotence: `prettify(prettify(c)) == prettify(c)` in all three forms on the release
   corpus, and the display does not depend on how the state holds its reciprocals;
 * P2, the read-back: every number of the display reads back as the float64 of the value it
@@ -62,7 +64,7 @@ TABLE = [
     ('(x2 + 0.5)^(500000000000000/4427)', '(x2 + 1/2)^1.1294330246216399e11'),
     ('x1^2*x2^2/(6*3.1415926535897*8.854e-12*(2.99792458e8)^3)', '2.2238078067157093e-16*x1^2*x2^2'),  # Larmor
     ('x1*20847313721190114925292351/1875000000000000000000000000', '0.011118567317968061*x1'),
-    ('sin(sin(9463/890))', 'sin(sin(10.632584269662921))'),
+    ('sin(sin(9463/890))', '-0.8045036621463277'),
     ('x1*6.626e-34', '6.626e-34*x1'),
     ('x1*1e-40*3', '3e-40*x1'),
     ('x1*1e200*1e200', '1e200*1e200*x1'),
@@ -145,7 +147,9 @@ def test_long_literals_show_their_float(eng):
     ('2.14583142772210003669120562399025*x1', 1, '2*x1'),
     ('x1/1024', 2, '9.8e-4*x1'),
     ('(x2 + 0.5)^(500000000000000/4427)', 3, '(x2 + 1/2)^1.13e11'),
-    ('x1*sin(9463/890)', 4, 'x1*sin(10.63)'),
+    ('x1*sin(9463/890)', 4, '-0.9348*x1'),
+    ('x1*exp(-381/2)', 3, '1.85e-83*x1'),
+    ('x1*exp(-381/2)', None, '1.8488479557720672e-83*x1'),
     ('9.9999*x1', 2, '10*x1'),
     ('1.000000000000000000003*x1', 3, 'x1'),
     (f'1/(2*{PI})', 3, '1/(2*3.14)'),
@@ -173,21 +177,55 @@ def test_digit_budget(eng):
 
 
 @pytest.mark.parametrize('text,expected', [
-    ('x1*exp(-381/2)', 'x1*exp(-190.5)'),
-    ('x1*sin(sin(9463/890))', 'x1*sin(sin(10.632584269662921))'),
-    ('x1*sin(9463/890)', 'x1*sin(10.632584269662921)'),
-    ('x1 + sin(9463/890)', 'x1 + sin(10.632584269662921)'),
+    ('x1*exp(-381/2)', '1.8488479557720672e-83*x1'),
+    ('x1*sin(sin(9463/890))', '-0.8045036621463277*x1'),
+    ('x1*sin(9463/890)', '-0.9348393354311442*x1'),
+    ('x1 + sin(9463/890)', 'x1 - 0.9348393354311442'),
+    ('x1*sin(x2 + sin(9463/890))', 'x1*sin(x2 - 0.9348393354311442)'),
+    # a float whose reciprocal holds as written stays a divisor beside another divisor
+    ('x1/sin(9463/890)/x2', '-x1/(0.9348393354311442*x2)'),
+    # an integer power the state keeps for its size: the power of the float its base is shown as
+    ('x1*0.12345670000000000001^40', '4.577059556136647e-37*x1'),
+])
+def test_a_function_of_floats_is_one_float(eng, text, expected):
+    """A function of numbers that are all shown as floats is the float the evaluator computes."""
+    assert show(eng, text) == expected
+
+
+# The fold is judged on the parts as the display writes them: the inner function folds and
+# combines with the exact 0.4 (or 2) into one float, so the outer function is a function of one
+# float. A folded term takes its place in the sum as reading the display places it.
+@pytest.mark.parametrize('text,expected', [
+    ('x1*asinh(atan(7452/1615) + 0.4)', '1.3295516895428026*x1'),
+    ('x1*sin(cosh(cosh(13429/3083)) + 2)', '0.9877111802133507*x1'),
+    ('x2 + 1.5455017691921438*x1*sin(cos(40148/6487))', '1.2967805889953927*x1 + x2'),
+    # the power of the float a long base is shown as is within the size cap: reading it combines
+    ('x1*0.12345670000000000001^40', '4.577059556136647e-37*x1'),
+])
+def test_a_fold_is_its_own_display(eng, text, expected):
+    assert show(eng, text) == expected
+    c = eng._core.parse(eng.simplify(text), True, False)
+    for form in ('infix', 'explicit', 'tagged'):
+        p = eng.prettify(in_form(eng, c, form))
+        assert eng.prettify(p) == p, (form, p)
+
+
+@pytest.mark.parametrize('text,expected', [
+    # a number written exactly keeps its function
     ('sin(2) + x1', 'x1 + sin(2)'),
+    ('x1*sin(0.3)', 'x1*sin(0.3)'),
+    ('x1*sin(2 + 9463/890*x2)', 'x1*sin(10.632584269662921*x2 + 2)'),
     # an odd function of a negative literal gives its sign to the joiner, as in `simplify`'s text
     ('x1 + sin(-2)', 'x1 - sin(2)'),
-    # a power the state keeps for its size stays a power of its base, written as a float (the
-    # walk folds a ground power only where its float is cheaper, which this one's is not)
-    ('x1*0.12345670000000000001^100', '0.1234567^100*x1'),
     ('3^5000*x1', '3^5000*x1'),
     ('x1*2^(1/3)', '2^(1/3)*x1'),
+    # a power beyond the size cap stays a power of its base, written as a float
+    ('x1*0.12345670000000000001^100', '0.1234567^100*x1'),
+    # a float that would be infinite or subnormal: the function stays
+    ('x1*exp(1905)', 'x1*exp(1905)'),
+    ('x1*exp(-1441/2)', 'x1*exp(-720.5)'),
 ])
-def test_functions_of_numbers_stay_functions(eng, text, expected):
-    """prettify writes numbers and evaluates nothing: what `simplify` keeps, it shows."""
+def test_any_other_function_of_numbers_stays(eng, text, expected):
     assert show(eng, text) == expected
 
 

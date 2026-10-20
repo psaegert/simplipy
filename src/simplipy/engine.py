@@ -2193,16 +2193,17 @@ class SimpliPyEngine:
         :meth:`simplify` returns the canonical form, whose numbers are exact
         (``2.14583142772210003669120562399025*x1`` stays as long as it was given). ``prettify``
         is the display of that form: it decides how each number is WRITTEN and leaves the
-        structure as it is. It evaluates nothing and simplifies nothing, so what the canonical
-        form keeps, the display shows. Nothing inside SimpliPy calls it or reads what it
-        returns; call it where people read expressions, on the answer of :meth:`simplify`::
+        structure as it is. It simplifies nothing, so what the canonical form keeps apart, the
+        display shows apart. Nothing inside SimpliPy calls it or reads what it returns; call it
+        where people read expressions, on the answer of :meth:`simplify`::
 
             engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
             # '2.1458314277221002*x1'
             engine.prettify(engine.simplify('x1*5/21'))        # 'x1/4.2'
             engine.prettify(engine.simplify('1/(2*3.141592653589793)'))
             # '1/(2*3.141592653589793)'
-            engine.prettify(engine.simplify('x1*exp(-381/2)'))  # 'x1*exp(-190.5)'
+            engine.prettify(engine.simplify('x1*exp(-381/2)'))
+            # '1.8488479557720672e-83*x1'
 
         The rules, at the digit budget ``D = digits`` (every digit a spelling writes counts,
         a numerator of 1 included: ``1/12`` counts 3):
@@ -2223,8 +2224,11 @@ class SimpliPyEngine:
         * A float whose reciprocal float64 holds as written stays a divisor where the
           product has another divisor; a bare ``x1/0.225147640565301`` is
           ``4.441529999999994*x1``.
-        * A function of numbers stays a function, its numbers written by these rules
-          (``x1*exp(-381/2)`` is ``x1*exp(-190.5)``). No numbers combine to inf, 0 or a
+        * A function of numbers that would all be written as floats is one float: its
+          float64 as SimpliPy's evaluator computes it, shown at the ``precision``
+          (``x1*exp(-381/2)`` is ``1.8488479557720672e-83*x1``, ``1.85e-83*x1`` at
+          ``precision=3``). A function of a number written exactly stays (``sin(2)``), and so
+          does one whose float would be 0, inf or subnormal. No numbers combine to inf, 0 or a
           subnormal.
         * Exponents follow the same rules; ``x^(1/n)`` and ``x^(-1/n)`` are written
           ``rootn(x, n)`` and ``1/rootn(x, n)`` for even ``n``.
