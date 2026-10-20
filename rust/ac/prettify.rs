@@ -4,9 +4,8 @@
 //! of the canonical expression and a digit budget `D`, and nothing inside the engine calls it or
 //! reads what it writes (a source guard in the test suite holds that line). The display keeps
 //! the state's structure -- its bags, divisors and function applications -- and decides only
-//! how each NUMBER is written. It collects nothing: what one display writes alike, reading it
-//! back collects, and `engine::prettify` repeats the display until it is its own display. The
-//! one value it computes is a function of numbers all shown as floats (rule 6).
+//! how each NUMBER is written. It simplifies nothing: what the display writes alike is not
+//! collected. The one value it computes is a function of numbers all shown as floats (rule 6).
 //!
 //! 1. **Digit budget.** A spelling's digits are every digit it writes, a numerator of 1
 //!    included (`1/12` counts 3, `3/123` counts 4, `0.05` counts 3).

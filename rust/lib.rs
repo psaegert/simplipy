@@ -860,12 +860,9 @@ impl PyEngine {
     /// `prettify`: the DISPLAY of an expression's canonical state under the digit budget
     /// `digits`, as infix text (`form="infix"`) or tokens (`"explicit"`, `"tagged"`), a float
     /// shown with `precision` significant digits (`None`: the shortest decimal of its float64),
-    /// its numbers read in `rule_mode`'s number domain: the display that is its own display.
-    /// Display only: it applies no rules, and nothing in the engine calls this or reads what it
-    /// returns. `max_rounds` caps the displays written (default `PRETTIFY_MAX_ROUNDS`; 1 is the
-    /// first display alone), and `report_rounds` answers `(display, rounds, converged)`.
-    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, rule_mode, max_rounds=None, report_rounds=false))]
-    #[allow(clippy::too_many_arguments)]
+    /// its numbers read in `rule_mode`'s number domain. Display only: it simplifies nothing, and
+    /// nothing in the engine calls this or reads what it returns.
+    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, rule_mode))]
     fn prettify(
         &self,
         py: Python<'_>,
@@ -874,8 +871,6 @@ impl PyEngine {
         form: &str,
         precision: Option<usize>,
         rule_mode: &str,
-        max_rounds: Option<usize>,
-        report_rounds: bool,
     ) -> PyResult<Py<PyAny>> {
         let form = engine::PrettyForm::parse(form).ok_or_else(|| {
             PyValueError::new_err(format!(
@@ -889,28 +884,17 @@ impl PyEngine {
         if precision == Some(0) {
             return Err(PyValueError::new_err("precision must be at least 1"));
         }
-        if max_rounds == Some(0) {
-            return Err(PyValueError::new_err("max_rounds must be at least 1"));
-        }
-        let cap = max_rounds.unwrap_or(engine::PRETTIFY_MAX_ROUNDS);
         let out = py.detach(|| {
             let inner = self.inner();
             ensure_ac_well_formed(&inner, &tokens)?;
             inner
-                .ac_prettify_rounds(&tokens, digits, precision, form, mode, cap)
+                .ac_prettify(&tokens, digits, precision, form, mode)
                 .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
         })?;
-        let shown = match out.shown {
+        Ok(match out {
             engine::Pretty::Text(s) => pyo3::types::PyString::new(py, &s).into_any().unbind(),
             engine::Pretty::Tokens(t) => PyList::new(py, t)?.into_any().unbind(),
-        };
-        if !report_rounds {
-            return Ok(shown);
-        }
-        Ok((shown, out.rounds, out.converged)
-            .into_pyobject(py)?
-            .into_any()
-            .unbind())
+        })
     }
 
     /// Bare-canon complexity: the measure `mu` (in milli-bits) of `tokens` read in the

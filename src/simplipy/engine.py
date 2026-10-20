@@ -2193,9 +2193,9 @@ class SimpliPyEngine:
         :meth:`simplify` returns the canonical form, whose numbers are exact
         (``2.14583142772210003669120562399025*x1`` stays as long as it was given). ``prettify``
         is the display of that form: it decides how each number is WRITTEN and leaves the
-        structure as it is, and applies no rules. Nothing inside SimpliPy calls it or reads
-        what it returns; call it where people read expressions, on the answer of
-        :meth:`simplify`::
+        structure as it is. It simplifies nothing, so what the canonical form keeps apart, the
+        display shows apart. Nothing inside SimpliPy calls it or reads what it returns; call it
+        where people read expressions, on the answer of :meth:`simplify`::
 
             engine.prettify(engine.simplify('2.14583142772210003669120562399025*x1'))
             # '2.1458314277221002*x1'
@@ -2244,16 +2244,12 @@ class SimpliPyEngine:
         At the default ``precision=None`` a number is written exactly or as the float64
         nearest to it, so the display reads back to the same float64 values: it evaluates as
         the expression does, up to the order of its operations. With a ``precision`` it does
-        not: a float shortened to ``k`` digits reads back as another number.
-
-        A display is its own display (``prettify(prettify(x)) == prettify(x)``). Writing
-        numbers as their floats can make parts alike that the expression keeps apart, and
-        reading such a display back collects them, so ``prettify`` reads its display back
-        through the canonical constructors (no rules) and displays again until it no longer
-        changes: ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``0``, as its float64 value
-        is, and ``x3 + (154104.1409857162*x1)^(3.00000000000000000001)`` is
-        ``x3 + 3.6596784345305275e15*x1^3``. The rounds run at full precision; a
-        ``precision`` shortens the floats of the display they reach.
+        not: a float shortened to ``k`` digits reads back as another number. Displaying a
+        display gives it back
+        (``prettify(prettify(x)) == prettify(x)``), except where writing numbers as their
+        floats lets reading the display collect or compute what the expression keeps apart:
+        the display of ``sin(1.00000000000000000001*x1) - sin(x1)`` is ``sin(x1) - sin(x1)``,
+        whose own display is ``0``.
 
         Parameters
         ----------
