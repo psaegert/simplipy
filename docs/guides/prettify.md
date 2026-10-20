@@ -3,7 +3,7 @@
 `simplify` returns the canonical form, and its numbers are exact: a literal keeps every digit
 it was given, and a coefficient that combines several literals is their exact product.
 `prettify` is the display of that form. It decides how each number is written for a reader and
-leaves the expression's structure as it is: it simplifies nothing.
+leaves the expression's structure as it is: it applies no rules.
 
 ```python
 import simplipy as sp
@@ -141,17 +141,24 @@ engine.prettify(tokens, form="tagged")
 At the default `precision=None` a number is written exactly or as the float64 nearest to it,
 so the display reads back to the same float64 values: it evaluates as the expression does, up to
 the order of its operations. A display at a `precision` does not read back to them.
-Displaying a display gives it back:
+
+**A display is its own display.** Writing numbers as their floats can make parts alike that the
+expression keeps apart, and reading such a display back collects them. So `prettify` reads its
+display back through the canonical constructors (no rules) and displays again, until the display
+no longer changes. Displaying a display gives it back:
 
 ```python
 shown = engine.prettify(answer)
 engine.prettify(shown) == shown
 # -> True
+engine.prettify(engine.simplify("sin(1.00000000000000000001*x1) - sin(x1)"))
+# -> '0'
+engine.prettify(engine.simplify("x3 + (154104.1409857162*x1)^(3.00000000000000000001)"))
+# -> 'x3 + 3.6596784345305275e15*x1^3'
 ```
 
-The exception is a display in which writing numbers as their floats makes parts alike that the
-expression keeps apart. `prettify` does not decide that they are alike, and it does not simplify
-what it wrote, so the display of `sin(1.00000000000000000001*x1) - sin(x1)` is
-`sin(x1) - sin(x1)` (whose own display is `0`), and an exponent a hair above 3 is written `3`
-without multiplying the power out. `mode` (default `f64`) is the mode whose number domain reads
-the numbers; the display rules are designed for `f64`.
+The two sines are written alike and cancel, as their float64 values do; the exponent is written
+`3`, and the cube then distributes over its base. The rounds run at full precision: with a
+`precision`, the display they reach has its floats shortened, and nothing is read back from it, so
+parts that agree only to those digits stay apart. `mode` (default `f64`) is the mode whose number
+domain reads the numbers; the display rules are designed for `f64`.

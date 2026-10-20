@@ -2,12 +2,14 @@
 
 Pinned here:
 * the expected-output table at D = 3, row by row, plus the token forms;
-* display only: prettify writes numbers and simplifies nothing -- a function of numbers that
+* display only: prettify writes numbers and applies no rules -- a function of numbers that
   are all shown as floats is one float, computed as the evaluator computes it, rounded to the
-  precision, never 0, inf or a subnormal; any other function stays; the display is not
-  simplified again;
-* P1, idempotence: `prettify(prettify(c)) == prettify(c)` in all three forms on the release
-  corpus, and the display does not depend on how the state holds its reciprocals;
+  precision, never 0, inf or a subnormal; any other function stays;
+* P1, idempotence by construction: prettify displays, reads the display back through the
+  canonical constructors and displays again until the display is its own, so parts written
+  alike are collected on the first call; the rounds converge (never at the cap) on the release
+  corpus and a fold fuzz, in all three forms and at a precision; `prettify(prettify(c)) ==
+  prettify(c)`, and the display does not depend on how the state holds its reciprocals;
 * P2, the read-back: every number of the display reads back as the float64 of the value it
   stands for -- the display evaluates as the state does on the corpus, and a one-ulp change to
   a displayed float is caught;
@@ -229,14 +231,36 @@ def test_any_other_function_of_numbers_stays(eng, text, expected):
     assert show(eng, text) == expected
 
 
-# The display rounds `1.00000000000000000001` to `1` and the exponent `3 + 1e-22` to `3`; it does
-# not simplify what it wrote, so the display neither collapses to `0` nor multiplies out.
+# The display rounds `1.00000000000000000001` to `1` and the exponent `3 + 1e-22` to `3`. Reading
+# that display back collects the two sines and distributes the cube, so the display that is its
+# own display is the collected one, on the first call.
 @pytest.mark.parametrize('text,expected', [
-    ('sin(1.00000000000000000001*x1) - sin(x1)', 'sin(x1) - sin(x1)'),
+    ('sin(1.00000000000000000001*x1) - sin(x1)', '0'),
+    ('x3 + (154104.1409857162*x1)^(3.00000000000000000001)', 'x3 + 3.6596784345305275e15*x1^3'),
     ('x3 + (1815963197375679774584911*x1/1.1784e19)^(9000000000000000000001/3000000000000000000000)',
-     'x3 + (154104.1409857162*x1)^3'),
+     'x3 + 3.6596784345305275e15*x1^3'),
 ])
-def test_the_display_is_not_simplified(eng, text, expected):
+def test_parts_written_alike_are_collected_on_the_first_call(eng, text, expected):
+    assert show(eng, text) == expected
+    assert eng.prettify(show(eng, text)) == expected
+
+
+def test_a_precision_shortens_the_floats_of_the_collected_display(eng):
+    """The rounds run at full precision; a precision shortens the floats of the display they
+    reach, and reads nothing back: terms that agree only to three digits stay apart."""
+    assert show(eng, 'x3 + (154104.1409857162*x1)^(3.00000000000000000001)', precision=3) == \
+        'x3 + 3.66e15*x1^3'
+    assert show(eng, 'sin(1.00000000000000000001*x1) - sin(x1)', precision=3) == '0'
+    assert show(eng, 'sin(1.0001*x1) - sin(x1)', precision=3) == 'sin(x1) - sin(x1)'
+
+
+# Reading the display back computes in float64's normal range: numbers whose product would
+# overflow or underflow stay apart, and nothing turns into 0 or inf.
+@pytest.mark.parametrize('text,expected', [
+    ('x1*1e200*1e200', '1e200*1e200*x1'),
+    ('x1*1e-200*1e-200', '1e-200*1e-200*x1'),
+])
+def test_reading_the_display_back_neither_overflows_nor_underflows(eng, text, expected):
     assert show(eng, text) == expected
 
 
@@ -311,11 +335,104 @@ def test_p1_displaying_a_display_gives_it_back_on_the_corpus(eng, form):
     assert not moved, moved[:5]
 
 
+def one_display(eng, expression):
+    """The first display alone, before any round reads it back."""
+    form, tokens = eng._read_input(expression)
+    return eng._core.prettify(tokens, 3, form, None, rule_mode='default', max_rounds=1)
+
+
 def test_p1_check_catches_a_display_that_moves(eng):
-    """The gate can fail. Writing a number as its float can make two terms of the display alike
-    that the state keeps apart; reading the display then collects them."""
+    """The gate can fail. Writing a number as its float can make two terms of the first display
+    alike that the state keeps apart; reading that display back collects them, so the first
+    display alone is not its own display."""
     row = 'sin(1.00000000000000000001*x1) - sin(x1)'
-    assert displays_that_move(eng, [row], 'infix') == [(row, 'sin(x1) - sin(x1)', '0')]
+    first = one_display(eng, eng.simplify(row))
+    assert (first, one_display(eng, first)) == ('sin(x1) - sin(x1)', '0')
+    assert displays_that_move(eng, [row], 'infix') == []
+
+
+def rounds(eng, expression, precision=None):
+    """`(display, rounds, converged)` of one call."""
+    form, tokens = eng._read_input(expression)
+    return eng._core.prettify(tokens, 3, form, precision, rule_mode='default', report_rounds=True)
+
+
+FUNS = ['sin', 'cos', 'exp', 'log', 'tanh', 'atan', 'sinh', 'asinh', 'cosh']
+
+
+def fold_fuzz(n, seed=11):
+    """Expressions whose canonical state keeps a function of numbers, in the shapes of a product,
+    a sum, a quotient, a reciprocal of a product, a function argument and an exponent."""
+    import random
+    rng = random.Random(seed)
+
+    def number():
+        kind = rng.random()
+        if kind < 0.4:
+            return f'{rng.randint(1, 99999)}/{rng.randint(7, 9999)}'
+        if kind < 0.7:
+            return repr(rng.uniform(-50, 50))
+        if kind < 0.85:
+            return str(rng.randint(-9, 9))
+        return f'{rng.randint(1, 9)}/{rng.choice([2, 3, 5, 10])}'
+
+    def ground(depth):
+        if depth == 0:
+            return number()
+        inner = ground(depth - 1) if rng.random() < 0.6 else number()
+        if rng.random() < 0.3:
+            inner = f'{inner} + {number()}'
+        return f'{rng.choice(FUNS)}({inner})'
+
+    out = []
+    for _ in range(n):
+        g = ground(rng.randint(1, 3))
+        out.append([f'x1*{g}', f'x1 + {g}', f'x1/{g}/x2', f'x1/({g}*(x2 + 1))', f'sin(x1 + {g})',
+                    f'{g}*{ground(1)}*x1 + x2', f'x1^({g})'][rng.randint(0, 6)])
+    return out
+
+
+def fuzz_states(eng, n):
+    states = []
+    for text in fold_fuzz(n):
+        try:
+            states.append(list(eng.simplify(eng._core.parse(text, True, False))))
+        except ValueError:
+            continue
+    return states
+
+
+@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+def test_p1_the_rounds_converge_on_the_corpus(eng, form):
+    """Every display of the corpus is reached before the round cap, and is its own display."""
+    for row in corpus():
+        c = in_form(eng, eng.simplify(row), form)
+        shown, n, converged = rounds(eng, c)
+        assert converged, (row, form, n)
+        assert eng.prettify(shown) == shown
+
+
+@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+def test_p1_the_rounds_converge_on_a_fold_fuzz(eng, form):
+    states = fuzz_states(eng, 400)
+    assert len(states) > 300
+    for c in states:
+        shown, n, converged = rounds(eng, in_form(eng, c, form))
+        assert converged, (eng.to_infix(c), form, n)
+        assert eng.prettify(shown) == shown
+
+
+def test_the_rounds_report_the_cap(eng):
+    """A display stopped by the cap is reported as not converged."""
+    row = eng.simplify('sin(1.00000000000000000001*x1) - sin(x1)')
+    assert rounds(eng, row) == ('0', 2, True)
+    form, tokens = eng._read_input(row)
+    assert eng._core.prettify(tokens, 3, form, None, rule_mode='default', max_rounds=2,
+                              report_rounds=True) == ('0', 2, False)
+    assert eng._core.prettify(tokens, 3, form, None, rule_mode='default', max_rounds=1,
+                              report_rounds=True) == ('sin(x1) - sin(x1)', 1, False)
+    with pytest.raises(ValueError):
+        eng._core.prettify(tokens, 3, form, None, rule_mode='default', max_rounds=0)
 
 
 # Joined reciprocals of numbers, variables and their powers and roots: alike in every form.
@@ -406,7 +523,8 @@ MODULES = {os.path.join('rust', 'ac', 'prettify.rs'), os.path.join('rust', 'engi
 # The only other lines that may name it: the module declarations and the FFI method.
 ALLOWED_RUST = {
     os.path.join('rust', 'ac', 'mod.rs'): {'pub mod prettify;'},
-    os.path.join('rust', 'engine', 'mod.rs'): {'mod prettify;', 'pub use prettify::{Pretty, PrettyForm};'},
+    os.path.join('rust', 'engine', 'mod.rs'): {
+        'mod prettify;', 'pub use prettify::{Pretty, PrettyForm, PrettyRounds, PRETTIFY_MAX_ROUNDS};'},
     os.path.join('rust', 'lib.rs'): {'fn prettify(', 'self.inner.ac_prettify(&tokens, digits, form, mode, budget)'},
 }
 NAME = re.compile(r'prettify|PrettyForm|Pretty\b')

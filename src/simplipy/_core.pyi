@@ -63,7 +63,9 @@ class Engine:
         precision: int | None = ...,  # significant digits of a float; None: its shortest decimal
         *,
         rule_mode: Literal["default", "real", "permissive"],  # the number domain; no rules
-    ) -> str | list[str]: ...
+        max_rounds: int | None = ...,  # displays written at most; 1: the first display alone
+        report_rounds: bool = ...,  # answer (display, rounds, converged)
+    ) -> str | list[str] | tuple[str | list[str], int, bool]: ...
     def ac_simplify_explore(
         self,
         tokens: list[str],

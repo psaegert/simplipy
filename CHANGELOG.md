@@ -151,14 +151,13 @@ model predictions.
   `x1/(sin(x3)*(x2 + 1))`). A function of numbers that would all be written as floats is one
   float, computed as the evaluator computes it and rounded to the precision
   (`1.8488479557720672e-83*x1` for `x1*exp(-381/2)`), and never 0, inf or a subnormal; a function
-  of a number written exactly stays (`sin(2)`). The display is not simplified again, so it never
-  collects what it wrote alike (`sin(1.00000000000000000001*x1) - sin(x1)` shows as
-  `sin(x1) - sin(x1)`). At the default `precision=None` a number is written exactly or as its
-  float64, so the display reads back to the same float64 values, and displaying a display gives
-  it back: on the release corpus and srbf's 6,531 ground truths in all three forms, and on 1,000
-  of its predictions, except where writing numbers as floats lets reading the display collect or
-  compute what the expression keeps apart (the display of `sin(x1) - sin(x1)` is `0`). Nothing
-  inside SimpliPy calls it; see the guide "Displaying expressions".
+  of a number written exactly stays (`sin(2)`). A display is its own display: where writing
+  numbers as floats makes parts alike, `prettify` reads its display back through the canonical
+  constructors (no rules) and displays again until it no longer changes, so
+  `sin(1.00000000000000000001*x1) - sin(x1)` shows as `0` and an exponent a hair above 3 as a
+  cube distributed over its base, on the first call. At the default `precision=None` a number is
+  written exactly or as its float64, so the display reads back to the same float64 values.
+  Nothing inside SimpliPy calls it; see the guide "Displaying expressions".
 <!-- TO BE MEASURED AFTER THE RE-MINE: the speed of 0.15.0 against 0.14.7, per mode, on the
      simplify inputs of flash-ansr's training-data generator, srbf's ground truths and its model
      predictions. The entry that stood here ("Fast in every mode") no longer holds: on the
