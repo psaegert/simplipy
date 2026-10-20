@@ -12,8 +12,7 @@
 //! place, each rebuilt into the whole state it is -- cheapest rebuilt state first, descends each
 //! to its fixpoint, steps to the first endpoint strictly below the best and starts the next
 //! round there; a round that accepts nothing ends the search. `effort=k` is the first `k`
-//! descents of that walk, and the work budget ([`super::work`]: matcher steps and constructor
-//! calls) cuts the same walk at the same place on every machine and under any load.
+//! descents of that walk.
 //!
 //! MEASURE-AGNOSTIC by construction: no measure number appears anywhere in this module --
 //! acceptance is the `ordered_below` predicate, the same Knuth-Bendix orientation the chain
@@ -37,8 +36,8 @@
 //!   ordered by price, single thread), and a reached valley re-explores to nothing: its own
 //!   expansions all settle at or above it. That holds for the answer only when the search ran
 //!   until a whole round of the answer's candidates found nothing (the default,
-//!   `effort=None`): a cap or a spent work budget can stop it between two accepted valleys,
-//!   and a second call then continues from the first one's answer. It also needs the answer
+//!   `effort=None`): a cap can stop it between two accepted valleys, and a second call then
+//!   continues from the first one's answer. It also needs the answer
 //!   to re-read to itself (L6a, docs/formal.md) and the step cap not to bind.
 //!
 //! MOVE SET: the distributive law, which the search owns (the rule load refuses a rule that
@@ -96,12 +95,6 @@ pub fn explore(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex 
     if budget == 0 {
         return fix;
     }
-    // THE WORK BUDGET (`ac::work`): the search may spend `work::search_budget()` units --
-    // matcher steps and constructor calls -- and stops when they are spent, exactly as when the
-    // descent cap binds: it returns the best state so far. A descent the ceiling cut short is
-    // never accepted. The units are a function of the walk alone, so the cut falls at the same
-    // place under every `budget`: a run capped at `k` descents is still the same walk cut short.
-    let _ceiling = super::work::limit(super::work::search_budget());
     search(fix, pass, max_passes, budget)
 }
 
@@ -146,14 +139,11 @@ fn search(fix: Ex, pass: &PassCtx, max_passes: usize, budget: usize) -> Ex {
         round.sort_by_key(|(mu, _)| *mu);
         let mut accepted: Option<Ex> = None;
         for (_, rebuilt) in round {
-            if spent >= budget || super::work::over() {
+            if spent >= budget {
                 return best;
             }
             spent += 1;
             let cur = descend(rebuilt, pass, max_passes);
-            if super::work::over() {
-                return best;
-            }
             if ordered_below(&cur, &best, view) {
                 accepted = Some(cur);
                 break;

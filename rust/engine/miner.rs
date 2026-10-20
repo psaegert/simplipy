@@ -21,7 +21,7 @@ pub type MinedRule = (u64, Vec<String>, Vec<String>);
 ///
 /// THE MARK IS THE SERVE ANSWER (`Engine::mine_mark`): a mode's mine asks the engine that
 /// will serve its file, `simplify(s, mode)` exactly as a user calls it -- the mode's canon,
-/// folds and number domain, its rules so far, the default effort and work budget.
+/// folds and number domain, its rules so far and the default effort.
 ///
 /// THE NUMERIC ACCEPTANCE PER MODE (`rescue`). A const-free pair agrees relatively,
 /// `|s - c| <= rtol*|c|`, so zero agrees only with zero; a FITTED constant keeps the

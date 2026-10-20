@@ -740,11 +740,6 @@ fn memo_log(what: &str, e: &Ex) {
 /// Try every applicable rule at this node (asset order, sig-prefiltered). On a bag fire the
 /// remainder joins the substituted RHS in a fresh canonical bag.
 fn try_rules_at(e: &Ex, p: &PassCtx) -> Option<Ex> {
-    // Past an armed work ceiling no rule is tried: the descent in progress settles quickly
-    // and the search discards it (`ac::search::explore`).
-    if super::work::over() {
-        return None;
-    }
     let node_sig = atom_sig(e, p.cx.view);
     // Lazy per-visit complexity of the subject (first candidate that needs it pays it).
     let node_mu_cell: std::cell::Cell<Option<u64>> = std::cell::Cell::new(None);

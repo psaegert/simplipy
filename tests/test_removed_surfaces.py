@@ -113,6 +113,18 @@ class TestRemovedIn015:
         with pytest.raises(TypeError, match='work_budget'):
             getattr(eng._core, entry)(['x0'], work_budget=10, rule_mode='default')
 
+    def test_the_core_counts_no_work(self) -> None:
+        """With no budget to count against, the counter goes too: no module of the core
+        counts matcher steps or constructor calls, or arms a ceiling over them."""
+        import os
+        import re
+        rust = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'rust')
+        assert not os.path.exists(os.path.join(rust, 'ac', 'work.rs'))
+        for folder, _, files in os.walk(rust):
+            for name in (n for n in files if n.endswith('.rs')):
+                with open(os.path.join(folder, name), encoding='utf-8') as f:
+                    assert not re.search(r'\bwork::|\bmod work\b', f.read()), name
+
     def test_evaluate_constants_has_no_form(self, eng) -> None:
         for form in ('infix', 'tagged', 'explicit'):
             with pytest.raises(TypeError, match='form'):

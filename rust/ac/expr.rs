@@ -3052,7 +3052,6 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 ///   terms, which all collapse into ONE `Const` absorbing the rational accumulator
 ///   (`c1 + c2 + 5 = c3`, the contract's forall-exists direction).
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
-    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // Flatten (Flat) + literal scan.
     let mut lits: Vec<Rat> = Vec::new();
@@ -4031,7 +4030,6 @@ pub(crate) fn mul_undecided(items: Vec<Ex>, cx: &Cx) -> Ex {
 }
 
 fn mul_with(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
-    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
     let mut nums: Vec<Rat> = Vec::new();
     let mut coeff_overflow: Vec<Ex> = Vec::new();
@@ -4941,7 +4939,6 @@ fn decide_opposite_sums(host: SignHost, raw: Vec<Ex>, out: Vec<Ex>, cx: &Cx) -> 
                 .any(|k| zero_off(members, k, cx) == Some(true))
         };
         let price = |choice: &[usize]| -> Option<(Ex, u64)> {
-            super::work::tick(1);
             let (v, odd) = bag(choice)?;
             let p = host.build(neg != odd, v, cx)?;
             let mu = if off(&p) {
@@ -8018,7 +8015,6 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
 /// * `(a*b)^n` for INTEGER n distributes over the factors (TOTAL as extended-real evaluations;
 ///   for non-integer exponents `(ab)^(1/2) != a^(1/2) b^(1/2)` on `a, b < 0`).
 pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
-    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A literal base or exponent beside a non-literal one LANDS here (permissive's ρ,
     // [`land`]); a power of two literals folds exactly or stays as written.
@@ -8567,7 +8563,6 @@ pub fn land_root(e: Ex, cx: &Cx) -> Ex {
 }
 
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
-    super::work::tick(1);
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A literal argument LANDS here (permissive's ρ, [`land`]).
     let args: Vec<Ex> = if cx.lossy() {
