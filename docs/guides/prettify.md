@@ -45,7 +45,9 @@ engine.prettify(engine.simplify("x2 + 0.5"))
 ```
 
 **Otherwise the value is one float**: the float64 nearest to it, in its shortest form, as a
-multiplier. A value a hair from a short number is written as that number.
+multiplier. A number shown as a float is read as a float. A number that would show as a short
+exact number it is not gets its rest, where the rest fits the budget, so the display keeps its
+value; `1.000000000000000000003` is not 1.
 
 ```python
 engine.prettify(engine.simplify("x1/1024"))
@@ -53,7 +55,9 @@ engine.prettify(engine.simplify("x1/1024"))
 engine.prettify(engine.simplify("x1/0.225147640565301"))
 # -> '4.441529999999994*x1'
 engine.prettify(engine.simplify("x1 + 1.000000000000000000003"))
-# -> 'x1 + 1'
+# -> 'x1 + 1 + 3e-21'
+engine.prettify(engine.simplify("0.0009853704666076428*x1"))
+# -> '9.853704666076429e-4*x1'
 ```
 
 **The structure stays.** Where writing a number by these rules would change the expression's
@@ -63,18 +67,17 @@ is written as that spelling and the rest to its value, `s + r` or `s - r`, the r
 the same rules. Of two numbers that would be equal, the one written first keeps its spelling.
 
 ```python
-engine.prettify(engine.simplify("1.000000000000000000003*x1"))
-# -> '(1 + 3e-21)*x1'
-engine.prettify(engine.simplify("sin(1.00000000000000000001*x1) - sin(x1)"))
-# -> 'sin((1 + 1e-20)*x1) - sin(x1)'
-engine.prettify(engine.simplify("x3 + (154104.1409857162*x1)^(3.00000000000000000001)"))
-# -> 'x3 + (154104.1409857162*x1)^(3 + 1e-20)'
+engine.prettify(engine.simplify("1.0000000000000000000031*x1"))
+# -> '(1 + 3.1e-21)*x1'
 engine.prettify(engine.simplify("sin(1.0001*x1) - sin(x1)"), precision=3)
 # -> 'sin((1 + 1e-4)*x1) - sin(x1)'
+engine.prettify(engine.simplify("sin(1.0001*x1) - sin(x1)"))
+# -> 'sin(1.0001*x1) - sin(x1)'
 ```
 
 **Precision.** `precision=k` shows a number written as a float with `k` significant digits
-instead of its shortest float64 form; a number written exactly is not affected. The shortened
+instead of its shortest float64 form, and with no rest unless the structure needs one: the
+reader asked for `k` digits. A number written exactly is not affected. The shortened
 number is written as every number is, so the display reads back as itself: `0.175` is 7/40,
 written `7/40`. Pi stays pi (below). The default, `precision=None`, writes floats in full.
 
@@ -172,8 +175,9 @@ engine.prettify(tokens, form="tagged")
 # -> ['<mul>', '1', '<div>', '2', 'np.pi', '</mul>']
 ```
 
-At the default `precision=None` a number is written exactly or as the float64 nearest to it,
-so the display reads back to the same float64 values: it evaluates as the expression does, up to
+At the default `precision=None` a number is written exactly or as the float64 nearest to it
+(with its rest where that fits), so the display reads back to the same float64 values: it
+evaluates as the expression does, up to
 the order of its operations. A display at a `precision` does not read back to them.
 The display keeps the structure, and displaying a display gives it back, at every precision:
 

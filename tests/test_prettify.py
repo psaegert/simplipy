@@ -135,11 +135,52 @@ def test_token_forms(eng, text, explicit, tagged):
 
 
 def test_long_literals_show_their_float(eng):
-    """An exact literal longer than a float shows as the float64 nearest to it; one a hair from
-    a short number shows as that number where the structure stays."""
+    """An exact literal longer than a float shows as the float64 nearest to it."""
     assert show(eng, '2.14583142772210003669120562399025*x1') == '2.1458314277221002*x1'
-    assert show(eng, 'x1 + 1.000000000000000000003') == 'x1 + 1'
     assert show(eng, 'x1^(300000000000000000001/600000000000000000000)') == 'rootn(x1, 2)'
+
+
+# A number shown as a float is read as a float. At full precision a number that would show as a
+# short exact number it is not gets its rest, where the rest fits the digit budget: the display
+# keeps its value. At a precision the reader asked for k digits, and a rest is written only where
+# the shortened number would change the structure.
+REST_FITS = [
+    ('x1 + 1.000000000000000000003', 'x1 + 1 + 3e-21'),
+    ('x1 - 1.000000000000000000003', 'x1 - 1 - 3e-21'),
+    ('x1 + 0.10000000000000000001', 'x1 + 0.1 + 1e-20'),
+    ('x1*sin(1.000000000000000000003)', 'x1*sin(1 + 3e-21)'),
+    ('x1^(0.50000000000000000001)', 'x1^(1/2 + 1e-20)'),
+    ('0.99999999999999999999*x1', '(1 - 1e-20)*x1'),
+]
+NO_REST = [
+    # a number shown as a float: a fitted constant with 17 significant digits, one unit in the
+    # 17th digit from its shortest float, and a long float whose rest would fit
+    ('0.0009853704666076428*x1 - 0.0088844026345499877', None,
+     '9.853704666076429e-4*x1 - 0.008884402634549989'),
+    ('2.1458314277221002000000000001*x1', None, '2.1458314277221002*x1'),
+    ('2.14583142772210003669120562399025*x1', None, '2.1458314277221002*x1'),
+    # a rest beyond the budget
+    ('x1 + 1.0000000000000000000031', None, 'x1 + 1'),
+    ('x1^(300000000000000000001/600000000000000000000)', None, 'rootn(x1, 2)'),
+    # at a precision
+    ('x1 + 1.000000000000000000003', 3, 'x1 + 1'),
+]
+
+
+@pytest.mark.parametrize('text,expected', REST_FITS, ids=[t for t, _ in REST_FITS])
+def test_a_number_that_would_show_as_a_short_number_it_is_not_gets_its_rest(eng, text, expected):
+    assert show(eng, text) == expected
+    assert eng.prettify(expected) == expected
+    assert structure(eng, eng.simplify(text)) == (expected, True)
+    # the display reads back to the state's own numbers
+    assert eng.simplify(expected) == eng.simplify(text)
+
+
+@pytest.mark.parametrize('text,precision,expected', NO_REST, ids=[f'{t}-{p}' for t, p, _ in NO_REST])
+def test_a_float_a_rest_beyond_the_budget_and_a_precision_write_no_rest(eng, text, precision, expected):
+    assert show(eng, text, precision=precision) == expected
+    assert eng.prettify(expected, precision=precision) == expected
+    assert structure(eng, eng.simplify(text), precision) == (expected, True)
 
 
 @pytest.mark.parametrize('text,precision,expected', [

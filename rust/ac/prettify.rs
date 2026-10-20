@@ -17,12 +17,16 @@
 //!    the reciprocal where it spells shorter (`x1/4.2` for `5/21`), else `p/q` (`22*x1/7`). If
 //!    that spelling fits `D` it is written.
 //! 3. **Otherwise one float**: the float64 nearest to the value, in its shortest form, as a
-//!    multiplier. The display writes the value that float reads back as, so a coefficient a
-//!    hair from 1 shows as no coefficient and an exponent a hair from 1/2 as a square root.
+//!    multiplier. The display writes the value that float reads back as, by these rules (an
+//!    exponent a hair from 1/2 is a square root). A number shown as a float is read as a float.
+//!    One that would show as a short exact number it is not (`1` for
+//!    `1.000000000000000000003`) is written, at full precision, with the rest to its value
+//!    where the rest is written exactly within `D`: `x1 + 1 + 3e-21`.
 //!    With a precision `k`, the float shows `k` significant digits instead (round half to
-//!    even), and that number is written by these rules as every number is (`0.175` is 7/40,
-//!    written `7/40`), so the display reads back as itself.
-//!    Where that spelling changes the value so that reading the display would build another
+//!    even) and no rest is written for its own sake, since the reader asked for `k` digits;
+//!    that number is written by these rules as every number is (`0.175` is 7/40, written
+//!    `7/40`), so the display reads back as itself.
+//!    Where a spelling changes the value so that reading the display would build another
 //!    structure, the number is written as the spelling and the rest, `s + r` or `s - r`
 //!    ([`Choice`]; `engine::prettify` decides, by the [`shape`] the display reads back to).
 //! 4. **pi**: the literal `3.141592653589793` is recognised by exact arithmetic: when `c / pi`
@@ -158,7 +162,8 @@ enum Spelling {
         symbol: bool,
     },
     /// `s + r` or `s - r`: the short spelling of a number and the rest to its value, where the
-    /// short spelling alone would change the expression's structure.
+    /// short spelling alone would show a short exact number it is not, or would change the
+    /// expression's structure.
     Split {
         s: Box<Spelling>,
         r: Box<Spelling>,
@@ -506,11 +511,17 @@ impl<'a, 'v> Display<'a, 'v> {
     }
 
     /// The spelling of `a > 0` given its short spelling: that spelling where it keeps `a`'s
-    /// value, else as the choices say.
+    /// value; at full precision, a short exact-looking spelling with the rest that fits the
+    /// budget; else as the choices say.
     fn choose(&self, a: &Rat, short: (Spelling, Rat)) -> (Spelling, Rat) {
         let short = self.pi_written(a, short);
         if short.1 == *a {
             return short;
+        }
+        if self.precision.is_none() {
+            if let Some(at_value) = self.with_fitting_rest(a, &short) {
+                return at_value;
+            }
         }
         self.note(a);
         match self.choice(a) {
@@ -548,6 +559,25 @@ impl<'a, 'v> Display<'a, 'v> {
             }
             _ => (sp.with_pi_literal(), value),
         }
+    }
+
+    /// `a` written at its value as its short spelling `s` and the rest `r = a - s`, where `s`
+    /// reads as an exact number (it is no float: `1`, `0.1`, `1/2`) and the rest is written
+    /// exactly within the digit budget (rules 1 and 2): `1 + 3e-21`. A number shown as a float
+    /// is read as a float and is written without its rest. `None` where there is no such rest.
+    fn with_fitting_rest(&self, a: &Rat, short: &(Spelling, Rat)) -> Option<(Spelling, Rat)> {
+        if matches!(short.0, Spelling::Float(_)) {
+            return None;
+        }
+        let _exact = number_domain(false);
+        let r = a.checked_add(&short.1.checked_neg()?)?;
+        let rest = exact_fit(&r.abs(), self.digits, NumberPlace::Alone)?;
+        let spelling = Spelling::Split {
+            s: Box::new(short.0.clone()),
+            r: Box::new(rest.spelling()),
+            minus: r.is_negative(),
+        };
+        Some((spelling, a.clone()))
     }
 
     /// `a` written as its short spelling `s` and the rest `r = a - s`, the rest written as

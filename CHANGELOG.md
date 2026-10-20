@@ -149,6 +149,9 @@ model predictions.
   float64 in shortest form (`9.765625e-4*x1`,
   `2.1458314277221002*x1` for a 33-digit literal), or with `k` significant digits at
   `precision=k` (`2.15*x1`), written as that number is so that the display reads back as itself.
+  A number shown as a float is read as a float; one that would show as a short exact number it
+  is not gets its rest where the rest fits the budget (`x1 + 1 + 3e-21` for
+  `x1 + 1.000000000000000000003`).
   A multiple of the literal `3.141592653589793` is written with pi factored out as the symbol
   `pi` where the rest fits (`1/(2*pi)`; `np.pi` in the token forms, the float the literal is),
   at every precision and never shortened, and with the literal where the symbol would read back
@@ -161,9 +164,11 @@ model predictions.
   of a number written exactly stays (`sin(2)`). It changes how a number is written, never the
   structure: a number whose spelling would let parts collect or cancel, drop a multiplier or an
   exponent of 1, or make a non-integer exponent an integer is written as that spelling and the
-  rest to its value (`sin((1 + 1e-20)*x1) - sin(x1)`, `(154104.1409857162*x1)^(3 + 1e-20)`).
-  At the default `precision=None` a number is written exactly or as its float64, so the display
-  reads back to the same float64 values; at every precision it reads back to the structure, and
+  rest to its value (`(1 + 3.1e-21)*x1` for `1.0000000000000000000031*x1`,
+  `sin((1 + 1e-4)*x1) - sin(x1)` for `sin(1.0001*x1) - sin(x1)` at `precision=3`).
+  At the default `precision=None` a number is written exactly or as its float64 (and its rest
+  where that fits), so the display reads back to the same float64 values; at every precision it
+  reads back to the structure, and
   displaying a display gives it back. Nothing inside SimpliPy calls it; see the guide
   "Displaying expressions".
 <!-- TO BE MEASURED AFTER THE RE-MINE: the speed of 0.15.0 against 0.14.7, per mode, on the

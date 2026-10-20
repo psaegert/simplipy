@@ -4,11 +4,14 @@
 //!
 //! **Numbers that would change the structure.** The display writes a number as its short
 //! spelling: exactly where that fits the digit budget, else as its float (`k` significant digits
-//! at a precision). A short spelling that changes the number's value can change what reading the
-//! display back builds: the number becomes 1 and a multiplier or an exponent drops, an integer
-//! where a non-integer exponent stood, or equal to another number so that parts collect, cancel
-//! or merge. Such a number is written as its short spelling and the rest to its value, `s + r`
-//! or `s - r`, the rest written by the same rules (`sin((1 + 1e-20)*x1) - sin(x1)`). A number
+//! at a precision). At full precision a number whose float writes as a short exact number it is
+//! not is written with the rest to its value where the rest fits the budget (`x1 + 1 + 3e-21`),
+//! which keeps its value. A short spelling that changes the number's value can change what
+//! reading the display back builds: the number becomes 1 and a multiplier or an exponent drops,
+//! an integer where a non-integer exponent stood, or equal to another number so that parts
+//! collect, cancel or merge. Such a number is written as its short spelling and the rest to its
+//! value, `s + r` or `s - r`, the rest written by the same rules (`(1 + 3.1e-21)*x1` for
+//! `1.0000000000000000000031*x1`, `sin((1 + 1e-4)*x1) - sin(x1)` at precision 3). A number
 //! written with pi factored out as the symbol is decided the same way, since the symbol reads
 //! back as a multiple of pi, which the canonical constructors can build otherwise than the
 //! number (`sin(x1 + pi)` is `-sin(x1)`): where it would change the structure, the literal
