@@ -1397,6 +1397,15 @@ impl<'a> Cx<'a> {
         !matches!(self.mode, RuleMode::Real) && super::rat::f64_numbers()
     }
 
+    /// The SIGNED-ZERO reading: does this construction answer in float64's signed zeros (IEEE
+    /// 754)? `f64` and `permissive` are evaluated in float64, where an exact zero carries the sign
+    /// of what formed it (`x*0` is -0 wherever x < 0) and its inverse is the infinity of that sign;
+    /// `real` reasons over the reals, whose one zero inverts to `+inf` whatever formed it.
+    #[inline]
+    pub fn ieee_zeros(&self) -> bool {
+        !matches!(self.mode, RuleMode::Real)
+    }
+
     /// In f64 mode, a numeral leaf the evaluator reads as +-inf or (underflowing) as 0:
     /// literals beyond float64's range, which stay leaves there (design 2c, review M4).
     fn f64_reads_degenerate(&self, t: Tok, zero_too: bool) -> bool {
@@ -3985,6 +3994,12 @@ fn level_sets_null(e: &Ex, cx: &Cx) -> bool {
 /// `Err` holds their product, built without its decision (`mul_undecided`), where `pow` refuses.
 pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<Ex>, Ex> {
     let ex = Ex::Num(k.clone());
+    if inverts_a_signed_zero(&members, cx) {
+        return Ok(members
+            .into_iter()
+            .map(|f| pow(f, ex.clone(), cx))
+            .collect());
+    }
     let magnitude = |v: &[Ex]| {
         v.iter()
             .any(|f| matches!(f, Ex::Num(r) if r.is_negative() && *r != Rat::NEG_ONE))
@@ -4002,6 +4017,20 @@ pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<E
         },
         f => Ok(vec![pow(f, ex, cx)]),
     }
+}
+
+/// A ZERO KEEPS ITS SIGN WHERE IT IS INVERTED, in float64's signed zeros (`Cx::ieee_zeros`): does
+/// the product of `v` hold an exact zero, whose sign is then the sign of its other members (`x*0`
+/// is -0 wherever x < 0, `-(x - x)` is -0)? A negative integer power distributes over such a
+/// product exactly in IEEE 754 arithmetic: the exact zero is +0, so `(0*f)^k` is `0^k * f^k`, that
+/// is `inf * f^k`, for every `f`, a zero, an infinity and NaN included. Each member keeps its own
+/// power and the zero the pole, so the answer keeps the infinity's sign: `1/(x1*(x2 - x2))` is
+/// `inf/x1`, `1/-(x1 - x1)` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`. `real` keeps its one zero:
+/// there the product is the zero and its inverse `+inf`. Asked where the members of an inverted
+/// product are still apart (`raised_members`), and by `pow`'s distribution licence
+/// (`power_bag`), where a product that holds a zero is inverted whole.
+fn inverts_a_signed_zero(v: &[Ex], cx: &Cx) -> bool {
+    cx.ieee_zeros() && v.iter().any(|f| matches!(f, Ex::Num(r) if r.is_zero()))
 }
 
 /// `mul()` without the opposite-sums decision, for a product about to be raised to a negative
@@ -8048,6 +8077,7 @@ pub(crate) fn distributes_power(v: &[Ex], e: &Rat, cx: &Cx) -> bool {
 fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     let licensed = !e.is_negative()
         || e.is_even_integer()
+        || inverts_a_signed_zero(v, cx)
         || v.iter().any(holds_infinity)
         || v.iter().all(|f| zero_set_null(f, cx))
         || (v.iter().any(|f| holds_odd_root(f, cx))
@@ -9347,6 +9377,41 @@ mod tests {
                     matches!(&kept, Ex::Mul(v) if v.contains(&neg_s)),
                     "{mode:?}: {kept:?}"
                 );
+            }
+        });
+    }
+
+    #[test]
+    fn a_zero_keeps_its_ieee_sign_where_it_is_inverted() {
+        with_view(|view| {
+            let lg = |cx: &Cx| fun(view.intern("log"), vec![x(view)], cx);
+            for mode in [RuleMode::Default, RuleMode::Permissive, RuleMode::Real] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let ieee = !matches!(mode, RuleMode::Real);
+                let inverse = |members: Vec<Ex>| -> Ex {
+                    let raised = raised_members(members, &Rat::NEG_ONE, &cx)
+                        .unwrap_or_else(|held| vec![pow(held, Ex::int(-1), &cx)]);
+                    mul(raised, &cx)
+                };
+                // 1/(x0*0) is inf/x0 in the float64 modes (-inf wherever x0 < 0), +inf in real
+                let want = if ieee {
+                    mul(vec![Ex::PosInf, pow(x(view), Ex::int(-1), &cx)], &cx)
+                } else {
+                    Ex::PosInf
+                };
+                assert_eq!(inverse(vec![x(view), Ex::int(0)]), want, "{mode:?}");
+                // 1/(-1*0) = 1/-0 is -inf in the float64 modes
+                let want = if ieee { Ex::NegInf } else { Ex::PosInf };
+                assert_eq!(inverse(vec![Ex::int(-1), Ex::int(0)]), want, "{mode:?}");
+                // a product held whole around its zero distributes the inverse too
+                let held = pow(Ex::Mul(vec![Ex::int(0), lg(&cx)]), Ex::int(-1), &cx);
+                if ieee {
+                    let want = mul(vec![Ex::PosInf, pow(lg(&cx), Ex::int(-1), &cx)], &cx);
+                    assert_eq!(held, want, "{mode:?}");
+                } else {
+                    assert!(matches!(held, Ex::Pow(..)), "{mode:?}: {held:?}");
+                }
             }
         });
     }

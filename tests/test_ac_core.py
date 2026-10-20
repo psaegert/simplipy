@@ -812,45 +812,69 @@ class TestInfixCallSyntaxRoundTrip:
             assert engine.simplify(list(back)) == out, (expr, infix, back)
 
 
-class TestOneZeroPoleContract:
-    """Hardening H-016 (2026-08-03, S0): every zero is THE unsigned zero and its pole
-    is +inf (contract v2 §9.2, DECIDED 2026-07-18; §9.8.1 rejected a directional zero
-    outright). The interval layer's 0.6.0-era signed-zero device (b_mul minted -0.0,
-    u_inv / b_pow read the sign bit to pick the pole) implemented the referee-era
-    deployment semantics that §9.2 formally overturned -- the miner-side twin (the R2''
-    tie-break) was deleted at ratification, but the interval-layer device survived.
-    Observable: a zero-coefficient bag whose cofactor is a RECIPROCAL survives to the
-    ground-classification fold (the cofactor is not syntactically certainly-finite),
-    the fold read the interval class, and IEEE `0 x negative = -0.0` flipped the pole:
-    `inv(0/tanh(-2))` shipped a `-inf` LITERAL while every sibling spelling
-    (`inv(0*tanh(-2))`, `inv(0/(-2))`, `inv(0*x1)`) collapsed structurally first and
-    shipped +inf. Same value, two answers, judge-convicted (INF-CHANGE 40/40)."""
+class TestZeroPoles:
+    """Where an exact zero is inverted, `f64` and `permissive` keep the sign IEEE 754 gives it,
+    since their evaluator is float64: a product holding an exact zero is a zero of its other
+    members' sign, and its inverse distributes over them (`(0*f)^k = inf * f^k`, exact in IEEE
+    arithmetic for every `f`). `real` reads the one zero of the reals, whose pole is `+inf`.
+    Every spelling of one value gets one answer in each mode: `inv(0/tanh(-2))`,
+    `inv(0*tanh(-2))` and `inv(0/(-2))` are all `-inf` in `f64` (0.14.7 shipped `-inf` for the
+    first and `+inf` for the others, H-016)."""
 
-    def test_surviving_zero_bag_pole_is_positive(self, engine: SimpliPyEngine) -> None:
-        assert engine.simplify(['inv', '/', '0', 'tanh', '-2']) == ['float("inf")']
+    @pytest.mark.parametrize('mode,want', [('f64', 'float("-inf")'), ('permissive', 'float("-inf")'),
+                                           ('real', 'float("inf")')])
+    def test_a_negative_zero_inverts_to_minus_inf(self, engine: SimpliPyEngine, mode, want) -> None:
+        for tokens in (['inv', '/', '0', 'tanh', '-2'],
+                       ['inv', '*', '0', 'tanh', '-2'],
+                       ['inv', '/', '0', '-2'],
+                       ['inv', 'neg', '-', 'x1', 'x1'],
+                       engine.read_infix('pow(0/tanh(-2), -3)')):
+            assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
+        # an even power of a zero is +0, whatever its sign
+        assert engine.simplify(engine.read_infix('pow(0/tanh(-2), -2)'), mode=mode) == \
+            ['float("inf")']
 
-    def test_odd_negative_exponent_pole_is_positive(self, engine: SimpliPyEngine) -> None:
-        # Under signed zero the odd-integer exponent carried -inf (pow(-0.0, -3) = -inf);
-        # under one zero the exponent's parity is irrelevant: pow(0, y<0) = +inf.
-        assert engine.simplify(engine.read_infix('pow(0/tanh(-2), -3)')) == ['float("inf")']
+    @pytest.mark.parametrize('mode', ['f64', 'permissive'])
+    def test_a_zero_takes_the_sign_of_its_co_members(self, engine: SimpliPyEngine, mode) -> None:
+        assert engine.simplify(['inv', '*', '0', 'x1'], mode=mode) == ['/', 'float("inf")', 'x1']
+        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode=mode) == \
+            ['/', 'float("inf")', 'x11']
+        # permissive keeps S in x/(0/S), as f64 does
+        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode=mode) == \
+            ['*', 'float("inf")', '*', 'x1', 'x2']
+
+    def test_a_zero_signed_outside_the_inverted_product_reads_plus(self, engine) -> None:
+        # The known residual (docs/formal.md): the canonical form holds one exact zero, so a
+        # sign a zero takes through an odd function or a sum is gone before the inverse; float64
+        # gives -inf for both.
+        for mode in ('f64', 'permissive', 'real'):
+            for tokens in (['inv', 'tan', 'neg', '-', 'x1', 'x1'], ['/', '1', '-', '*', '0', '-2', '0']):
+                assert engine.simplify(list(tokens), mode=mode) == ['float("inf")'], (mode, tokens)
+
+    def test_real_reads_one_zero(self, engine: SimpliPyEngine) -> None:
+        assert engine.simplify(['inv', '*', '0', 'x1'], mode='real') == ['float("inf")']
+        assert engine.simplify(['/', '1', '*', 'x11', '-', 'x13', 'x13'], mode='real') == \
+            ['float("inf")']
+        assert engine.simplify(['/', 'x1', '/', '0', 'x2'], mode='real') == \
+            ['*', 'float("inf")', 'x1']
 
     def test_fuzz_row_188677_family(self, engine: SimpliPyEngine) -> None:
-        # x2 / ((0*x1/tanh(-2)) / inf): the denominator collapses to a ground zero bag;
-        # its -0.0 rendering flipped x2/0 to -inf*x2.
-        out = engine.simplify(engine.to_tagged(
-            ['/', 'x2', '/', '/', '*', '0', '*', 'x1', '1', 'tanh', '-2', 'float("inf")']))
-        assert out == ['<mul>', 'float("inf")', 'x2', '</mul>']
-
-    def test_sibling_spellings_stay_positive(self, engine: SimpliPyEngine) -> None:
-        # Anti-regression: the structurally-collapsing spellings were already correct.
-        for tokens in (['inv', '*', '0', 'tanh', '-2'],
-                       ['inv', '/', '0', '-2'],
-                       ['inv', '*', '0', 'x1']):
-            assert engine.simplify(list(tokens)) == ['float("inf")'], tokens
+        # x2 / ((0*x1/tanh(-2)) / inf): the inverse of a product holding a zero, which takes the
+        # sign of x1 and of tanh(-2): -inf*x2/x1 in f64, +inf*x2 (one zero) in real.
+        import numpy as np
+        tokens = ['/', 'x2', '/', '/', '*', '0', '*', 'x1', '1', 'tanh', '-2', 'float("inf")']
+        assert engine.simplify(list(tokens), mode='real') == ['*', 'float("inf")', 'x2']
+        out = engine.simplify(list(tokens))
+        x = np.array([[1.5, 2.5], [-1.5, 2.5], [1.5, -2.5], [-1.5, -2.5]])
+        f = engine.as_callable(out, ['x1', 'x2'])
+        with np.errstate(all='ignore'):
+            got = np.asarray(f(x[:, 0], x[:, 1]), dtype=float)
+        assert list(got) == [-np.inf, np.inf, np.inf, -np.inf], out
 
     def test_interval_layer_speaks_one_zero(self, engine: SimpliPyEngine) -> None:
-        # The oracle itself, not just the fold that consumes it: the class of a
-        # point-zero pole is POSINF regardless of how IEEE arithmetic renders the zero.
+        # The interval oracle reads the reals' one zero: the class of a point-zero pole is
+        # POSINF regardless of how IEEE arithmetic renders the zero. The float64 modes distribute
+        # the inverse of a product holding a zero before a ground node is classified.
         for tokens in (['inv', '/', '0', 'tanh', '-2'],
                        ['inv', '/', '0', '-2'],
                        ['inv', '*', '0', 'x0']):

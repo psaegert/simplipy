@@ -144,8 +144,17 @@ def acj4_refused_rows(engine: SimpliPyEngine) -> tuple[list, list]:
 
 
 # Known violations of the permissive-dominance sweep over the shipped corpus (rows where the
-# permissive answer prices above f64's on f64's yardstick): none.
-PERMISSIVE_DOMINANCE_KNOWN: tuple = ()
+# permissive answer prices above another mode's on f64's yardstick). One row, by the zero each
+# mode reads: its divisor holds `x13 - x13` beside `x11`, which float64's signed zero makes
+# `-inf*x14*(x17/x11 - 1)` inside the tanh in `f64` and `permissive`, while the one zero of
+# `real` gives the cheaper `inf*x14*(x11 - x17)`, a value permissive may not take (it is +inf
+# where float64 gives -inf).
+PERMISSIVE_DOMINANCE_KNOWN: tuple = (
+    {'expression': ['/', '*', 'x2', '-', '+', '*', 'x13', 'tanh', '+', '+', 'x13', '/', '*', '2',
+                    '*', 'x14', '-', 'x11', 'x17', '*', 'x11', '-', 'x13', 'x13', 'x14', 'x13',
+                    '-', 'x14', 'x13', 'x11'],
+     'mu': {'f64': 91585, 'real': 83585, 'permissive': 91585}},
+)
 
 
 def construct_legacy_table() -> SimpliPyEngine:

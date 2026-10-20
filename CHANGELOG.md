@@ -45,7 +45,10 @@ organised by who you are, then the highlights, then every change in detail.
   them, are written in one orientation with the sign in the coefficient: `-1/(x1 - 3)` and
   `1/(3 - x1)` are one answer, and at a pole the answer keeps the limit.
 - **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/2)` is `+0`,
-  the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`.
+  the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`. Where
+  an exact zero is inverted, `f64` (and `permissive`) keep the sign float64 gives it:
+  `1/(x1*(x2 - x2))` is `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `real` reads
+  one zero and keeps `inf`.
 - **Long exact coefficients.** An answer carries every digit of an exact number
   (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
   long, because a literal costs at most what its float costs. Show answers to a reader with
@@ -335,6 +338,26 @@ model predictions.
   two spellings now give one skeleton for every row (one row gave two). srbf's ground truths,
   predictions and the training-data inputs hold no `<constant>`, and none of their answers
   changes in any mode.
+- **A zero keeps its IEEE sign where it is inverted, in `f64` and `permissive`.** Their evaluator
+  is float64, whose zero carries the sign of what formed it: `x1*(x2 - x2)` is `-0` wherever
+  `x1 < 0`, and its inverse `-inf`. The inverse of a product that holds an exact zero now
+  distributes over its members, the zero giving `+inf` and each other member its own power, which
+  is exact in IEEE arithmetic for every member, zeros, infinities and NaN included:
+  `1/(x1*(x2 - x2))` is `inf/x1` (it was `inf`), `1/-(x1 - x1)` is `-inf`, `1/(0/tanh(-2))` and
+  `1/(0/(-2))` are `-inf`, and `permissive` keeps `S` in `x/(0/S)` (`inf*x*S`). `real` reasons
+  over the reals, whose one zero inverts to `+inf`, and keeps its answers (`inf`, `inf`,
+  `inf*x`). The canonical form holds one exact zero, so a sign a zero takes through an odd
+  function or a sum is not kept: `1/tan(-(x1 - x1))` and `1/(0*(-2) - 0)` are `+inf`, where
+  float64 gives `-inf`. On a tenth of the training-data inputs 85 `f64` answers change (14
+  cheaper, 64 dearer, 7 at an equal price) and 81 `permissive` ones (14, 61, 6); evaluated beside
+  their inputs on 256 points, the `f64` answers that give an infinity of the other sign fall from
+  50 rows to 1, and the `permissive` ones from 48 to 13. srbf's ground truths and predictions do
+  not change in any mode, `real` does not change, and no answer changes on a second call. The
+  rule judge's deployed lane already reads float64's signed zeros; the end-to-end monitor
+  (`monitor_ruleset`, `judge_pair(..., mode=)`) now reads a zero in the lane of the mode a rewrite
+  was made in, the signed zeros of `f64` and `permissive` or the one zero of `real`. On the
+  release corpus `permissive` no longer prices at or below `real` on one row, whose `real` answer
+  takes the one zero's `+inf` where float64 gives `-inf`.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

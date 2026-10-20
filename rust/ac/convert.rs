@@ -171,9 +171,11 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
             let at = parse_members(tokens, idx + 1, cx, &mut num)?;
             let (mut den, at) = divisor_members(tokens, at, cx)?;
             // A literal over a literal is the spelling of one number (`/ p q`), and stays one
-            // member of the coefficient's partition.
+            // member of the coefficient's partition -- but for a zero over a literal in the
+            // float64 modes, which is the signed zero of the divisor's sign (`0/(-2)` is -0), so
+            // its members stay apart for an inverse to read (`zero_over_literal`).
             match (num.as_slice(), den.as_slice()) {
-                ([Ex::Num(_)], [Ex::Num(_)]) => {
+                ([Ex::Num(n)], [Ex::Num(_)]) if !zero_over_literal(n, cx) => {
                     out.push(desugar("/", t, vec![num.remove(0), den.remove(0)], cx))
                 }
                 _ => {
@@ -213,9 +215,12 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
                 };
             }
             // A literal over a literal is the tagged spelling of one number, as `/ p q` is the
-            // explicit one, and stays one member of the coefficient's partition.
+            // explicit one, and stays one member of the coefficient's partition (but a zero
+            // over a literal in the float64 modes, `zero_over_literal`).
             match (num.as_slice(), den.as_slice()) {
-                ([Ex::Num(_)], [d]) if matches!(d.as_slice(), [Ex::Num(_)]) => {
+                ([Ex::Num(n)], [d])
+                    if matches!(d.as_slice(), [Ex::Num(_)]) && !zero_over_literal(n, cx) =>
+                {
                     let q = den.remove(0).remove(0);
                     out.push(mul(
                         vec![num.remove(0), pow(q, Ex::Num(Rat::NEG_ONE), cx)],
@@ -236,16 +241,23 @@ fn parse_members(tokens: &[Tok], idx: usize, cx: &Cx, out: &mut Vec<Ex>) -> Opti
     }
 }
 
-/// The members of a divisor spelled at `idx`: those of a product spelling, else the one member.
+/// Is the numerator `n` of a literal fraction a zero the float64 modes read as a signed zero
+/// (`Cx::ieee_zeros`)? `0/q` is then +0 or -0 by the sign of `q`, which no exact number holds, so
+/// the fraction stays its members, the zero and the divisor's inverse: an inverse that reaches
+/// them keeps the sign (`1/(0/(-2))` is -inf), and their product is the zero as before.
+fn zero_over_literal(n: &Rat, cx: &Cx) -> bool {
+    n.is_zero() && cx.ieee_zeros()
+}
+
+/// The members of a divisor spelled at `idx`, as `parse_members` reads every spelling: a
+/// product's members, those of a negative integer power of a product (`product_power`), else the
+/// one member. A divisor that is a power of a product so gives its raised members, as inside a
+/// product spelled around it, and an inverse meets them apart: an exact zero among them keeps
+/// the sign they give it.
 fn divisor_members(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Vec<Ex>, usize)> {
-    let t = *tokens.get(idx)?;
-    if product_head(&cx.view.resolve_owned(t), cx.view.arity(t)) {
-        let mut members = Vec::new();
-        let at = parse_members(tokens, idx, cx, &mut members)?;
-        return Some((members, at));
-    }
-    let (e, at) = parse_one(tokens, idx, cx)?;
-    Some((vec![e], at))
+    let mut members = Vec::new();
+    let at = parse_members(tokens, idx, cx, &mut members)?;
+    Some((members, at))
 }
 
 /// `inv P` or `pow P k` (`k` a negative integer literal) over a product spelling `P`: its

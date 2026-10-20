@@ -337,6 +337,17 @@ vanishes at a class's zero only through a term that vanishes faster there
 root keeps the sign of zero like every odd function (IEEE-754 `rootn(-0, n) = -0` for odd `n`), so
 it reads at the zero as its radicand does.
 
+A zero that holds everywhere (`x2 - x2`) has no limit to read. In `f64` and `permissive`, whose
+evaluator is float64, it is IEEE-754's signed zero: where a product holding an exact zero is
+inverted, the inverse distributes over its members, the zero giving `+inf` (it is `+0`) and each
+other member its own power, so the answer keeps the sign the members give the zero:
+`1/(x1*(x2 - x2))` is `inf/x1`, `1/(-(x1 - x1))` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`.
+`real` reads the one zero of the reals, whose inverse is `+inf` (`c/0 = sign(c)*inf`): there the
+three are `inf`, `inf` and `inf*x1`. A zero's sign survives only as a member of the product
+that is inverted, since the canonical form holds one exact zero: through an odd function or a
+sum it is lost, so `1/tan(-(x1 - x1))` and `1/(0*(-2) - 0)` are `+inf` in every mode, where
+float64 gives `-inf`.
+
 **Convention (factored vs. flat scaling, finite and infinite alike).** The constructors
 extract a sum's content only in the unanimity case (it must never lengthen a term), so with
 the search off (`effort=0`) a factored spelling like `-2*(x1 - 5/2)` and its distributed equal

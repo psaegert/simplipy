@@ -123,6 +123,74 @@ class TestRootnSemantics:
         assert r['clause'] == 'bc-positive-measure'
 
 
+class TestZeroLanes:
+    """The monitor reads a zero in the lane of the mode the rewrite was made in: `real`'s one
+    unsigned zero (1/0 = +inf), or the signed zeros IEEE 754 gives the float64 modes."""
+
+    #: Inputs whose exact zero is inverted, with the IEEE answer and the one-zero answer.
+    POLES = [
+        ('/ 1 * x11 - x13 x13', '/ float("inf") x11', 'float("inf")'),
+        ('inv neg - x1 x1', 'float("-inf")', 'float("inf")'),
+        ('/ x1 / 0 x2', '* float("inf") * x1 x2', '* float("inf") x1'),
+    ]
+
+    @pytest.mark.parametrize('src,ieee,one_zero', POLES)
+    def test_each_lane_accepts_its_own_reading_and_refuses_the_other(self, src, ieee, one_zero):
+        for mode, good, bad in (('f64', ieee, one_zero), ('permissive', ieee, one_zero),
+                                ('real', one_zero, ieee)):
+            verdict, detail = judge_pair(src.split(), good.split(), rng(), mode=mode)
+            assert verdict == 'OK', (mode, good, detail)
+            verdict, detail = judge_pair(src.split(), bad.split(), rng(), mode=mode)
+            assert verdict == 'VIOLATION' and 'INF-CHANGE' in detail, (mode, bad, detail)
+
+    def test_the_default_lane_is_the_engines_default_mode(self):
+        src, ieee, one_zero = self.POLES[0]
+        assert judge_pair(src.split(), ieee.split(), rng()) == \
+            judge_pair(src.split(), ieee.split(), rng(), mode='f64')
+        assert judge_pair(src.split(), one_zero.split(), rng())[0] == 'VIOLATION'
+
+    def test_the_signed_lane_follows_ieee_through_every_zero_sensitive_operator(self):
+        from mpmath import mp, mpf
+        from simplipy.verify._monitor import DPS
+        mp.dps = DPS  # direct-internal evaluator call: the caller owns the precision (C35)
+        env = {'x1': mpf(-2), 'x2': mpf(3)}
+        for tokens, ieee in [
+                ('inv neg - x2 x2', -np.inf),          # -(+0) is -0
+                ('inv * x1 - x2 x2', -np.inf),         # (-2)*(+0) is -0
+                ('inv / 0 x1', -np.inf),               # 0/(-2) is -0
+                ('inv / x2 float("-inf")', -np.inf),   # 3/(-inf) is -0
+                ('inv + neg 0 neg 0', -np.inf),        # -0 + -0 is -0
+                ('inv - neg 0 0', -np.inf),            # -0 - (+0) is -0
+                ('inv - x2 x2', np.inf),               # x - x is +0
+                ('inv abs neg 0', np.inf),             # |-0| is +0
+                ('pow neg 0 -3', -np.inf), ('pow neg 0 -2', np.inf),
+                ('rootn neg 0 -3', -np.inf), ('rootn neg 0 -2', np.inf),
+                ('inv pow neg 0 3', -np.inf), ('inv pow neg 0 0.5', np.inf),
+                ('inv rootn float("-inf") -3', -np.inf),
+                ('inv sin neg 0', -np.inf), ('inv tan neg 0', -np.inf),
+                ('inv atan neg 0', -np.inf), ('inv tanh neg 0', -np.inf),
+                ('inv asinh neg 0', -np.inf), ('inv sinh neg 0', -np.inf),
+                ('inv asin neg 0', -np.inf), ('inv atanh neg 0', -np.inf),
+                ('inv exp float("-inf")', np.inf),     # exp(-inf) is +0
+                ('<mul> 1 <div> neg 0 </mul>', -np.inf),
+                ('inv -0.0', -np.inf), ('inv -0', np.inf),   # a float spelling keeps its sign
+                ('/ 0 0', np.nan)]:
+            got = evaluate(tokens.split(), env, signed=True)
+            assert (np.isnan(ieee) and got != got) or got == ieee, (tokens, got)
+            # the one-zero lane: every pole of a zero is +inf
+            one = evaluate(tokens.split(), env)
+            assert one == np.inf or (np.isnan(ieee) and one != one), (tokens, one)
+
+    def test_a_zero_valued_literal_span_keeps_its_sign(self):
+        # `* -1 0` folds to an exact zero, whose sign IEEE reads as -0
+        assert judge_pair(['inv', '*', '-1', '0'], ['float("-inf")'], rng(), mode='f64')[0] == 'OK'
+        assert judge_pair(['inv', '*', '-1', '0'], ['float("inf")'], rng(), mode='real')[0] == 'OK'
+
+    def test_an_unknown_mode_is_refused(self):
+        with pytest.raises(ValueError, match='mode'):
+            judge_pair(['x1'], ['x1'], rng(), mode='complex')
+
+
 class TestGateSelftest:
     def test_gate_and_contract_selftest(self):
         assert v.selftest() is True
@@ -741,8 +809,9 @@ class TestCleanlinessIsPerMode:
                                acj_corpus_rules_path(),
                                engine_config=acj_config_path())
         assert all(r['is_clean'] for r in report['modes'].values())
-        # the package ships the corpus, so the sweep runs in any install. INTERIM (2026-10-18):
-        # exactly the one known violation (conftest), which alone keeps the triple unclean.
+        # the package ships the corpus, so the sweep runs in any install. Exactly the known
+        # violations (conftest: a row where real's one zero and permissive's signed zero give
+        # different values), which alone keep the triple unclean.
         assert report['permissive_dominance'] == {
             'checked': True, 'violations': list(PERMISSIVE_DOMINANCE_KNOWN)}
         assert report['is_clean'] is (not PERMISSIVE_DOMINANCE_KNOWN), report['relationships']

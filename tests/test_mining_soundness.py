@@ -2428,7 +2428,11 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         engine = SimpliPyEngine.from_config(acj_config_path())
         assert engine._core.mode_rules_len(rule_mode='real') is not None
         rows = default_corpus()[:120]
-        assert assert_permissive_dominates(engine, rows) == []
+        # the corpus's known violation (conftest): real's one zero and permissive's signed zero
+        # give that row different values, so real's cheaper answer is not permissive's to take
+        from conftest import PERMISSIVE_DOMINANCE_KNOWN
+        known = [v for v in PERMISSIVE_DOMINANCE_KNOWN if v['expression'] in map(list, rows)]
+        assert assert_permissive_dominates(engine, rows) == known
 
     def test_it_CAN_fail(self) -> None:
         """An invariant that cannot fail proves nothing -- three tautologies shipped in
