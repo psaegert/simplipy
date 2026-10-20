@@ -63,7 +63,8 @@ class Engine:
         precision: int | None = ...,  # significant digits of a float; None: its shortest decimal
         *,
         rule_mode: Literal["default", "real", "permissive"],  # the number domain; no rules
-    ) -> str | list[str]: ...
+        check_structure: bool = ...,  # answer (display, whether it keeps the structure)
+    ) -> str | list[str] | tuple[str | list[str], bool]: ...
     def ac_simplify_explore(
         self,
         tokens: list[str],

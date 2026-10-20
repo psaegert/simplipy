@@ -3,7 +3,8 @@
 `simplify` returns the canonical form, and its numbers are exact: a literal keeps every digit
 it was given, and a coefficient that combines several literals is their exact product.
 `prettify` is the display of that form. It decides how each number is written for a reader and
-leaves the expression's structure as it is: it evaluates nothing and simplifies nothing.
+leaves the expression's structure as it is: it changes how a number is written, never the
+structure, and applies no rules.
 
 ```python
 import simplipy as sp
@@ -26,16 +27,21 @@ plots, logs and reports.
 The digit budget `digits` (default 3) counts every digit a spelling writes, a numerator of 1
 included: `1/12` counts 3.
 
-A **fraction that fits the budget is written as a fraction**: the shortest of `p/q` and the
-integers over a decimal (`5/21` is also `1/4.2`).
+A **number that fits the budget is written exactly, as `simplify` writes it**. The budget
+decides only whether a number is written exactly or as its float; how an exact number is
+written is `simplify`'s own rule: the decimal where it is the cheaper spelling (`0.3`), else a
+fraction, with the reciprocal as the divisor where that is shorter (`5/21` beside a factor is
+`x1/4.2`).
 
 ```python
+engine.prettify(engine.simplify("x1*3/10"))
+# -> '0.3*x1'
 engine.prettify(engine.simplify("x1*5/21"))
 # -> 'x1/4.2'
 engine.prettify(engine.simplify("22/7*x1"))
 # -> '22*x1/7'
-engine.prettify(engine.simplify("x1/2"))
-# -> 'x1/2'
+engine.prettify(engine.simplify("x2 + 0.5"))
+# -> 'x2 + 1/2'
 ```
 
 **Otherwise the value is one float**: the float64 nearest to it, in its shortest form, as a
@@ -46,27 +52,50 @@ engine.prettify(engine.simplify("x1/1024"))
 # -> '9.765625e-4*x1'
 engine.prettify(engine.simplify("x1/0.225147640565301"))
 # -> '4.441529999999994*x1'
+engine.prettify(engine.simplify("x1 + 1.000000000000000000003"))
+# -> 'x1 + 1'
+```
+
+**The structure stays.** Where writing a number by these rules would change the expression's
+structure -- the number would be 1 and a multiplier or an exponent would drop, an integer where
+a non-integer exponent stood, or equal to another number so that parts collect or cancel -- it
+is written as that spelling and the rest to its value, `s + r` or `s - r`, the rest written by
+the same rules. Of two numbers that would be equal, the one written first keeps its spelling.
+
+```python
 engine.prettify(engine.simplify("1.000000000000000000003*x1"))
-# -> 'x1'
+# -> '(1 + 3e-21)*x1'
+engine.prettify(engine.simplify("sin(1.00000000000000000001*x1) - sin(x1)"))
+# -> 'sin((1 + 1e-20)*x1) - sin(x1)'
+engine.prettify(engine.simplify("x3 + (154104.1409857162*x1)^(3.00000000000000000001)"))
+# -> 'x3 + (154104.1409857162*x1)^(3 + 1e-20)'
+engine.prettify(engine.simplify("sin(1.0001*x1) - sin(x1)"), precision=3)
+# -> 'sin((1 + 1e-4)*x1) - sin(x1)'
 ```
 
 **Precision.** `precision=k` shows a number written as a float with `k` significant digits
-instead of its shortest float64 form; a fraction that fits the digit budget is not affected.
-The default, `precision=None`, writes floats in full.
+instead of its shortest float64 form; a number written exactly is not affected. The shortened
+number is written as every number is, so the display reads back as itself: `0.175` is 7/40,
+written `7/40`, and pi is factored out only at full precision. The default, `precision=None`,
+writes floats in full.
 
 ```python
 engine.prettify(answer, precision=3)
 # -> '2.15*x1'
 engine.prettify(engine.simplify("x1*5/21"), precision=1)
 # -> 'x1/4.2'
+engine.prettify(engine.simplify("x0/(2*3.141592653589793)"), precision=3)
+# -> '0.159*x0'
 ```
 
-**pi** is the literal `3.141592653589793`. A value that is a fitting fraction times pi, or over
-it, is written with the literal factored out.
+**pi** is the literal `3.141592653589793`. A value that is a number written exactly times pi,
+or over it, is written with the literal factored out.
 
 ```python
+engine.prettify(engine.simplify("x0/(2*3.141592653589793)"))
+# -> 'x0/(2*3.141592653589793)'
 engine.prettify(engine.simplify("3*x0^2/(20*3.141592653589793*x1*x2)"))
-# -> '3*x0^2/(20*3.141592653589793*x1*x2)'
+# -> '0.15*x0^2/(3.141592653589793*x1*x2)'
 ```
 
 **Divisors.** Every divisor of a product joins one denominator, functions and sums included:
@@ -87,14 +116,18 @@ engine.prettify(engine.simplify("x1/243/x2"))
 Tagged tokens write a section member per reciprocal, as the tagged form reads them, so there a
 reciprocal of a product holding a sum or a function stays one bag in the section.
 
-**Functions of numbers** stay functions, their numbers written by the same rules: what `simplify`
-keeps, the display shows. No numbers combine to inf, 0 or a subnormal.
+**A function of floats is one float.** A function of numbers that would all be written as
+floats is written as its float64, computed as SimpliPy's evaluator computes it and shown at the
+`precision`. A function of a number written exactly stays a function, and so does one whose
+float would be 0, infinite or subnormal. No numbers combine to inf, 0 or a subnormal.
 
 ```python
 engine.prettify(engine.simplify("x1*exp(-381/2)"))
-# -> 'x1*exp(-190.5)'
+# -> '1.8488479557720672e-83*x1'
+engine.prettify(engine.simplify("x1*exp(-381/2)"), precision=3)
+# -> '1.85e-83*x1'
 engine.prettify(engine.simplify("sin(sin(9463/890))"))
-# -> 'sin(sin(10.632584269662921))'
+# -> '-0.8045036621463277'
 engine.prettify(engine.simplify("x1 + sin(2)"))
 # -> 'x1 + sin(2)'
 ```
@@ -130,7 +163,7 @@ engine.prettify(tokens, form="tagged")
 At the default `precision=None` a number is written exactly or as the float64 nearest to it,
 so the display reads back to the same float64 values: it evaluates as the expression does, up to
 the order of its operations. A display at a `precision` does not read back to them.
-Displaying a display gives it back:
+The display keeps the structure, and displaying a display gives it back, at every precision:
 
 ```python
 shown = engine.prettify(answer)
@@ -138,9 +171,5 @@ engine.prettify(shown) == shown
 # -> True
 ```
 
-The exception is a display in which writing numbers as their floats makes parts alike that the
-expression keeps apart. `prettify` does not decide that they are alike, and it does not simplify
-what it wrote, so the display of `sin(1.00000000000000000001*x1) - sin(x1)` is
-`sin(x1) - sin(x1)` (whose own display is `0`), and an exponent a hair above 3 is written `3`
-without multiplying the power out. `mode` (default `f64`) is the mode whose number domain reads
-the numbers; the display rules are designed for `f64`.
+`mode` (default `f64`) is the mode whose number domain reads the numbers; the display rules are
+designed for `f64`.
