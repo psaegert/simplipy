@@ -98,8 +98,9 @@ def require_triple(why: str = 'the acj-4 triple is not staged') -> None:
 # key (fewest signs, then outermost) and the one-bit sign moved the canon and the measure past the
 # staged acj-4 asset, which was mined under the earlier ones, and the f64 load refuses exactly
 # these rows of it:
-#   * SUBSUMED (gate G2): a sign moved at an odd function, which the canon now places itself, so
-#     both sides are one canonical state;
+#   * SUBSUMED (gate G2): a sign moved at an odd function, which the canon now places itself, and
+#     a product of two powers of e, which the product constructor merges (`exp(2)/e` is `e`),
+#     so both sides are one canonical state;
 #   * UPHILL (gate G7): two rows whose sides now climb in price. A sign costs one bit wherever it
 #     sits, so a negation standing alone pays no `Mul` head: `-exp(-x)` is cheaper than
 #     `-1/exp(x)` and `-log(acos(x))` than `log(1/acos(x))`, where the two sides cost the same
@@ -116,6 +117,7 @@ ACJ4_INTERIM_SUBSUMED = (
     ('inv neg atan _0', 'inv atan neg _0'), ('inv neg atanh _0', 'inv atanh neg _0'),
     ('neg rootn _0 3', 'rootn neg _0 3'), ('neg rootn _0 5', 'rootn neg _0 5'),
     ('neg rootn _0 7', 'rootn neg _0 7'), ('neg rootn _0 9', 'rootn neg _0 9'),
+    ('/ exp 2 np.e', 'np.e'),
 )
 ACJ4_INTERIM_UPHILL = (
     ('neg exp neg !0', 'inv neg exp !0'), ('neg log acos _0', 'log inv acos _0'),

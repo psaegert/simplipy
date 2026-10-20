@@ -6,7 +6,8 @@
 //!   `Const`; like terms collected as far as the soundness gates allow; sorted by [`cmp_ex`].
 //! * `Mul(v)`: `v.len() >= 2`; no element is a `Mul`; at most one `Num` (never 1; 0 only in the
 //!   uncertified `0 * t` case documented at the zero-coefficient gate); at most one bare `Const`;
-//!   like bases collected under the gates; sorted by [`cmp_ex`].
+//!   like bases collected under the gates, and at most one power of e (`exp(a) exp(b)` is
+//!   `exp(a + b)`); sorted by [`cmp_ex`].
 //! * `Pow(b, e)`: `e` is never `Num(0)` or `Num(1)`; `b` is never a `Mul` when `e` is a
 //!   non-negative or even integer (integer powers distribute) -- for ODD NEGATIVE `e` the
 //!   distribution carries a zero-set licence (see `pow`), so a refused `Pow(Mul[..], e)`
@@ -4295,8 +4296,10 @@ fn mul_with(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
 
 /// Like-base exponent collection, `mul()`'s step after the coefficient: the factors with one
 /// base (and one symbolic exponent) merge their exponents, and each result is rebuilt through
-/// [`pow`]. Returns the rebuilt factors and whether one of them came back as a product
-/// (`spliced`: its members are in the list, and the caller re-runs the constructor on it).
+/// [`pow`]; then the powers of e left over distinct bases merge into one (`merge_e_powers`).
+/// Returns the rebuilt factors and whether one of them must re-enter the constructor
+/// (`spliced`: a product whose members are in the list, or a factor of another kind, and the
+/// caller re-runs the constructor on it).
 fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
     // Like-base exponent collection. The BRANCH-CUT licence gates every single merge step,
     // including same-sign ones: merging exponents `a` and `b` into `a + b` is sound iff both
@@ -4405,7 +4408,66 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
         let (out, again) = collect_like_bases(out, cx);
         return (out, spliced || again);
     }
-    (out, spliced)
+    let merged = merge_e_powers(&mut out, cx);
+    (out, spliced || merged)
+}
+
+/// The exponent of `f` read as a power of Euler's number: `exp(a)` is `e^a`, the leaf `E` is
+/// `e^1`, and a rational power of either is `e^(a r)` -- a `Pow` with a literal exponent, or an
+/// even root, which `factor_split` reads as a rational power too. `None` for anything else,
+/// a symbolic power included: `(e^a)^b` is `e^(a b)` only where `a b` is no `0 * inf`.
+fn e_exponent(f: &Ex, cx: &Cx) -> Option<Ex> {
+    let (base, r) = as_rational_power(f, cx).unwrap_or((f, Rat::ONE));
+    let a = match base {
+        Ex::E => return Some(Ex::Num(r)),
+        Ex::Fun(op, args) if args.len() == 1 && cx.view.tok_is(*op, "exp") => &args[0],
+        _ => return None,
+    };
+    Some(if r.is_one() {
+        a.clone()
+    } else {
+        mul(vec![Ex::Num(r), a.clone()], cx)
+    })
+}
+
+/// POWERS OF e COLLECT BY THEIR EXPONENTS: `exp(a) exp(b) = exp(a + b)`. `exp` is a power of e,
+/// so this is the like-base collection that merges `x^a x^b` into `x^(a + b)`, over the one base
+/// e every power of e shares, whatever `exp` spells its exponent with: `collect_like_bases` merges
+/// the powers over one `exp(a)` as over any base, and this merges what remains over distinct
+/// ones. The base is positive, finite and nonzero, so every licence of that collection holds for
+/// it (the branch cut and the finite-nonzero licence of a cancelling merge); the exponents sum
+/// through [`add`], whose own licences decide what cancels: `exp(u) exp(-u)` is `exp(0) = 1` where
+/// `u` is finite almost everywhere, as `exp(u)/exp(u)` is.
+///
+/// TOTAL on the extended real line, so no mode needs a licence of its own: at `a = +inf`,
+/// `b = -inf` both sides are NaN (`inf * 0`, and `exp(inf - inf)`), and at one infinite exponent
+/// both are that exponent's limit. Under the f64 evaluator the two sides differ where an `exp`
+/// overflows or underflows (`exp(800) exp(-800)` is `inf * 0 = NaN`, while `exp(0)` is 1), which
+/// is f64's range event (`numeric::RangeKind`): there a rewrite may give the true value, and the
+/// merge gives it.
+///
+/// Rebuilt through [`pow`] over the base e, so the merged exponent takes the spelling `pow` gives
+/// any power of e (`compose_e_power`): `exp(x + 1)`, or `E` and `1` at the exponents 1 and 0. A
+/// single power of e stays as it stands. Returns whether the merged factor must re-enter the
+/// constructor: when it is no power of e (a number, a product, a factor over another base).
+fn merge_e_powers(out: &mut Vec<Ex>, cx: &Cx) -> bool {
+    let at: Vec<(usize, Ex)> = out
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| e_exponent(f, cx).map(|x| (i, x)))
+        .collect();
+    if at.len() < 2 {
+        return false;
+    }
+    let mut exponents = Vec::with_capacity(at.len());
+    for (i, x) in at.into_iter().rev() {
+        out.remove(i);
+        exponents.push(x);
+    }
+    let merged = pow(Ex::E, add(exponents, cx), cx);
+    let again = e_exponent(&merged, cx).is_none();
+    out.push(merged);
+    again
 }
 
 /// `mul()`'s last step: the sign owners, then the assembly, for a nonzero coefficient and a
@@ -9234,6 +9296,54 @@ mod tests {
             assert_eq!(mul(vec![Ex::int(0), x(view)], &cx), Ex::int(0));
             let e = mul(vec![Ex::int(0), lg.clone()], &cx);
             assert_eq!(e, Ex::Mul(vec![Ex::int(0), lg]));
+        });
+    }
+
+    #[test]
+    fn powers_of_e_collect_by_their_exponents() {
+        with_view(|view| {
+            let exp = view.intern("exp");
+            let y = || Ex::Leaf(view.intern("x1"));
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let e = |a: Ex| fun(exp, vec![a], &cx);
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // exp(a) exp(b) = exp(a + b)
+                assert_eq!(
+                    mul(vec![e(x(view)), e(y())], &cx),
+                    e(add(vec![x(view), y()], &cx)),
+                    "{mode:?}"
+                );
+                // exp(u) exp(-u) = exp(0) = 1, u finite almost everywhere
+                assert_eq!(mul(vec![e(x(view)), e(neg(x(view)))], &cx), Ex::int(1));
+                // e is e^1, and a rational power of an exp is a power of e
+                assert_eq!(
+                    mul(vec![Ex::E, e(x(view))], &cx),
+                    e(add(vec![x(view), Ex::int(1)], &cx))
+                );
+                let sq = pow(e(x(view)), Ex::int(2), &cx);
+                assert_eq!(
+                    mul(vec![sq.clone(), e(y())], &cx),
+                    e(add(vec![mul(vec![Ex::int(2), x(view)], &cx), y()], &cx))
+                );
+                // a quotient of powers of e, inside a wider product
+                let q = mul(vec![y(), e(x(view)), pow(e(y()), Ex::int(-1), &cx)], &cx);
+                assert_eq!(q, mul(vec![y(), e(add(vec![x(view), neg(y())], &cx))], &cx));
+                // f64's exp(800) exp(-800) is inf * 0 = NaN, an overflow, where the true value
+                // is given: exp(0) = 1
+                assert_eq!(
+                    mul(vec![e(Ex::int(800)), e(Ex::int(-800))], &cx),
+                    Ex::int(1)
+                );
+                // a lone power of e stays, and one base's powers collect over that base as
+                // `pow` spells them: exp(x) exp(x) is exp(x)^2
+                assert_eq!(
+                    mul(vec![sq.clone(), Ex::int(3)], &cx),
+                    Ex::Mul(vec![Ex::int(3), sq.clone()])
+                );
+                assert_eq!(mul(vec![e(x(view)), e(x(view))], &cx), sq);
+            }
         });
     }
 

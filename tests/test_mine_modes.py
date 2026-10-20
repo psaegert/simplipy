@@ -69,6 +69,30 @@ def test_the_miner_refuses_the_law_the_load_refuses(tmp_path, eng, mode):
     assert loaded._core.ac_rules_drop_census(rule_mode=mode).get('engine-owned-law') == 1
 
 
+#: `exp(a) exp(b) = exp(a + b)` stated as a rule, in either direction.
+EXP_LAW = [
+    (['*', 'exp', '?0', 'exp', '?1'], ['exp', '+', '?0', '?1']),
+    (['exp', '+', '?0', '*', '2', '?1'], ['*', 'exp', '?0', 'pow', 'exp', '?1', '2']),
+    (['/', 'exp', '_0', 'exp', '_1'], ['exp', '-', '_0', '_1']),
+    (['*', 'np.e', 'exp', '!0'], ['exp', '+', '!0', '1']),
+]
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_a_rule_stating_the_exp_law_is_refused_in_either_direction(tmp_path, eng, mode):
+    """The product constructor collects powers of e, so both sides of a rule stating the law
+    are one canonical state: the miner names it `canon`, and the load refuses every such row."""
+    for lhs, rhs in EXP_LAW:
+        assert eng._core.law_instance(lhs, rhs, rule_mode=mode) == 'canon', (lhs, rhs)
+    (tmp_path / 'rules.json').write_text(json.dumps(EXP_LAW))
+    (tmp_path / 'config.yaml').write_text(yaml.safe_dump(
+        {'operators': eng._operators_config, 'rules': 'rules.json',
+         'rules_real': 'rules.json', 'rules_permissive': 'rules.json'}))
+    loaded = SimpliPyEngine.from_config(str(tmp_path / 'config.yaml'))
+    assert loaded._core.ac_served_rules_in_mode(rule_mode=mode) == []
+    assert loaded._core.ac_rules_drop_census(rule_mode=mode) == {'arithmetic-subsumed': len(EXP_LAW)}
+
+
 @pytest.mark.parametrize('name,args', [
     ('ac_simplify_in_mode', (['x0'],)), ('ac_simplify_infix_in_mode', (['x0'],)),
     ('ac_simplify_explore', (['x0'],)), ('prettify', (['x0'],)), ('ac_complexity', (['x0'],)),

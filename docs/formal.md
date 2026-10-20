@@ -366,7 +366,7 @@ G6–G8; there is no G5):
 | G4 | non-composite LHS | catch-alls below the arithmetic waterline |
 | G6 | RHS wildcards not bound by the **canonical** LHS | an unbound wildcard would panic substitution at rewrite time; canon can erase LHS wildcards, so the raw check is insufficient |
 | G7 | $\mu(\mathrm{nf}(\rho)) > \mu(\mathrm{nf}(\ell))$ (uphill patterns) | no loaded rule climbs; sides of one price load, and the `oriented` gate decides each application under the full ordering (§5) |
-| G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node |
+| G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node. A law the constructors own, such as the collection of powers of e ($e^a e^b = e^{a+b}$), needs no gate of its own: a rule stating it, in either direction, has $\mathrm{nf}(\ell) = \mathrm{nf}(\rho)$ and G2 refuses it |
 
 Both directions of a rewrite whose sides cost the same may load (on the shipped `acj-5-4-llm`,
 `acos(0) - _0` and `asin(1) - _0`): $<_o$ is strict and total, so on any instance at most one of

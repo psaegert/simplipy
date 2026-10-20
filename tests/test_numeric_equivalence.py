@@ -348,7 +348,10 @@ class TestCorpusGate:
         # AN OVERFLOW CUTS NO BAND (2026-10-19): 54,750,550 -> 54,718,550. Where sinh overflows
         # the collapse of `asinh(sinh(t))` gives the true value, so f64 collapses it for every
         # t: row 380 rests 32,000 milli-bits cheaper.
-        assert walk['complexity_out'] == 54718550, walk['complexity_out']
+        # POWERS OF e COLLECT: 54,718,550 -> 54,715,550. The product constructor merges
+        # `exp(a) exp(b)` into `exp(a + b)`: row 7's `exp(x6) exp(-x3)` is `exp(x6 - x3)`
+        # (-3,000).
+        assert walk['complexity_out'] == 54715550, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

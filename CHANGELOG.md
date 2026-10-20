@@ -300,6 +300,29 @@ model predictions.
   overflow). On a tenth of the training-data inputs 2 `f64` answers change, each now collapsing an
   `asinh(sinh(.))` (16,000 and 19,000 milli-bits cheaper); srbf's ground truths and predictions do
   not change, `real` and `permissive` do not change, and no answer changes on a second call.
+- **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
+  merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
+  `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and
+  `exp(u)*exp(-u)` is `1` wherever `u` is finite, as `exp(u)/exp(u)` is. Since a sign costs one
+  bit, `exp(-u)` is the cheaper spelling of `1/exp(u)`, and nothing cancelled it against
+  `exp(u)`. The law is exact on the extended reals; under the f64 evaluator the two sides differ
+  where an `exp` overflows or underflows (`exp(800)*exp(-800)` is `inf*0 = nan`, `exp(0)` is
+  1), where `f64` accepts the true value, and by the rounding of the summed exponent
+  (`exp(x1)*exp(1.7)` against `exp(x1 + 1.7)`, measured on 40,002 points per band: at most 8 ulps
+  for `|x1| <= 12.3`, 26 up to 100, 152 up to 300 and 410 up to 700). A rule stating the law, in
+  either direction, has one
+  canonical state on both sides and the load refuses it as subsumed. The published
+  `acj-5-4-llm` files serve 16 rows fewer in `f64` (2 subsumed, 14 now duplicating the left side
+  of another row), 57 in `real` and 55 in `permissive` (all subsumed). Ground truth 2255 rests at
+  77,000 milli-bits (94,000 before) and
+  1299 at 64,000 (75,000). Against the previous build, at the default effort: on srbf's ground
+  truths 38 answers change in `f64` (19 cheaper, 1 dearer, 18 rereading to the same state), 38
+  in `real` (19, 1) and 69 in `permissive` (49, 1); on a tenth of the training-data inputs 3, 4
+  and 3, none cheaper or dearer; on a tenth of the predictions 14, 14 and 13 (`permissive`: 2
+  cheaper, 2 dearer; the other modes 1 dearer). The dearer answers are the search ending
+  elsewhere: `2*exp(x1)*exp(exp(x1)) + exp(exp(x1))` was `exp(exp(x1))*(2*exp(x1) + 1)`, and the
+  merged `exp(x1 + exp(x1))` no longer shows the factor `exp(exp(x1))` that FACTOR takes out.
+  No answer changes on a second call.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
