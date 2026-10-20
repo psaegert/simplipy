@@ -323,6 +323,18 @@ model predictions.
   elsewhere: `2*exp(x1)*exp(exp(x1)) + exp(exp(x1))` was `exp(exp(x1))*(2*exp(x1) + 1)`, and the
   merged `exp(x1 + exp(x1))` no longer shows the factor `exp(exp(x1))` that FACTOR takes out.
   No answer changes on a second call.
+- **A `<constant>` absorbs the orientation sign of every class beside it.** A `<constant>`
+  absorbs every constant factor of its product (`<constant>*5` is `<constant>`), and a class's
+  orientation sign is the constant factor -1, so beside a bare `<constant>` the orientation of
+  every class is free and the sign key's is taken (fewest signs, then outermost; a tie by the
+  class's own sum). A sum holding `<constant>`s of its own is such a class too: `-(x1 + x2^c)/c`,
+  `c*-(x1 + x2^c)` and `c*(-x1 - x2^c)` are all `c*(x1 + x2^c)` (the first and the last kept
+  `c*(-x1 - x2^c)`), and `c*sin(c - x1)` is `c*sin(x1 + c)`. The skeletons of a model's
+  training data change accordingly: on the release corpus (400 skeletons) 18 change, from the
+  explicit and the tagged spelling alike, 12 of them cheaper and 6 at an equal price, and the
+  two spellings now give one skeleton for every row (one row gave two). srbf's ground truths,
+  predictions and the training-data inputs hold no `<constant>`, and none of their answers
+  changes in any mode.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

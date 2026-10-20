@@ -351,7 +351,12 @@ class TestCorpusGate:
         # POWERS OF e COLLECT: 54,718,550 -> 54,715,550. The product constructor merges
         # `exp(a) exp(b)` into `exp(a + b)`: row 7's `exp(x6) exp(-x3)` is `exp(x6 - x3)`
         # (-3,000).
-        assert walk['complexity_out'] == 54715550, walk['complexity_out']
+        # A CONSTANT ABSORBS EVERY CLASS'S ORIENTATION SIGN: 54,715,550 -> 54,705,550. Beside a bare
+        # `<constant>` a sum holding `<constant>`s of its own takes the orientation with the fewer
+        # signs: rows 203 (-2,000), 296 (-1,000), 312 (-4,000), 321 (-2,000) and 364
+        # (`<constant>*(<constant> - x7)/x3` is `<constant>*(x7 + <constant>)/x3`, -1,000) rest
+        # cheaper, and row 274 takes its tied orientation by its own sum (0).
+        assert walk['complexity_out'] == 54705550, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)

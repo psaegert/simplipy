@@ -6802,10 +6802,20 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
         // by the parity of the class's members. At the zero of the sum every member's base is +0,
         // so the product's value there is the coefficient's infinity -- the limit wherever the
         // pole is one-signed; a single member flipping alone would turn it (`1/(cbrt(u) u)`).
+        // Beside a bare `Const`, which absorbs every constant factor of the product and so the
+        // orientation sign of every class, every class is a site (`refit_trade_flip`).
+        let refit = out.iter().any(|f| matches!(f, Ex::Const));
         let site_flips: Vec<(usize, Ex)> = out
             .iter()
             .enumerate()
-            .filter_map(|(i, f)| sign_trade_flip(f, cx).map(|nf| (i, nf)))
+            .filter_map(|(i, f)| {
+                let flip = if refit {
+                    refit_trade_flip(f, cx)
+                } else {
+                    sign_trade_flip(f, cx)
+                };
+                flip.map(|nf| (i, nf))
+            })
             .collect();
         // A class is read only where its sum meets another occurrence of itself: two sites over
         // sums of one shape, or a sum inside another factor (`classes_meet`). Elsewhere each site
@@ -7281,6 +7291,21 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
     // orientation of the other parity (among switches of one cost, the one whose product is
     // structurally smallest).
     let best: Vec<&SiteOption> = decided.iter().map(|(_, opts)| &opts[0]).collect();
+    let build = |pick: &[&SiteOption]| {
+        let mut flipped = vec![false; n];
+        for opt in pick {
+            for &bit in &opt.flips {
+                flipped[bit] = true;
+            }
+        }
+        o.candidate(&flipped, cx)
+    };
+    // Where the sign is absorbed (a bare `Const`, which absorbs every constant factor of its
+    // product, or a zero coefficient) the parity is no constraint: every class takes its own
+    // cheapest orientation, ties by its sites as they then stand, whatever else the product holds.
+    if matches!(o.carrier, Carrier::Free) {
+        return build(&best).map(|(e, _)| e);
+    }
     let parity = best.iter().fold(false, |p, opt| p ^ opt.odd);
     type Delta = (u64, i64, i64);
     let switches: Vec<(Delta, usize, &SiteOption)> = decided
@@ -7297,15 +7322,6 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
         })
         .collect();
     let least = switches.iter().map(|(delta, _, _)| *delta).min();
-    let build = |pick: &[&SiteOption]| {
-        let mut flipped = vec![false; n];
-        for opt in pick {
-            for &bit in &opt.flips {
-                flipped[bit] = true;
-            }
-        }
-        o.candidate(&flipped, cx)
-    };
     let mut chosen: Option<(u64, Ex)> = None;
     for target in [false, true] {
         let built = if target == parity {
@@ -7401,10 +7417,25 @@ fn is_sign_trade_site(f: &Ex, cx: &Cx) -> bool {
 /// through the same two. Without the memo a sum nested `d` deep cost `4^d` flips (measured:
 /// `x1*(x1 + (N + 1)/x1)` nested 9 deep took 7 s with the search off, all of it here).
 fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
+    trade_flip(f, cx, false)
+}
+
+/// The flip of `f` as a factor of a product that holds a bare `Const` (`sign_place`). A
+/// `<constant>` absorbs every constant factor of its product, and a class's orientation sign is
+/// one, the constant factor -1: beside one, the orientation of EVERY class is free, so the classes
+/// whose sign an absorption owner holds elsewhere (a sum holding a `Const`, one with a
+/// negation-absorbing member, one with an infinity) are sites too, their sign the constant's.
+fn refit_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
+    trade_flip(f, cx, true)
+}
+
+/// [`sign_trade_flip`] and [`refit_trade_flip`], memoized; `refit`: the product's sign is a bare
+/// `Const`'s.
+fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
     if !matches!(f, Ex::Add(_) | Ex::Pow(..) | Ex::Fun(..)) {
         return None;
     }
-    let key = (flip_cx_key(cx), f.clone());
+    let key = (flip_cx_key(cx), f.clone(), refit);
     let outer = FLIP_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         if m.is_none() {
@@ -7418,7 +7449,7 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
     if let Some(hit) = FLIP_MEMO.with(|m| m.borrow().as_ref().and_then(|t| t.get(&key).cloned())) {
         return hit;
     }
-    let r = sign_trade_flip_raw(f, cx);
+    let r = sign_trade_flip_raw(f, cx, refit);
     FLIP_MEMO.with(|m| {
         if let Some(t) = m.borrow_mut().as_mut() {
             t.insert(key, r.clone());
@@ -7432,7 +7463,7 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
 /// the thread's number domain. All of them outlive the outermost call, so no identity is reused
 /// within the memo's extent.
 type FlipCxKey = (usize, [usize; 4], u8);
-type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex), Option<Ex>>;
+type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex, bool), Option<Ex>>;
 
 /// The opposite-sums decision of a product (`collect_opposite_sums`), keyed like a flip: by the
 /// context, the sign host and the factors as they arrived. It lives exactly as long as the flip
@@ -7501,19 +7532,31 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
     )
 }
 
-fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
+fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
     let flip_sum = |ts: &[Ex]| -> Option<Vec<Ex>> {
         // Exclusions = the absorption owners' classes: Const-bearing (H-020),
         // absorbing-member (H-030), and BARE-infinity terms (the inf carries the
         // sign itself, H-014 -- `term_absorbs_negation` only matches inf-carrying
         // PRODUCTS, so the bare member needs its own test; missing it let an
         // odd-fun trade flip an inf-bearing sum and inflate mu: fuzz row 131227,
-        // P5, the one violation in 200k).
+        // P5, the one violation in 200k). Beside a bare `Const` (`refit`) the
+        // constant owns every class's sign, theirs too: such a sum negates through
+        // `add`, which files it bare (`primitive_sum` never wraps one).
         if ts.iter().any(Ex::contains_const)
             || ts.iter().any(term_absorbs_negation)
             || ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
         {
-            return None;
+            if !refit {
+                return None;
+            }
+            let negated = ts
+                .iter()
+                .map(|t| negate_term(t, cx))
+                .collect::<Option<Vec<Ex>>>()?;
+            return match add(negated, cx) {
+                Ex::Add(v) => Some(v),
+                _ => None,
+            };
         }
         let mut out = ts
             .iter()
@@ -7556,7 +7599,7 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
                         a.has_measure_space(cx.view) || a.contains_wildcard(cx.view)
                     }) =>
                 {
-                    sign_trade_flip(b, cx).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
+                    trade_flip(b, cx, refit).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
                 }
                 _ => None,
             }?;
@@ -9264,6 +9307,47 @@ mod tests {
             let cx_term = || Ex::Mul(vec![Ex::Const, x(view)]);
             let e = add(vec![cx_term(), cx_term()], &cx);
             assert_eq!(e, Ex::Add(vec![cx_term(), cx_term()]));
+        });
+    }
+
+    #[test]
+    fn a_constant_absorbs_the_orientation_sign_of_every_class() {
+        with_view(|view| {
+            let sin = view.intern("sin");
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // A sum holding a `<constant>` takes a sign into its terms: -(x0 + x1^c) is
+                // -x0 - x1^c.
+                let s = add(vec![x(view), pow(y(view), Ex::Const, &cx)], &cx);
+                let neg_s = neg(s.clone());
+                assert!(matches!(&neg_s, Ex::Add(_)), "{mode:?}: {neg_s:?}");
+                // Beside a bare `<constant>`, which absorbs every constant factor of its
+                // product, that sign is the constant's, whatever route built the product, and the
+                // sum takes the orientation with the fewer signs: c*-(x0 + x1^c) is c*(x0 + x1^c).
+                let want = mul(vec![Ex::Const, s.clone()], &cx);
+                assert_eq!(want, Ex::Mul(vec![Ex::Const, s.clone()]), "{mode:?}");
+                assert_eq!(mul(vec![neg_s.clone(), Ex::Const], &cx), want, "{mode:?}");
+                assert_eq!(
+                    mul(vec![Ex::Const, Ex::int(-1), s.clone()], &cx),
+                    want,
+                    "{mode:?}"
+                );
+                // So does an odd function of one: c*sin(c - x0) is c*sin(x0 + c).
+                let t = add(vec![x(view), Ex::Const], &cx);
+                assert_eq!(
+                    mul(vec![Ex::Const, fun(sin, vec![neg(t.clone())], &cx)], &cx),
+                    mul(vec![Ex::Const, fun(sin, vec![t], &cx)], &cx),
+                    "{mode:?}"
+                );
+                // Without a bare `<constant>` the sum keeps the sign the product gave it.
+                let kept = mul(vec![y(view), neg_s.clone()], &cx);
+                assert!(
+                    matches!(&kept, Ex::Mul(v) if v.contains(&neg_s)),
+                    "{mode:?}: {kept:?}"
+                );
+            }
         });
     }
 
