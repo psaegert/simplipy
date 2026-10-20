@@ -22,7 +22,9 @@
 
 use crate::tokens::{Tok, TokenView};
 
-use super::expr::{add, canon, fun, mul, mul_undecided, pow, raised_members, Cx, Ex, FlipScope};
+use super::expr::{
+    add, canon, fun, mul, mul_undecided, pow, pow_member, raised_members, Cx, Ex, FlipScope,
+};
 use super::rat::Rat;
 use num_bigint::BigInt;
 use num_traits::{One, Zero};
@@ -303,13 +305,13 @@ fn powered_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Vec<Ex> {
     // printer spells a sum of negative terms so.
     if let [Ex::Num(r), f] | [f, Ex::Num(r)] = members.as_slice() {
         if *r == Rat::NEG_ONE && !matches!(f, Ex::Num(_)) {
-            return vec![pow(mul(members, cx), Ex::Num(k.clone()), cx)];
+            return vec![pow_member(mul(members, cx), Ex::Num(k.clone()), cx)];
         }
     }
     if members.len() < 2 {
         return members
             .into_iter()
-            .map(|f| pow(f, Ex::Num(k.clone()), cx))
+            .map(|f| pow_member(f, Ex::Num(k.clone()), cx))
             .collect();
     }
     match raised_members(members, k, cx) {
@@ -318,10 +320,13 @@ fn powered_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Vec<Ex> {
             // Held as `(prod f^|k|)^-1`, the form `pow` keeps a refused power in, its product
             // still undecided.
             let m = Ex::Num(k.checked_neg().expect("a negative integer negates"));
-            let parts = v.into_iter().map(|f| pow(f, m.clone(), cx)).collect();
-            vec![pow(mul_undecided(parts, cx), Ex::int(-1), cx)]
+            let parts = v
+                .into_iter()
+                .map(|f| pow_member(f, m.clone(), cx))
+                .collect();
+            vec![pow_member(mul_undecided(parts, cx), Ex::int(-1), cx)]
         }
-        Err(held) => vec![pow(held, Ex::Num(k.clone()), cx)],
+        Err(held) => vec![pow_member(held, Ex::Num(k.clone()), cx)],
     }
 }
 

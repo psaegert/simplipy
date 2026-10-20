@@ -442,3 +442,21 @@ def test_wide_products_get_one_answer(eng, mode, pair):
 def test_a_shared_odd_function_is_read_up_to_sign(eng, mode, spellings, expected):
     answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
     assert answers == {expected}
+
+
+# ONE ORIENTATION FOR A CLASS, WHEREVER IT STANDS: a site alone takes the orientation it takes as a
+# product's one factor (two signs either way here, the outer one wins), and an inverse over it reads
+# the same class whichever orientation it stands in (srbf ground truth 6397).
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('spellings, expected', [
+    (['pow - * x3 - x3 x1 x2 3', '* 1 pow - * x3 - x3 x1 x2 3', 'neg pow + x2 * x3 - x1 x3 3'],
+     'neg pow + x2 * x3 - x1 x3 3'),
+    (['inv pow - * x3 - x3 x1 x2 3', '/ 1 * 1 pow - * x3 - x3 x1 x2 3', 'pow - * x3 - x3 x1 x2 -3',
+      'inv neg pow + x2 * x3 - x1 x3 3'], '/ -1 pow + x2 * x3 - x1 x3 3'),
+    (['sin - - x1 x2 x3', '* 1 sin - - x1 x2 x3', 'neg sin - + x2 x3 x1'], 'neg sin - + x2 x3 x1'),
+    (['inv sin - - x1 x2 x3', '/ 1 * 1 sin - - x1 x2 x3', 'inv neg sin - + x2 x3 x1'],
+     '/ -1 sin - + x2 x3 x1'),
+])
+def test_a_lone_site_is_oriented_as_a_products_one_factor(eng, mode, spellings, expected):
+    answers = {' '.join(eng.simplify(s.split(), mode=mode)) for s in spellings}
+    assert answers == {expected}

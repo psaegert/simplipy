@@ -358,6 +358,24 @@ model predictions.
   was made in, the signed zeros of `f64` and `permissive` or the one zero of `real`. On the
   release corpus `permissive` no longer prices at or below `real` on one row, whose `real` answer
   takes the one zero's `+inf` where float64 gives `-inf`.
+- **A class takes one orientation wherever it stands.** An odd power or odd root of a sum, and an
+  odd function of one, can be written over the sum or over its negation (`S^3` or `-(-S)^3`).
+  Inside a product the sign placement chooses (the cheaper, then fewest signs, then the outer
+  ones); a site standing alone kept the orientation it was written in. It now takes the one it
+  takes as a product's one factor, so `S^3` and `1*S^3` are one answer, and so are `1/S^3` and
+  `1/(1*S^3)`: srbf ground truth 6397, `1/(x3*(x3 - x1) - x2)^3`, is
+  `-1/(x2 + x3*(x1 - x3))^3`, as it was inside a product (the same price, two signs either way,
+  the second's further out), and `sin(x1 - x2 - x3)` is `-sin(x2 + x3 - x1)`. A power over a
+  negated site reads its class, `(-F)^s` being the flip of `F` to the `s`, so `1/S^3` and
+  `(S^3)^(1/2)` are read over one class whichever orientation `S^3` stands in, and a factor of a
+  product is still oriented by its product. On srbf's ground truths 3 answers change in `f64`, 3
+  in `real` and 4 in `permissive`, on a tenth of the training-data inputs 10 in each mode, and on
+  a tenth of the predictions 2, 2 and 12, every one at an equal price and none changing on a
+  second call; respelling each odd function of srbf's 1,780 ground truths that hold one as
+  `-f(-u)` gives the original answer in every mode. As elsewhere a sum's zero has no sign in the
+  canonical form, so over a sum that vanishes on a region `f64` reads `1/-(S^3)` as `1/S^3` there
+  (`+inf` where float64 gives `-inf`), as it already read `1/-(|x1| - x1)` as `1/(x1 - |x1|)`.
+  The decision costs about 5% of `permissive`'s time on a tenth of the predictions.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

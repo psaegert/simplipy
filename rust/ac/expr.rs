@@ -3997,7 +3997,7 @@ pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<E
     if inverts_a_signed_zero(&members, cx) {
         return Ok(members
             .into_iter()
-            .map(|f| pow(f, ex.clone(), cx))
+            .map(|f| pow_member(f, ex.clone(), cx))
             .collect());
     }
     let magnitude = |v: &[Ex]| {
@@ -4006,16 +4006,17 @@ pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<E
     };
     match mul_undecided(members.clone(), cx) {
         Ex::Mul(v) => match power_bag(&v, k, cx) {
-            Some(bag) if bag != v && magnitude(&v) => {
-                Ok(bag.into_iter().map(|f| pow(f, ex.clone(), cx)).collect())
-            }
+            Some(bag) if bag != v && magnitude(&v) => Ok(bag
+                .into_iter()
+                .map(|f| pow_member(f, ex.clone(), cx))
+                .collect()),
             Some(_) => Ok(members
                 .into_iter()
-                .map(|f| pow(f, ex.clone(), cx))
+                .map(|f| pow_member(f, ex.clone(), cx))
                 .collect()),
             None => Err(Ex::Mul(v)),
         },
-        f => Ok(vec![pow(f, ex, cx)]),
+        f => Ok(vec![pow_member(f, ex, cx)]),
     }
 }
 
@@ -8049,17 +8050,18 @@ fn rejoin_walk(e: Ex, signed: bool, cx: &Cx) -> Ex {
     }
 }
 
-/// Rebuild `base^exp` (rational or symbolic-with-count) through the [`pow`] constructor so
-/// integer-power distribution and exact folds apply.
+/// Rebuild `base^exp` (rational or symbolic-with-count) through the power constructor so
+/// integer-power distribution and exact folds apply; as a member of the product being built
+/// ([`pow_member`]), whose sign placement orients it.
 fn rebuild_factor(base: Ex, sym: Option<Ex>, r: Rat, cx: &Cx) -> Ex {
     match sym {
-        None => pow(base, Ex::Num(r), cx),
+        None => pow_member(base, Ex::Num(r), cx),
         Some(e) => {
             if r.is_one() {
-                pow(base, e, cx)
+                pow_member(base, e, cx)
             } else {
                 let scaled = mul(vec![Ex::Num(r), e], cx);
-                pow(base, scaled, cx)
+                pow_member(base, scaled, cx)
             }
         }
     }
@@ -8149,7 +8151,19 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
 ///   `(a^(1/2))^2 = a` only on `a >= 0`.
 /// * `(a*b)^n` for INTEGER n distributes over the factors (TOTAL as extended-real evaluations;
 ///   for non-integer exponents `(ab)^(1/2) != a^(1/2) b^(1/2)` on `a, b < 0`).
+/// * a power that is a sign-trade site takes the orientation it takes as a product's one factor
+///   (`lone_site`).
 pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
+    match pow_member(base, exp, cx) {
+        node @ Ex::Pow(..) => lone_site(node, cx),
+        other => other,
+    }
+}
+
+/// [`pow`] for a member of a product, whose sign placement decides the member's orientation with
+/// the product's other members (`sign_place`): the same power, a sign-trade site left in the
+/// orientation it was built in.
+pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A literal base or exponent beside a non-literal one LANDS here (permissive's ρ,
     // [`land`]); a power of two literals folds exactly or stays as written.
@@ -8227,6 +8241,22 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             }
         }
     }
+    // A NEGATED SITE UNDER A POWER IS THE POWER OF ITS FLIP: `-F` and its flip (`sign_trade_flip`)
+    // are one class in its two orientations, one value wherever the flip is a site's other spelling,
+    // so `(-F)^s` is `flip(F)^s` for every exponent. A site standing alone may take the negated
+    // orientation (`lone_site`); a power over it reads the class as it reads the site spelled
+    // without the sign: `(S^3)^-1` is `S^-3` and `(S^3)^(1/2)` is `S^(3/2)` whichever orientation
+    // `S^3` stands in. (A negative coefficient beside other members folds into a site where the
+    // power distributes, `power_bag`.)
+    if let Ex::Mul(v) = &base {
+        if let [Ex::Num(c), f] | [f, Ex::Num(c)] = v.as_slice() {
+            if *c == Rat::NEG_ONE {
+                if let Some(flipped) = sign_trade_flip(f, cx) {
+                    return pow_member(flipped, exp, cx);
+                }
+            }
+        }
+    }
     // Integer powers distribute over products -- TOTAL for non-negative and for EVEN
     // integer exponents (at a zero of the product both spellings give 0 resp. +inf; at
     // infinities they agree for every integer). For ODD NEGATIVE exponents the identity
@@ -8249,7 +8279,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if let Some(bag) = power_bag(v, e, cx) {
                 let parts: Vec<Ex> = bag
                     .into_iter()
-                    .map(|f| pow(f, Ex::Num(e.clone()), cx))
+                    .map(|f| pow_member(f, Ex::Num(e.clone()), cx))
                     .collect();
                 return mul(parts, cx);
             }
@@ -8267,9 +8297,9 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 let parts: Vec<Ex> = v
                     .iter()
                     .cloned()
-                    .map(|f| pow(f, Ex::Num(m.clone()), cx))
+                    .map(|f| pow_member(f, Ex::Num(m.clone()), cx))
                     .collect();
-                return pow(mul(parts, cx), Ex::int(-1), cx);
+                return pow_member(mul(parts, cx), Ex::int(-1), cx);
             }
         }
     }
@@ -8320,7 +8350,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             };
             if licence {
                 if let Some(p) = r.checked_mul(s) {
-                    return pow(inner_base.clone(), Ex::Num(p), cx);
+                    return pow_member(inner_base.clone(), Ex::Num(p), cx);
                 }
             }
         }
@@ -8361,7 +8391,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     if !e.is_negative() {
                         return rargs[0].clone();
                     }
-                    return pow(rargs[0].clone(), Ex::int(-1), cx);
+                    return pow_member(rargs[0].clone(), Ex::int(-1), cx);
                 }
             }
         }
@@ -8386,7 +8416,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if let Ex::Num(idx) = &rargs[1] {
                 if idx.is_odd_integer() && idx.cmp_int(3) != Ordering::Less {
                     if let Some(t) = idx.checked_inv().and_then(|inv| s.checked_mul(&inv)) {
-                        return pow(rargs[0].clone(), Ex::Num(t), cx);
+                        return pow_member(rargs[0].clone(), Ex::Num(t), cx);
                     }
                 }
             }
@@ -8408,8 +8438,8 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     && n.is_even_integer()
                 {
                     if let Some(unit) = s.checked_neg() {
-                        let root = pow(base.clone(), Ex::Num(unit), cx);
-                        return pow(root, Ex::int(-1), cx);
+                        let root = pow_member(base.clone(), Ex::Num(unit), cx);
+                        return pow_member(root, Ex::int(-1), cx);
                     }
                 }
             }
@@ -8460,7 +8490,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 } else {
                     Ex::PosInf
                 };
-                return pow((**inner).clone(), flipped, cx);
+                return pow_member((**inner).clone(), flipped, cx);
             }
         }
     }
@@ -8507,7 +8537,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         };
         if single_member {
             if let Some(r) = literal_reciprocal(&base) {
-                return pow(r, positive, cx);
+                return pow_member(r, positive, cx);
             }
         }
     }
@@ -8521,7 +8551,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if matches!(&exp, Ex::Num(r) if *r == Rat::NEG_ONE) {
         if let Ex::Pow(ib, ie) = &base {
             if let Some(r) = literal_reciprocal(ib) {
-                return pow(r, (**ie).clone(), cx);
+                return pow_member(r, (**ie).clone(), cx);
             }
         }
     }
@@ -8571,7 +8601,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 // orientation primitive_sum itself would file bare.
                 if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                     flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
-                    return pow(Ex::Add(flipped), exp, cx);
+                    return pow_member(Ex::Add(flipped), exp, cx);
                 }
             }
         }
@@ -8599,7 +8629,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         let mut args = args.clone();
                         args[0] = Ex::Add(flipped);
-                        return pow(Ex::Fun(*op, args), exp, cx);
+                        return pow_member(Ex::Fun(*op, args), exp, cx);
                     }
                 }
             }
@@ -8608,11 +8638,28 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         // `sin(2 x1)^2`, as the class {sin(2 x1), sin(-2 x1)} is written (`collect_opposite_sums`).
         if r.is_even_integer() && !r.is_zero() {
             if let Some(Ex::Fun(fk, fa)) = positive_head(&base, cx.view) {
-                return pow(fun(fk, fa, cx), exp, cx);
+                return pow_member(fun(fk, fa, cx), exp, cx);
             }
         }
     }
     Ex::Pow(Box::new(base), Box::new(exp))
+}
+
+/// ONE ORIENTATION FOR A CLASS, WHEREVER IT STANDS. A sign-trade site (`sign_trade_flip`: an odd
+/// power or an odd root of a sum, an odd function of one) spells its class in either
+/// orientation, `f(S)` or `-f(-S)`; as a factor of a product the sign placement picks between
+/// them over the whole product (`sign_place`: the cheaper, then the sign key, fewest signs and
+/// then the outer ones). A site standing alone takes the spelling that placement gives it as the
+/// one factor of a product, so `S^3` and `1*S^3` are one answer, and so are `1/S` and `1/(1*S)`:
+/// `(x3*(x3 - x1) - x2)^3` is `-(x2 + x3*(x1 - x3))^3`, whose two signs stand further out.
+fn lone_site(node: Ex, cx: &Cx) -> Ex {
+    // One scope for the site test and the placement, so the flip is computed once.
+    let _memo = FlipScope::open();
+    if sign_trade_flip(&node, cx).is_some() {
+        sign_place(Rat::ONE, vec![node], cx)
+    } else {
+        node
+    }
 }
 
 /// THE PERMISSIVE LITERAL FOLD. An exact rational the constructors produced -- the quotient of two
@@ -9095,6 +9142,11 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             }
         }
     }
+    // A head of a sum is a class site: alone it takes the orientation it takes as a product's one
+    // factor (`lone_site`). Its flip negates the sum in place, so asking it builds no head.
+    if matches!(&head, Ex::Fun(_, a) if matches!(a.first(), Some(Ex::Add(_)))) {
+        return lone_site(head, cx);
+    }
     head
 }
 
@@ -9376,6 +9428,58 @@ mod tests {
                 assert!(
                     matches!(&kept, Ex::Mul(v) if v.contains(&neg_s)),
                     "{mode:?}: {kept:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_lone_site_takes_the_orientation_of_a_products_one_factor() {
+        with_view(|view| {
+            let sin = view.intern("sin");
+            let z = || Ex::Leaf(view.intern("x2"));
+            let half = Ex::Num(Rat::new(1, 2).unwrap());
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // x0 - x1 - x2: two signs; -(x1 + x2 - x0) has two too, the outer one
+                let s = add(vec![x(view), neg(y(view)), neg(z())], &cx);
+                let raw_cube = Ex::Pow(Box::new(s.clone()), Box::new(Ex::int(3)));
+                let raw_sin = Ex::Fun(sin, vec![s.clone()]);
+                // alone, as the one factor of a product: (x0 - x1 - x2)^3 is
+                // -(x1 + x2 - x0)^3, and sin(x0 - x1 - x2) is -sin(x1 + x2 - x0)
+                let cube = pow(s.clone(), Ex::int(3), &cx);
+                assert_eq!(
+                    cube,
+                    mul(vec![Ex::int(1), raw_cube.clone()], &cx),
+                    "{mode:?}"
+                );
+                assert!(
+                    matches!(&cube, Ex::Mul(v) if v.contains(&Ex::int(-1))),
+                    "{mode:?}: {cube:?}"
+                );
+                let sine = fun(sin, vec![s.clone()], &cx);
+                assert_eq!(
+                    sine,
+                    mul(vec![Ex::int(1), raw_sin.clone()], &cx),
+                    "{mode:?}"
+                );
+                // a power over a lone site reads its class, whichever orientation it stands in
+                assert_eq!(
+                    pow(cube.clone(), Ex::int(-1), &cx),
+                    pow(s.clone(), Ex::int(-3), &cx),
+                    "{mode:?}"
+                );
+                assert_eq!(
+                    pow(cube, half.clone(), &cx),
+                    pow(s.clone(), Ex::Num(Rat::new(3, 2).unwrap()), &cx),
+                    "{mode:?}"
+                );
+                assert_eq!(
+                    pow(sine, Ex::int(-1), &cx),
+                    pow(raw_sin, Ex::int(-1), &cx),
+                    "{mode:?}"
                 );
             }
         });

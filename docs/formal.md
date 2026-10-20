@@ -271,7 +271,12 @@ then the sum of their depths (the root at depth 0). Wherever two spellings cost 
 a sign-trade site, the product table, a sum's orientation, and the reduction ordering (§5), so
 every rule application -- the one with fewer signs wins, then the one whose signs stand
 further out, then `cmp_ex`: `sin(-x1)` is `-sin(x1)`, `x1 + sin(-x1)` is `x1 - sin(x1)`, and
-`-sin(x1 - x2)` is `sin(x2 - x1)` (one sign, not two). A rule whose two sides differ only in
+`-sin(x1 - x2)` is `sin(x2 - x1)` (one sign, not two). A site standing alone is decided as a
+product's one factor, so a class has one orientation wherever it stands: `(x3(x3 - x1) - x2)^3`
+is `-(x2 + x3(x1 - x3))^3` alone as beside other factors (two signs either way, the second's
+further out). A power over a negated site reads its class, $(-F)^s = \bar F^s$ for the flip
+$\bar F$ of $F$, so `1/S^3` and `(S^3)^(1/2)` are read over one class whichever orientation `S^3`
+stands in. A rule whose two sides differ only in
 where the core places a sign has one canonical state on both sides and is refused at load as
 subsumed (G2).
 

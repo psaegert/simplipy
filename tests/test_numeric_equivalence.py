@@ -358,7 +358,11 @@ class TestCorpusGate:
         # inverse of a product holding an exact zero distributes over its members, the zero
         # giving +inf, as IEEE's signed zero has it: rows 20 (`inf*x14*(x11 - x17)` is
         # `-inf*x14*(x17/x11 - 1)`, +8,000) and 283 (+15,000) keep the members' signs.
-        assert walk['complexity_out'] == 54728550, walk['complexity_out']
+        # ONE ORIENTATION WHEREVER A CLASS STANDS: 54,728,550 -> 54,727,550. A site alone takes
+        # the orientation it takes as a product's one factor: row 163's odd root of a sum under
+        # `cos` takes its sign outside, where `cos` drops it (-1,000), and row 82 respells its
+        # `tan(tan(.)^3)` at an equal price.
+        assert walk['complexity_out'] == 54727550, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old
