@@ -1,7 +1,11 @@
 """The mine's per-length judge loop (miner.md 2.6, 2.7): the judge's tier is decided inside
 the scan, a refused rule never prunes a longer source, and the scan is a function of the
 global source index alone."""
+import contextlib
 import json
+import logging
+import threading
+import time
 
 import numpy as np
 import pytest
@@ -349,35 +353,82 @@ def test_a_proposal_whose_target_the_mode_refuses_reads_rejected_at_the_judge(tm
     assert side['real']['proposals']['judge_loop'] == {'judge_rounds': 1, 'excluded': []}
 
 
+class _HeldJudge:
+    """The judge (`verify_ruleset`) with each judgment of the rule `lhs` HELD: it returns only
+    when the test releases it, so nothing the watchdog decides depends on how fast the machine
+    judges. Every other rule goes to the real judge, which the tests run under the default
+    thresholds only; the short ones are for held judgments, which cannot finish in time.
+    `ended_by` is the exception that ended the last held judgment (the watchdog's), or None
+    for one that was released; `timeouts` is the wall-clock timeout of every judgment."""
+
+    #: A held judgment nobody releases returns after this long, so a watchdog that never fires
+    #: fails the test instead of hanging it. A watchdog that fires never waits for it.
+    GUARD_S = 30.0
+
+    def __init__(self, monkeypatch, lhs: list) -> None:
+        import simplipy.verify
+        self.real, self.lhs = simplipy.verify.verify_ruleset, lhs
+        self.release = threading.Event()
+        self.ended_by: type | None = None
+        self.timeouts: list = []
+        monkeypatch.setattr(simplipy.verify, 'verify_ruleset', self)
+
+    def __call__(self, rules: list, **kwargs) -> dict:
+        self.timeouts.append(kwargs.get('judge_timeout_s'))
+        if rules[0][0] == self.lhs:
+            self.ended_by = None
+            deadline = time.monotonic() + self.GUARD_S
+            try:
+                # Short waits, so the watchdog's exception lands between two of them.
+                while not self.release.wait(0.01) and time.monotonic() < deadline:
+                    pass
+            except BaseException as error:
+                self.ended_by = type(error)
+                raise
+            finally:
+                self.release.clear()
+        return self.real(rules, **kwargs)
+
+    @contextlib.contextmanager
+    def released_by_its_warning(self):
+        """Release a held judgment when the watchdog logs it as still running."""
+        held, release = f"judgment of {' '.join(self.lhs)} -> ", self.release
+
+        class _Release(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                if held in record.getMessage() and 'still running' in record.getMessage():
+                    release.set()
+
+        handler = _Release(logging.WARNING)
+        log = logging.getLogger('simplipy.mining')
+        log.addHandler(handler)
+        try:
+            yield
+        finally:
+            log.removeHandler(handler)
+
+
 def test_the_mine_judges_with_no_timeout_under_a_watchdog(monkeypatch, caplog) -> None:
     """S2: a verdict never depends on the machine's load. The judge runs with no wall-clock
-    timeout; a judgment past `warn_s` is logged, one past `fail_s` fails the mine by name."""
-    import logging
-    import time
-    import simplipy.verify
+    timeout; a judgment past `warn_s` is logged, one past `fail_s` fails the mine by name.
+    Which judgment runs long is the test's choice (`_HeldJudge`), not the machine's."""
+    import simplipy.mining
     from simplipy.mining import judge_tiers
-    real_verify = simplipy.verify.verify_ruleset
-    seen = []
-
-    def slow_verify(rules, **kwargs):
-        seen.append(kwargs.get('judge_timeout_s'))
-        if rules[0][0] == ['exp', 'log', '?0']:
-            for _ in range(200):
-                time.sleep(0.01)
-        return real_verify(rules, **kwargs)
-
-    monkeypatch.setattr(simplipy.verify, 'verify_ruleset', slow_verify)
-    rule, slow = (['log', 'exp', '?0'], ['?0']), (['exp', 'log', '?0'], ['?0'])
+    rule, held = (['log', 'exp', '?0'], ['?0']), (['exp', 'log', '?0'], ['?0'])
+    judge = _HeldJudge(monkeypatch, held[0])
     with caplog.at_level(logging.WARNING, logger='simplipy.mining'):
-        assert judge_tiers([rule], processes=1, warn_s=0.05, fail_s=60) == judge_tiers(
-            [rule], processes=1)
-        judge_tiers([slow], processes=1, warn_s=0.05, fail_s=60)
-    assert seen and set(seen) == {0}, seen
-    assert any('exp log ?0 -> ?0' in r.getMessage() for r in caplog.records), caplog.text
-    started = time.monotonic()
+        assert judge_tiers([rule], processes=1, warn_s=0.05) == judge_tiers([rule], processes=1)
+        # held until the watchdog logs it as still running, then judged: logged, not failed
+        with judge.released_by_its_warning():
+            judge_tiers([held], processes=1, warn_s=0.05)
+    assert judge.ended_by is None, judge.ended_by
+    assert judge.timeouts and set(judge.timeouts) == {0}, judge.timeouts
+    assert any('judgment of exp log ?0 -> ?0 is still running' in r.getMessage()
+               for r in caplog.records), caplog.text
+    # held until the watchdog ends it: it fails the mine by the rule's name
     with pytest.raises(RuntimeError, match=r'exp log \?0 -> \?0 ran past 0.3 s'):
-        judge_tiers([rule, slow], processes=1, warn_s=0.1, fail_s=0.3)
-    assert time.monotonic() - started < 1.5, 'the watchdog did not interrupt the judgment'
+        judge_tiers([held], processes=1, warn_s=0.1, fail_s=0.3)
+    assert judge.ended_by is simplipy.mining._JudgmentOverrun, 'the watchdog did not interrupt the judgment'
 
 
 class _Crash(Exception):
@@ -494,40 +545,31 @@ def test_a_stubborn_source_fails_the_mine_by_name_after_the_checkpoint(tmp_path,
 def test_the_watchdog_fails_the_mine_from_any_thread(monkeypatch) -> None:
     """A mine may run off the main thread, and a judgment that never returns must still fail
     it at `fail_s`: the watchdog interrupts the judgment in its own thread, not only when it
-    returns."""
-    import threading
-    import time
-    import simplipy.verify
+    returns. The judgment is held until released (`_HeldJudge`): it never returns before
+    the watchdog fires, however loaded the machine."""
+    import simplipy.mining
     from simplipy.mining import judge_tiers
-    real_verify = simplipy.verify.verify_ruleset
-
-    def stuck_verify(rules, **kwargs):
-        if rules[0][0] == ['exp', 'log', '?0']:
-            for _ in range(1000):  # 10 s, far past `fail_s`
-                time.sleep(0.01)
-        return real_verify(rules, **kwargs)
-
-    monkeypatch.setattr(simplipy.verify, 'verify_ruleset', stuck_verify)
-    rule, stuck = (['log', 'exp', '?0'], ['?0']), (['exp', 'log', '?0'], ['?0'])
+    rule, held = (['log', 'exp', '?0'], ['?0']), (['exp', 'log', '?0'], ['?0'])
+    expected = judge_tiers([rule], processes=1)
+    judge = _HeldJudge(monkeypatch, held[0])
     outcome: dict = {}
 
     def mine() -> None:
-        started = time.monotonic()
         try:
-            judge_tiers([rule, stuck], processes=1, warn_s=0.1, fail_s=0.3)
+            judge_tiers([held], processes=1, warn_s=0.1, fail_s=0.3)
         except RuntimeError as error:
             outcome['error'] = str(error)
-        outcome['elapsed'] = time.monotonic() - started
+        outcome['ended_by'] = judge.ended_by
         # the thread carries no exception the watchdog left behind
-        outcome['after'] = judge_tiers([rule], processes=1, warn_s=0.1, fail_s=0.3)
+        outcome['after'] = judge_tiers([rule], processes=1)
 
     worker = threading.Thread(target=mine)
     worker.start()
-    worker.join(30)
+    worker.join(2 * judge.GUARD_S)
     assert not worker.is_alive()
     assert 'exp log ?0 -> ?0 ran past 0.3 s' in outcome.get('error', ''), outcome
-    assert outcome['elapsed'] < 2.0, 'the watchdog waited for the judgment to return'
-    assert outcome['after'] == judge_tiers([rule], processes=1)
+    assert outcome['ended_by'] is simplipy.mining._JudgmentOverrun, 'the watchdog waited for the judgment to return'
+    assert outcome['after'] == expected
 
 
 def test_a_judgment_without_a_timeout_leaves_the_alarm_alone() -> None:
