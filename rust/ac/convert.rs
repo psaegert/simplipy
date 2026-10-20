@@ -983,9 +983,11 @@ fn emit_num(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
 /// delimited (`<add> ... </add>`, `<mul> ... </mul>`) and carry their group inverse as a
 /// SECTION: terms after `<sub>` are subtracted, factors after `<div>` divide --
 /// `(2*x1)/(x2*x3)` is `<mul> 2 x1 <div> x2 x3 </mul>`. `pow` and the unary functions stay
-/// plain prefix (fixed arity needs no delimiters). `neg`/`inv` exist ONLY as the standalone
-/// unary spellings (function arguments, lone terms: `tan neg x0`, `inv x0`); inside bags the
-/// sections own all inverses, so bags contain no negative literals and no inverse operators.
+/// plain prefix (fixed arity needs no delimiters). `neg` exists ONLY as the standalone unary
+/// spelling (function arguments, lone terms: `tan neg x0`); a lone reciprocal or negative power
+/// is a quotient like any other, bagged with the unit (`<mul> 1 <div> x0 </mul>`, `<mul> 1 <div>
+/// pow x0 3 </mul>`, as `to_tagged` writes `inv x0` and `inv pow x0 3`); inside bags the sections
+/// own all inverses, so bags contain no negative literals and no inverse operators.
 /// Integers spell bare (`7`), every fraction as a bag (`<mul> 1 <div> 3 </mul>`), and decimals as
 /// one token (`0.15915494309189535`) except small ones, which spell as a bag too (`0.2` is
 /// `<mul> 1 <div> 5 </mul>`).
@@ -1004,19 +1006,29 @@ pub fn to_prefix_tagged(e: &Ex, cx: &Cx) -> Vec<Tok> {
     let mut out = Vec::new();
     emit_tagged(e, cx, &mut out);
     // A spelling without a bag reads back as explicit notation, so a tagged answer either
-    // carries a bag or is the spelling the explicit printer gives the same state (`pow x1 -2`
-    // would come back as `inv pow x1 2`). A negated divisor keeps its bag instead
-    // (`<mul> -1 <div> x1 </mul>`, not `neg inv x1`, which comes back as `/ -1 x1`).
+    // carries a bag or is the spelling the explicit printer gives the same state (`exp 1.5`).
     let bags = [cx.view.intern("<add>"), cx.view.intern("<mul>")];
-    let bagged = |o: &[Tok]| o.iter().any(|t| bags.contains(t));
-    if !bagged(&out) {
-        out.clear();
-        emit_tagged_at(e, cx, &mut out, true);
-        if !bagged(&out) {
-            return to_prefix(e, cx);
-        }
+    if !out.iter().any(|t| bags.contains(t)) {
+        return to_prefix(e, cx);
     }
     out
+}
+
+/// The `<div>` member of a quotient factor: `Pow(b, q)` with a negative rational `q` divides by
+/// `b` (`q = -1`) or by `Pow(b, -q)`. A literal-zero base never joins a divisor section: the zero
+/// would collapse the product it re-parses into, so its power keeps its exponent.
+fn divisor_member(b: &Ex, ex: &Ex) -> Option<Ex> {
+    match ex {
+        Ex::Num(q) if q.is_negative() && !matches!(b, Ex::Num(z) if z.is_zero()) => {
+            let flipped = q.checked_neg()?;
+            Some(if flipped.is_one() {
+                b.clone()
+            } else {
+                Ex::Pow(Box::new(b.clone()), Box::new(Ex::Num(flipped)))
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Tagged emission of a rational: integers bare, every NON-integer as the structural
@@ -1050,12 +1062,6 @@ fn emit_rational_tagged(r: &Rat, cx: &Cx, out: &mut Vec<Tok>) {
 }
 
 fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
-    emit_tagged_at(e, cx, out, false);
-}
-
-/// `top`: `e` is the whole answer and its spelling holds no other bag, so a bag here decides the
-/// notation a second call reads (`to_prefix_tagged`).
-fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
     let view = cx.view;
     match e {
         Ex::Num(r) => emit_rational_tagged(r, cx, out),
@@ -1073,12 +1079,23 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
             }
         }
         Ex::Pow(b, ex) => {
-            // The standalone reciprocal: `inv x` (2 tokens) beats `pow x -1` (3). Deeper
-            // negative exponents keep the literal (`pow x -3` beats `inv pow x 3`).
-            // Base and exponent use the STRUCTURAL emission: a licence-refused
-            // `Pow(Mul[-1, A], n)` survives canon (see `ac::expr::pow`), and the flip
-            // display of its base does not round-trip (see `emit_structural`).
+            // A negative power is a quotient, and the tagged form spells every quotient as a
+            // bag: the unit beside the member a product's `<div>` section holds (a one-member
+            // bag does not exist), `<mul> 1 <div> x </mul>` and `<mul> 1 <div> pow x 3 </mul>`,
+            // as `to_tagged` writes the explicit `inv x` and `inv pow x 3`. Base, exponent and
+            // member use the STRUCTURAL emission: a licence-refused `Pow(Mul[-1, A], n)`
+            // survives canon (see `ac::expr::pow`), and the flip display of its base does not
+            // round-trip (see `emit_structural`).
+            if let Some(member) = divisor_member(b, ex) {
+                out.push(view.intern("<mul>"));
+                emit_tagged(&Ex::Num(Rat::ONE), cx, out);
+                out.push(view.intern("<div>"));
+                emit_structural(&member, cx, out);
+                out.push(view.intern("</mul>"));
+                return;
+            }
             if matches!(&**ex, Ex::Num(r) if *r == Rat::NEG_ONE) {
+                // The `inv 0` pole (see `divisor_member`).
                 out.push(view.intern("inv"));
                 emit_structural(b, cx, out);
                 return;
@@ -1126,14 +1143,11 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                                 return;
                             }
                         }
-                        // As a whole answer with no other bag a divisor keeps the bag, as under
-                        // any other coefficient (`<mul> -1 <div> x1 </mul>`, like `<mul> -2
-                        // <div> x1 </mul>`): the bare `neg inv x1` reads back as explicit
-                        // notation, `/ -1 x1`. Where a bag settles the notation, `neg` is shorter.
-                        let divisor = matches!(&v[1], Ex::Pow(b, ex)
-                            if matches!(&**ex, Ex::Num(q) if q.is_negative())
-                                && !matches!(&**b, Ex::Num(z) if z.is_zero()));
-                        if !(top && divisor) {
+                        // A negated quotient keeps its bag, as under any other coefficient
+                        // (`<mul> -1 <div> x1 </mul>`, like `<mul> -2 <div> x1 </mul>`).
+                        let quotient = matches!(&v[1], Ex::Pow(b, ex)
+                            if divisor_member(b, ex).is_some());
+                        if !quotient {
                             out.push(view.intern("neg"));
                             emit_tagged(&v[1], cx, out);
                             return;
@@ -1243,18 +1257,9 @@ fn emit_tagged_at(e: &Ex, cx: &Cx, out: &mut Vec<Tok>, top: bool) {
                             }
                         }
                     }
-                    Ex::Pow(b, ex) => match &**ex {
-                        Ex::Num(r)
-                            if r.is_negative() && !matches!(&**b, Ex::Num(z) if z.is_zero()) =>
-                        {
-                            let flipped = r.checked_neg().unwrap();
-                            if flipped.is_one() {
-                                den.push((**b).clone());
-                            } else {
-                                den.push(Ex::Pow(b.clone(), Box::new(Ex::Num(flipped))));
-                            }
-                        }
-                        _ => num.push(f),
+                    Ex::Pow(b, ex) => match divisor_member(b, ex) {
+                        Some(member) => den.push(member),
+                        None => num.push(f),
                     },
                     _ => num.push(f),
                 }

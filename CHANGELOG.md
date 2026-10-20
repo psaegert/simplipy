@@ -495,6 +495,20 @@ model predictions.
   (`<mul> -1 <div> x1 </mul>`, like `-2/x1`; 0.14.7 answered `neg inv x1`, which re-read as
   `/ -1 x1`), so every tagged answer reads back as itself. Explicit input is unchanged,
   `exp 1/2` included.
+- **The tagged form writes a reciprocal and a negative power as a quotient.** `simplify` answered
+  `1/x0` as `inv x0` and `x0^-3` as `pow x0 -3` in the tagged form, while `to_tagged` writes their
+  explicit spellings `inv x0` and `inv pow x0 3` as the bags `<mul> 1 <div> x0 </mul>` and
+  `<mul> 1 <div> pow x0 3 </mul>`, so one value had two tagged spellings. The core now writes
+  these bags wherever the quotient stands (`sin <mul> 1 <div> x0 </mul>`), the same member a
+  product's `<div>` section holds, and a negated one keeps its coefficient
+  (`exp <mul> -1 <div> x0 </mul>`, as `to_tagged` writes `exp / -1 x0`). Explicit and infix
+  answers do not change. From tagged inputs (`to_tagged` of each row), the tagged answers that
+  hold an `inv` fall to none (srbf's ground truths: 965 in `f64`, 964 in `real` and 1,205 in
+  `permissive`; a tenth of the training-data inputs: 1,970, 1,983 and 2,314; a tenth of the
+  predictions: 1,011, 1,012 and 4,967), every one respelled at its price, and the tagged answers
+  that are `to_tagged` of the explicit answer rise from 4,317 to 5,307 of the 6,531 ground truths
+  in `f64` (`real`: 4,296 to 5,291, `permissive`: 4,126 to 5,394). No answer changes on a second
+  call, in either notation.
 - **Permissive is one walk.** `simplify(.., mode='permissive')` ran three arms (its two fold
   disciplines and the `f64` chain) and chose between them by the price of internal states it did
   not return: 0.14.7 returns 769 of the training-data inputs, 3,326 of srbf's predictions and 12

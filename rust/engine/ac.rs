@@ -2901,9 +2901,10 @@ mod tests {
             .unwrap(),
             t(&["<mul>", "2", "x1", "<div>", "x2", "x3", "</mul>"])
         );
-        // Standalone unary spellings: `neg` in a function argument, `inv` for a lone
-        // reciprocal; both parse back (liberal input). A negation leaves an odd function
-        // on an equal price (fewest signs, then the outermost).
+        // `neg` is the standalone unary spelling in a function argument; a lone reciprocal is
+        // a quotient, bagged with the unit, as `to_tagged` writes it (`inv` still parses back:
+        // the input is liberal). A negation leaves an odd function on an equal price (fewest
+        // signs, then the outermost).
         assert_eq!(
             e.ac_simplify(&t(&["tan", "neg", "x0"]), 48, RuleMode::Default)
                 .unwrap(),
@@ -2912,7 +2913,13 @@ mod tests {
         assert_eq!(
             e.ac_simplify(&t(&["inv", "x0"]), 48, RuleMode::Default)
                 .unwrap(),
-            t(&["inv", "x0"])
+            t(&["<mul>", "1", "<div>", "x0", "</mul>"])
+        );
+        // A negated reciprocal keeps the coefficient bag, as `/ -1 x0` reads in tagged form.
+        assert_eq!(
+            e.ac_simplify(&t(&["exp", "neg", "inv", "x0"]), 48, RuleMode::Default)
+                .unwrap(),
+            t(&["exp", "<mul>", "-1", "<div>", "x0", "</mul>"])
         );
         // In-bag `neg` on input maps to the section spelling on output.
         // (constant-like terms sort LAST under the stripped order: x2 + 2.3, not 2.3 + x2)
@@ -3295,10 +3302,16 @@ mod tests {
                     "pow",
                     "rootn",
                     "x2",
-                    "inv",
+                    "<mul>",
+                    "1",
+                    "<div>",
                     "x4",
-                    "inv",
+                    "</mul>",
+                    "<mul>",
+                    "1",
+                    "<div>",
                     "x0",
+                    "</mul>",
                     "</mul>",
                     "<sub>",
                     "<mul>",
@@ -3387,7 +3400,7 @@ mod tests {
         let partner = t(&["*", "acos", "x0", "inv", "*", "acos", "x0", "atan", "x1"]);
         assert_eq!(
             e.ac_simplify(&partner, 48, RuleMode::Permissive).unwrap(),
-            t(&["inv", "atan", "x1"]),
+            t(&["<mul>", "1", "<div>", "atan", "x1", "</mul>"]),
             "partner cancellation must survive the projection"
         );
 
@@ -3487,12 +3500,20 @@ mod tests {
         let nl = e.ac_simplify(&nonconst, 48, RuleMode::Permissive).unwrap();
         assert_eq!(
             ns,
-            t(&["inv", "<mul>", "-1", "np.pi", "rootn", "3", "x1", "</mul>"]),
+            t(&[
+                "<mul>", "1", "<div>", "<mul>", "-1", "np.pi", "rootn", "3", "x1", "</mul>",
+                "</mul>"
+            ]),
             "sound's refusal form"
         );
         assert_eq!(
             nl,
-            t(&["neg", "inv", "<mul>", "np.pi", "rootn", "3", "x1", "</mul>"]),
+            t(
+                &[
+                    "<mul>", "-1", "<div>", "<mul>", "np.pi", "rootn", "3", "x1", "</mul>",
+                    "</mul>"
+                ]
+            ),
             "the negative completion joins with its sign outermost"
         );
         assert_eq!(

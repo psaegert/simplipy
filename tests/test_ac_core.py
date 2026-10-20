@@ -1053,7 +1053,7 @@ class TestLossyReciprocalRejoinProjection:
         sound = engine.simplify(list(x))
         lossy = engine.simplify(list(x), mode=Mode.permissive)
         assert lossy == sound, (lossy, sound)
-        assert lossy[:2] == ['inv', '<mul>'], lossy
+        assert lossy[:4] == ['<mul>', '1', '<div>', '<mul>'], lossy
 
     def test_partner_cancellation_survives(self, engine: SimpliPyEngine) -> None:
         x = ['*', 'acos', 'x0', 'inv', '*', 'acos', 'x0', 'atan', 'x1']
@@ -1386,8 +1386,8 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
         # one bit wherever it sits), so the sign key places it outermost.
         x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'pow', 'x3', 'x4'])
         out = engine.simplify(list(x), mode=Mode.permissive)
-        assert out == ['neg', 'inv', '<mul>', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3',
-                       'x4', '</add>', '</mul>'], out
+        assert out == ['<mul>', '-1', '<div>', '<mul>', 'x0', '<add>', 'exp', 'x3', 'pow',
+                       'x3', 'x4', '</add>', '</mul>', '</mul>'], out
         inside = ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3', 'x4', '</add>',
                   '</mul>']
         assert engine.complexity(out, mode=Mode.permissive) == \

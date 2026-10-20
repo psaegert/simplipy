@@ -265,6 +265,18 @@ class TestSimplifyPreservesTheDialect:
         out = engine.simplify(['<mul>', '2', 'atan', 'x0', '</mul>'])
         assert out == ['<mul>', '2', 'atan', 'x0', '</mul>']
 
+    @pytest.mark.parametrize('mode', ['real', 'f64', 'permissive'])
+    def test_a_tagged_answer_spells_a_quotient_as_to_tagged_does(self, engine, mode) -> None:
+        # One tagged spelling per value: a reciprocal or a negative power in a tagged answer is
+        # the bag `to_tagged` writes for its explicit spelling, wherever it stands.
+        for prefix in (['inv', 'x0'], ['sin', 'inv', 'x0'], ['+', 'x1', 'inv', 'x0'],
+                       ['exp', 'inv', 'sin', 'x0'], ['/', '-1', 'x0'], ['exp', '/', '-1', 'x0'],
+                       ['pow', 'x0', '-3'], ['+', 'x1', 'pow', 'x0', '-2'],
+                       ['exp', 'neg', 'pow', 'x0', '-2']):
+            explicit = engine.simplify(prefix, mode=mode)
+            tagged = engine.to_tagged(explicit)
+            assert engine.simplify(tagged, mode=mode) == tagged, (prefix, explicit, tagged)
+
     def test_str_in_str_out(self, engine) -> None:
         assert isinstance(engine.simplify('2*atan(x0)'), str)
 

@@ -192,7 +192,8 @@ def _sq(s):
 
 REDECIDED = [
     # (x1 - 3) / (x1 - 3)^3 is an even power, which then joins 1/(3 - x1)
-    (['<mul>', 'inv'] + _S + _N + ['inv', 'pow'] + _N + ['3', '</mul>'], 'pow <add> 3 <sub> x1 </add> -3'),
+    (['<mul>', 'inv'] + _S + _N + ['inv', 'pow'] + _N + ['3', '</mul>'],
+     '<mul> 1 <div> pow <add> 3 <sub> x1 </add> 3 </mul>'),
     # (3 - x1)^2 / (3 - x1) is the bare 3 - x1, which joins the root over x1 - 3
     ('* / pow - 3 x1 2 - 3 x1 pow - x1 3 0.5'.split(), 'neg pow - x1 3 / 3 2'),
     # inverses on both sides: the class is written in one orientation, the lone inverse joining the
@@ -205,7 +206,8 @@ REDECIDED = [
      {'f64': '/ neg pow - 3 x1 x3 - 3 x1', 'real': '/ neg pow - 3 x1 x3 - 3 x1',
       'permissive': '/ pow - 3 x1 x3 - x1 3'}),
     # (3 - x1) / (3 - x1)^3 is an even power over x1 - 3, which meets the bare x1 - 3
-    (['<mul>'] + _S + ['inv', 'pow'] + _S + ['3'] + _N + ['</mul>'], 'inv <add> x1 <sub> 3 </add>'),
+    (['<mul>'] + _S + ['inv', 'pow'] + _S + ['3'] + _N + ['</mul>'],
+     '<mul> 1 <div> <add> x1 <sub> 3 </add> </mul>'),
     # (x1 - 3)^2 / (x1 - 3) is the bare x1 - 3, which cancels against 1/(3 - x1)
     (['<mul>', 'pow'] + _N + ['2', 'inv'] + _S + ['inv'] + _N + ['</mul>'], '-1'),
     # x1 - 3 flips onto the root's sum and collects with both members there
@@ -348,7 +350,7 @@ def test_classes_are_decided_together(eng, mode):
 def test_an_odd_negative_total_keeps_one_inverse(eng, mode, effort):
     src = ['<mul>', 'inv', 'pow'] + _S + ['2', 'inv', 'pow'] + _S + ['3', 'inv'] + _N + ['</mul>']
     answer = list(eng.simplify(src, mode=mode, effort=effort))
-    assert ' '.join(answer) == 'neg pow <add> x1 <sub> 3 </add> -6'
+    assert ' '.join(answer) == '<mul> -1 <div> pow <add> x1 <sub> 3 </add> 6 </mul>'
     assert list(eng.simplify(answer, mode=mode, effort=effort)) == answer
 
 
