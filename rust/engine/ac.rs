@@ -2738,9 +2738,10 @@ mod tests {
              lags the engine -- republish, do not re-pin"
         );
         // INTERIM (2026-10-18), until the re-mine resets the count to 0: the sign key (fewest
-        // signs, then outermost) makes the canon place a sign at an odd function itself, so 16
-        // rows of the staged asset are subsumed (G2). The suites pin them by rule
-        // (`tests/conftest.py`, `ACJ4_INTERIM_SUBSUMED`); any other count still fails here.
+        // signs, then outermost) makes the canon place a sign at an odd function itself, and the
+        // product constructor merges powers of e (`exp(2)/e` is `e`), so 17 rows of the staged
+        // asset are subsumed (G2). The suites pin them by rule (`tests/conftest.py`,
+        // `ACJ4_INTERIM_SUBSUMED`); any other count still fails here.
         // G2 REPUBLISH (2026-08-15): the full-lane re-mine ships (6,594 rules, x3
         // byte-identical on the reference mint host, D20's row-by-row accounting) and the pin returns
         // to its PRISTINE form after the B5+B19 interim (6649/30/0, discharged). If
@@ -2750,7 +2751,7 @@ mod tests {
         // legacy one, `RuleCanon::Legacy`): nothing is subsumed. Read in f64's own folded
         // canon, `atanh pow (-10) (-9) -> -1e-09` was, a row nothing judged in that canon.
         assert_eq!(
-            subsumed, 16,
+            subsumed, 17,
             "published asset, read in its own canon, must translate loss-free but for the \
              interim rows; a subsumption means the canon moved past it -- republish, do not \
              re-pin"
@@ -2900,9 +2901,10 @@ mod tests {
             .unwrap(),
             t(&["<mul>", "2", "x1", "<div>", "x2", "x3", "</mul>"])
         );
-        // Standalone unary spellings: `neg` in a function argument, `inv` for a lone
-        // reciprocal; both parse back (liberal input). A negation leaves an odd function
-        // on an equal price (fewest signs, then the outermost).
+        // `neg` is the standalone unary spelling in a function argument; a lone reciprocal is
+        // a quotient, bagged with the unit, as `to_tagged` writes it (`inv` still parses back:
+        // the input is liberal). A negation leaves an odd function on an equal price (fewest
+        // signs, then the outermost).
         assert_eq!(
             e.ac_simplify(&t(&["tan", "neg", "x0"]), 48, RuleMode::Default)
                 .unwrap(),
@@ -2911,7 +2913,13 @@ mod tests {
         assert_eq!(
             e.ac_simplify(&t(&["inv", "x0"]), 48, RuleMode::Default)
                 .unwrap(),
-            t(&["inv", "x0"])
+            t(&["<mul>", "1", "<div>", "x0", "</mul>"])
+        );
+        // A negated reciprocal keeps the coefficient bag, as `/ -1 x0` reads in tagged form.
+        assert_eq!(
+            e.ac_simplify(&t(&["exp", "neg", "inv", "x0"]), 48, RuleMode::Default)
+                .unwrap(),
+            t(&["exp", "<mul>", "-1", "<div>", "x0", "</mul>"])
         );
         // In-bag `neg` on input maps to the section spelling on output.
         // (constant-like terms sort LAST under the stripped order: x2 + 2.3, not 2.3 + x2)
@@ -3294,10 +3302,16 @@ mod tests {
                     "pow",
                     "rootn",
                     "x2",
-                    "inv",
+                    "<mul>",
+                    "1",
+                    "<div>",
                     "x4",
-                    "inv",
+                    "</mul>",
+                    "<mul>",
+                    "1",
+                    "<div>",
                     "x0",
+                    "</mul>",
                     "</mul>",
                     "<sub>",
                     "<mul>",
@@ -3386,7 +3400,7 @@ mod tests {
         let partner = t(&["*", "acos", "x0", "inv", "*", "acos", "x0", "atan", "x1"]);
         assert_eq!(
             e.ac_simplify(&partner, 48, RuleMode::Permissive).unwrap(),
-            t(&["inv", "atan", "x1"]),
+            t(&["<mul>", "1", "<div>", "atan", "x1", "</mul>"]),
             "partner cancellation must survive the projection"
         );
 
@@ -3486,12 +3500,20 @@ mod tests {
         let nl = e.ac_simplify(&nonconst, 48, RuleMode::Permissive).unwrap();
         assert_eq!(
             ns,
-            t(&["inv", "<mul>", "-1", "np.pi", "rootn", "3", "x1", "</mul>"]),
+            t(&[
+                "<mul>", "1", "<div>", "<mul>", "-1", "np.pi", "rootn", "3", "x1", "</mul>",
+                "</mul>"
+            ]),
             "sound's refusal form"
         );
         assert_eq!(
             nl,
-            t(&["neg", "inv", "<mul>", "np.pi", "rootn", "3", "x1", "</mul>"]),
+            t(
+                &[
+                    "<mul>", "-1", "<div>", "<mul>", "np.pi", "rootn", "3", "x1", "</mul>",
+                    "</mul>"
+                ]
+            ),
             "the negative completion joins with its sign outermost"
         );
         assert_eq!(

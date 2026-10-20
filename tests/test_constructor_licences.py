@@ -597,9 +597,14 @@ class TestEvenFunctionsAreSignBlind:
         # (contract §9.2) `neg(0) = 0`, so `inv(neg 0)` and `neg(inv 0)` genuinely
         # disagree -- pinned as VALUES, because this is the reason `inv` has no parity.
         # §9.8.4 proves no total semantics with +inf != -inf keeps both pole symmetry and
-        # absorption, and this contract keeps absorption.
-        assert bare.simplify(['inv', 'neg', '0']) == ['float("inf")']
-        assert bare.simplify(['neg', 'inv', '0']) == ['float("-inf")']
+        # absorption, and this contract keeps absorption -- in `real`. float64's signed zero is
+        # odd at the pole (`1/-0 = -inf`), so in `f64` the two spellings agree.
+        real = SimpliPyEngine(operators=yaml.safe_load(open(CONFIG))['operators'], rules=[],
+                              rules_real=[])
+        assert real.simplify(['inv', 'neg', '0'], mode=Mode.real) == ['float("inf")']
+        assert real.simplify(['neg', 'inv', '0'], mode=Mode.real) == ['float("-inf")']
+        assert bare.simplify(['inv', 'neg', '0'], mode=Mode.f64) == ['float("-inf")']
+        assert bare.simplify(['neg', 'inv', '0'], mode=Mode.f64) == ['float("-inf")']
         # `abs(1/(-x)) -> abs(1/x)` DOES hold and does fire -- not through a parity claim
         # about `inv`, but because `pow` distributes the -1 out of the base first and the
         # bag-coefficient arm then drops it. The refusal above is about the POLE, and the

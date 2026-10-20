@@ -770,26 +770,27 @@ class TestCertifyRules:
         proposals = [
             ["inv", "exp", "x0"],                                    # 1/exp(a) = exp(-a)
             ["+", "exp", "x0", "cosh", "x1"],                        # no shorter equivalent -> reject
-            ["*", "exp", "x0", "*", "exp", "x1", "exp", "x2"],       # minimal form is 6 tokens
-            ["log", "*", "exp", "x0", "exp", "x1"],                  # log(e^a e^b) -> a+b: TRUE, unrealised
+            ["+", "exp", "x0", "exp", "+", "x0", "x1"],              # minimal form is 6 tokens
+            ["log", "pow2", "exp", "x0"],                            # log((e^a)^2) -> a+a: TRUE, unrealised
         ]
-        hints = [None, None, ["exp", "+", "x0", "+", "x1", "x2"], None]
+        hints = [None, None, ["*", "exp", "x0", "+", "1", "exp", "x1"], None]
         out = engine.certify_rules(proposals, hints, dummy_variables=3, X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
         assert by_src[tuple(proposals[0])] == (("exp", "neg", "x0"), "minimal")
         assert tuple(proposals[1]) not in by_src
-        assert by_src[tuple(proposals[2])] == (("exp", "+", "x0", "+", "x1", "x2"), "verified")
-        # `log(e^a e^b) -> a+b` is exactly true on R and NOT realised by the shipped f64
-        # engine -- exp overflows at 709.78, so log(exp(800)*exp(1)) is inf, not 801 --
-        # which the deployed lane convicts as ENGINE-MISALIGN.
+        assert by_src[tuple(proposals[2])] == (("*", "exp", "x0", "+", "1", "exp", "x1"), "verified")
+        # `log((e^a)^2) -> a+a` is exactly true on R and NOT realised by the shipped f64
+        # engine -- near a = 0 the log of a rounded square of exp loses the low digits, so
+        # at a = 1e-3 the two sides are 83 ulps apart -- which the deployed lane convicts as
+        # ENGINE-MISALIGN.
         #
         # Under the triple that verdict is no longer a death sentence: ENGINE-MISALIGN is
         # the `real` tier, so the pair SURVIVES certification and is routed into
         # rules_real.json / rules_permissive.json and out of rules.json. Deleting it here
         # would break the parity `certify_rules` promises with the mine, which keeps it.
-        assert by_src[tuple(proposals[3])][0] == ('+', 'x0', 'x1')
+        assert by_src[tuple(proposals[3])][0] == ('+', 'x0', 'x0')
         from simplipy.verify._contract import judge_rule
-        assert judge_rule(list(proposals[3]), ['+', 'x0', 'x1'])['tier'] == 'real'
+        assert judge_rule(list(proposals[3]), ['+', 'x0', 'x0'])['tier'] == 'real'
 
     def test_skips_sources_the_engine_already_reduces(self, engine) -> None:
         engine.find_rules(max_source_pattern_length=3, dummy_variables=1,
@@ -909,11 +910,11 @@ class TestSymbolicGateFatalBuckets:
         self._withdraw_log(monkeypatch)
         out = engine.certify_rules(
             [["log", "*", "exp", "x0", "exp", "x1"],
-             ["*", "exp", "x0", "exp", "x1"]],
+             ["inv", "exp", "x0"]],
             dummy_variables=2, X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
-        assert by_src.get(("*", "exp", "x0", "exp", "x1")) \
-            == (("exp", "+", "x0", "x1"), "minimal"), "control identity failed upstream"
+        assert by_src.get(("inv", "exp", "x0")) \
+            == (("exp", "neg", "x0"), "minimal"), "control identity failed upstream"
         assert ("log", "*", "exp", "x0", "exp", "x1") not in by_src, \
             "a certification the judge cannot evaluate was returned"
 
@@ -938,13 +939,16 @@ class TestCoverageGateSearches:
         across-length continuation: at target length 3 the scan meets `pow2 exp x0`,
         numerically equivalent but parsing to the very Ex the engine already reaches
         (not strictly below -> refused); the scan must keep going and take the
-        length-4 `exp + x0 x0`. The off-diagonal sibling never hit the gate and is the
-        anti-vacuity control."""
+        length-4 `exp + x0 x0`. A source that never hits the gate is the anti-vacuity control.
+        The off-diagonal sibling `* exp x0 exp x1` is the product constructor's own: it merges
+        the two powers of e into `exp(x0 + x1)`, so no target lies strictly below it."""
         out = engine.certify_rules(
-            [self.DIAG, ["*", "exp", "x0", "exp", "x1"]], dummy_variables=2, X=256, seed=7)
+            [self.DIAG, ["*", "exp", "x0", "exp", "x1"], ["inv", "exp", "x0"]],
+            dummy_variables=2, X=256, seed=7)
         by_src = {tuple(s): (t, c) for s, t, c in out}
         assert by_src.get(tuple(self.DIAG)) == (self.BETTER, "minimal")
-        assert by_src.get(("*", "exp", "x0", "exp", "x1")) == (("exp", "+", "x0", "x1"), "minimal")
+        assert ("*", "exp", "x0", "exp", "x1") not in by_src
+        assert by_src.get(("inv", "exp", "x0")) == (("exp", "neg", "x0"), "minimal")
 
     def test_hint_certifies_when_the_library_cannot_spell_the_target(self, engine) -> None:
         """Same source, target length capped at 3: the library cannot spell the 4-token
@@ -2424,7 +2428,11 @@ class TestPermissiveDominanceReplacesTheSetInvariant:
         engine = SimpliPyEngine.from_config(acj_config_path())
         assert engine._core.mode_rules_len(rule_mode='real') is not None
         rows = default_corpus()[:120]
-        assert assert_permissive_dominates(engine, rows) == []
+        # the corpus's known violation (conftest): real's one zero and permissive's signed zero
+        # give that row different values, so real's cheaper answer is not permissive's to take
+        from conftest import PERMISSIVE_DOMINANCE_KNOWN
+        known = [v for v in PERMISSIVE_DOMINANCE_KNOWN if v['expression'] in map(list, rows)]
+        assert assert_permissive_dominates(engine, rows) == known
 
     def test_it_CAN_fail(self) -> None:
         """An invariant that cannot fail proves nothing -- three tautologies shipped in

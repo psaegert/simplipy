@@ -6,7 +6,8 @@
 //!   `Const`; like terms collected as far as the soundness gates allow; sorted by [`cmp_ex`].
 //! * `Mul(v)`: `v.len() >= 2`; no element is a `Mul`; at most one `Num` (never 1; 0 only in the
 //!   uncertified `0 * t` case documented at the zero-coefficient gate); at most one bare `Const`;
-//!   like bases collected under the gates; sorted by [`cmp_ex`].
+//!   like bases collected under the gates, and at most one power of e (`exp(a) exp(b)` is
+//!   `exp(a + b)`); sorted by [`cmp_ex`].
 //! * `Pow(b, e)`: `e` is never `Num(0)` or `Num(1)`; `b` is never a `Mul` when `e` is a
 //!   non-negative or even integer (integer powers distribute) -- for ODD NEGATIVE `e` the
 //!   distribution carries a zero-set licence (see `pow`), so a refused `Pow(Mul[..], e)`
@@ -1394,6 +1395,15 @@ impl<'a> Cx<'a> {
     #[inline]
     pub fn f64_numbers(&self) -> bool {
         !matches!(self.mode, RuleMode::Real) && super::rat::f64_numbers()
+    }
+
+    /// The SIGNED-ZERO reading: does this construction answer in float64's signed zeros (IEEE
+    /// 754)? `f64` and `permissive` are evaluated in float64, where an exact zero carries the sign
+    /// of what formed it (`x*0` is -0 wherever x < 0) and its inverse is the infinity of that sign;
+    /// `real` reasons over the reals, whose one zero inverts to `+inf` whatever formed it.
+    #[inline]
+    pub fn ieee_zeros(&self) -> bool {
+        !matches!(self.mode, RuleMode::Real)
     }
 
     /// In f64 mode, a numeral leaf the evaluator reads as +-inf or (underflowing) as 0:
@@ -3984,23 +3994,44 @@ fn level_sets_null(e: &Ex, cx: &Cx) -> bool {
 /// `Err` holds their product, built without its decision (`mul_undecided`), where `pow` refuses.
 pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<Ex>, Ex> {
     let ex = Ex::Num(k.clone());
+    if inverts_a_signed_zero(&members, cx) {
+        return Ok(members
+            .into_iter()
+            .map(|f| pow_member(f, ex.clone(), cx))
+            .collect());
+    }
     let magnitude = |v: &[Ex]| {
         v.iter()
             .any(|f| matches!(f, Ex::Num(r) if r.is_negative() && *r != Rat::NEG_ONE))
     };
     match mul_undecided(members.clone(), cx) {
         Ex::Mul(v) => match power_bag(&v, k, cx) {
-            Some(bag) if bag != v && magnitude(&v) => {
-                Ok(bag.into_iter().map(|f| pow(f, ex.clone(), cx)).collect())
-            }
+            Some(bag) if bag != v && magnitude(&v) => Ok(bag
+                .into_iter()
+                .map(|f| pow_member(f, ex.clone(), cx))
+                .collect()),
             Some(_) => Ok(members
                 .into_iter()
-                .map(|f| pow(f, ex.clone(), cx))
+                .map(|f| pow_member(f, ex.clone(), cx))
                 .collect()),
             None => Err(Ex::Mul(v)),
         },
-        f => Ok(vec![pow(f, ex, cx)]),
+        f => Ok(vec![pow_member(f, ex, cx)]),
     }
+}
+
+/// A ZERO KEEPS ITS SIGN WHERE IT IS INVERTED, in float64's signed zeros (`Cx::ieee_zeros`): does
+/// the product of `v` hold an exact zero, whose sign is then the sign of its other members (`x*0`
+/// is -0 wherever x < 0, `-(x - x)` is -0)? A negative integer power distributes over such a
+/// product exactly in IEEE 754 arithmetic: the exact zero is +0, so `(0*f)^k` is `0^k * f^k`, that
+/// is `inf * f^k`, for every `f`, a zero, an infinity and NaN included. Each member keeps its own
+/// power and the zero the pole, so the answer keeps the infinity's sign: `1/(x1*(x2 - x2))` is
+/// `inf/x1`, `1/-(x1 - x1)` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`. `real` keeps its one zero:
+/// there the product is the zero and its inverse `+inf`. Asked where the members of an inverted
+/// product are still apart (`raised_members`), and by `pow`'s distribution licence
+/// (`power_bag`), where a product that holds a zero is inverted whole.
+fn inverts_a_signed_zero(v: &[Ex], cx: &Cx) -> bool {
+    cx.ieee_zeros() && v.iter().any(|f| matches!(f, Ex::Num(r) if r.is_zero()))
 }
 
 /// `mul()` without the opposite-sums decision, for a product about to be raised to a negative
@@ -4295,8 +4326,10 @@ fn mul_with(items: Vec<Ex>, cx: &Cx, decide: bool) -> Ex {
 
 /// Like-base exponent collection, `mul()`'s step after the coefficient: the factors with one
 /// base (and one symbolic exponent) merge their exponents, and each result is rebuilt through
-/// [`pow`]. Returns the rebuilt factors and whether one of them came back as a product
-/// (`spliced`: its members are in the list, and the caller re-runs the constructor on it).
+/// [`pow`]; then the powers of e left over distinct bases merge into one (`merge_e_powers`).
+/// Returns the rebuilt factors and whether one of them must re-enter the constructor
+/// (`spliced`: a product whose members are in the list, or a factor of another kind, and the
+/// caller re-runs the constructor on it).
 fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
     // Like-base exponent collection. The BRANCH-CUT licence gates every single merge step,
     // including same-sign ones: merging exponents `a` and `b` into `a + b` is sound iff both
@@ -4405,7 +4438,66 @@ fn collect_like_bases(factors: Vec<Ex>, cx: &Cx) -> (Vec<Ex>, bool) {
         let (out, again) = collect_like_bases(out, cx);
         return (out, spliced || again);
     }
-    (out, spliced)
+    let merged = merge_e_powers(&mut out, cx);
+    (out, spliced || merged)
+}
+
+/// The exponent of `f` read as a power of Euler's number: `exp(a)` is `e^a`, the leaf `E` is
+/// `e^1`, and a rational power of either is `e^(a r)` -- a `Pow` with a literal exponent, or an
+/// even root, which `factor_split` reads as a rational power too. `None` for anything else,
+/// a symbolic power included: `(e^a)^b` is `e^(a b)` only where `a b` is no `0 * inf`.
+fn e_exponent(f: &Ex, cx: &Cx) -> Option<Ex> {
+    let (base, r) = as_rational_power(f, cx).unwrap_or((f, Rat::ONE));
+    let a = match base {
+        Ex::E => return Some(Ex::Num(r)),
+        Ex::Fun(op, args) if args.len() == 1 && cx.view.tok_is(*op, "exp") => &args[0],
+        _ => return None,
+    };
+    Some(if r.is_one() {
+        a.clone()
+    } else {
+        mul(vec![Ex::Num(r), a.clone()], cx)
+    })
+}
+
+/// POWERS OF e COLLECT BY THEIR EXPONENTS: `exp(a) exp(b) = exp(a + b)`. `exp` is a power of e,
+/// so this is the like-base collection that merges `x^a x^b` into `x^(a + b)`, over the one base
+/// e every power of e shares, whatever `exp` spells its exponent with: `collect_like_bases` merges
+/// the powers over one `exp(a)` as over any base, and this merges what remains over distinct
+/// ones. The base is positive, finite and nonzero, so every licence of that collection holds for
+/// it (the branch cut and the finite-nonzero licence of a cancelling merge); the exponents sum
+/// through [`add`], whose own licences decide what cancels: `exp(u) exp(-u)` is `exp(0) = 1` where
+/// `u` is finite almost everywhere, as `exp(u)/exp(u)` is.
+///
+/// TOTAL on the extended real line, so no mode needs a licence of its own: at `a = +inf`,
+/// `b = -inf` both sides are NaN (`inf * 0`, and `exp(inf - inf)`), and at one infinite exponent
+/// both are that exponent's limit. Under the f64 evaluator the two sides differ where an `exp`
+/// overflows or underflows (`exp(800) exp(-800)` is `inf * 0 = NaN`, while `exp(0)` is 1), which
+/// is f64's range event (`numeric::RangeKind`): there a rewrite may give the true value, and the
+/// merge gives it.
+///
+/// Rebuilt through [`pow`] over the base e, so the merged exponent takes the spelling `pow` gives
+/// any power of e (`compose_e_power`): `exp(x + 1)`, or `E` and `1` at the exponents 1 and 0. A
+/// single power of e stays as it stands. Returns whether the merged factor must re-enter the
+/// constructor: when it is no power of e (a number, a product, a factor over another base).
+fn merge_e_powers(out: &mut Vec<Ex>, cx: &Cx) -> bool {
+    let at: Vec<(usize, Ex)> = out
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| e_exponent(f, cx).map(|x| (i, x)))
+        .collect();
+    if at.len() < 2 {
+        return false;
+    }
+    let mut exponents = Vec::with_capacity(at.len());
+    for (i, x) in at.into_iter().rev() {
+        out.remove(i);
+        exponents.push(x);
+    }
+    let merged = pow(Ex::E, add(exponents, cx), cx);
+    let again = e_exponent(&merged, cx).is_none();
+    out.push(merged);
+    again
 }
 
 /// `mul()`'s last step: the sign owners, then the assembly, for a nonzero coefficient and a
@@ -6740,10 +6832,20 @@ fn sign_place(mut coeff: Rat, mut out: Vec<Ex>, cx: &Cx) -> Ex {
         // by the parity of the class's members. At the zero of the sum every member's base is +0,
         // so the product's value there is the coefficient's infinity -- the limit wherever the
         // pole is one-signed; a single member flipping alone would turn it (`1/(cbrt(u) u)`).
+        // Beside a bare `Const`, which absorbs every constant factor of the product and so the
+        // orientation sign of every class, every class is a site (`refit_trade_flip`).
+        let refit = out.iter().any(|f| matches!(f, Ex::Const));
         let site_flips: Vec<(usize, Ex)> = out
             .iter()
             .enumerate()
-            .filter_map(|(i, f)| sign_trade_flip(f, cx).map(|nf| (i, nf)))
+            .filter_map(|(i, f)| {
+                let flip = if refit {
+                    refit_trade_flip(f, cx)
+                } else {
+                    sign_trade_flip(f, cx)
+                };
+                flip.map(|nf| (i, nf))
+            })
             .collect();
         // A class is read only where its sum meets another occurrence of itself: two sites over
         // sums of one shape, or a sum inside another factor (`classes_meet`). Elsewhere each site
@@ -7219,6 +7321,21 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
     // orientation of the other parity (among switches of one cost, the one whose product is
     // structurally smallest).
     let best: Vec<&SiteOption> = decided.iter().map(|(_, opts)| &opts[0]).collect();
+    let build = |pick: &[&SiteOption]| {
+        let mut flipped = vec![false; n];
+        for opt in pick {
+            for &bit in &opt.flips {
+                flipped[bit] = true;
+            }
+        }
+        o.candidate(&flipped, cx)
+    };
+    // Where the sign is absorbed (a bare `Const`, which absorbs every constant factor of its
+    // product, or a zero coefficient) the parity is no constraint: every class takes its own
+    // cheapest orientation, ties by its sites as they then stand, whatever else the product holds.
+    if matches!(o.carrier, Carrier::Free) {
+        return build(&best).map(|(e, _)| e);
+    }
     let parity = best.iter().fold(false, |p, opt| p ^ opt.odd);
     type Delta = (u64, i64, i64);
     let switches: Vec<(Delta, usize, &SiteOption)> = decided
@@ -7235,15 +7352,6 @@ fn sign_place_groups(o: &SignOrbit, cx: &Cx) -> Option<Ex> {
         })
         .collect();
     let least = switches.iter().map(|(delta, _, _)| *delta).min();
-    let build = |pick: &[&SiteOption]| {
-        let mut flipped = vec![false; n];
-        for opt in pick {
-            for &bit in &opt.flips {
-                flipped[bit] = true;
-            }
-        }
-        o.candidate(&flipped, cx)
-    };
     let mut chosen: Option<(u64, Ex)> = None;
     for target in [false, true] {
         let built = if target == parity {
@@ -7339,10 +7447,25 @@ fn is_sign_trade_site(f: &Ex, cx: &Cx) -> bool {
 /// through the same two. Without the memo a sum nested `d` deep cost `4^d` flips (measured:
 /// `x1*(x1 + (N + 1)/x1)` nested 9 deep took 7 s with the search off, all of it here).
 fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
+    trade_flip(f, cx, false)
+}
+
+/// The flip of `f` as a factor of a product that holds a bare `Const` (`sign_place`). A
+/// `<constant>` absorbs every constant factor of its product, and a class's orientation sign is
+/// one, the constant factor -1: beside one, the orientation of EVERY class is free, so the classes
+/// whose sign an absorption owner holds elsewhere (a sum holding a `Const`, one with a
+/// negation-absorbing member, one with an infinity) are sites too, their sign the constant's.
+fn refit_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
+    trade_flip(f, cx, true)
+}
+
+/// [`sign_trade_flip`] and [`refit_trade_flip`], memoized; `refit`: the product's sign is a bare
+/// `Const`'s.
+fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
     if !matches!(f, Ex::Add(_) | Ex::Pow(..) | Ex::Fun(..)) {
         return None;
     }
-    let key = (flip_cx_key(cx), f.clone());
+    let key = (flip_cx_key(cx), f.clone(), refit);
     let outer = FLIP_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         if m.is_none() {
@@ -7356,7 +7479,7 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
     if let Some(hit) = FLIP_MEMO.with(|m| m.borrow().as_ref().and_then(|t| t.get(&key).cloned())) {
         return hit;
     }
-    let r = sign_trade_flip_raw(f, cx);
+    let r = sign_trade_flip_raw(f, cx, refit);
     FLIP_MEMO.with(|m| {
         if let Some(t) = m.borrow_mut().as_mut() {
             t.insert(key, r.clone());
@@ -7370,7 +7493,7 @@ fn sign_trade_flip(f: &Ex, cx: &Cx) -> Option<Ex> {
 /// the thread's number domain. All of them outlive the outermost call, so no identity is reused
 /// within the memo's extent.
 type FlipCxKey = (usize, [usize; 4], u8);
-type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex), Option<Ex>>;
+type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex, bool), Option<Ex>>;
 
 /// The opposite-sums decision of a product (`collect_opposite_sums`), keyed like a flip: by the
 /// context, the sign host and the factors as they arrived. It lives exactly as long as the flip
@@ -7439,19 +7562,31 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
     )
 }
 
-fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
+fn sign_trade_flip_raw(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
     let flip_sum = |ts: &[Ex]| -> Option<Vec<Ex>> {
         // Exclusions = the absorption owners' classes: Const-bearing (H-020),
         // absorbing-member (H-030), and BARE-infinity terms (the inf carries the
         // sign itself, H-014 -- `term_absorbs_negation` only matches inf-carrying
         // PRODUCTS, so the bare member needs its own test; missing it let an
         // odd-fun trade flip an inf-bearing sum and inflate mu: fuzz row 131227,
-        // P5, the one violation in 200k).
+        // P5, the one violation in 200k). Beside a bare `Const` (`refit`) the
+        // constant owns every class's sign, theirs too: such a sum negates through
+        // `add`, which files it bare (`primitive_sum` never wraps one).
         if ts.iter().any(Ex::contains_const)
             || ts.iter().any(term_absorbs_negation)
             || ts.iter().any(|x| matches!(x, Ex::PosInf | Ex::NegInf))
         {
-            return None;
+            if !refit {
+                return None;
+            }
+            let negated = ts
+                .iter()
+                .map(|t| negate_term(t, cx))
+                .collect::<Option<Vec<Ex>>>()?;
+            return match add(negated, cx) {
+                Ex::Add(v) => Some(v),
+                _ => None,
+            };
         }
         let mut out = ts
             .iter()
@@ -7494,7 +7629,7 @@ fn sign_trade_flip_raw(f: &Ex, cx: &Cx) -> Option<Ex> {
                         a.has_measure_space(cx.view) || a.contains_wildcard(cx.view)
                     }) =>
                 {
-                    sign_trade_flip(b, cx).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
+                    trade_flip(b, cx, refit).map(|nb| Ex::Pow(Box::new(nb), e.clone()))
                 }
                 _ => None,
             }?;
@@ -7915,17 +8050,18 @@ fn rejoin_walk(e: Ex, signed: bool, cx: &Cx) -> Ex {
     }
 }
 
-/// Rebuild `base^exp` (rational or symbolic-with-count) through the [`pow`] constructor so
-/// integer-power distribution and exact folds apply.
+/// Rebuild `base^exp` (rational or symbolic-with-count) through the power constructor so
+/// integer-power distribution and exact folds apply; as a member of the product being built
+/// ([`pow_member`]), whose sign placement orients it.
 fn rebuild_factor(base: Ex, sym: Option<Ex>, r: Rat, cx: &Cx) -> Ex {
     match sym {
-        None => pow(base, Ex::Num(r), cx),
+        None => pow_member(base, Ex::Num(r), cx),
         Some(e) => {
             if r.is_one() {
-                pow(base, e, cx)
+                pow_member(base, e, cx)
             } else {
                 let scaled = mul(vec![Ex::Num(r), e], cx);
-                pow(base, scaled, cx)
+                pow_member(base, scaled, cx)
             }
         }
     }
@@ -7943,6 +8079,7 @@ pub(crate) fn distributes_power(v: &[Ex], e: &Rat, cx: &Cx) -> bool {
 fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     let licensed = !e.is_negative()
         || e.is_even_integer()
+        || inverts_a_signed_zero(v, cx)
         || v.iter().any(holds_infinity)
         || v.iter().all(|f| zero_set_null(f, cx))
         || (v.iter().any(|f| holds_odd_root(f, cx))
@@ -8014,7 +8151,19 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
 ///   `(a^(1/2))^2 = a` only on `a >= 0`.
 /// * `(a*b)^n` for INTEGER n distributes over the factors (TOTAL as extended-real evaluations;
 ///   for non-integer exponents `(ab)^(1/2) != a^(1/2) b^(1/2)` on `a, b < 0`).
+/// * a power that is a sign-trade site takes the orientation it takes as a product's one factor
+///   (`lone_site`).
 pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
+    match pow_member(base, exp, cx) {
+        node @ Ex::Pow(..) => lone_site(node, cx),
+        other => other,
+    }
+}
+
+/// [`pow`] for a member of a product, whose sign placement decides the member's orientation with
+/// the product's other members (`sign_place`): the same power, a sign-trade site left in the
+/// orientation it was built in.
+pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A literal base or exponent beside a non-literal one LANDS here (permissive's ρ,
     // [`land`]); a power of two literals folds exactly or stays as written.
@@ -8092,6 +8241,22 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             }
         }
     }
+    // A NEGATED SITE UNDER A POWER IS THE POWER OF ITS FLIP: `-F` and its flip (`sign_trade_flip`)
+    // are one class in its two orientations, one value wherever the flip is a site's other spelling,
+    // so `(-F)^s` is `flip(F)^s` for every exponent. A site standing alone may take the negated
+    // orientation (`lone_site`); a power over it reads the class as it reads the site spelled
+    // without the sign: `(S^3)^-1` is `S^-3` and `(S^3)^(1/2)` is `S^(3/2)` whichever orientation
+    // `S^3` stands in. (A negative coefficient beside other members folds into a site where the
+    // power distributes, `power_bag`.)
+    if let Ex::Mul(v) = &base {
+        if let [Ex::Num(c), f] | [f, Ex::Num(c)] = v.as_slice() {
+            if *c == Rat::NEG_ONE {
+                if let Some(flipped) = sign_trade_flip(f, cx) {
+                    return pow_member(flipped, exp, cx);
+                }
+            }
+        }
+    }
     // Integer powers distribute over products -- TOTAL for non-negative and for EVEN
     // integer exponents (at a zero of the product both spellings give 0 resp. +inf; at
     // infinities they agree for every integer). For ODD NEGATIVE exponents the identity
@@ -8114,7 +8279,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if let Some(bag) = power_bag(v, e, cx) {
                 let parts: Vec<Ex> = bag
                     .into_iter()
-                    .map(|f| pow(f, Ex::Num(e.clone()), cx))
+                    .map(|f| pow_member(f, Ex::Num(e.clone()), cx))
                     .collect();
                 return mul(parts, cx);
             }
@@ -8132,9 +8297,9 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 let parts: Vec<Ex> = v
                     .iter()
                     .cloned()
-                    .map(|f| pow(f, Ex::Num(m.clone()), cx))
+                    .map(|f| pow_member(f, Ex::Num(m.clone()), cx))
                     .collect();
-                return pow(mul(parts, cx), Ex::int(-1), cx);
+                return pow_member(mul(parts, cx), Ex::int(-1), cx);
             }
         }
     }
@@ -8185,7 +8350,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             };
             if licence {
                 if let Some(p) = r.checked_mul(s) {
-                    return pow(inner_base.clone(), Ex::Num(p), cx);
+                    return pow_member(inner_base.clone(), Ex::Num(p), cx);
                 }
             }
         }
@@ -8226,7 +8391,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     if !e.is_negative() {
                         return rargs[0].clone();
                     }
-                    return pow(rargs[0].clone(), Ex::int(-1), cx);
+                    return pow_member(rargs[0].clone(), Ex::int(-1), cx);
                 }
             }
         }
@@ -8251,7 +8416,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
             if let Ex::Num(idx) = &rargs[1] {
                 if idx.is_odd_integer() && idx.cmp_int(3) != Ordering::Less {
                     if let Some(t) = idx.checked_inv().and_then(|inv| s.checked_mul(&inv)) {
-                        return pow(rargs[0].clone(), Ex::Num(t), cx);
+                        return pow_member(rargs[0].clone(), Ex::Num(t), cx);
                     }
                 }
             }
@@ -8273,8 +8438,8 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                     && n.is_even_integer()
                 {
                     if let Some(unit) = s.checked_neg() {
-                        let root = pow(base.clone(), Ex::Num(unit), cx);
-                        return pow(root, Ex::int(-1), cx);
+                        let root = pow_member(base.clone(), Ex::Num(unit), cx);
+                        return pow_member(root, Ex::int(-1), cx);
                     }
                 }
             }
@@ -8325,7 +8490,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 } else {
                     Ex::PosInf
                 };
-                return pow((**inner).clone(), flipped, cx);
+                return pow_member((**inner).clone(), flipped, cx);
             }
         }
     }
@@ -8372,7 +8537,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         };
         if single_member {
             if let Some(r) = literal_reciprocal(&base) {
-                return pow(r, positive, cx);
+                return pow_member(r, positive, cx);
             }
         }
     }
@@ -8386,7 +8551,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     if matches!(&exp, Ex::Num(r) if *r == Rat::NEG_ONE) {
         if let Ex::Pow(ib, ie) = &base {
             if let Some(r) = literal_reciprocal(ib) {
-                return pow(r, (**ie).clone(), cx);
+                return pow_member(r, (**ie).clone(), cx);
             }
         }
     }
@@ -8436,7 +8601,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                 // orientation primitive_sum itself would file bare.
                 if !flipped_orientation_wins(&flipped, Wrapper::Flipped, Tie::Keep, cx) {
                     flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
-                    return pow(Ex::Add(flipped), exp, cx);
+                    return pow_member(Ex::Add(flipped), exp, cx);
                 }
             }
         }
@@ -8464,7 +8629,7 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
                         flipped.sort_by(|a, b| add_term_cmp(a, b, cx.view));
                         let mut args = args.clone();
                         args[0] = Ex::Add(flipped);
-                        return pow(Ex::Fun(*op, args), exp, cx);
+                        return pow_member(Ex::Fun(*op, args), exp, cx);
                     }
                 }
             }
@@ -8473,11 +8638,28 @@ pub fn pow(base: Ex, exp: Ex, cx: &Cx) -> Ex {
         // `sin(2 x1)^2`, as the class {sin(2 x1), sin(-2 x1)} is written (`collect_opposite_sums`).
         if r.is_even_integer() && !r.is_zero() {
             if let Some(Ex::Fun(fk, fa)) = positive_head(&base, cx.view) {
-                return pow(fun(fk, fa, cx), exp, cx);
+                return pow_member(fun(fk, fa, cx), exp, cx);
             }
         }
     }
     Ex::Pow(Box::new(base), Box::new(exp))
+}
+
+/// ONE ORIENTATION FOR A CLASS, WHEREVER IT STANDS. A sign-trade site (`sign_trade_flip`: an odd
+/// power or an odd root of a sum, an odd function of one) spells its class in either
+/// orientation, `f(S)` or `-f(-S)`; as a factor of a product the sign placement picks between
+/// them over the whole product (`sign_place`: the cheaper, then the sign key, fewest signs and
+/// then the outer ones). A site standing alone takes the spelling that placement gives it as the
+/// one factor of a product, so `S^3` and `1*S^3` are one answer, and so are `1/S` and `1/(1*S)`:
+/// `(x3*(x3 - x1) - x2)^3` is `-(x2 + x3*(x1 - x3))^3`, whose two signs stand further out.
+fn lone_site(node: Ex, cx: &Cx) -> Ex {
+    // One scope for the site test and the placement, so the flip is computed once.
+    let _memo = FlipScope::open();
+    if sign_trade_flip(&node, cx).is_some() {
+        sign_place(Rat::ONE, vec![node], cx)
+    } else {
+        node
+    }
 }
 
 /// THE PERMISSIVE LITERAL FOLD. An exact rational the constructors produced -- the quotient of two
@@ -8960,6 +9142,11 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             }
         }
     }
+    // A head of a sum is a class site: alone it takes the orientation it takes as a product's one
+    // factor (`lone_site`). Its flip negates the sum in place, so asking it builds no head.
+    if matches!(&head, Ex::Fun(_, a) if matches!(a.first(), Some(Ex::Add(_)))) {
+        return lone_site(head, cx);
+    }
     head
 }
 
@@ -9206,6 +9393,134 @@ mod tests {
     }
 
     #[test]
+    fn a_constant_absorbs_the_orientation_sign_of_every_class() {
+        with_view(|view| {
+            let sin = view.intern("sin");
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // A sum holding a `<constant>` takes a sign into its terms: -(x0 + x1^c) is
+                // -x0 - x1^c.
+                let s = add(vec![x(view), pow(y(view), Ex::Const, &cx)], &cx);
+                let neg_s = neg(s.clone());
+                assert!(matches!(&neg_s, Ex::Add(_)), "{mode:?}: {neg_s:?}");
+                // Beside a bare `<constant>`, which absorbs every constant factor of its
+                // product, that sign is the constant's, whatever route built the product, and the
+                // sum takes the orientation with the fewer signs: c*-(x0 + x1^c) is c*(x0 + x1^c).
+                let want = mul(vec![Ex::Const, s.clone()], &cx);
+                assert_eq!(want, Ex::Mul(vec![Ex::Const, s.clone()]), "{mode:?}");
+                assert_eq!(mul(vec![neg_s.clone(), Ex::Const], &cx), want, "{mode:?}");
+                assert_eq!(
+                    mul(vec![Ex::Const, Ex::int(-1), s.clone()], &cx),
+                    want,
+                    "{mode:?}"
+                );
+                // So does an odd function of one: c*sin(c - x0) is c*sin(x0 + c).
+                let t = add(vec![x(view), Ex::Const], &cx);
+                assert_eq!(
+                    mul(vec![Ex::Const, fun(sin, vec![neg(t.clone())], &cx)], &cx),
+                    mul(vec![Ex::Const, fun(sin, vec![t], &cx)], &cx),
+                    "{mode:?}"
+                );
+                // Without a bare `<constant>` the sum keeps the sign the product gave it.
+                let kept = mul(vec![y(view), neg_s.clone()], &cx);
+                assert!(
+                    matches!(&kept, Ex::Mul(v) if v.contains(&neg_s)),
+                    "{mode:?}: {kept:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_lone_site_takes_the_orientation_of_a_products_one_factor() {
+        with_view(|view| {
+            let sin = view.intern("sin");
+            let z = || Ex::Leaf(view.intern("x2"));
+            let half = Ex::Num(Rat::new(1, 2).unwrap());
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // x0 - x1 - x2: two signs; -(x1 + x2 - x0) has two too, the outer one
+                let s = add(vec![x(view), neg(y(view)), neg(z())], &cx);
+                let raw_cube = Ex::Pow(Box::new(s.clone()), Box::new(Ex::int(3)));
+                let raw_sin = Ex::Fun(sin, vec![s.clone()]);
+                // alone, as the one factor of a product: (x0 - x1 - x2)^3 is
+                // -(x1 + x2 - x0)^3, and sin(x0 - x1 - x2) is -sin(x1 + x2 - x0)
+                let cube = pow(s.clone(), Ex::int(3), &cx);
+                assert_eq!(
+                    cube,
+                    mul(vec![Ex::int(1), raw_cube.clone()], &cx),
+                    "{mode:?}"
+                );
+                assert!(
+                    matches!(&cube, Ex::Mul(v) if v.contains(&Ex::int(-1))),
+                    "{mode:?}: {cube:?}"
+                );
+                let sine = fun(sin, vec![s.clone()], &cx);
+                assert_eq!(
+                    sine,
+                    mul(vec![Ex::int(1), raw_sin.clone()], &cx),
+                    "{mode:?}"
+                );
+                // a power over a lone site reads its class, whichever orientation it stands in
+                assert_eq!(
+                    pow(cube.clone(), Ex::int(-1), &cx),
+                    pow(s.clone(), Ex::int(-3), &cx),
+                    "{mode:?}"
+                );
+                assert_eq!(
+                    pow(cube, half.clone(), &cx),
+                    pow(s.clone(), Ex::Num(Rat::new(3, 2).unwrap()), &cx),
+                    "{mode:?}"
+                );
+                assert_eq!(
+                    pow(sine, Ex::int(-1), &cx),
+                    pow(raw_sin, Ex::int(-1), &cx),
+                    "{mode:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_zero_keeps_its_ieee_sign_where_it_is_inverted() {
+        with_view(|view| {
+            let lg = |cx: &Cx| fun(view.intern("log"), vec![x(view)], cx);
+            for mode in [RuleMode::Default, RuleMode::Permissive, RuleMode::Real] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let ieee = !matches!(mode, RuleMode::Real);
+                let inverse = |members: Vec<Ex>| -> Ex {
+                    let raised = raised_members(members, &Rat::NEG_ONE, &cx)
+                        .unwrap_or_else(|held| vec![pow(held, Ex::int(-1), &cx)]);
+                    mul(raised, &cx)
+                };
+                // 1/(x0*0) is inf/x0 in the float64 modes (-inf wherever x0 < 0), +inf in real
+                let want = if ieee {
+                    mul(vec![Ex::PosInf, pow(x(view), Ex::int(-1), &cx)], &cx)
+                } else {
+                    Ex::PosInf
+                };
+                assert_eq!(inverse(vec![x(view), Ex::int(0)]), want, "{mode:?}");
+                // 1/(-1*0) = 1/-0 is -inf in the float64 modes
+                let want = if ieee { Ex::NegInf } else { Ex::PosInf };
+                assert_eq!(inverse(vec![Ex::int(-1), Ex::int(0)]), want, "{mode:?}");
+                // a product held whole around its zero distributes the inverse too
+                let held = pow(Ex::Mul(vec![Ex::int(0), lg(&cx)]), Ex::int(-1), &cx);
+                if ieee {
+                    let want = mul(vec![Ex::PosInf, pow(lg(&cx), Ex::int(-1), &cx)], &cx);
+                    assert_eq!(held, want, "{mode:?}");
+                } else {
+                    assert!(matches!(held, Ex::Pow(..)), "{mode:?}: {held:?}");
+                }
+            }
+        });
+    }
+
+    #[test]
     fn mul_collects_exponents() {
         with_view(|view| {
             let cx = Cx::bare(view);
@@ -9234,6 +9549,54 @@ mod tests {
             assert_eq!(mul(vec![Ex::int(0), x(view)], &cx), Ex::int(0));
             let e = mul(vec![Ex::int(0), lg.clone()], &cx);
             assert_eq!(e, Ex::Mul(vec![Ex::int(0), lg]));
+        });
+    }
+
+    #[test]
+    fn powers_of_e_collect_by_their_exponents() {
+        with_view(|view| {
+            let exp = view.intern("exp");
+            let y = || Ex::Leaf(view.intern("x1"));
+            for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+                let mut cx = Cx::bare(view);
+                cx.mode = mode;
+                let e = |a: Ex| fun(exp, vec![a], &cx);
+                let neg = |a: Ex| mul(vec![Ex::int(-1), a], &cx);
+                // exp(a) exp(b) = exp(a + b)
+                assert_eq!(
+                    mul(vec![e(x(view)), e(y())], &cx),
+                    e(add(vec![x(view), y()], &cx)),
+                    "{mode:?}"
+                );
+                // exp(u) exp(-u) = exp(0) = 1, u finite almost everywhere
+                assert_eq!(mul(vec![e(x(view)), e(neg(x(view)))], &cx), Ex::int(1));
+                // e is e^1, and a rational power of an exp is a power of e
+                assert_eq!(
+                    mul(vec![Ex::E, e(x(view))], &cx),
+                    e(add(vec![x(view), Ex::int(1)], &cx))
+                );
+                let sq = pow(e(x(view)), Ex::int(2), &cx);
+                assert_eq!(
+                    mul(vec![sq.clone(), e(y())], &cx),
+                    e(add(vec![mul(vec![Ex::int(2), x(view)], &cx), y()], &cx))
+                );
+                // a quotient of powers of e, inside a wider product
+                let q = mul(vec![y(), e(x(view)), pow(e(y()), Ex::int(-1), &cx)], &cx);
+                assert_eq!(q, mul(vec![y(), e(add(vec![x(view), neg(y())], &cx))], &cx));
+                // f64's exp(800) exp(-800) is inf * 0 = NaN, an overflow, where the true value
+                // is given: exp(0) = 1
+                assert_eq!(
+                    mul(vec![e(Ex::int(800)), e(Ex::int(-800))], &cx),
+                    Ex::int(1)
+                );
+                // a lone power of e stays, and one base's powers collect over that base as
+                // `pow` spells them: exp(x) exp(x) is exp(x)^2
+                assert_eq!(
+                    mul(vec![sq.clone(), Ex::int(3)], &cx),
+                    Ex::Mul(vec![Ex::int(3), sq.clone()])
+                );
+                assert_eq!(mul(vec![e(x(view)), e(x(view))], &cx), sq);
+            }
         });
     }
 

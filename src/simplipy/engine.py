@@ -2086,9 +2086,11 @@ class SimpliPyEngine:
               ``<mul> ... </mul>``) and carry their group inverse as a SECTION -- terms
               after ``<sub>`` subtract, factors after ``<div>`` divide, so
               ``(2*x1)/(x2*x3)`` is ``<mul> 2 x1 <div> x2 x3 </mul>``. ``pow`` and the
-              unary functions stay plain prefix; ``neg``/``inv`` exist only as the
-              standalone unary spellings (``tan neg x0``, ``inv x0``) -- inside bags the
-              sections own all inverses. Integers are one token (``7``), every fraction is a
+              unary functions stay plain prefix; ``neg`` exists only as the standalone
+              unary spelling (``tan neg x0``), and a reciprocal or negative power is a
+              quotient like any other (``<mul> 1 <div> x0 </mul>``, ``<mul> 1 <div> pow x0 3
+              </mul>``, as ``to_tagged`` writes ``inv x0`` and ``inv pow x0 3``) -- inside bags
+              the sections own all inverses. Integers are one token (``7``), every fraction is a
               bag (``<mul> 1 <div> 3 </mul>``), and so is a small decimal (``0.2`` is
               ``<mul> 1 <div> 5 </mul>``); other decimals are one token. So a tagged answer
               that holds a fraction always carries a bag and reads back as tagged. Tagged

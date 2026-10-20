@@ -325,7 +325,11 @@ impl RuleCanon {
 /// rule `lhs -> rhs` (canonical sides) state a law the engine itself performs? Today that is
 /// the distributive law as the search applies it (one FACTOR move, `search::is_factoring`).
 /// The load drops such a rule ("engine-owned-law"); the miner refuses to mint it
-/// (`Engine::law_instance`, the miner's acceptance).
+/// (`Engine::law_instance`, the miner's acceptance). A law the constructors perform needs no
+/// arm here, the collection of powers of e (`exp(a) exp(b) = exp(a + b)`) among them: every
+/// canon a rule side is read in performs it, so a rule stating it, in either direction, has one
+/// canonical state on both sides, which the load refuses as subsumed before this gate and
+/// `Engine::law_instance` names `canon`.
 ///
 /// The search meets a rule's INSTANCES, so the law is judged on one: every `?`, `!` and `$`
 /// wildcard becomes a variable of its own ([`pattern_instance`]), and the sides are read in

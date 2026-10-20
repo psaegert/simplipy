@@ -271,7 +271,12 @@ then the sum of their depths (the root at depth 0). Wherever two spellings cost 
 a sign-trade site, the product table, a sum's orientation, and the reduction ordering (§5), so
 every rule application -- the one with fewer signs wins, then the one whose signs stand
 further out, then `cmp_ex`: `sin(-x1)` is `-sin(x1)`, `x1 + sin(-x1)` is `x1 - sin(x1)`, and
-`-sin(x1 - x2)` is `sin(x2 - x1)` (one sign, not two). A rule whose two sides differ only in
+`-sin(x1 - x2)` is `sin(x2 - x1)` (one sign, not two). A site standing alone is decided as a
+product's one factor, so a class has one orientation wherever it stands: `(x3(x3 - x1) - x2)^3`
+is `-(x2 + x3(x1 - x3))^3` alone as beside other factors (two signs either way, the second's
+further out). A power over a negated site reads its class, $(-F)^s = \bar F^s$ for the flip
+$\bar F$ of $F$, so `1/S^3` and `(S^3)^(1/2)` are read over one class whichever orientation `S^3`
+stands in. A rule whose two sides differ only in
 where the core places a sign has one canonical state on both sides and is refused at load as
 subsumed (G2).
 
@@ -337,6 +342,17 @@ vanishes at a class's zero only through a term that vanishes faster there
 root keeps the sign of zero like every odd function (IEEE-754 `rootn(-0, n) = -0` for odd `n`), so
 it reads at the zero as its radicand does.
 
+A zero that holds everywhere (`x2 - x2`) has no limit to read. In `f64` and `permissive`, whose
+evaluator is float64, it is IEEE-754's signed zero: where a product holding an exact zero is
+inverted, the inverse distributes over its members, the zero giving `+inf` (it is `+0`) and each
+other member its own power, so the answer keeps the sign the members give the zero:
+`1/(x1*(x2 - x2))` is `inf/x1`, `1/(-(x1 - x1))` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`.
+`real` reads the one zero of the reals, whose inverse is `+inf` (`c/0 = sign(c)*inf`): there the
+three are `inf`, `inf` and `inf*x1`. A zero's sign survives only as a member of the product
+that is inverted, since the canonical form holds one exact zero: through an odd function or a
+sum it is lost, so `1/tan(-(x1 - x1))` and `1/(0*(-2) - 0)` are `+inf` in every mode, where
+float64 gives `-inf`.
+
 **Convention (factored vs. flat scaling, finite and infinite alike).** The constructors
 extract a sum's content only in the unanimity case (it must never lengthen a term), so with
 the search off (`effort=0`) a factored spelling like `-2*(x1 - 5/2)` and its distributed equal
@@ -366,7 +382,7 @@ G6–G8; there is no G5):
 | G4 | non-composite LHS | catch-alls below the arithmetic waterline |
 | G6 | RHS wildcards not bound by the **canonical** LHS | an unbound wildcard would panic substitution at rewrite time; canon can erase LHS wildcards, so the raw check is insufficient |
 | G7 | $\mu(\mathrm{nf}(\rho)) > \mu(\mathrm{nf}(\ell))$ (uphill patterns) | no loaded rule climbs; sides of one price load, and the `oriented` gate decides each application under the full ordering (§5) |
-| G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node |
+| G8 | one FACTOR move of the search turns $\mathrm{nf}(\ell)$ into $\mathrm{nf}(\rho)$, under the search's licence at every binding the wildcard sorts admit | the search owns the distributive law (below); a rule stating it would take the first factoring that lowers its own node. A law the constructors own, such as the collection of powers of e ($e^a e^b = e^{a+b}$), needs no gate of its own: a rule stating it, in either direction, has $\mathrm{nf}(\ell) = \mathrm{nf}(\rho)$ and G2 refuses it |
 
 Both directions of a rewrite whose sides cost the same may load (on the shipped `acj-5-4-llm`,
 `acos(0) - _0` and `asin(1) - _0`): $<_o$ is strict and total, so on any instance at most one of

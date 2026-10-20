@@ -169,18 +169,22 @@ class TestDialectInvariance:
         b = engine.simplify(engine.to_prefix(to_skeleton(right, engine)))
         assert list(a) == list(b), f'{left} -> {a} vs {right} -> {b}'
 
-    #: The one corpus row (of the first 120) whose skeletons still differ by dialect, pinned with
-    #: its cause. Its canonical form holds a negated sum, `-(A + B)/(4*x17)` (the sign key's
-    #: placement at an equal price), and the mask's collect moves the masked 4 beside that sum as
-    #: a `<constant>`, where the sum, holding `<constant>`s of its own (the masked exponent and
-    #: root index), keeps the sign it took: `<constant> * -(A + B)/x17` is the prefix skeleton,
-    #: while re-reading the tagged skeleton gives `<constant> * (A + B)/x17`, the bare
-    #: `<constant>` absorbing the sign. The same two states come from `-(x1 + x2^c)/c` and
-    #: `c * -(x1 + x2^c)` written directly, in the parent build too.
-    KNOWN_DIALECT_DEPENDENT = [
-        ['/', '*', '/', '1', '4', '-', 'rootn', '*', 'x17', '*', '/', 'x13', 'x2', 'tan', '-', 'x9',
-         'x13', '5', '/', 'pow', 'x17', '5', 'x6', 'x17'],
-    ]
+    #: No corpus row (of the first 120) has skeletons that differ by dialect. The last one held a
+    #: negated sum beside a masked number, `-(A + B)/(4*x17)`, whose sum holds `<constant>`s of
+    #: its own (the masked exponent and root index): a bare `<constant>` absorbs every constant
+    #: factor of its product, a class's orientation sign -1 included, so both dialects give
+    #: `<constant> * (A + B)/x17`.
+    KNOWN_DIALECT_DEPENDENT: list = []
+
+    @pytest.mark.parametrize('route', ['-(x1 + x2^c)/c', 'c*-(x1 + x2^c)', 'c*(-x1 - x2^c)'])
+    def test_a_constant_absorbs_the_orientation_sign_of_a_sum(
+            self, engine: SimpliPyEngine, route: str) -> None:
+        """A sum holding a `<constant>` beside a bare `<constant>` takes the orientation with
+        the fewer signs, whatever route built the product: the constant absorbs the sign."""
+        tokens = engine.to_prefix(route.replace('c', '<constant>'))
+        assert engine.simplify(tokens) == engine.to_prefix('<constant>*(x1 + x2^<constant>)')
+        assert to_skeleton(tokens, engine) == to_skeleton(
+            engine.to_prefix('<constant>*(x1 + x2^<constant>)'), engine)
 
     def test_the_corpus_agrees_across_dialects(self, engine: SimpliPyEngine) -> None:
         corpus = default_corpus()

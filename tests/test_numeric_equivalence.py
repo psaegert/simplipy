@@ -51,14 +51,12 @@ certificate -- so each spelling keeps its own bare measure. Per-row monotonicity
 for the chain's internal certified metric, which that boundary hides from this
 measurement.
 
-Two known sound-flag families double as the walk's liveness canaries
+A known sound-flag family doubles as the walk's liveness canary
 (test_expected_flag_set pins the exact flag set, so wiring rot in the numeric tier --
 a screen that stops seeing disagreements, an inverted flag predicate -- fails loudly
-instead of passing vacuously):
-  * row 20 (43/64 points): a structural zero (x13 - x13) in a denominator evaluates
-    under numpy's SIGNED zeros, flipping the pole sign pointwise vs the contract's one
-    unsigned zero; the judge works at contract semantics and certifies the engine's
-    inf-spelling fold.
+instead of passing vacuously). Row 20, a structural zero (x13 - x13) in a denominator,
+flagged until f64 kept the sign IEEE gives that zero: its answer now evaluates as numpy's
+signed zeros do.
   * row 263 (7/64 points): an exp-argument respelling (exp(inv((1/3)y)) -> exp(3/y))
     with f64 wobble past rtol=1e-5 where the exponent is large; judge-certified sound.
     This row sat inside the old 20% dead band -- it is the in-suite witness that the
@@ -348,15 +346,31 @@ class TestCorpusGate:
         # AN OVERFLOW CUTS NO BAND (2026-10-19): 54,750,550 -> 54,718,550. Where sinh overflows
         # the collapse of `asinh(sinh(t))` gives the true value, so f64 collapses it for every
         # t: row 380 rests 32,000 milli-bits cheaper.
-        assert walk['complexity_out'] == 54718550, walk['complexity_out']
+        # POWERS OF e COLLECT: 54,718,550 -> 54,715,550. The product constructor merges
+        # `exp(a) exp(b)` into `exp(a + b)`: row 7's `exp(x6) exp(-x3)` is `exp(x6 - x3)`
+        # (-3,000).
+        # A CONSTANT ABSORBS EVERY CLASS'S ORIENTATION SIGN: 54,715,550 -> 54,705,550. Beside a bare
+        # `<constant>` a sum holding `<constant>`s of its own takes the orientation with the fewer
+        # signs: rows 203 (-2,000), 296 (-1,000), 312 (-4,000), 321 (-2,000) and 364
+        # (`<constant>*(<constant> - x7)/x3` is `<constant>*(x7 + <constant>)/x3`, -1,000) rest
+        # cheaper, and row 274 takes its tied orientation by its own sum (0).
+        # A ZERO KEEPS ITS SIGN WHERE IT IS INVERTED (f64): 54,705,550 -> 54,728,550. The
+        # inverse of a product holding an exact zero distributes over its members, the zero
+        # giving +inf, as IEEE's signed zero has it: rows 20 (`inf*x14*(x11 - x17)` is
+        # `-inf*x14*(x17/x11 - 1)`, +8,000) and 283 (+15,000) keep the members' signs.
+        # ONE ORIENTATION WHEREVER A CLASS STANDS: 54,728,550 -> 54,727,550. A site alone takes
+        # the orientation it takes as a product's one factor: row 163's odd root of a sum under
+        # `cos` takes its sign outside, where `cos` drops it (-1,000), and row 82 respells its
+        # `tan(tan(.)^3)` at an equal price.
+        assert walk['complexity_out'] == 54727550, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
-        # the walk's liveness canaries: row 20 (structural-zero inf fold, 43/64 points)
-        # and row 263 (exp-argument respell, 7/64 points -- the old dead band's in-suite
-        # witness) flag deterministically under the pinned corpus/config/X. An empty or
-        # shrunken flag set here means the numeric tier stopped seeing disagreements --
-        # vacuity, not health.
-        assert [(i, n) for (i, n, *_) in walk['flagged']] == [(20, 43), (263, 7)], \
+        # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old
+        # dead band's in-suite witness) flags deterministically under the pinned
+        # corpus/config/X. An empty flag set here means the numeric tier stopped seeing
+        # disagreements -- vacuity, not health. (Row 20's structural zero no longer flags:
+        # f64 keeps the sign IEEE gives it.)
+        assert [(i, n) for (i, n, *_) in walk['flagged']] == [(263, 7)], \
             walk['flagged']
 
     def test_flagged_rows_adjudicate_sound(self, walk):

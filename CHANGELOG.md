@@ -45,7 +45,10 @@ organised by who you are, then the highlights, then every change in detail.
   them, are written in one orientation with the sign in the coefficient: `-1/(x1 - 3)` and
   `1/(3 - x1)` are one answer, and at a pole the answer keeps the limit.
 - **Signed zeros.** `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf`, `(-0)^(1/2)` is `+0`,
-  the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`.
+  the scalar `abs(-0.0)` is `+0.0`, and an integer spelling of zero (`-0`) reads as `+0`. Where
+  an exact zero is inverted, `f64` (and `permissive`) keep the sign float64 gives it:
+  `1/(x1*(x2 - x2))` is `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `real` reads
+  one zero and keeps `inf`.
 - **Long exact coefficients.** An answer carries every digit of an exact number
   (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
   long, because a literal costs at most what its float costs. Show answers to a reader with
@@ -300,6 +303,79 @@ model predictions.
   overflow). On a tenth of the training-data inputs 2 `f64` answers change, each now collapsing an
   `asinh(sinh(.))` (16,000 and 19,000 milli-bits cheaper); srbf's ground truths and predictions do
   not change, `real` and `permissive` do not change, and no answer changes on a second call.
+- **Powers of e collect by their exponents.** `exp` is a power of e, so the product constructor
+  merges `exp(a)*exp(b)` into `exp(a + b)` in every mode, as it merges `x^a*x^b` into
+  `x^(a + b)`: `e*exp(x1)` is `exp(x1 + 1)`, `exp(x1)/exp(x2)` is `exp(x1 - x2)`, and
+  `exp(u)*exp(-u)` is `1` wherever `u` is finite, as `exp(u)/exp(u)` is. Since a sign costs one
+  bit, `exp(-u)` is the cheaper spelling of `1/exp(u)`, and nothing cancelled it against
+  `exp(u)`. The law is exact on the extended reals; under the f64 evaluator the two sides differ
+  where an `exp` overflows or underflows (`exp(800)*exp(-800)` is `inf*0 = nan`, `exp(0)` is
+  1), where `f64` accepts the true value, and by the rounding of the summed exponent
+  (`exp(x1)*exp(1.7)` against `exp(x1 + 1.7)`, measured on 40,002 points per band: at most 8 ulps
+  for `|x1| <= 12.3`, 26 up to 100, 152 up to 300 and 410 up to 700). A rule stating the law, in
+  either direction, has one
+  canonical state on both sides and the load refuses it as subsumed. The published
+  `acj-5-4-llm` files serve 16 rows fewer in `f64` (2 subsumed, 14 now duplicating the left side
+  of another row), 57 in `real` and 55 in `permissive` (all subsumed). Ground truth 2255 rests at
+  77,000 milli-bits (94,000 before) and
+  1299 at 64,000 (75,000). Against the previous build, at the default effort: on srbf's ground
+  truths 38 answers change in `f64` (19 cheaper, 1 dearer, 18 rereading to the same state), 38
+  in `real` (19, 1) and 69 in `permissive` (49, 1); on a tenth of the training-data inputs 3, 4
+  and 3, none cheaper or dearer; on a tenth of the predictions 14, 14 and 13 (`permissive`: 2
+  cheaper, 2 dearer; the other modes 1 dearer). The dearer answers are the search ending
+  elsewhere: `2*exp(x1)*exp(exp(x1)) + exp(exp(x1))` was `exp(exp(x1))*(2*exp(x1) + 1)`, and the
+  merged `exp(x1 + exp(x1))` no longer shows the factor `exp(exp(x1))` that FACTOR takes out.
+  No answer changes on a second call.
+- **A `<constant>` absorbs the orientation sign of every class beside it.** A `<constant>`
+  absorbs every constant factor of its product (`<constant>*5` is `<constant>`), and a class's
+  orientation sign is the constant factor -1, so beside a bare `<constant>` the orientation of
+  every class is free and the sign key's is taken (fewest signs, then outermost; a tie by the
+  class's own sum). A sum holding `<constant>`s of its own is such a class too: `-(x1 + x2^c)/c`,
+  `c*-(x1 + x2^c)` and `c*(-x1 - x2^c)` are all `c*(x1 + x2^c)` (the first and the last kept
+  `c*(-x1 - x2^c)`), and `c*sin(c - x1)` is `c*sin(x1 + c)`. The skeletons of a model's
+  training data change accordingly: on the release corpus (400 skeletons) 18 change, from the
+  explicit and the tagged spelling alike, 12 of them cheaper and 6 at an equal price, and the
+  two spellings now give one skeleton for every row (one row gave two). srbf's ground truths,
+  predictions and the training-data inputs hold no `<constant>`, and none of their answers
+  changes in any mode.
+- **A zero keeps its IEEE sign where it is inverted, in `f64` and `permissive`.** Their evaluator
+  is float64, whose zero carries the sign of what formed it: `x1*(x2 - x2)` is `-0` wherever
+  `x1 < 0`, and its inverse `-inf`. The inverse of a product that holds an exact zero now
+  distributes over its members, the zero giving `+inf` and each other member its own power, which
+  is exact in IEEE arithmetic for every member, zeros, infinities and NaN included:
+  `1/(x1*(x2 - x2))` is `inf/x1` (it was `inf`), `1/-(x1 - x1)` is `-inf`, `1/(0/tanh(-2))` and
+  `1/(0/(-2))` are `-inf`, and `permissive` keeps `S` in `x/(0/S)` (`inf*x*S`). `real` reasons
+  over the reals, whose one zero inverts to `+inf`, and keeps its answers (`inf`, `inf`,
+  `inf*x`). The canonical form holds one exact zero, so a sign a zero takes through an odd
+  function or a sum is not kept: `1/tan(-(x1 - x1))` and `1/(0*(-2) - 0)` are `+inf`, where
+  float64 gives `-inf`. On a tenth of the training-data inputs 85 `f64` answers change (14
+  cheaper, 64 dearer, 7 at an equal price) and 81 `permissive` ones (14, 61, 6); evaluated beside
+  their inputs on 256 points, the `f64` answers that give an infinity of the other sign fall from
+  50 rows to 1, and the `permissive` ones from 48 to 13. srbf's ground truths and predictions do
+  not change in any mode, `real` does not change, and no answer changes on a second call. The
+  rule judge's deployed lane already reads float64's signed zeros; the end-to-end monitor
+  (`monitor_ruleset`, `judge_pair(..., mode=)`) now reads a zero in the lane of the mode a rewrite
+  was made in, the signed zeros of `f64` and `permissive` or the one zero of `real`. On the
+  release corpus `permissive` no longer prices at or below `real` on one row, whose `real` answer
+  takes the one zero's `+inf` where float64 gives `-inf`.
+- **A class takes one orientation wherever it stands.** An odd power or odd root of a sum, and an
+  odd function of one, can be written over the sum or over its negation (`S^3` or `-(-S)^3`).
+  Inside a product the sign placement chooses (the cheaper, then fewest signs, then the outer
+  ones); a site standing alone kept the orientation it was written in. It now takes the one it
+  takes as a product's one factor, so `S^3` and `1*S^3` are one answer, and so are `1/S^3` and
+  `1/(1*S^3)`: srbf ground truth 6397, `1/(x3*(x3 - x1) - x2)^3`, is
+  `-1/(x2 + x3*(x1 - x3))^3`, as it was inside a product (the same price, two signs either way,
+  the second's further out), and `sin(x1 - x2 - x3)` is `-sin(x2 + x3 - x1)`. A power over a
+  negated site reads its class, `(-F)^s` being the flip of `F` to the `s`, so `1/S^3` and
+  `(S^3)^(1/2)` are read over one class whichever orientation `S^3` stands in, and a factor of a
+  product is still oriented by its product. On srbf's ground truths 3 answers change in `f64`, 3
+  in `real` and 4 in `permissive`, on a tenth of the training-data inputs 10 in each mode, and on
+  a tenth of the predictions 2, 2 and 12, every one at an equal price and none changing on a
+  second call; respelling each odd function of srbf's 1,780 ground truths that hold one as
+  `-f(-u)` gives the original answer in every mode. As elsewhere a sum's zero has no sign in the
+  canonical form, so over a sum that vanishes on a region `f64` reads `1/-(S^3)` as `1/S^3` there
+  (`+inf` where float64 gives `-inf`), as it already read `1/-(|x1| - x1)` as `1/(x1 - |x1|)`.
+  The decision costs about 5% of `permissive`'s time on a tenth of the predictions.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
@@ -419,6 +495,20 @@ model predictions.
   (`<mul> -1 <div> x1 </mul>`, like `-2/x1`; 0.14.7 answered `neg inv x1`, which re-read as
   `/ -1 x1`), so every tagged answer reads back as itself. Explicit input is unchanged,
   `exp 1/2` included.
+- **The tagged form writes a reciprocal and a negative power as a quotient.** `simplify` answered
+  `1/x0` as `inv x0` and `x0^-3` as `pow x0 -3` in the tagged form, while `to_tagged` writes their
+  explicit spellings `inv x0` and `inv pow x0 3` as the bags `<mul> 1 <div> x0 </mul>` and
+  `<mul> 1 <div> pow x0 3 </mul>`, so one value had two tagged spellings. The core now writes
+  these bags wherever the quotient stands (`sin <mul> 1 <div> x0 </mul>`), the same member a
+  product's `<div>` section holds, and a negated one keeps its coefficient
+  (`exp <mul> -1 <div> x0 </mul>`, as `to_tagged` writes `exp / -1 x0`). Explicit and infix
+  answers do not change. From tagged inputs (`to_tagged` of each row), the tagged answers that
+  hold an `inv` fall to none (srbf's ground truths: 965 in `f64`, 964 in `real` and 1,205 in
+  `permissive`; a tenth of the training-data inputs: 1,970, 1,983 and 2,314; a tenth of the
+  predictions: 1,011, 1,012 and 4,967), every one respelled at its price, and the tagged answers
+  that are `to_tagged` of the explicit answer rise from 4,317 to 5,307 of the 6,531 ground truths
+  in `f64` (`real`: 4,296 to 5,291, `permissive`: 4,126 to 5,394). No answer changes on a second
+  call, in either notation.
 - **Permissive is one walk.** `simplify(.., mode='permissive')` ran three arms (its two fold
   disciplines and the `f64` chain) and chose between them by the price of internal states it did
   not return: 0.14.7 returns 769 of the training-data inputs, 3,326 of srbf's predictions and 12
