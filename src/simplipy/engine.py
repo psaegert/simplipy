@@ -2207,17 +2207,19 @@ class SimpliPyEngine:
         The rules, at the digit budget ``D = digits`` (every digit a spelling writes counts,
         a numerator of 1 included: ``1/12`` counts 3):
 
-        * A fraction that fits ``D`` is written as a fraction: the shortest of ``p/q`` and
-          the integers over a decimal (``5/21`` is ``1/4.2``, ``22/7`` stays ``22/7``,
-          ``x1/2`` stays ``x1/2``).
+        * A number whose exact spelling fits ``D`` is written exactly, as :meth:`simplify`
+          writes it: the budget decides only whether a number is exact or its float
+          (``3*x1/10`` is ``0.3*x1``, ``x2 + 0.5`` is ``x2 + 1/2``, ``5/21`` beside a factor is
+          ``x1/4.2``, ``22/7`` stays ``22*x1/7``, ``x1/2`` stays ``x1/2``).
         * Otherwise the value is the float64 nearest to it, in its shortest form, as a
           multiplier (``x1/1024`` is ``9.765625e-4*x1``). A value a hair from a short
           number shows as that number (``1.000000000000000000003*x1`` is ``x1``). With
           ``precision=k`` such a float shows ``k`` significant digits instead
           (``2.1458314277221002*x1`` is ``2.15*x1`` at ``precision=3``), the pi literal and
-          a divisor of the next rules included; a fraction that fits ``D`` is not affected.
-        * pi is the literal ``3.141592653589793``: a value that is a fitting fraction times
-          or over it is written with the literal factored out (``3*x0^2/(20*3.141592653589793*x1*x2)``).
+          a divisor of the next rules included; a number written exactly is not affected.
+        * pi is the literal ``3.141592653589793``: a value that is an exact number within
+          ``D`` times or over it is written with the literal factored out
+          (``x0/(2*3.141592653589793)``, ``0.15*x0^2/(3.141592653589793*x1*x2)``).
         * A float whose reciprocal float64 holds as written stays a divisor where the
           product has another divisor; a bare ``x1/0.225147640565301`` is
           ``4.441529999999994*x1``.

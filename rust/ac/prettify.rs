@@ -9,18 +9,21 @@
 //! collected.
 //!
 //! 1. **Digit budget.** A spelling's digits are every digit it writes, a numerator of 1
-//!    included (`1/12` counts 3, `3/123` counts 4).
-//! 2. **A fraction that fits stays a fraction.** Among a value's fraction spellings -- `p/q`
-//!    and every integer over a decimal above 1 (`5/21` is `1/4.2`, `10/37` is `1/3.7`) -- the
-//!    shortest is taken; if it fits `D` it is written.
+//!    included (`1/12` counts 3, `3/123` counts 4, `0.05` counts 3).
+//! 2. **A number that fits is written exactly, as `simplify` writes it.** The budget decides
+//!    only whether a number is written exactly; how an exact number is written is the core's
+//!    own rule, the one `simplify`'s text follows (`convert::infix_number_parts`): an integer,
+//!    the decimal where its codeword is the cheaper (`0.3*x1`, `x2 + 1/2`), beside a factor
+//!    the reciprocal where it spells shorter (`x1/4.2` for `5/21`), else `p/q` (`22*x1/7`). If
+//!    that spelling fits `D` it is written.
 //! 3. **Otherwise one float**: the float64 nearest to the value, in its shortest form, as a
 //!    multiplier. The display writes the value that float reads back as, so a coefficient a
 //!    hair from 1 shows as no coefficient and an exponent a hair from 1/2 as a square root.
 //!    With a precision `k`, the float shows `k` significant digits instead (round half to
 //!    even), the pi literal and a divisor of rule 5 included.
 //! 4. **pi** is the literal `3.141592653589793`, recognised by exact arithmetic: when `c / pi`
-//!    or `c * pi` has a fraction spelling that fits `D` (pi's digits not counted), the value is
-//!    written with the literal factored out (`1/(2*3.141592653589793)`).
+//!    or `c * pi` is written exactly within `D` (pi's digits not counted), the value is written
+//!    with the literal factored out (`1/(2*3.141592653589793)`).
 //! 5. **Divisors.** A float coefficient whose reciprocal is a decimal float64 holds as written
 //!    joins the denominator (`x1/(243*x2)`); only a bare `x/float` becomes a multiplier
 //!    (`x1/243` is `0.00411522633744856*x1`).
@@ -41,12 +44,11 @@
 //! 9. **Range**: no numbers combine to inf, 0 or a subnormal.
 
 use std::cell::Cell;
-use std::cmp::Ordering;
 use std::sync::OnceLock;
 
-use num_bigint::{BigInt, BigUint};
-use num_traits::{One, Zero};
+use num_bigint::BigUint;
 
+use super::convert::{infix_number_parts, NumberPlace};
 use super::expr::{add, fun, mul, mul_factor_cmp, negate_term, pow, Cx, Ex};
 use super::rat::{number_domain, Rat};
 
@@ -88,8 +90,9 @@ pub enum Node {
 /// How a positive value is written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Spelling {
-    /// An integer numeral: one that fits, or a float that writes as a plain integer.
-    Int(String),
+    /// One exact numeral: an integer or decimal written as the core writes it, or a float that
+    /// writes as a plain integer.
+    Exact(String),
     /// A float (rule 3).
     Float(String),
     /// `num/den`, `num` omitted when it is 1.
@@ -116,7 +119,7 @@ impl Spelling {
             None => Some(Rat::ONE),
         };
         Some(match self {
-            Spelling::Int(_) | Spelling::Float(_) => (value.clone(), Rat::ONE),
+            Spelling::Exact(_) | Spelling::Float(_) => (value.clone(), Rat::ONE),
             Spelling::Frac { num, den } => (part(num)?, Rat::parse_decimal(den)?),
             Spelling::PiNum { num, den } => (part(num)?.checked_mul(pi_value())?, part(den)?),
             Spelling::PiDen { num, den } => (part(num)?, part(den)?.checked_mul(pi_value())?),
@@ -128,7 +131,7 @@ impl Spelling {
         let pi = || Node::Num(pi.to_string());
         let n = |s: &Option<String>| s.iter().map(|t| Node::Num(t.clone())).collect::<Vec<_>>();
         match self {
-            Spelling::Int(s) | Spelling::Float(s) => (vec![Node::Num(s.clone())], vec![]),
+            Spelling::Exact(s) | Spelling::Float(s) => (vec![Node::Num(s.clone())], vec![]),
             Spelling::Frac { num, den } => (n(num), vec![Node::Num(den.clone())]),
             Spelling::PiNum { num, den } => {
                 let mut top = n(num);
@@ -144,119 +147,44 @@ impl Spelling {
     }
 }
 
-/// A fraction spelling `n/d` of a positive value: `d` is `None` for an integer value.
+/// The exact spelling of a positive value: the numerals of its numerator and denominator as the
+/// core writes them (the numerator `None` for a 1 the text leaves out), and the digits they
+/// write, a numerator of 1 counted where the text leaves it out (`x1/12` counts 3).
 #[derive(Clone, Debug)]
-struct Fraction {
-    digits: usize,
-    num: BigUint,
+struct ExactParts {
+    num: Option<String>,
     den: Option<String>,
+    digits: usize,
 }
 
-impl Fraction {
-    /// Tie order after the digit count: fewer digits WRITTEN (a numerator of 1 is not written
-    /// beside another numerator factor: `x1/4.2` writes two digits, `5*x1/21` three), then an
-    /// integer denominator (`x1^(5/21)`, not `x1^(1/4.2)`), then the smaller numerator.
-    fn key(&self, unit_free: bool) -> (usize, usize, bool, BigUint) {
-        let decimal_den = self.den.as_ref().is_some_and(|d| d.contains('.'));
-        let silent = unit_free && self.num.is_one() && self.den.is_some();
-        (
-            self.digits,
-            self.digits - usize::from(silent),
-            decimal_den,
-            self.num.clone(),
-        )
-    }
-
-    fn spelling(&self) -> (Option<String>, Option<String>) {
-        let num = (!self.num.is_one() || self.den.is_none()).then(|| self.num.to_string());
-        (num, self.den.clone())
+impl ExactParts {
+    fn spelling(self) -> Spelling {
+        match (self.num, self.den) {
+            (Some(n), None) => Spelling::Exact(n),
+            (num, Some(den)) => Spelling::Frac { num, den },
+            (None, None) => unreachable!("an exact spelling writes a numeral"),
+        }
     }
 }
 
-fn ndigits(n: &BigUint) -> usize {
-    n.to_string().len()
+fn digits_of(s: &str) -> usize {
+    s.chars().filter(char::is_ascii_digit).count()
 }
 
 fn power_of(base: u32, k: usize) -> BigUint {
     num_traits::pow(BigUint::from(base), k)
 }
 
-/// The shortest fraction spelling of a positive value `a` that fits `d` digits, if any
-/// (rules 1 and 2). An integer is its own spelling. A non-integer `p/q` is `p/q` itself or an
-/// integer `n = p/g` over the decimal `q/g > 1`, for `g` a product of the 2s and 5s of `p`
-/// (`5/21 = 1/4.2`). Only `n` below `10^(d-1)` can fit, which bounds the search. `unit_free`:
-/// a numerator of 1 is not written in this position (see [`Fraction::key`]).
-fn fraction_fit(a: &Rat, d: usize, unit_free: bool) -> Option<Fraction> {
-    let (p, q) = a.big_parts();
-    let (p, q) = (p.magnitude().clone(), q.magnitude().clone());
-    if q.is_one() {
-        let digits = ndigits(&p);
-        return (digits <= d).then_some(Fraction {
-            digits,
-            num: p,
-            den: None,
-        });
-    }
-    let mut best: Option<Fraction> = None;
-    let mut consider = |f: Fraction| {
-        if f.digits <= d
-            && best
-                .as_ref()
-                .is_none_or(|b| f.key(unit_free) < b.key(unit_free))
-        {
-            best = Some(f);
-        }
+/// The exact spelling of a positive value `a` at `place` when it fits `d` digits (rules 1 and
+/// 2): the core's own spelling (`convert::infix_number_parts`), counted digit by digit.
+fn exact_fit(a: &Rat, d: usize, place: NumberPlace) -> Option<ExactParts> {
+    let (num, den) = infix_number_parts(a, place);
+    let digits = match (&num, &den) {
+        (Some(n), den) => digits_of(n) + den.as_deref().map_or(0, digits_of),
+        (None, Some(den)) => 1 + digits_of(den),
+        (None, None) => return None,
     };
-    consider(Fraction {
-        digits: ndigits(&p) + ndigits(&q),
-        num: p.clone(),
-        den: Some(q.to_string()),
-    });
-    // p = m * 2^v2 * 5^v5 with m free of 2 and 5; n = m * 2^x * 5^y keeps x <= v2, y <= v5.
-    let v2 = p.trailing_zeros().unwrap_or(0) as usize;
-    let mut m = &p >> v2;
-    let five = BigUint::from(5u32);
-    let mut v5 = 0usize;
-    while (&m % &five).is_zero() {
-        m /= &five;
-        v5 += 1;
-    }
-    if d < 2 || ndigits(&m) >= d {
-        return best; // n >= m leaves no digit for the denominator
-    }
-    let limit = power_of(10, d - 1);
-    // 2^x <= 10^(d-1) and 5^y <= 10^(d-1)
-    let (max_x, max_y) = (v2.min(4 * d), v5.min(2 * d));
-    for x in 0..=max_x {
-        for y in 0..=max_y {
-            if x == v2 && y == v5 {
-                continue; // g = 1, the plain p/q above
-            }
-            let n = &m * power_of(2, x) * power_of(5, y);
-            if n >= limit {
-                continue;
-            }
-            let g = &p / &n;
-            let den = {
-                let _exact = number_domain(false);
-                Rat::from_big(BigInt::from(q.clone()), BigInt::from(g))
-            };
-            let Some(den) = den else { continue };
-            if den.cmp_int(1) != Ordering::Greater {
-                continue; // a denominator below 1 is a multiplier in disguise
-            }
-            let Some(text) = den.exact_decimal() else {
-                continue;
-            };
-            let digits = ndigits(&n) + text.chars().filter(char::is_ascii_digit).count();
-            consider(Fraction {
-                digits,
-                num: n,
-                den: Some(text),
-            });
-        }
-    }
-    best
+    (digits <= d).then_some(ExactParts { num, den, digits })
 }
 
 /// The float form of an exact decimal `s` (rule 8): positional between 10^-3 (inclusive) and
@@ -290,7 +218,7 @@ fn float_text(s: &Rat) -> String {
 fn float_spelling(s: Rat) -> (Spelling, Rat) {
     let text = float_text(&s);
     if s.is_integer() && !text.contains('e') {
-        return (Spelling::Int(text), s);
+        return (Spelling::Exact(text), s);
     }
     (Spelling::Float(text), s)
 }
@@ -351,21 +279,14 @@ impl<'a, 'v> Display<'a, 'v> {
         }
     }
 
-    /// The spelling of a positive value and the value that spelling reads back as (rules 2-4).
-    /// `unit_free`: the value is a coefficient beside a numerator factor, where a numerator of
-    /// 1 is not written.
-    fn spell(&self, a: &Rat, unit_free: bool) -> (Spelling, Rat) {
+    /// The spelling of a positive value at `place` and the value that spelling reads back as
+    /// (rules 2-4).
+    fn spell(&self, a: &Rat, place: NumberPlace) -> (Spelling, Rat) {
         let _exact = number_domain(false);
-        if let Some(f) = fraction_fit(a, self.digits, unit_free) {
-            let (num, den) = f.spelling();
-            let sp = match (num, den) {
-                (Some(n), None) => Spelling::Int(n),
-                (num, Some(den)) => Spelling::Frac { num, den },
-                (None, None) => unreachable!("an integer spelling writes its numerator"),
-            };
-            return (sp, a.clone());
+        if let Some(f) = exact_fit(a, self.digits, place) {
+            return (f.spelling(), a.clone());
         }
-        if let Some(sp) = self.pi_fit(a, unit_free) {
+        if let Some(sp) = self.pi_fit(a, place) {
             return (sp, a.clone());
         }
         let y = a.to_f64_nearest();
@@ -378,7 +299,7 @@ impl<'a, 'v> Display<'a, 'v> {
         }
         if s != *a {
             // The display writes the value its float reads back as.
-            return self.spell(&s, unit_free);
+            return self.spell(&s, place);
         }
         float_spelling(s)
     }
@@ -400,24 +321,33 @@ impl<'a, 'v> Display<'a, 'v> {
         }
     }
 
-    /// Rule 4: `a` with the literal pi factored out, when the rest has a fraction that fits:
-    /// `a / pi` in front of the literal, or `a * pi` over it, whichever writes fewer digits.
-    fn pi_fit(&self, a: &Rat, unit_free: bool) -> Option<Spelling> {
+    /// Rule 4: `a` with the literal pi factored out, when the rest is written exactly within
+    /// the budget: `a / pi` in front of the literal, or `a * pi` over it, whichever writes fewer
+    /// digits. The rest is the coefficient of a product with the literal in it: beside the
+    /// literal in front of it, and beside the factors of `place` over it.
+    fn pi_fit(&self, a: &Rat, place: NumberPlace) -> Option<Spelling> {
         let pi = pi_value();
-        let fit = |r: Option<Rat>| r.and_then(|r| fraction_fit(&r, self.digits, unit_free));
-        let over = fit(pi.checked_inv().and_then(|inv| a.checked_mul(&inv)));
-        let times = fit(a.checked_mul(pi));
-        let unit = |f: &Fraction| {
-            let (num, den) = f.spelling();
-            (num.filter(|n| n != "1"), den)
+        let fit = |r: Option<Rat>, place| r.and_then(|r| exact_fit(&r, self.digits, place));
+        let over = fit(
+            pi.checked_inv().and_then(|inv| a.checked_mul(&inv)),
+            NumberPlace::Coefficient { plain: true },
+        );
+        let beside = match place {
+            NumberPlace::Coefficient { plain } => plain,
+            NumberPlace::Alone | NumberPlace::Exponent => false,
         };
+        let times = fit(
+            a.checked_mul(pi),
+            NumberPlace::Coefficient { plain: beside },
+        );
+        let unit = |f: ExactParts| (f.num.filter(|n| n != "1"), f.den);
         match (over, times) {
             (Some(o), t) if t.as_ref().is_none_or(|t| o.digits < t.digits) => {
-                let (num, den) = unit(&o);
+                let (num, den) = unit(o);
                 Some(Spelling::PiNum { num, den })
             }
             (_, Some(t)) => {
-                let (num, den) = unit(&t);
+                let (num, den) = unit(t);
                 Some(Spelling::PiDen { num, den })
             }
             _ => None,
@@ -435,12 +365,17 @@ impl<'a, 'v> Display<'a, 'v> {
         }
     }
 
-    /// The node of a signed value, and the value it reads back as.
+    /// The node of a signed value on its own, and the value it reads back as.
     fn number(&self, r: &Rat) -> (Node, Rat) {
+        self.number_at(r, NumberPlace::Alone)
+    }
+
+    /// The node of a signed value at `place`, and the value it reads back as.
+    fn number_at(&self, r: &Rat, place: NumberPlace) -> (Node, Rat) {
         if r.is_zero() {
             return (Node::Num("0".to_string()), Rat::ZERO);
         }
-        let (sp, value) = self.spell(&r.abs(), false);
+        let (sp, value) = self.spell(&r.abs(), place);
         let (num, den) = sp.parts(&self.pi_text());
         let node = if den.is_empty() && num.len() == 1 {
             num.into_iter().next().unwrap()
@@ -558,7 +493,7 @@ impl<'a, 'v> Display<'a, 'v> {
         if let Ex::Pow(b, x) = f {
             if let Ex::Num(r) = &**x {
                 if !matches!(&**b, Ex::Num(z) if z.is_zero()) {
-                    let (_, k) = self.number(r);
+                    let (_, k) = self.number_at(r, NumberPlace::Exponent);
                     return if k.is_negative() {
                         (true, self.power(b, &k.abs()))
                     } else {
@@ -585,7 +520,10 @@ impl<'a, 'v> Display<'a, 'v> {
                 vec![self.write(b), Node::Num(k.denom().numer_string())],
             );
         }
-        Node::Pow(Box::new(self.write(b)), Box::new(self.number(k).0))
+        Node::Pow(
+            Box::new(self.write(b)),
+            Box::new(self.number_at(k, NumberPlace::Exponent).0),
+        )
     }
 
     /// The display of the product `v` as it stands.
@@ -655,7 +593,10 @@ impl<'a, 'v> Display<'a, 'v> {
         match coefficient(&numbers, &divisors) {
             Some(c) => {
                 neg = c.is_negative();
-                let (sp, value) = self.spell(&c.abs(), !num.is_empty());
+                let place = NumberPlace::Coefficient {
+                    plain: !num.is_empty(),
+                };
+                let (sp, value) = self.spell(&c.abs(), place);
                 if !value.is_one() {
                     match self.divisor(&sp, &c.abs(), !den.is_empty()) {
                         Some((d, _)) => lead_den.push(d),
@@ -757,9 +698,9 @@ impl<'a, 'v> Display<'a, 'v> {
     }
 
     /// The exact numerator and denominator a coefficient `a > 0` is written with: its spelling's
-    /// parts, or rule 5's divisor.
-    fn written(&self, a: &Rat, unit_free: bool, has_den: bool) -> Option<(Rat, Rat)> {
-        let (sp, value) = self.spell(a, unit_free);
+    /// parts, or rule 5's divisor. `plain`: the product has a factor beside it.
+    fn written(&self, a: &Rat, plain: bool, has_den: bool) -> Option<(Rat, Rat)> {
+        let (sp, value) = self.spell(a, NumberPlace::Coefficient { plain });
         if value.is_one() {
             return Some((Rat::ONE, Rat::ONE));
         }
@@ -1264,42 +1205,50 @@ mod tests {
         Rat::new(p, q).unwrap()
     }
 
-    fn fit(a: &Rat, d: usize, unit_free: bool) -> Option<String> {
-        fraction_fit(a, d, unit_free).map(|f| match f.spelling() {
+    fn fit(a: &Rat, d: usize, place: NumberPlace) -> Option<String> {
+        exact_fit(a, d, place).map(|f| match (f.num, f.den) {
             (Some(n), None) => n,
             (n, Some(d)) => format!("{}/{d}", n.unwrap_or_else(|| "1".to_string())),
             (None, None) => unreachable!(),
         })
     }
 
-    /// Rules 1 and 2: every digit counts, the shortest fraction spelling that fits is taken,
-    /// a silent numerator of 1 breaks a tie beside a numerator factor, an integer denominator
-    /// breaks the rest.
+    /// Rules 1 and 2: an exact number is written as the core writes it, and every digit of
+    /// that spelling counts, a numerator of 1 included.
     #[test]
-    fn fraction_spellings_count_every_digit() {
-        assert_eq!(fit(&rat(1, 12), 3, true).as_deref(), Some("1/12"));
-        assert_eq!(fit(&rat(1, 12), 2, true), None);
-        assert_eq!(fit(&rat(3, 124), 3, false), None);
-        assert_eq!(fit(&rat(3, 124), 4, false).as_deref(), Some("3/124"));
-        assert_eq!(fit(&rat(5, 21), 3, true).as_deref(), Some("1/4.2"));
-        assert_eq!(fit(&rat(5, 21), 3, false).as_deref(), Some("5/21"));
-        assert_eq!(fit(&rat(10, 37), 3, true).as_deref(), Some("1/3.7"));
-        assert_eq!(fit(&rat(22, 7), 3, true).as_deref(), Some("22/7"));
-        assert_eq!(fit(&rat(1, 2), 3, true).as_deref(), Some("1/2"));
-        assert_eq!(fit(&rat(1, 1024), 3, true), None);
-        assert_eq!(fit(&rat(1024, 1), 3, true), None);
-        assert_eq!(fit(&rat(999, 1), 3, true).as_deref(), Some("999"));
-        // a denominator below 1 is never written: 1000/3 is not 1/0.003
-        assert_eq!(fit(&rat(1000, 3), 9, true).as_deref(), Some("1000/3"));
-    }
-
-    /// A big value is searched within the bound `n < 10^(D-1)`, not over all its 2s and 5s.
-    #[test]
-    fn fraction_search_is_bounded_on_big_values() {
-        let _exact = number_domain(false);
-        let p = BigInt::from(5u32) * num_traits::pow(BigInt::from(2u32), 1000);
-        let a = Rat::from_big(p, BigInt::from(21)).unwrap();
-        assert_eq!(fit(&a, 3, true), None);
+    fn exact_numbers_are_written_as_the_core_writes_them() {
+        let beside = NumberPlace::Coefficient { plain: true };
+        let alone = NumberPlace::Alone;
+        // the decimal where its codeword is the cheaper
+        assert_eq!(fit(&rat(3, 10), 3, beside).as_deref(), Some("0.3"));
+        assert_eq!(fit(&rat(1, 5), 3, beside).as_deref(), Some("0.2"));
+        assert_eq!(fit(&rat(1, 20), 3, beside).as_deref(), Some("0.05"));
+        assert_eq!(fit(&rat(1, 200), 3, beside), None);
+        assert_eq!(fit(&rat(1, 200), 4, beside).as_deref(), Some("0.005"));
+        // a fraction where it is the cheaper, and beside a factor the reciprocal that spells
+        // shorter
+        assert_eq!(fit(&rat(1, 2), 3, alone).as_deref(), Some("1/2"));
+        assert_eq!(fit(&rat(5, 21), 3, beside).as_deref(), Some("1/4.2"));
+        assert_eq!(fit(&rat(5, 21), 3, alone).as_deref(), Some("5/21"));
+        assert_eq!(fit(&rat(10, 37), 3, beside).as_deref(), Some("1/3.7"));
+        assert_eq!(fit(&rat(10, 37), 3, alone), None);
+        assert_eq!(fit(&rat(22, 7), 3, beside).as_deref(), Some("22/7"));
+        assert_eq!(fit(&rat(1, 12), 3, beside).as_deref(), Some("1/12"));
+        assert_eq!(fit(&rat(1, 12), 2, beside), None);
+        assert_eq!(fit(&rat(355, 113), 3, beside), None);
+        assert_eq!(fit(&rat(355, 113), 6, beside).as_deref(), Some("355/113"));
+        assert_eq!(fit(&rat(3, 124), 4, alone).as_deref(), Some("3/124"));
+        assert_eq!(fit(&rat(999, 1), 3, alone).as_deref(), Some("999"));
+        assert_eq!(fit(&rat(1024, 1), 3, alone), None);
+        // an exponent is one numeral, as the core writes it
+        assert_eq!(
+            fit(&rat(3, 10), 3, NumberPlace::Exponent).as_deref(),
+            Some("0.3")
+        );
+        assert_eq!(
+            fit(&rat(5, 21), 3, NumberPlace::Exponent).as_deref(),
+            Some("5/21")
+        );
     }
 
     /// A precision rounds a float to its significant digits, half to even.

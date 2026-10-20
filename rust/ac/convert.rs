@@ -1376,13 +1376,62 @@ pub fn to_infix_pretty(e: &Ex, cx: &Cx) -> String {
 /// one-TOKEN `num_token` keeps the digits of `p/q`, the only fraction the leaf parser reads as
 /// one literal.
 fn infix_num(r: &Rat) -> String {
+    let sign = if r.is_negative() { "-" } else { "" };
+    match infix_number_parts(&r.abs(), NumberPlace::Alone) {
+        (Some(n), None) => format!("{sign}{n}"),
+        (n, Some(d)) => format!("{sign}{}/{d}", n.as_deref().unwrap_or("1")),
+        (None, None) => unreachable!("a number writes a numeral"),
+    }
+}
+
+/// Where the infix text writes a number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NumberPlace {
+    /// On its own: a term of a sum, an argument, a base.
+    Alone,
+    /// The coefficient of a product. `plain`: the product has a plain factor (one that is no
+    /// number and no reciprocal), beside which a reciprocal that spells shorter is written as
+    /// the divisor (`x1/4.2`).
+    Coefficient { plain: bool },
+    /// An exponent: one numeral, as [`num_token`] writes it.
+    Exponent,
+}
+
+/// How the infix text writes a POSITIVE exact number: the numerals of its numerator and of its
+/// denominator, the numerator `None` for a 1 the text leaves out (a product writes no `1*`, and
+/// on its own the number is `1/q`). It is the one spelling rule of the text, so `prettify`
+/// writes an exact number as `simplify` does:
+///
+/// * an integer, or the decimal where its codeword is the cheaper (`decimal_spelling_wins`:
+///   `0.3`, `0.05`, `1.2`; `1/2` and `22/7` stay fractions);
+/// * else, as the coefficient beside a plain factor, the reciprocal where it spells shorter
+///   (`divisor_side`: `x1/4.2` for `5/21`, `x1/12`); a fraction beyond 128 bits stays one numeral
+///   of a product;
+/// * else, outside an exponent, an integer over a decimal where that is shorter
+///   (`ratio_spelling`: `1/6.283185307179586`);
+/// * else `p/q`.
+pub(crate) fn infix_number_parts(r: &Rat, place: NumberPlace) -> (Option<String>, Option<String>) {
     if r.is_integer() || crate::ac::expr::decimal_spelling_wins(r) {
-        return num_token(r);
+        return (Some(num_token(r)), None);
     }
-    match ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
-        Some((n, ds)) => format!("{}/{}", n.numer_token(), ds),
-        None => format!("{}/{}", r.numer_token(), r.denom_token()),
+    if let NumberPlace::Coefficient { plain } = place {
+        if let Some(inv) = divisor_side(r).filter(|_| plain) {
+            return (None, Some(num_token(&inv)));
+        }
+        if r.small_parts().is_none() {
+            // beyond 128 bits: one numeral, never split across the product (see `mul_div_split`)
+            return (Some(num_token(r)), None);
+        }
     }
+    if place != NumberPlace::Exponent {
+        if let Some((n, ds)) = ratio_spelling(r).and_then(|(n, d)| Some((n, d.exact_decimal()?))) {
+            return ((!n.is_one()).then(|| n.numer_token()), Some(ds));
+        }
+    }
+    (
+        (!r.numer().is_one()).then(|| r.numer_token()),
+        Some(r.denom_token()),
+    )
 }
 
 /// Precedence levels: 1 = additive, 2 = multiplicative, 3 = power, 4 = atom.
@@ -1522,46 +1571,19 @@ fn render_prec(e: &Ex, cx: &Cx) -> (String, u8) {
                             neg = !neg;
                             r = r.checked_neg().unwrap();
                         }
-                        if !r.is_integer() && !crate::ac::expr::decimal_spelling_wins(&r) {
-                            // Divisor-side spelling (see `divisor_side`): the firing
-                            // reciprocal is an integer or exact decimal -- an atom, safe
-                            // unparenthesized in the denominator join.
-                            //
-                            // The old `&& r.exact_decimal().is_none()` gate was the same
-                            // staleness as in `divisor_side` itself: it sent every value
-                            // with a decimal straight to the numerator on the assumption it
-                            // printed as a decimal atom. Under argmin spelling `1/2` prints
-                            // `1/2`, so that path emitted `1/2 * x0` beside `x0 / 3` -- two
-                            // shapes for one thing. Every non-integer now takes the same
-                            // route, matching the explicit dialect.
-                            match divisor_side(&r).filter(|_| has_plain_mul_factor(v)) {
-                                Some(inv) => den_parts.insert(0, num_token(&inv)),
-                                // beyond 128 bits: one numeral, never split across the
-                                // product (see `mul_div_split`)
-                                None if r.small_parts().is_none() => {
-                                    num_parts.insert(0, num_token(&r))
-                                }
-                                None => match ratio_spelling(&r)
-                                    .and_then(|(n, d)| Some((n, d.exact_decimal()?)))
-                                {
-                                    // Integer over decimal: the decimal is one atom in the
-                                    // denominator join, like a divisor-side reciprocal.
-                                    Some((n, ds)) => {
-                                        if !n.is_one() {
-                                            num_parts.insert(0, n.numer_token());
-                                        }
-                                        den_parts.insert(0, ds);
-                                    }
-                                    None => {
-                                        if !r.numer().is_one() {
-                                            num_parts.insert(0, r.numer_token());
-                                        }
-                                        den_parts.insert(0, r.denom_token());
-                                    }
-                                },
-                            }
-                        } else if !r.is_one() {
-                            num_parts.insert(0, num_token(&r));
+                        // Every non-integer whose fraction is the cheaper codeword takes the
+                        // same route, matching the explicit dialect: a divisor-side reciprocal
+                        // (an integer or exact decimal) or the decimal of an integer over a
+                        // decimal is one atom, safe unparenthesized in the denominator join.
+                        let place = NumberPlace::Coefficient {
+                            plain: has_plain_mul_factor(v),
+                        };
+                        let (n, d) = infix_number_parts(&r, place);
+                        if let Some(n) = n.filter(|_| !r.is_one()) {
+                            num_parts.insert(0, n);
+                        }
+                        if let Some(d) = d {
+                            den_parts.insert(0, d);
                         }
                     }
                     Ex::Pow(b, ex) => match &**ex {

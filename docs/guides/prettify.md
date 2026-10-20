@@ -26,16 +26,21 @@ plots, logs and reports.
 The digit budget `digits` (default 3) counts every digit a spelling writes, a numerator of 1
 included: `1/12` counts 3.
 
-A **fraction that fits the budget is written as a fraction**: the shortest of `p/q` and the
-integers over a decimal (`5/21` is also `1/4.2`).
+A **number that fits the budget is written exactly, as `simplify` writes it**. The budget
+decides only whether a number is written exactly or as its float; how an exact number is
+written is `simplify`'s own rule: the decimal where it is the cheaper spelling (`0.3`), else a
+fraction, with the reciprocal as the divisor where that is shorter (`5/21` beside a factor is
+`x1/4.2`).
 
 ```python
+engine.prettify(engine.simplify("x1*3/10"))
+# -> '0.3*x1'
 engine.prettify(engine.simplify("x1*5/21"))
 # -> 'x1/4.2'
 engine.prettify(engine.simplify("22/7*x1"))
 # -> '22*x1/7'
-engine.prettify(engine.simplify("x1/2"))
-# -> 'x1/2'
+engine.prettify(engine.simplify("x2 + 0.5"))
+# -> 'x2 + 1/2'
 ```
 
 **Otherwise the value is one float**: the float64 nearest to it, in its shortest form, as a
@@ -51,8 +56,8 @@ engine.prettify(engine.simplify("1.000000000000000000003*x1"))
 ```
 
 **Precision.** `precision=k` shows a number written as a float with `k` significant digits
-instead of its shortest float64 form; a fraction that fits the digit budget is not affected.
-The default, `precision=None`, writes floats in full.
+instead of its shortest float64 form; a number written exactly is not affected. The default,
+`precision=None`, writes floats in full.
 
 ```python
 engine.prettify(answer, precision=3)
@@ -61,12 +66,14 @@ engine.prettify(engine.simplify("x1*5/21"), precision=1)
 # -> 'x1/4.2'
 ```
 
-**pi** is the literal `3.141592653589793`. A value that is a fitting fraction times pi, or over
-it, is written with the literal factored out.
+**pi** is the literal `3.141592653589793`. A value that is a number written exactly times pi,
+or over it, is written with the literal factored out.
 
 ```python
+engine.prettify(engine.simplify("x0/(2*3.141592653589793)"))
+# -> 'x0/(2*3.141592653589793)'
 engine.prettify(engine.simplify("3*x0^2/(20*3.141592653589793*x1*x2)"))
-# -> '3*x0^2/(20*3.141592653589793*x1*x2)'
+# -> '0.15*x0^2/(3.141592653589793*x1*x2)'
 ```
 
 **Divisors.** Every divisor of a product joins one denominator, functions and sums included:

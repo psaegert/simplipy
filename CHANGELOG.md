@@ -141,8 +141,9 @@ model predictions.
 
 - **`prettify()` writes an expression for a reader.** `simplify` keeps every number exact;
   `engine.prettify(expr, digits=3)` is the display of that canonical form, as infix text or
-  explicit or tagged tokens. A fraction that fits the digit budget stays a fraction (`x1/4.2`,
-  `22*x1/7`), any other number is its float64 in shortest form (`9.765625e-4*x1`,
+  explicit or tagged tokens. A number that fits the digit budget is written exactly, as
+  `simplify` writes it (`0.3*x1`, `x1/4.2`, `22*x1/7`, `x2 + 1/2`), any other number is its
+  float64 in shortest form (`9.765625e-4*x1`,
   `2.1458314277221002*x1` for a 33-digit literal), or with `k` significant digits at
   `precision=k` (`2.15*x1`). pi is factored out as the literal `3.141592653589793` where the
   rest fits (`1/(2*3.141592653589793)`), even roots read `rootn(x, n)`, and every divisor of a

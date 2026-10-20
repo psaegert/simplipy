@@ -47,7 +47,8 @@ TABLE = [
     (f'3/(2*{PI})', f'3/(2*{PI})'),
     (f'x0/(2*{PI})', f'x0/(2*{PI})'),
     (f'exp(-x0^2/2)/rootn(2*{PI}, 2)', '0.3989422804014327*exp(-x0^2/2)'),  # Feynman I.6.2a
-    (f'3*x0^2/(20*{PI}*x1*x2)', f'3*x0^2/(20*{PI}*x1*x2)'),  # Feynman 58
+    # Feynman 58: the rest beside pi is written as `simplify` writes 3/20
+    (f'3*x0^2/(20*{PI}*x1*x2)', f'0.15*x0^2/({PI}*x1*x2)'),
     ('x1/2', 'x1/2'),
     ('x1/12', 'x1/12'),
     ('x1/3.7', 'x1/3.7'),
@@ -76,6 +77,43 @@ TABLE = [
 @pytest.mark.parametrize('text,expected', TABLE, ids=[t for t, _ in TABLE])
 def test_the_plans_table(eng, text, expected):
     assert show(eng, text) == expected
+
+
+# The digit budget decides only whether a number is written exactly or as its float; an exact
+# number is written as `simplify` writes it.
+@pytest.mark.parametrize('text,expected', [
+    ('x1*3/10', '0.3*x1'),
+    ('x2 + 0.5', 'x2 + 1/2'),
+    ('x1/5', '0.2*x1'),
+    ('x1/20', '0.05*x1'),
+    ('22*x1/7', '22*x1/7'),
+    ('x1*5/21', 'x1/4.2'),
+    ('355/113*x1', '3.1415929203539825*x1'),
+    ('x1/200', '0.005*x1'),
+    ('x1^(3/10)', 'x1^0.3'),
+    (f'0.3*{PI}*x1', f'0.3*{PI}*x1'),
+    (f'x1/(2*{PI})', f'x1/(2*{PI})'),
+])
+def test_an_exact_number_is_written_as_simplify_writes_it(eng, text, expected):
+    assert show(eng, text) == expected
+
+
+def test_within_the_budget_the_display_is_simplifys_text(eng):
+    """Every coefficient and every term `p/q` with `p, q < 30`: where `simplify` writes the
+    number within the digit budget (its digits, and the 1 of `x1/d`), the display is
+    `simplify`'s own text."""
+    compared = 0
+    for p in range(1, 30):
+        for q in range(2, 30):
+            if math.gcd(p, q) != 1:
+                continue
+            for text in (f'{p}/{q}*x1', f'x2 + {p}/{q}'):
+                answer = eng.simplify(text)
+                digits = sum(c.isdigit() for c in re.sub(r'x\d', '', answer))
+                if digits + answer.startswith('x1/') <= 3:
+                    assert eng.prettify(answer) == answer, (text, answer)
+                    compared += 1
+    assert compared == 596, compared
 
 
 @pytest.mark.parametrize('text,explicit,tagged', [
@@ -201,6 +239,7 @@ def test_a_number_beside_a_fitted_constant_keeps_its_place(eng):
     import numpy as np
     text = '<constant>*x5/(0.2*(rootn(x2, 2) + <constant>*x7))'
     p = eng.prettify(text)
+    assert p == text  # the number written as `simplify` writes it
     assert eng.prettify(p) == p
     names, xs = ['x2', 'x5', 'x7'], np.random.default_rng(1).uniform(0.5, 2.0, size=(16, 3))
     a = values(eng, eng._core.parse(text, strict=True), names, xs)
