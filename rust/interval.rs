@@ -2079,13 +2079,70 @@ pub(crate) fn index_reaches_a_nonzero_integer(b: &Vs) -> bool {
     first != 0.0 || holds(first + 1.0)
 }
 
-/// Index of a variable leaf (`_0`/`x0` -> 0), or `None` if `t` is not a variable.
+/// The dimension of a DUMMY variable (`x0`/`_0` -> 0): the miner's sources are spelled over
+/// `x<k>` and a pattern instance binds `_<k>`, and the layer numbers its dimensions by them. Every
+/// other variable is spelled as a dummy at the public entry points (`dummy_spelling`), so inside
+/// the layer this is the one variable test. `None` for anything else.
 fn var_index(t: &str) -> Option<usize> {
     let rest = t.strip_prefix('_').or_else(|| t.strip_prefix('x'))?;
     if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     rest.parse().ok()
+}
+
+/// Is `t` a variable? What the engine's vocabulary says one is (as the AC core reads a leaf, and
+/// `SimpliPyEngine.expression_variables`): a token that is no operator, no literal (a numeral, a
+/// parenthesized one, `np.pi`, `np.e`, a spelled non-finite), no `<constant>` and no placeholder
+/// of the rule or tagged language (`_`, `?`, `!`, `$`, `<` ...), whatever it is called; a dummy
+/// (`var_index`) is one too.
+fn is_variable(t: &str, ops: &Operators) -> bool {
+    if var_index(t).is_some() {
+        return true;
+    }
+    !t.is_empty()
+        && !t.starts_with(['_', '?', '!', '$', '<', '('])
+        && ops.arity_of(t).is_none()
+        && crate::numeric::leaf_value(t).is_none()
+        && !crate::utils::looks_numeric(t)
+}
+
+/// A FAMILY'S VARIABLES SPELLED AS DUMMIES, so that what a variable is called decides nothing:
+/// `sin(x_1)` and `sin(v1)` are analysed as `sin(x1)` is. Each variable that is no dummy
+/// (`is_variable`, `var_index`) takes, in order of first appearance across the family, the dummy
+/// past every dummy the family holds, and never dimension 0, the axis an unbound `<constant>`
+/// shares (`leaf_vs`): over `x1, x2` and over `x_1, x_2` a family is the same box. `None` where
+/// every variable already is a dummy. Applied at every public entry point that reads its
+/// variables from the tokens; `value_set_p` takes its domains by dummy index and is not one.
+fn dummy_spelling(exprs: &[&[String]], ops: &Operators) -> Option<Vec<Vec<String>>> {
+    let mut named: Vec<&str> = Vec::new();
+    let mut top = 0usize;
+    for e in exprs {
+        for t in e.iter() {
+            if let Some(i) = var_index(t) {
+                top = top.max(i);
+            } else if !named.contains(&t.as_str()) && is_variable(t, ops) {
+                named.push(t);
+            }
+        }
+    }
+    if named.is_empty() {
+        return None;
+    }
+    let base = top + 1;
+    Some(
+        exprs
+            .iter()
+            .map(|e| {
+                e.iter()
+                    .map(|t| match named.iter().position(|n| *n == t.as_str()) {
+                        Some(j) => format!("x{}", base + j),
+                        None => t.clone(),
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
 }
 
 /// Length a `doms` array needs = 1 + the largest variable index seen (floored at 1, so a
@@ -2527,11 +2584,17 @@ pub fn value_set_p(tokens: &[String], ops: &Operators, doms: &[Vs], params: &[f6
 /// takes `Vs::reals()` anyway, so per-variable boxes would change nothing. Do NOT use it for a
 /// subdivided cell -- that is exactly the conflation `domain_extension_p` exists to avoid.
 pub fn value_set(tokens: &[String], ops: &Operators, dom: &Vs) -> Option<Vs> {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return value_set(&d[0], ops, dom);
+    }
     let doms = vec![*dom; n_var_slots(&[tokens])];
     value_set_p(tokens, ops, &doms, &[])
 }
 
 pub fn value_class(tokens: &[String], ops: &Operators) -> Option<Class> {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return value_class(&d[0], ops);
+    }
     let v = value_set(tokens, ops, &Vs::reals())?;
     // R3 NULL-KILL at the measure-aware consumer (H-019, 2026-08-04): a finite part
     // supported ONLY on a null x-set (`fin_null` -- e.g. `clip`'s kept boundary graze,
@@ -2575,6 +2638,9 @@ pub fn domain_extension_p(
     tgt_params: &[f64],
     ops: &Operators,
 ) -> Option<f64> {
+    if let Some(d) = dummy_spelling(&[source, target], ops) {
+        return domain_extension_p(&d[0], src_params, &d[1], tgt_params, ops);
+    }
     let (r, depth_per_dim, decidable) = gate_horizon(source, src_params, target, tgt_params, ops);
     if !decidable {
         return None; // horizon past R_MAX: the question is not answerable in any affordable box
@@ -2764,6 +2830,9 @@ pub fn gate_horizon(
     tgt_params: &[f64],
     ops: &Operators,
 ) -> (f64, u32, bool) {
+    if let Some(d) = dummy_spelling(&[source, target], ops) {
+        return gate_horizon(&d[0], src_params, &d[1], tgt_params, ops);
+    }
     let (r, depth_per_dim, decidable) = horizon(&[source, target], &[src_params, tgt_params], ops);
     if !decidable {
         // We do not know, and the caller must not accept. Counted, not hidden.
@@ -2788,6 +2857,9 @@ pub fn domain_extension_p_at(
     r: f64,
     depth_per_dim: u32,
 ) -> Option<f64> {
+    if let Some(d) = dummy_spelling(&[source, target], ops) {
+        return domain_extension_p_at(&d[0], src_params, &d[1], tgt_params, ops, r, depth_per_dim);
+    }
     let used = distinct_vars(&[source, target]);
     let width = n_var_slots(&[source, target]);
     let n = used.len().max(1); // >=1: free `<constant>`s live on doms[0]
@@ -2870,6 +2942,9 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 /// verdict fails closed the wrong way around), and the arm decides only the shipped
 /// vocabulary -- see the hazard note on `tail_finite_ae`.
 pub fn finite_ae(tokens: &[String], ops: &Operators) -> bool {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return finite_ae(&d[0], ops);
+    }
     nonfinite_null(tokens, ops)
         || (finite_ae_subdivision(tokens, ops) && tail_finite_ae(tokens, ops))
 }
@@ -3160,6 +3235,9 @@ const CERT_RECURSION_MAX: u32 = 32;
 
 /// {x : f(x) = 0} is Lebesgue-null, for every value of any `<constant>`. Fail-closed.
 pub fn zero_set_null(tokens: &[String], ops: &Operators) -> bool {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return zero_set_null(&d[0], ops);
+    }
     if tokens.iter().any(|s| s == "<constant>") {
         return false;
     }
@@ -3179,6 +3257,9 @@ pub fn zero_set_null(tokens: &[String], ops: &Operators) -> bool {
 /// the `$`-cancel licence keeps its SELFCANCEL asymmetry (the c = 0 atom stays
 /// protected there), pinned by test.
 pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators) -> bool {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return zero_set_null_generic_const(&d[0], ops);
+    }
     if !tokens.iter().any(|s| s == "<constant>") {
         return zsn(tokens, ops, 0, true);
     }
@@ -3677,6 +3758,9 @@ fn analytic_nonzero_witness(t: &[String], ops: &Operators) -> bool {
 /// {x : f(x) not a finite real} is Lebesgue-null, for every `<constant>` value.
 /// Fail-closed.
 pub fn nonfinite_null(tokens: &[String], ops: &Operators) -> bool {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return nonfinite_null(&d[0], ops);
+    }
     nfn(tokens, ops, 0)
 }
 
@@ -3819,6 +3903,9 @@ fn nfn(t: &[String], ops: &Operators, d: u32) -> bool {
 // through the zsn/nfn arms.
 #[cfg(test)]
 pub fn infinite_set_null(tokens: &[String], ops: &Operators) -> bool {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return infinite_set_null(&d[0], ops);
+    }
     isn(tokens, ops, 0)
 }
 
@@ -3944,6 +4031,9 @@ pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators) -> bool {
 /// construction: an identically-constant-but-unfolded y (sin^2 + cos^2) admits no
 /// disjoint pair; an abs-bearing y is not entire; a ground y is constant.
 pub fn nonconstant_entire(t: &[String], ops: &Operators) -> bool {
+    if let Some(d) = dummy_spelling(&[t], ops) {
+        return nonconstant_entire(&d[0], ops);
+    }
     if t.iter()
         .any(|s| ops.is_operator(s) && !op_entire_analytic(s))
     {
@@ -3994,6 +4084,9 @@ pub fn nonconstant_entire(t: &[String], ops: &Operators) -> bool {
 /// the certified/poison batteries below pin its behavior.
 #[cfg(test)]
 pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
+    if let Some(d) = dummy_spelling(&[tokens], ops) {
+        return positive_ae(&d[0], ops);
+    }
     if tokens.is_empty() {
         return false;
     }
@@ -4056,6 +4149,9 @@ pub fn reaches_all_of(cand: &Vs, src: &Vs) -> bool {
 /// on what "positive measure" means.
 #[cfg(test)] // the in-crate gate deliberately uses `_at` (see below); the tests use this one
 pub fn defined_measure_p(expr: &[String], params: &[f64], ops: &Operators) -> Option<f64> {
+    if let Some(d) = dummy_spelling(&[expr], ops) {
+        return defined_measure_p(&d[0], params, ops);
+    }
     // Standalone use only. A GATE decision must NOT call this: it derives its horizon from `expr`
     // alone, and deadness judged at a different horizon than its extension witness is a
     // fail-open. Gates compute `gate_horizon(..)` once and call `defined_measure_p_at`.
@@ -4082,6 +4178,9 @@ pub fn defined_measure_p_at(
     r: f64,
     depth_per_dim: u32,
 ) -> Option<f64> {
+    if let Some(d) = dummy_spelling(&[expr], ops) {
+        return defined_measure_p_at(&d[0], params, ops, r, depth_per_dim);
+    }
     #[allow(clippy::too_many_arguments)]
     fn rec(
         e: &[String],
@@ -4793,6 +4892,72 @@ mod tests {
                 "witness changed when the variable was spelled {v}"
             );
         }
+    }
+
+    /// A verdict must not depend on what a variable is CALLED: the vocabulary says what a variable
+    /// is, and every name is read as a dummy of its own (`dummy_spelling`).
+    #[test]
+    fn verdicts_are_invariant_to_what_a_variable_is_called() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let spell = |src: &[&str], a: &str, b: &str| -> Vec<String> {
+            src.iter()
+                .map(|t| match *t {
+                    "A" => a.to_string(),
+                    "B" => b.to_string(),
+                    t => t.to_string(),
+                })
+                .collect()
+        };
+        let exprs: [&[&str]; 7] = [
+            &["sin", "inv", "A"],
+            &["log", "A"],
+            &["-", "A", "sin", "B"],
+            &["-", "A", "abs", "A"],
+            &["+", "exp", "A", "*", "B", "<constant>"],
+            &["/", "A", "-", "B", "B"],
+            &["exp", "log", "A"],
+        ];
+        for src in exprs {
+            let at = |a: &str, b: &str| {
+                let t = spell(src, a, b);
+                (
+                    finite_ae(&t, ops),
+                    zero_set_null(&t, ops),
+                    zero_set_null_generic_const(&t, ops),
+                    nonfinite_null(&t, ops),
+                    infinite_set_null(&t, ops),
+                    nonconstant_entire(&t, ops),
+                    value_class(&t, ops),
+                    domain_extension(&t, &spell(&["A"], a, b), ops),
+                )
+            };
+            let want = at("x1", "x2");
+            for (a, b) in [
+                ("x_1", "x_2"),
+                ("v1", "v2"),
+                ("alpha", "beta"),
+                ("x2", "x1"),
+            ] {
+                assert_eq!(at(a, b), want, "{src:?} over {a}, {b}");
+            }
+        }
+        // a dummy keeps its dimension; another name takes one past it, never the constants' axis
+        let t = s(&["+", "x0", "*", "y", "x_1"]);
+        assert_eq!(
+            dummy_spelling(&[&t], ops),
+            Some(vec![s(&["+", "x0", "*", "x1", "x2"])])
+        );
+        assert_eq!(
+            dummy_spelling(&[&s(&["sin", "theta"]), &s(&["theta"])], ops),
+            Some(vec![s(&["sin", "x1"]), s(&["x1"])])
+        );
+        assert_eq!(
+            dummy_spelling(&[&s(&["sin", "x3", "np.pi", "1/3"])], ops),
+            None
+        );
     }
 
     /// The gate must decide on the MATHEMATICS, not on whether the source's nan region happens to

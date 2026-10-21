@@ -15,6 +15,11 @@ organised by who you are, then the highlights, then every change in detail.
   limits, numbers stay exact beyond 128 bits, and `complexity` prices each mode in its own
   reading, a literal costing at most what its float costs. Regenerate every test, cache or
   dataset that pins answers or prices.
+- **What a variable is called no longer matters.** Over names other than `x<k>` (`x_1`, `v1`,
+  `alpha`) every certificate failed, so collections and orientations the certificates license
+  did not happen there: `2*sin(1/x_1) - sin(1/x_1)` stayed as written, where
+  `2*sin(1/x1) - sin(1/x1)` is `sin(1/x1)`. An expression now gets the answer it gets over
+  `x<k>`, renamed.
 - **The search runs until a round finds nothing.** `simplipy.DEFAULT_EFFORT` is `None` (it was
   4), so a second call has nothing left to continue. Code that compares `DEFAULT_EFFORT` with an
   int now sees `None`; pass `effort=4` for the old cap.
@@ -388,6 +393,25 @@ model predictions.
   canonical form, so over a sum that vanishes on a region `f64` reads `1/-(S^3)` as `1/S^3` there
   (`+inf` where float64 gives `-inf`), as it already read `1/-(|x1| - x1)` as `1/(x1 - |x1|)`.
   The decision costs about 5% of `permissive`'s time on a tenth of the predictions.
+- **The certificates read a variable whatever it is called.** The interval layer that certifies
+  finiteness, a null zero set and the other a.e. properties took a variable to be a dummy, `x<k>`
+  or `_<k>`; any other name (`x_1`, `v1`, `alpha`) was a token it could not read, and every
+  certificate over it failed closed. So over such names the collections and sign placements the
+  certificates license did not happen: `2*sin(1/x_1) - sin(1/x_1)` stayed as written where
+  `2*sin(1/x1) - sin(1/x1)` is `sin(1/x1)`, a sum such as `x_1 - sin(x_2) - 3` kept the orientation
+  it was written in, and `interval_finite_ae(['sin', 'x_1'])` was `False`. A variable is now what
+  the engine's vocabulary says it is (no operator, no literal, no `<constant>`, no placeholder),
+  and the layer reads every other name as a dummy of its own, past every dummy the expression
+  holds and never on the axis a free `<constant>` shares, so an expression over `x_1, x_2` is
+  analysed as it is over `x1, x2`. srbf's ground truths and the training-data inputs, spelled
+  over `x<k>`, do not change in any mode. srbf's model predictions are spelled over `v<k>` and
+  `x_<k>`: of all 125,127, 44,103 `f64` answers change (15,024 cheaper, 1,520 dearer, 27,559 at
+  an equal price), 44,061 in `real` (14,968, 1,525, 27,568) and 5,387 in `permissive` (1, 1,
+  5,385). Every changed answer checked (each dearer one and 2,000 random rows per mode) is the
+  answer of the same expression spelled over `x<k>`, renamed, and no answer changes on a second
+  call. Evaluated beside their inputs on 256 points, 2 `f64` and 9 `real` answers no longer show
+  the input's infinities and NaNs where the old answers did, each where a power or an exact
+  literal leaves float64's range (`v1^158`, a coefficient of `5.3e320`).
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
