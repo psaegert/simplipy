@@ -14,6 +14,12 @@
 
 use crate::operators::Operators;
 
+mod dd;
+mod harmonic;
+#[rustfmt::skip]
+mod harmonic_tables;
+pub mod kernels;
+
 /// The transcendentals are evaluated through the SYSTEM libm (the same `<math.h>` functions Python's
 /// `math` module calls), NOT Rust's `f64::*` methods. Rust's std calls the platform libm for most of
 /// them (so they already match Python at 0 ULP), but `f64::atanh` is Rust's OWN composition

@@ -365,6 +365,9 @@ mod worker;
 // the engine handle plus the types its pub methods take/return from otherwise-private modules.
 pub use convert::Power;
 pub use engine::Engine;
+/// The 0.15 operators' float64 kernels (scalar functions and element-wise maps), a plain
+/// Rust API that the `_core` entries `kernel_unary`/`kernel_binary` wrap.
+pub use numeric::kernels;
 pub use worker::CandidateLibrary;
 
 /// Test-suite thinning guard: when `SIMPLIPY_TEST_REQUIRE_ASSETS` is set (any value), an
@@ -1999,6 +2002,110 @@ fn range_event(op: &str, args: Vec<f64>, value: f64) -> Option<bool> {
     crate::numeric::range_event(op, &args, value)
 }
 
+/// The data of a float64 buffer, carried across the GIL release. The `PyBuffer` it was read
+/// from is held by the calling frame until the call returns, so the memory outlives every use.
+#[derive(Clone, Copy)]
+struct RawF64 {
+    ptr: *mut f64,
+    len: usize,
+}
+
+// SAFETY: see the type's documentation; the pointer is only dereferenced inside the call.
+unsafe impl Send for RawF64 {}
+
+impl RawF64 {
+    fn of(buf: &pyo3::buffer::PyBuffer<f64>, what: &str, writable: bool) -> PyResult<RawF64> {
+        let ptr = buf.buf_ptr() as *mut f64;
+        if !buf.is_c_contiguous() || (ptr as usize) % std::mem::align_of::<f64>() != 0 {
+            return Err(PyValueError::new_err(format!(
+                "{what} must be an aligned, C-contiguous float64 buffer"
+            )));
+        }
+        if writable && buf.readonly() {
+            return Err(PyValueError::new_err(format!("{what} is read-only")));
+        }
+        Ok(RawF64 {
+            ptr,
+            len: buf.item_count(),
+        })
+    }
+
+    fn overlaps(self, other: RawF64) -> bool {
+        let size = std::mem::size_of::<f64>();
+        let (a, b) = (self.ptr as usize, other.ptr as usize);
+        self.len > 0 && other.len > 0 && a < b + other.len * size && b < a + self.len * size
+    }
+
+    /// SAFETY: the buffer is alive, aligned and `len` elements long (checked in `of`).
+    unsafe fn slice<'a>(self) -> &'a [f64] {
+        if self.len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(self.ptr, self.len)
+        }
+    }
+
+    /// SAFETY: as `slice`, and no other live reference covers the buffer (the callers refuse
+    /// an output that overlaps an operand).
+    unsafe fn slice_mut<'a>(self) -> &'a mut [f64] {
+        if self.len == 0 {
+            &mut []
+        } else {
+            std::slice::from_raw_parts_mut(self.ptr, self.len)
+        }
+    }
+}
+
+fn kernel_output(out: &pyo3::buffer::PyBuffer<f64>, operands: &[RawF64]) -> PyResult<RawF64> {
+    let o = RawF64::of(out, "out", true)?;
+    if operands.iter().any(|x| x.overlaps(o)) {
+        return Err(PyValueError::new_err("out must not overlap an operand"));
+    }
+    Ok(o)
+}
+
+/// `out[i] = name(x[i])` for a 0.15 operator kernel (`numeric::kernels`), the GIL released.
+/// `x` and `out` are C-contiguous float64 buffers; `x` has `len(out)` elements or one, which
+/// is broadcast. The deployed realization of an operator whose kernel is its own
+/// (`simplipy.operators.harmonic`) calls this; for the others it is the gate's handle on the
+/// kernel the engine will evaluate.
+#[pyfunction]
+fn kernel_unary(
+    py: Python<'_>,
+    name: &str,
+    x: pyo3::buffer::PyBuffer<f64>,
+    out: pyo3::buffer::PyBuffer<f64>,
+) -> PyResult<()> {
+    let xv = RawF64::of(&x, "x", false)?;
+    let ov = kernel_output(&out, &[xv])?;
+    py.detach(move || {
+        // SAFETY: both buffers are held by this frame, and `out` overlaps no operand.
+        let (xs, os) = unsafe { (xv.slice(), ov.slice_mut()) };
+        numeric::kernels::map_unary(name, xs, os)
+    })
+    .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// `out[i] = name(a[i], b[i])` for a binary 0.15 operator kernel, as `kernel_unary`.
+#[pyfunction]
+fn kernel_binary(
+    py: Python<'_>,
+    name: &str,
+    a: pyo3::buffer::PyBuffer<f64>,
+    b: pyo3::buffer::PyBuffer<f64>,
+    out: pyo3::buffer::PyBuffer<f64>,
+) -> PyResult<()> {
+    let av = RawF64::of(&a, "a", false)?;
+    let bv = RawF64::of(&b, "b", false)?;
+    let ov = kernel_output(&out, &[av, bv])?;
+    py.detach(move || {
+        // SAFETY: as in `kernel_unary`.
+        let (as_, bs, os) = unsafe { (av.slice(), bv.slice(), ov.slice_mut()) };
+        numeric::kernels::map_binary(name, as_, bs, os)
+    })
+    .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngine>()?;
@@ -2009,6 +2116,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
     m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
     m.add_function(wrap_pyfunction!(range_event, m)?)?;
+    m.add_function(wrap_pyfunction!(kernel_unary, m)?)?;
+    m.add_function(wrap_pyfunction!(kernel_binary, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
     // The near-miss gate of the high-precision re-judgement (real and permissive): the
     // fraction of a pair's points that may fail f64 for it to escalate. Recorded per mine.
