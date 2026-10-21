@@ -457,9 +457,19 @@ model predictions.
   no answer changes on a second call. The dearer answers keep an inverse joined where the
   certificate cannot read a tail and so fails closed: the limit leaves a constant past its horizon
   (`atan(u)^64` is fl(π/2)^64 = 3.6e12 there), or it sits under `cos`, where `cos(fl(π/2))` is
-  6e-17 but the literal's enclosure holds π/2. The plain certificate behind the `$`-cancel keeps
-  the real reading: in `f64`, `(tanh(x1) - 1)^2/(tanh(x1) - 1)` is still `tanh(x1) - 1`, a value
-  where float64 gives NaN on the tail.
+  6e-17 but the literal's enclosure holds π/2.
+- **The `!` and `$` certificates read float64's tails in `f64` too.** The certificates behind the
+  cancellations are "defined and finite almost everywhere" (`!`: `2t - t` as `t`, `0*t` as `0`)
+  and "defined, finite and nonzero almost everywhere" (`$`: `t/t` as `1`, `t^2/t` as `t`). They
+  are consulted on the core's terms and on a rule's pieces. They took the real `tanh` and `atan`,
+  so in `f64` `(tanh(x1) - 1)/(tanh(x1) - 1)` became `1` and `2/(tanh(x1) - 1) - 1/(tanh(x1) - 1)`
+  became `1/(tanh(x1) - 1)`: a value where float64 gives NaN, wherever x1 ≥ 18.99. They now read
+  an expression as the zero-set certificate does, as the real one off the tails and, on each tail,
+  with the function replaced by its limit; each reading keeps its own certificate memo. `real` and
+  `permissive` do not change. srbf's ground truths and a tenth of the training-data inputs do not
+  change in any mode. On a tenth of the predictions one `f64` answer is 2.8% dearer: there a tail
+  leaves a constant past the certificate's horizon (`480586*atan(v2)` is 754906 on it), and the
+  certificate fails closed. No answer changes on a second call.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

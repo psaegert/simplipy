@@ -273,8 +273,9 @@ impl Engine {
         f: impl FnOnce(&Cx) -> R,
     ) -> R {
         let memo = RefCell::new(FxHashMap::default());
-        let cf = |e: &Ex| self.pattern_cert(e, view, false, &memo);
-        let cfz = |e: &Ex| self.pattern_cert(e, view, true, &memo);
+        let f64 = matches!(mode, RuleMode::Default);
+        let cf = |e: &Ex| self.pattern_cert(e, view, false, f64, &memo);
+        let cfz = |e: &Ex| self.pattern_cert(e, view, true, f64, &memo);
         let law = Cx {
             view,
             cert_fin: Some(&cf),
@@ -294,11 +295,13 @@ impl Engine {
     /// variable is a variable; a lone `!` (`$`) variable binds only a subject that carries the
     /// finite (finite and nonzero) certificate; a piece with a `!` or `$` variable inside, or a
     /// `_` wildcard anywhere, has instances nothing here can vouch for, and is uncertified.
+    /// `f64` reads the instance as `ac_cert` does in the `f64` mode (one reading per memo).
     fn pattern_cert(
         &self,
         e: &Ex,
         view: &TokenView,
         nonzero: bool,
+        f64: bool,
         memo: &RefCell<FxHashMap<(Vec<String>, bool), bool>>,
     ) -> bool {
         let var = crate::ac::rules::PATTERN_VAR;
@@ -333,9 +336,9 @@ impl Engine {
         }
         let b = known
             && if nonzero {
-                crate::interval::finite_nonzero_ae(&instance, &self.operators)
+                crate::interval::finite_nonzero_ae(&instance, &self.operators, f64)
             } else {
-                crate::interval::finite_ae(&instance, &self.operators)
+                crate::interval::finite_ae(&instance, &self.operators, f64)
             };
         memo.borrow_mut().insert(key, b);
         b
@@ -468,14 +471,19 @@ impl Engine {
     /// An AC-side certificate through the shared per-engine caches: serialize the expression
     /// into the explicit form and consult the SAME `finite_ae` / `finite_nonzero_ae` interval
     /// analysis (and the same generational memo) as the old kernel.
-    fn ac_cert(&self, e: &Ex, ctx: &SimplifyCtx, mult: bool) -> bool {
+    ///
+    /// `f64` (the `f64` mode) reads the expression in float64, where `tanh` and `atan` are
+    /// constant on whole tails; `real` and `permissive` read it over the reals. Each reading has
+    /// its own memo.
+    fn ac_cert(&self, e: &Ex, ctx: &SimplifyCtx, mult: bool, f64: bool) -> bool {
         let view = self.view(ctx);
         let bare = Cx::bare(&view);
         let flat = to_prefix(e, &bare);
+        let reading = usize::from(f64);
         let scratch = if mult {
-            &ctx.cert_mult_scratch
+            &ctx.cert_mult_scratch[reading]
         } else {
-            &ctx.cert_scratch
+            &ctx.cert_scratch[reading]
         };
         if let Some(&b) = scratch.borrow().get(&flat) {
             return b;
@@ -483,9 +491,9 @@ impl Engine {
         let table_only = flat.iter().all(|&t| self.tokens.is_table_id(t));
         if table_only {
             let cache = if mult {
-                &self.mult_cache
+                &self.mult_cache[reading]
             } else {
-                &self.bang_cache
+                &self.bang_cache[reading]
             };
             if let Some(b) = cache.lock().unwrap().get_promoting(&flat, &self.tokens) {
                 scratch.borrow_mut().insert(flat, b);
@@ -494,15 +502,15 @@ impl Engine {
         }
         let strs = self.resolve_seq(&flat, ctx);
         let b = if mult {
-            crate::interval::finite_nonzero_ae(&strs, &self.operators)
+            crate::interval::finite_nonzero_ae(&strs, &self.operators, f64)
         } else {
-            crate::interval::finite_ae(&strs, &self.operators)
+            crate::interval::finite_ae(&strs, &self.operators, f64)
         };
         if table_only {
             let cache = if mult {
-                &self.mult_cache
+                &self.mult_cache[reading]
             } else {
-                &self.bang_cache
+                &self.bang_cache[reading]
             };
             cache.lock().unwrap().insert(flat.clone(), b, &self.tokens);
         }
@@ -1357,9 +1365,10 @@ impl Engine {
     ) -> Option<(Ex, u64)> {
         let toks = self.intern_seq(tokens, ctx);
         let view = self.view(ctx);
-        let cf = |e: &Ex| self.ac_cert(e, ctx, false);
-        let cfz = |e: &Ex| self.ac_cert(e, ctx, true);
-        let czn = |e: &Ex| self.ac_zsn(e, ctx, matches!(canon_mode, RuleMode::Default));
+        let f64 = matches!(canon_mode, RuleMode::Default);
+        let cf = |e: &Ex| self.ac_cert(e, ctx, false, f64);
+        let cfz = |e: &Ex| self.ac_cert(e, ctx, true, f64);
+        let czn = |e: &Ex| self.ac_zsn(e, ctx, f64);
         let cnc = |e: &Ex| self.ac_nce(e, ctx);
         let cx = Cx {
             view: &view,
@@ -1502,9 +1511,10 @@ impl Engine {
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
 
-        let cf = |e: &Ex| self.ac_cert(e, &ctx, false);
-        let cfz = |e: &Ex| self.ac_cert(e, &ctx, true);
-        let czn = |e: &Ex| self.ac_zsn(e, &ctx, matches!(mode, RuleMode::Default));
+        let f64 = matches!(mode, RuleMode::Default);
+        let cf = |e: &Ex| self.ac_cert(e, &ctx, false, f64);
+        let cfz = |e: &Ex| self.ac_cert(e, &ctx, true, f64);
+        let czn = |e: &Ex| self.ac_zsn(e, &ctx, f64);
         let cnc = |e: &Ex| self.ac_nce(e, &ctx);
         let cx = Cx {
             view: &view,
@@ -2239,7 +2249,7 @@ mod tests {
         let ctx = crate::engine::memo_ctx_for_tests(&e);
         let key = crate::engine::intern_for_tests(&e, &t(&["+", "x0", "x1"]), &ctx);
         assert!(key.iter().all(|&tk| e.tokens.is_table_id(tk)));
-        let mut cache = e.bang_cache.lock().unwrap();
+        let mut cache = e.bang_cache[0].lock().unwrap();
         cache.insert(key.clone(), true, &e.tokens);
         assert_eq!(cache.get_promoting(&key, &e.tokens), Some(true));
     }
@@ -2255,7 +2265,7 @@ mod tests {
             key.iter().any(|&tk| !e.tokens.is_table_id(tk)),
             "precondition: the key must carry an overlay id"
         );
-        let mut cache = e.bang_cache.lock().unwrap();
+        let mut cache = e.bang_cache[0].lock().unwrap();
         cache.insert(key.clone(), true, &e.tokens);
         assert_eq!(cache.get_promoting(&key, &e.tokens), None);
     }
@@ -2272,7 +2282,7 @@ mod tests {
         let ctx = crate::engine::memo_ctx_for_tests(&e);
         let key = crate::engine::intern_for_tests(&e, &t(&["31415926535897932"]), &ctx);
         assert!(key.iter().any(|&tk| !e.tokens.is_table_id(tk)));
-        e.bang_cache.lock().unwrap().insert(key, true, &e.tokens);
+        e.bang_cache[0].lock().unwrap().insert(key, true, &e.tokens);
     }
 
     /// H-051 (2026-08-05, extreme-literal lane): `Ex::Num` exponents classify by the

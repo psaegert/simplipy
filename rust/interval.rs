@@ -2943,12 +2943,22 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 /// DEPENDENCY LOSS remain unsound after it (`x3 - x3` widens to (-inf, inf) and the
 /// verdict fails closed the wrong way around), and the arm decides only the shipped
 /// vocabulary -- see the hazard note on `tail_finite_ae`.
-pub fn finite_ae(tokens: &[String], ops: &Operators) -> bool {
+///
+/// `f64` (the `f64` mode) reads the expression in float64, where `tanh` and `atan` are constant
+/// on whole tails (`on_float64_tails`): `1/(tanh(x1) - 1)` is `+inf` wherever x1 >= 18.99.
+/// `real` and `permissive` read it over the reals.
+pub fn finite_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
-        return finite_ae(&d[0], ops);
+        return finite_ae(&d[0], ops, f64);
     }
-    nonfinite_null(tokens, ops)
-        || (finite_ae_subdivision(tokens, ops) && tail_finite_ae(tokens, ops))
+    let real = |t: &[String]| {
+        nonfinite_null(t, ops) || (finite_ae_subdivision(t, ops) && tail_finite_ae(t, ops))
+    };
+    if f64 {
+        on_float64_tails(tokens, ops, 0, &real, &real)
+    } else {
+        real(tokens)
+    }
 }
 
 /// The TAIL ARM (audit B2, ruling D9): discharge the a.e.-finiteness obligation on the
@@ -3235,15 +3245,21 @@ fn whole_range(t: &[String], ops: &Operators) -> Option<Vs> {
 
 const CERT_RECURSION_MAX: u32 = 32;
 
-/// {x : f(x) = 0} is Lebesgue-null, for every value of any `<constant>`. Fail-closed.
-pub fn zero_set_null(tokens: &[String], ops: &Operators) -> bool {
+/// {x : f(x) = 0} is Lebesgue-null, for every value of any `<constant>`. Fail-closed. `f64` reads
+/// the expression in float64 (`on_float64_tails`), `real` and `permissive` over the reals.
+pub fn zero_set_null(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
-        return zero_set_null(&d[0], ops);
+        return zero_set_null(&d[0], ops, f64);
     }
     if tokens.iter().any(|s| s == "<constant>") {
         return false;
     }
-    zsn(tokens, ops, 0, false)
+    let real = |t: &[String]| zsn(t, ops, 0, false);
+    if f64 {
+        on_float64_tails(tokens, ops, 0, &real, &real)
+    } else {
+        real(tokens)
+    }
 }
 
 /// E1 (F80, owner-ruled 2026-08-10): `zero_set_null` with `<constant>` as a GENERIC
@@ -3258,17 +3274,18 @@ pub fn zero_set_null(tokens: &[String], ops: &Operators) -> bool {
 /// licence (`engine::ac::ac_zsn`). Deliberately NOT wired into `finite_nonzero_ae`:
 /// the `$`-cancel licence keeps its SELFCANCEL asymmetry (the c = 0 atom stays
 /// protected there), pinned by test. `f64` (the `f64` mode) reads the expression in float64,
-/// where `tanh` and `atan` are constant on whole tails (`float64_null`); `real` and `permissive`
-/// read it over the reals.
+/// where `tanh` and `atan` are constant on whole tails (`on_float64_tails`); `real` and
+/// `permissive` read it over the reals.
 pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
         return zero_set_null_generic_const(&d[0], ops, f64);
     }
+    let real = |t: &[String]| zsn(t, ops, 0, true);
     let read = |t: &[String]| {
         if f64 {
-            float64_null(t, ops, 0)
+            on_float64_tails(t, ops, 0, &real, &real)
         } else {
-            zsn(t, ops, 0, true)
+            real(t)
         }
     };
     if !tokens.iter().any(|s| s == "<constant>") {
@@ -3310,17 +3327,25 @@ fn tail_of(op: &str) -> Option<(f64, f64)> {
     }
 }
 
-/// The zero set in float64 is null. Off the tails of its `tanh` and `atan` (`tail_of`) an
-/// expression is the real one, so there its zeros are among the real expression's, null by the
-/// real certificate (`zsn`). On a tail of one of them it is EXACTLY the expression with that
-/// function replaced by its limit, whose zero set must then be null in float64 too (on the whole
-/// space, a stronger claim). So `x2*tanh(x1) - x1` is null (its tails read `x2 - x1` and
-/// `-x2 - x1`), and `x2*tanh(x1) - x2`, `+0` wherever x1 >= 18.99, is not. A function whose
-/// argument is ground, or never leaves (-threshold, threshold) (`tanh(sin(x1))`), has no tail to
-/// read; more than `MAX_TAILS` of them fail closed.
-fn float64_null(t: &[String], ops: &Operators, d: u32) -> bool {
+/// A certificate of an almost-everywhere property (a null zero set, finiteness), read in
+/// float64. Off the tails of its `tanh` and `atan` (`tail_of`) an expression is the real one, so
+/// there the property holds almost everywhere when the real certificate `real` says so. On a tail
+/// of one of them it is EXACTLY the expression with that function replaced by its limit, which
+/// must then have the property in float64 too, on the whole space (a stronger claim); `ground`
+/// decides one that is a constant there. So the zero set of `x2*tanh(x1) - x1` is null (its tails
+/// read `x2 - x1` and `-x2 - x1`), and that of `x2*tanh(x1) - x2`, `+0` wherever x1 >= 18.99, is
+/// not; `1/(tanh(x1) - 1)` is not finite almost everywhere. A function whose argument is ground,
+/// or never leaves (-threshold, threshold) (`tanh(sin(x1))`), has no tail to read; more than
+/// `MAX_TAILS` of them fail closed.
+fn on_float64_tails(
+    t: &[String],
+    ops: &Operators,
+    d: u32,
+    real: &dyn Fn(&[String]) -> bool,
+    ground: &dyn Fn(&[String]) -> bool,
+) -> bool {
     const MAX_TAILS: usize = 3;
-    if d > CERT_RECURSION_MAX || !zsn(t, ops, 0, true) {
+    if d > CERT_RECURSION_MAX || !real(t) {
         return false;
     }
     let Some(sites) = tail_sites(t, ops) else {
@@ -3328,9 +3353,16 @@ fn float64_null(t: &[String], ops: &Operators, d: u32) -> bool {
     };
     sites.len() <= MAX_TAILS
         && sites.iter().all(|&(site, limit)| {
-            [limit, -limit]
-                .iter()
-                .all(|&c| float64_null(&replace_subtree(t, site, c, ops), ops, d + 1))
+            [limit, -limit].iter().all(|&c| {
+                let f = replace_subtree(t, site, c, ops);
+                if f.iter()
+                    .all(|x| var_index(x).is_none() && x != "<constant>")
+                {
+                    ground(&f)
+                } else {
+                    on_float64_tails(&f, ops, d + 1, real, ground)
+                }
+            })
         })
 }
 
@@ -4467,8 +4499,8 @@ fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
 /// The multiplicative group's regular domain: defined, finite AND nonzero a.e. -- the
 /// exact soundness domain of `A/A -> 1` (SELFCANCEL T1). Refuses `<constant>`-bearing
 /// trees via `zero_set_null`.
-pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators) -> bool {
-    zero_set_null(tokens, ops) && finite_ae(tokens, ops)
+pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
+    zero_set_null(tokens, ops, f64) && finite_ae(tokens, ops, f64)
 }
 
 /// Is `f` an ENTIRE-analytic composition (no branch cuts, poles, or abs) that is
@@ -4543,7 +4575,7 @@ pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
         "exp" | "cosh" => nonfinite_null(&tokens[1..], ops),
         // squares / abs of a null-zero-set argument: >= 0 with a null zero set
         "pow2" | "pow4" | "abs" => {
-            zero_set_null(&tokens[1..], ops) && nonfinite_null(&tokens[1..], ops)
+            zero_set_null(&tokens[1..], ops, false) && nonfinite_null(&tokens[1..], ops)
         }
         // the BINARY spelling of the even powers (generation-2 vocabulary completion,
         // audit Tier-1 #3 -- the retired unary arm above never fires on a live engine):
@@ -4554,7 +4586,7 @@ pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
                 return false;
             };
             matches!(int_literal(&tokens[ja..]), Some(k) if k > 0 && k % 2 == 0)
-                && zero_set_null(&tokens[1..ja], ops)
+                && zero_set_null(&tokens[1..ja], ops, false)
                 && nonfinite_null(&tokens[1..ja], ops)
         }
         "inv" => positive_ae(&tokens[1..], ops),
@@ -5111,11 +5143,11 @@ mod tests {
         // THE ASYMMETRY PINS: the plain certificate and the $-certificate are
         // untouched by E1 -- Const-bearing streams still refuse there.
         assert!(
-            !zero_set_null(&s(&["acos", "<constant>"]), ops),
+            !zero_set_null(&s(&["acos", "<constant>"]), ops, false),
             "plain zero_set_null keeps the Const blanket"
         );
         assert!(
-            !finite_nonzero_ae(&s(&["acos", "<constant>"]), ops),
+            !finite_nonzero_ae(&s(&["acos", "<constant>"]), ops, false),
             "the $-cancel licence keeps its SELFCANCEL protection of the c = 0 atom"
         );
     }
@@ -5217,11 +5249,11 @@ mod tests {
         );
         // --- SCOPING ASYMMETRY (ask b, ratified: ac_zsn-scoped only) ---
         assert!(
-            !zero_set_null(&s(&["-", "inv", "x7", "x7"]), ops),
+            !zero_set_null(&s(&["-", "inv", "x7", "x7"]), ops, false),
             "the PLAIN certificate keeps its pre-E2 strength (scoped wiring)"
         );
         assert!(
-            !finite_nonzero_ae(&s(&["-", "inv", "x7", "x7"]), ops),
+            !finite_nonzero_ae(&s(&["-", "inv", "x7", "x7"]), ops, false),
             "the $-cancel licence is untouched by E2 (widening is its own ruling)"
         );
     }
@@ -5251,7 +5283,7 @@ mod tests {
                 "{null:?}: never zero on a region of its domain"
             );
             // the plain certificate keeps its strength (the `$`-cancel's ruling)
-            assert!(!zero_set_null(&s(null), ops), "{null:?}");
+            assert!(!zero_set_null(&s(null), ops, false), "{null:?}");
         }
         for region in [
             &["-", "x1", "abs", "x1"][..],
@@ -5311,6 +5343,51 @@ mod tests {
         ] {
             assert!(read(null, false), "{null:?}");
             assert!(read(null, true), "{null:?}");
+        }
+    }
+
+    /// The `!` and `$` certificates read float64's tails in f64: `1/(tanh(x1) - 1)` is `+inf`
+    /// and `tanh(x1) - 1` is `+0` wherever x1 >= 18.99, which the real functions never are.
+    #[test]
+    fn float64_tails_hold_infinities() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let fin = |t: &[&str], f64: bool| finite_ae(&s(t), ops, f64);
+        let finnz = |t: &[&str], f64: bool| finite_nonzero_ae(&s(t), ops, f64);
+        let zero = |t: &[&str], f64: bool| zero_set_null(&s(t), ops, f64);
+        for t in [
+            &["inv", "-", "tanh", "x1", "1"][..],
+            &["*", "x2", "inv", "-", "tanh", "x1", "1"],
+            &["inv", "-", "atan", "x1", "1.5707963267948966"],
+            &["/", "x2", "+", "tanh", "-", "x1", "x3", "1"],
+        ] {
+            assert!(fin(t, false), "{t:?}: finite over the reals");
+            assert!(!fin(t, true), "{t:?}: infinite on a float64 tail");
+        }
+        for t in [
+            &["-", "tanh", "x1", "1"][..],
+            &["*", "x2", "-", "tanh", "x1", "1"],
+            &["-", "atan", "x1", "1.5707963267948966"],
+        ] {
+            assert!(
+                finnz(t, false) && zero(t, false),
+                "{t:?}: nonzero over the reals"
+            );
+            assert!(
+                !finnz(t, true) && !zero(t, true),
+                "{t:?}: zero on a float64 tail"
+            );
+        }
+        // the tails stay finite and nonzero
+        for t in [
+            &["inv", "-", "tanh", "x1", "/", "1", "2"][..],
+            &["tanh", "x1"],
+            &["-", "*", "x2", "tanh", "x1", "x1"],
+            &["inv", "-", "atan", "x1", "x1"],
+        ] {
+            assert!(finnz(t, false) && finnz(t, true), "{t:?}");
         }
     }
 
@@ -5392,20 +5469,20 @@ mod tests {
         let ops = e.operators_ref();
         // Exact-zero identity grounds: the nonzero certificate must REFUSE.
         assert!(
-            !zero_set_null(&s(&["sin", "np.pi"]), ops),
+            !zero_set_null(&s(&["sin", "np.pi"]), ops, false),
             "sin(pi) is exactly 0: a nonzero-a.e. certificate must not exist"
         );
         assert!(
-            !zero_set_null(&s(&["abs", "sin", "np.pi"]), ops),
+            !zero_set_null(&s(&["abs", "sin", "np.pi"]), ops, false),
             "abs(sin(pi)) is exactly 0: certificate must refuse"
         );
         // Grounds bounded away from 0 still certify (no blanket refusal).
         assert!(
-            zero_set_null(&s(&["np.pi"]), ops),
+            zero_set_null(&s(&["np.pi"]), ops, false),
             "pi itself is rigorously nonzero"
         );
         assert!(
-            zero_set_null(&s(&["+", "sin", "np.pi", "2"]), ops),
+            zero_set_null(&s(&["+", "sin", "np.pi", "2"]), ops, false),
             "sin(pi) + 2 is rigorously bounded away from 0"
         );
         // The atom's value set really is a bracket containing the true constant.
@@ -5468,8 +5545,8 @@ mod tests {
             let at = |a: &str, b: &str| {
                 let t = spell(src, a, b);
                 (
-                    finite_ae(&t, ops),
-                    zero_set_null(&t, ops),
+                    finite_ae(&t, ops, false),
+                    zero_set_null(&t, ops, false),
                     zero_set_null_generic_const(&t, ops, false),
                     nonfinite_null(&t, ops),
                     infinite_set_null(&t, ops),
@@ -5930,7 +6007,7 @@ mod tests {
             vec!["tan", "x0"],
             vec!["/", "x0", "-", "x1", "cos", "x1"],
         ] {
-            assert!(finite_ae(&s(&expr), ops), "{expr:?} must certify");
+            assert!(finite_ae(&s(&expr), ops, false), "{expr:?} must certify");
         }
         // refuted / fail-closed: never bindable by `!`
         for expr in [
@@ -5941,7 +6018,10 @@ mod tests {
             vec!["/", "x0", "-", "x1", "x1"], // x/0: nonfinite a.e.
             vec!["/", "x0", "*", "<constant>", "x1"], // C = 0 makes it nonfinite a.e.
         ] {
-            assert!(!finite_ae(&s(&expr), ops), "{expr:?} must NOT certify");
+            assert!(
+                !finite_ae(&s(&expr), ops, false),
+                "{expr:?} must NOT certify"
+            );
         }
     }
 
@@ -5964,7 +6044,7 @@ mod tests {
             vec!["asin", "*", "0.001", "x1"],
         ] {
             assert!(
-                !finite_ae(&s(&expr), ops),
+                !finite_ae(&s(&expr), ops, false),
                 "{expr:?} is nan on a positive-measure tail and must NOT certify"
             );
         }
@@ -5975,11 +6055,18 @@ mod tests {
             vec!["sinh", "x0"],
             vec!["tanh", "*", "x0", "x1"],
         ] {
-            assert!(finite_ae(&s(&expr), ops), "{expr:?} must keep certifying");
+            assert!(
+                finite_ae(&s(&expr), ops, false),
+                "{expr:?} must keep certifying"
+            );
         }
         // In-box onsets were always refused and must stay refused (the control that
         // pins the boundary from the other side: 1/0.0157 = 63.69 < 64).
-        assert!(!finite_ae(&s(&["log", "-", "1", "*", "0.0157", "x1"]), ops));
+        assert!(!finite_ae(
+            &s(&["log", "-", "1", "*", "0.0157", "x1"]),
+            ops,
+            false
+        ));
     }
 
     /// The certificate algebra: `zero_set_null` / `nonfinite_null` / `finite_nonzero_ae`
@@ -6006,7 +6093,7 @@ mod tests {
             vec!["log", "cosh", "x0"], // zero only at x = 0
         ] {
             assert!(
-                zero_set_null(&v(&expr), ops),
+                zero_set_null(&v(&expr), ops, false),
                 "{expr:?} must have null zero set"
             );
         }
@@ -6022,7 +6109,10 @@ mod tests {
             vec!["*", "<constant>", "x0"], // C = 0 zeroes it identically
             vec!["sin", "*", "<constant>", "x0"],
         ] {
-            assert!(!zero_set_null(&v(&expr), ops), "{expr:?} must NOT certify");
+            assert!(
+                !zero_set_null(&v(&expr), ops, false),
+                "{expr:?} must NOT certify"
+            );
         }
 
         // nonfinite_null: certified
@@ -6065,7 +6155,10 @@ mod tests {
             vec!["inv", "x0"],
             vec!["-", "x0", "cos", "x0"],
         ] {
-            assert!(finite_nonzero_ae(&v(&expr), ops), "{expr:?} must certify");
+            assert!(
+                finite_nonzero_ae(&v(&expr), ops, false),
+                "{expr:?} must certify"
+            );
         }
         for expr in [
             vec!["0"],
@@ -6076,7 +6169,7 @@ mod tests {
             vec!["asin", "x0"], // nonzero-a.e. but NOT finite a.e. -> refused
         ] {
             assert!(
-                !finite_nonzero_ae(&v(&expr), ops),
+                !finite_nonzero_ae(&v(&expr), ops, false),
                 "{expr:?} must NOT certify"
             );
         }
@@ -6180,7 +6273,10 @@ mod tests {
             vec!["inv", "tan", "x0"], // zero only where tan is infinite: null
             vec!["+", "pow", "x0", "3", "1"], // polynomial witness via binary pow
         ] {
-            assert!(zero_set_null(&v(&expr), ops), "{expr:?} must certify");
+            assert!(
+                zero_set_null(&v(&expr), ops, false),
+                "{expr:?} must certify"
+            );
         }
         // zero_set_null: sharpened arms must keep refusing the fat sets
         for expr in [
@@ -6188,7 +6284,10 @@ mod tests {
             vec!["pow", "-", "x0", "x0", "2"],          // identically zero, no witness
             vec!["+", "abs", "x0", "x0"],               // plateau (unchanged refusal)
         ] {
-            assert!(!zero_set_null(&v(&expr), ops), "{expr:?} must NOT certify");
+            assert!(
+                !zero_set_null(&v(&expr), ops, false),
+                "{expr:?} must NOT certify"
+            );
         }
     }
 

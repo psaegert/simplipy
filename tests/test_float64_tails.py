@@ -5,7 +5,9 @@
 limit, `x2*tanh(x1) - x2`, is +0 on a whole region and its inverse +inf there. The zero-set
 certificate read the real functions, which never reach their limits, and let a sign move through
 such a sum under an inverse: `-1/(x2*tanh(x1) - x2)` became `1/((1 - tanh(x1))*x2)`, +inf where
-the input is -inf. `f64` reads each function on its float64 range; `real` and `permissive` keep the
+the input is -inf. The certificates behind the cancellations read them too: `t/t` became 1 and
+`2t - t` became `t` for `t = tanh(x1) - 1` and `t = 1/(tanh(x1) - 1)`, a value where float64 gives
+NaN on the tail. `f64` reads each function on its float64 range; `real` and `permissive` keep the
 real reading.
 """
 import numpy as np
@@ -84,3 +86,33 @@ def test_only_f64_reads_the_tails(eng, mode, expected):
 ])
 def test_a_sum_whose_tails_do_not_cancel_still_moves_its_sign(eng, mode, expression, expected):
     assert ' '.join(eng.simplify(expression.split(), mode=mode)) == expected
+
+
+@pytest.mark.parametrize('expression', [
+    '/ pow - tanh x1 1 2 - tanh x1 1',
+    '/ - tanh x1 1 - tanh x1 1',
+    '/ * x2 - tanh x1 1 - tanh x1 1',
+    '/ - atan x1 1.5707963267948966 - atan x1 1.5707963267948966',
+    '- * 2 inv - tanh x1 1 inv - tanh x1 1',
+    '* 0 inv - tanh x1 1',
+    '- + x2 inv - tanh x1 1 inv - tanh x1 1',
+    '- + x2 inv - atan x1 1.5707963267948966 inv - atan x1 1.5707963267948966',
+])
+def test_f64_keeps_the_nan_of_a_cancellation_on_a_tail(eng, expression):
+    tokens = expression.split()
+    answer = eng.simplify(tokens, mode='f64')
+    names = sorted(eng.expression_variables(tokens))
+    X = tail_points(len(names))
+    a, b = evaluate(eng, tokens, names, X), evaluate(eng, answer, names, X)
+    assert np.isnan(a).any(), 'the input has no NaN on its tails'
+    same = (np.isnan(a) == np.isnan(b)) & np.where(np.isinf(a) | np.isinf(b), a == b, True)
+    assert same.all(), f'{" ".join(answer)} at {X[~same][0]}: {a[~same][0]} vs {b[~same][0]}'
+
+
+@pytest.mark.parametrize('mode, expected', [
+    ('f64', '/ - tanh x1 1 - tanh x1 1'),
+    ('real', '1'),
+    ('permissive', '1'),
+])
+def test_only_f64_reads_the_tails_of_a_cancellation(eng, mode, expected):
+    assert ' '.join(eng.simplify('/ - tanh x1 1 - tanh x1 1'.split(), mode=mode)) == expected
