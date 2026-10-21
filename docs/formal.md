@@ -402,6 +402,29 @@ that is inverted, since the canonical form holds one exact zero: through an odd 
 sum it is lost, so `1/tan(-(x1 - x1))` and `1/(0*(-2) - 0)` are `+inf` in every mode, where
 float64 gives `-inf`.
 
+**A sum that vanishes on a region keeps its zero's sign where it is inverted, in `f64`.** float64
+adds to `+0` wherever a sum cancels, however the sum is written: `|x1| - x1` and `x1 - |x1|` are
+both `+0` for every x1 ≥ 0, and the negation `-(|x1| - x1)` is `-0` there. The canonical form holds
+a sum and its negation as one sum in one orientation, so it read `1/-(|x1| - x1)` as
+`1/(x1 - |x1|)`: `+inf` there, where float64 gives `-inf`. Where a sum's zero set is null, the sign
+of its zero is no value the answer keeps (poles are read by their limits). Where it may hold a
+region, because the zero-set certificate cannot show it null, and the sum is inverted, `f64` keeps
+the sign with the inverse instead of in the sum: `1/-(|x1| - x1)` is `-1/(|x1| - x1)`. The same
+holds through an odd power, an odd function or an odd root of such a sum (`1/-(S^3)`,
+`1/sin(-S)`, `1/rootn(-S, 3)`), and in a product holding one, whose inverse then distributes over
+its members (`1/(x2*-(|x1| - x1))` is `-(1/(|x1| - x1))/x2`). Under an inverse the search does
+not factor out of such a sum a content that is not certainly positive. A ground sum, and a sum
+holding a `<constant>` or an infinity, are read as before. `real` reads the one zero of the reals,
+and `permissive` a value up to the sign of a zero.
+
+The rule acts where an inverse meets the sum, and a sum turned around before that can still lose
+its zero's sign. `1/(-x1 - |x1|)` is `+inf` for every x1 ≤ 0, where the sum is `+0`, but the sum
+`-x1 - |x1|` is held as `-(x1 + |x1|)` when it is built, before the inverse reaches it, and the
+answer `-1/(x1 + |x1|)` is `-inf` there. To keep every such sum in the orientation it is written
+in, the zero-set test must first show null the sums it cannot read today. These are mostly sums
+over restricted arguments that are not affine, such as `log(x1*x2)` or `sqrt(x1 - x2^2)`. Without
+that, keeping the orientation of every sum the test cannot clear makes many answers dearer.
+
 **Convention (factored vs. flat scaling, finite and infinite alike).** The constructors
 extract a sum's content only in the unanimity case (it must never lengthen a term), so with
 the search off (`effort=0`) a factored spelling like `-2*(x1 - 5/2)` and its distributed equal

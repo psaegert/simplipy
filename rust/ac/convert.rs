@@ -23,7 +23,8 @@
 use crate::tokens::{Tok, TokenView};
 
 use super::expr::{
-    add, canon, fun, mul, mul_undecided, pow, pow_member, raised_members, Cx, Ex, FlipScope,
+    add, canon, fun, inverts_a_signed_zero, mul, mul_undecided, pow, pow_member, raised_members,
+    Cx, Ex, FlipScope,
 };
 use super::rat::Rat;
 use num_bigint::BigInt;
@@ -302,9 +303,13 @@ fn product_power(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Vec<Ex>, usize)
 /// negation, built as `neg S` always is.
 fn powered_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Vec<Ex> {
     // A unit negation of one member (`neg S`) is that member's negation, one member: the
-    // printer spells a sum of negative terms so.
+    // printer spells a sum of negative terms so. Not where the member keeps the sign of a zero
+    // the power inverts (`inverts_a_signed_zero`): there each member is raised.
     if let [Ex::Num(r), f] | [f, Ex::Num(r)] = members.as_slice() {
-        if *r == Rat::NEG_ONE && !matches!(f, Ex::Num(_)) {
+        if *r == Rat::NEG_ONE
+            && !matches!(f, Ex::Num(_))
+            && !(k.is_odd_integer() && inverts_a_signed_zero(&members, cx))
+        {
             return vec![pow_member(mul(members, cx), Ex::Num(k.clone()), cx)];
         }
     }

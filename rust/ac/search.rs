@@ -58,8 +58,8 @@
 //! is sound (candidates then settle high and are refused by the ordering test).
 
 use super::expr::{
-    add, complexity, distributes_power, fun, mul, orient_term_classes, orientation_near_miss, pow,
-    Cx, Ex,
+    add, complexity, distributes_power, fun, keeps_zero_sign, mul, orient_term_classes,
+    orientation_near_miss, pow, Cx, Ex,
 };
 use super::rat::Rat;
 use super::rules::{no_nested_bags, ordered_below, rewrite_pass, PassCtx};
@@ -388,7 +388,9 @@ fn factor_moves(terms: &[Ex], cx: &Cx, power: Option<&Rat>) -> Vec<Ex> {
     factorings(terms, cx, &|f| licensed(f, cx))
         .into_iter()
         .filter(|(cand, _)| match (cand, negative) {
-            (Ex::Mul(fs), Some(k)) => distributes_power(fs, k, cx),
+            (Ex::Mul(fs), Some(k)) => {
+                distributes_power(fs, k, cx) && !(k.is_odd_integer() && moves_a_zero_sign(fs, cx))
+            }
             _ => true,
         })
         .map(|(cand, _)| cand)
@@ -821,6 +823,24 @@ fn shares_a_variable(a: &Ex, b: &Ex) -> bool {
     leaves(a, &mut la);
     leaves(b, &mut lb);
     la.iter().any(|x| lb.contains(x))
+}
+
+/// FACTOR UNDER AN INVERSE AT A SUM THAT KEEPS THE SIGN OF ITS ZERO (`expr::keeps_zero_sign`,
+/// `f64`): on the region where the quotients' sum vanishes, `1/(c*q1 + c*q2)` is `+inf` (the terms
+/// cancel to `+0`) while `1/(c*(q1 + q2))` is the infinity of `c`'s sign: does the factored
+/// product `fs` hold such a sum beside members that are not certainly positive (`strict_sign`)?
+fn moves_a_zero_sign(fs: &[Ex], cx: &Cx) -> bool {
+    fs.iter().enumerate().any(|(i, f)| {
+        keeps_zero_sign(f, cx) && {
+            let co: Vec<Ex> = fs
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, g)| g.clone())
+                .collect();
+            strict_sign(&Ex::Mul(co), cx) != Some(false)
+        }
+    })
 }
 
 /// The one sign `e` takes wherever it is defined, finite and nonzero (`Some(true)`: negative),

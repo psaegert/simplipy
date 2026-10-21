@@ -1334,6 +1334,13 @@ pub struct Cx<'a> {
     /// SYMBOLIC-exponent occurrence merge (see `mul`'s like-base collection) on
     /// sign-indefinite bases by proving the exponent's level sets are null.
     pub cert_nce: Option<&'a dyn Fn(&Ex) -> bool>,
+    /// The REGION certificate: the zero-set certificate, consulted only where a sum's zero sign is
+    /// decided (`keeps_zero_sign`). A parse holds no other certificate, yet where it inverts a sum
+    /// whose zero set may hold a region it distributes the inverse (`inverts_a_signed_zero`), a
+    /// decision its canon cannot undo, so in `f64` it reads that region as the canon does while
+    /// every licence of the parse stays certificate-free. `None`: reading A's test
+    /// (`zero_set_null`).
+    pub cert_region: Option<&'a dyn Fn(&Ex) -> bool>,
     /// WHICH SOUNDNESS this construction preserves. Was a `lossy: bool`, which could only
     /// ask "may I skip certification?" -- and that is the wrong question for a guard whose
     /// reason is f64 saturation rather than recall. `real` needs those guards OFF (the
@@ -1425,6 +1432,7 @@ impl<'a> Cx<'a> {
             cert_finnz: None,
             cert_nzae: None,
             cert_nce: None,
+            cert_region: None,
             mode: RuleMode::Default,
             fold_f64: false,
             sentinels_expired: false,
@@ -3905,6 +3913,53 @@ impl Drop for RegionScope {
     }
 }
 
+/// A SUM KEEPS THE SIGN OF ITS ZERO WHERE ITS ZERO SET MAY HOLD A REGION, in `f64`. Float64 adds
+/// to `+0` wherever a sum cancels, however it is written: `x1 - |x1|` and `|x1| - x1` are both
+/// `+0` for every `x1 >= 0`, so the negation `-(|x1| - x1)` is `-0` there. A sum and its terms
+/// negated one by one (its other orientation) are one value everywhere else, the rounding being
+/// symmetric in sign. Where the zero set is null its sign is no value the answer keeps (reading
+/// A: poles are read by their limits); where it may hold a region, the sign is a value where the
+/// zero is inverted (`region_signed_zero`, `inverts_a_signed_zero`). The region test is reading
+/// A's (`zero_set_null`: the certificate where the context has one; a context without it reads
+/// the form, `zero_set_null_by_form`). A sum without a region of the variables' space
+/// (`Ex::has_measure_space`: a ground sum, or a pattern's) has no zero set to read, and a sum
+/// whose sign an absorption owner takes into its terms whatever its zero set -- one holding a
+/// `<constant>` (the refit, H-020), an infinity term or a term absorbing a negation (H-014,
+/// H-030) -- keeps its owner. `real` reads one unsigned zero, and `permissive` a value up to the
+/// sign of a zero.
+pub(crate) fn keeps_zero_sign(s: &Ex, cx: &Cx) -> bool {
+    let owned = s.contains_const()
+        || matches!(s, Ex::Add(ts) if ts.iter().any(|t| {
+            matches!(t, Ex::PosInf | Ex::NegInf) || term_absorbs_negation(t)
+        }));
+    cx.f64_semantics()
+        && s.has_measure_space(cx.view)
+        && !owned
+        && !zero_set_null_by_form(s, cx)
+        && !match cx.cert_region {
+            Some(f) => f(s),
+            None => zero_set_null(s, cx),
+        }
+}
+
+/// Does `f` vanish on a region with the sign its orientation gives it: a sum that keeps the sign
+/// of its zero (`keeps_zero_sign`), or an odd power, an odd function or an odd root of one, each
+/// odd at a signed zero as everywhere else?
+fn region_signed_zero(f: &Ex, cx: &Cx) -> bool {
+    match f {
+        Ex::Add(_) => keeps_zero_sign(f, cx),
+        Ex::Pow(b, e) => {
+            matches!(&**e, Ex::Num(r) if r.is_odd_integer() && !r.is_negative())
+                && region_signed_zero(b, cx)
+        }
+        Ex::Fun(op, a) if a.len() == 1 && odd_fun(cx.view, *op) => region_signed_zero(&a[0], cx),
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") => {
+            matches!(&a[1], Ex::Num(k) if k.is_odd_integer()) && region_signed_zero(&a[0], cx)
+        }
+        _ => false,
+    }
+}
+
 /// Is the zero set of `e` null by its form alone, without the certificate (which the parse has
 /// not)? A variable, a nonzero literal, a `Const`, an infinity, a product of such factors, a
 /// positive power or a root of one, a negative power of a function whose level sets are null
@@ -4030,8 +4085,15 @@ pub(crate) fn raised_members(members: Vec<Ex>, k: &Rat, cx: &Cx) -> Result<Vec<E
 /// there the product is the zero and its inverse `+inf`. Asked where the members of an inverted
 /// product are still apart (`raised_members`), and by `pow`'s distribution licence
 /// (`power_bag`), where a product that holds a zero is inverted whole.
-fn inverts_a_signed_zero(v: &[Ex], cx: &Cx) -> bool {
-    cx.ieee_zeros() && v.iter().any(|f| matches!(f, Ex::Num(r) if r.is_zero()))
+///
+/// So with a member that vanishes on a region with the sign its orientation gives it, in `f64`
+/// (`region_signed_zero`): `1/(x2*-(|x1| - x1))` is `-1/x2 * 1/(|x1| - x1)`, `-inf/x2` for every
+/// `x1 >= 0`, and each member's inverse keeps the orientation it was written in, a negative power
+/// whose zero set may hold a region being no sign-trade site (`sign_trade_flip`).
+pub(crate) fn inverts_a_signed_zero(v: &[Ex], cx: &Cx) -> bool {
+    cx.ieee_zeros()
+        && v.iter()
+            .any(|f| matches!(f, Ex::Num(r) if r.is_zero()) || region_signed_zero(f, cx))
 }
 
 /// `mul()` without the opposite-sums decision, for a product about to be raised to a negative
@@ -7492,7 +7554,7 @@ fn trade_flip(f: &Ex, cx: &Cx, refit: bool) -> Option<Ex> {
 /// token view, the four certificate closures (by identity), the mode, the two fold switches and
 /// the thread's number domain. All of them outlive the outermost call, so no identity is reused
 /// within the memo's extent.
-type FlipCxKey = (usize, [usize; 4], u8);
+type FlipCxKey = (usize, [usize; 5], u8);
 type FlipMemo = rustc_hash::FxHashMap<(FlipCxKey, Ex, bool), Option<Ex>>;
 
 /// The opposite-sums decision of a product (`collect_opposite_sums`), keyed like a flip: by the
@@ -7557,6 +7619,7 @@ fn flip_cx_key(cx: &Cx) -> FlipCxKey {
             id(cx.cert_finnz),
             id(cx.cert_nzae),
             id(cx.cert_nce),
+            id(cx.cert_region),
         ],
         bits,
     )
@@ -8101,7 +8164,7 @@ fn power_bag(v: &[Ex], e: &Rat, cx: &Cx) -> Option<Vec<Ex>> {
     // post-distribute there is no legal trade, so entry-independence
     // requires one fixed pre-state.
     let vv: Vec<Ex>;
-    let bag: &[Ex] = if e.is_negative() && e.is_odd_integer() {
+    let bag: &[Ex] = if e.is_negative() && e.is_odd_integer() && !inverts_a_signed_zero(v, cx) {
         let ci = v
             .iter()
             .position(|f| matches!(f, Ex::Num(r) if r.is_negative()));
@@ -8248,9 +8311,13 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     // without the sign: `(S^3)^-1` is `S^-3` and `(S^3)^(1/2)` is `S^(3/2)` whichever orientation
     // `S^3` stands in. (A negative coefficient beside other members folds into a site where the
     // power distributes, `power_bag`.)
+    // An odd negative power inverts the zero of a site that vanishes on a region with the sign
+    // its orientation gives it (`region_signed_zero`): `1/-(S^3)` is `-inf` there and
+    // `1/flip(S)^3` is `+inf`, so the power distributes instead (`inverts_a_signed_zero`).
+    let inverts = matches!(&exp, Ex::Num(s) if s.is_negative() && s.is_odd_integer());
     if let Ex::Mul(v) = &base {
         if let [Ex::Num(c), f] | [f, Ex::Num(c)] = v.as_slice() {
-            if *c == Rat::NEG_ONE {
+            if *c == Rat::NEG_ONE && !(inverts && region_signed_zero(f, cx)) {
                 if let Some(flipped) = sign_trade_flip(f, cx) {
                     return pow_member(flipped, exp, cx);
                 }
@@ -8653,6 +8720,12 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
 /// one factor of a product, so `S^3` and `1*S^3` are one answer, and so are `1/S` and `1/(1*S)`:
 /// `(x3*(x3 - x1) - x2)^3` is `-(x2 + x3*(x1 - x3))^3`, whose two signs stand further out.
 fn lone_site(node: Ex, cx: &Cx) -> Ex {
+    // A site standing alone may be the one an inverse reads (`1/S^3`): over a sum that vanishes on
+    // a region it keeps the orientation it was written in, which the inverse keeps
+    // (`region_signed_zero`, `inverts_a_signed_zero`).
+    if region_signed_zero(&node, cx) {
+        return node;
+    }
     // One scope for the site test and the placement, so the flip is computed once.
     let _memo = FlipScope::open();
     if sign_trade_flip(&node, cx).is_some() {
@@ -9344,6 +9417,7 @@ mod tests {
                 cert_finnz: None,
                 cert_nzae: None,
                 cert_nce: None,
+                cert_region: None,
                 mode: RuleMode::Default,
                 fold_f64: Cx::folds_for(RuleMode::Default),
                 sentinels_expired: false,

@@ -369,7 +369,13 @@ class TestCorpusGate:
         # -16,737, 156 -4,000, 196 -6,585, 318 -2,000, 362 -7,000, 366 -3,000), four respell
         # at an equal price (65, 87, 160, 239) and row 55 rests dearer (+3,000): its inverse
         # now splits over `acosh(acos(<constant>))`, which takes the constant's inverse.
-        assert walk['complexity_out'] == 54672228, walk['complexity_out']
+        # A SUM THAT VANISHES ON A REGION KEEPS ITS ZERO'S SIGN WHERE IT IS INVERTED:
+        # 54,672,228 -> 54,657,536. Where a product holding a sum the certificate cannot show
+        # null is inverted, f64 keeps the sign with the inverse and distributes it over the
+        # members. 10 walk rows move: five rest cheaper (77 -3,000, 135 -1,000, 154 -1,000, 160
+        # -8,000, 331 -2,692), four respell at an equal price (176, 325, 329, 336) and row 163
+        # rests dearer (+1,000): its odd root under `cos` keeps the orientation it is written in.
+        assert walk['complexity_out'] == 54657536, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old
