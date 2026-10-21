@@ -389,10 +389,10 @@ model predictions.
   in `real` and 4 in `permissive`, on a tenth of the training-data inputs 10 in each mode, and on
   a tenth of the predictions 2, 2 and 12, every one at an equal price and none changing on a
   second call; respelling each odd function of srbf's 1,780 ground truths that hold one as
-  `-f(-u)` gives the original answer in every mode. As elsewhere a sum's zero has no sign in the
-  canonical form, so over a sum that vanishes on a region `f64` reads `1/-(S^3)` as `1/S^3` there
-  (`+inf` where float64 gives `-inf`), as it already read `1/-(|x1| - x1)` as `1/(x1 - |x1|)`.
-  The decision costs about 5% of `permissive`'s time on a tenth of the predictions.
+  `-f(-u)` gives the original answer in every mode. Where the sum under such a site vanishes on a
+  region and is inverted, `f64` keeps the sign of its zero (see "a sum that vanishes on a region
+  keeps its zero's sign", below). The decision costs about 5% of `permissive`'s time on a tenth of
+  the predictions.
 - **The certificates read a variable whatever it is called.** The interval layer that certifies
   finiteness, a null zero set and the other a.e. properties took a variable to be a dummy, `x<k>`
   or `_<k>`; any other name (`x_1`, `v1`, `alpha`) was a token it could not read, and every
@@ -481,6 +481,31 @@ model predictions.
   `x2^(3*atan(x1)) * x2^(3*atan(x1))` stays as written. `real` and `permissive` do not change, and
   no answer of srbf's ground truths, a tenth of the training-data inputs or a tenth of the
   predictions changes in any mode.
+- **In `f64` a sum that vanishes on a region keeps its zero's sign where it is inverted.** float64
+  adds to `+0` wherever a sum cancels, however the sum is written: `|x1| - x1` is `+0` for every
+  x1 ≥ 0, so `-(|x1| - x1)` is `-0` there and `1/-(|x1| - x1)` is `-inf`. The canonical form holds a
+  sum and its negation as one sum in one orientation, and `f64` wrote that inverse as
+  `1/(x1 - |x1|)`, `+inf` there. Where the zero-set certificate cannot show a sum's zero set null
+  and the sum is inverted, `f64` now keeps the sign with the inverse: `1/-(|x1| - x1)` is
+  `-1/(|x1| - x1)`. The same holds through an odd power, an odd function or an odd root of such a
+  sum, and in a product holding one, whose inverse distributes over its members:
+  `1/(x2*-(|x1| - x1))` is `-(1/(|x1| - x1))/x2`. Under an inverse the search no longer factors a
+  content out of such a sum unless that content is certainly positive. A ground sum, and a sum
+  holding a `<constant>` or an infinity, are read as before. `real` and `permissive` do not change.
+  On srbf's ground truths 50 `f64` answers change (2 cheaper, 3 dearer, 45 at an equal price), on
+  a tenth of the training-data inputs 596 (28, 32, 536) and on a tenth of the predictions 488 (70,
+  63, 355), most of them at an equal price. No answer changes on a second call, and none loses the
+  input's infinities and NaNs on 256 points.
+  Respelling each odd function of srbf's 1,780 ground truths that hold one as `-f(-u)` still gives
+  the original answer in every mode. Respelling each sum as its negation turned around still does
+  in `real` and `permissive` (5,986 of 5,986), and does for 5,897 in `f64`. The other 89 (44 over
+  `log`, 37 over a root, 8 others) hold a sum whose zero set the certificate cannot show null, so
+  there the orientation written decides which infinity the answer gives. A sum turned around
+  before it is inverted can still lose its zero's sign: `1/(-x1 - |x1|)` is `+inf` for every
+  x1 ≤ 0, but the sum is held as `-(x1 + |x1|)` when it is built, and the answer
+  `-1/(x1 + |x1|)` is `-inf` there. Keeping every such sum as written needs the zero-set test to
+  also show null the sums over restricted arguments that are not affine (`log(x1*x2)`,
+  `sqrt(x1 - x2^2)`); until then it would make many answers dearer.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

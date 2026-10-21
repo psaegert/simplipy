@@ -315,11 +315,14 @@ class TestCertificateCompletenessTowers:
 
     def test_bare_fat_zero_factor_still_refused(self, eng):
         # POISON: 1/(x9*(x8-|x8|)) -- the BARE sum factor has a fat zero set (the
-        # audit's infinity-sign-flip class); the sharpened licence must still refuse
-        # the distribution: exactly one reciprocal, never a split product of them.
+        # audit's infinity-sign-flip class): no sign may move through it. In f64 the
+        # inverse distributes over the members, each keeping the orientation it is written
+        # in, so the sum stays `x8 - |x8|` and its `+0` gives `+inf/x9`, float64's value;
+        # real reads its one zero and keeps exactly one reciprocal.
         out = check(eng, 'inv * x9 - x8 abs x8'.split())
-        assert 'abs' in out
-        assert out.count('inv') + out.count('/') == 1, f'unsound distribution: {out}'
+        assert out == ['/', 'inv', '-', 'x8', 'abs', 'x8', 'x9'], f'unsound distribution: {out}'
+        real = eng.simplify('inv * x9 - x8 abs x8'.split(), mode='real')
+        assert real.count('inv') + real.count('/') == 1, f'real distributed: {real}'
 
     def test_zero_kills_pole_bearing_factor(self, eng):
         # 0 * sinh(0.25*x5^2*(x17+cos x17)/x6) -> 0 (row-481 shape): the argument's

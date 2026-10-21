@@ -282,6 +282,7 @@ impl Engine {
             cert_finnz: Some(&cfz),
             cert_nzae: None,
             cert_nce: None,
+            cert_region: None,
             mode,
             fold_f64,
             sentinels_expired: false,
@@ -1377,6 +1378,7 @@ impl Engine {
             cert_finnz: Some(&cfz),
             cert_nzae: Some(&czn),
             cert_nce: Some(&cnc),
+            cert_region: None,
             mode: canon_mode,
             fold_f64: Cx::folds_for(canon_mode),
             sentinels_expired: false,
@@ -1391,6 +1393,10 @@ impl Engine {
         let mut pbare = Cx::bare(&view);
         pbare.mode = mode;
         pbare.fold_f64 = Cx::folds_for(mode);
+        // f64 reads a sum's region at the parse as its chain does (see `ac_simplify_ex_fold_sup`).
+        if cx.f64_semantics() {
+            pbare.cert_region = Some(&czn);
+        }
         let e = land_root(canon(from_prefix(&toks, &pbare)?, &cx), &cx);
         let mu = complexity(&e, &view);
         Some((e, mu))
@@ -1523,6 +1529,7 @@ impl Engine {
             cert_finnz: Some(&cfz),
             cert_nzae: Some(&czn),
             cert_nce: Some(&cnc),
+            cert_region: None,
             mode,
             fold_f64: fold_tr,
             sentinels_expired: false,
@@ -1542,6 +1549,13 @@ impl Engine {
         let mut pbare = Cx::bare(&view);
         pbare.mode = mode;
         pbare.fold_f64 = fold_tr;
+        // Except the region certificate in f64 (`Cx::cert_region`): where a sum whose zero set may
+        // hold a region is inverted, f64 distributes the inverse at the parse
+        // (`inverts_a_signed_zero`), a decision the canon cannot undo, so the parse reads that
+        // region as the canon does; its licences stay certificate-free.
+        if cx.f64_semantics() {
+            pbare.cert_region = Some(&czn);
+        }
         let Some(e0) = from_prefix(&toks, &pbare) else {
             return (ctx, None);
         };
@@ -1704,6 +1718,7 @@ impl Engine {
                 cert_finnz: Some(&cfz),
                 cert_nzae: Some(&czn),
                 cert_nce: Some(&cnc),
+                cert_region: None,
                 mode: RuleMode::Permissive,
                 fold_f64: fold_tr,
                 sentinels_expired: true,
