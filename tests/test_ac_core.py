@@ -1383,12 +1383,14 @@ class TestLossySentinelExpiryAndCoefficientCompletion:
 
     def test_neg_one_coefficient_stands_outside_the_join(self, engine: SimpliPyEngine) -> None:
         # The -1 inside the joined base and the negation outside it cost the same (a sign is
-        # one bit wherever it sits), so the sign key places it outermost.
-        x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'pow', 'x3', 'x4'])
+        # one bit wherever it sits), so the sign key places it outermost. (The join is offered
+        # where the sound certificate does not split the inverse: `exp(x3) + log(sin(x4))`,
+        # whose `log` argument is not affine; `exp(x3) + x3^x4` it reads null on its domain.)
+        x = engine.to_tagged(['neg', 'inv', '*', 'x0', '+', 'exp', 'x3', 'log', 'sin', 'x4'])
         out = engine.simplify(list(x), mode=Mode.permissive)
-        assert out == ['<mul>', '-1', '<div>', '<mul>', 'x0', '<add>', 'exp', 'x3', 'pow',
-                       'x3', 'x4', '</add>', '</mul>', '</mul>'], out
-        inside = ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'pow', 'x3', 'x4', '</add>',
+        assert out == ['<mul>', '-1', '<div>', '<mul>', 'x0', '<add>', 'exp', 'x3', 'log',
+                       'sin', 'x4', '</add>', '</mul>', '</mul>'], out
+        inside = ['inv', '<mul>', '-1', 'x0', '<add>', 'exp', 'x3', 'log', 'sin', 'x4', '</add>',
                   '</mul>']
         assert engine.complexity(out, mode=Mode.permissive) == \
             engine.complexity(inside, mode=Mode.permissive)

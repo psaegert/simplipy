@@ -159,6 +159,26 @@ and always sound. Each certificate is exactly as sharp as the fold's true disagr
 set: e.g. splitting a reciprocal factor needs only `{A = ±inf}` null — a NaN of `A`
 agrees on both spellings, so a fat NaN domain does not refuse it.
 
+**The zero-set certificate reads a zero set on the expression's domain.** A zero is a value,
+so only where an expression is defined can it have one; a NaN region holds no zero. The
+certificate of a null zero set that the core reads (reading A, the distribution licences,
+orientation) applies the identity theorem there. Every operator is real-analytic on an open
+domain: the entire ones on R; `log`, an even root and a fractional or symbolic power where
+their argument is positive; `asin`, `acos`, `atanh` on (-1, 1); `acosh` above 1; an inverse, a
+quotient, a negative power, `abs` and an odd root where their argument is nonzero. Off that
+domain an expression is NaN, or its argument sits on the domain's edge. Where each restricted
+argument is affine in the variables, or its domain holds over the whole space, the edges are
+hyperplanes, a null set, and the domain is a union of convex pieces, one per sign of the
+arguments that must be nonzero. The zero set is null when interval evaluation finds in every
+piece a cell on which every restricted argument lies in its domain and the expression is
+nonzero: an analytic function that vanished on a set of positive measure in a connected piece
+would vanish on all of it. So `log(x2) - x2`, `sqrt(x2) - x2`, `log(x3) - log(x2)`,
+`asin(x1) - x1` and `sin(x3)/x1 - sqrt(x2)` are null, while `x1 - |x1|` (zero on all of
+`x1 > 0`) and `asin(sin(x1)) - x1` are not. The certificate fails closed on a piece where it
+finds no such cell, on a restricted argument that is not affine, on `tan` (whose poles cut the
+line into infinitely many pieces) and on more than three arguments that must be nonzero. The
+plain certificate behind the `$`-cancel keeps its strength.
+
 **Lemma L1 (nf is well-defined and terminating)** [BY CONSTRUCTION — audited per call
 site]. Every recursive constructor call is on arguments of strictly smaller size, with
 exactly two audited exceptions carrying their own strictly decreasing measures:

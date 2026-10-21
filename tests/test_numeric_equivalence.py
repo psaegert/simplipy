@@ -362,7 +362,14 @@ class TestCorpusGate:
         # the orientation it takes as a product's one factor: row 163's odd root of a sum under
         # `cos` takes its sign outside, where `cos` drops it (-1,000), and row 82 respells its
         # `tan(tan(.)^3)` at an equal price.
-        assert walk['complexity_out'] == 54727550, walk['complexity_out']
+        # A ZERO SET IS READ ON THE DOMAIN: 54,727,550 -> 54,672,228. The zero-set certificate
+        # applies the identity theorem on an expression's domain, so sums over log, roots, acosh,
+        # asin and quotients are null there, and inverses split and signs move over them. 15
+        # walk rows move: ten rest cheaper (50, 286 and 351 -6,000 each, 68 -1,000, 119
+        # -16,737, 156 -4,000, 196 -6,585, 318 -2,000, 362 -7,000, 366 -3,000), four respell
+        # at an equal price (65, 87, 160, 239) and row 55 rests dearer (+3,000): its inverse
+        # now splits over `acosh(acos(<constant>))`, which takes the constant's inverse.
+        assert walk['complexity_out'] == 54672228, walk['complexity_out']
 
     def test_expected_flag_set(self, walk):
         # the walk's liveness canary: row 263 (exp-argument respell, 7/64 points -- the old

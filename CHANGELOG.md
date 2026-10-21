@@ -412,6 +412,31 @@ model predictions.
   call. Evaluated beside their inputs on 256 points, 2 `f64` and 9 `real` answers no longer show
   the input's infinities and NaNs where the old answers did, each where a power or an exact
   literal leaves float64's range (`v1^158`, a coefficient of `5.3e320`).
+- **A zero set is read on the expression's domain.** The certificate of a null zero set that
+  reading A, the distribution licences and the orientation of a pole read applied the identity
+  theorem only to expressions analytic on all of R^n, so a sum over `log`, a root, a fractional
+  power, `asin`, `acos`, `atanh`, `acosh`, a quotient or `abs` was never shown null: under an
+  inverse `log(x2) - x2` kept the sign it was written with, `-1/(x1 - log(x1))` stayed as written
+  in `f64` and `real` where `permissive` wrote `1/(log(x1) - x1)`, and the inverse of
+  `x3*(log(x2) - x2)` stayed joined. A zero is a value, so only where an expression is defined
+  can it have one, and a NaN region holds no zero. The certificate now reads the zero set on the
+  domain: every operator is analytic where its argument is positive, in (-1, 1), above 1 or
+  nonzero; where each such argument is affine in the variables (or its condition holds over the
+  whole space) the domain is a union of convex pieces bounded by hyperplanes, and the zero set is
+  null when interval evaluation finds in every piece a cell on which the expression is certainly
+  nonzero. `log(x2) - x2`, `sqrt(x2) - x2`, `log(x3) - log(x2)`, `asin(x1) - x1`, `acosh(x1) - x1`
+  and `sin(x3)/x1 - sqrt(x2)` are now null; `x1 - |x1|`, `asin(sin(x1)) - x1` and
+  `log(exp(x1)) - x1`, which vanish on a region of their domain, are not, nor is a sum over `tan`
+  (its poles cut the line into infinitely many pieces). The plain certificate behind the
+  `$`-cancel keeps its strength. On srbf's ground truths 321 `f64` answers change (14 cheaper, 1
+  dearer, 306 at an equal price), 323 in `real` (15, 4, 304) and 38 in `permissive` (all at an
+  equal price); on a tenth of the training-data inputs 458 (23, 3, 432), 461 (23, 4, 434) and
+  156; on a tenth of the predictions 256 (29, 12, 215), 255 (31, 11, 213) and 35. No answer
+  changes on a second call. The dearer answers are inverses the stronger licence now distributes
+  over a product (`1/(a*b)` as `1/a * 1/b`), which can price above the joined product, and the
+  searches that start from those forms. One `f64` and one `real` training-data answer no longer
+  show the input's infinity: a denominator `x2*tanh(u) - x2` that float64 rounds to exactly zero
+  where `tanh` saturates to 1, which the real `tanh` never is.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

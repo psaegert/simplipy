@@ -3290,6 +3290,9 @@ pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators) -> bool {
 /// licence's scoped certificate, mirroring E1's deliberate scoping. The plain
 /// `zero_set_null` (and through it `finite_nonzero_ae`, the `$`-cancel) keeps
 /// its current strength, pinned by test; widening is a separate future ruling.
+/// The identity theorem on the expression's domain (`domain_witness`) is scoped
+/// the same way: it serves the zero-set certificate the core reads
+/// (`engine::ac::ac_zsn`: reading A, the distribution licences, orientation).
 fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
     if d > CERT_RECURSION_MAX || t.is_empty() {
         return false;
@@ -3385,9 +3388,13 @@ fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
                 _ => false,
             }
         }
-        // sums, sin, cos, and any other analytic composition: identity theorem + witness;
-        // on refusal, the E2 clearing fallback (scoped -- see the fn doc).
-        _ => analytic_nonzero_witness(t, ops) || (e2 && cleared_witness(t, ops)),
+        // sums, sin, cos, and any other analytic composition: identity theorem + witness; on
+        // refusal, the identity theorem on the expression's domain (`domain_witness`) and the E2
+        // clearing fallback, both scoped as E2 is (see the fn doc).
+        _ => {
+            analytic_nonzero_witness(t, ops)
+                || (e2 && (domain_witness(t, ops) || cleared_witness(t, ops)))
+        }
     }
 }
 
@@ -3753,6 +3760,346 @@ fn analytic_nonzero_witness(t: &[String], ops: &Operators) -> bool {
         left || right
     }
     rec(t, ops, r, &mut bx, &used, width, 0, depth_max, &mut budget)
+}
+
+// ---------------------------------------------------------------------------
+// THE IDENTITY THEOREM ON THE EXPRESSION'S DOMAIN. `analytic_nonzero_witness` needs f analytic on
+// all of R^n, so a sum over `log`, an even root, a fractional power, `asin`, a quotient or `abs`
+// never got past it: `log(x2) - x2` is never zero, yet its zero set was "not proven null". A zero
+// is a value, so only where f is DEFINED can it be one; where f is NaN it is no zero (and `1/NaN`
+// carries no sign).
+//
+// The argument. Every operator of f is real-analytic on an open domain: the entire ones on R,
+// `log`, an even root and a fractional or symbolic power where their argument is > 0, `asin`,
+// `acos`, `atanh` on (-1, 1), `acosh` on (1, inf), and `inv`, a quotient's denominator, a negative
+// integer power, `abs` and an odd root where their argument is != 0. So f is analytic on the open
+// set D where every such argument lies in its domain. Off D f is undefined (NaN, no zero), or the
+// argument sits on the domain's edge, a level set {g = c}. Where each restricted argument g is
+// AFFINE in the variables (or its domain holds over the whole space, `vacuous`), every edge is a
+// hyperplane, a null set, and D is a union of convex pieces, one per sign of the arguments that
+// must be != 0; a convex set is connected. By the identity theorem, f vanishing on a set of
+// positive measure in a piece vanishes on the whole piece. So the zero set is null as soon as
+// each piece holds one cell of positive measure, certified inside the piece by interval
+// evaluation of every restricted argument, on which f is certified nonzero. A piece in which f is
+// identically zero never yields such a cell (`x1 - |x1|` on x1 > 0), and neither does an empty or
+// unreachable piece: the test fails closed, it never guesses.
+// ---------------------------------------------------------------------------
+
+/// Where an operator is real-analytic: its argument `g` must be positive, in (-1, 1), above 1, or
+/// nonzero (`domain_witness`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Need {
+    Pos,
+    Unit,
+    AboveOne,
+    NonZero,
+}
+
+/// The domain restrictions of `t`: each restricted argument as its token range, with what it needs.
+/// `None` where an operator is outside the analytic vocabulary (`tan`, whose poles cut the line into
+/// infinitely many pieces, a non-literal root index, ...). A ground subtree is a constant, decided
+/// by its value.
+fn analytic_domain(t: &[String], ops: &Operators) -> Option<Vec<(usize, usize, Need)>> {
+    fn rec(
+        t: &[String],
+        i: usize,
+        ops: &Operators,
+        out: &mut Vec<(usize, usize, Need)>,
+    ) -> Option<usize> {
+        let tok = t.get(i)?.as_str();
+        if !ops.is_operator(tok) {
+            return Some(i + 1);
+        }
+        if let Some(j) = ground_leaf(t, i, ops) {
+            return Some(j);
+        }
+        let one = |need: Need, out: &mut Vec<(usize, usize, Need)>| -> Option<usize> {
+            let j = rec(t, i + 1, ops, out)?;
+            out.push((i + 1, j, need));
+            Some(j)
+        };
+        match (tok, ops.arity_of(tok)?) {
+            ("log" | "pow1_2" | "pow1_4", 1) => one(Need::Pos, out),
+            ("asin" | "acos" | "atanh", 1) => one(Need::Unit, out),
+            ("acosh", 1) => one(Need::AboveOne, out),
+            ("inv" | "abs" | "pow1_3" | "pow1_5", 1) => one(Need::NonZero, out),
+            ("/", 2) => {
+                let ja = rec(t, i + 1, ops, out)?;
+                let jb = rec(t, ja, ops, out)?;
+                out.push((ja, jb, Need::NonZero));
+                Some(jb)
+            }
+            ("pow", 2) => {
+                let ja = rec(t, i + 1, ops, out)?;
+                let jb = subtree_end(t, ja, ops)?;
+                match int_literal(&t[ja..jb]) {
+                    Some(q) if q >= 0 => {}
+                    Some(_) => out.push((i + 1, ja, Need::NonZero)),
+                    // a fractional or symbolic exponent: `exp(e * log(b))`, analytic for b > 0
+                    None => {
+                        rec(t, ja, ops, out)?;
+                        out.push((i + 1, ja, Need::Pos));
+                    }
+                }
+                Some(jb)
+            }
+            ("rootn", 2) => {
+                let ja = rec(t, i + 1, ops, out)?;
+                let jb = subtree_end(t, ja, ops)?;
+                match int_literal(&t[ja..jb]) {
+                    Some(n) if n >= 2 && n % 2 == 0 => out.push((i + 1, ja, Need::Pos)),
+                    Some(n) if n >= 3 => out.push((i + 1, ja, Need::NonZero)),
+                    _ => return None,
+                }
+                Some(jb)
+            }
+            (op, n) if op_entire_analytic(op) => {
+                let mut j = i + 1;
+                for _ in 0..n {
+                    j = rec(t, j, ops, out)?;
+                }
+                Some(j)
+            }
+            _ => None,
+        }
+    }
+    let mut out = Vec::new();
+    (rec(t, 0, ops, &mut out)? == t.len()).then_some(out)
+}
+
+/// Is `g` affine in the variables: a variable, a constant, their sums and differences, and their
+/// multiples and quotients by constants? Its level sets are then hyperplanes and its sub- and
+/// superlevel sets half-spaces.
+fn affine(g: &[String], ops: &Operators) -> bool {
+    fn rec(t: &[String], i: usize, ops: &Operators) -> Option<usize> {
+        let tok = t.get(i)?.as_str();
+        if !ops.is_operator(tok) {
+            return Some(i + 1);
+        }
+        if let Some(j) = ground_leaf(t, i, ops) {
+            return Some(j);
+        }
+        match (tok, ops.arity_of(tok)?) {
+            ("+" | "-", 2) => {
+                let ja = rec(t, i + 1, ops)?;
+                rec(t, ja, ops)
+            }
+            (
+                "neg" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5",
+                1,
+            ) => rec(t, i + 1, ops),
+            ("*", 2) => {
+                let ja = subtree_end(t, i + 1, ops)?;
+                let jb = subtree_end(t, ja, ops)?;
+                if ground_leaf(t, i + 1, ops).is_some() {
+                    rec(t, ja, ops).filter(|&j| j == jb)
+                } else if ground_leaf(t, ja, ops).is_some() {
+                    rec(t, i + 1, ops).filter(|&j| j == ja).map(|_| jb)
+                } else {
+                    None
+                }
+            }
+            ("/", 2) => {
+                let ja = rec(t, i + 1, ops)?;
+                ground_leaf(t, ja, ops)
+            }
+            _ => None,
+        }
+    }
+    rec(g, 0, ops) == Some(g.len())
+}
+
+/// Does `v`, a value set of a restricted argument, satisfy `need` throughout (`strict` on its finite
+/// part; an argument that is NaN somewhere is restricted by its own operators)?
+fn meets(v: &Vs, need: Need, sign: bool) -> bool {
+    if !v.has_fin {
+        return false;
+    }
+    let above = |c: f64| v.lo > c || (v.lo == c && v.lo_open);
+    let below = |c: f64| v.hi < c || (v.hi == c && v.hi_open);
+    match need {
+        Need::Pos => above(0.0),
+        Need::Unit => above(-1.0) && below(1.0),
+        Need::AboveOne => above(1.0),
+        Need::NonZero if sign => above(0.0),
+        Need::NonZero => below(0.0),
+    }
+}
+
+/// Does `v` certainly miss `need` everywhere (a cell wholly outside the piece)?
+fn misses(v: &Vs, need: Need, sign: bool) -> bool {
+    if !v.has_fin {
+        return true;
+    }
+    let at_most = |c: f64| v.hi <= c;
+    let at_least = |c: f64| v.lo >= c;
+    match need {
+        Need::Pos => at_most(0.0),
+        Need::Unit => at_most(-1.0) || at_least(1.0),
+        Need::AboveOne => at_most(1.0),
+        Need::NonZero if sign => at_most(0.0),
+        Need::NonZero => at_least(0.0),
+    }
+}
+
+/// THE ZERO SET IS NULL ON THE DOMAIN (see the section note): every operator of `t` real-analytic
+/// on a domain bounded by hyperplanes, and in each convex piece of it a cell where every restricted
+/// argument certainly lies in its domain and `t` is certainly nonzero. Fail-closed on budget,
+/// horizon, a non-affine restricted argument whose domain is not the whole space, and on more than
+/// `MAX_SIGNS` arguments that must be nonzero (`2^MAX_SIGNS` pieces).
+fn domain_witness(t: &[String], ops: &Operators) -> bool {
+    const MAX_SIGNS: usize = 3;
+    const WITNESS_BUDGET: u32 = 2_000;
+    let Some(needs) = analytic_domain(t, ops) else {
+        return false;
+    };
+    // No restriction: f is entire, `analytic_nonzero_witness`'s case.
+    if needs.is_empty() {
+        return false;
+    }
+    // Each restriction: dropped where it holds over the whole space, else its argument must be
+    // affine. An argument that must be nonzero is read up to its sign (`neg g`), once, and not at
+    // all where another restriction on it already keeps it away from zero.
+    let mut kept: Vec<(&[String], Need)> = Vec::new();
+    for &(a, b, need) in &needs {
+        let mut g = &t[a..b];
+        if need == Need::NonZero && g.first().is_some_and(|s| s == "neg") {
+            g = &g[1..];
+        }
+        if kept.iter().any(|&(h, n)| h == g && n == need) {
+            continue;
+        }
+        if whole_range(g, ops).is_some_and(|v| {
+            meets(&v, need, true) || (need == Need::NonZero && meets(&v, need, false))
+        }) {
+            continue;
+        }
+        if !affine(g, ops) {
+            return false;
+        }
+        kept.push((g, need));
+    }
+    kept.retain(|&(g, need)| need != Need::NonZero || !needs_positive_elsewhere(g, &needs, t));
+    let signs: Vec<&[String]> = kept
+        .iter()
+        .filter(|(_, n)| *n == Need::NonZero)
+        .map(|(g, _)| *g)
+        .collect();
+    if signs.len() > MAX_SIGNS {
+        return false;
+    }
+    let pieces = 1usize << signs.len();
+    let (r, depth_per_dim, decidable) = horizon(&[t], &[&[]], ops);
+    if !decidable {
+        return false;
+    }
+    let used = distinct_vars(&[t]);
+    let width = n_var_slots(&[t]);
+    let n = used.len().max(1);
+    let mut bx = vec![(-r, r); n];
+    let mut budget = WITNESS_BUDGET.saturating_mul(pieces as u32);
+    let mut found = vec![false; pieces];
+    struct Search<'a> {
+        t: &'a [String],
+        ops: &'a Operators,
+        kept: &'a [(&'a [String], Need)],
+        signs: &'a [&'a [String]],
+        r: f64,
+        used: &'a [usize],
+        width: usize,
+        depth_max: u32,
+    }
+    // The pieces this cell may still meet (bit k: the sign of `signs[k]`), and for each the
+    // verdict: a witness, outside, or undecided.
+    fn rec(s: &Search, bx: &mut [(f64, f64)], d: u32, budget: &mut u32, found: &mut [bool]) {
+        if *budget == 0 || found.iter().all(|&f| f) {
+            return;
+        }
+        *budget -= 1;
+        let doms = doms_from_box(bx, s.used, s.width, (-s.r, s.r));
+        let mut open: Vec<usize> = Vec::new();
+        let vals: Vec<Option<Vs>> = s
+            .kept
+            .iter()
+            .map(|(g, _)| value_set_p(g, s.ops, &doms, &[]))
+            .collect();
+        for (piece, done) in found.iter_mut().enumerate() {
+            if *done {
+                continue;
+            }
+            let sign_of = |g: &[String]| {
+                let k = s
+                    .signs
+                    .iter()
+                    .position(|h| *h == g)
+                    .expect("a sign argument");
+                piece >> k & 1 == 1
+            };
+            let mut inside = true;
+            let mut outside = false;
+            for ((g, need), v) in s.kept.iter().zip(&vals) {
+                let sign = *need != Need::NonZero || sign_of(g);
+                match v {
+                    Some(v) if meets(v, *need, sign) => {}
+                    Some(v) if misses(v, *need, sign) => {
+                        outside = true;
+                        inside = false;
+                    }
+                    _ => inside = false,
+                }
+            }
+            if outside {
+                continue;
+            }
+            if inside {
+                if let Some(v) = value_set_p(s.t, s.ops, &doms, &[]) {
+                    let zero_in = (v.lo < 0.0 || (v.lo == 0.0 && !v.lo_open))
+                        && (v.hi > 0.0 || (v.hi == 0.0 && !v.hi_open));
+                    if v.fin_pm() && !zero_in && !v.nan {
+                        *done = true;
+                        continue;
+                    }
+                }
+            }
+            open.push(piece);
+        }
+        if open.is_empty() || d >= s.depth_max {
+            return;
+        }
+        let i = (0..bx.len())
+            .max_by(|&a, &b| {
+                (bx[a].1 - bx[a].0)
+                    .partial_cmp(&(bx[b].1 - bx[b].0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        let (lo, hi) = bx[i];
+        let mid = 0.5 * (lo + hi);
+        bx[i] = (lo, mid);
+        rec(s, bx, d + 1, budget, found);
+        bx[i] = (mid, hi);
+        rec(s, bx, d + 1, budget, found);
+        bx[i] = (lo, hi);
+    }
+    let s = Search {
+        t,
+        ops,
+        kept: &kept,
+        signs: &signs,
+        r,
+        used: &used,
+        width,
+        depth_max: depth_per_dim * n as u32,
+    };
+    rec(&s, &mut bx, 0, &mut budget, &mut found);
+    found.iter().all(|&f| f)
+}
+
+/// Is `g` kept positive or above one by another restriction of `t`, so that it needs no sign?
+fn needs_positive_elsewhere(g: &[String], needs: &[(usize, usize, Need)], t: &[String]) -> bool {
+    needs
+        .iter()
+        .any(|&(a, b, n)| matches!(n, Need::Pos | Need::AboveOne) && &t[a..b] == g)
 }
 
 /// {x : f(x) not a finite real} is Lebesgue-null, for every `<constant>` value.
@@ -4726,10 +5073,16 @@ mod tests {
             !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops),
             "x - |x| is the genuinely forbidden class: no spelling may certify it"
         );
-        // Pole inside a transcendental argument: the ratified boundary.
+        // Pole inside a transcendental argument: the ratified boundary of the clearing.
         assert!(
-            !zero_set_null_generic_const(&s(&["+", "x1", "sin", "inv", "x2"]), ops),
+            !cleared_witness(&s(&["+", "x1", "sin", "inv", "x2"]), ops),
             "sin(1/x) class: clearing cannot pull a denominator through sin"
+        );
+        // The identity theorem on the domain reads it: analytic on each half-space x2 > 0 and
+        // x2 < 0, nonzero on a cell of each, and NaN on x2 = 0 (sin(inf)), which holds no zero.
+        assert!(
+            zero_set_null_generic_const(&s(&["+", "x1", "sin", "inv", "x2"]), ops),
+            "sin(1/x) class: null on each piece of the domain"
         );
         // Identically-zero disguise: sin^2 + cos^2 - 1 clears to itself (D = 1)
         // and the witness can never find a nonzero cell. Fail-closed.
@@ -4768,6 +5121,49 @@ mod tests {
             !finite_nonzero_ae(&s(&["-", "inv", "x7", "x7"]), ops),
             "the $-cancel licence is untouched by E2 (widening is its own ruling)"
         );
+    }
+
+    /// The identity theorem on the expression's domain: a sum over `log`, roots, `asin`, `acosh`, a
+    /// quotient or `abs` has a null zero set where every piece of its domain holds a cell on which
+    /// it is certainly nonzero; a sum that vanishes on a region of its domain never does.
+    #[test]
+    fn a_zero_set_is_read_on_the_domain() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        for null in [
+            &["-", "log", "x2", "x2"][..],
+            &["-", "rootn", "x2", "2", "x2"],
+            &["-", "log", "x3", "log", "x2"],
+            &["-", "asin", "x1", "x1"],
+            &["-", "acosh", "x1", "x1"],
+            &["-", "/", "sin", "x3", "x1", "rootn", "x2", "2"],
+            &["-", "pow", "x2", "/", "1", "3", "x2"],
+            &["+", "abs", "x1", "1"],
+            &["-", "*", "x2", "log", "+", "x1", "1", "x1"],
+        ] {
+            assert!(
+                zero_set_null_generic_const(&s(null), ops),
+                "{null:?}: never zero on a region of its domain"
+            );
+            // the plain certificate keeps its strength (the `$`-cancel's ruling)
+            assert!(!zero_set_null(&s(null), ops), "{null:?}");
+        }
+        for region in [
+            &["-", "x1", "abs", "x1"][..],
+            &["-", "abs", "x1", "x1"],
+            &["-", "x1", "pow", "rootn", "x1", "2", "2"],
+            &["-", "asin", "sin", "x1", "x1"],
+            &["-", "log", "exp", "x1", "x1"],
+            &["-", "x1", "atan", "tan", "x1"],
+            &["-", "acos", "cos", "x1", "x1"],
+        ] {
+            assert!(
+                !zero_set_null_generic_const(&s(region), ops),
+                "{region:?} vanishes on a region"
+            );
+        }
     }
 
     /// enclosure makes every exact-zero identity ground contain 0 (certificates fail closed)
