@@ -500,6 +500,9 @@ model predictions.
   a tenth of the training-data inputs 596 (28, 32, 536) and on a tenth of the predictions 488 (70,
   63, 355), most of them at an equal price. No answer changes on a second call, and none loses the
   input's infinities and NaNs on 256 points.
+  `prettify` builds its display with the same `f64` constructors, so a display can move a sign
+  accordingly, also where the answer is unchanged: an answer that displayed as
+  `-sin(x1 + pi/6 - x1^3)` now displays as `sin(x1^3 - x1 - pi/6)`.
   Respelling each odd function of srbf's 1,780 ground truths that hold one as `-f(-u)` still gives
   the original answer in every mode. Respelling each sum as its negation turned around still does
   in `real` and `permissive` (5,986 of 5,986), and does for 5,897 in `f64`. The other 89 (44 over
