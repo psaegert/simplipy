@@ -14,6 +14,9 @@ Pinned here:
 * P2, the read-back: every number of the display reads back as the float64 of the value it
   stands for -- the display evaluates as the state does on the corpus, and a one-ulp change to
   a displayed float is caught;
+* the grouping: with `keep_grouping=True` every sum and product is written as SimpliPy's
+  explicit tokens group it, so the display, infix or explicit, evaluates in the state's order;
+  idempotence and the structure hold with it, and by default sums are flat;
 * the source guard: nothing inside SimpliPy calls prettify -- and the guard catches a call;
 * the API: digits, form, dialects, empty input.
 """
@@ -472,11 +475,12 @@ def displays_that_move(eng, rows, form, display=None):
     return moved
 
 
-def structure(eng, expression, precision=None):
+def structure(eng, expression, precision=None, keep_grouping=False):
     """`(display, kept)`: whether the display reads back, through the canonical constructors, to
     the shape of the state after the display's folds."""
     form, tokens = eng._read_input(expression)
-    return eng._core.prettify(tokens, 3, form, precision, rule_mode='default', check_structure=True)
+    return eng._core.prettify(tokens, 3, form, precision, rule_mode='default', check_structure=True,
+                              keep_grouping=keep_grouping)
 
 
 @pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
@@ -670,12 +674,103 @@ def test_p2_catches_a_one_ulp_change(eng, text):
     assert floats(eng.simplify(bumped)) != floats(eng.simplify(p))
 
 
+# ---------------------------------------------------------------- the grouping
+# With `keep_grouping=True` every sum and product is written as SimpliPy's explicit tokens group
+# it: a sum's positive terms grouped from the right, then each subtracted term in turn, and a
+# product's factors grouped from the right. By default a sum is flat, and reading it groups it
+# from the left.
+GROUPED = [
+    ('x1 + x2 + exp(x3)', 'x1 + x2 + exp(x3)', 'x1 + (x2 + exp(x3))'),
+    ('2*x2 + 2*x3 + exp(x2 + x3) - x1', '2*x2 + 2*x3 + exp(x2 + x3) - x1',
+     '2*x2 + (2*x3 + exp(x2 + x3)) - x1'),
+    ('-x1 - x2 - x3', '-x1 - x2 - x3', '-x1 - (x2 + x3)'),
+    ('x1 + x2 - x3 - x4', 'x1 + x2 - x3 - x4', 'x1 + x2 - x3 - x4'),
+    ('2*x1*x2*x3', '2*x1*x2*x3', '2*(x1*(x2*x3))'),
+    ('x1*x2/(x3*x4*x5)', 'x1*x2/(x3*x4*x5)', 'x1*x2/(x3*(x4*x5))'),
+    ('sin(x1 + x2 + x3)*x4*x5', 'x4*x5*sin(x1 + x2 + x3)', 'x4*(x5*sin(x1 + (x2 + x3)))'),
+    # a number written with its rest is one term
+    ('x1 + 1.000000000000000000003', 'x1 + 1 + 3e-21', 'x1 + (1 + 3e-21)'),
+]
+
+
+@pytest.mark.parametrize('text,flat,grouped', GROUPED, ids=[t for t, _, _ in GROUPED])
+def test_keep_grouping_writes_the_grouping_of_the_explicit_tokens(eng, text, flat, grouped):
+    c = eng.simplify(text)
+    assert eng.prettify(c) == flat
+    assert eng.prettify(c, keep_grouping=False) == flat
+    assert eng.prettify(c, keep_grouping=True) == grouped
+    assert eng.prettify(grouped, keep_grouping=True) == grouped
+    assert structure(eng, c, keep_grouping=True) == (grouped, True)
+    tokens = eng._core.parse(c, True, False, True)
+    # the display, explicit tokens or the infix read, evaluates as the state's own tokens
+    import numpy as np
+    state = list(eng.simplify(tokens))
+    names = sorted({t for t in state if re.fullmatch(r'x\d+', t)})
+    xs = np.random.default_rng(0).uniform(-2.0, 2.0, size=(16, len(names)))
+    a = values(eng, state, names, xs)
+    assert np.array_equal(a, values(eng, eng.prettify(tokens, keep_grouping=True), names, xs))
+    assert np.array_equal(a, values(eng, eng._core.parse(grouped, True, False, True), names, xs))
+    # the tagged form writes bags, which have no grouping
+    assert eng.prettify(eng.to_tagged(tokens), keep_grouping=True) == eng.prettify(eng.to_tagged(tokens))
+
+
+# Where the terms of a sum nearly cancel, or a function amplifies its argument, the flat display
+# read from the left evaluates apart from the state; the grouped display evaluates as the state,
+# bit for bit, in infix and in explicit tokens. The rows are srbf's (a ground truth, and parts of
+# a prediction and of a ground truth).
+APART = [
+    '-cos(exp(2*x2 + 2*x3 + exp(x2 + x3) - x1))/(x2 + x3 + exp(x2 + x3) - x1)',
+    'cos(221742068887.4986*x1 + 0.00331/(18.464400843893329*x2 - 7.698449108356519) + 62.24454675925565)',
+    '0.7088195661797923*cos(21267013.501384924*x1^5*(x3 - 0.52035366738351248*x2)^5)/x1',
+]
+
+
+@pytest.mark.parametrize('text', APART)
+def test_the_grouped_display_evaluates_as_the_state(eng, text):
+    import numpy as np
+    state = list(eng.simplify(eng._core.parse(text, True, False, True)))
+    names = sorted({t for t in state if re.fullmatch(r'x\d+', t)})
+    xs = np.random.default_rng(0).uniform(0.5, 2.0, size=(32, len(names)))
+    a = values(eng, state, names, xs)
+
+    def read(display):
+        return values(eng, eng._core.parse(display, True, False, True), names, xs)
+
+    flat = eng.prettify(eng.to_infix(state))
+    assert not np.allclose(a, read(flat), rtol=P2_RTOL, atol=0)
+    grouped = eng.prettify(eng.to_infix(state), keep_grouping=True)
+    assert np.array_equal(a, read(grouped))
+    assert np.array_equal(a, values(eng, eng.prettify(state, keep_grouping=True), names, xs))
+
+
+@pytest.mark.parametrize('form', ['infix', 'explicit', 'tagged'])
+@pytest.mark.parametrize('precision', [None, 3])
+def test_with_the_grouping_idempotence_and_the_structure_hold(eng, fuzz_states, form, precision):
+    moved, lost = [], []
+    for c in [list(eng.simplify(row)) for row in corpus()] + fuzz_states:
+        p, kept = structure(eng, in_form(eng, c, form), precision, keep_grouping=True)
+        if not kept:
+            lost.append((eng.to_infix(c), p))
+        if eng.prettify(p, precision=precision, keep_grouping=True) != p:
+            moved.append((eng.to_infix(c), p))
+    assert not moved, moved[:5]
+    assert not lost, lost[:5]
+
+
+def test_keep_grouping_is_a_bool(eng):
+    with pytest.raises(TypeError):
+        eng.prettify('x1 + x2 + x3', keep_grouping=1)
+    with pytest.raises(TypeError):
+        eng.prettify('x1 + x2 + x3', keep_grouping='yes')
+
+
 # ---------------------------------------------------------------- the source guard
 MODULES = {os.path.join('rust', 'ac', 'prettify.rs'), os.path.join('rust', 'engine', 'prettify.rs')}
 # The only other lines that may name it: the module declarations and the FFI method.
 ALLOWED_RUST = {
     os.path.join('rust', 'ac', 'mod.rs'): {'pub mod prettify;'},
-    os.path.join('rust', 'engine', 'mod.rs'): {'mod prettify;', 'pub use prettify::{Pretty, PrettyForm};'},
+    os.path.join('rust', 'engine', 'mod.rs'): {'mod prettify;',
+                                               'pub use prettify::{Pretty, PrettyForm, PrettyOptions};'},
     os.path.join('rust', 'lib.rs'): {'fn prettify(', 'self.inner.ac_prettify(&tokens, digits, form, mode, budget)'},
 }
 NAME = re.compile(r'prettify|PrettyForm|Pretty\b')

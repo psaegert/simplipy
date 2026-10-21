@@ -68,6 +68,16 @@
 //!    numbers, variables and their powers and roots. Scientific notation from 10^6 and below
 //!    10^-3 with a lowercase `e`.
 //! 9. **Range**: no numbers combine to inf, 0 or a subnormal.
+//! 10. **Grouping** (`keep_grouping`, off by default): every sum and product is written with
+//!     the grouping of SimpliPy's explicit token form, the order in which it evaluates the
+//!     state. A sum's positive terms are a right-nested chain, then each subtracted term follows
+//!     in turn (`p1 + (p2 + p3) - n1 - n2`); a sum of subtracted terms alone is `-n1 - (n2 + n3)`,
+//!     and a number written with its rest is one term, `(s + r)`. A product's numerator and
+//!     denominator are right-nested chains (`c*(x1*x2)/(x3*(x4*x5))`), which the explicit
+//!     tokens write by default. Reading the display back, infix text or explicit tokens, then
+//!     evaluates every sum and product in the state's order. By default a sum is one flat
+//!     chain and an infix product one run of factors, which reading groups from the left. The
+//!     tagged form writes bags, which have no order of operations, and is the same either way.
 
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
@@ -444,6 +454,8 @@ pub struct Display<'a, 'v> {
     holds_pi: Cell<bool>,
     /// A number is written with pi factored out as the symbol.
     wrote_pi_symbol: Cell<bool>,
+    /// Sums and products are written with the grouping of the explicit token form (rule 10).
+    keep_grouping: bool,
 }
 
 impl<'a, 'v> Display<'a, 'v> {
@@ -459,7 +471,15 @@ impl<'a, 'v> Display<'a, 'v> {
             changed: RefCell::new(Vec::new()),
             holds_pi: Cell::new(false),
             wrote_pi_symbol: Cell::new(false),
+            keep_grouping: false,
         }
+    }
+
+    /// The display with every sum and product written with the grouping of the explicit token
+    /// form (rule 10) where `on`. A tagged section writes bags, which have no grouping.
+    pub fn with_grouping(mut self, on: bool) -> Self {
+        self.keep_grouping = on && self.layout == Layout::OneDenominator;
+        self
     }
 
     /// The display with `choices` for the numbers whose short spelling changes their value.
@@ -1273,9 +1293,10 @@ impl<'a, 'v> Display<'a, 'v> {
             None => numbers,
         };
         for c in &constants {
-            // A number written as `s + r` is two terms of the sum, as it reads back.
+            // A number written as `s + r` is two terms of the sum, as it reads back; with the
+            // grouping kept it is one term, `(s + r)`, as the state's number is.
             match split_neg(self.number(c).0) {
-                (neg, Node::Sum(parts)) => {
+                (neg, Node::Sum(parts)) if !self.keep_grouping => {
                     terms.extend(parts.into_iter().map(|(minus, t)| (minus ^ neg, t)))
                 }
                 term => terms.push(term),
@@ -1290,8 +1311,43 @@ impl<'a, 'v> Display<'a, 'v> {
         }
         // Positive terms first, each group in canonical order.
         terms.sort_by_key(|(neg, _)| *neg);
+        if self.keep_grouping {
+            return nested_sum(terms);
+        }
         Node::Sum(terms)
     }
+}
+
+/// Rule 10: the terms of a sum, positive terms first, with the grouping of the explicit token
+/// form: the positive terms a right-nested chain, `p1 + (p2 + (p3 + p4))`, then each subtracted
+/// term in turn. A sum of subtracted terms alone is the negated chain `-(n1 + (n2 + n3))`,
+/// written `-n1 - (n2 + n3)`, which evaluates to the same float64.
+fn nested_sum(terms: Vec<(bool, Node)>) -> Node {
+    let (pos, neg): (Vec<_>, Vec<_>) = terms.into_iter().partition(|(minus, _)| !minus);
+    let strip = |v: Vec<(bool, Node)>| v.into_iter().map(|(_, t)| t).collect::<Vec<_>>();
+    if pos.is_empty() {
+        let chain = right_chain(strip(neg));
+        return Node::Sum(chain.into_iter().map(|t| (true, t)).collect());
+    }
+    let mut out: Vec<(bool, Node)> = right_chain(strip(pos))
+        .into_iter()
+        .map(|t| (false, t))
+        .collect();
+    out.extend(neg);
+    Node::Sum(out)
+}
+
+/// The members of the right-nested chain `t1 + (t2 + (t3 + ...))`: the first term and the sum
+/// of the rest (the terms themselves for two or fewer).
+fn right_chain(mut terms: Vec<Node>) -> Vec<Node> {
+    if terms.len() <= 2 {
+        return terms;
+    }
+    let rest = terms.split_off(1);
+    terms.push(Node::Sum(
+        right_chain(rest).into_iter().map(|t| (false, t)).collect(),
+    ));
+    terms
 }
 
 /// The exact combination of several numbers (`None` when it leaves the representable range or
@@ -1637,8 +1693,9 @@ fn exponent_class(k: &Rat) -> &'static str {
 // ------------------------------------------------------------------------------------------
 // The three output forms.
 
-/// Precedence: 1 additive (and a leading sign), 2 multiplicative, 3 power, 4 atom.
-fn infix_prec(node: &Node, out: &mut String) -> u8 {
+/// Precedence: 1 additive (and a leading sign), 2 multiplicative, 3 power, 4 atom. `grouped`:
+/// a product's factors as the right-nested chain of the explicit tokens (rule 10).
+fn infix_prec(node: &Node, grouped: bool, out: &mut String) -> u8 {
     match node {
         Node::Num(s) => {
             out.push_str(s);
@@ -1650,7 +1707,7 @@ fn infix_prec(node: &Node, out: &mut String) -> u8 {
         }
         Node::Neg(inner) => {
             out.push('-');
-            infix_at(inner, 2, out);
+            infix_at(inner, 2, grouped, out);
             1
         }
         Node::Sum(terms) => {
@@ -1661,7 +1718,7 @@ fn infix_prec(node: &Node, out: &mut String) -> u8 {
                     (_, true) => out.push_str(" - "),
                     (_, false) => out.push_str(" + "),
                 }
-                infix_at(t, 2, out);
+                infix_at(t, 2, grouped, out);
             }
             1
         }
@@ -1677,26 +1734,16 @@ fn infix_prec(node: &Node, out: &mut String) -> u8 {
             if num.is_empty() {
                 out.push('1');
             }
-            for (i, f) in num.iter().enumerate() {
-                if i > 0 {
-                    out.push('*');
-                }
-                infix_at(f, 2, out);
-            }
+            infix_factors(num, grouped, out);
             match (den.as_slice(), den_neg) {
                 ([], _) => {}
                 ([one], false) => {
                     out.push('/');
-                    infix_at(one, 3, out);
+                    infix_at(one, 3, grouped, out);
                 }
                 (all, _) => {
                     out.push_str(if *den_neg { "/(-" } else { "/(" });
-                    for (i, f) in all.iter().enumerate() {
-                        if i > 0 {
-                            out.push('*');
-                        }
-                        infix_at(f, 2, out);
-                    }
+                    infix_factors(all, grouped, out);
                     out.push(')');
                 }
             }
@@ -1707,9 +1754,9 @@ fn infix_prec(node: &Node, out: &mut String) -> u8 {
             }
         }
         Node::Pow(b, x) => {
-            infix_at(b, 4, out);
+            infix_at(b, 4, grouped, out);
             out.push('^');
-            infix_at(x, 4, out);
+            infix_at(x, 4, grouped, out);
             3
         }
         Node::Call(f, args) => {
@@ -1719,7 +1766,7 @@ fn infix_prec(node: &Node, out: &mut String) -> u8 {
                 if i > 0 {
                     out.push_str(", ");
                 }
-                infix_at(a, 0, out);
+                infix_at(a, 0, grouped, out);
             }
             out.push(')');
             4
@@ -1727,9 +1774,26 @@ fn infix_prec(node: &Node, out: &mut String) -> u8 {
     }
 }
 
-fn infix_at(node: &Node, ctx: u8, out: &mut String) {
+/// The factors of a product's numerator or denominator joined by `*`; `grouped`, as the
+/// right-nested chain of the explicit tokens, `f1*(f2*f3)`.
+fn infix_factors(factors: &[Node], grouped: bool, out: &mut String) {
+    for (i, f) in factors.iter().enumerate() {
+        if i > 0 {
+            out.push('*');
+            if grouped && factors.len() - i > 1 {
+                out.push('(');
+                infix_factors(&factors[i..], grouped, out);
+                out.push(')');
+                return;
+            }
+        }
+        infix_at(f, 2, grouped, out);
+    }
+}
+
+fn infix_at(node: &Node, ctx: u8, grouped: bool, out: &mut String) {
     let mut s = String::new();
-    let prec = infix_prec(node, &mut s);
+    let prec = infix_prec(node, grouped, &mut s);
     if prec < ctx {
         out.push('(');
         out.push_str(&s);
@@ -1739,10 +1803,11 @@ fn infix_at(node: &Node, ctx: u8, out: &mut String) {
     }
 }
 
-/// The infix text.
-pub fn to_infix(node: &Node) -> String {
+/// The infix text; `grouped`, each product's factors as the right-nested chain of the explicit
+/// tokens (rule 10).
+pub fn to_infix(node: &Node, grouped: bool) -> String {
     let mut out = String::new();
-    infix_at(node, 0, &mut out);
+    infix_at(node, 0, grouped, &mut out);
     out
 }
 
@@ -2026,7 +2091,7 @@ mod tests {
             den: vec![n("7"), x("x2"), sum.clone()],
             den_neg,
         };
-        assert_eq!(to_infix(&tree(false)), "-22*x1/(7*x2*(x1 + 1))");
+        assert_eq!(to_infix(&tree(false), false), "-22*x1/(7*x2*(x1 + 1))");
         assert_eq!(
             to_prefix(&tree(false)).join(" "),
             "/ * -22 x1 * 7 * x2 + x1 1"
@@ -2036,10 +2101,55 @@ mod tests {
             "<mul> -22 x1 <div> 7 x2 <add> x1 1 </add> </mul>"
         );
         // a sign the denominator holds
-        assert_eq!(to_infix(&tree(true)), "-22*x1/(-7*x2*(x1 + 1))");
+        assert_eq!(to_infix(&tree(true), false), "-22*x1/(-7*x2*(x1 + 1))");
         assert_eq!(
             to_prefix(&tree(true)).join(" "),
             "/ * -22 x1 * -7 * x2 + x1 1"
+        );
+        // grouped: the right-nested chains the explicit tokens write
+        assert_eq!(to_infix(&tree(false), true), "-22*x1/(7*(x2*(x1 + 1)))");
+    }
+
+    /// Rule 10: a sum with the grouping of the explicit token form, in infix and in explicit
+    /// tokens, which write it alike.
+    #[test]
+    fn a_nested_sum_is_the_explicit_tokens_grouping() {
+        let x = |s: &str| Node::Name(s.to_string(), s.to_string());
+        let terms = |signs: &[bool]| -> Vec<(bool, Node)> {
+            signs
+                .iter()
+                .enumerate()
+                .map(|(i, &minus)| (minus, x(&format!("x{}", i + 1))))
+                .collect()
+        };
+        let both = |signs: &[bool]| {
+            let node = nested_sum(terms(signs));
+            (to_infix(&node, true), to_prefix(&node).join(" "))
+        };
+        assert_eq!(
+            both(&[false, false, false, false]),
+            (
+                "x1 + (x2 + (x3 + x4))".to_string(),
+                "+ x1 + x2 + x3 x4".to_string()
+            )
+        );
+        assert_eq!(
+            both(&[false, false, false, true, true]),
+            (
+                "x1 + (x2 + x3) - x4 - x5".to_string(),
+                "- - + x1 + x2 x3 x4 x5".to_string()
+            )
+        );
+        assert_eq!(
+            both(&[true, true, true]),
+            (
+                "-x1 - (x2 + x3)".to_string(),
+                "neg + x1 + x2 x3".to_string()
+            )
+        );
+        assert_eq!(
+            both(&[false, true]),
+            ("x1 - x2".to_string(), "- x1 x2".to_string())
         );
     }
 

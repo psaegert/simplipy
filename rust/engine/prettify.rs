@@ -68,6 +68,17 @@ impl PrettyForm {
     }
 }
 
+/// How `prettify` writes a display: the digit budget, the significant digits a float shows
+/// (`None`: the shortest decimal of its float64), the output form, and whether every sum and
+/// product is written with the grouping of the explicit token form (`ac::prettify`, rule 10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrettyOptions {
+    pub digits: usize,
+    pub precision: Option<usize>,
+    pub form: PrettyForm,
+    pub keep_grouping: bool,
+}
+
 /// A displayed expression: infix text or tokens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pretty {
@@ -86,9 +97,9 @@ struct Kept {
     pi_symbol: bool,
 }
 
-fn render(node: &Node, form: PrettyForm) -> Pretty {
+fn render(node: &Node, form: PrettyForm, grouped: bool) -> Pretty {
     match form {
-        PrettyForm::Infix => Pretty::Text(to_infix(node)),
+        PrettyForm::Infix => Pretty::Text(to_infix(node, grouped)),
         PrettyForm::Explicit => Pretty::Tokens(to_prefix(node)),
         PrettyForm::Tagged => Pretty::Tokens(to_tagged(node)),
     }
@@ -109,19 +120,17 @@ impl Engine {
         Some(shape(&state, &bare))
     }
 
-    /// `prettify`: the display of `tokens` (any dialect) under the digit budget `digits`, a
-    /// float shown with `precision` significant digits (`None`: the shortest decimal of its
-    /// float64), its numbers read in `mode`'s number domain, every number written so that the
-    /// display keeps the structure (see the module documentation). `None` on malformed input.
+    /// `prettify`: the display of `tokens` (any dialect) as `options` say (the digit budget, a
+    /// float's significant digits, the form, the grouping of sums), its numbers read in `mode`'s
+    /// number domain, every number written so that the display keeps the structure (see the
+    /// module documentation). `None` on malformed input.
     pub fn ac_prettify(
         &self,
         tokens: &[String],
-        digits: usize,
-        precision: Option<usize>,
-        form: PrettyForm,
+        options: PrettyOptions,
         mode: RuleMode,
     ) -> Option<Pretty> {
-        self.ac_prettify_structure(tokens, digits, precision, form, mode, false)
+        self.ac_prettify_structure(tokens, options, mode, false)
             .map(|(shown, _)| shown)
     }
 
@@ -141,20 +150,18 @@ impl Engine {
     pub fn ac_prettify_structure(
         &self,
         tokens: &[String],
-        digits: usize,
-        precision: Option<usize>,
-        form: PrettyForm,
+        options: PrettyOptions,
         mode: RuleMode,
         verify: bool,
     ) -> Option<(Pretty, bool)> {
-        let first = self.display_keeping(tokens, digits, precision, form, mode, verify)?;
-        if (precision.is_none() && !first.pi_symbol) || !first.kept {
+        let first = self.display_keeping(tokens, options, mode, verify)?;
+        if (options.precision.is_none() && !first.pi_symbol) || !first.kept {
             return Some((first.shown, first.kept));
         }
         let Some(read) = self.read_display(&first.shown) else {
             return Some((first.shown, first.kept));
         };
-        match self.display_keeping(&read, digits, precision, form, mode, true) {
+        match self.display_keeping(&read, options, mode, true) {
             Some(again) if again.kept && self.read_shape(&again.shown, mode) == first.reference => {
                 Some((again.shown, true))
             }
@@ -176,12 +183,16 @@ impl Engine {
     fn display_keeping(
         &self,
         tokens: &[String],
-        digits: usize,
-        precision: Option<usize>,
-        form: PrettyForm,
+        options: PrettyOptions,
         mode: RuleMode,
         verify: bool,
     ) -> Option<Kept> {
+        let PrettyOptions {
+            digits,
+            precision,
+            form,
+            keep_grouping,
+        } = options;
         let ctx = SimplifyCtx::new(self.tokens.len());
         let toks = self.intern_seq(tokens, &ctx);
         let view = self.view(&ctx);
@@ -189,11 +200,12 @@ impl Engine {
         let _domain = crate::ac::rat::number_domain(!matches!(mode, RuleMode::Real));
         let state = canon(from_prefix(&toks, &bare)?, &bare);
         let pass = |choices: &Choices| -> (Pretty, Vec<Rat>, bool) {
-            let display =
-                Display::new(&bare, digits, precision, form.layout()).with_choices(choices.clone());
+            let display = Display::new(&bare, digits, precision, form.layout())
+                .with_choices(choices.clone())
+                .with_grouping(keep_grouping);
             let node = display.node(&state);
             (
-                render(&node, form),
+                render(&node, form, keep_grouping),
                 display.changed(),
                 display.pi_symbol_written(),
             )

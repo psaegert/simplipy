@@ -28,7 +28,7 @@ use memo::{BangCache, SimplifyCtx};
 pub use ac::AcForm;
 pub use ac::RuleMode;
 pub use miner::{ConfirmSet, MineRefusal, MineSpec, MinedRule};
-pub use prettify::{Pretty, PrettyForm};
+pub use prettify::{Pretty, PrettyForm, PrettyOptions};
 
 /// Test-only plumbing for the serialization-stability probes (a per-call ctx + view + intern).
 #[cfg(test)]

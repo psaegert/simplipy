@@ -2189,7 +2189,8 @@ class SimpliPyEngine:
             digits: int = 3,
             precision: int | None = None,
             form: str | None = None,
-            mode: Mode | str = Mode.f64) -> str | list[str]:
+            mode: Mode | str = Mode.f64,
+            keep_grouping: bool = False) -> str | list[str]:
         """Write an expression for a READER: each number written to a digit budget, nothing else decided.
 
         :meth:`simplify` returns the canonical form, whose numbers are exact
@@ -2259,10 +2260,16 @@ class SimpliPyEngine:
 
         At the default ``precision=None`` a number is written exactly or as the float64
         nearest to it (with its rest where that fits), so the display reads back to the same
-        float64 values: it evaluates as
-        the expression does, up to the order of its operations. With a ``precision`` it does
-        not: a float shortened to ``k`` digits reads back as another number. At every
-        precision the display reads back to the expression's structure, and displaying a
+        float64 values: it evaluates as the expression does, up to the order of its
+        operations. A sum is written as one flat chain, ``x1 + x2 + exp(x3)``, and an infix
+        product as one run of factors, which reading groups from the left; SimpliPy's explicit
+        tokens group them from the right (``+ x1 + x2 exp x3``), and where terms nearly cancel,
+        or a function amplifies its argument, the two orders give different float64 values.
+        ``keep_grouping=True`` writes every sum and product with the grouping of the explicit
+        tokens, ``x1 + (x2 + exp(x3))``, ``2*(x1*(x2*x3))``, so the display evaluates every sum
+        and product in the state's order. With a ``precision`` the display does not read back
+        to the same values: a float shortened to ``k`` digits reads back as another number. At
+        every precision the display reads back to the expression's structure, and displaying a
         display gives it back (``prettify(prettify(x)) == prettify(x)``).
 
         Parameters
@@ -2281,6 +2288,15 @@ class SimpliPyEngine:
         mode : Mode | str, optional
             The mode whose number domain reads the expression's numbers (default ``f64``, for
             which the display rules are designed). No rules are used.
+        keep_grouping : bool, optional
+            Write every sum and product with the grouping of SimpliPy's explicit tokens of the
+            canonical form, the order in which it evaluates the expression: a sum's positive
+            terms grouped from the right, then each subtracted term in turn
+            (``x1 + (x2 + exp(x3)) - x4``), a number written with its rest as one term
+            (``x1 + (1 + 3e-21)``), and a product's factors grouped from the right
+            (``x1*(x2*x3)/(x4*(x5*x6))``). Default ``False``: one flat chain per sum and
+            product. The tagged form writes bags, which have no order, and is the same either
+            way.
 
         Returns
         -------
@@ -2299,6 +2315,8 @@ class SimpliPyEngine:
             if precision < 1:
                 raise ValueError(f"precision must be at least 1, got {precision}")
             precision = int(precision)
+        if not isinstance(keep_grouping, (bool, np.bool_)):
+            raise TypeError(f"keep_grouping must be a bool, not {type(keep_grouping).__name__} ({keep_grouping!r})")
         mode = _coerce_mode(mode)
         in_form, tokens = self._read_input(expression)
         target = form or in_form
@@ -2306,7 +2324,8 @@ class SimpliPyEngine:
             raise ValueError(f"unknown form {form!r}: expected 'infix', 'explicit' or 'tagged'")
         if not tokens:
             return '' if target == 'infix' else []
-        return self._core.prettify(tokens, int(digits), target, precision, rule_mode=_RULE_MODE[mode])
+        return self._core.prettify(tokens, int(digits), target, precision, rule_mode=_RULE_MODE[mode],
+                                   keep_grouping=bool(keep_grouping))
 
     def complexity(
             self,

@@ -64,6 +64,7 @@ class Engine:
         *,
         rule_mode: Literal["default", "real", "permissive"],  # the number domain; no rules
         check_structure: bool = ...,  # answer (display, whether it keeps the structure)
+        keep_grouping: bool = ...,  # every sum grouped as the explicit tokens group it
     ) -> str | list[str] | tuple[str | list[str], bool]: ...
     def ac_simplify_explore(
         self,

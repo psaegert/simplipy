@@ -187,5 +187,37 @@ engine.prettify(shown) == shown
 # -> True
 ```
 
+## Grouping
+
+The display writes a sum as one flat chain and an infix product as one run of factors, which
+reading groups from the left. SimpliPy's explicit tokens group them from the right
+(`+ x1 + x2 exp x3`), and that is the order in which SimpliPy evaluates the canonical form.
+Floats are not associative: where the terms of a sum nearly cancel, or a function amplifies its
+argument, the two orders give different float64 values. `keep_grouping=True` writes every sum
+and product with the grouping of the explicit tokens, so the display, read as infix text or as
+explicit tokens, evaluates every sum and product in the canonical form's order. A sum's
+positive terms are grouped from the right and each subtracted term follows in turn; a number
+written with its rest is one term. The tagged form writes bags, which have no order, and is the
+same either way.
+
+```python
+grouped = engine.simplify("2*x2 + 2*x3 + exp(x2 + x3) - x1")
+engine.prettify(grouped)
+# -> '2*x2 + 2*x3 + exp(x2 + x3) - x1'
+engine.prettify(grouped, keep_grouping=True)
+# -> '2*x2 + (2*x3 + exp(x2 + x3)) - x1'
+engine.prettify(engine.simplify("2*x1*x2/(x3*x4*x5)"), keep_grouping=True)
+# -> '2*(x1*x2)/(x3*(x4*x5))'
+engine.prettify(engine.simplify("x1 + 1.000000000000000000003"), keep_grouping=True)
+# -> 'x1 + (1 + 3e-21)'
+```
+
+The grouping is that of the canonical form's tokens, not of the input: `simplify` orders the
+terms and factors of the canonical form, and the display groups them in that order. A number
+the canonical form holds exactly is still written by the rules above, so where the explicit
+tokens divide by an integer (`/ * 3.1415926535897e37 * x1 x2 3313`) the display writes one
+float (`9.482621954692726e33*(x1*x2)`), and the one-slash layout still joins every divisor of a
+product into one denominator.
+
 `mode` (default `f64`) is the mode whose number domain reads the numbers; the display rules are
 designed for `f64`.

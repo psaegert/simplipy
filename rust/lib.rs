@@ -863,8 +863,9 @@ impl PyEngine {
     /// its numbers read in `rule_mode`'s number domain, written so that the display keeps the
     /// structure. Display only: it applies no rules, and nothing in the engine calls this or
     /// reads what it returns. `check_structure` answers `(display, kept)`: whether the display
-    /// reads back to the shape of the state after the display's folds.
-    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, rule_mode, check_structure=false))]
+    /// reads back to the shape of the state after the display's folds. `keep_grouping` writes
+    /// every sum and product with the grouping of the explicit token form.
+    #[pyo3(signature = (tokens, digits=3, form="infix", precision=None, *, rule_mode, check_structure=false, keep_grouping=false))]
     #[allow(clippy::too_many_arguments)]
     fn prettify(
         &self,
@@ -875,6 +876,7 @@ impl PyEngine {
         precision: Option<usize>,
         rule_mode: &str,
         check_structure: bool,
+        keep_grouping: bool,
     ) -> PyResult<Py<PyAny>> {
         let form = engine::PrettyForm::parse(form).ok_or_else(|| {
             PyValueError::new_err(format!(
@@ -892,7 +894,17 @@ impl PyEngine {
             let inner = self.inner();
             ensure_ac_well_formed(&inner, &tokens)?;
             inner
-                .ac_prettify_structure(&tokens, digits, precision, form, mode, check_structure)
+                .ac_prettify_structure(
+                    &tokens,
+                    engine::PrettyOptions {
+                        digits,
+                        precision,
+                        form,
+                        keep_grouping,
+                    },
+                    mode,
+                    check_structure,
+                )
                 .ok_or_else(|| PyValueError::new_err("invalid or malformed prefix expression"))
         })?;
         let shown = match out {

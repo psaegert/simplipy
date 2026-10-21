@@ -174,8 +174,12 @@ model predictions.
   At the default `precision=None` a number is written exactly or as its float64 (and its rest
   where that fits), so the display reads back to the same float64 values; at every precision it
   reads back to the structure, and
-  displaying a display gives it back. Nothing inside SimpliPy calls it; see the guide
-  "Displaying expressions".
+  displaying a display gives it back. `keep_grouping=True` (off by default) writes every sum and
+  product with the grouping of SimpliPy's explicit tokens, the order in which it evaluates the
+  canonical form (`2*x2 + (2*x3 + exp(x2 + x3)) - x1`, `2*(x1*x2)/(x3*(x4*x5))`), so a display
+  read back evaluates every sum and product in that order, where by default reading groups a
+  flat sum from the left and terms that nearly cancel give another float64 value. Nothing inside
+  SimpliPy calls it; see the guide "Displaying expressions".
 <!-- TO BE MEASURED AFTER THE RE-MINE: the speed of 0.15.0 against 0.14.7, per mode, on the
      simplify inputs of flash-ansr's training-data generator, srbf's ground truths and its model
      predictions. The entry that stood here ("Fast in every mode") no longer holds: on the
