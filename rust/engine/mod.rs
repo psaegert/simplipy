@@ -86,10 +86,12 @@ pub struct Engine {
     /// Memo for the `!`-sort match-time certificate (`interval::finite_ae` by subtree tokens).
     /// Per-ENGINE, not global: certificates depend on this engine's operator semantics, and
     /// tests build many engines with different op sets in one process. Generational (see
-    /// `BangCache`): bounded memory, never stops memoizing.
-    bang_cache: std::sync::Mutex<BangCache>,
+    /// `BangCache`): bounded memory, never stops memoizing. One per reading, indexed by
+    /// `ac_cert`'s `f64`: 0 over the reals (`real`, `permissive`), 1 in float64 (`f64`), whose
+    /// `tanh` and `atan` are constant on whole tails.
+    bang_cache: [std::sync::Mutex<BangCache>; 2],
     /// The `$`-sort twin (`interval::finite_nonzero_ae`), same discipline.
-    mult_cache: std::sync::Mutex<BangCache>,
+    mult_cache: [std::sync::Mutex<BangCache>; 2],
     /// The DEFAULT mode's translated ruleset, built lazily on first `ac_simplify` (see
     /// `engine/ac.rs`) so consumers that never opt in pay nothing at construction.
     ac_rules_cell: std::sync::OnceLock<crate::ac::rules::AcRules>,
@@ -230,8 +232,8 @@ impl Engine {
             operators,
             rules: compiled,
             tokens,
-            bang_cache: std::sync::Mutex::new(BangCache::new()),
-            mult_cache: std::sync::Mutex::new(BangCache::new()),
+            bang_cache: [(); 2].map(|_| std::sync::Mutex::new(BangCache::new())),
+            mult_cache: [(); 2].map(|_| std::sync::Mutex::new(BangCache::new())),
             ac_rules_cell: std::sync::OnceLock::new(),
             // NO per-mode sets at construction: `from_strs` builds exactly today's engine
             // from exactly today's `rules.json`, and the other two files -- when a config

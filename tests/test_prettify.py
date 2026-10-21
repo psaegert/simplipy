@@ -76,9 +76,10 @@ TABLE = [
     ('x1*1e200*1e200', '1e200*1e200*x1'),
     ('x1^(-1/2)', '1/rootn(x1, 2)'),
     ('x1/0.225147640565301', '4.441529999999994*x1'),
-    # rule 5: a divisor float64 holds as written stays a divisor beside another divisor
+    # rule 5: a divisor float64 holds as written stays a divisor beside another divisor (the
+    # sign moves out: the zero set of `rootn(x1, 2) + sin(x2)` is null on its domain)
     ('(3.44153*x2 + 0.774852359434699*rootn(x1, 2))/(-0.225147640565301*(rootn(x1, 2) + sin(x2)))',
-     '(3.44153*x2 + 0.774852359434699*rootn(x1, 2))/(-0.225147640565301*(rootn(x1, 2) + sin(x2)))'),
+     '-(3.44153*x2 + 0.774852359434699*rootn(x1, 2))/(0.225147640565301*(rootn(x1, 2) + sin(x2)))'),
 ]
 
 

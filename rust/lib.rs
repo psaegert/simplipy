@@ -1305,12 +1305,13 @@ impl PyEngine {
 
     /// OFFLINE: the `!`-sort certificate -- is the expression DEFINED AND FINITE a.e. over its
     /// variables (within the standalone horizon box)? Fail-closed: every undecided path is
-    /// `false`. The same predicate the engine's `!` pattern matching runs behind its cache.
-    /// No caller inside the package: kept as a probe of the certificate layer for scripts
-    /// that query `_core` directly.
+    /// `false`. The same predicate the engine's `!` pattern matching runs behind its cache,
+    /// read over the reals as `real` and `permissive` read it (`f64` also reads float64's
+    /// constant tails of `tanh` and `atan`). No caller inside the package: kept as a probe of
+    /// the certificate layer for scripts that query `_core` directly.
     fn interval_finite_ae(&self, py: Python<'_>, tokens: Vec<String>) -> PyResult<bool> {
         ensure_tokens_are_tokens(&tokens)?;
-        Ok(py.detach(|| crate::interval::finite_ae(&tokens, self.inner().operators_ref())))
+        Ok(py.detach(|| crate::interval::finite_ae(&tokens, self.inner().operators_ref(), false)))
     }
 
     /// OFFLINE: EXACT value-class of an expression by interval analysis (`rust/interval.rs`) --

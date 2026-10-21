@@ -44,6 +44,8 @@ const TANH_SAT: f64 = 18.990341103219276;
 /// Largest x with `exp(x) == 0.0` exactly; just above it exp gives 5e-324, the smallest
 /// subnormal.
 const EXP_UNDERFLOW: f64 = -745.1332191019412;
+/// Smallest x with `atan(x) == fl(pi/2)` exactly (the deployed evaluator and the engine's agree).
+const ATAN_SAT: f64 = 5805358775541310.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
@@ -2941,12 +2943,22 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 /// DEPENDENCY LOSS remain unsound after it (`x3 - x3` widens to (-inf, inf) and the
 /// verdict fails closed the wrong way around), and the arm decides only the shipped
 /// vocabulary -- see the hazard note on `tail_finite_ae`.
-pub fn finite_ae(tokens: &[String], ops: &Operators) -> bool {
+///
+/// `f64` (the `f64` mode) reads the expression in float64, where `tanh` and `atan` are constant
+/// on whole tails (`on_float64_tails`): `1/(tanh(x1) - 1)` is `+inf` wherever x1 >= 18.99.
+/// `real` and `permissive` read it over the reals.
+pub fn finite_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
-        return finite_ae(&d[0], ops);
+        return finite_ae(&d[0], ops, f64);
     }
-    nonfinite_null(tokens, ops)
-        || (finite_ae_subdivision(tokens, ops) && tail_finite_ae(tokens, ops))
+    let real = |t: &[String]| {
+        nonfinite_null(t, ops) || (finite_ae_subdivision(t, ops) && tail_finite_ae(t, ops))
+    };
+    if f64 {
+        on_float64_tails(tokens, ops, 0, &real, &real)
+    } else {
+        real(tokens)
+    }
 }
 
 /// The TAIL ARM (audit B2, ruling D9): discharge the a.e.-finiteness obligation on the
@@ -3233,15 +3245,21 @@ fn whole_range(t: &[String], ops: &Operators) -> Option<Vs> {
 
 const CERT_RECURSION_MAX: u32 = 32;
 
-/// {x : f(x) = 0} is Lebesgue-null, for every value of any `<constant>`. Fail-closed.
-pub fn zero_set_null(tokens: &[String], ops: &Operators) -> bool {
+/// {x : f(x) = 0} is Lebesgue-null, for every value of any `<constant>`. Fail-closed. `f64` reads
+/// the expression in float64 (`on_float64_tails`), `real` and `permissive` over the reals.
+pub fn zero_set_null(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
-        return zero_set_null(&d[0], ops);
+        return zero_set_null(&d[0], ops, f64);
     }
     if tokens.iter().any(|s| s == "<constant>") {
         return false;
     }
-    zsn(tokens, ops, 0, false)
+    let real = |t: &[String]| zsn(t, ops, 0, false);
+    if f64 {
+        on_float64_tails(tokens, ops, 0, &real, &real)
+    } else {
+        real(tokens)
+    }
 }
 
 /// E1 (F80, owner-ruled 2026-08-10): `zero_set_null` with `<constant>` as a GENERIC
@@ -3255,13 +3273,23 @@ pub fn zero_set_null(tokens: &[String], ops: &Operators) -> bool {
 /// `Cx::nz_ae_licensed`). SCOPE: consumed ONLY by the odd-negative power-distribution
 /// licence (`engine::ac::ac_zsn`). Deliberately NOT wired into `finite_nonzero_ae`:
 /// the `$`-cancel licence keeps its SELFCANCEL asymmetry (the c = 0 atom stays
-/// protected there), pinned by test.
-pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators) -> bool {
+/// protected there), pinned by test. `f64` (the `f64` mode) reads the expression in float64,
+/// where `tanh` and `atan` are constant on whole tails (`on_float64_tails`); `real` and
+/// `permissive` read it over the reals.
+pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
-        return zero_set_null_generic_const(&d[0], ops);
+        return zero_set_null_generic_const(&d[0], ops, f64);
     }
+    let real = |t: &[String]| zsn(t, ops, 0, true);
+    let read = |t: &[String]| {
+        if f64 {
+            on_float64_tails(t, ops, 0, &real, &real)
+        } else {
+            real(t)
+        }
+    };
     if !tokens.iter().any(|s| s == "<constant>") {
-        return zsn(tokens, ops, 0, true);
+        return read(tokens);
     }
     let base = 1 + tokens
         .iter()
@@ -3281,7 +3309,111 @@ pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators) -> bool {
             }
         })
         .collect();
-    zsn(&renamed, ops, 0, true)
+    read(&renamed)
+}
+
+/// float64's tails: `(threshold, limit)` where the function is EXACTLY `limit` for every argument
+/// at or past `threshold`, and `-limit` at or below `-threshold`. Measured on every operator of the
+/// vocabulary with the deployed evaluator and the engine's, out to the largest float: only `tanh`
+/// (+-1; the deployed evaluator saturates first, at `TANH_SAT`, the engine's at 19.0615) and
+/// `atan` (+-fl(pi/2)) have one. Overflow and underflow to an infinity or 0 (`exp`, `sinh`,
+/// `cosh`, `pow`) are the overflow reading's; `asin`, `acos`, `atanh`, `acosh` and `log` are NaN
+/// off their domains.
+fn tail_of(op: &str) -> Option<(f64, f64)> {
+    match op {
+        "tanh" => Some((TANH_SAT, 1.0)),
+        "atan" => Some((ATAN_SAT, std::f64::consts::FRAC_PI_2)),
+        _ => None,
+    }
+}
+
+/// A certificate of an almost-everywhere property (a null zero set, finiteness), read in
+/// float64. Off the tails of its `tanh` and `atan` (`tail_of`) an expression is the real one, so
+/// there the property holds almost everywhere when the real certificate `real` says so. On a tail
+/// of one of them it is EXACTLY the expression with that function replaced by its limit, which
+/// must then have the property in float64 too, on the whole space (a stronger claim); `ground`
+/// decides one that is a constant there. So the zero set of `x2*tanh(x1) - x1` is null (its tails
+/// read `x2 - x1` and `-x2 - x1`), and that of `x2*tanh(x1) - x2`, `+0` wherever x1 >= 18.99, is
+/// not; `1/(tanh(x1) - 1)` is not finite almost everywhere. A function whose argument is ground,
+/// or never leaves (-threshold, threshold) (`tanh(sin(x1))`), has no tail to read; more than
+/// `MAX_TAILS` of them fail closed.
+fn on_float64_tails(
+    t: &[String],
+    ops: &Operators,
+    d: u32,
+    real: &dyn Fn(&[String]) -> bool,
+    ground: &dyn Fn(&[String]) -> bool,
+) -> bool {
+    const MAX_TAILS: usize = 3;
+    if d > CERT_RECURSION_MAX || !real(t) {
+        return false;
+    }
+    let Some(sites) = tail_sites(t, ops) else {
+        return false;
+    };
+    sites.len() <= MAX_TAILS
+        && sites.iter().all(|&(site, limit)| {
+            [limit, -limit].iter().all(|&c| {
+                let f = replace_subtree(t, site, c, ops);
+                if f.iter()
+                    .all(|x| var_index(x).is_none() && x != "<constant>")
+                {
+                    ground(&f)
+                } else {
+                    on_float64_tails(&f, ops, d + 1, real, ground)
+                }
+            })
+        })
+}
+
+/// The functions of `t` that reach a float64 tail: each distinct subtree once, with its limit.
+fn tail_sites<'a>(t: &'a [String], ops: &Operators) -> Option<Vec<(&'a [String], f64)>> {
+    let mut sites: Vec<(&[String], f64)> = Vec::new();
+    for (i, tok) in t.iter().enumerate() {
+        let Some((threshold, limit)) = tail_of(tok) else {
+            continue;
+        };
+        if ops.arity_of(tok) != Some(1) {
+            continue;
+        }
+        let j = subtree_end(t, i, ops)?;
+        if ground_leaf(t, i + 1, ops).is_some() {
+            continue;
+        }
+        let inside = |v: Vs| {
+            !v.pinf
+                && !v.ninf
+                && (!v.has_fin
+                    || ((v.lo > -threshold || (v.lo == -threshold && v.lo_open))
+                        && (v.hi < threshold || (v.hi == threshold && v.hi_open))))
+        };
+        if whole_range(&t[i + 1..j], ops).is_some_and(inside) {
+            continue;
+        }
+        if !sites.iter().any(|&(s, _)| s == &t[i..j]) {
+            sites.push((&t[i..j], limit));
+        }
+    }
+    Some(sites)
+}
+
+/// `t` with every occurrence of the subtree `site` replaced by the literal `c`, spelled as the
+/// shortest decimal that reads back as `c` (an integer limit as an integer, which reads as a
+/// point).
+fn replace_subtree(t: &[String], site: &[String], c: f64, ops: &Operators) -> Vec<String> {
+    let lit = format!("{c}");
+    let mut out = Vec::with_capacity(t.len());
+    let mut i = 0;
+    while i < t.len() {
+        if t[i..].starts_with(site) && subtree_end(t, i, ops) == Some(i + site.len()) {
+            out.push(lit.clone());
+            i += site.len();
+        } else {
+            out.push(t[i].clone());
+            i += 1;
+        }
+    }
+    out
 }
 
 /// `e2` (owner-ratified 2026-08-11, audit F81; design in the research harness):
@@ -3290,6 +3422,9 @@ pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators) -> bool {
 /// licence's scoped certificate, mirroring E1's deliberate scoping. The plain
 /// `zero_set_null` (and through it `finite_nonzero_ae`, the `$`-cancel) keeps
 /// its current strength, pinned by test; widening is a separate future ruling.
+/// The identity theorem on the expression's domain (`domain_witness`) is scoped
+/// the same way: it serves the zero-set certificate the core reads
+/// (`engine::ac::ac_zsn`: reading A, the distribution licences, orientation).
 fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
     if d > CERT_RECURSION_MAX || t.is_empty() {
         return false;
@@ -3385,9 +3520,13 @@ fn zsn(t: &[String], ops: &Operators, d: u32, e2: bool) -> bool {
                 _ => false,
             }
         }
-        // sums, sin, cos, and any other analytic composition: identity theorem + witness;
-        // on refusal, the E2 clearing fallback (scoped -- see the fn doc).
-        _ => analytic_nonzero_witness(t, ops) || (e2 && cleared_witness(t, ops)),
+        // sums, sin, cos, and any other analytic composition: identity theorem + witness; on
+        // refusal, the identity theorem on the expression's domain (`domain_witness`) and the E2
+        // clearing fallback, both scoped as E2 is (see the fn doc).
+        _ => {
+            analytic_nonzero_witness(t, ops)
+                || (e2 && (domain_witness(t, ops) || cleared_witness(t, ops)))
+        }
     }
 }
 
@@ -3755,6 +3894,346 @@ fn analytic_nonzero_witness(t: &[String], ops: &Operators) -> bool {
     rec(t, ops, r, &mut bx, &used, width, 0, depth_max, &mut budget)
 }
 
+// ---------------------------------------------------------------------------
+// THE IDENTITY THEOREM ON THE EXPRESSION'S DOMAIN. `analytic_nonzero_witness` needs f analytic on
+// all of R^n, so a sum over `log`, an even root, a fractional power, `asin`, a quotient or `abs`
+// never got past it: `log(x2) - x2` is never zero, yet its zero set was "not proven null". A zero
+// is a value, so only where f is DEFINED can it be one; where f is NaN it is no zero (and `1/NaN`
+// carries no sign).
+//
+// The argument. Every operator of f is real-analytic on an open domain: the entire ones on R,
+// `log`, an even root and a fractional or symbolic power where their argument is > 0, `asin`,
+// `acos`, `atanh` on (-1, 1), `acosh` on (1, inf), and `inv`, a quotient's denominator, a negative
+// integer power, `abs` and an odd root where their argument is != 0. So f is analytic on the open
+// set D where every such argument lies in its domain. Off D f is undefined (NaN, no zero), or the
+// argument sits on the domain's edge, a level set {g = c}. Where each restricted argument g is
+// AFFINE in the variables (or its domain holds over the whole space, `vacuous`), every edge is a
+// hyperplane, a null set, and D is a union of convex pieces, one per sign of the arguments that
+// must be != 0; a convex set is connected. By the identity theorem, f vanishing on a set of
+// positive measure in a piece vanishes on the whole piece. So the zero set is null as soon as
+// each piece holds one cell of positive measure, certified inside the piece by interval
+// evaluation of every restricted argument, on which f is certified nonzero. A piece in which f is
+// identically zero never yields such a cell (`x1 - |x1|` on x1 > 0), and neither does an empty or
+// unreachable piece: the test fails closed, it never guesses.
+// ---------------------------------------------------------------------------
+
+/// Where an operator is real-analytic: its argument `g` must be positive, in (-1, 1), above 1, or
+/// nonzero (`domain_witness`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Need {
+    Pos,
+    Unit,
+    AboveOne,
+    NonZero,
+}
+
+/// The domain restrictions of `t`: each restricted argument as its token range, with what it needs.
+/// `None` where an operator is outside the analytic vocabulary (`tan`, whose poles cut the line into
+/// infinitely many pieces, a non-literal root index, ...). A ground subtree is a constant, decided
+/// by its value.
+fn analytic_domain(t: &[String], ops: &Operators) -> Option<Vec<(usize, usize, Need)>> {
+    fn rec(
+        t: &[String],
+        i: usize,
+        ops: &Operators,
+        out: &mut Vec<(usize, usize, Need)>,
+    ) -> Option<usize> {
+        let tok = t.get(i)?.as_str();
+        if !ops.is_operator(tok) {
+            return Some(i + 1);
+        }
+        if let Some(j) = ground_leaf(t, i, ops) {
+            return Some(j);
+        }
+        let one = |need: Need, out: &mut Vec<(usize, usize, Need)>| -> Option<usize> {
+            let j = rec(t, i + 1, ops, out)?;
+            out.push((i + 1, j, need));
+            Some(j)
+        };
+        match (tok, ops.arity_of(tok)?) {
+            ("log" | "pow1_2" | "pow1_4", 1) => one(Need::Pos, out),
+            ("asin" | "acos" | "atanh", 1) => one(Need::Unit, out),
+            ("acosh", 1) => one(Need::AboveOne, out),
+            ("inv" | "abs" | "pow1_3" | "pow1_5", 1) => one(Need::NonZero, out),
+            ("/", 2) => {
+                let ja = rec(t, i + 1, ops, out)?;
+                let jb = rec(t, ja, ops, out)?;
+                out.push((ja, jb, Need::NonZero));
+                Some(jb)
+            }
+            ("pow", 2) => {
+                let ja = rec(t, i + 1, ops, out)?;
+                let jb = subtree_end(t, ja, ops)?;
+                match int_literal(&t[ja..jb]) {
+                    Some(q) if q >= 0 => {}
+                    Some(_) => out.push((i + 1, ja, Need::NonZero)),
+                    // a fractional or symbolic exponent: `exp(e * log(b))`, analytic for b > 0
+                    None => {
+                        rec(t, ja, ops, out)?;
+                        out.push((i + 1, ja, Need::Pos));
+                    }
+                }
+                Some(jb)
+            }
+            ("rootn", 2) => {
+                let ja = rec(t, i + 1, ops, out)?;
+                let jb = subtree_end(t, ja, ops)?;
+                match int_literal(&t[ja..jb]) {
+                    Some(n) if n >= 2 && n % 2 == 0 => out.push((i + 1, ja, Need::Pos)),
+                    Some(n) if n >= 3 => out.push((i + 1, ja, Need::NonZero)),
+                    _ => return None,
+                }
+                Some(jb)
+            }
+            (op, n) if op_entire_analytic(op) => {
+                let mut j = i + 1;
+                for _ in 0..n {
+                    j = rec(t, j, ops, out)?;
+                }
+                Some(j)
+            }
+            _ => None,
+        }
+    }
+    let mut out = Vec::new();
+    (rec(t, 0, ops, &mut out)? == t.len()).then_some(out)
+}
+
+/// Is `g` affine in the variables: a variable, a constant, their sums and differences, and their
+/// multiples and quotients by constants? Its level sets are then hyperplanes and its sub- and
+/// superlevel sets half-spaces.
+fn affine(g: &[String], ops: &Operators) -> bool {
+    fn rec(t: &[String], i: usize, ops: &Operators) -> Option<usize> {
+        let tok = t.get(i)?.as_str();
+        if !ops.is_operator(tok) {
+            return Some(i + 1);
+        }
+        if let Some(j) = ground_leaf(t, i, ops) {
+            return Some(j);
+        }
+        match (tok, ops.arity_of(tok)?) {
+            ("+" | "-", 2) => {
+                let ja = rec(t, i + 1, ops)?;
+                rec(t, ja, ops)
+            }
+            (
+                "neg" | "mult2" | "mult3" | "mult4" | "mult5" | "div2" | "div3" | "div4" | "div5",
+                1,
+            ) => rec(t, i + 1, ops),
+            ("*", 2) => {
+                let ja = subtree_end(t, i + 1, ops)?;
+                let jb = subtree_end(t, ja, ops)?;
+                if ground_leaf(t, i + 1, ops).is_some() {
+                    rec(t, ja, ops).filter(|&j| j == jb)
+                } else if ground_leaf(t, ja, ops).is_some() {
+                    rec(t, i + 1, ops).filter(|&j| j == ja).map(|_| jb)
+                } else {
+                    None
+                }
+            }
+            ("/", 2) => {
+                let ja = rec(t, i + 1, ops)?;
+                ground_leaf(t, ja, ops)
+            }
+            _ => None,
+        }
+    }
+    rec(g, 0, ops) == Some(g.len())
+}
+
+/// Does `v`, a value set of a restricted argument, satisfy `need` throughout (`strict` on its finite
+/// part; an argument that is NaN somewhere is restricted by its own operators)?
+fn meets(v: &Vs, need: Need, sign: bool) -> bool {
+    if !v.has_fin {
+        return false;
+    }
+    let above = |c: f64| v.lo > c || (v.lo == c && v.lo_open);
+    let below = |c: f64| v.hi < c || (v.hi == c && v.hi_open);
+    match need {
+        Need::Pos => above(0.0),
+        Need::Unit => above(-1.0) && below(1.0),
+        Need::AboveOne => above(1.0),
+        Need::NonZero if sign => above(0.0),
+        Need::NonZero => below(0.0),
+    }
+}
+
+/// Does `v` certainly miss `need` everywhere (a cell wholly outside the piece)?
+fn misses(v: &Vs, need: Need, sign: bool) -> bool {
+    if !v.has_fin {
+        return true;
+    }
+    let at_most = |c: f64| v.hi <= c;
+    let at_least = |c: f64| v.lo >= c;
+    match need {
+        Need::Pos => at_most(0.0),
+        Need::Unit => at_most(-1.0) || at_least(1.0),
+        Need::AboveOne => at_most(1.0),
+        Need::NonZero if sign => at_most(0.0),
+        Need::NonZero => at_least(0.0),
+    }
+}
+
+/// THE ZERO SET IS NULL ON THE DOMAIN (see the section note): every operator of `t` real-analytic
+/// on a domain bounded by hyperplanes, and in each convex piece of it a cell where every restricted
+/// argument certainly lies in its domain and `t` is certainly nonzero. Fail-closed on budget,
+/// horizon, a non-affine restricted argument whose domain is not the whole space, and on more than
+/// `MAX_SIGNS` arguments that must be nonzero (`2^MAX_SIGNS` pieces).
+fn domain_witness(t: &[String], ops: &Operators) -> bool {
+    const MAX_SIGNS: usize = 3;
+    const WITNESS_BUDGET: u32 = 2_000;
+    let Some(needs) = analytic_domain(t, ops) else {
+        return false;
+    };
+    // No restriction: f is entire, `analytic_nonzero_witness`'s case.
+    if needs.is_empty() {
+        return false;
+    }
+    // Each restriction: dropped where it holds over the whole space, else its argument must be
+    // affine. An argument that must be nonzero is read up to its sign (`neg g`), once, and not at
+    // all where another restriction on it already keeps it away from zero.
+    let mut kept: Vec<(&[String], Need)> = Vec::new();
+    for &(a, b, need) in &needs {
+        let mut g = &t[a..b];
+        if need == Need::NonZero && g.first().is_some_and(|s| s == "neg") {
+            g = &g[1..];
+        }
+        if kept.iter().any(|&(h, n)| h == g && n == need) {
+            continue;
+        }
+        if whole_range(g, ops).is_some_and(|v| {
+            meets(&v, need, true) || (need == Need::NonZero && meets(&v, need, false))
+        }) {
+            continue;
+        }
+        if !affine(g, ops) {
+            return false;
+        }
+        kept.push((g, need));
+    }
+    kept.retain(|&(g, need)| need != Need::NonZero || !needs_positive_elsewhere(g, &needs, t));
+    let signs: Vec<&[String]> = kept
+        .iter()
+        .filter(|(_, n)| *n == Need::NonZero)
+        .map(|(g, _)| *g)
+        .collect();
+    if signs.len() > MAX_SIGNS {
+        return false;
+    }
+    let pieces = 1usize << signs.len();
+    let (r, depth_per_dim, decidable) = horizon(&[t], &[&[]], ops);
+    if !decidable {
+        return false;
+    }
+    let used = distinct_vars(&[t]);
+    let width = n_var_slots(&[t]);
+    let n = used.len().max(1);
+    let mut bx = vec![(-r, r); n];
+    let mut budget = WITNESS_BUDGET.saturating_mul(pieces as u32);
+    let mut found = vec![false; pieces];
+    struct Search<'a> {
+        t: &'a [String],
+        ops: &'a Operators,
+        kept: &'a [(&'a [String], Need)],
+        signs: &'a [&'a [String]],
+        r: f64,
+        used: &'a [usize],
+        width: usize,
+        depth_max: u32,
+    }
+    // The pieces this cell may still meet (bit k: the sign of `signs[k]`), and for each the
+    // verdict: a witness, outside, or undecided.
+    fn rec(s: &Search, bx: &mut [(f64, f64)], d: u32, budget: &mut u32, found: &mut [bool]) {
+        if *budget == 0 || found.iter().all(|&f| f) {
+            return;
+        }
+        *budget -= 1;
+        let doms = doms_from_box(bx, s.used, s.width, (-s.r, s.r));
+        let mut open: Vec<usize> = Vec::new();
+        let vals: Vec<Option<Vs>> = s
+            .kept
+            .iter()
+            .map(|(g, _)| value_set_p(g, s.ops, &doms, &[]))
+            .collect();
+        for (piece, done) in found.iter_mut().enumerate() {
+            if *done {
+                continue;
+            }
+            let sign_of = |g: &[String]| {
+                let k = s
+                    .signs
+                    .iter()
+                    .position(|h| *h == g)
+                    .expect("a sign argument");
+                piece >> k & 1 == 1
+            };
+            let mut inside = true;
+            let mut outside = false;
+            for ((g, need), v) in s.kept.iter().zip(&vals) {
+                let sign = *need != Need::NonZero || sign_of(g);
+                match v {
+                    Some(v) if meets(v, *need, sign) => {}
+                    Some(v) if misses(v, *need, sign) => {
+                        outside = true;
+                        inside = false;
+                    }
+                    _ => inside = false,
+                }
+            }
+            if outside {
+                continue;
+            }
+            if inside {
+                if let Some(v) = value_set_p(s.t, s.ops, &doms, &[]) {
+                    let zero_in = (v.lo < 0.0 || (v.lo == 0.0 && !v.lo_open))
+                        && (v.hi > 0.0 || (v.hi == 0.0 && !v.hi_open));
+                    if v.fin_pm() && !zero_in && !v.nan {
+                        *done = true;
+                        continue;
+                    }
+                }
+            }
+            open.push(piece);
+        }
+        if open.is_empty() || d >= s.depth_max {
+            return;
+        }
+        let i = (0..bx.len())
+            .max_by(|&a, &b| {
+                (bx[a].1 - bx[a].0)
+                    .partial_cmp(&(bx[b].1 - bx[b].0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        let (lo, hi) = bx[i];
+        let mid = 0.5 * (lo + hi);
+        bx[i] = (lo, mid);
+        rec(s, bx, d + 1, budget, found);
+        bx[i] = (mid, hi);
+        rec(s, bx, d + 1, budget, found);
+        bx[i] = (lo, hi);
+    }
+    let s = Search {
+        t,
+        ops,
+        kept: &kept,
+        signs: &signs,
+        r,
+        used: &used,
+        width,
+        depth_max: depth_per_dim * n as u32,
+    };
+    rec(&s, &mut bx, 0, &mut budget, &mut found);
+    found.iter().all(|&f| f)
+}
+
+/// Is `g` kept positive or above one by another restriction of `t`, so that it needs no sign?
+fn needs_positive_elsewhere(g: &[String], needs: &[(usize, usize, Need)], t: &[String]) -> bool {
+    needs
+        .iter()
+        .any(|&(a, b, n)| matches!(n, Need::Pos | Need::AboveOne) && &t[a..b] == g)
+}
+
 /// {x : f(x) not a finite real} is Lebesgue-null, for every `<constant>` value.
 /// Fail-closed.
 pub fn nonfinite_null(tokens: &[String], ops: &Operators) -> bool {
@@ -4018,8 +4497,8 @@ fn isn(t: &[String], ops: &Operators, d: u32) -> bool {
 /// The multiplicative group's regular domain: defined, finite AND nonzero a.e. -- the
 /// exact soundness domain of `A/A -> 1` (SELFCANCEL T1). Refuses `<constant>`-bearing
 /// trees via `zero_set_null`.
-pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators) -> bool {
-    zero_set_null(tokens, ops) && finite_ae(tokens, ops)
+pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
+    zero_set_null(tokens, ops, f64) && finite_ae(tokens, ops, f64)
 }
 
 /// Is `f` an ENTIRE-analytic composition (no branch cuts, poles, or abs) that is
@@ -4030,10 +4509,33 @@ pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators) -> bool {
 /// base^y into base^(n*y) changes nothing off a null set. The traps are refused by
 /// construction: an identically-constant-but-unfolded y (sin^2 + cos^2) admits no
 /// disjoint pair; an abs-bearing y is not entire; a ground y is constant.
-pub fn nonconstant_entire(t: &[String], ops: &Operators) -> bool {
+///
+/// `f64` (the `f64` mode) reads y in float64 (`on_float64_tails`), where `tanh` and `atan` are
+/// constant on whole tails: there y is constant too, and its level set at that value is the whole
+/// tail. The merge reads only the levels off the integers, so a tail on which y is an integer
+/// (`tanh(x1)`, at +-1) is harmless, and one on which it is any other constant (`3*atan(x1)`, at
+/// +-3*fl(pi/2)) is refused. The constant is the one float64 computes there (the engine's
+/// evaluator, whose `tanh` saturates after the deployed one's: where it reads an integer, so does
+/// the deployed one). `real` and `permissive` read y over the reals.
+pub fn nonconstant_entire(t: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[t], ops) {
-        return nonconstant_entire(&d[0], ops);
+        return nonconstant_entire(&d[0], ops, f64);
     }
+    let real = |t: &[String]| nonconstant_entire_real(t, ops);
+    let integer = |t: &[String]| {
+        crate::numeric::evaluate_constant_subtree(t, ops)
+            .and_then(|v| v.parse::<f64>().ok())
+            .is_some_and(|v| v.is_finite() && v.fract() == 0.0)
+    };
+    if f64 {
+        on_float64_tails(t, ops, 0, &real, &integer)
+    } else {
+        real(t)
+    }
+}
+
+/// `nonconstant_entire` over the reals.
+fn nonconstant_entire_real(t: &[String], ops: &Operators) -> bool {
     if t.iter()
         .any(|s| ops.is_operator(s) && !op_entire_analytic(s))
     {
@@ -4094,7 +4596,7 @@ pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
         "exp" | "cosh" => nonfinite_null(&tokens[1..], ops),
         // squares / abs of a null-zero-set argument: >= 0 with a null zero set
         "pow2" | "pow4" | "abs" => {
-            zero_set_null(&tokens[1..], ops) && nonfinite_null(&tokens[1..], ops)
+            zero_set_null(&tokens[1..], ops, false) && nonfinite_null(&tokens[1..], ops)
         }
         // the BINARY spelling of the even powers (generation-2 vocabulary completion,
         // audit Tier-1 #3 -- the retired unary arm above never fires on a live engine):
@@ -4105,7 +4607,7 @@ pub fn positive_ae(tokens: &[String], ops: &Operators) -> bool {
                 return false;
             };
             matches!(int_literal(&tokens[ja..]), Some(k) if k > 0 && k % 2 == 0)
-                && zero_set_null(&tokens[1..ja], ops)
+                && zero_set_null(&tokens[1..ja], ops, false)
                 && nonfinite_null(&tokens[1..ja], ops)
         }
         "inv" => positive_ae(&tokens[1..], ops),
@@ -4636,37 +5138,37 @@ mod tests {
         let ops = e.operators_ref();
         // The acos(C) witness class: zero only at the single setting C = 1.
         assert!(
-            zero_set_null_generic_const(&s(&["acos", "<constant>"]), ops),
+            zero_set_null_generic_const(&s(&["acos", "<constant>"]), ops, false),
             "acos(<constant>) vanishes only at C = 1: null in parameter space"
         );
         // The bare atom, consistent with the ruled licence doctrine.
         assert!(
-            zero_set_null_generic_const(&s(&["<constant>"]), ops),
+            zero_set_null_generic_const(&s(&["<constant>"]), ops, false),
             "{{c = 0}} is a null set of the mask's own parameter space"
         );
         // Independent occurrences: C1 - C2 vanishes only on the diagonal.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "<constant>", "<constant>"]), ops),
+            zero_set_null_generic_const(&s(&["-", "<constant>", "<constant>"]), ops, false),
             "two <constant>s are INDEPENDENT: the diagonal is null"
         );
         // A zero literal still kills the product unconditionally.
         assert!(
-            !zero_set_null_generic_const(&s(&["*", "0", "<constant>"]), ops),
+            !zero_set_null_generic_const(&s(&["*", "0", "<constant>"]), ops, false),
             "an exact zero factor is identically zero"
         );
         // The genuinely-forbidden fat-zero shape stays refused (abs is not analytic).
         assert!(
-            !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops),
+            !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops, false),
             "x - |x| vanishes on a half-line: must refuse"
         );
         // THE ASYMMETRY PINS: the plain certificate and the $-certificate are
         // untouched by E1 -- Const-bearing streams still refuse there.
         assert!(
-            !zero_set_null(&s(&["acos", "<constant>"]), ops),
+            !zero_set_null(&s(&["acos", "<constant>"]), ops, false),
             "plain zero_set_null keeps the Const blanket"
         );
         assert!(
-            !finite_nonzero_ae(&s(&["acos", "<constant>"]), ops),
+            !finite_nonzero_ae(&s(&["acos", "<constant>"]), ops, false),
             "the $-cancel licence keeps its SELFCANCEL protection of the c = 0 atom"
         );
     }
@@ -4687,7 +5189,7 @@ mod tests {
         // The design's worked example: an affine sum whose literal spells as a
         // fraction; tier-0 ground-leaf acceptance lets the witness see it.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "x3", "/", "5", "4"]), ops),
+            zero_set_null_generic_const(&s(&["-", "x3", "/", "5", "4"]), ops, false),
             "x3 - 5/4 vanishes on one hyperplane: the literal SPELLING must not refuse"
         );
         assert!(
@@ -4696,53 +5198,60 @@ mod tests {
         );
         // 1/x - x clears to N = 1 - x^2: zeros {-1, +1}, null.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "inv", "x7", "x7"]), ops),
+            zero_set_null_generic_const(&s(&["-", "inv", "x7", "x7"]), ops, false),
             "1/x - x = (1 - x^2)/x: witness the entire numerator"
         );
         // Zeros AT the inner pole: 1/(1/x + 1) is genuinely 0 at x = 0
         // (1/0 = +inf, 1/inf = 0); the swap makes N = x, catching it.
         assert!(
-            zero_set_null_generic_const(&s(&["inv", "+", "inv", "x1", "1"]), ops),
+            zero_set_null_generic_const(&s(&["inv", "+", "inv", "x1", "1"]), ops, false),
             "the pair swap captures zeros-at-poles: Z = {{0}}, null"
         );
         // tan clears at head level: x2 + tan(x3) -> N = x2*cos(x3) + sin(x3).
         assert!(
-            zero_set_null_generic_const(&s(&["+", "x2", "tan", "x3"]), ops),
+            zero_set_null_generic_const(&s(&["+", "x2", "tan", "x3"]), ops, false),
             "tan u = sin u / cos u clears; N is entire and not identically zero"
         );
         // E1 x E2 composition: 1/c - c with the generic-parameter rename.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "inv", "<constant>", "<constant>"]), ops),
+            zero_set_null_generic_const(&s(&["-", "inv", "<constant>", "<constant>"]), ops, false),
             "Const renames to a generic variable BEFORE clearing (ordering law)"
         );
         // Negative literal exponents are cleared by the powered swap.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "pow", "x2", "-2", "x2"]), ops),
+            zero_set_null_generic_const(&s(&["-", "pow", "x2", "-2", "x2"]), ops, false),
             "x^-2 - x = (1 - x^3)/x^2: the powered swap clears it"
         );
         // --- SOUND-REFUSAL PINS (must stay refused forever) ---
         // The fat class: x - |x| vanishes on a half-line; abs refuses clearing.
         assert!(
-            !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops),
+            !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops, false),
             "x - |x| is the genuinely forbidden class: no spelling may certify it"
         );
-        // Pole inside a transcendental argument: the ratified boundary.
+        // Pole inside a transcendental argument: the ratified boundary of the clearing.
         assert!(
-            !zero_set_null_generic_const(&s(&["+", "x1", "sin", "inv", "x2"]), ops),
+            !cleared_witness(&s(&["+", "x1", "sin", "inv", "x2"]), ops),
             "sin(1/x) class: clearing cannot pull a denominator through sin"
+        );
+        // The identity theorem on the domain reads it: analytic on each half-space x2 > 0 and
+        // x2 < 0, nonzero on a cell of each, and NaN on x2 = 0 (sin(inf)), which holds no zero.
+        assert!(
+            zero_set_null_generic_const(&s(&["+", "x1", "sin", "inv", "x2"]), ops, false),
+            "sin(1/x) class: null on each piece of the domain"
         );
         // Identically-zero disguise: sin^2 + cos^2 - 1 clears to itself (D = 1)
         // and the witness can never find a nonzero cell. Fail-closed.
         assert!(
             !zero_set_null_generic_const(
                 &s(&["-", "+", "*", "sin", "x1", "sin", "x1", "*", "cos", "x1", "cos", "x1", "1"]),
-                ops
+                ops,
+                false
             ),
             "an identically-zero factor has no nonzero witness cell"
         );
         // Branch-cut exponent: the pair algebra refuses non-integer powers.
         assert!(
-            !zero_set_null_generic_const(&s(&["inv", "pow", "x1", "/", "1", "2"]), ops),
+            !zero_set_null_generic_const(&s(&["inv", "pow", "x1", "/", "1", "2"]), ops, false),
             "x^(-1/2): non-integer exponents stay out of scope"
         );
         // Ground infinity: x1 + 1/0 = +inf everywhere -- EMPTY zero set, so a
@@ -4750,24 +5259,192 @@ mod tests {
         // invariant (factor-zeros in Z(N), factor-INFINITIES in Z(D)) parks
         // the everywhere-infinity in D = 0 and hands the witness N == 1.
         assert!(
-            zero_set_null_generic_const(&s(&["+", "x1", "/", "1", "0"]), ops),
+            zero_set_null_generic_const(&s(&["+", "x1", "/", "1", "0"]), ops, false),
             "x1 + 1/0 is +inf everywhere: empty zero set certifies"
         );
         // The mirror image: inv(inv(0)) = inv(+inf) IS identically zero -- the
         // swap carries the zero into N = 0 and the witness can never certify.
         assert!(
-            !zero_set_null_generic_const(&s(&["inv", "inv", "0"]), ops),
+            !zero_set_null_generic_const(&s(&["inv", "inv", "0"]), ops, false),
             "1/(1/0) = 1/inf = 0 identically: the swap parks it in N = 0"
         );
         // --- SCOPING ASYMMETRY (ask b, ratified: ac_zsn-scoped only) ---
         assert!(
-            !zero_set_null(&s(&["-", "inv", "x7", "x7"]), ops),
+            !zero_set_null(&s(&["-", "inv", "x7", "x7"]), ops, false),
             "the PLAIN certificate keeps its pre-E2 strength (scoped wiring)"
         );
         assert!(
-            !finite_nonzero_ae(&s(&["-", "inv", "x7", "x7"]), ops),
+            !finite_nonzero_ae(&s(&["-", "inv", "x7", "x7"]), ops, false),
             "the $-cancel licence is untouched by E2 (widening is its own ruling)"
         );
+    }
+
+    /// The identity theorem on the expression's domain: a sum over `log`, roots, `asin`, `acosh`, a
+    /// quotient or `abs` has a null zero set where every piece of its domain holds a cell on which
+    /// it is certainly nonzero; a sum that vanishes on a region of its domain never does.
+    #[test]
+    fn a_zero_set_is_read_on_the_domain() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        for null in [
+            &["-", "log", "x2", "x2"][..],
+            &["-", "rootn", "x2", "2", "x2"],
+            &["-", "log", "x3", "log", "x2"],
+            &["-", "asin", "x1", "x1"],
+            &["-", "acosh", "x1", "x1"],
+            &["-", "/", "sin", "x3", "x1", "rootn", "x2", "2"],
+            &["-", "pow", "x2", "/", "1", "3", "x2"],
+            &["+", "abs", "x1", "1"],
+            &["-", "*", "x2", "log", "+", "x1", "1", "x1"],
+        ] {
+            assert!(
+                zero_set_null_generic_const(&s(null), ops, false),
+                "{null:?}: never zero on a region of its domain"
+            );
+            // the plain certificate keeps its strength (the `$`-cancel's ruling)
+            assert!(!zero_set_null(&s(null), ops, false), "{null:?}");
+        }
+        for region in [
+            &["-", "x1", "abs", "x1"][..],
+            &["-", "abs", "x1", "x1"],
+            &["-", "x1", "pow", "rootn", "x1", "2", "2"],
+            &["-", "asin", "sin", "x1", "x1"],
+            &["-", "log", "exp", "x1", "x1"],
+            &["-", "x1", "atan", "tan", "x1"],
+            &["-", "acos", "cos", "x1", "x1"],
+        ] {
+            assert!(
+                !zero_set_null_generic_const(&s(region), ops, false),
+                "{region:?} vanishes on a region"
+            );
+        }
+    }
+
+    /// float64's `tanh` is exactly +-1 for every |g| >= 18.99 and its `atan` exactly +-fl(pi/2)
+    /// for every |g| >= 5.8e15, so in f64 a sum that cancels the limit vanishes on a region,
+    /// where over the reals it never vanishes.
+    #[test]
+    fn float64_tails_hold_zero_sets() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let read = |t: &[&str], f64: bool| zero_set_null_generic_const(&s(t), ops, f64);
+        for region in [
+            &["-", "*", "x2", "tanh", "x1", "x2"][..],
+            &["-", "tanh", "x1", "1"],
+            &["+", "tanh", "-", "x1", "x3", "1"],
+            &["-", "atan", "x1", "1.5707963267948966"],
+            &["-", "atan", "x1", "/", "np.pi", "2"],
+            &["*", "<constant>", "-", "tanh", "x1", "1"],
+            // tanh(tanh(x1)) is tanh(1) wherever x1 >= 18.99
+            &["-", "tanh", "tanh", "x1", "tanh", "1"],
+            // 1/(tanh(x1) - 1) is +inf on the tail, so its inverse is 0 there
+            &["inv", "inv", "-", "tanh", "x1", "1"],
+            // a training-data denominator: x2 - x2 wherever its tanh saturates
+            &[
+                "-", "*", "x2", "tanh", "-", "x8", "/", "*", "x8", "asin", "x2", "x9", "x2",
+            ],
+        ] {
+            assert!(read(region, false), "{region:?}: never zero over the reals");
+            assert!(!read(region, true), "{region:?}: zero on a float64 tail");
+        }
+        // the tails do not cancel, or the argument never reaches them
+        for null in [
+            &["-", "atan", "x1", "x1"][..],
+            &["-", "*", "x2", "tanh", "x1", "x1"],
+            &["-", "*", "x2", "tanh", "*", "x1", "x3", "x1"],
+            &["-", "tanh", "x1", "/", "1", "2"],
+            &["sin", "tanh", "pow", "x1", "8"],
+            &["-", "tanh", "sin", "x1", "1"],
+            &["-", "log", "x2", "tanh", "x2"],
+            &["-", "x1", "tanh", "1"],
+        ] {
+            assert!(read(null, false), "{null:?}");
+            assert!(read(null, true), "{null:?}");
+        }
+    }
+
+    /// The `!` and `$` certificates read float64's tails in f64: `1/(tanh(x1) - 1)` is `+inf`
+    /// and `tanh(x1) - 1` is `+0` wherever x1 >= 18.99, which the real functions never are.
+    #[test]
+    fn float64_tails_hold_infinities() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let fin = |t: &[&str], f64: bool| finite_ae(&s(t), ops, f64);
+        let finnz = |t: &[&str], f64: bool| finite_nonzero_ae(&s(t), ops, f64);
+        let zero = |t: &[&str], f64: bool| zero_set_null(&s(t), ops, f64);
+        for t in [
+            &["inv", "-", "tanh", "x1", "1"][..],
+            &["*", "x2", "inv", "-", "tanh", "x1", "1"],
+            &["inv", "-", "atan", "x1", "1.5707963267948966"],
+            &["/", "x2", "+", "tanh", "-", "x1", "x3", "1"],
+        ] {
+            assert!(fin(t, false), "{t:?}: finite over the reals");
+            assert!(!fin(t, true), "{t:?}: infinite on a float64 tail");
+        }
+        for t in [
+            &["-", "tanh", "x1", "1"][..],
+            &["*", "x2", "-", "tanh", "x1", "1"],
+            &["-", "atan", "x1", "1.5707963267948966"],
+        ] {
+            assert!(
+                finnz(t, false) && zero(t, false),
+                "{t:?}: nonzero over the reals"
+            );
+            assert!(
+                !finnz(t, true) && !zero(t, true),
+                "{t:?}: zero on a float64 tail"
+            );
+        }
+        // the tails stay finite and nonzero
+        for t in [
+            &["inv", "-", "tanh", "x1", "/", "1", "2"][..],
+            &["tanh", "x1"],
+            &["-", "*", "x2", "tanh", "x1", "x1"],
+            &["inv", "-", "atan", "x1", "x1"],
+        ] {
+            assert!(finnz(t, false) && finnz(t, true), "{t:?}");
+        }
+    }
+
+    /// The symbolic-exponent merge certificate reads float64's tails in f64: on a tail the
+    /// exponent is constant, so its level set there is the whole tail. A level at an integer is
+    /// harmless to the merge; one at any other value is refused.
+    #[test]
+    fn float64_tails_hold_exponent_levels() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let nce = |t: &[&str], f64: bool| nonconstant_entire(&s(t), ops, f64);
+        for t in [
+            &["atan", "x1"][..],
+            &["*", "3", "atan", "x1"],
+            &["sin", "tanh", "x1"],
+            // fl(pi) where x1 and -x2 are both on their upper tails
+            &["-", "atan", "x1", "atan", "x2"],
+        ] {
+            assert!(nce(t, false), "{t:?}: every level null over the reals");
+            assert!(
+                !nce(t, true),
+                "{t:?}: a non-integer level holds a float64 tail"
+            );
+        }
+        for t in [
+            &["tanh", "x1"][..],
+            &["+", "tanh", "x1", "1"],
+            &["*", "3", "tanh", "x1"],
+            &["*", "x2", "tanh", "x1"],
+            &["-", "atan", "x1", "x2"],
+            &["exp", "x1"],
+        ] {
+            assert!(nce(t, false) && nce(t, true), "{t:?}");
+        }
     }
 
     /// enclosure makes every exact-zero identity ground contain 0 (certificates fail closed)
@@ -4848,20 +5525,20 @@ mod tests {
         let ops = e.operators_ref();
         // Exact-zero identity grounds: the nonzero certificate must REFUSE.
         assert!(
-            !zero_set_null(&s(&["sin", "np.pi"]), ops),
+            !zero_set_null(&s(&["sin", "np.pi"]), ops, false),
             "sin(pi) is exactly 0: a nonzero-a.e. certificate must not exist"
         );
         assert!(
-            !zero_set_null(&s(&["abs", "sin", "np.pi"]), ops),
+            !zero_set_null(&s(&["abs", "sin", "np.pi"]), ops, false),
             "abs(sin(pi)) is exactly 0: certificate must refuse"
         );
         // Grounds bounded away from 0 still certify (no blanket refusal).
         assert!(
-            zero_set_null(&s(&["np.pi"]), ops),
+            zero_set_null(&s(&["np.pi"]), ops, false),
             "pi itself is rigorously nonzero"
         );
         assert!(
-            zero_set_null(&s(&["+", "sin", "np.pi", "2"]), ops),
+            zero_set_null(&s(&["+", "sin", "np.pi", "2"]), ops, false),
             "sin(pi) + 2 is rigorously bounded away from 0"
         );
         // The atom's value set really is a bracket containing the true constant.
@@ -4924,12 +5601,12 @@ mod tests {
             let at = |a: &str, b: &str| {
                 let t = spell(src, a, b);
                 (
-                    finite_ae(&t, ops),
-                    zero_set_null(&t, ops),
-                    zero_set_null_generic_const(&t, ops),
+                    finite_ae(&t, ops, false),
+                    zero_set_null(&t, ops, false),
+                    zero_set_null_generic_const(&t, ops, false),
                     nonfinite_null(&t, ops),
                     infinite_set_null(&t, ops),
-                    nonconstant_entire(&t, ops),
+                    nonconstant_entire(&t, ops, false),
                     value_class(&t, ops),
                     domain_extension(&t, &spell(&["A"], a, b), ops),
                 )
@@ -5386,7 +6063,7 @@ mod tests {
             vec!["tan", "x0"],
             vec!["/", "x0", "-", "x1", "cos", "x1"],
         ] {
-            assert!(finite_ae(&s(&expr), ops), "{expr:?} must certify");
+            assert!(finite_ae(&s(&expr), ops, false), "{expr:?} must certify");
         }
         // refuted / fail-closed: never bindable by `!`
         for expr in [
@@ -5397,7 +6074,10 @@ mod tests {
             vec!["/", "x0", "-", "x1", "x1"], // x/0: nonfinite a.e.
             vec!["/", "x0", "*", "<constant>", "x1"], // C = 0 makes it nonfinite a.e.
         ] {
-            assert!(!finite_ae(&s(&expr), ops), "{expr:?} must NOT certify");
+            assert!(
+                !finite_ae(&s(&expr), ops, false),
+                "{expr:?} must NOT certify"
+            );
         }
     }
 
@@ -5420,7 +6100,7 @@ mod tests {
             vec!["asin", "*", "0.001", "x1"],
         ] {
             assert!(
-                !finite_ae(&s(&expr), ops),
+                !finite_ae(&s(&expr), ops, false),
                 "{expr:?} is nan on a positive-measure tail and must NOT certify"
             );
         }
@@ -5431,11 +6111,18 @@ mod tests {
             vec!["sinh", "x0"],
             vec!["tanh", "*", "x0", "x1"],
         ] {
-            assert!(finite_ae(&s(&expr), ops), "{expr:?} must keep certifying");
+            assert!(
+                finite_ae(&s(&expr), ops, false),
+                "{expr:?} must keep certifying"
+            );
         }
         // In-box onsets were always refused and must stay refused (the control that
         // pins the boundary from the other side: 1/0.0157 = 63.69 < 64).
-        assert!(!finite_ae(&s(&["log", "-", "1", "*", "0.0157", "x1"]), ops));
+        assert!(!finite_ae(
+            &s(&["log", "-", "1", "*", "0.0157", "x1"]),
+            ops,
+            false
+        ));
     }
 
     /// The certificate algebra: `zero_set_null` / `nonfinite_null` / `finite_nonzero_ae`
@@ -5462,7 +6149,7 @@ mod tests {
             vec!["log", "cosh", "x0"], // zero only at x = 0
         ] {
             assert!(
-                zero_set_null(&v(&expr), ops),
+                zero_set_null(&v(&expr), ops, false),
                 "{expr:?} must have null zero set"
             );
         }
@@ -5478,7 +6165,10 @@ mod tests {
             vec!["*", "<constant>", "x0"], // C = 0 zeroes it identically
             vec!["sin", "*", "<constant>", "x0"],
         ] {
-            assert!(!zero_set_null(&v(&expr), ops), "{expr:?} must NOT certify");
+            assert!(
+                !zero_set_null(&v(&expr), ops, false),
+                "{expr:?} must NOT certify"
+            );
         }
 
         // nonfinite_null: certified
@@ -5521,7 +6211,10 @@ mod tests {
             vec!["inv", "x0"],
             vec!["-", "x0", "cos", "x0"],
         ] {
-            assert!(finite_nonzero_ae(&v(&expr), ops), "{expr:?} must certify");
+            assert!(
+                finite_nonzero_ae(&v(&expr), ops, false),
+                "{expr:?} must certify"
+            );
         }
         for expr in [
             vec!["0"],
@@ -5532,7 +6225,7 @@ mod tests {
             vec!["asin", "x0"], // nonzero-a.e. but NOT finite a.e. -> refused
         ] {
             assert!(
-                !finite_nonzero_ae(&v(&expr), ops),
+                !finite_nonzero_ae(&v(&expr), ops, false),
                 "{expr:?} must NOT certify"
             );
         }
@@ -5636,7 +6329,10 @@ mod tests {
             vec!["inv", "tan", "x0"], // zero only where tan is infinite: null
             vec!["+", "pow", "x0", "3", "1"], // polynomial witness via binary pow
         ] {
-            assert!(zero_set_null(&v(&expr), ops), "{expr:?} must certify");
+            assert!(
+                zero_set_null(&v(&expr), ops, false),
+                "{expr:?} must certify"
+            );
         }
         // zero_set_null: sharpened arms must keep refusing the fat sets
         for expr in [
@@ -5644,7 +6340,10 @@ mod tests {
             vec!["pow", "-", "x0", "x0", "2"],          // identically zero, no witness
             vec!["+", "abs", "x0", "x0"],               // plateau (unchanged refusal)
         ] {
-            assert!(!zero_set_null(&v(&expr), ops), "{expr:?} must NOT certify");
+            assert!(
+                !zero_set_null(&v(&expr), ops, false),
+                "{expr:?} must NOT certify"
+            );
         }
     }
 
