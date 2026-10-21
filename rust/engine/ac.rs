@@ -515,13 +515,15 @@ impl Engine {
     /// identity-theorem witness for analytic compositions, `<constant>` analyzed as a
     /// generic parameter in the joint space per the E1 lemma (F80, owner-ruled
     /// 2026-08-10), fail-closed on everything else). Uncached: the structural
-    /// recursion is cheap and the witness budget is small.
-    fn ac_zsn(&self, e: &Ex, ctx: &SimplifyCtx) -> bool {
+    /// recursion is cheap and the witness budget is small. `f64` (the `f64` mode) reads each
+    /// function on its float64 range, where `tanh` and `atan` are constant on whole tails;
+    /// `real` and `permissive` read the real functions.
+    fn ac_zsn(&self, e: &Ex, ctx: &SimplifyCtx, f64: bool) -> bool {
         let view = self.view(ctx);
         let bare = Cx::bare(&view);
         let flat = to_prefix(e, &bare);
         let strs = self.resolve_seq(&flat, ctx);
-        crate::interval::zero_set_null_generic_const(&strs, &self.operators)
+        crate::interval::zero_set_null_generic_const(&strs, &self.operators, f64)
     }
 
     /// The nonconstant-entire certificate behind `Cx::cert_nce` (the symbolic-exponent
@@ -1357,7 +1359,7 @@ impl Engine {
         let view = self.view(ctx);
         let cf = |e: &Ex| self.ac_cert(e, ctx, false);
         let cfz = |e: &Ex| self.ac_cert(e, ctx, true);
-        let czn = |e: &Ex| self.ac_zsn(e, ctx);
+        let czn = |e: &Ex| self.ac_zsn(e, ctx, matches!(canon_mode, RuleMode::Default));
         let cnc = |e: &Ex| self.ac_nce(e, ctx);
         let cx = Cx {
             view: &view,
@@ -1502,7 +1504,7 @@ impl Engine {
 
         let cf = |e: &Ex| self.ac_cert(e, &ctx, false);
         let cfz = |e: &Ex| self.ac_cert(e, &ctx, true);
-        let czn = |e: &Ex| self.ac_zsn(e, &ctx);
+        let czn = |e: &Ex| self.ac_zsn(e, &ctx, matches!(mode, RuleMode::Default));
         let cnc = |e: &Ex| self.ac_nce(e, &ctx);
         let cx = Cx {
             view: &view,

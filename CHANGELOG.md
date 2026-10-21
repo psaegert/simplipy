@@ -434,9 +434,32 @@ model predictions.
   156; on a tenth of the predictions 256 (29, 12, 215), 255 (31, 11, 213) and 35. No answer
   changes on a second call. The dearer answers are inverses the stronger licence now distributes
   over a product (`1/(a*b)` as `1/a * 1/b`), which can price above the joined product, and the
-  searches that start from those forms. One `f64` and one `real` training-data answer no longer
-  show the input's infinity: a denominator `x2*tanh(u) - x2` that float64 rounds to exactly zero
-  where `tanh` saturates to 1, which the real `tanh` never is.
+  searches that start from those forms. One `real` training-data answer no longer shows the
+  input's float64 infinity: a denominator `x2*tanh(u) - x2`, which float64 rounds to exactly zero
+  where `tanh` saturates to 1 and the real `tanh` never does (`f64` reads float64's `tanh`, below).
+- **`f64` reads `tanh` and `atan` on their float64 range.** float64's `tanh(u)` is exactly ±1 for
+  every |u| ≥ 18.99 and its `atan(u)` exactly ±fl(π/2) for every |u| ≥ 5.8e15, in the deployed
+  evaluator as in the engine's. No other operator is constant on a tail: measured on each out to
+  the largest float, the others keep changing, overflow or underflow (which the overflow reading
+  covers), or are NaN off their domains. So in `f64` a sum that cancels such a limit is `+0` on a
+  whole region: `x2*tanh(x1) - x2` vanishes wherever x1 ≥ 18.99. The zero-set certificate the core
+  reads took the real functions, which never reach their limits, and let a sign move through such
+  a sum under an inverse: `-1/(x2*tanh(x1) - x2)` became `1/((1 - tanh(x1))*x2)`, `+inf` where
+  float64 gives `-inf`. In `f64` the certificate now reads the expression as the real one off the
+  tails and, on each tail, as the expression with the function replaced by its limit, whose zero
+  set must be null too. `-1/(x2*tanh(x1) - x2)` stays as written, and so, under an inverse, do
+  `tanh(x1 - x3) + 1`, `atan(x1) - fl(π/2)` and `tanh(tanh(x1)) - tanh(1)`. `x2*tanh(x1) - x1` and
+  `atan(x1) - x1`, whose tails do not cancel, are null as before. `real` and `permissive` read the
+  real functions. srbf's ground truths do not change in any mode. On a tenth of the
+  training-data inputs 2 `f64` answers change (1 cheaper, 1 at an equal price), and the
+  `x2*tanh(u) - x2` answer above keeps the input's infinity in `f64`. On a tenth of the
+  predictions 5 change (3 dearer, 2 at an equal price). `real` and `permissive` do not change, and
+  no answer changes on a second call. The dearer answers keep an inverse joined where the
+  certificate cannot read a tail and so fails closed: the limit leaves a constant past its horizon
+  (`atan(u)^64` is fl(π/2)^64 = 3.6e12 there), or it sits under `cos`, where `cos(fl(π/2))` is
+  6e-17 but the literal's enclosure holds π/2. The plain certificate behind the `$`-cancel keeps
+  the real reading: in `f64`, `(tanh(x1) - 1)^2/(tanh(x1) - 1)` is still `tanh(x1) - 1`, a value
+  where float64 gives NaN on the tail.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled

@@ -179,6 +179,29 @@ finds no such cell, on a restricted argument that is not affine, on `tan` (whose
 line into infinitely many pieces) and on more than three arguments that must be nonzero. The
 plain certificate behind the `$`-cancel keeps its strength.
 
+**In `f64` the zero-set certificate reads each function on its float64 range.** Two functions of
+the vocabulary are exactly constant on a whole tail in float64: `tanh(u)` is ±1 for every
+|u| ≥ 18.990341103219276 (the deployed evaluator; the engine's own saturates at 19.06) and
+`atan(u)` is ±fl(π/2) for every |u| ≥ 5805358775541310. This was measured on every operator,
+with both evaluators, out to the largest float. Every other operator keeps changing on its tails,
+or overflows to an infinity or underflows to 0 (`exp`, `sinh`, `cosh`, `pow`), which the overflow
+reading covers, or is NaN off its domain. On a tail such a function is not analytic, and a sum
+that cancels its limit vanishes on a region: `x2*tanh(x1) - x2` is `+0` wherever x1 ≥ 18.99, so
+its inverse is `+inf` there. In `f64` the certificate therefore splits the space. Off the tails the
+expression is the real one, so its zeros there are among the real expression's, which the real
+certificate shows null. On a tail it is exactly the expression with that function replaced by
+its limit, and the tail adds no zero set when that expression's zero set is null in float64 on
+the whole space (a stronger claim, which fails closed). A function whose argument is ground, or
+never leaves the middle (`tanh(sin(x1))`), has no tail to read; more than three such functions
+fail closed. So `x2*tanh(x1) - x1`, `x2*tanh(x1*x3) - x1`, `sin(tanh(x1^8))` and `atan(x1) - x1`
+stay null, while `x2*tanh(x1) - x2`, `tanh(x1 - x3) + 1`, `atan(x1) - fl(π/2)`,
+`tanh(tanh(x1)) - tanh(1)` and `1/(1/(tanh(x1) - 1))` are not. `real` and `permissive` read the
+real functions, which never reach their limits. Rounding plateaus are not covered by this reading:
+`cos` is exactly 1 within 1.05e-8 of every multiple of 2π, `cosh` and `exp` are exactly 1 near 0,
+an addend falls off a much larger one (`(x1 + 1) - x1`), and an argument that tends to a plateau
+stretches it over a tail (`cos(1/x1)` is exactly 1 for every |x1| ≥ 1e8). Like all rounding, the
+certificate reads these as the real functions.
+
 **Lemma L1 (nf is well-defined and terminating)** [BY CONSTRUCTION — audited per call
 site]. Every recursive constructor call is on arguments of strictly smaller size, with
 exactly two audited exceptions carrying their own strictly decreasing measures:

@@ -44,6 +44,8 @@ const TANH_SAT: f64 = 18.990341103219276;
 /// Largest x with `exp(x) == 0.0` exactly; just above it exp gives 5e-324, the smallest
 /// subnormal.
 const EXP_UNDERFLOW: f64 = -745.1332191019412;
+/// Smallest x with `atan(x) == fl(pi/2)` exactly (the deployed evaluator and the engine's agree).
+const ATAN_SAT: f64 = 5805358775541310.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
@@ -3255,13 +3257,22 @@ pub fn zero_set_null(tokens: &[String], ops: &Operators) -> bool {
 /// `Cx::nz_ae_licensed`). SCOPE: consumed ONLY by the odd-negative power-distribution
 /// licence (`engine::ac::ac_zsn`). Deliberately NOT wired into `finite_nonzero_ae`:
 /// the `$`-cancel licence keeps its SELFCANCEL asymmetry (the c = 0 atom stays
-/// protected there), pinned by test.
-pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators) -> bool {
+/// protected there), pinned by test. `f64` (the `f64` mode) reads the expression in float64,
+/// where `tanh` and `atan` are constant on whole tails (`float64_null`); `real` and `permissive`
+/// read it over the reals.
+pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
-        return zero_set_null_generic_const(&d[0], ops);
+        return zero_set_null_generic_const(&d[0], ops, f64);
     }
+    let read = |t: &[String]| {
+        if f64 {
+            float64_null(t, ops, 0)
+        } else {
+            zsn(t, ops, 0, true)
+        }
+    };
     if !tokens.iter().any(|s| s == "<constant>") {
-        return zsn(tokens, ops, 0, true);
+        return read(tokens);
     }
     let base = 1 + tokens
         .iter()
@@ -3281,7 +3292,98 @@ pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators) -> bool {
             }
         })
         .collect();
-    zsn(&renamed, ops, 0, true)
+    read(&renamed)
+}
+
+/// float64's tails: `(threshold, limit)` where the function is EXACTLY `limit` for every argument
+/// at or past `threshold`, and `-limit` at or below `-threshold`. Measured on every operator of the
+/// vocabulary with the deployed evaluator and the engine's, out to the largest float: only `tanh`
+/// (+-1; the deployed evaluator saturates first, at `TANH_SAT`, the engine's at 19.0615) and
+/// `atan` (+-fl(pi/2)) have one. Overflow and underflow to an infinity or 0 (`exp`, `sinh`,
+/// `cosh`, `pow`) are the overflow reading's; `asin`, `acos`, `atanh`, `acosh` and `log` are NaN
+/// off their domains.
+fn tail_of(op: &str) -> Option<(f64, f64)> {
+    match op {
+        "tanh" => Some((TANH_SAT, 1.0)),
+        "atan" => Some((ATAN_SAT, std::f64::consts::FRAC_PI_2)),
+        _ => None,
+    }
+}
+
+/// The zero set in float64 is null. Off the tails of its `tanh` and `atan` (`tail_of`) an
+/// expression is the real one, so there its zeros are among the real expression's, null by the
+/// real certificate (`zsn`). On a tail of one of them it is EXACTLY the expression with that
+/// function replaced by its limit, whose zero set must then be null in float64 too (on the whole
+/// space, a stronger claim). So `x2*tanh(x1) - x1` is null (its tails read `x2 - x1` and
+/// `-x2 - x1`), and `x2*tanh(x1) - x2`, `+0` wherever x1 >= 18.99, is not. A function whose
+/// argument is ground, or never leaves (-threshold, threshold) (`tanh(sin(x1))`), has no tail to
+/// read; more than `MAX_TAILS` of them fail closed.
+fn float64_null(t: &[String], ops: &Operators, d: u32) -> bool {
+    const MAX_TAILS: usize = 3;
+    if d > CERT_RECURSION_MAX || !zsn(t, ops, 0, true) {
+        return false;
+    }
+    let Some(sites) = tail_sites(t, ops) else {
+        return false;
+    };
+    sites.len() <= MAX_TAILS
+        && sites.iter().all(|&(site, limit)| {
+            [limit, -limit]
+                .iter()
+                .all(|&c| float64_null(&replace_subtree(t, site, c, ops), ops, d + 1))
+        })
+}
+
+/// The functions of `t` that reach a float64 tail: each distinct subtree once, with its limit.
+fn tail_sites<'a>(t: &'a [String], ops: &Operators) -> Option<Vec<(&'a [String], f64)>> {
+    let mut sites: Vec<(&[String], f64)> = Vec::new();
+    for (i, tok) in t.iter().enumerate() {
+        let Some((threshold, limit)) = tail_of(tok) else {
+            continue;
+        };
+        if ops.arity_of(tok) != Some(1) {
+            continue;
+        }
+        let j = subtree_end(t, i, ops)?;
+        if ground_leaf(t, i + 1, ops).is_some() {
+            continue;
+        }
+        let inside = |v: Vs| {
+            !v.pinf
+                && !v.ninf
+                && (!v.has_fin
+                    || ((v.lo > -threshold || (v.lo == -threshold && v.lo_open))
+                        && (v.hi < threshold || (v.hi == threshold && v.hi_open))))
+        };
+        if whole_range(&t[i + 1..j], ops).is_some_and(inside) {
+            continue;
+        }
+        if !sites.iter().any(|&(s, _)| s == &t[i..j]) {
+            sites.push((&t[i..j], limit));
+        }
+    }
+    Some(sites)
+}
+
+/// `t` with every occurrence of the subtree `site` replaced by the literal `c`.
+fn replace_subtree(t: &[String], site: &[String], c: f64, ops: &Operators) -> Vec<String> {
+    let lit = if c < 0.0 {
+        format!("(-{})", -c)
+    } else {
+        format!("{c}")
+    };
+    let mut out = Vec::with_capacity(t.len());
+    let mut i = 0;
+    while i < t.len() {
+        if t[i..].starts_with(site) && subtree_end(t, i, ops) == Some(i + site.len()) {
+            out.push(lit.clone());
+            i += site.len();
+        } else {
+            out.push(t[i].clone());
+            i += 1;
+        }
+    }
+    out
 }
 
 /// `e2` (owner-ratified 2026-08-11, audit F81; design in the research harness):
@@ -4983,27 +5085,27 @@ mod tests {
         let ops = e.operators_ref();
         // The acos(C) witness class: zero only at the single setting C = 1.
         assert!(
-            zero_set_null_generic_const(&s(&["acos", "<constant>"]), ops),
+            zero_set_null_generic_const(&s(&["acos", "<constant>"]), ops, false),
             "acos(<constant>) vanishes only at C = 1: null in parameter space"
         );
         // The bare atom, consistent with the ruled licence doctrine.
         assert!(
-            zero_set_null_generic_const(&s(&["<constant>"]), ops),
+            zero_set_null_generic_const(&s(&["<constant>"]), ops, false),
             "{{c = 0}} is a null set of the mask's own parameter space"
         );
         // Independent occurrences: C1 - C2 vanishes only on the diagonal.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "<constant>", "<constant>"]), ops),
+            zero_set_null_generic_const(&s(&["-", "<constant>", "<constant>"]), ops, false),
             "two <constant>s are INDEPENDENT: the diagonal is null"
         );
         // A zero literal still kills the product unconditionally.
         assert!(
-            !zero_set_null_generic_const(&s(&["*", "0", "<constant>"]), ops),
+            !zero_set_null_generic_const(&s(&["*", "0", "<constant>"]), ops, false),
             "an exact zero factor is identically zero"
         );
         // The genuinely-forbidden fat-zero shape stays refused (abs is not analytic).
         assert!(
-            !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops),
+            !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops, false),
             "x - |x| vanishes on a half-line: must refuse"
         );
         // THE ASYMMETRY PINS: the plain certificate and the $-certificate are
@@ -5034,7 +5136,7 @@ mod tests {
         // The design's worked example: an affine sum whose literal spells as a
         // fraction; tier-0 ground-leaf acceptance lets the witness see it.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "x3", "/", "5", "4"]), ops),
+            zero_set_null_generic_const(&s(&["-", "x3", "/", "5", "4"]), ops, false),
             "x3 - 5/4 vanishes on one hyperplane: the literal SPELLING must not refuse"
         );
         assert!(
@@ -5043,34 +5145,34 @@ mod tests {
         );
         // 1/x - x clears to N = 1 - x^2: zeros {-1, +1}, null.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "inv", "x7", "x7"]), ops),
+            zero_set_null_generic_const(&s(&["-", "inv", "x7", "x7"]), ops, false),
             "1/x - x = (1 - x^2)/x: witness the entire numerator"
         );
         // Zeros AT the inner pole: 1/(1/x + 1) is genuinely 0 at x = 0
         // (1/0 = +inf, 1/inf = 0); the swap makes N = x, catching it.
         assert!(
-            zero_set_null_generic_const(&s(&["inv", "+", "inv", "x1", "1"]), ops),
+            zero_set_null_generic_const(&s(&["inv", "+", "inv", "x1", "1"]), ops, false),
             "the pair swap captures zeros-at-poles: Z = {{0}}, null"
         );
         // tan clears at head level: x2 + tan(x3) -> N = x2*cos(x3) + sin(x3).
         assert!(
-            zero_set_null_generic_const(&s(&["+", "x2", "tan", "x3"]), ops),
+            zero_set_null_generic_const(&s(&["+", "x2", "tan", "x3"]), ops, false),
             "tan u = sin u / cos u clears; N is entire and not identically zero"
         );
         // E1 x E2 composition: 1/c - c with the generic-parameter rename.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "inv", "<constant>", "<constant>"]), ops),
+            zero_set_null_generic_const(&s(&["-", "inv", "<constant>", "<constant>"]), ops, false),
             "Const renames to a generic variable BEFORE clearing (ordering law)"
         );
         // Negative literal exponents are cleared by the powered swap.
         assert!(
-            zero_set_null_generic_const(&s(&["-", "pow", "x2", "-2", "x2"]), ops),
+            zero_set_null_generic_const(&s(&["-", "pow", "x2", "-2", "x2"]), ops, false),
             "x^-2 - x = (1 - x^3)/x^2: the powered swap clears it"
         );
         // --- SOUND-REFUSAL PINS (must stay refused forever) ---
         // The fat class: x - |x| vanishes on a half-line; abs refuses clearing.
         assert!(
-            !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops),
+            !zero_set_null_generic_const(&s(&["-", "x0", "abs", "x0"]), ops, false),
             "x - |x| is the genuinely forbidden class: no spelling may certify it"
         );
         // Pole inside a transcendental argument: the ratified boundary of the clearing.
@@ -5081,7 +5183,7 @@ mod tests {
         // The identity theorem on the domain reads it: analytic on each half-space x2 > 0 and
         // x2 < 0, nonzero on a cell of each, and NaN on x2 = 0 (sin(inf)), which holds no zero.
         assert!(
-            zero_set_null_generic_const(&s(&["+", "x1", "sin", "inv", "x2"]), ops),
+            zero_set_null_generic_const(&s(&["+", "x1", "sin", "inv", "x2"]), ops, false),
             "sin(1/x) class: null on each piece of the domain"
         );
         // Identically-zero disguise: sin^2 + cos^2 - 1 clears to itself (D = 1)
@@ -5089,13 +5191,14 @@ mod tests {
         assert!(
             !zero_set_null_generic_const(
                 &s(&["-", "+", "*", "sin", "x1", "sin", "x1", "*", "cos", "x1", "cos", "x1", "1"]),
-                ops
+                ops,
+                false
             ),
             "an identically-zero factor has no nonzero witness cell"
         );
         // Branch-cut exponent: the pair algebra refuses non-integer powers.
         assert!(
-            !zero_set_null_generic_const(&s(&["inv", "pow", "x1", "/", "1", "2"]), ops),
+            !zero_set_null_generic_const(&s(&["inv", "pow", "x1", "/", "1", "2"]), ops, false),
             "x^(-1/2): non-integer exponents stay out of scope"
         );
         // Ground infinity: x1 + 1/0 = +inf everywhere -- EMPTY zero set, so a
@@ -5103,13 +5206,13 @@ mod tests {
         // invariant (factor-zeros in Z(N), factor-INFINITIES in Z(D)) parks
         // the everywhere-infinity in D = 0 and hands the witness N == 1.
         assert!(
-            zero_set_null_generic_const(&s(&["+", "x1", "/", "1", "0"]), ops),
+            zero_set_null_generic_const(&s(&["+", "x1", "/", "1", "0"]), ops, false),
             "x1 + 1/0 is +inf everywhere: empty zero set certifies"
         );
         // The mirror image: inv(inv(0)) = inv(+inf) IS identically zero -- the
         // swap carries the zero into N = 0 and the witness can never certify.
         assert!(
-            !zero_set_null_generic_const(&s(&["inv", "inv", "0"]), ops),
+            !zero_set_null_generic_const(&s(&["inv", "inv", "0"]), ops, false),
             "1/(1/0) = 1/inf = 0 identically: the swap parks it in N = 0"
         );
         // --- SCOPING ASYMMETRY (ask b, ratified: ac_zsn-scoped only) ---
@@ -5144,7 +5247,7 @@ mod tests {
             &["-", "*", "x2", "log", "+", "x1", "1", "x1"],
         ] {
             assert!(
-                zero_set_null_generic_const(&s(null), ops),
+                zero_set_null_generic_const(&s(null), ops, false),
                 "{null:?}: never zero on a region of its domain"
             );
             // the plain certificate keeps its strength (the `$`-cancel's ruling)
@@ -5160,9 +5263,54 @@ mod tests {
             &["-", "acos", "cos", "x1", "x1"],
         ] {
             assert!(
-                !zero_set_null_generic_const(&s(region), ops),
+                !zero_set_null_generic_const(&s(region), ops, false),
                 "{region:?} vanishes on a region"
             );
+        }
+    }
+
+    /// float64's `tanh` is exactly +-1 for every |g| >= 18.99 and its `atan` exactly +-fl(pi/2)
+    /// for every |g| >= 5.8e15, so in f64 a sum that cancels the limit vanishes on a region,
+    /// where over the reals it never vanishes.
+    #[test]
+    fn float64_tails_hold_zero_sets() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let read = |t: &[&str], f64: bool| zero_set_null_generic_const(&s(t), ops, f64);
+        for region in [
+            &["-", "*", "x2", "tanh", "x1", "x2"][..],
+            &["-", "tanh", "x1", "1"],
+            &["+", "tanh", "-", "x1", "x3", "1"],
+            &["-", "atan", "x1", "1.5707963267948966"],
+            &["-", "atan", "x1", "/", "np.pi", "2"],
+            &["*", "<constant>", "-", "tanh", "x1", "1"],
+            // tanh(tanh(x1)) is tanh(1) wherever x1 >= 18.99
+            &["-", "tanh", "tanh", "x1", "tanh", "1"],
+            // 1/(tanh(x1) - 1) is +inf on the tail, so its inverse is 0 there
+            &["inv", "inv", "-", "tanh", "x1", "1"],
+            // a training-data denominator: x2 - x2 wherever its tanh saturates
+            &[
+                "-", "*", "x2", "tanh", "-", "x8", "/", "*", "x8", "asin", "x2", "x9", "x2",
+            ],
+        ] {
+            assert!(read(region, false), "{region:?}: never zero over the reals");
+            assert!(!read(region, true), "{region:?}: zero on a float64 tail");
+        }
+        // the tails do not cancel, or the argument never reaches them
+        for null in [
+            &["-", "atan", "x1", "x1"][..],
+            &["-", "*", "x2", "tanh", "x1", "x1"],
+            &["-", "*", "x2", "tanh", "*", "x1", "x3", "x1"],
+            &["-", "tanh", "x1", "/", "1", "2"],
+            &["sin", "tanh", "pow", "x1", "8"],
+            &["-", "tanh", "sin", "x1", "1"],
+            &["-", "log", "x2", "tanh", "x2"],
+            &["-", "x1", "tanh", "1"],
+        ] {
+            assert!(read(null, false), "{null:?}");
+            assert!(read(null, true), "{null:?}");
         }
     }
 
@@ -5322,7 +5470,7 @@ mod tests {
                 (
                     finite_ae(&t, ops),
                     zero_set_null(&t, ops),
-                    zero_set_null_generic_const(&t, ops),
+                    zero_set_null_generic_const(&t, ops, false),
                     nonfinite_null(&t, ops),
                     infinite_set_null(&t, ops),
                     nonconstant_entire(&t, ops),
