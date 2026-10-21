@@ -3397,13 +3397,11 @@ fn tail_sites<'a>(t: &'a [String], ops: &Operators) -> Option<Vec<(&'a [String],
     Some(sites)
 }
 
-/// `t` with every occurrence of the subtree `site` replaced by the literal `c`.
+/// `t` with every occurrence of the subtree `site` replaced by the literal `c`, spelled as the
+/// shortest decimal that reads back as `c` (an integer limit as an integer, which reads as a
+/// point).
 fn replace_subtree(t: &[String], site: &[String], c: f64, ops: &Operators) -> Vec<String> {
-    let lit = if c < 0.0 {
-        format!("(-{})", -c)
-    } else {
-        format!("{c}")
-    };
+    let lit = format!("{c}");
     let mut out = Vec::with_capacity(t.len());
     let mut i = 0;
     while i < t.len() {
@@ -4511,10 +4509,33 @@ pub fn finite_nonzero_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool 
 /// base^y into base^(n*y) changes nothing off a null set. The traps are refused by
 /// construction: an identically-constant-but-unfolded y (sin^2 + cos^2) admits no
 /// disjoint pair; an abs-bearing y is not entire; a ground y is constant.
-pub fn nonconstant_entire(t: &[String], ops: &Operators) -> bool {
+///
+/// `f64` (the `f64` mode) reads y in float64 (`on_float64_tails`), where `tanh` and `atan` are
+/// constant on whole tails: there y is constant too, and its level set at that value is the whole
+/// tail. The merge reads only the levels off the integers, so a tail on which y is an integer
+/// (`tanh(x1)`, at +-1) is harmless, and one on which it is any other constant (`3*atan(x1)`, at
+/// +-3*fl(pi/2)) is refused. The constant is the one float64 computes there (the engine's
+/// evaluator, whose `tanh` saturates after the deployed one's: where it reads an integer, so does
+/// the deployed one). `real` and `permissive` read y over the reals.
+pub fn nonconstant_entire(t: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[t], ops) {
-        return nonconstant_entire(&d[0], ops);
+        return nonconstant_entire(&d[0], ops, f64);
     }
+    let real = |t: &[String]| nonconstant_entire_real(t, ops);
+    let integer = |t: &[String]| {
+        crate::numeric::evaluate_constant_subtree(t, ops)
+            .and_then(|v| v.parse::<f64>().ok())
+            .is_some_and(|v| v.is_finite() && v.fract() == 0.0)
+    };
+    if f64 {
+        on_float64_tails(t, ops, 0, &real, &integer)
+    } else {
+        real(t)
+    }
+}
+
+/// `nonconstant_entire` over the reals.
+fn nonconstant_entire_real(t: &[String], ops: &Operators) -> bool {
     if t.iter()
         .any(|s| ops.is_operator(s) && !op_entire_analytic(s))
     {
@@ -5391,6 +5412,41 @@ mod tests {
         }
     }
 
+    /// The symbolic-exponent merge certificate reads float64's tails in f64: on a tail the
+    /// exponent is constant, so its level set there is the whole tail. A level at an integer is
+    /// harmless to the merge; one at any other value is refused.
+    #[test]
+    fn float64_tails_hold_exponent_levels() {
+        let Some(e) = crate::test_engine() else {
+            return;
+        };
+        let ops = e.operators_ref();
+        let nce = |t: &[&str], f64: bool| nonconstant_entire(&s(t), ops, f64);
+        for t in [
+            &["atan", "x1"][..],
+            &["*", "3", "atan", "x1"],
+            &["sin", "tanh", "x1"],
+            // fl(pi) where x1 and -x2 are both on their upper tails
+            &["-", "atan", "x1", "atan", "x2"],
+        ] {
+            assert!(nce(t, false), "{t:?}: every level null over the reals");
+            assert!(
+                !nce(t, true),
+                "{t:?}: a non-integer level holds a float64 tail"
+            );
+        }
+        for t in [
+            &["tanh", "x1"][..],
+            &["+", "tanh", "x1", "1"],
+            &["*", "3", "tanh", "x1"],
+            &["*", "x2", "tanh", "x1"],
+            &["-", "atan", "x1", "x2"],
+            &["exp", "x1"],
+        ] {
+            assert!(nce(t, false) && nce(t, true), "{t:?}");
+        }
+    }
+
     /// enclosure makes every exact-zero identity ground contain 0 (certificates fail closed)
     /// while grounds rigorously bounded away from 0 keep certifying.
     /// F82 (2026-08-11, extreme row 433087): b_mul's infinite blocks collapsed a
@@ -5550,7 +5606,7 @@ mod tests {
                     zero_set_null_generic_const(&t, ops, false),
                     nonfinite_null(&t, ops),
                     infinite_set_null(&t, ops),
-                    nonconstant_entire(&t, ops),
+                    nonconstant_entire(&t, ops, false),
                     value_class(&t, ops),
                     domain_extension(&t, &spell(&["A"], a, b), ops),
                 )

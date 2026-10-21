@@ -7,8 +7,10 @@ certificate read the real functions, which never reach their limits, and let a s
 such a sum under an inverse: `-1/(x2*tanh(x1) - x2)` became `1/((1 - tanh(x1))*x2)`, +inf where
 the input is -inf. The certificates behind the cancellations read them too: `t/t` became 1 and
 `2t - t` became `t` for `t = tanh(x1) - 1` and `t = 1/(tanh(x1) - 1)`, a value where float64 gives
-NaN on the tail. `f64` reads each function on its float64 range; `real` and `permissive` keep the
-real reading.
+NaN on the tail. The merge of `x^y * x^y` into `x^(2y)` reads the levels of the exponent: on a
+tail a `tanh` or `atan` exponent is constant, so its level set there is the whole tail, harmless at
+an integer (`tanh(x1)`) and refused elsewhere (`3*atan(x1)`). `f64` reads each function on its
+float64 range; `real` and `permissive` keep the real reading.
 """
 import numpy as np
 import pytest
@@ -116,3 +118,15 @@ def test_f64_keeps_the_nan_of_a_cancellation_on_a_tail(eng, expression):
 ])
 def test_only_f64_reads_the_tails_of_a_cancellation(eng, mode, expected):
     assert ' '.join(eng.simplify('/ - tanh x1 1 - tanh x1 1'.split(), mode=mode)) == expected
+
+
+@pytest.mark.parametrize('mode, expected', [
+    ('f64', '* pow x2 * 3 atan x1 pow x2 * 3 atan x1'),
+    ('real', 'pow x2 * 6 atan x1'),
+    ('permissive', 'pow x2 * 6 atan x1'),
+])
+def test_an_exponent_constant_on_a_tail_merges_only_at_an_integer(eng, mode, expected):
+    tokens = '* pow x2 * 3 atan x1 pow x2 * 3 atan x1'.split()
+    assert ' '.join(eng.simplify(tokens, mode=mode)) == expected
+    merged = '* pow x2 tanh x1 pow x2 tanh x1'.split()
+    assert ' '.join(eng.simplify(merged, mode=mode)) == 'pow x2 * 2 tanh x1'

@@ -536,13 +536,14 @@ impl Engine {
 
     /// The nonconstant-entire certificate behind `Cx::cert_nce` (the symbolic-exponent
     /// merge licence): two disjoint rigorous value intervals prove the exponent is not
-    /// identically constant, so its level sets are null (identity theorem).
-    fn ac_nce(&self, e: &Ex, ctx: &SimplifyCtx) -> bool {
+    /// identically constant, so its level sets are null (identity theorem). `f64` (the `f64`
+    /// mode) reads the exponent in float64, where `tanh` and `atan` are constant on whole tails.
+    fn ac_nce(&self, e: &Ex, ctx: &SimplifyCtx, f64: bool) -> bool {
         let view = self.view(ctx);
         let bare = Cx::bare(&view);
         let flat = to_prefix(e, &bare);
         let strs = self.resolve_seq(&flat, ctx);
-        crate::interval::nonconstant_entire(&strs, &self.operators)
+        crate::interval::nonconstant_entire(&strs, &self.operators, f64)
     }
 
     /// The `<constant>` value-set fold: a node of `<constant>` and literals (numbers and special
@@ -1369,7 +1370,7 @@ impl Engine {
         let cf = |e: &Ex| self.ac_cert(e, ctx, false, f64);
         let cfz = |e: &Ex| self.ac_cert(e, ctx, true, f64);
         let czn = |e: &Ex| self.ac_zsn(e, ctx, f64);
-        let cnc = |e: &Ex| self.ac_nce(e, ctx);
+        let cnc = |e: &Ex| self.ac_nce(e, ctx, f64);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),
@@ -1515,7 +1516,7 @@ impl Engine {
         let cf = |e: &Ex| self.ac_cert(e, &ctx, false, f64);
         let cfz = |e: &Ex| self.ac_cert(e, &ctx, true, f64);
         let czn = |e: &Ex| self.ac_zsn(e, &ctx, f64);
-        let cnc = |e: &Ex| self.ac_nce(e, &ctx);
+        let cnc = |e: &Ex| self.ac_nce(e, &ctx, f64);
         let cx = Cx {
             view: &view,
             cert_fin: Some(&cf),

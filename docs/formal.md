@@ -199,6 +199,9 @@ stay null, while `x2*tanh(x1) - x2`, `tanh(x1 - x3) + 1`, `atan(x1) - fl(π/2)`,
 cancellations, "finite almost everywhere" (`!`) and "finite and nonzero almost everywhere" (`$`),
 read an expression the same way: `1/(tanh(x1) - 1)` is not finite on the tail, nor
 `tanh(x1) - 1` nonzero, so `(tanh(x1) - 1)/(tanh(x1) - 1)`, NaN there, is not `1` in `f64`.
+The merge of `x^y * x^y` into `x^(2y)` needs the levels of `y` off the integers to be null. On a
+tail `y` is constant, which is harmless where that constant is an integer (`tanh(x1)` at ±1) and
+refused elsewhere (`3*atan(x1)` at ±3·fl(π/2)).
 `real` and `permissive` read the real functions, which never reach their limits. Rounding plateaus are not covered by this reading:
 `cos` is exactly 1 within 1.05e-8 of every multiple of 2π, `cosh` and `exp` are exactly 1 near 0,
 an addend falls off a much larger one (`(x1 + 1) - x1`), and an argument that tends to a plateau

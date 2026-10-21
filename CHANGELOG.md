@@ -470,6 +470,17 @@ model predictions.
   change in any mode. On a tenth of the predictions one `f64` answer is 2.8% dearer: there a tail
   leaves a constant past the certificate's horizon (`480586*atan(v2)` is 754906 on it), and the
   certificate fails closed. No answer changes on a second call.
+- **The symbolic-exponent merge reads float64's tails in `f64`.** `x^y * x^y` merges into
+  `x^(2y)` where the level sets of `y` off the integers are null, which the certificate drew from
+  `y` being a nonconstant analytic function. In float64 a `tanh` or `atan` exponent is constant on
+  whole tails, so its level set there is the whole tail. No merge the certificate licensed was
+  wrong: a `tanh` tail sits at an integer, harmless to the merge, and an `atan` tail at a float
+  none of whose small multiples is an integer. But the claim it rested on was false. In `f64` the
+  certificate now reads `y` as the zero-set certificate does and accepts a tail only where `y` is
+  an integer there: `x2^tanh(x1) * x2^tanh(x1)` still merges, and
+  `x2^(3*atan(x1)) * x2^(3*atan(x1))` stays as written. `real` and `permissive` do not change, and
+  no answer of srbf's ground truths, a tenth of the training-data inputs or a tenth of the
+  predictions changes in any mode.
 - **`rootn` keeps the sign of zero.** An odd root is odd at zero as everywhere else, as IEEE-754
   `rootn` is: `rootn(-0, 3)` is `-0` and `rootn(-0, -3)` is `-inf` (0.14.7: `+0` and `+inf`, while
   `rootn(-0, 1)`, `sinh(-0)` and `(-0)^3` were already `-0`), in numpy, on scalars, in the compiled
