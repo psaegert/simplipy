@@ -48,6 +48,8 @@ const TANH_SAT: f64 = 19.061547465398498;
 const EXP_UNDERFLOW: f64 = -745.1332191019412;
 /// Smallest x with `atan(x) == fl(pi/2)` exactly (the deployed evaluator and the engine's agree).
 const ATAN_SAT: f64 = 5805358775541310.0;
+/// Smallest x with `erf(x) == 1.0` exactly; just below it erf gives 0.9999999999999999.
+const ERF_SAT: f64 = 5.921587195794507;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
@@ -1269,8 +1271,233 @@ fn u_scale(v: &Vs, c: f64) -> Vs {
     r
 }
 
+// ================= THE 0.15 HEADS ============================================
+// Simple enclosures, each sound for the deployed kernel (`numeric::kernels`) and for the real
+// function. Where one is not simple, the arm refuses (`None`), and every consumer fails closed.
+//
+// The PLATEAU heads (`floor`, `ceil`, `max`, `min`, `mod`) attain their bounds on whole
+// intervals, which the provenance bits (`sat_lo`/`sat_hi`) cannot record. A non-point image is
+// therefore widened one ulp past its bounds, so that a domain edge downstream never grazes one
+// (`clip` reads an unproven graze as a NULL point, which is false for a plateau). A point image
+// is exact: the head is constant on the operand's whole support.
+
+/// `r` with its finite part set to the box `[lo, hi]` (a plateau image, see above).
+fn with_plateau(mut r: Vs, lo: f64, hi: f64, fin_null: bool) -> Vs {
+    let (lo, hi) = if lo == hi {
+        (lo, hi)
+    } else {
+        (out_lo(lo, ULP_ARITH), out_hi(hi, ULP_ARITH))
+    };
+    r.has_fin = true;
+    r.lo = lo;
+    r.hi = hi;
+    r.lo_open = lo == -INF;
+    r.hi_open = hi == INF;
+    r.sat_lo = false;
+    r.sat_hi = false;
+    r.fin_null = fin_null;
+    r
+}
+
+/// `floor` / `ceil`: monotone, exact, finite on finite values; +-inf and NaN pass through.
+fn u_step(v: &Vs, f: fn(f64) -> f64) -> Vs {
+    let mut r = Vs::empty();
+    r.nan = v.nan;
+    r.pinf = v.pinf;
+    r.ninf = v.ninf;
+    if v.has_fin {
+        r = with_plateau(r, f(v.lo), f(v.hi), v.fin_null);
+    }
+    r
+}
+
+/// `erf`: `tanh`'s shape -- increasing, within (-1, 1), with float64 attaining +-1 past
+/// +-`ERF_SAT`.
+fn u_erf(v: &Vs) -> Vs {
+    let mut r = mono(v, crate::numeric::kernels::erf, Some(-1.0), Some(1.0));
+    r.nan = v.nan;
+    if r.has_fin && r.lo <= -1.0 {
+        r.lo = -1.0;
+        r.lo_open = true;
+        r.sat_lo = false;
+    }
+    if r.has_fin && r.hi >= 1.0 {
+        r.hi = 1.0;
+        r.hi_open = true;
+        r.sat_hi = false;
+    }
+    if v.reaches_up_to(ERF_SAT) {
+        r.attain_pt(1.0);
+    }
+    if v.reaches_down_to(-ERF_SAT) {
+        r.attain_pt(-1.0);
+    }
+    r
+}
+
+/// `harmonic`: increasing on (-1, inf), +inf at +inf. An operand that may reach -1 or below
+/// meets the poles (and NaN at -inf): refused.
+fn u_harmonic(v: &Vs) -> Option<Vs> {
+    if v.ninf || (v.has_fin && v.lo <= -1.0) {
+        return None;
+    }
+    let mut r = Vs::empty();
+    r.nan = v.nan;
+    r.pinf = v.pinf;
+    if v.has_fin {
+        let h = crate::numeric::kernels::harmonic;
+        r.has_fin = true;
+        r.lo = out_lo(h(v.lo), ULP_LIBM);
+        r.hi = if v.hi == INF {
+            INF
+        } else {
+            out_hi(h(v.hi), ULP_LIBM)
+        };
+        r.lo_open = false;
+        r.hi_open = r.hi == INF;
+        r.fin_null = v.fin_null;
+    }
+    Some(r)
+}
+
+/// `max` / `min`: monotone in both operands, NaN-propagating. The finite part is the lattice
+/// of the two finite boxes, plus either operand's box against the infinity it absorbs
+/// (`max(a, -inf) = a`).
+fn b_lattice(a: &Vs, b: &Vs, is_max: bool) -> Vs {
+    let mut r = Vs::empty();
+    r.nan = a.nan || b.nan;
+    let def = |v: &Vs| v.has_fin || v.pinf || v.ninf;
+    let (top_a, top_b, bot_a, bot_b) = if is_max {
+        (a.pinf, b.pinf, a.ninf, b.ninf)
+    } else {
+        (a.ninf, b.ninf, a.pinf, b.pinf)
+    };
+    // the infinity that wins against anything defined, and the one that survives only
+    // against itself
+    let wins = (top_a && def(b)) || (top_b && def(a));
+    let loses = bot_a && bot_b;
+    if is_max {
+        r.pinf = wins;
+        r.ninf = loses;
+    } else {
+        r.ninf = wins;
+        r.pinf = loses;
+    }
+    let (mut lo, mut hi, mut any) = (INF, -INF, false);
+    if a.has_fin && b.has_fin {
+        if is_max {
+            lo = a.lo.max(b.lo);
+            hi = a.hi.max(b.hi);
+        } else {
+            lo = a.lo.min(b.lo);
+            hi = a.hi.min(b.hi);
+        }
+        any = true;
+    }
+    for (v, absorbed) in [(a, bot_b), (b, bot_a)] {
+        if v.has_fin && absorbed {
+            lo = lo.min(v.lo);
+            hi = hi.max(v.hi);
+            any = true;
+        }
+    }
+    if any {
+        r = with_plateau(r, lo, hi, false);
+    }
+    r
+}
+
+/// `atan2(y, x)`: every value lies in [-pi, pi]. Two nonzero points are evaluated (the sign
+/// of a zero decides the branch cut, and a point box does not carry it).
+fn b_atan2(y: &Vs, x: &Vs) -> Vs {
+    let mut r = Vs::empty();
+    r.nan = y.nan || x.nan;
+    let def = |v: &Vs| v.has_fin || v.pinf || v.ninf;
+    if !(def(y) && def(x)) {
+        return r;
+    }
+    r.has_fin = true;
+    if y.is_const() && x.is_const() && y.lo != 0.0 && x.lo != 0.0 && !r.nan {
+        let t = crate::numeric::kernels::atan2(y.lo, x.lo);
+        r.lo = out_lo(t, ULP_LIBM);
+        r.hi = out_hi(t, ULP_LIBM);
+    } else {
+        // fl(pi) lies below pi: the bound is stepped outward
+        let p = out_hi(std::f64::consts::PI, ULP_LIBM);
+        r.lo = -p;
+        r.hi = p;
+    }
+    r
+}
+
+/// `mod(a, b)` (numpy's: the sign of the divisor). Two points are the kernel's value, one ulp
+/// wide (the remainder is exact, its adjustment one rounded addition). Otherwise the value
+/// lies between 0 and the divisor, both closed (a tiny negative dividend gives `b` itself),
+/// and a zero divisor is NaN. A divisor that may be zero among other values, and an infinite
+/// operand, are refused.
+fn b_mod(a: &Vs, b: &Vs) -> Option<Vs> {
+    if a.pinf || a.ninf || b.pinf || b.ninf {
+        return None;
+    }
+    let mut r = Vs::empty();
+    r.nan = a.nan || b.nan;
+    if !(a.has_fin && b.has_fin) {
+        return Some(r);
+    }
+    if b.lo == 0.0 && b.hi == 0.0 {
+        r.nan = true;
+        return Some(r);
+    }
+    if b.lo <= 0.0 && 0.0 <= b.hi {
+        return None;
+    }
+    if a.is_const() && b.is_const() {
+        let m = crate::numeric::kernels::modulo(a.lo, b.lo);
+        r.has_fin = true;
+        r.lo = out_lo(m, ULP_ARITH);
+        r.hi = out_hi(m, ULP_ARITH);
+        return Some(r);
+    }
+    let (lo, hi) = if b.lo > 0.0 { (0.0, b.hi) } else { (b.lo, 0.0) };
+    Some(with_plateau(r, lo, hi, false))
+}
+
+/// `besselj(nu, x)`: |J_nu(x)| <= 1 for every order nu >= 0 at every real x, so the box is
+/// [-1, 1], widened one ulp (J_0 is exactly 1.0 on |x| < 1e-8 in float64, a plateau). NaN at
+/// +-inf (scipy's cell), under an order that may be a non-integer at a negative argument, and
+/// under an order beyond `BESSELJ_NU_MEASURED`, where the kernel's own routines give up (it is
+/// NaN at order 3.8e16, x = 2.05). An order that may be negative or infinite is refused.
+/// The orders up to which the besselj kernel is read as NaN-free at every finite argument
+/// (measured: no NaN at orders up to 1.1e9 over 3,200 arguments out to the largest float, so
+/// this keeps a wide margin).
+const BESSELJ_NU_MEASURED: f64 = 1e3;
+
+fn b_besselj(nu: &Vs, x: &Vs) -> Option<Vs> {
+    if !nu.has_fin || nu.pinf || nu.ninf || nu.lo < 0.0 {
+        return None;
+    }
+    let integer_order = nu.is_const() && nu.lo.fract() == 0.0;
+    let mut r = Vs::empty();
+    r.nan = nu.nan
+        || x.nan
+        || x.pinf
+        || x.ninf
+        || (!integer_order && x.has_fin && x.lo < 0.0)
+        || nu.hi > BESSELJ_NU_MEASURED;
+    if x.has_fin {
+        r.has_fin = true;
+        r.lo = out_lo(-1.0, ULP_ARITH);
+        r.hi = out_hi(1.0, ULP_ARITH);
+    }
+    Some(r)
+}
+
 fn apply_unary(op: &str, v: &Vs) -> Option<Vs> {
     Some(match op {
+        "floor" => u_step(v, f64::floor),
+        "ceil" => u_step(v, f64::ceil),
+        "erf" => u_erf(v),
+        "harmonic" => return u_harmonic(v),
         "neg" => u_neg(v),
         "abs" => u_abs(v),
         "inv" => u_inv(v),
@@ -2011,6 +2238,11 @@ fn b_pow(a: &Vs, b: &Vs) -> Vs {
 
 fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
     Some(match op {
+        "max" => b_lattice(a, b, true),
+        "min" => b_lattice(a, b, false),
+        "atan2" => b_atan2(a, b),
+        "mod" => return b_mod(a, b),
+        "besselj" => return b_besselj(a, b),
         "+" => b_add(a, b),
         "-" => b_add(a, &u_neg(b)),
         "*" => b_mul(a, b),
@@ -2056,6 +2288,22 @@ fn apply_binary(op: &str, a: &Vs, b: &Vs) -> Option<Vs> {
         }
         _ => return None,
     })
+}
+
+/// Does `tokens` hold an operator the interval layer may not analyze: one whose arm can refuse
+/// (`harmonic`, `besselj`, `mod`) or one with no arm at all? The vocabulary before 0.15 and the
+/// total 0.15 arms are not such heads, so a consumer that fails closed on them changes nothing
+/// for an engine without them.
+pub(crate) fn holds_partial_head(tokens: &[String], ops: &Operators) -> bool {
+    const TOTAL: [&str; 45] = [
+        "neg", "abs", "inv", "exp", "log", "sin", "cos", "tan", "tanh", "atanh", "asin", "acos",
+        "acosh", "cosh", "sinh", "asinh", "atan", "pow2", "pow3", "pow4", "pow5", "pow1_2",
+        "pow1_3", "pow1_4", "pow1_5", "mult2", "mult3", "mult4", "mult5", "div2", "div3", "div4",
+        "div5", "+", "-", "*", "/", "pow", "rootn", "floor", "ceil", "erf", "max", "min", "atan2",
+    ];
+    tokens
+        .iter()
+        .any(|t| ops.is_operator(t) && !TOTAL.contains(&t.as_str()))
 }
 
 /// May a value of the set `b` be a NONZERO INTEGER (the indices at which `rootn` is a root)? Only
@@ -2998,7 +3246,16 @@ pub fn finite_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
 /// through `nonfinite_null`, so the recall cost lands only on subdivision-exclusive
 /// trees).
 fn tail_finite_ae(tokens: &[String], ops: &Operators) -> bool {
-    const POLE_OPS: [&str; 7] = ["inv", "/", "tan", "log", "atanh", "rootn", "pow"];
+    // Keyed the SAFE way round: the operators known to map no finite input to +-inf. Any
+    // other operator (`inv`, `/`, `tan`, `log`, `atanh`, `rootn`, `pow`, `harmonic`,
+    // `besselj`, and every head this table does not name) makes the tree pole-bearing, which
+    // only asks for a bounded slab.
+    const POLE_FREE: [&str; 39] = [
+        "+", "-", "*", "neg", "abs", "exp", "sin", "cos", "sinh", "cosh", "tanh", "asinh", "atan",
+        "asin", "acos", "acosh", "pow2", "pow3", "pow4", "pow5", "pow1_2", "pow1_3", "pow1_4",
+        "pow1_5", "mult2", "mult3", "mult4", "mult5", "div2", "div3", "div4", "div5", "floor",
+        "ceil", "erf", "max", "min", "mod", "atan2",
+    ];
     let (r, _d, decidable) = horizon(&[tokens], &[&[]], ops);
     if !decidable {
         return false; // horizon past R_MAX: fail closed, as in the subdivision arm
@@ -3006,7 +3263,9 @@ fn tail_finite_ae(tokens: &[String], ops: &Operators) -> bool {
     let used = distinct_vars(&[tokens]);
     let width = n_var_slots(&[tokens]);
     let n = used.len().max(1);
-    let pole_free = !tokens.iter().any(|s| POLE_OPS.contains(&s.as_str()));
+    let pole_free = tokens
+        .iter()
+        .all(|s| !ops.is_operator(s) || POLE_FREE.contains(&s.as_str()));
     for dim in 0..n {
         for &(lo, hi) in &[(r, INF), (-INF, -r)] {
             let mut bx = vec![(-INF, INF); n];
@@ -3325,6 +3584,7 @@ fn tail_of(op: &str) -> Option<(f64, f64)> {
     match op {
         "tanh" => Some((TANH_SAT, 1.0)),
         "atan" => Some((ATAN_SAT, std::f64::consts::FRAC_PI_2)),
+        "erf" => Some((ERF_SAT, 1.0)),
         _ => None,
     }
 }
@@ -6664,5 +6924,188 @@ mod enclosure_fuzz {
                 v.lo, v.hi, v.pinf, v.ninf
             );
         }
+    }
+}
+
+/// The 0.15 heads: every enclosure contains what the deployed kernel computes, and the arms
+/// that have no simple sound answer refuse.
+#[cfg(test)]
+mod new_head_tests {
+    use super::*;
+    use crate::numeric::kernels;
+
+    fn engine() -> crate::engine::Engine {
+        crate::engine::Engine::from_strs(include_str!("../assets/engines/acj2-4/config.yaml"), "[]")
+            .expect("acj2-4 builds")
+    }
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    fn inside(v: &Vs, y: f64) -> bool {
+        if y.is_nan() {
+            return v.nan;
+        }
+        if y == INF {
+            return v.pinf || (v.has_fin && v.hi == INF);
+        }
+        if y == -INF {
+            return v.ninf || (v.has_fin && v.lo == -INF);
+        }
+        v.has_fin && v.lo <= y && y <= v.hi
+    }
+
+    /// A deterministic spread of boxes: points, narrow and wide intervals, both signs,
+    /// integer and half-integer edges, huge magnitudes.
+    fn boxes() -> Vec<(f64, f64)> {
+        let edges = [
+            -1e300, -1e17, -7.5, -3.0, -2.5, -1.0, -0.75, -0.5, -1e-300, 0.0, 1e-300, 0.25, 0.5,
+            1.0, 1.5, 2.0, 3.0, 5.92, 6.0, 40.0, 1e17, 1e300,
+        ];
+        let mut out = Vec::new();
+        for (i, &a) in edges.iter().enumerate() {
+            for &b in &edges[i..] {
+                out.push((a, b));
+            }
+        }
+        out
+    }
+
+    fn samples(lo: f64, hi: f64) -> Vec<f64> {
+        let mut v = vec![lo, hi];
+        for k in 1..16 {
+            let t = k as f64 / 16.0;
+            v.push(lo + t * (hi - lo));
+        }
+        v.retain(|x| x.is_finite() && *x >= lo && *x <= hi);
+        v
+    }
+
+    #[test]
+    fn new_head_enclosures_contain_the_kernel() {
+        let e = engine();
+        let ops = e.operators_ref();
+        let unary: [(&str, fn(f64) -> f64); 4] = [
+            ("floor", kernels::floor),
+            ("ceil", kernels::ceil),
+            ("erf", kernels::erf),
+            ("harmonic", kernels::harmonic),
+        ];
+        let mut checked = 0usize;
+        for (name, f) in unary {
+            for (lo, hi) in boxes() {
+                let dom = Vs::interval(lo, hi, false, false);
+                let Some(v) = value_set_p(&s(&[name, "x0"]), ops, &[dom], &[]) else {
+                    assert!(
+                        name == "harmonic" && lo <= -1.0,
+                        "{name} on [{lo}, {hi}] refused"
+                    );
+                    continue;
+                };
+                for x in samples(lo, hi) {
+                    checked += 1;
+                    assert!(inside(&v, f(x)), "{name}({x}) = {} outside {v:?}", f(x));
+                }
+            }
+        }
+        let binary: [(&str, fn(f64, f64) -> f64); 5] = [
+            ("max", kernels::max),
+            ("min", kernels::min),
+            ("mod", kernels::modulo),
+            ("atan2", kernels::atan2),
+            ("besselj", kernels::besselj),
+        ];
+        let bx = boxes();
+        for (name, f) in binary {
+            for (i, &(alo, ahi)) in bx.iter().enumerate().step_by(7) {
+                for &(blo, bhi) in bx.iter().skip(i % 5).step_by(5) {
+                    let doms = [
+                        Vs::interval(alo, ahi, false, false),
+                        Vs::interval(blo, bhi, false, false),
+                    ];
+                    let Some(v) = value_set_p(&s(&[name, "x0", "x1"]), ops, &doms, &[]) else {
+                        continue;
+                    };
+                    for a in samples(alo, ahi) {
+                        for b in samples(blo, bhi) {
+                            checked += 1;
+                            assert!(
+                                inside(&v, f(a, b)),
+                                "{name}({a}, {b}) = {} outside {v:?}",
+                                f(a, b)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 20_000, "vacuous sweep: {checked}");
+    }
+
+    #[test]
+    fn new_heads_refuse_where_no_simple_enclosure_is_sound() {
+        let e = engine();
+        let ops = e.operators_ref();
+        let iv = |lo: f64, hi: f64| Vs::interval(lo, hi, false, false);
+        let vs = |t: &[&str], doms: &[Vs]| value_set_p(&s(t), ops, doms, &[]);
+        // harmonic meets its poles at or below -1
+        assert!(vs(&["harmonic", "x0"], &[iv(-1.0, 2.0)]).is_none());
+        assert!(vs(&["harmonic", "x0"], &[iv(-0.5, 2.0)]).is_some());
+        // besselj: a negative or unknown-sign order
+        assert!(vs(&["besselj", "x0", "x1"], &[iv(-0.5, 0.5), iv(0.0, 1.0)]).is_none());
+        assert!(vs(&["besselj", "x0", "x1"], &[iv(0.0, 3.0), iv(-1.0, 1.0)]).is_some());
+        // mod: a divisor that may be zero among other values
+        assert!(vs(&["mod", "x0", "x1"], &[iv(0.0, 1.0), iv(-1.0, 1.0)]).is_none());
+        // ... and a zero divisor is NaN, everywhere
+        let z = vs(&["mod", "x0", "0"], &[iv(0.0, 1.0)]).unwrap();
+        assert!(z.nan && !z.has_fin);
+        // a non-integer order at a negative argument is NaN
+        let n = vs(&["besselj", "0.5", "x0"], &[iv(-2.0, -1.0)]).unwrap();
+        assert!(n.nan);
+        // every unknown head is unanalyzable
+        let cfg = "operators:\n  \"+\": {realization: '+', arity: 2, precedence: 1, commutative: true}\n  gamma: {realization: math.gamma, arity: 1}\n";
+        let e2 = crate::engine::Engine::from_strs(cfg, "[]").unwrap();
+        assert!(value_set_p(
+            &s(&["gamma", "x0"]),
+            e2.operators_ref(),
+            &[iv(0.0, 1.0)],
+            &[]
+        )
+        .is_none());
+    }
+
+    /// A ground class through a 0.15 head is decided by the interval layer: `mod(1, 0)` is NaN,
+    /// `floor(inf)` is +inf, and a finite one stays finite.
+    #[test]
+    fn new_head_ground_classes() {
+        let e = engine();
+        let ops = e.operators_ref();
+        assert_eq!(value_class(&s(&["mod", "1", "0"]), ops), Some(Class::Nan));
+        assert_eq!(
+            value_class(&s(&["floor", "float(\"inf\")"]), ops),
+            Some(Class::PosInf)
+        );
+        assert_eq!(
+            value_class(&s(&["erf", "float(\"-inf\")"]), ops),
+            Some(Class::Finite)
+        );
+        assert_eq!(value_class(&s(&["besselj", "-0.5", "0"]), ops), None);
+        assert_eq!(value_class(&s(&["harmonic", "-2"]), ops), None);
+    }
+
+    /// The pole-free table is keyed the safe way round: a head it does not name makes the tree
+    /// pole-bearing (bounded slabs only).
+    #[test]
+    fn tail_arm_reads_unknown_heads_as_pole_bearing() {
+        let e = engine();
+        let ops = e.operators_ref();
+        // erf is pole-free and bounded; harmonic of exp is unbounded and harmonic is not named
+        assert!(tail_finite_ae(&s(&["erf", "x0"]), ops));
+        assert!(!tail_finite_ae(&s(&["harmonic", "exp", "x0"]), ops));
+        // the measured float64 tail of erf
+        assert_eq!(kernels::erf(ERF_SAT), 1.0);
+        assert!(kernels::erf(f64::from_bits(ERF_SAT.to_bits() - 1)) < 1.0);
+        assert_eq!(tail_of("erf"), Some((ERF_SAT, 1.0)));
     }
 }

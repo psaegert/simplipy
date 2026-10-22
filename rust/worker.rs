@@ -1810,6 +1810,10 @@ struct SourceCtx<'s> {
     /// computed only for it.
     events: Vec<Option<Vec<bool>>>,
     reach: Option<crate::interval::Vs>,
+    /// A variable-free source the interval layer could not analyze because it holds a head
+    /// whose arm may refuse (`interval::holds_partial_head`): its reachability and class gates
+    /// cannot run, so every candidate is refused (fail closed).
+    blind: bool,
     battery: Option<crate::battery::SpecialBattery>,
 }
 
@@ -1844,11 +1848,13 @@ impl<'s> SourceCtx<'s> {
         // interval engine is validated on, and exactly the family the sampled POLE_GRID exists for
         // (`pow(asin(C/2), inf) -> 0`, whose +inf band a fixed grid can straddle and miss).
         // Computed ONCE per source, outside the scan.
-        let reach = if !source.iter().any(|t| var_names.contains(t)) {
+        let var_free = !source.iter().any(|t| var_names.contains(t));
+        let reach = if var_free {
             crate::interval::value_set(source, ops, &crate::interval::Vs::reals())
         } else {
             None
         };
+        let blind = var_free && reach.is_none() && crate::interval::holds_partial_head(source, ops);
         // Special-point battery over THIS source's variable set (None for a variable-free
         // source), shared across the whole candidate scan; see `rust/battery.rs`.
         let battery = crate::battery::SpecialBattery::build(
@@ -1863,6 +1869,7 @@ impl<'s> SourceCtx<'s> {
             y,
             events,
             reach,
+            blind,
             battery,
         })
     }
@@ -1903,6 +1910,9 @@ fn certify_candidate(
     // source, Const-bearing candidates stay IN the scan: their slots are fixed
     // reals, resolved to literal tokens below.
     if sc.n_const > 0 && cand.n_const > sc.n_const {
+        return None;
+    }
+    if sc.blind {
         return None;
     }
     if let Some(sv) = &sc.reach {

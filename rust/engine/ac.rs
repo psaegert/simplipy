@@ -1860,6 +1860,45 @@ pub enum AcForm {
 
 #[cfg(test)]
 mod tests {
+
+    /// The 0.15 step and lattice heads of literals: exact in `real` (the constructor), the
+    /// deployed float in `f64` and `permissive` (the ground fold); transcendental heads of
+    /// literals stay written where the literal is dearer, and fold where it is cheaper.
+    #[test]
+    fn new_heads_of_literals_fold_in_every_mode() {
+        let e = Engine::from_strs(
+            include_str!("../../assets/engines/acj2-4/config.yaml"),
+            "[]",
+        )
+        .expect("acj2-4 builds");
+        let run = |t: &[&str], mode: RuleMode| {
+            let v: Vec<String> = t.iter().map(|x| x.to_string()).collect();
+            e.ac_simplify_proj(&v, 48, mode, crate::engine::AcForm::Explicit)
+                .unwrap()
+                .join(" ")
+        };
+        for mode in [RuleMode::Default, RuleMode::Real, RuleMode::Permissive] {
+            assert_eq!(run(&["floor", "2.5"], mode), "2", "{mode:?}");
+            assert_eq!(run(&["ceil", "-2.5"], mode), "-2", "{mode:?}");
+            assert_eq!(run(&["max", "1", "/", "1", "3"], mode), "1", "{mode:?}");
+            assert_eq!(run(&["min", "1", "/", "1", "3"], mode), "/ 1 3", "{mode:?}");
+            assert_eq!(run(&["mod", "7", "-3"], mode), "-2", "{mode:?}");
+            assert_eq!(run(&["mod", "1", "0"], mode), "float(\"nan\")", "{mode:?}");
+            assert_eq!(run(&["erf", "1"], mode), "erf 1", "{mode:?}");
+            assert_eq!(run(&["floor", "x0"], mode), "floor x0", "{mode:?}");
+        }
+        // f64 reads a literal at its float, real at its rational
+        assert_eq!(
+            run(&["floor", "0.99999999999999999"], RuleMode::Default),
+            "1"
+        );
+        assert_eq!(run(&["floor", "0.99999999999999999"], RuleMode::Real), "0");
+        // the f64 kernels fold where the literal is cheaper
+        assert_eq!(run(&["erf", "0"], RuleMode::Default), "0");
+        assert_eq!(run(&["besselj", "0", "0"], RuleMode::Default), "1");
+        // erf is odd: the sign leaves it
+        assert_eq!(run(&["erf", "neg", "x0"], RuleMode::Default), "neg erf x0");
+    }
     use crate::engine::RuleMode;
     use crate::Engine;
 
