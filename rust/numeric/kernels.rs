@@ -9,9 +9,8 @@
 //! transcendentals come from `numeric::elementary`, the one elementary-function source.
 //!
 //! The operators added in 0.15 (`floor`, `ceil`, `max`, `min`, `mod`, `harmonic`, `erf`,
-//! `atan2`, `besselj`) are deliberately NOT in the evaluator's dispatch: an operator enters the fold, the
-//! tape and the miner together with its interval, high-precision and judge arms, so until those
-//! exist every engine path refuses the new heads.
+//! `atan2`, `besselj`) are in the evaluator's dispatch too. They have interval enclosures but no
+//! high-precision or contract kernels yet, so every certificate that needs one refuses them.
 
 pub use super::besselj::besselj;
 use super::elementary;
@@ -583,7 +582,7 @@ mod tests {
     fn the_evaluator_and_the_kernels_are_one_function() {
         let unary = [
             "neg", "inv", "abs", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh",
-            "tanh", "asinh", "acosh", "atanh", "exp", "log",
+            "tanh", "asinh", "acosh", "atanh", "exp", "log", "floor", "ceil", "harmonic", "erf",
         ];
         let g = grid();
         for name in unary {
@@ -595,7 +594,9 @@ mod tests {
                 assert!(bits(e(x)) == bits(k(x)), "{name}({x})");
             }
         }
-        for name in ["+", "-", "*", "/", "pow", "rootn"] {
+        for name in [
+            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj",
+        ] {
             let (e, k) = (
                 crate::numeric::binary_fn(name).unwrap(),
                 super::binary(name).unwrap(),
@@ -606,20 +607,6 @@ mod tests {
                     assert!(bits(u) == bits(v) || (u.is_nan() && v.is_nan()), "{name}");
                 }
             }
-        }
-    }
-
-    /// The 0.15 heads stay out of the evaluator until their interval, high-precision and judge
-    /// arms exist: the fold, the tape and the miner refuse them (fail closed).
-    #[test]
-    fn new_heads_are_not_in_the_evaluator_dispatch() {
-        for name in ["floor", "ceil", "harmonic", "erf"] {
-            assert!(crate::numeric::unary_fn(name).is_none(), "{name}");
-            assert!(unary(name).is_some(), "{name}");
-        }
-        for name in ["max", "min", "mod", "atan2", "besselj"] {
-            assert!(crate::numeric::binary_fn(name).is_none(), "{name}");
-            assert!(binary(name).is_some(), "{name}");
         }
     }
 

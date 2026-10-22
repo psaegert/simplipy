@@ -308,6 +308,10 @@ fn mu_fun_bits(name: &str) -> u64 {
         "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
             MU_BITS_TRANSCENDENTAL
         }
+        // The 0.15 heads, priced at the transcendental tier by ruling (no census yet).
+        "floor" | "ceil" | "max" | "min" | "mod" | "harmonic" | "erf" | "atan2" | "besselj" => {
+            MU_BITS_TRANSCENDENTAL
+        }
         _ => 8,
     }
 }
@@ -2687,8 +2691,10 @@ fn scale_term(t: &Ex, r: &Rat, cx: &Cx) -> Option<Ex> {
 /// parity machinery and the infix renderer's sign hoist -- ONE table, or it is the
 /// five-arity-tables disease again.
 pub(crate) fn odd_fun(view: &TokenView, f: Tok) -> bool {
-    const ODD: [&str; 8] = [
-        "sin", "sinh", "tan", "tanh", "asin", "asinh", "atan", "atanh",
+    // `erf` is odd bit for bit in float64 too, signed zero included: its kernel evaluates
+    // |x| and restores the sign.
+    const ODD: [&str; 9] = [
+        "sin", "sinh", "tan", "tanh", "asin", "asinh", "atan", "atanh", "erf",
     ];
     ODD.iter().any(|s| view.tok_is(f, s))
 }
@@ -8817,6 +8823,41 @@ pub fn land_root(e: Ex, cx: &Cx) -> Ex {
     land_operand(e, cx)
 }
 
+/// `floor` (or `ceil`) of a rational, exactly; `None` when the result leaves `Rat`.
+fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
+    use num_integer::Integer;
+    if r.is_integer() {
+        return Some(r.clone());
+    }
+    let (p, q) = r.big_parts();
+    let f = p.div_floor(&q);
+    Rat::from_big(if ceil { f + 1 } else { f }, BigInt::from(1))
+}
+
+/// The exact value of `max` or `min` at rational arguments, and with `real` of `floor`, `ceil`
+/// or `mod` too (the real `mod`: `a - b floor(a/b)`, NaN at `b = 0`); `None` for any other head
+/// or a result that leaves `Rat`.
+fn exact_step_fold(op: Tok, args: &[Ex], real: bool, cx: &Cx) -> Option<Ex> {
+    let v = cx.view;
+    match args {
+        [Ex::Num(r)] if real && v.tok_is(op, "floor") => rat_floor(r, false).map(Ex::Num),
+        [Ex::Num(r)] if real && v.tok_is(op, "ceil") => rat_floor(r, true).map(Ex::Num),
+        [Ex::Num(a), Ex::Num(b)] if v.tok_is(op, "max") || v.tok_is(op, "min") => {
+            let a_wins = (a.cmp_exact(b) == Ordering::Less) != v.tok_is(op, "max");
+            Some(Ex::Num(if a_wins { a.clone() } else { b.clone() }))
+        }
+        [Ex::Num(a), Ex::Num(b)] if real && v.tok_is(op, "mod") => {
+            if b.is_zero() {
+                return Some(Ex::NaN);
+            }
+            let k = rat_floor(&a.checked_mul(&b.checked_inv()?)?, false)?;
+            a.checked_add(&b.checked_mul(&k)?.checked_neg()?)
+                .map(Ex::Num)
+        }
+        _ => None,
+    }
+}
+
 pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
     // A literal argument LANDS here (permissive's ρ, [`land`]).
@@ -8861,6 +8902,18 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
             } else {
                 return Ex::Num(r.clone());
             }
+        }
+    }
+    // THE STEP AND LATTICE HEADS OF RATIONALS ARE EXACT ARITHMETIC, so they fold here as
+    // `abs` does: `max` and `min` in every mode (they pick an operand, and rounding to the
+    // nearest float keeps the order, so the float of the pick is the pick of the floats), and
+    // `floor`, `ceil` and `mod` (`mod(a, 0)` is NaN) in `real` only, where a literal is its
+    // rational: `f64` and `permissive` read a literal at its nearest float
+    // (`floor(0.99999999999999999)` is 1 there), so their ground fold computes these with the
+    // deployed kernels instead.
+    if !args.is_empty() && args.iter().all(|a| matches!(a, Ex::Num(_))) {
+        if let Some(folded) = exact_step_fold(op, &args, matches!(cx.mode, RuleMode::Real), cx) {
+            return folded;
         }
     }
     // AN EVEN FUNCTION EATS THE SIGN OF ITS ARGUMENT: `g(-t) -> g(t)`.

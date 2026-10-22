@@ -261,6 +261,11 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
         "atanh" => kernels::atanh,
         "exp" => kernels::exp,
         "log" => kernels::log,
+        // The 0.15 heads: the deployed kernels themselves, like the rest.
+        "floor" => kernels::floor,
+        "ceil" => kernels::ceil,
+        "harmonic" => kernels::harmonic,
+        "erf" => kernels::erf,
         // The retired hyper-operator vocabulary (input support for configs that declare it).
         "mult2" => |x| 2.0 * x,
         "mult3" => |x| 3.0 * x,
@@ -298,6 +303,13 @@ pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
         "pow" => kernels::pow,
         // `rootn(x, n)`: IEEE-754 rootn, honest for EVERY integer index.
         "rootn" => kernels::rootn,
+        // The 0.15 heads. `besselj(nu, x)`: the order is the first operand, a literal or
+        // any expression.
+        "max" => kernels::max,
+        "min" => kernels::min,
+        "mod" => kernels::modulo,
+        "atan2" => kernels::atan2,
+        "besselj" => kernels::besselj,
         _ => return None,
     })
 }
@@ -339,9 +351,15 @@ pub(crate) enum RangeKind {
     PowLike,
     /// `acos acosh`: an exact zero at one.
     ZeroAtOne,
-    /// `sin tan asin atan sinh tanh asinh`, `div2..div5`, `pow2..pow5`, `pow1_2..pow1_5`:
-    /// an exact zero at zero.
+    /// `sin tan asin atan sinh tanh asinh erf harmonic`, `div2..div5`, `pow2..pow5`,
+    /// `pow1_2..pow1_5`: an exact zero at zero. (`harmonic` is NaN, not infinite, at its
+    /// poles, so it has none.)
     ZeroAtZero,
+    /// `atan2(y, x)`: an exact zero at `y = 0` with `x` positive or `+0`; no pole.
+    Atan2,
+    /// `besselj(nu, x)`: a pole at `x = 0` under a negative non-integer order, an exact zero
+    /// at `x = 0` under any other nonzero order.
+    Besselj,
 }
 
 impl RangeKind {
@@ -350,6 +368,12 @@ impl RangeKind {
         use RangeKind::*;
         Some(match name {
             "+" | "-" | "neg" | "abs" | "mult2" | "mult3" | "mult4" | "mult5" => ExactWhenTiny,
+            // integers or +-0, an operand, or an exact remainder moved by one addition of
+            // the divisor (a subnormal sum is exact): never a rounded tiny result
+            "floor" | "ceil" | "max" | "min" | "mod" => ExactWhenTiny,
+            "erf" | "harmonic" => ZeroAtZero,
+            "atan2" => Atan2,
+            "besselj" => Besselj,
             "exp" | "cos" | "cosh" => Plain,
             "*" => Mul,
             "/" => Div,
@@ -372,6 +396,7 @@ impl RangeKind {
             RangeKind::Inv | RangeKind::Log => args[0] == 0.0,
             RangeKind::Atanh => args[0] == 1.0 || args[0] == -1.0,
             RangeKind::PowLike => args[0] == 0.0 && args[1] < 0.0,
+            RangeKind::Besselj => args[1] == 0.0 && args[0] < 0.0 && args[0].fract() != 0.0,
             _ => false,
         }
     }
@@ -384,6 +409,12 @@ impl RangeKind {
                 args[0] == 0.0
             }
             RangeKind::Log | RangeKind::ZeroAtOne => args[0] == 1.0,
+            RangeKind::Atan2 => {
+                args[0] == 0.0 && (args[1] > 0.0 || (args[1] == 0.0 && args[1].is_sign_positive()))
+            }
+            RangeKind::Besselj => {
+                args[1] == 0.0 && args[0] != 0.0 && (args[0] > 0.0 || args[0].fract() == 0.0)
+            }
             RangeKind::ExactWhenTiny | RangeKind::Plain | RangeKind::Inv => false,
         }
     }
@@ -608,7 +639,7 @@ mod aligned_pow_tests {
             "neg", "inv", "abs", "mult2", "mult3", "mult4", "mult5", "div2", "div3", "div4",
             "div5", "pow2", "pow3", "pow4", "pow5", "pow1_2", "pow1_3", "pow1_4", "pow1_5", "sin",
             "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh",
-            "atanh", "exp", "log",
+            "atanh", "exp", "log", "floor", "ceil", "harmonic", "erf",
         ];
         for op in unary {
             assert!(
@@ -616,7 +647,9 @@ mod aligned_pow_tests {
                 "{op}"
             );
         }
-        for op in ["+", "-", "*", "/", "pow", "rootn"] {
+        for op in [
+            "+", "-", "*", "/", "pow", "rootn", "max", "min", "mod", "atan2", "besselj",
+        ] {
             assert!(
                 binary_fn(op).is_some() && RangeKind::of(op).is_some(),
                 "{op}"
@@ -639,6 +672,9 @@ mod aligned_pow_tests {
             ("pow", vec![10.0, 400.0]),
             ("inv", vec![1e308]),
             ("rootn", vec![5e-324, -1.0]),
+            ("erf", vec![5e-324]),
+            ("atan2", vec![1e-300, 1e300]),
+            ("besselj", vec![200.0, 1e-3]),
         ] {
             assert!(ev(op, &args), "{op}{args:?} must be a range event");
         }
@@ -657,6 +693,18 @@ mod aligned_pow_tests {
             ("tanh", vec![20.0]),
             ("exp", vec![f64::INFINITY]),
             ("exp", vec![700.0]),
+            ("erf", vec![0.0]),
+            ("harmonic", vec![0.0]),
+            ("harmonic", vec![-2.0]),
+            ("ceil", vec![-0.5]),
+            ("mod", vec![3.0, 3.0]),
+            ("mod", vec![5e-324, 1e-320]),
+            ("max", vec![5e-324, -1.0]),
+            ("atan2", vec![0.0, 1.0]),
+            ("atan2", vec![0.0, 0.0]),
+            ("besselj", vec![1.0, 0.0]),
+            ("besselj", vec![-2.0, 0.0]),
+            ("besselj", vec![-0.5, 0.0]),
         ] {
             assert!(!ev(op, &args), "{op}{args:?} must not be a range event");
         }

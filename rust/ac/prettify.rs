@@ -52,7 +52,7 @@
 //!    `atan(c)` folds and combines with `0.4`. A function of a number written
 //!    exactly stays (`sin(2)`), and so does one whose float is 0, infinite or subnormal. An
 //!    integer power of a float the state keeps for its size is that float's power, exactly.
-//!    Exponents and root indices are not numbers inside it.
+//!    Exponents, root indices and Bessel orders are not numbers inside it.
 //! 7. **Exponents** are numbers like any other; `x^(1/n)` is `rootn(x, n)` and `x^(-1/n)` is
 //!    `1/rootn(x, n)` for even `n`.
 //! 8. **Layout**: one coefficient in front and ONE SLASH: every divisor of a product joins a
@@ -1387,7 +1387,8 @@ fn holds_function(e: &Ex) -> bool {
 }
 
 /// The numbers inside a ground expression that rule 6 reads: every number but the exponents
-/// of powers and the indices of roots.
+/// of powers, the indices of roots and the orders of Bessel functions (structural, as an index
+/// is).
 fn numbers_inside(e: &Ex, cx: &Cx, out: &mut Vec<Rat>) {
     match e {
         Ex::Num(r) => out.push(r.clone()),
@@ -1396,6 +1397,9 @@ fn numbers_inside(e: &Ex, cx: &Cx, out: &mut Vec<Rat>) {
             if let Some(x) = v.first() {
                 numbers_inside(x, cx, out);
             }
+        }
+        Ex::Fun(f, v) if v.len() == 2 && cx.view.tok_is(*f, "besselj") => {
+            numbers_inside(&v[1], cx, out);
         }
         Ex::Fun(_, v) => v.iter().for_each(|x| numbers_inside(x, cx, out)),
         Ex::Pow(b, x) => {
