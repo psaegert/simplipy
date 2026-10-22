@@ -294,3 +294,39 @@ class TestEngineMaskFrontDoor:
         # The front door reads an infix str or a token LIST -- nothing else (D8).
         with pytest.raises(TypeError):
             engine.mask(('*', '2', 'x0'))
+
+
+class TestBesseljOrder:
+    """besselj's order is STRUCTURE, like a ``pow`` exponent: a non-integer order makes
+    ``J_nu(x)`` NaN for every ``x < 0`` and an integer order's parity is the function's, so
+    the order controls the domain. It gets its own role, ``ORDER``, which types its whole
+    subtree, and the fittable kind keeps it."""
+
+    @pytest.fixture(scope="class")
+    def bessel_engine(self) -> SimpliPyEngine:
+        import warnings
+
+        from simplipy.io import load_config
+        ops = dict(load_config(acj_config_path())['operators'])
+        ops['besselj'] = {'realization': 'scipy.special.jv', 'alias': [], 'arity': 2, 'commutative': False}
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')  # the engine has no rules, and says so
+            return SimpliPyEngine(operators=ops, rules=[])
+
+    def test_the_order_has_its_own_role(self, bessel_engine: SimpliPyEngine) -> None:
+        def sites(tokens: list[str]) -> list[tuple[str, masking.Role]]:
+            return [(v, r) for _, v, r in masking.literal_sites(tokens, bessel_engine)]
+        assert sites(["besselj", "2", "x0"]) == [("2", masking.Role.ORDER)]
+        assert sites(["besselj", "/", "1", "2", "*", "3", "x0"]) == [
+            ("1", masking.Role.ORDER), ("2", masking.Role.ORDER), ("3", masking.Role.COEFFICIENT)]
+        assert sites(["besselj", "<mul>", "1", "<div>", "2", "</mul>", "x0"]) == [
+            ("1", masking.Role.ORDER), ("2", masking.Role.ORDER)]
+        assert sites(["besselj", "x1", "2"]) == [("2", masking.Role.VALUE)]
+
+    def test_fittable_keeps_the_order_and_all_masks_it(self, bessel_engine: SimpliPyEngine) -> None:
+        tokens = ["besselj", "2", "*", "3", "x0"]
+        assert masking.mask(tokens, bessel_engine, masking.mask_fittable, collect=False) == [
+            "besselj", "2", "*", "<constant>", "x0"]
+        assert masking.mask(tokens, bessel_engine, masking.mask_all, collect=False) == [
+            "besselj", "<constant>", "*", "<constant>", "x0"]
+        assert masking.mask_fittable("2", masking.Role.ORDER) is None

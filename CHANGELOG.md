@@ -1006,6 +1006,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 
 <!-- PENDING: CHANGELOG lines from the miner/rules and the core/concurrency fix rounds go here
      (and under Removed, if any). -->
+- **`masking.Role.ORDER`** is the role of `besselj`'s order (its first operand). Like a `pow`
+  exponent it decides the domain (a non-integer order is NaN for every negative argument), so
+  it types its whole subtree and `mask_fittable` keeps it; `mask_all` masks it.
 - **A call takes its operator's arity in arguments.** The infix readers refuse a call whose
   argument count is not its operator's (`sin(x0, x1)`: "sin takes 1 argument, got 2") and a
   comma outside a call's argument list, where they used to emit a malformed prefix list.
