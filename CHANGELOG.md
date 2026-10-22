@@ -1050,7 +1050,10 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     of literals fold exactly in `real` (`mod(a, 0)` is NaN) and to their float in `f64` and
     `permissive`, where a literal reads as its float (`floor(0.99999999999999999)` is 1 there,
     0 in `real`). A function of literals whose float is dearer than it stays written
-    (`erf(1)`), as for the other heads. `erf` is odd, so `erf(-x)` is `-erf(x)`.
+    (`erf(1)`), as for the other heads. `erf` is odd, so `erf(-x)` is `-erf(x)`. `max` and
+    `min` take a canonical argument order and `max(a, a)` is `a` (bit for bit: their kernels
+    follow IEEE 754-2019 at the zero tie and propagate NaN in either order); a nested
+    `max(a, max(b, c))` stays as written, and a pattern matches either argument order.
   - *Enclosures.* `floor`, `ceil`, `erf`, `max` and `min` map their operands' bounds (`erf`
     reaches exactly +-1 from |x| = 5.921587195794507); `atan2` lies in [-pi, pi];
     `besselj(nu, x)` in [-1, 1] for an order nu >= 0, NaN where a non-integer order meets a
@@ -1060,6 +1063,25 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     are unanalyzable: every certificate refuses them, and the miner accepts no candidate for a
     variable-free source it cannot analyze. The tail certificate's table of
     pole-free operators names the operators that are, so an unnamed head is pole-bearing.
+  - *Signed zeros.* `ceil(-0.5)`, `mod(3, -3)` and their kin are -0 in float64, and `atan2`
+    reads the sign of a zero as an inverse does (`atan2(-0, -1)` is -pi). In `f64` a ground
+    whose float is -0 stays as written, and a ground infinity takes float64's sign
+    (`1/ceil(-0.5)` is `-inf`). A negative coefficient of `atan2`'s first argument leaves the
+    call, `atan2(-S, x) = -atan2(S, x)` (exact in float64, not in `real`), so a sum that
+    vanishes on a region keeps its orientation under `atan2`; the step and lattice heads count
+    as region zeros wherever an inverse reads one.
+  - *Discontinuities.* A rule spelled with one of the nine is judged by one function in the core
+    (`deployed_exact`), which the contract judge calls and the miner applies to every such pair
+    it would accept, so the judge licenses exactly what the miner accepts: both sides bit for
+    bit in float64, a zero's sign included, at each variable's battery, +-inf, NaN, -0, the
+    float neighbours of the integers, tiny and huge magnitudes and the negative integers, every 0.05 over [-25, 25]
+    and on the diagonal. So `floor(x + 1) -> floor(x) + 1`, `mod(x + 1, 1) -> mod(x, 1)` and
+    `floor(mod(x, 1)) -> 0`, true over the reals and false in float64 just below an integer,
+    are refused, and so is `acosh(erf(floor(x))) -> acosh(erf(x))`, false on [5.9216, 6)
+    where erf saturates first. A source constant of such a source is also swept over zero and the small
+    integers and half-integers, and the refuter's witnesses read the new heads (integer
+    neighbours for `floor`, `ceil` and `harmonic`; preimages through `atan2`, `mod`, `max`
+    and `min`).
   - *High precision and the judge.* The nine have no high-precision or contract kernels yet.
     An operator the high-precision evaluators do not know is unevaluable, even at a NaN
     operand: the contract point verdict is none (it read as equal), and the licence registry
@@ -1071,6 +1093,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     name, and the high-precision oracle reads a complex value as NaN.
   - *Fingerprints.* The libm fingerprint probes `erf` and `atan2`, and the measure fingerprint
     prices `atan2(x0, x1)`, so every host's fingerprint moves.
+  - *besselj* accepts torch tensors: the core kernel on the host, returned in the tensor's dtype
+    and device (not differentiable). The port carries no branch a real argument cannot reach
+    (AMOS's overflow rescaling and its `kscl`); its bits stay scipy's.
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
   judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and

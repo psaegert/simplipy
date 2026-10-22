@@ -174,8 +174,10 @@ def test_torch_branches() -> None:
     assert h[0] == 0 and torch.signbit(h[1]) and abs(float(h[2]) - 1) < 1e-15 and torch.isnan(h[3])
     assert abs(float(h[4]) - float(ops.harmonic(2.5))) < 1e-14
     assert math.isclose(float(ops.erf(torch.tensor(0.5, dtype=torch.float64))), float(ops.erf(0.5)), rel_tol=1e-15)
-    with pytest.raises(TypeError, match='no torch realization'):
-        ops.besselj(t, t)
+    j = ops.besselj(torch.tensor([0.0, 1.0, 2.5]), torch.tensor([1.5, -2.0, 3.0]))
+    assert isinstance(j, torch.Tensor) and j.dtype == torch.get_default_dtype()
+    assert torch.equal(j, torch.as_tensor(ops.besselj(np.array([0.0, 1.0, 2.5]), np.array([1.5, -2.0, 3.0])),
+                                          dtype=j.dtype))
 
 
 def test_the_acj2_4_config_is_acj_4_plus_the_new_operators() -> None:

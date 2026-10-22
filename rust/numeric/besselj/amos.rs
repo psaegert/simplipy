@@ -1,7 +1,7 @@
 //! A transliteration of the AMOS routines scipy 1.18.1 reaches for a Bessel function of the
 //! first kind of a real argument (`xsf/amos/amos.h`, the SciPy developers' C++ translation of
 //! D. E. Amos's Fortran, ACM TOMS Algorithm 644): `besj`, `besy`, `besh`, `binu`, `seri`,
-//! `asyi`, `mlri`, `uoik`, `buni`, `uni2`, `unhj`, `bknu`, `kscl`, `rati`, `wrsk`, `bunk`,
+//! `asyi`, `mlri`, `uoik`, `buni`, `uni2`, `unhj`, `bknu`, `rati`, `wrsk`, `bunk`,
 //! `unk2`, `airy`, `acai`, `s1s2`, `uchk`, `gamln`. Statement for statement, with every complex
 //! operation computed as the C++ computes it (`cx`), the C++'s own quirks kept (they decide
 //! bits): `seri`'s shadowed loop index, `buni`'s and `unk2`'s scaling bounds, `uoik`'s real
@@ -601,108 +601,6 @@ fn mlri(z: C64, fnu: f64, kode: i32, n: i32, y: &mut [C64], tol: f64) -> i32 {
     nz
 }
 
-/// `kscl`: set K functions to zero on underflow, continue the recurrence on scaled values.
-#[allow(clippy::too_many_arguments)]
-fn kscl(
-    zr: C64,
-    fnu: f64,
-    n: i32,
-    y: &mut [C64],
-    rz: C64,
-    ascle: &mut f64,
-    tol: f64,
-    elim: f64,
-) -> i32 {
-    let mut cy = [C64::ZERO; 2];
-    let mut nz = 0;
-    let mut ic = 0;
-    let nn = if n > 2 { 2 } else { n };
-    let elm = e::exp(-elim);
-    let mut xx = zr.re;
-    for i in 1..(nn + 1) {
-        let s1 = y[(i - 1) as usize];
-        cy[(i - 1) as usize] = s1;
-        let as_ = s1.abs();
-        let acs = -zr.re + e::log(as_);
-        nz += 1;
-        y[(i - 1) as usize] = C64::ZERO;
-        if acs < -elim {
-            continue;
-        }
-        let mut cs = -zr + s1.ln();
-        cs = (e::exp(cs.re) / tol) * C64::new(e::cos(cs.im), e::sin(cs.im));
-        if !uchk(cs, *ascle, tol) {
-            y[(i - 1) as usize] = cs;
-            nz -= 1;
-            ic = i;
-        }
-    }
-    if n == 1 {
-        return nz;
-    }
-    if ic <= 1 {
-        y[0] = C64::ZERO;
-        nz = 2;
-    }
-    if n == 2 {
-        return nz;
-    }
-    if nz == 0 {
-        return nz;
-    }
-    let fn_ = fnu + 1.0;
-    let mut ck = fn_ * rz;
-    let mut s1 = cy[0];
-    let mut s2 = cy[1];
-    let zri = zr.im;
-    let mut zd = zr;
-    for i in 3..(n + 1) {
-        let kk = i;
-        let cs = s2;
-        s2 *= ck;
-        s2 += s1;
-        s1 = cs;
-        ck += rz;
-        let as_ = s2.abs();
-        let alas = e::log(as_);
-        let acs = alas - xx;
-        nz += 1;
-        y[(i - 1) as usize] = C64::ZERO;
-        if acs >= -elim {
-            let mut cs = s2.ln();
-            cs -= zd;
-            cs = (e::exp(cs.re) / tol) * C64::new(e::cos(cs.im), e::sin(cs.im));
-            if !uchk(cs, *ascle, tol) {
-                y[(i - 1) as usize] = cs;
-                nz -= 1;
-                if ic == kk - 1 {
-                    nz = kk - 2;
-                    for v in y.iter_mut().take(nz as usize) {
-                        *v = C64::ZERO;
-                    }
-                    return nz;
-                }
-                ic = kk;
-                continue;
-            }
-        }
-        if alas >= 0.5 * elim {
-            xx -= elim;
-            zd = C64::new(xx, zri);
-            s1 *= elm;
-            s2 *= elm;
-        }
-    }
-    nz = n;
-    if ic == n {
-        nz = n - 1;
-    }
-    for v in y.iter_mut().take(nz as usize) {
-        *v = C64::ZERO;
-    }
-    nz
-}
-
 /// `bknu`: K(fnu, z) in the right half plane.
 #[allow(clippy::too_many_arguments)]
 fn bknu(z: C64, fnu: f64, kode: i32, n: i32, y: &mut [C64], tol: f64, elim: f64, alim: f64) -> i32 {
@@ -740,7 +638,7 @@ fn bknu(z: C64, fnu: f64, kode: i32, n: i32, y: &mut [C64], tol: f64, elim: f64,
     let css = [C64::real(cscl), C64::real(1.0), C64::real(crsc)];
     let csr = [C64::real(crsc), C64::real(1.0), C64::real(cscl)];
     let bry = [1e3 * D1MACH[0] / tol, tol / (1e3 * D1MACH[0]), D1MACH[1]];
-    let mut nz = 0;
+    let nz = 0;
     let mut iflag = 0;
     let mut koded = kode;
     let rz = 2.0 / z;
@@ -1156,33 +1054,15 @@ fn bknu(z: C64, fnu: f64, kode: i32, n: i32, y: &mut [C64], tol: f64, elim: f64,
                 label = L::L190;
             }
             L::L190 => {
-                let _ = i_l160_exit;
-                y[0] = s1;
-                if n != 1 {
-                    y[1] = s2;
+                // AMOS rescales an underflowing recurrence here (`kscl`). No real argument of
+                // J reaches it (measured over the whole coverage grid of the real entry), so
+                // the port carries no `kscl`: the value is NaN, which the real entry answers
+                // from Cephes (`besselj`).
+                let _ = (i_l160_exit, s1, s2);
+                for v in y.iter_mut().take(n as usize) {
+                    *v = C64::new(f64::NAN, f64::NAN);
                 }
-                ascle = bry[0];
-                nz = kscl(zd, fnu, n, y, rz, &mut ascle, tol, elim);
-                inu = n - nz;
-                if inu <= 0 {
-                    return nz;
-                }
-                kk = nz + 1;
-                s1 = y[(kk - 1) as usize];
-                y[(kk - 1) as usize] = s1 * csr[0];
-                if inu == 1 {
-                    return nz;
-                }
-                kk = nz + 2;
-                s2 = y[(kk - 1) as usize];
-                y[(kk - 1) as usize] = s2 * csr[0];
-                if inu == 2 {
-                    return nz;
-                }
-                let t2 = fnu + (kk - 1) as f64;
-                ck = t2 * rz;
-                kflag = 1;
-                label = L::L140;
+                return 0;
             }
         }
     }

@@ -445,8 +445,11 @@ def besselj(nu: Any, x: Any) -> Any:
     within 2,634 ulp at least 0.1 away from a zero of J_nu and within 1.4e-14 absolute near
     one. NaN for a non-integer order of a negative argument (the value is complex there) and
     for an infinite argument; ``J_0(0) = 1``, ``J_nu(0) = 0`` for nu > 0 and for a negative
-    integer nu, ``J_nu(0) = inf`` for a negative non-integer nu. No torch realization."""
+    integer nu, ``J_nu(0) = inf`` for a negative non-integer nu. Torch has no Bessel function
+    of real order, so a tensor is evaluated by the same kernel on the host and returned as a
+    tensor of its dtype and device (not differentiable)."""
     def torch_besselj(torch: ModuleType, a: Any, b: Any) -> Any:
-        raise TypeError('besselj has no torch realization: torch has no Bessel function of '
-                        'real order; pass numpy arrays or floats')
+        at, bt = _torch_pair(torch, a, b)
+        host = lambda t: t.detach().to('cpu', torch.float64).numpy()  # noqa: E731
+        return torch.as_tensor(besselj(host(at), host(bt)), dtype=at.dtype, device=at.device)
     return _binary('besselj', nu, x, torch_besselj)
