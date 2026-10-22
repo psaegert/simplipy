@@ -648,10 +648,19 @@ impl Engine {
     /// and a literal dearer than its expression is refused (`sin 1` stays). A whole ground node
     /// folds before its children, so `rootn(exp(19.11787581094798), 2)` is
     /// `14170.787488305119` and not the root of a 9-digit literal. `real` never folds.
-    fn ground_fold(&self, strs: &[String]) -> Option<Ex> {
+    fn ground_fold(&self, strs: &[String], signed: bool) -> Option<Ex> {
         let tok = crate::numeric::evaluate_constant_subtree(strs, &self.operators)?;
         let y = crate::numeric::leaf_value(&tok)?;
         if !y.is_finite() {
+            return None;
+        }
+        // In `f64` a zero keeps its sign where it is inverted (`1/ceil(-0.5)` is -inf), and a
+        // literal has one zero: a ground whose float is -0 stays as written.
+        if signed
+            && y == 0.0
+            && crate::numeric::evaluate_constant_value(strs, &self.operators)
+                .is_some_and(|v| v.is_sign_negative())
+        {
             return None;
         }
         let _f64 = crate::ac::rat::number_domain(true);
@@ -748,10 +757,27 @@ impl Engine {
             };
             // THE GROUND FOLD (G): a finite ground node folds to its float, in `f64` and in
             // `permissive`.
+            let signed = fold_f64 && !lossy;
             let verdict = match verdict {
                 None if lossy || fold_f64 => {
                     let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
-                    self.ground_fold(&self.resolve_seq(&literal, ctx))
+                    self.ground_fold(&self.resolve_seq(&literal, ctx), signed)
+                }
+                // In `f64` an infinity takes the sign float64 gives it, which a signed zero
+                // decides (`1/ceil(-0.5)` is -inf, where the interval layer's one zero reads
+                // +inf): a class the evaluator contradicts does not fold.
+                Some(inf @ (Ex::PosInf | Ex::NegInf)) if signed => {
+                    let literal = crate::ac::convert::to_prefix_literal_tokens(e, &bare);
+                    let y = crate::numeric::evaluate_constant_value(
+                        &self.resolve_seq(&literal, ctx),
+                        &self.operators,
+                    );
+                    match y {
+                        Some(v) if v == f64::INFINITY => Some(Ex::PosInf),
+                        Some(v) if v == f64::NEG_INFINITY => Some(Ex::NegInf),
+                        None => Some(inf),
+                        _ => None,
+                    }
                 }
                 v => v,
             };

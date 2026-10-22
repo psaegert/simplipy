@@ -168,7 +168,17 @@ pub fn matches_each(subject: &Ex, pattern: &Ex, binds: &mut Binds, cx: &MCx, k: 
         }
         Ex::Fun(pf, pa) => match subject {
             Ex::Fun(sf, sa) if sf == pf && sa.len() == pa.len() => {
-                matches_seq(sa, pa, 0, binds, cx, k)
+                if matches_seq(sa, pa, 0, binds, cx, &mut *k) {
+                    return true;
+                }
+                // `max` and `min` are commutative: their canonical argument order
+                // (`expr::fun`) sorts a pattern's wildcards apart from what they bind, so
+                // the other order is tried too.
+                if sa.len() == 2 && (cx.view.tok_is(*pf, "max") || cx.view.tok_is(*pf, "min")) {
+                    let swapped = [sa[1].clone(), sa[0].clone()];
+                    return matches_seq(&swapped, pa, 0, binds, cx, k);
+                }
+                false
             }
             _ => false,
         },

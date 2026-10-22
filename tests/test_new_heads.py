@@ -95,6 +95,48 @@ def test_a_small_mine_mines_new_head_rules():
 
     for rules in (e.simplification_rules, e.permissive_simplification_rules):
         assert has(rules, 'floor floor #0', 'floor #0'), rules
-        assert has(rules, 'max #0 #0', '#0'), rules
+        assert has(rules, 'ceil floor #0', 'floor #0'), rules
+        # max(x, x) = x and the argument order are the engine's: no rule states them
+        assert not any(a[0] == 'max' and b[0] == 'max' for a, b in rules), rules
+        assert not has(rules, 'max #0 #0', '#0'), rules
     heads = {'floor', 'ceil', 'max'}
     assert not any(heads & set(list(a) + list(b)) for a, b in e.real_simplification_rules)
+
+
+def test_max_and_min_are_order_independent_and_idempotent(bare):
+    for mode in MODES:
+        s = lambda t: bare.simplify(t.split(), mode=mode)  # noqa: E731
+        assert s('max x0 1') == s('max 1 x0') and s('min sin x0 x1') == s('min x1 sin x0')
+        assert s('max x0 x0') == ['x0'] and s('min erf x1 erf x1') == ['erf', 'x1']
+        # two constants are independent: the pair is no `max(a, a)`
+        assert s('max * <constant> x0 * <constant> x0')[0] == 'max'
+
+
+def test_float64_keeps_the_zero_sign_the_new_heads_produce_and_atan2_reads(bare):
+    import simplipy.operators as ops
+    f64 = lambda t: bare.simplify(t.split(), mode='f64')  # noqa: E731
+    # a ground's zero sign decides the infinity it inverts to, as float64 evaluates it
+    assert f64('inv ceil -0.5') == ['float("-inf")']
+    assert f64('inv mod 3 -3') in (['float("-inf")'], ['inv', 'mod', '3', '-3'])
+    # atan2 reads its first argument's zero sign: atan2(-0, -1) = -pi
+    for src in ('atan2 neg - x0 abs x0 -1', 'atan2 neg - x0 x0 -1', 'atan2 ceil -0.5 -1'):
+        tgt = f64(src)
+        fs, ft = (eval('lambda x0: ' + bare.prefix_to_infix(t, realization=True),
+                       {**vars(ops), 'np': np, 'simplipy': __import__('simplipy')})
+                  for t in (src.split(), list(tgt)))
+        for x in (0.0, 1.5, 3.0):
+            a, b = (float(np.asarray(f(np.array([x]))).ravel()[0]) for f in (fs, ft))
+            assert a == b and np.signbit(a) == np.signbit(b), (src, tgt, x, a, b)
+
+
+def test_the_mint_refuses_laws_float64_breaks_at_a_jump(bare):
+    from simplipy.mining import RuleMiner
+    X = RuleMiner(bare)._mining_sample_x(256, 2, np.random.default_rng(0))
+
+    def certified(src, tgt):
+        return bare._core.judge_pair(src.split(), tgt.split(), ['x0', 'x1'], X.flatten().tolist(),
+                                     X.shape[0], rtol=1e-11, atol=1e-12, rule_mode='default')[0]
+    for src, tgt in (('floor + x0 1', '+ floor x0 1'), ('mod + x0 1 1', 'mod x0 1'),
+                     ('floor mod x0 1', '0'), ('+ floor x0 1', 'ceil x0')):
+        assert not certified(src, tgt), (src, tgt)
+    assert certified('floor floor x0', 'floor x0')

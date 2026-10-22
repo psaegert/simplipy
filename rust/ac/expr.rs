@@ -3962,6 +3962,27 @@ fn region_signed_zero(f: &Ex, cx: &Cx) -> bool {
         Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "rootn") => {
             matches!(&a[1], Ex::Num(k) if k.is_odd_integer()) && region_signed_zero(&a[0], cx)
         }
+        // The 0.15 heads. A step or lattice head vanishes on whole intervals with a sign of its
+        // own (`ceil` is -0 on (-1, 0), `mod` takes the divisor's, `max(x, -0)` and `min(x, 0)`
+        // hold a zero on a half-line), wherever it has a region to vanish on. `harmonic` is odd at
+        // its zero, `atan2` in its first argument and `besselj` (under an odd order) in its
+        // second, so each keeps its argument's.
+        Ex::Fun(op, _)
+            if ["floor", "ceil", "max", "min", "mod"]
+                .iter()
+                .any(|h| cx.view.tok_is(*op, h)) =>
+        {
+            cx.f64_semantics() && f.has_measure_space(cx.view)
+        }
+        Ex::Fun(op, a) if a.len() == 1 && cx.view.tok_is(*op, "harmonic") => {
+            region_signed_zero(&a[0], cx)
+        }
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "atan2") => {
+            region_signed_zero(&a[0], cx)
+        }
+        Ex::Fun(op, a) if a.len() == 2 && cx.view.tok_is(*op, "besselj") => {
+            region_signed_zero(&a[1], cx)
+        }
         _ => false,
     }
 }
@@ -8914,6 +8935,20 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     if !args.is_empty() && args.iter().all(|a| matches!(a, Ex::Num(_))) {
         if let Some(folded) = exact_step_fold(op, &args, matches!(cx.mode, RuleMode::Real), cx) {
             return folded;
+        }
+    }
+    // `max` AND `min` ARE COMMUTATIVE AND IDEMPOTENT, bit for bit: their kernels are IEEE
+    // 754-2019's maximum and minimum, NaN-propagating in both orders and ordering -0 below +0,
+    // and so are the real functions. The arguments take the canonical order, and `max(a, a)` is
+    // `a` (two `<constant>`s are independent, so a `Const`-bearing pair stays). Nesting stays
+    // as written: `max(a, max(b, c))` is no bag.
+    let mut args = args;
+    if args.len() == 2 && (cx.view.tok_is(op, "max") || cx.view.tok_is(op, "min")) {
+        if args[0] == args[1] && !args[0].contains_const() {
+            return args.into_iter().next().unwrap();
+        }
+        if cmp_ex(&args[1], &args[0], cx.view) == Ordering::Less {
+            args.swap(0, 1);
         }
     }
     // AN EVEN FUNCTION EATS THE SIGN OF ITS ARGUMENT: `g(-t) -> g(t)`.

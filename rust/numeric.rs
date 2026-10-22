@@ -62,6 +62,14 @@ pub fn evaluate_constant_subtree(tokens: &[String], ops: &Operators) -> Option<S
     Some(py_float_repr(value))
 }
 
+/// The float64 value of an all-numeric prefix subtree as the evaluator computes it, the sign
+/// of a zero included (`evaluate_constant_subtree` writes a token, which keeps no zero sign).
+pub(crate) fn evaluate_constant_value(tokens: &[String], ops: &Operators) -> Option<f64> {
+    let mut idx = 0;
+    let value = eval_node(tokens, &mut idx, ops)?;
+    (idx == tokens.len()).then_some(value)
+}
+
 /// Recursive prefix evaluation: an operator consumes `arity` operands; a leaf is `float(token)`.
 fn eval_node(tokens: &[String], idx: &mut usize, ops: &Operators) -> Option<f64> {
     let tok = tokens.get(*idx)?.clone();

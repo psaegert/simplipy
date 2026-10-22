@@ -112,6 +112,34 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
         let (index, at) = parse_one(tokens, at, cx)?;
         return Some((fun(t, vec![base, index], cx), at));
     }
+    // `atan2` READS THE SIGN OF A ZERO in its first argument (`atan2(-0, -1) = -pi`) and is odd
+    // in it bit for bit in float64: a negative coefficient of that argument leaves the call
+    // (`atan2(-S, x) = -atan2(S, x)`) before a product decides its members, so a sum that
+    // vanishes on a region keeps the orientation it was written in, as under an inverse
+    // (`inverts_a_signed_zero`). Not in `real`, whose one zero gives `atan2(0, -1) = pi`.
+    if s == "atan2" && view.arity(t) == Some(2) && cx.ieee_zeros() {
+        let mut ym = Vec::new();
+        let at = parse_members(tokens, idx + 1, cx, &mut ym)?;
+        let (x, at) = parse_one(tokens, at, cx)?;
+        let negatives = ym
+            .iter()
+            .filter(|m| matches!(m, Ex::Num(r) if r.is_negative()))
+            .count();
+        if negatives % 2 == 1 {
+            let pos = ym
+                .iter()
+                .position(|m| matches!(m, Ex::Num(r) if r.is_negative()))?;
+            if let Ex::Num(r) = &ym[pos] {
+                if let Some(n) = r.checked_neg() {
+                    ym[pos] = Ex::Num(n);
+                    let inner = desugar(&s, t, vec![mul(ym, cx), x], cx);
+                    return Some((mul(vec![Ex::Num(Rat::NEG_ONE), inner], cx), at));
+                }
+            }
+            return None;
+        }
+        return Some((desugar(&s, t, vec![mul(ym, cx), x], cx), at));
+    }
     let arity = view.arity(t);
     match arity {
         None => Some((parse_leaf_token(t, &s, view), idx + 1)),
