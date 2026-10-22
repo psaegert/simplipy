@@ -194,6 +194,11 @@ def _check_range(t, v):
             f"{PERIODIC_ARG_EXP_LIMIT}, beyond the range where the value is decidable")
 
 
+def _real_or_nan(r):
+    """A complex result (an operator off its real domain) is no real value: NaN."""
+    return nan if isinstance(r, (complex, mp.mpc)) else r
+
+
 def _ev(tokens, i, env, consts, ci):
     t = tokens[i]
     i += 1
@@ -211,7 +216,7 @@ def _ev(tokens, i, env, consts, ci):
             r = UN[t](v)
         except (OverflowError, ValueError, ZeroDivisionError):
             r = nan
-        return r, i, ci
+        return _real_or_nan(r), i, ci
     if t in BIN:
         a, i, ci = _ev(tokens, i, env, consts, ci)
         b, i, ci = _ev(tokens, i, env, consts, ci)
@@ -223,7 +228,7 @@ def _ev(tokens, i, env, consts, ci):
             r = BIN[t](a, b)
         except (OverflowError, ValueError, ZeroDivisionError):
             r = nan
-        return r, i, ci
+        return _real_or_nan(r), i, ci
     if t == '<constant>':
         v = consts[ci]
         return _num(v), i, ci + 1

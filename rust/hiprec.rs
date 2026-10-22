@@ -1020,9 +1020,67 @@ fn powi_sr_at(x: &BigFloat, k: u64, g: usize) -> BigFloat {
     acc
 }
 
+/// The operators both high-precision evaluators (the rescue `apply_unary`/`apply_binary` and the
+/// contract `ct_unary`/`ct_binary`) know. Any other head is unevaluable, at a NaN operand too,
+/// so every verdict that needs one refuses it.
+pub(crate) fn knows_operator(name: &str) -> bool {
+    matches!(
+        name,
+        "neg"
+            | "abs"
+            | "inv"
+            | "mult2"
+            | "mult3"
+            | "mult4"
+            | "mult5"
+            | "div2"
+            | "div3"
+            | "div4"
+            | "div5"
+            | "pow2"
+            | "pow3"
+            | "pow4"
+            | "pow5"
+            | "pow1_2"
+            | "pow1_3"
+            | "pow1_4"
+            | "pow1_5"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "asinh"
+            | "acosh"
+            | "atanh"
+            | "exp"
+            | "log"
+            | "+"
+            | "-"
+            | "*"
+            | "/"
+            | "pow"
+            | "rootn"
+    )
+}
+
+/// Can both evaluators evaluate every operator of `tokens` (read with `ops`' arities)?
+pub(crate) fn evaluable(tokens: &[String], ops: &Operators) -> bool {
+    tokens
+        .iter()
+        .all(|t| ops.arity_of(t).is_none() || knows_operator(t))
+}
+
 /// Unary/binary OPS at contract semantics. `None` = Unresolved.
 fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat>> {
     // outer None = unknown operator (caller falls back); inner None = Unresolved
+    if !knows_operator(name) {
+        return None;
+    }
     let p = ctx.p;
     if x.is_nan() && name != "pow2" && name != "pow3" && name != "pow4" && name != "pow5" {
         // every contract op propagates nan (powk go through ct_pow, which handles nan^0 = n/a)
@@ -1224,6 +1282,9 @@ fn ct_unary(name: &str, x: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat
 }
 
 fn ct_binary(name: &str, a: &BigFloat, b: &BigFloat, ctx: &mut CtCtx) -> Option<Option<BigFloat>> {
+    if !knows_operator(name) {
+        return None;
+    }
     let p = ctx.p;
     if (a.is_nan() || b.is_nan()) && name != "pow" {
         return Some(Some(NAN));
@@ -1566,8 +1627,9 @@ fn ct_saturation_verdict(
 /// same contract the artifact gate applies. `(None, snapped)` = the point cannot be judged
 /// honestly (refused at every affordable rung, or rung disagreement); otherwise the
 /// confirmed class. `snapped` is rung 1's flag. `atoms` is full-width (aligned with
-/// `var_names`); coordinates are re-rendered per rung. Unevaluable tokens fail OPEN as
-/// `(Some(Eq), false)` -- the f64 row comparison still binds upstream.
+/// `var_names`); coordinates are re-rendered per rung. A side holding an operator neither
+/// evaluator knows (`knows_operator`) is unevaluable and gets no verdict, `(None, false)`:
+/// it fails CLOSED, never reading as equal.
 ///
 /// THE FINITE HALF HAS NO MAGNITUDE BAR. It asks how a gap RESPONDS TO PRECISION, because
 /// no threshold separates the two populations -- the shipped artifact proves it by
@@ -1645,7 +1707,7 @@ pub fn contract_point_verdict(
     };
 
     let Some((read1, snap1, req1, mag1, dem1)) = once(GAP_RUNGS[0], true) else {
-        return (Some(PointCmp::Eq), false); // unevaluable: fail open
+        return (None, false); // unevaluable: no verdict (fail closed)
     };
     // RUNG 2 IS OPERAND-SCALED. A fixed 120 confirms nothing when the intermediates are
     // 10^217: both rungs are swamped alike, agree on a manufactured verdict, and the
@@ -1667,7 +1729,7 @@ pub fn contract_point_verdict(
             Some(rd) => rd,
             None => match once(rungs[i], false) {
                 Some((rd, _, _, _, _)) => rd,
-                None => return (Some(PointCmp::Eq), false), // unevaluable: fail open
+                None => return (None, false), // unevaluable: no verdict
             },
         };
         if let Some(rd) = read {
@@ -1691,7 +1753,7 @@ pub fn contract_point_verdict(
             // gap to watch decay, so this half is the two/three-rung rule unchanged.
             let f1 = Some((c1, cl1, cr1));
             let Some((r2, _, _, _, _)) = once(hi_dps, false) else {
-                return (Some(PointCmp::Eq), false);
+                return (None, false);
             };
             let Some(r2) = r2 else {
                 return (None, snap1); // Unresolved higher up: never convict
@@ -1729,7 +1791,7 @@ pub fn contract_point_verdict(
             // BOTH FINITE -- decided by DECAY, never by size.
             let mut p = dps_to_prec(hi_dps);
             let Some((rhi, _, _, _, _)) = once(hi_dps, false) else {
-                return (Some(PointCmp::Eq), false);
+                return (None, false);
             };
             let Some(Read::Gap(d2, s2)) = rhi else {
                 return (None, snap1); // class flipped / Unresolved: never convict
@@ -1752,7 +1814,7 @@ pub fn contract_point_verdict(
             if !s1.is_zero() && cmp_eq(&d1, &s1) && !cmp_eq(&d2, &s2) {
                 let next = GAP_RUNGS[2].max(2 * hi_dps);
                 let Some((rn, _, _, _, _)) = once(next, false) else {
-                    return (Some(PointCmp::Eq), false);
+                    return (None, false);
                 };
                 let Some(Read::Gap(d3, s3)) = rn else {
                     return (None, snap1);
@@ -1894,6 +1956,9 @@ fn pow_pos_base(a: &BigFloat, b: &BigFloat, p: usize, cc: &mut Consts) -> BigFlo
 }
 
 fn apply_unary(name: &str, x: &BigFloat, p: usize, cc: &mut Consts) -> Option<BigFloat> {
+    if !knows_operator(name) {
+        return None;
+    }
     if x.is_nan() {
         return Some(NAN);
     }
@@ -2029,6 +2094,9 @@ fn apply_binary(
     p: usize,
     cc: &mut Consts,
 ) -> Option<BigFloat> {
+    if !knows_operator(name) {
+        return None;
+    }
     if a.is_nan() || b.is_nan() {
         return Some(NAN);
     }

@@ -2244,7 +2244,7 @@ class TestTheGateRoutesInsteadOfDeleting:
         from simplipy.verify import FATAL_BUCKETS
         from simplipy.verify._contract import _tier
         for bucket in FATAL_BUCKETS:
-            if bucket in ('ENGINE-MISALIGN', 'KILL'):
+            if bucket in ('ENGINE-MISALIGN', 'KILL', 'F64-ONLY'):
                 continue
             for realised in (True, False, None):
                 assert _tier(bucket, realised) == 'reject', bucket

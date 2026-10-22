@@ -17,7 +17,7 @@ import signal
 import threading
 import time
 from typing import Callable, TYPE_CHECKING
-from typing import Any
+from typing import Any, Sequence
 from copy import deepcopy
 
 import numpy as np
@@ -358,6 +358,20 @@ def judge_tiers(pairs: list, processes: int = 4, warn_s: float = JUDGE_WARN_S,
 
 def _file_mode(rule_mode: str) -> str:
     return dict(_MINE_MODES)[rule_mode]
+
+
+def _licensable(tokens: Sequence[str], rule_mode: str) -> bool:
+    """Can the contract judge license, in ``rule_mode``'s file, a rule with these tokens on
+    either side? A head without a contract kernel (``verify._contract.DEPLOYED_ONLY_ARITY``) is
+    judged in the deployed float64 lane alone, which earns at most the ``f64`` tier and refuses
+    a ``<constant>``: such a rule never enters the real file, nor any file with a
+    ``<constant>``. The mine leaves those sources and candidates out, rather than letting the
+    judge loop refuse them one pick at a time (and give up on a source after
+    ``_JUDGE_ROUNDS_MAX`` refusals)."""
+    from .verify._contract import DEPLOYED_ONLY_ARITY
+    if not any(t in DEPLOYED_ONLY_ARITY for t in tokens):
+        return True
+    return _file_mode(rule_mode) != 'real' and '<constant>' not in tokens
 
 
 def _mode_tiers(rule_mode: str) -> frozenset:
@@ -889,6 +903,7 @@ class RuleMiner:
             for length in sorted(expressions_of_length)
             if length <= max_candidate_length
             for expression in sorted(expressions_of_length[length])
+            if _licensable(expression, rule_mode)
         ]
         library = self.engine._core.build_candidate_library(
             candidates, list(dummy_variables), X_data.flatten(order='C').tolist(), X_data.shape[0],
@@ -1401,6 +1416,7 @@ class RuleMiner:
             _raw_sources = [list(expression) for expression in sorted(expressions_of_length[length])]
             sources = self.engine._core.mine_sources(_raw_sources, rule_mode=rule_mode)
             n_ac_classed = len(_raw_sources) - len(sources)
+            sources = [source for source in sources if _licensable(source, rule_mode)]
             if verbose and n_ac_classed:
                 print(f'Length {length}: {len(_raw_sources):,} sources -> {len(sources):,} AC classes '
                       f'({n_ac_classed:,} duplicate spellings skipped)')

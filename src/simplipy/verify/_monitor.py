@@ -604,7 +604,15 @@ def _zero_signbit(op, args):
         if base == 0:
             return sb[0] and k > 0 and _odd_integer(k)
         return isinf(base) and base < 0 and k < 0 and _odd_integer(k)
-    return False                          # abs, an even power, exp(-inf), log(1), acos(1), ...
+    if op in _PLUS_ZERO:
+        return False                      # abs, an even power, exp(-inf), log(1), acos(1), ...
+    # A head whose zero sign this table does not know: no reading, rather than a guessed +0.
+    raise Unresolved()
+
+
+#: The operators whose exact zero is always +0 in IEEE 754.
+_PLUS_ZERO = frozenset({'abs', 'exp', 'log', 'cos', 'cosh', 'acos', 'acosh', 'pow2', 'pow4',
+                        'pow1_2', 'pow1_4'})
 
 
 def _pole_signbit(op, args):
