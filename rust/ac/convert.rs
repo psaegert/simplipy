@@ -24,7 +24,7 @@ use crate::tokens::{Tok, TokenView};
 
 use super::expr::{
     add, atan2_of, canon, fun, inverts_a_signed_zero, mul, mul_undecided, pow, pow_member,
-    raised_members, Cx, Ex, FlipScope, NEG_ZERO,
+    raised_members, signed_zero_product, Cx, Ex, FlipScope, NEG_ZERO,
 };
 use super::rat::Rat;
 use num_bigint::BigInt;
@@ -57,6 +57,10 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
     if product_head(&s, view.arity(t)) {
         let mut members = Vec::new();
         let at = parse_members(tokens, idx, cx, &mut members)?;
+        // A written product of numbers that is zero takes float64's sign in `f64` (`-1*0`).
+        if let Some(zero) = signed_zero_product(&members, cx) {
+            return Some((zero, at));
+        }
         return Some((mul(members, cx), at));
     }
     if let Some((members, at)) = product_power(tokens, idx, cx) {

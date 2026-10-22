@@ -8926,6 +8926,40 @@ fn product_members(e: Ex) -> Vec<Ex> {
     }
 }
 
+/// The float64 value of a written product of numbers that is zero, in `f64`: the product of the
+/// signs of its factors (`-1*0`, `0*(-2)` and `-(0)` are -0, `-1*-0.0` is +0), which the exact
+/// coefficient, one zero, cannot hold, so `-0.0` (`NEG_ZERO`) where an odd number of the factors
+/// are negative or the written negative zero, else `0`. `None` outside `f64` and for any other
+/// product (a factor that is no number, an infinity, or no zero factor). The parse builds a
+/// written product through it; a zero the search derives keeps the one zero (the region rule).
+pub(crate) fn signed_zero_product(items: &[Ex], cx: &Cx) -> Option<Ex> {
+    if !cx.f64_semantics() {
+        return None;
+    }
+    let mut zero = false;
+    let mut negative = false;
+    for f in items {
+        match f {
+            Ex::Num(r) => {
+                zero |= r.is_zero();
+                negative ^= r.is_negative();
+            }
+            f if is_neg_zero(f, cx.view) => {
+                zero = true;
+                negative = !negative;
+            }
+            _ => return None,
+        }
+    }
+    zero.then(|| {
+        if negative {
+            Ex::Leaf(cx.view.intern(NEG_ZERO))
+        } else {
+            Ex::Num(Rat::ZERO)
+        }
+    })
+}
+
 /// `floor` (or `ceil`) of a rational, exactly; `None` when the result leaves `Rat`.
 fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
     use num_integer::Integer;

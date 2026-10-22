@@ -120,7 +120,11 @@ def test_f64_writes_the_negative_zero_and_reads_it(bare):
     for src, want in (('ceil -0.5', ['-0.0']), ('mod 3 -3', ['-0.0']),
                       ('inv mod 3 -3', ['float("-inf")']), ('inv ceil -0.5', ['float("-inf")']),
                       ('inv -0.0', ['float("-inf")']), ('pow -0.0 -2', ['float("inf")']),
-                      ('atan2 0 -0.0', ['np.pi']), ('+ x0 -0.0', ['x0']), ('-0', ['0'])):
+                      ('atan2 0 -0.0', ['np.pi']), ('+ x0 -0.0', ['x0']), ('-0', ['0']),
+                      # a product or negation of numbers that is zero has float64's sign
+                      ('* -1 0', ['-0.0']), ('* 0 -1', ['-0.0']), ('* -1 0.0', ['-0.0']),
+                      ('neg 0', ['-0.0']), ('/ 0 -2', ['-0.0']), ('* -1 -0.0', ['0']),
+                      ('* -1 * -1 0', ['0'])):
         assert f64(src) == want, (src, f64(src))
     for mode in ('real', 'permissive'):
         assert bare.simplify(['inv', '-0.0'], mode=mode) == ['float("inf")']

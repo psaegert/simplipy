@@ -397,10 +397,11 @@ inverted, the inverse distributes over its members, the zero giving `+inf` (it i
 other member its own power, so the answer keeps the sign the members give the zero:
 `1/(x1*(x2 - x2))` is `inf/x1`, `1/(-(x1 - x1))` is `-inf` and `x1/(0/x2)` is `inf*x1*x2`.
 `real` reads the one zero of the reals, whose inverse is `+inf` (`c/0 = sign(c)*inf`): there the
-three are `inf`, `inf` and `inf*x1`. A zero's sign survives only as a member of the product
-that is inverted, since the canonical form holds one exact zero: through an odd function or a
-sum it is lost, so `1/tan(-(x1 - x1))` and `1/(0*(-2) - 0)` are `+inf` in every mode, where
-float64 gives `-inf`.
+three are `inf`, `inf` and `inf*x1`. In `f64` a written product or negation of numbers that is
+zero is float64's signed zero, `-0.0` where its sign is negative, which an odd function keeps:
+`1/tan(-(x1 - x1))` is `-inf` there. Otherwise a zero's sign survives only as a member of the
+product that is inverted, since the canonical form holds one exact zero: through a sum it is
+lost, so `1/(0*(-2) - 0)` is `+inf` in every mode, where float64 gives `-inf`.
 
 **A sum that vanishes on a region keeps its zero's sign where it is inverted, in `f64`.** float64
 adds to `+0` wherever a sum cancels, however the sum is written: `|x1| - x1` and `x1 - |x1|` are

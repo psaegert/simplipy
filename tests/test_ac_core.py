@@ -847,11 +847,12 @@ class TestZeroPoles:
 
     def test_a_zero_signed_outside_the_inverted_product_reads_plus(self, engine) -> None:
         # The known residual (docs/formal.md): the canonical form holds one exact zero, so a
-        # sign a zero takes through an odd function or a sum is gone before the inverse; float64
-        # gives -inf for both.
+        # sign a zero takes through a sum is gone before the inverse; float64 gives -inf for
+        # both. A written negation of a zero is f64's `-0.0`, which an odd function keeps.
         for mode in ('f64', 'permissive', 'real'):
             for tokens in (['inv', 'tan', 'neg', '-', 'x1', 'x1'], ['/', '1', '-', '*', '0', '-2', '0']):
-                assert engine.simplify(list(tokens), mode=mode) == ['float("inf")'], (mode, tokens)
+                want = 'float("-inf")' if mode == 'f64' and tokens[0] == 'inv' else 'float("inf")'
+                assert engine.simplify(list(tokens), mode=mode) == [want], (mode, tokens)
 
     def test_real_reads_one_zero(self, engine: SimpliPyEngine) -> None:
         assert engine.simplify(['inv', '*', '0', 'x1'], mode='real') == ['float("inf")']

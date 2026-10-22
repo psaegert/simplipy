@@ -58,8 +58,11 @@ organised by who you are, then the highlights, then every change in detail.
   integer `-0` is Python's +0) keeps its sign in `f64` and is printed `-0.0`, priced as the zero
   and one sign bit; `real` and `permissive` read it as 0. An `f64` ground fold writes its float
   exactly, -0 included, and the floats of pi and e as `np.pi` and `np.e`: `1/(-0.0)` is `-inf`
-  (it was `inf`), `atan2(0, -0.0)` is `np.pi` (it was `0`), `x + -0.0` is `x`. A nonzero
-  literal that underflows to -0 stays the leaf it is written as.
+  (it was `inf`), `atan2(0, -0.0)` is `np.pi` (it was `0`), `x + -0.0` is `x`. A written
+  product or negation of numbers that is zero takes float64's sign: `-1*0`, `0*(-2)` and `-(0)`
+  are `-0.0` (they were `0`), `-1*-0.0` is `0`; a zero the search derives keeps the one zero
+  (`x1*0` is unchanged). A nonzero literal that underflows to -0 stays the leaf it is written
+  as.
 - **Long exact coefficients.** An answer carries every digit of an exact number
   (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
   long, because a literal costs at most what its float costs. Show answers to a reader with
