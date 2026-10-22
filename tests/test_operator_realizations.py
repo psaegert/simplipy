@@ -20,7 +20,7 @@ RNG = np.random.default_rng(1021)
 UNARY = ['neg', 'inv', 'abs', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
          'asinh', 'acosh', 'atanh', 'exp', 'log', 'floor', 'ceil', 'harmonic', 'erf']
 BINARY = {'add': '+', 'sub': '-', 'mul': '*', 'div': '/', 'pow': 'pow', 'rootn': 'rootn',
-          'max': 'max', 'min': 'min', 'mod': 'mod', 'atan2': 'atan2'}
+          'max': 'max', 'min': 'min', 'mod': 'mod', 'atan2': 'atan2', 'besselj': 'besselj'}
 
 
 def unary_grid() -> np.ndarray:
@@ -154,7 +154,8 @@ def test_complex_operands() -> None:
     assert ops.abs(3 + 4j) == 5.0 and np.array_equal(ops.abs(z), np.abs(z))
     assert np.array_equal(ops.add(z, 1.0), z + 1.0) and np.array_equal(ops.neg(z), -z)
     for f, args in [(ops.harmonic, (1j,)), (ops.floor, (np.array([1 + 1j]),)), (ops.max, (1.0, 2j)),
-                    (ops.mod, (1j, 2.0)), (ops.erf, (1j,)), (ops.atan2, (1j, 1.0))]:
+                    (ops.mod, (1j, 2.0)), (ops.erf, (1j,)), (ops.atan2, (1j, 1.0)),
+                    (ops.besselj, (1.0, 1j))]:
         with pytest.raises(TypeError, match='real numbers'):
             f(*args)
 
@@ -173,3 +174,39 @@ def test_torch_branches() -> None:
     assert h[0] == 0 and torch.signbit(h[1]) and abs(float(h[2]) - 1) < 1e-15 and torch.isnan(h[3])
     assert abs(float(h[4]) - float(ops.harmonic(2.5))) < 1e-14
     assert math.isclose(float(ops.erf(torch.tensor(0.5, dtype=torch.float64))), float(ops.erf(0.5)), rel_tol=1e-15)
+    with pytest.raises(TypeError, match='no torch realization'):
+        ops.besselj(t, t)
+
+
+def test_the_acj2_4_config_is_acj_4_plus_the_new_operators() -> None:
+    """acj2-4's vocabulary is acj-4's plus the nine 0.15 operators, every realization one of
+    `simplipy.operators`; it loads (without rule sets until its mines write them) and reads
+    the new calls."""
+    import importlib
+    import os
+    import warnings
+
+    import yaml
+
+    import simplipy as sp
+
+    root = os.path.join(os.path.dirname(__file__), '..', 'assets', 'engines')
+    with open(os.path.join(root, 'acj-4', 'config.yaml')) as f:
+        old = yaml.safe_load(f)['operators']
+    path = os.path.join(root, 'acj2-4', 'config.yaml')
+    with open(path) as f:
+        new = yaml.safe_load(f)['operators']
+    added = {'floor', 'ceil', 'erf', 'harmonic', 'max', 'min', 'mod', 'atan2', 'besselj'}
+    assert set(new) == set(old) | added
+    for token, spec in new.items():
+        module, name = spec['realization'].rsplit('.', 1)
+        assert module == 'simplipy.operators', token
+        assert callable(getattr(importlib.import_module(module), name)), token
+        if token in old:
+            assert {k: v for k, v in spec.items() if k != 'realization'} == \
+                {k: v for k, v in old[token].items() if k != 'realization'}, token
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        engine = sp.SimpliPyEngine.from_config(path)
+    assert engine.simplify('max(x1, x2, x3)') == 'max(x1, max(x2, x3))'
+    assert engine.simplify('besselj(2, x1) + 0') == 'besselj(2, x1)'

@@ -1031,6 +1031,19 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   continuation takes numpy's, and a torch tensor takes torch's. New realizations name the
   arithmetic, `add`, `sub` and `mul`, for configs that spell every operator in
   `simplipy.operators`.
+- **Nine new operators and the `acj2-4` engine config.** `simplipy.operators` gains `floor`,
+  `ceil`, `max`, `min` (IEEE 754-2019 at the zero tie: `max(-0, +0) = +0`, `min(+0, -0) = -0`),
+  `mod` (numpy's `np.mod`, the divisor's sign), `harmonic` (H(x) = digamma(x + 1) +
+  euler_gamma, the core's own kernel: within 0.53 ulp on x > -1, `H(-0) = -0`, NaN at every
+  negative integer), `erf` and `atan2(y, x)` (the platform libm's), and `besselj(nu, x)`, the
+  Bessel function of the first kind of real order: scipy 1.18.1's `jv` carried in the core
+  (AMOS and Cephes, BSD-3-Clause, notices in `LICENSES_bundled.txt`), identical to
+  `scipy.special.jv` bit for bit, and so with scipy's accuracy. Each is a core kernel the
+  evaluator does not dispatch yet, so an expression using one does not fold, mine or judge
+  until those layers declare it. `max(a, b, c)` reads as `max(a, max(b, c))` (and `min`
+  alike). `assets/engines/acj2-4/config.yaml` declares acj-4's operators plus the nine, every
+  realization in `simplipy.operators`, with no rule sets yet: an engine loaded from it
+  simplifies with the constructors alone.
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
   judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and

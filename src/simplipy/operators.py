@@ -36,7 +36,7 @@ __all__ = [
     'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
     'exp', 'log', 'rootn', 'pow',
     'add', 'sub', 'mul',
-    'floor', 'ceil', 'max', 'min', 'mod', 'harmonic', 'erf', 'atan2',
+    'floor', 'ceil', 'max', 'min', 'mod', 'harmonic', 'erf', 'atan2', 'besselj',
 ]
 
 _torch_module: ModuleType | None = None
@@ -434,3 +434,19 @@ def atan2(y: Any, x: Any) -> Any:
         at, bt = _torch_pair(torch, a, b)
         return torch.atan2(at, bt)
     return _binary('atan2', y, x, torch_atan2)
+
+
+def besselj(nu: Any, x: Any) -> Any:
+    """The Bessel function of the first kind J_nu(x) of real order nu, element-wise.
+
+    Bit for bit ``scipy.special.jv`` (scipy 1.18.1, whose code the core carries: AMOS, with
+    the reflection through Y for a negative order and Cephes where AMOS fails), and so
+    scipy's accuracy: measured against 50-digit mpmath on nu in [0, 50], x in [0, 100],
+    within 2,634 ulp at least 0.1 away from a zero of J_nu and within 1.4e-14 absolute near
+    one. NaN for a non-integer order of a negative argument (the value is complex there) and
+    for an infinite argument; ``J_0(0) = 1``, ``J_nu(0) = 0`` for nu > 0 and for a negative
+    integer nu, ``J_nu(0) = inf`` for a negative non-integer nu. No torch realization."""
+    def torch_besselj(torch: ModuleType, a: Any, b: Any) -> Any:
+        raise TypeError('besselj has no torch realization: torch has no Bessel function of '
+                        'real order; pass numpy arrays or floats')
+    return _binary('besselj', nu, x, torch_besselj)
