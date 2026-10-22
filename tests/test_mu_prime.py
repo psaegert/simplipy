@@ -56,7 +56,7 @@ ACJ_MINED_DIGEST = '84a2bc8eac4a0df1'
 #: pins exactly this set, so a re-mine that records them fails there and is noticed.
 ACJ_UNRECORDED_PROBES = [
     '0.0766541268471677307861497420516056347394916180597539647375669841',
-    '/ 1.2345678901234567e-305 9.876543210987654e-10',
+    '/ 1.2345678901234567e-305 9.876543210987654e-10', 'atan2 x0 x1',
     '-2', 'neg x0', '* neg x0 x1',
     'pow pow x0 2 0.5', 'asin 1e-08', '* inv exp 5132.3 x0', 'atanh tanh x0', '/ x0 * x0 x1']
 
@@ -620,6 +620,7 @@ class TestFingerprintAndArtifactLoad:
             'np.pi': 4 * MILLI, 'np.e': 4 * MILLI,
             'sin x0': 6 * MILLI + MU_LEAF,       # elementary head
             'asin x0': 8 * MILLI + MU_LEAF,      # transcendental head
+            'atan2 x0 x1': None,                 # a 0.15 head this config lacks
             'float("inf")': 8 * MILLI,
             # a sign, one bit wherever it sits: on a literal, a negation standing alone (no
             # Mul head), the coefficient -1 beside other factors

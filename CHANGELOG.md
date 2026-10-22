@@ -1038,12 +1038,39 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
   negative integer), `erf` and `atan2(y, x)` (the platform libm's), and `besselj(nu, x)`, the
   Bessel function of the first kind of real order: scipy 1.18.1's `jv` carried in the core
   (AMOS and Cephes, BSD-3-Clause, notices in `LICENSES_bundled.txt`), identical to
-  `scipy.special.jv` bit for bit, and so with scipy's accuracy. Each is a core kernel the
-  evaluator does not dispatch yet, so an expression using one does not fold, mine or judge
-  until those layers declare it. `max(a, b, c)` reads as `max(a, max(b, c))` (and `min`
-  alike). `assets/engines/acj2-4/config.yaml` declares acj-4's operators plus the nine, every
+  `scipy.special.jv` bit for bit, and so with scipy's accuracy. Each is a core kernel, and the
+  evaluator dispatches it, so the folds, the miner, simplify and the realization compute the
+  same bits. `max(a, b, c)` reads as `max(a, max(b, c))` (and `min` alike).
+  `assets/engines/acj2-4/config.yaml` declares acj-4's operators plus the nine, every
   realization in `simplipy.operators`, with no rule sets yet: an engine loaded from it
-  simplifies with the constructors alone.
+  simplifies with the constructors alone. The mine kits are `acj2-4/mine.yaml` and
+  `acj2-5-4-llm/`.
+- **The nine heads in every layer, failing closed where a layer has no sound treatment.**
+  - *Folds.* `max` and `min` of literals fold exactly in every mode; `floor`, `ceil` and `mod`
+    of literals fold exactly in `real` (`mod(a, 0)` is NaN) and to their float in `f64` and
+    `permissive`, where a literal reads as its float (`floor(0.99999999999999999)` is 1 there,
+    0 in `real`). A function of literals whose float is dearer than it stays written
+    (`erf(1)`), as for the other heads. `erf` is odd, so `erf(-x)` is `-erf(x)`.
+  - *Enclosures.* `floor`, `ceil`, `erf`, `max` and `min` map their operands' bounds (`erf`
+    reaches exactly +-1 from |x| = 5.921587195794507); `atan2` lies in [-pi, pi];
+    `besselj(nu, x)` in [-1, 1] for an order nu >= 0, NaN where a non-integer order meets a
+    negative argument; `harmonic` is increasing on (-1, inf); `mod(a, b)` lies between 0 and
+    `b`, NaN at `b = 0`. `harmonic` of an argument that may reach -1, `besselj` of an order
+    that may be negative, `mod` by a divisor that may be zero, and every head without an arm
+    are unanalyzable: every certificate refuses them, and the miner accepts no candidate for a
+    variable-free source it cannot analyze. The tail certificate's table of
+    pole-free operators names the operators that are, so an unnamed head is pole-bearing.
+  - *High precision and the judge.* The nine have no high-precision or contract kernels yet.
+    An operator the high-precision evaluators do not know is unevaluable, even at a NaN
+    operand: the contract point verdict is none (it read as equal), and the licence registry
+    refuses a pattern with exceptional points that holds one. The contract judge judges a rule
+    spelled with one of the nine in the deployed float64 lane alone (new verdict `F64-ONLY`):
+    tier `f64` when both sides agree bit for bit at every probe, `reject` otherwise, never
+    `core` or `real`. So these rules can enter the `f64` and `permissive` files and never the
+    `real` one. The corpus monitor reads no zero sign for an operator its table does not
+    name, and the high-precision oracle reads a complex value as NaN.
+  - *Fingerprints.* The libm fingerprint probes `erf` and `atan2`, and the measure fingerprint
+    prices `atan2(x0, x1)`, so every host's fingerprint moves.
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
   judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and

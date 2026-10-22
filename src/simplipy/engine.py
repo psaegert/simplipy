@@ -2446,6 +2446,7 @@ class SimpliPyEngine:
         ('np.pi',), ('np.e',),      # the named constants
         ('sin', 'x0'),              # an elementary head
         ('asin', 'x0'),             # a transcendental head
+        ('atan2', 'x0', 'x1'),      # a 0.15 head (binary; absent where a config lacks it)
         ('float("inf")',),          # the infinities
         # the SIGN, one bit wherever it sits: a literal's sign, a negation standing alone (a
         # sign, not a product, so no `Mul` head), the coefficient -1 beside other factors
@@ -2576,6 +2577,8 @@ class SimpliPyEngine:
         ('pow', 'np.pi', 'np.e'), ('pow', '2', '0.5'), ('pow', '10', '-7'),
         ('rootn', '2', '3'), ('sin', 'exp', '3'), ('log', 'cosh', '10'),
         ('tan', 'exp', '2'),
+        # the 0.15 heads that call libm: erf, and atan2 off its exact cells
+        ('erf', '0.5'), ('erf', '2'), ('atan2', '1', '2'), ('atan2', '-3', '0.5'),
     )
 
     def libm_fingerprint(self) -> str:

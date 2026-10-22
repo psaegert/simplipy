@@ -1,0 +1,36 @@
+# Artifact kit acj2-4: the complete AC-judged 4->4 mine over the 0.15 vocabulary (acj-4's
+# operators plus floor, ceil, max, min, mod, erf, harmonic, atan2 and besselj, each priced at
+# the transcendental tier). Reproduce with ONE command:
+#   simplipy find-rules -e config.yaml -c mine.yaml -o rules.json -v --reset-rules
+# It writes rules.json (f64), rules_real.json and rules_permissive.json, each with its
+# provenance sidecar.
+#
+# NO SECOND NUMBER: the target cap is 4 and so is the source bound, so the cap refuses nothing.
+#
+# The new heads have no contract kernel yet, so a rule spelled with one is judged in the
+# deployed float64 lane alone: it can enter rules.json and rules_permissive.json, never
+# rules_real.json.
+#
+# Universe at u=21 unary, b=11 binary, a=29 leaves (27 terms + two dummies), by the miner's
+# recurrence: T(1)=29  T(2)=609  T(3)=22,040  T(4)=851,382 (2.1x acj-4's length-4 tier, and
+# the target library grows alike). Measure the rate off the length-3 tier before promising
+# an ETA.
+#
+# Alphabet unchanged from acj-4 (flash-ansr vocabulary literals -10..10, e, pi).
+extra_internal_terms: ['<constant>', '(-10)', '(-9)', '(-8)', '(-7)', '(-6)', '(-5)', '(-4)', '(-3)', '(-2)', '(-1)', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+                       'np.e', 'np.pi',
+                       'float("inf")', 'float("-inf")', 'float("nan")']
+dummy_variables: 2  # ceil(max_source_pattern_length/2)
+max_source_pattern_length: 4
+max_target_pattern_length: 4
+n_samples: 1024
+constants_fit_challenges: 16
+constants_fit_retries: 16
+rtol: 1.0e-11  # carried from acj-4-3 (2026-08-01 grid measurement)
+atol: 1.0e-12
+min_informative: null
+seed: 42
+confirm: true
+relaxed_kruskal: true
+prune: covered
+promote_sorts: true
