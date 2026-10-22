@@ -166,6 +166,9 @@ fn site_list(e: &Ex, cx: &Cx, power: Option<&Rat>, path: &mut Vec<usize>, out: &
         out.push((path.clone(), m));
     }
     match e {
+        // `atan2` reads the signs of its arguments' zeros, which a move inside them may trade
+        // with a sum's orientation (`expr::atan2_of`): no exploration move inside one.
+        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(*f, "atan2") => {}
         Ex::Add(v) | Ex::Mul(v) | Ex::Fun(_, v) => {
             for (i, c) in v.iter().enumerate() {
                 path.push(i);

@@ -54,6 +54,12 @@ organised by who you are, then the highlights, then every change in detail.
   an exact zero is inverted, `f64` (and `permissive`) keep the sign float64 gives it:
   `1/(x1*(x2 - x2))` is `inf/x1`, which is `-inf` wherever `x1 < 0` (it was `inf`); `real` reads
   one zero and keeps `inf`.
+- **`f64` writes the negative zero.** A spelling of zero that float64 reads as -0 (`-0.0`; the
+  integer `-0` is Python's +0) keeps its sign in `f64` and is printed `-0.0`, priced as the zero
+  and one sign bit; `real` and `permissive` read it as 0. An `f64` ground fold writes its float
+  exactly, -0 included, and the floats of pi and e as `np.pi` and `np.e`: `1/(-0.0)` is `-inf`
+  (it was `inf`), `atan2(0, -0.0)` is `np.pi` (it was `0`), `x + -0.0` is `x`. A nonzero
+  literal that underflows to -0 stays the leaf it is written as.
 - **Long exact coefficients.** An answer carries every digit of an exact number
   (`2.566969966535569956e-38*x1`), and the search accepts expansions whose coefficients are
   long, because a literal costs at most what its float costs. Show answers to a reader with
@@ -1064,12 +1070,15 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     variable-free source it cannot analyze. The tail certificate's table of
     pole-free operators names the operators that are, so an unnamed head is pole-bearing.
   - *Signed zeros.* `ceil(-0.5)`, `mod(3, -3)` and their kin are -0 in float64, and `atan2`
-    reads the sign of a zero as an inverse does (`atan2(-0, -1)` is -pi). In `f64` a ground
-    whose float is -0 stays as written, and a ground infinity takes float64's sign
-    (`1/ceil(-0.5)` is `-inf`). A negative coefficient of `atan2`'s first argument leaves the
-    call, `atan2(-S, x) = -atan2(S, x)` (exact in float64, not in `real`), so a sum that
-    vanishes on a region keeps its orientation under `atan2`; the step and lattice heads count
-    as region zeros wherever an inverse reads one.
+    reads the sign of a zero in both arguments, as an inverse does (`atan2(-0, -1)` is -pi,
+    `atan2(+0, -0)` is pi). In `f64` such a ground folds to `-0.0` and a ground infinity takes
+    float64's sign (`1/ceil(-0.5)` and `1/mod(3, -3)` are `-inf`). Every `atan2` node is built
+    from its arguments' product members, however it arises (the parse, a rule's right-hand
+    side, the pass's rebuild): a negative coefficient of the first leaves the call,
+    `atan2(-S, x) = -atan2(S, x)` (exact in float64, not in `real`), and no argument's sign
+    moves into a sum's orientation, so a sum that vanishes on a region keeps the sign of its
+    zero in either argument (printed as the negation it is); the search makes no move inside
+    an `atan2`. The step and lattice heads count as region zeros wherever an inverse reads one.
   - *Discontinuities.* A rule spelled with one of the nine is judged by one function in the core
     (`deployed_exact`), which the contract judge calls and the miner applies to every such pair
     it would accept, so the judge licenses exactly what the miner accepts: both sides bit for

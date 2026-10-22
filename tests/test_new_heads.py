@@ -112,21 +112,47 @@ def test_max_and_min_are_order_independent_and_idempotent(bare):
         assert s('max * <constant> x0 * <constant> x0')[0] == 'max'
 
 
-def test_float64_keeps_the_zero_sign_the_new_heads_produce_and_atan2_reads(bare):
-    import simplipy.operators as ops
+def test_f64_writes_the_negative_zero_and_reads_it(bare):
+    """f64 follows float64: a -0 is written `-0.0` (Python's `-0` is the integer zero, +0), a
+    ground fold writes its float exactly, and an inverse or `atan2` reads the sign. `real` and
+    `permissive` have one zero."""
     f64 = lambda t: bare.simplify(t.split(), mode='f64')  # noqa: E731
-    # a ground's zero sign decides the infinity it inverts to, as float64 evaluates it
-    assert f64('inv ceil -0.5') == ['float("-inf")']
-    assert f64('inv mod 3 -3') in (['float("-inf")'], ['inv', 'mod', '3', '-3'])
-    # atan2 reads its first argument's zero sign: atan2(-0, -1) = -pi
-    for src in ('atan2 neg - x0 abs x0 -1', 'atan2 neg - x0 x0 -1', 'atan2 ceil -0.5 -1'):
-        tgt = f64(src)
-        fs, ft = (eval('lambda x0: ' + bare.prefix_to_infix(t, realization=True),
-                       {**vars(ops), 'np': np, 'simplipy': __import__('simplipy')})
-                  for t in (src.split(), list(tgt)))
+    for src, want in (('ceil -0.5', ['-0.0']), ('mod 3 -3', ['-0.0']),
+                      ('inv mod 3 -3', ['float("-inf")']), ('inv ceil -0.5', ['float("-inf")']),
+                      ('inv -0.0', ['float("-inf")']), ('pow -0.0 -2', ['float("inf")']),
+                      ('atan2 0 -0.0', ['np.pi']), ('+ x0 -0.0', ['x0']), ('-0', ['0'])):
+        assert f64(src) == want, (src, f64(src))
+    for mode in ('real', 'permissive'):
+        assert bare.simplify(['inv', '-0.0'], mode=mode) == ['float("inf")']
+        assert bare.simplify(['ceil', '-0.5'], mode=mode) == ['0']
+    # one sign bit on top of the zero
+    assert bare.complexity(['-0.0'], mode='f64') == bare.complexity(['0'], mode='f64') + 1000
+
+
+def test_atan2_reads_both_zero_signs_however_it_is_built(bare):
+    import simplipy.operators as ops
+    env = {**vars(ops), 'np': np, 'simplipy': __import__('simplipy')}
+
+    def same(src, tgt):
+        fs, ft = (eval('lambda x0: ' + bare.prefix_to_infix(list(t), realization=True), env)
+                  for t in (src, tgt))
         for x in (0.0, 1.5, 3.0):
             a, b = (float(np.asarray(f(np.array([x]))).ravel()[0]) for f in (fs, ft))
             assert a == b and np.signbit(a) == np.signbit(b), (src, tgt, x, a, b)
+    # parsed: a negated sum that vanishes on x0 >= 0 keeps its zero's sign in either argument
+    for src in ('atan2 neg - x0 abs x0 -1', 'atan2 neg - x0 x0 -1', 'atan2 ceil -0.5 -1',
+                'atan2 0 neg - x0 abs x0', 'atan2 neg - x0 abs x0 neg - x0 abs x0',
+                'atan2 0 * 2 neg - x0 abs x0'):
+        same(src.split(), bare.simplify(src.split(), mode='f64'))
+    # built by substitution into a rule's right-hand side
+    cfg = yaml.safe_load(open(ACJ2_4))['operators']
+    for rule, src, want in (
+            ((('erf', 'atan2', '_0', '_1'), ('atan2', '_0', 'neg', '_1')),
+             'erf atan2 0 - x0 abs x0', ['atan2', '0', 'neg', '-', 'x0', 'abs', 'x0']),
+            ((('erf', 'atan2', '_0', 'sin', '_1'), ('atan2', 'neg', '_0', '_1')),
+             'erf atan2 - x0 abs x0 sin 1', ['neg', 'atan2', '-', 'x0', 'abs', 'x0', '1'])):
+        e = SimpliPyEngine(operators=cfg, rules=[rule], rules_real=[], rules_permissive=[])
+        assert e.simplify(src.split(), mode='f64') == want
 
 
 def test_the_mint_refuses_laws_float64_breaks_at_a_jump(bare):

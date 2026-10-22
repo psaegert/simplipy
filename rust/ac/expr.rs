@@ -597,7 +597,7 @@ fn mu_rat_float(r: &Rat) -> u64 {
 /// numbers move with it -- `mu(1000)` is 4 bits where the ratified note says 5 -- but
 /// H-055's finding was the SYMMETRY, `mu(1000) == mu(0.001)`, and that holds at 4.
 /// Evidence: `audit-2026-08-21/floor/`.
-const MU_RAT_FLOOR: u64 = 1 * MU_MILLI;
+const MU_RAT_FLOOR: u64 = MU_MILLI;
 
 fn mu_rat_codeword_totals(r: &Rat) -> (u64, Option<u64>) {
     // A big-form literal's codewords cost big-integer divisions and logarithms, and the same
@@ -986,6 +986,15 @@ pub fn complexity(e: &Ex, view: &TokenView) -> u64 {
     priced(e, view).0
 }
 
+/// The spelling of float64's negative zero in `f64`: a numeral leaf, since a number has one
+/// zero. Python reads `-0.0` as -0 and `-0` as the integer zero, +0.
+pub(crate) const NEG_ZERO: &str = "-0.0";
+
+/// Is `e` the written negative zero (`NEG_ZERO`)?
+pub(crate) fn is_neg_zero(e: &Ex, view: &TokenView) -> bool {
+    matches!(e, Ex::Leaf(t) if view.sigil(*t) == 0 && view.with_str(*t, |s| s == NEG_ZERO))
+}
+
 /// Is `s` a NUMERIC-STRING leaf (a literal the engine holds as written)? A first-byte filter
 /// skips the full numeric parse for ordinary vocabulary leaves (`x0`, function names), which
 /// never start with a digit, dot, or sign.
@@ -1106,6 +1115,10 @@ fn mu_numeric_leaf(s: &str) -> u64 {
     }
     if let Some(v) = LEAF_PRICES.with(|m| m.borrow().get(s).copied()) {
         return v;
+    }
+    // The written negative zero is the zero and one sign bit (its value, 0, has no sign).
+    if s == NEG_ZERO {
+        return mu_rat(&Rat::ZERO).saturating_add(MU_SIGN);
     }
     let value = {
         let _exact = super::rat::number_domain(false);
@@ -3077,6 +3090,20 @@ fn compose_e_power(base: &Ex, exponent: &Ex, cx: &Cx) -> Option<Ex> {
 ///   (`c1 + c2 + 5 = c3`, the contract's forall-exists direction).
 pub fn add(items: Vec<Ex>, cx: &Cx) -> Ex {
     let _domain = super::rat::number_domain(cx.f64_numbers());
+    // `x + (-0)` is `x` bit for bit in float64, the sign of a zero and NaN included: the written
+    // negative zero leaves a sum that holds anything else.
+    let items = if cx.f64_semantics()
+        && items.len() > 1
+        && items.iter().any(|e| is_neg_zero(e, cx.view))
+        && !items.iter().all(|e| is_neg_zero(e, cx.view))
+    {
+        items
+            .into_iter()
+            .filter(|e| !is_neg_zero(e, cx.view))
+            .collect()
+    } else {
+        items
+    };
     // Flatten (Flat) + literal scan.
     let mut lits: Vec<Rat> = Vec::new();
     let mut acc_overflow: Vec<Ex> = Vec::new(); // Num partials an overflowed accumulator emitted
@@ -8132,6 +8159,10 @@ fn rejoin_walk(e: Ex, signed: bool, cx: &Cx) -> Ex {
             Box::new(rejoin_walk(*b, false, cx)),
             Box::new(rejoin_walk(*ex, false, cx)),
         ),
+        // `atan2` reads its arguments' zero signs, and the parse keeps their signs (`atan2_of`).
+        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(f, "atan2") => {
+            Ex::Fun(f, v.into_iter().map(|x| rejoin_walk(x, true, cx)).collect())
+        }
         Ex::Fun(f, v) => Ex::Fun(
             f,
             v.into_iter().map(|x| rejoin_walk(x, false, cx)).collect(),
@@ -8272,6 +8303,19 @@ pub(crate) fn pow_member(base: Ex, exp: Ex, cx: &Cx) -> Ex {
     }
     if matches!(&base, Ex::Num(b) if b.is_one()) {
         return Ex::Num(Rat::ONE);
+    }
+    // THE WRITTEN NEGATIVE ZERO under a negative integer power is float64's pole of its sign:
+    // `(-0)^-1` is -inf, `(-0)^-2` is +inf (`NEG_ZERO`; `f64` only).
+    if cx.f64_semantics() && is_neg_zero(&base, cx.view) {
+        if let Ex::Num(k) = &exp {
+            if k.is_integer() && k.is_negative() {
+                return if k.is_odd_integer() {
+                    Ex::NegInf
+                } else {
+                    Ex::PosInf
+                };
+            }
+        }
     }
     // rational^rational exact folds.
     if let (Ex::Num(b), Ex::Num(e)) = (&base, &exp) {
@@ -8844,6 +8888,44 @@ pub fn land_root(e: Ex, cx: &Cx) -> Ex {
     land_operand(e, cx)
 }
 
+/// `atan2(y, x)` built from the product members of its arguments, as float64 reads them: it
+/// reads the sign of a zero in both (`atan2(-0, -1) = -pi`, `atan2(+0, -0) = pi`). In the
+/// float64 modes a negative coefficient of `y` leaves the call (`atan2(-S, x) = -atan2(S, x)`,
+/// exact there, and not in `real`, whose one zero gives `atan2(0, -1) = pi`), and each argument
+/// keeps its members apart (`mul_undecided`), so neither a sum that vanishes on a region nor a
+/// written zero changes the sign of its zero by a product's orientation decision. Every
+/// construction of an `atan2` node goes through here: the parse, the canonical rebuild (a rule's
+/// right-hand side after substitution) and the pass's rebuild.
+pub(crate) fn atan2_of(op: Tok, mut ym: Vec<Ex>, xm: Vec<Ex>, cx: &Cx) -> Ex {
+    let negative = |m: &Ex| matches!(m, Ex::Num(r) if r.is_negative());
+    if !cx.ieee_zeros() {
+        return fun(op, vec![mul(ym, cx), mul(xm, cx)], cx);
+    }
+    // No sign moves between an argument's members either way: a decided product may trade its
+    // coefficient's sign with a sum's orientation, which moves the sign of the sum's zero.
+    let build = |m: Vec<Ex>| mul_undecided(m, cx);
+    if ym.iter().filter(|m| negative(m)).count() % 2 == 1 {
+        if let Some(pos) = ym.iter().position(negative) {
+            if let Ex::Num(r) = &ym[pos] {
+                if let Some(n) = r.checked_neg() {
+                    ym[pos] = Ex::Num(n);
+                    let inner = fun(op, vec![build(ym), build(xm)], cx);
+                    return mul(vec![Ex::Num(Rat::NEG_ONE), inner], cx);
+                }
+            }
+        }
+    }
+    fun(op, vec![build(ym), build(xm)], cx)
+}
+
+/// The product members of `e` (itself where it is no product).
+fn product_members(e: Ex) -> Vec<Ex> {
+    match e {
+        Ex::Mul(v) => v,
+        other => vec![other],
+    }
+}
+
 /// `floor` (or `ceil`) of a rational, exactly; `None` when the result leaves `Rat`.
 fn rat_floor(r: &Rat, ceil: bool) -> Option<Rat> {
     use num_integer::Integer;
@@ -8943,6 +9025,15 @@ pub fn fun(op: Tok, args: Vec<Ex>, cx: &Cx) -> Ex {
     // `a` (two `<constant>`s are independent, so a `Const`-bearing pair stays). Nesting stays
     // as written: `max(a, max(b, c))` is no bag.
     let mut args = args;
+    if args.len() == 2
+        && cx.ieee_zeros()
+        && cx.view.tok_is(op, "atan2")
+        && matches!(&args[0], Ex::Mul(v) if v.iter().any(|m| matches!(m, Ex::Num(r) if r.is_negative())))
+    {
+        let x = args.pop().expect("two arguments");
+        let y = args.pop().expect("two arguments");
+        return atan2_of(op, product_members(y), product_members(x), cx);
+    }
     if args.len() == 2 && (cx.view.tok_is(op, "max") || cx.view.tok_is(op, "min")) {
         if args[0] == args[1] && !args[0].contains_const() {
             return args.into_iter().next().unwrap();
@@ -9359,6 +9450,15 @@ fn canon_walk(e: Ex, cx: &Cx) -> Ex {
             let b = canon_walk(*b, cx);
             let ex = canon_walk(*ex, cx);
             pow(b, ex, cx)
+        }
+        Ex::Fun(f, v) if v.len() == 2 && cx.ieee_zeros() && cx.view.tok_is(f, "atan2") => {
+            let mut members = v.into_iter().map(|a| match a {
+                Ex::Mul(w) => w.into_iter().map(|m| canon_walk(m, cx)).collect(),
+                other => vec![canon_walk(other, cx)],
+            });
+            let ym: Vec<Ex> = members.next().expect("two arguments");
+            let xm: Vec<Ex> = members.next().expect("two arguments");
+            atan2_of(f, ym, xm, cx)
         }
         Ex::Fun(f, v) => {
             let parts = v.into_iter().map(|x| canon_walk(x, cx)).collect();

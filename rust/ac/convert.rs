@@ -23,8 +23,8 @@
 use crate::tokens::{Tok, TokenView};
 
 use super::expr::{
-    add, canon, fun, inverts_a_signed_zero, mul, mul_undecided, pow, pow_member, raised_members,
-    Cx, Ex, FlipScope,
+    add, atan2_of, canon, fun, inverts_a_signed_zero, mul, mul_undecided, pow, pow_member,
+    raised_members, Cx, Ex, FlipScope, NEG_ZERO,
 };
 use super::rat::Rat;
 use num_bigint::BigInt;
@@ -120,28 +120,28 @@ fn parse_one(tokens: &[Tok], idx: usize, cx: &Cx) -> Option<(Ex, usize)> {
     if s == "atan2" && view.arity(t) == Some(2) && cx.ieee_zeros() {
         let mut ym = Vec::new();
         let at = parse_members(tokens, idx + 1, cx, &mut ym)?;
-        let (x, at) = parse_one(tokens, at, cx)?;
-        let negatives = ym
-            .iter()
-            .filter(|m| matches!(m, Ex::Num(r) if r.is_negative()))
-            .count();
-        if negatives % 2 == 1 {
-            let pos = ym
-                .iter()
-                .position(|m| matches!(m, Ex::Num(r) if r.is_negative()))?;
-            if let Ex::Num(r) = &ym[pos] {
-                if let Some(n) = r.checked_neg() {
-                    ym[pos] = Ex::Num(n);
-                    let inner = desugar(&s, t, vec![mul(ym, cx), x], cx);
-                    return Some((mul(vec![Ex::Num(Rat::NEG_ONE), inner], cx), at));
-                }
-            }
-            return None;
-        }
-        return Some((desugar(&s, t, vec![mul(ym, cx), x], cx), at));
+        let mut xm = Vec::new();
+        let at = parse_members(tokens, at, cx, &mut xm)?;
+        return Some((atan2_of(t, ym, xm, cx), at));
     }
     let arity = view.arity(t);
     match arity {
+        // In `f64` a spelling of zero that float64 reads as -0 (`-0.0`, not the integer `-0`) is
+        // the written negative zero, a leaf (`NEG_ZERO`): a number has one zero, and float64
+        // reads the sign wherever a zero is inverted. (A nonzero literal that underflows to -0
+        // stays the leaf it is written as.)
+        None if cx.f64_semantics()
+            && crate::utils::looks_numeric(&s)
+            && crate::numeric::leaf_value(&s).is_some_and(|v| v == 0.0 && v.is_sign_negative())
+            && Rat::parse_decimal(&s).is_some_and(|r| r.is_zero()) =>
+        {
+            let leaf = if s == NEG_ZERO {
+                t
+            } else {
+                view.intern(NEG_ZERO)
+            };
+            Some((Ex::Leaf(leaf), idx + 1))
+        }
         None => Some((parse_leaf_token(t, &s, view), idx + 1)),
         Some(n) => {
             let mut args = Vec::with_capacity(n as usize);
@@ -836,8 +836,15 @@ fn emit(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
             // treat `rootn` as an engine built-in, so the serialization stays readable
             // under any pairing without legacy resugar.
             out.push(*f);
+            // `atan2` reads its arguments' zero signs (`atan2_of`): a negated sum is written as
+            // the negation it is, never as the flipped sum, whose zero has the other sign.
+            let reads_signs = args.len() == 2 && cx.ieee_zeros() && view.tok_is(*f, "atan2");
             for a in args {
-                emit(a, cx, out);
+                if reads_signs {
+                    emit_bin_structural(a, cx, out);
+                } else {
+                    emit(a, cx, out);
+                }
             }
         }
         Ex::Pow(b, ex) => match &**ex {
@@ -1107,8 +1114,13 @@ fn emit_tagged(e: &Ex, cx: &Cx, out: &mut Vec<Tok>) {
         Ex::Leaf(t) => out.push(*t),
         Ex::Fun(f, args) => {
             out.push(*f);
+            let reads_signs = args.len() == 2 && cx.ieee_zeros() && view.tok_is(*f, "atan2");
             for a in args {
-                emit_tagged(a, cx, out);
+                if reads_signs {
+                    emit_structural(a, cx, out);
+                } else {
+                    emit_tagged(a, cx, out);
+                }
             }
         }
         Ex::Pow(b, ex) => {

@@ -463,7 +463,9 @@ class TestContracts:
         # parse_decimal before the explicit bail. Timing is pinned at the Rust unit
         # level; here the exact values.
         assert engine.simplify(["0e2147483647"]) == ["0"]
-        assert engine.simplify(["-0.00e2147483647"]) == ["0"]
+        # a float spelling of zero with a minus sign is float64's -0, which f64 writes
+        assert engine.simplify(["-0.00e2147483647"]) == ["-0.0"]
+        assert engine.simplify(["-0.00e2147483647"], mode='real') == ["0"]
         # Nonzero mantissas beyond i128 keep their overflow bound and stay symbolic.
         assert engine.simplify(["1e2147483647"]) == ["1e2147483647"]
 

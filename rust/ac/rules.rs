@@ -1091,6 +1091,25 @@ fn visit(node: &Ex, p: &PassCtx) -> Visit {
                 ))
             }
         }
+        // `atan2` is rebuilt from its arguments' members (`expr::atan2_of`): a negated argument
+        // keeps its members apart, so its rewritten members are not re-decided as a product.
+        Ex::Fun(f, v) if v.len() == 2 && p.cx.ieee_zeros() && p.cx.view.tok_is(*f, "atan2") => {
+            let f = *f;
+            let members = |a: &Ex| -> (Vec<Ex>, bool) {
+                match a {
+                    Ex::Mul(w) => match rewrite_children(w, p) {
+                        Some(k) => (k, true),
+                        None => (w.clone(), false),
+                    },
+                    other => match rewrite_pass_opt(other, p) {
+                        Some(n) => (vec![n], true),
+                        None => (vec![other.clone()], false),
+                    },
+                }
+            };
+            let ((ym, cy), (xm, cxm)) = (members(&v[0]), members(&v[1]));
+            (cy || cxm).then(|| super::expr::atan2_of(f, ym, xm, p.cx))
+        }
         Ex::Fun(f, v) => {
             let f = *f;
             rewrite_children(v, p).map(|k| super::expr::fun(f, k, p.cx))
