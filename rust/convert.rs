@@ -745,6 +745,70 @@ fn rewrite_legacy_calls(tokens: Vec<Token>) -> Vec<Token> {
     out
 }
 
+/// One parenthesized group on the right-to-left stream of [`read_infix_tokens`], opened at its
+/// `)`: where its tokens start in the output, and where each top-level `,` cut it.
+struct Group {
+    start: usize,
+    cuts: Vec<usize>,
+}
+
+/// A comma separates the arguments of a call, and nothing else.
+const STRAY_COMMA: &str = "a comma outside a call's argument list";
+
+/// The operators a call may give any number (at least two) of arguments, read nested to the
+/// right: `max(a, b, c)` is `max(a, max(b, c))`, as sympy writes `Max` n-ary.
+const VARIADIC: [&str; 2] = ["max", "min"];
+
+/// Close a parenthesized group at its `(`. A group a declared operator's name calls (`callee`,
+/// the token just left of the `(`) must give that operator exactly its arity in arguments,
+/// except that a binary `max`/`min` takes any number of at least two, nested to the right.
+/// A call of an undeclared name passes through as written (the tolerant reading; the strict
+/// one has refused it already), and a group nothing calls holds one expression. `prefix` is
+/// the reversed output so far.
+fn close_group(
+    group: Group,
+    callee: Option<&str>,
+    prefix: &mut Vec<String>,
+    ops: &Operators,
+) -> Result<(), String> {
+    let n_args = if group.cuts.is_empty() {
+        usize::from(prefix.len() > group.start)
+    } else {
+        group.cuts.len() + 1
+    };
+    let mut prev = group.start;
+    for &cut in group.cuts.iter().chain(std::iter::once(&prefix.len())) {
+        if cut == prev && n_args > 1 {
+            return Err("an empty argument in a call's argument list".to_string());
+        }
+        prev = cut;
+    }
+    let callee = callee.filter(|c| is_ident_start(c));
+    let declared = callee.and_then(|c| {
+        let canonical = ops.operator_aliases.get(c).map_or(c, String::as_str);
+        ops.arity_of(canonical)
+            .map(|arity| (c, canonical, usize::from(arity)))
+    });
+    match declared {
+        Some((_, _, arity)) if n_args == arity => Ok(()),
+        Some((written, canonical, 2)) if n_args > 2 && VARIADIC.contains(&canonical) => {
+            // On the reversed stream the arguments arrived last-first; a copy of the callee
+            // after every cut but the first (between a_k and a_(k-1), k < n) nests them to
+            // the right, the callee's own token closing the outermost call.
+            for &cut in group.cuts[1..].iter().rev() {
+                prefix.insert(cut, written.to_string());
+            }
+            Ok(())
+        }
+        Some((written, _, arity)) => Err(format!(
+            "{written} takes {arity} argument{}, got {n_args}",
+            if arity == 1 { "" } else { "s" }
+        )),
+        None if callee.is_none() && n_args > 1 => Err(STRAY_COMMA.to_string()),
+        None => Ok(()),
+    }
+}
+
 /// [`infix_to_prefix`]'s reader; `legacy_calls` reads the legacy call spellings
 /// ([`rewrite_legacy_calls`]), after the strict refusal of undeclared calls.
 fn read_infix_tokens(
@@ -767,6 +831,7 @@ fn read_infix_tokens(
 
     let mut stack: Vec<String> = Vec::new();
     let mut prefix_expr: Vec<String> = Vec::new();
+    let mut groups: Vec<Group> = Vec::new();
     let prec = |t: &str| ops.precedence_get(t).unwrap_or(0.0); // `.get(t, 0)`
 
     let mut i = 0;
@@ -806,6 +871,10 @@ fn read_infix_tokens(
             });
         } else if token == ")" {
             stack.push(token);
+            groups.push(Group {
+                start: prefix_expr.len(),
+                cuts: Vec::new(),
+            });
         } else if token == "(" {
             while stack.last().is_some_and(|t| t != ")") {
                 prefix_expr.push(unmark(stack.pop().unwrap()));
@@ -813,12 +882,26 @@ fn read_infix_tokens(
             if stack.last().is_some_and(|t| t == ")") {
                 stack.pop();
             }
+            // The group's arguments are complete: check them against its callee, the name
+            // directly left of the `(` (the next token of the reversed stream).
+            if let Some(group) = groups.pop() {
+                let callee = tokens
+                    .get(i + 1)
+                    .filter(|_| !apps[i + 1])
+                    .map(String::as_str);
+                close_group(group, callee, &mut prefix_expr, ops)?;
+            }
         } else if token == "," {
             // Argument separator: flush the just-finished argument's pending operators
             // down to the enclosing ')' (the paren boundary WITHOUT consuming it), so
-            // each argument of a 2-ary call parses independently (H-011).
+            // each argument of a call parses independently (H-011), and mark where the
+            // argument ends.
             while stack.last().is_some_and(|t| t != ")") {
                 prefix_expr.push(unmark(stack.pop().unwrap()));
+            }
+            match groups.last_mut() {
+                Some(group) => group.cuts.push(prefix_expr.len()),
+                None => return Err(STRAY_COMMA.to_string()),
             }
         } else {
             // A function without parentheses on the right of this operator is complete: the
@@ -1672,6 +1755,79 @@ mod tests {
         assert_eq!(i2p(&e, "np.pi + x0"), v(&["+", "np.pi", "x0"]));
         // Prefixed/suffixed identifiers are NOT reserved (`pie`, `inf2` stay variables).
         assert_eq!(i2p(&e, "pie + inf2"), v(&["+", "pie", "inf2"]));
+    }
+
+    /// A call gives its operator exactly its arity in arguments; `max` and `min` take any
+    /// number of at least two, nested to the right (sympy prints `Max(x0, x1, x2)`). Every
+    /// other count is refused by name, as is a comma no declared operator's call holds.
+    #[test]
+    fn calls_take_their_operators_arity_and_max_min_nest() {
+        use crate::operators::{OperatorSpec, Operators};
+        let mut specs: rustc_hash::FxHashMap<String, OperatorSpec> = Default::default();
+        let mut order = Vec::new();
+        for (name, arity, alias) in [
+            ("+", 2, ""),
+            ("-", 2, ""),
+            ("*", 2, ""),
+            ("sin", 1, ""),
+            ("max", 2, "Max"),
+            ("min", 2, "Min"),
+        ] {
+            order.push(name.to_string());
+            specs.insert(
+                name.to_string(),
+                OperatorSpec {
+                    realization: name.to_string(),
+                    alias: if alias.is_empty() {
+                        vec![]
+                    } else {
+                        vec![alias.to_string()]
+                    },
+                    inverse: None,
+                    arity,
+                    precedence: None,
+                    commutative: false,
+                },
+            );
+        }
+        let ops = Operators::from_specs(order, specs);
+        let read = |s: &str| super::infix_to_prefix(s, &ops, false);
+        let v = |xs: &[&str]| -> Result<Vec<String>, String> {
+            Ok(xs.iter().map(|s| s.to_string()).collect())
+        };
+        let err = |m: &str| -> Result<Vec<String>, String> { Err(m.to_string()) };
+        assert_eq!(read("max(x0, x1)"), v(&["max", "x0", "x1"]));
+        assert_eq!(
+            read("max(x0, x1, x2)"),
+            v(&["max", "x0", "max", "x1", "x2"])
+        );
+        assert_eq!(
+            read("Max(x0, x1 + 1, -x2, sin(x3))"),
+            v(&["Max", "x0", "Max", "+", "x1", "1", "Max", "neg", "x2", "sin", "x3"])
+        );
+        assert_eq!(
+            read("min(max(x0, x1, x2), x3) * 2"),
+            v(&["*", "min", "max", "x0", "max", "x1", "x2", "x3", "2"])
+        );
+        assert_eq!(read("Min(x0, x1)"), v(&["Min", "x0", "x1"]));
+        assert_eq!(read("sin(x0, x1)"), err("sin takes 1 argument, got 2"));
+        assert_eq!(read("max(x0)"), err("max takes 2 arguments, got 1"));
+        assert_eq!(read("max()"), err("max takes 2 arguments, got 0"));
+        assert_eq!(read("sin()"), err("sin takes 1 argument, got 0"));
+        let comma = "a comma outside a call's argument list";
+        assert_eq!(read("(x0, x1)"), err(comma));
+        assert_eq!(read("x0, x1"), err(comma));
+        assert_eq!(read("x0 * (x1, x2)"), err(comma));
+        assert_eq!(
+            read("max(x0, , x1)"),
+            err("an empty argument in a call's argument list")
+        );
+        // a parenthesized argument is one argument
+        assert_eq!(read("max((x0, x1), x2)"), err(comma));
+        assert_eq!(read("sin((x0))"), v(&["sin", "x0"]));
+        // the tolerant reading passes a call of an undeclared name through as written
+        assert_eq!(read("foo(x0, x1, x2)"), v(&["foo", "x0", "x1", "x2"]));
+        assert_eq!(read("foo()"), v(&["foo"]));
     }
 
     /// `**` conversion under a CLEAN config (no `pow{N}`/`pow1_{N}` in the vocabulary):

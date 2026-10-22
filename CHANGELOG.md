@@ -1006,6 +1006,12 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 
 <!-- PENDING: CHANGELOG lines from the miner/rules and the core/concurrency fix rounds go here
      (and under Removed, if any). -->
+- **A call takes its operator's arity in arguments.** The infix readers refuse a call whose
+  argument count is not its operator's (`sin(x0, x1)`: "sin takes 1 argument, got 2") and a
+  comma outside a call's argument list, where they used to emit a malformed prefix list.
+  `max` and `min` take any number of at least two, nested to the right, as sympy prints them:
+  `Max(x0, x1, x2)` reads as `max(x0, max(x1, x2))`. A call of an undeclared name still reads
+  tolerantly in `read_infix`.
 - **Every realization is the engine's own kernel.** Each function in `simplipy.operators`
   evaluates, on real operands, the float64 kernel the engine's evaluator uses for its token
   (`simplipy._core`), so the deployed value, the constant fold, the miner and the rule judge

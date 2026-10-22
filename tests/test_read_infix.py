@@ -218,3 +218,48 @@ class TestWhitespace:
         for read in (engine.read_infix, engine.infix_to_prefix, engine.simplify):
             with pytest.raises(ValueError, match="separated only by whitespace"):
                 read(text)
+
+
+class TestCallArgumentCounts:
+    """A call gives its operator exactly its arity in arguments. `max` and `min` take any
+    number of at least two, nested to the right, because sympy prints them n-ary
+    (`Max(x0, x1, x2)`); every other count is refused by name, never read into a malformed
+    prefix list."""
+
+    @pytest.fixture(scope="class")
+    def minmax_engine(self) -> SimpliPyEngine:
+        import warnings
+
+        from simplipy.io import load_config
+        ops = dict(load_config(acj_config_path())['operators'])
+        for name in ('max', 'min'):
+            ops[name] = {'realization': f'simplipy.operators.{name}', 'alias': [name.capitalize()],
+                         'arity': 2, 'commutative': False}
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')  # the engine has no rules, and says so
+            return SimpliPyEngine(operators=ops, rules=[])
+
+    def test_max_and_min_nest_to_the_right(self, minmax_engine: SimpliPyEngine) -> None:
+        e = minmax_engine
+        assert e.read_infix('Max(x0, x1, x2)') == ['max', 'x0', 'max', 'x1', 'x2']
+        assert e.read_infix('Max(Min(x0, x1), Min(Max(x0, x1), x2))') == \
+            ['max', 'min', 'x0', 'x1', 'min', 'max', 'x0', 'x1', 'x2']
+        assert e.read_infix('min(x0, 2, -x1, x2)') == ['min', 'x0', 'min', '2', 'min', 'neg', 'x1', 'x2']
+        assert e.to_prefix('Max(x0, x1, x2)') == e.to_prefix('max(x0, max(x1, x2))')
+
+    @pytest.mark.parametrize('text, message', [
+        ('sin(x0, x1)', 'sin takes 1 argument, got 2'),
+        ('pow(x0)', 'pow takes 2 arguments, got 1'),
+        ('pow(x0, x1, x2)', 'pow takes 2 arguments, got 3'),
+        ('max(x0)', 'max takes 2 arguments, got 1'),
+        ('(x0, x1)', "a comma outside a call's argument list"),
+        ('x0 + (x1, x2)', "a comma outside a call's argument list"),
+    ])
+    def test_every_other_count_is_refused(self, minmax_engine: SimpliPyEngine, text: str, message: str) -> None:
+        import re
+        for read in (minmax_engine.read_infix, minmax_engine.infix_to_prefix, minmax_engine.simplify):
+            with pytest.raises(ValueError, match=re.escape(message)):
+                read(text)
+
+    def test_an_undeclared_call_still_reads_tolerantly(self, engine: SimpliPyEngine) -> None:
+        assert engine.read_infix('foo(x0, x1)') == ['foo', 'x0', 'x1']
