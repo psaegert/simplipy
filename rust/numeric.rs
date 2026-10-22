@@ -14,6 +14,7 @@
 
 use crate::operators::Operators;
 
+mod besselj;
 mod dd;
 pub(crate) mod elementary;
 mod harmonic;

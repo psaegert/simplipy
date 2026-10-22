@@ -9,10 +9,11 @@
 //! transcendentals come from `numeric::elementary`, the one elementary-function source.
 //!
 //! The operators added in 0.15 (`floor`, `ceil`, `max`, `min`, `mod`, `harmonic`, `erf`,
-//! `atan2`) are deliberately NOT in the evaluator's dispatch: an operator enters the fold, the
+//! `atan2`, `besselj`) are deliberately NOT in the evaluator's dispatch: an operator enters the fold, the
 //! tape and the miner together with its interval, high-precision and judge arms, so until those
 //! exist every engine path refuses the new heads.
 
+pub use super::besselj::besselj;
 use super::elementary;
 pub use super::harmonic::harmonic;
 
@@ -195,7 +196,8 @@ macro_rules! binary_table {
     ($m:ident) => {
         $m!(
             "+" => add, "-" => sub, "*" => mul, "/" => div, "pow" => pow, "rootn" => rootn,
-            "max" => max, "min" => min, "mod" => modulo, "atan2" => atan2
+            "max" => max, "min" => min, "mod" => modulo, "atan2" => atan2,
+            "besselj" => besselj
         )
     };
 }
@@ -615,7 +617,7 @@ mod tests {
             assert!(crate::numeric::unary_fn(name).is_none(), "{name}");
             assert!(unary(name).is_some(), "{name}");
         }
-        for name in ["max", "min", "mod", "atan2"] {
+        for name in ["max", "min", "mod", "atan2", "besselj"] {
             assert!(crate::numeric::binary_fn(name).is_none(), "{name}");
             assert!(binary(name).is_some(), "{name}");
         }

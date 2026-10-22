@@ -2,7 +2,8 @@
 `_core` entries `kernel_unary`/`kernel_binary`.
 
 floor, ceil, max, min, mod and harmonic are the core's own; erf and atan2 are the platform's
-libm through the core's elementary-function source, as every other transcendental is. Two
+libm through the core's elementary-function source, as every other transcendental is;
+besselj is scipy 1.18.1's jv, carried in the core and gated bit for bit against scipy. Two
 gates per kernel:
 
 * BIT IDENTITY with numpy where numpy's own operation is the deployed one: floor and ceil
@@ -304,3 +305,61 @@ def test_atan2_meets_the_bar() -> None:
         worst = max((_ulps(v, mp.atan2(mp.mpf(float(a)), mp.mpf(float(b)))), a, b)
                     for a, b, v in zip(y, x, core2('atan2', y, x)))
     assert worst[0] <= 2.0, worst
+
+
+# --------------------------------------------------------------------------- besselj
+
+
+def besselj_grid() -> tuple[np.ndarray, np.ndarray]:
+    """Orders and arguments over every regime scipy's jv switches on: random magnitudes of
+    both signs (integer and not), the catalog ranges, orders just inside a power of two (where
+    the C's left-to-right `fnu + n - 1` drops a bit), order close to argument, large
+    arguments, large orders, the neighbourhood of zeros and of integer orders, and every
+    special cell."""
+    rng = np.random.default_rng(2026)
+    parts = []
+    v = 10.0 ** rng.uniform(-3, 4, 60_000) * rng.choice([-1, 1], 60_000)
+    parts.append((np.where(rng.random(60_000) < 0.35, np.round(v), v),
+                  10.0 ** rng.uniform(-6, 5, 60_000) * np.where(rng.random(60_000) < 0.2, -1, 1)))
+    parts.append((rng.integers(-10, 11, 30_000).astype(F), rng.uniform(-50, 50, 30_000)))
+    parts.append((rng.uniform(-5, 50, 30_000), rng.uniform(0, 100, 30_000)))
+    k = rng.integers(1, 8, 20_000)
+    parts.append((np.where(rng.random(20_000) < 0.5, -1, 1) * (2.0 ** k - rng.uniform(0, 1, 20_000)),
+                  rng.uniform(0, 90, 20_000)))
+    big = 10.0 ** rng.uniform(1, 5, 10_000)
+    parts.append((big, big * rng.uniform(0.5, 1.5, 10_000)))
+    parts.append((rng.uniform(0, 5, 5_000), 10.0 ** rng.uniform(4, 15.5, 5_000)))
+    parts.append((10.0 ** rng.uniform(9, 16, 5_000), rng.uniform(0, 100, 5_000)))
+    zeros = np.array([float(mp.besseljzero(0, i)) for i in range(1, 101)])
+    parts.append((np.zeros(2_000), np.repeat(zeros, 20) + rng.normal(0, 1e-9, 2_000)))
+    parts.append((np.round(rng.uniform(-30, 30, 5_000)) + rng.choice([0, 1e-12, -1e-12, 1e-6], 5_000),
+                  rng.uniform(0, 60, 5_000)))
+    cells = [0.0, -0.0, 0.5, -0.5, 1.0, -1.0, 2.0, -2.0, 2.5, -2.5, 30.0, 1e3, -1e3, 1e300, -1e300,
+             TINY, np.inf, -np.inf, np.nan]
+    cv, cx = np.meshgrid(cells, cells)
+    parts.append((cv.ravel(), cx.ravel()))
+    return np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
+
+
+def test_besselj_is_scipy_bit_for_bit() -> None:
+    """The core carries scipy 1.18.1's jv (AMOS, the reflection through Y, the Cephes
+    fallback), so its value is scipy's, bit for bit; a scipy release that changed jv would
+    show here first."""
+    special = pytest.importorskip('scipy.special')
+    nu, x = besselj_grid()
+    with np.errstate(all='ignore'):
+        want = special.jv(nu, x)
+    same = bits_equal(core2('besselj', nu, x), want)
+    assert same.all(), list(zip(nu[~same][:5], x[~same][:5]))
+
+
+def test_besselj_cells() -> None:
+    inf, nan = np.inf, np.nan
+    for nu, x, want in [(0.0, 0.0, 1.0), (1.0, 0.0, 0.0), (2.5, 0.0, 0.0), (-2.0, 0.0, 0.0), (-0.5, 0.0, inf),
+                        (2.0, -1.0, 0.1149034849319005), (0.5, -1.0, nan), (0.0, inf, nan), (0.0, -inf, nan),
+                        (inf, 1.0, 0.0), (nan, 1.0, nan), (1.0, nan, nan), (1000.0, 1.0, 0.0)]:
+        assert bits_equal(core2('besselj', nu, x), want).all(), (nu, x)
+    # J_{-n}(x) = (-1)^n J_n(x) for an integer order
+    xs = RNG.uniform(0, 40, 200)
+    for n in (1, 2, 5):
+        assert np.allclose(core2('besselj', -n, xs), (-1) ** n * core2('besselj', n, xs), rtol=1e-13, atol=1e-15)
