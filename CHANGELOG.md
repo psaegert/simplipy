@@ -1006,6 +1006,22 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
 
 <!-- PENDING: CHANGELOG lines from the miner/rules and the core/concurrency fix rounds go here
      (and under Removed, if any). -->
+- **Every realization is the engine's own kernel.** Each function in `simplipy.operators`
+  evaluates, on real operands, the float64 kernel the engine's evaluator uses for its token
+  (`simplipy._core`), so the deployed value, the constant fold, the miner and the rule judge
+  compute the same bits on every host. Before, numpy's own SIMD routines could decide them: on
+  AVX2 and AVX-512 hosts numpy's `tanh` is its own (up to 3 ulp from the platform libm's, and 1.0
+  from 18.990341103219276), and on AVX-512 hosts numpy routes `exp`, `log`, `tan`, the inverse
+  trigonometric and hyperbolic functions, `sinh`, `cosh`, `power` and `arctan2` through Intel's
+  SVML. The transcendentals are the platform libm's, through one module of the core. So `tanh`
+  is exactly 1.0 from 19.061547465398498 (glibc), where float64's tails are now read in `f64`
+  (`atan`'s stays 5805358775541310). Scalars give numpy float64 scalars (`abs` keeps a Python
+  scalar's own type and `rootn` gives a float, as before); arrays of 32,768 elements or more
+  are split over threads (`SIMPLIPY_KERNEL_THREADS` caps the count; 1 keeps every call on the
+  calling thread), the GIL released. A complex operand of a function with a complex
+  continuation takes numpy's, and a torch tensor takes torch's. New realizations name the
+  arithmetic, `add`, `sub` and `mul`, for configs that spell every operator in
+  `simplipy.operators`.
 - **A rule file is read in the canon it was certified in.** Since the per-mode mines, every set
   was read in its serving mode's canon, so a file mined before them could read as rules nothing
   judged: `real` read the f64 fact `rootn 2 atanh tanh 3 -> nan` as `rootn 2 3 -> nan`, and

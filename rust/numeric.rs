@@ -15,63 +15,21 @@
 use crate::operators::Operators;
 
 mod dd;
+pub(crate) mod elementary;
 mod harmonic;
 #[rustfmt::skip]
 mod harmonic_tables;
 pub mod kernels;
 
-/// The transcendentals are evaluated through the SYSTEM libm (the same `<math.h>` functions Python's
-/// `math` module calls), NOT Rust's `f64::*` methods. Rust's std calls the platform libm for most of
-/// them (so they already match Python at 0 ULP), but `f64::atanh` is Rust's OWN composition
-/// (`0.5 * ln_1p(2x/(1-x))`), and its divergence from glibc is UNBOUNDED in ulps toward the domain
-/// edges: measured 2026-08-15 (audit B6), 161 ulps at -0.999 and 1.5e13 ulps at -(1 - 1e-15) --
-/// the 4th significant digit -- with 39% of a dense (-1,1) grid differing. (`asinh`/`acosh`
-/// measured 0-ulp identical to libm over 2.2M points on the same build.) Binding the C symbols
-/// directly guarantees Python==Rust on every platform (both use that platform's libm) -- the
-/// determinism the f64+libm folding spec needs.
-mod cmath {
-    extern "C" {
-        pub fn sin(x: f64) -> f64;
-        pub fn cos(x: f64) -> f64;
-        pub fn tan(x: f64) -> f64;
-        pub fn asin(x: f64) -> f64;
-        pub fn acos(x: f64) -> f64;
-        pub fn atan(x: f64) -> f64;
-        pub fn sinh(x: f64) -> f64;
-        pub fn cosh(x: f64) -> f64;
-        pub fn tanh(x: f64) -> f64;
-        pub fn asinh(x: f64) -> f64;
-        pub fn acosh(x: f64) -> f64;
-        pub fn atanh(x: f64) -> f64;
-        pub fn exp(x: f64) -> f64;
-        pub fn log(x: f64) -> f64;
-        pub fn pow(x: f64, y: f64) -> f64;
-    }
-}
-
-/// `simplipy.operators.pow` / the `pow{N}` ops / the real roots all reduce to `x ** y` = C `pow`
-/// (CPython `float.__pow__`). Route through the system `pow` for guaranteed Python parity.
-///
-/// `black_box` the operands so the optimizer cannot specialize a constant exponent into a different
-/// instruction sequence: LLVM rewrites `pow(x, 2.0)` -> `x * x` (and, under fast-math, `pow(x, 0.5)`
-/// -> `sqrt`), which is ~1 ULP off the libm `pow` result. Without this, `pow2` would silently diverge
-/// from both the binary `pow` operator and the pure-Python folder, and the divergence would depend on
-/// the opt-level / LLVM version. Forcing the real call keeps every `pow{N}` realization bit-identical
-/// to `pow(x, N)` and to the Python `_apply_numeric_op` (which routes through the same libm `pow`).
-#[inline]
-fn cpow(x: f64, y: f64) -> f64 {
-    unsafe { cmath::pow(std::hint::black_box(x), std::hint::black_box(y)) }
-}
-
 /// The libm `atanh`, for the ONE consumer outside this module's own kernels: the interval
 /// arm (`interval.rs::u_atanh`) must evaluate endpoint images with the SAME function the
 /// fold ships, because its outward-rounding budget (`ULP_LIBM` = 8 ulps) only covers
 /// libm's own rounding error -- not the unbounded std-vs-libm composition gap documented
-/// on `cmath` above (audit B6: the fold at -0.999 sat 161 ulps below the std-computed
+/// in `elementary` (audit B6: the fold at -0.999 sat 161 ulps below the std-computed
 /// box's lower bound, an enclosure violation).
 #[inline]
 pub(crate) fn libm_atanh(x: f64) -> f64 {
-    unsafe { cmath::atanh(x) }
+    elementary::atanh(x)
 }
 
 /// Contract-aligned power: `pow(negative base — including −∞ — , finite non-integer
@@ -81,11 +39,11 @@ pub(crate) fn libm_atanh(x: f64) -> f64 {
 /// Infinite exponents keep the C99 magnitude-step semantics (`pow(t, ±∞)` decided by
 /// |t| — including negative `t`), which the contract ratifies as-is.
 #[inline]
-fn aligned_pow(x: f64, y: f64) -> f64 {
+pub(crate) fn aligned_pow(x: f64, y: f64) -> f64 {
     if x < 0.0 && y.is_finite() && y.fract() != 0.0 {
         return f64::NAN;
     }
-    cpow(x, y)
+    elementary::pow(x, y)
 }
 
 /// Port of `_evaluate_constant_subtree`: evaluate an all-numeric prefix
@@ -282,12 +240,27 @@ fn parse_pyfloat(tok: &str) -> Option<f64> {
 /// arithmetic, custom `inv` zero handling, real odd roots, libm transcendentals via the C symbols).
 pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
     Some(match name {
-        "neg" => |x| -x,
-        // inv: plain IEEE 1/x (1/+0 -> +inf, 1/-0 -> -inf) == the deployed numpy ARRAY branch.
-        // The old +inf-for-any-zero special case was the python SCALAR quirk; the miner
-        // must match deployment (numpy) semantics.
-        "inv" => |x| 1.0 / x,
-        "abs" => |x: f64| x.abs(),
+        // The deployed vocabulary: the deployed kernels themselves (`kernels`), so the fold,
+        // the tape and `simplipy.operators` compute one function.
+        "neg" => kernels::neg,
+        // inv: plain IEEE 1/x (1/+0 -> +inf, 1/-0 -> -inf) == the deployed realization.
+        "inv" => kernels::inv,
+        "abs" => kernels::abs,
+        "sin" => kernels::sin,
+        "cos" => kernels::cos,
+        "tan" => kernels::tan,
+        "asin" => kernels::asin,
+        "acos" => kernels::acos,
+        "atan" => kernels::atan,
+        "sinh" => kernels::sinh,
+        "cosh" => kernels::cosh,
+        "tanh" => kernels::tanh,
+        "asinh" => kernels::asinh,
+        "acosh" => kernels::acosh,
+        "atanh" => kernels::atanh,
+        "exp" => kernels::exp,
+        "log" => kernels::log,
+        // The retired hyper-operator vocabulary (input support for configs that declare it).
         "mult2" => |x| 2.0 * x,
         "mult3" => |x| 3.0 * x,
         "mult4" => |x| 4.0 * x,
@@ -304,25 +277,10 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
         // pow1_2 / pow1_4 = `x ** 0.5` / `x ** 0.25`: negative base (incl. -inf) -> NaN.
         "pow1_2" => |x| aligned_pow(x, 0.5),
         "pow1_4" => |x| aligned_pow(x, 0.25),
-        // pow1_3 / pow1_5: real cube/fifth root, sign-folded, always real (retired-vocabulary
-        // input support; the live spelling is `rootn`, whose odd arm matches this exactly)
+        // pow1_3 / pow1_5: real cube/fifth root, sign-folded, always real (the live spelling is
+        // `rootn`, whose odd arm matches this exactly)
         "pow1_3" => |x| real_odd_root(x, 1.0 / 3.0),
         "pow1_5" => |x| real_odd_root(x, 1.0 / 5.0),
-        // transcendentals via the SYSTEM libm (same functions Python's `math` calls)
-        "sin" => |x| unsafe { cmath::sin(x) },
-        "cos" => |x| unsafe { cmath::cos(x) },
-        "tan" => |x| unsafe { cmath::tan(x) },
-        "asin" => |x| unsafe { cmath::asin(x) },
-        "acos" => |x| unsafe { cmath::acos(x) },
-        "atan" => |x| unsafe { cmath::atan(x) },
-        "sinh" => |x| unsafe { cmath::sinh(x) },
-        "cosh" => |x| unsafe { cmath::cosh(x) },
-        "tanh" => |x| unsafe { cmath::tanh(x) },
-        "asinh" => |x| unsafe { cmath::asinh(x) },
-        "acosh" => |x| unsafe { cmath::acosh(x) },
-        "atanh" => |x| unsafe { cmath::atanh(x) },
-        "exp" => |x| unsafe { cmath::exp(x) },
-        "log" => |x| unsafe { cmath::log(x) },
         _ => return None,
     })
 }
@@ -330,15 +288,15 @@ pub(crate) fn unary_fn(name: &str) -> Option<fn(f64) -> f64> {
 /// Resolve a binary canonical operator to its scalar kernel as a function pointer, or `None`.
 pub(crate) fn binary_fn(name: &str) -> Option<fn(f64, f64) -> f64> {
     Some(match name {
-        "+" => |a, b| a + b,
-        "-" => |a, b| a - b,
-        "*" => |a, b| a * b,
-        // `/` realization is `operators.div`: scalar zero-divisor -> signed inf / nan
-        "/" => op_div,
+        "+" => kernels::add,
+        "-" => kernels::sub,
+        "*" => kernels::mul,
+        // `/`: plain IEEE x / y, the sign of a zero divisor participating
+        "/" => kernels::div,
         // binary `pow` = `x ** y` = C pow (invalid -> NaN, overflow -> inf)
-        "pow" => aligned_pow,
+        "pow" => kernels::pow,
         // `rootn(x, n)`: IEEE-754 rootn, honest for EVERY integer index.
-        "rootn" => rootn_f64,
+        "rootn" => kernels::rootn,
         _ => return None,
     })
 }
@@ -460,14 +418,6 @@ pub(crate) fn apply_op(name: &str, a: &[f64]) -> Option<f64> {
     }
 }
 
-/// Division: plain IEEE `x / y` == the deployed numpy ARRAY branch (sign of a ZERO DIVISOR
-/// participates: 1/-0.0 = -inf; 0/0 = nan). The old sign-of-numerator-only special case was the
-/// python SCALAR quirk; rules certified under it can be false under deployment (numpy)
-/// semantics.
-fn op_div(x: f64, y: f64) -> f64 {
-    x / y
-}
-
 /// IEEE-754 `rootn(x, n)`, honest for every integer index:
 /// odd index = the signed root (total on R, `-0` at `-0`); even = the principal root (NaN on
 /// negatives, `+0` at either zero, identical to `pow(x, 1/n)`); n == 1 = the identity; n < 0 =
@@ -475,7 +425,7 @@ fn op_div(x: f64, y: f64) -> f64 {
 /// operation).
 /// One semantics, five surfaces: this table, `operators.py::rootn`, `interval.rs`, and
 /// both `hiprec.rs` evaluators -- pinned against each other by the parity tests.
-fn rootn_f64(x: f64, n: f64) -> f64 {
+pub(crate) fn rootn_f64(x: f64, n: f64) -> f64 {
     if n.fract() != 0.0 || n == 0.0 || !n.is_finite() {
         return f64::NAN;
     }
@@ -489,7 +439,7 @@ fn rootn_f64(x: f64, n: f64) -> f64 {
     } else if x < 0.0 {
         f64::NAN
     } else {
-        x.powf(1.0 / k)
+        elementary::pow(x, 1.0 / k)
     };
     if n < 0.0 {
         1.0 / root
@@ -502,7 +452,7 @@ fn rootn_f64(x: f64, n: f64) -> f64 {
 /// carrying the sign of `x`, the sign of zero included (`rootn(-0, 3) = -0`, as IEEE-754 `rootn`
 /// and every other odd function give).
 fn real_odd_root(x: f64, r: f64) -> f64 {
-    cpow(x.abs(), r).copysign(x)
+    elementary::pow(x.abs(), r).copysign(x)
 }
 
 /// CPython-exact `str(float)` as the result formatter uses it:

@@ -2064,11 +2064,27 @@ fn kernel_output(out: &pyo3::buffer::PyBuffer<f64>, operands: &[RawF64]) -> PyRe
     Ok(o)
 }
 
-/// `out[i] = name(x[i])` for a 0.15 operator kernel (`numeric::kernels`), the GIL released.
-/// `x` and `out` are C-contiguous float64 buffers; `x` has `len(out)` elements or one, which
-/// is broadcast. The deployed realization of an operator whose kernel is its own
-/// (`simplipy.operators.harmonic`) calls this; for the others it is the gate's handle on the
-/// kernel the engine will evaluate.
+/// Releasing and retaking the GIL costs about a tenth of a microsecond, so a map shorter than
+/// this runs with it held.
+const DETACH_MIN: usize = 1024;
+
+/// Run a kernel map, the GIL released when it is long enough to pay for that.
+fn run_map<T, F>(py: Python<'_>, n: usize, map: F) -> T
+where
+    F: FnOnce() -> T + Send,
+    T: Send,
+{
+    if n >= DETACH_MIN {
+        py.detach(map)
+    } else {
+        map()
+    }
+}
+
+/// `out[i] = name(x[i])` for an operator's float64 kernel (`numeric::kernels`), the GIL
+/// released for a long map. `x` and `out` are C-contiguous float64 buffers; `x` has `len(out)` elements or
+/// one, which is broadcast. Every realization in `simplipy.operators` evaluates through this
+/// and `kernel_binary`, so the deployed value is the engine evaluator's.
 #[pyfunction]
 fn kernel_unary(
     py: Python<'_>,
@@ -2078,7 +2094,7 @@ fn kernel_unary(
 ) -> PyResult<()> {
     let xv = RawF64::of(&x, "x", false)?;
     let ov = kernel_output(&out, &[xv])?;
-    py.detach(move || {
+    run_map(py, ov.len, move || {
         // SAFETY: both buffers are held by this frame, and `out` overlaps no operand.
         let (xs, os) = unsafe { (xv.slice(), ov.slice_mut()) };
         numeric::kernels::map_unary(name, xs, os)
@@ -2086,7 +2102,23 @@ fn kernel_unary(
     .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// `out[i] = name(a[i], b[i])` for a binary 0.15 operator kernel, as `kernel_unary`.
+/// `name(x)` of one float: the scalar path of `kernel_unary` (the same function).
+#[pyfunction]
+fn kernel_unary_scalar(name: &str, x: f64) -> PyResult<f64> {
+    numeric::kernels::unary(name)
+        .map(|f| f(x))
+        .ok_or_else(|| PyValueError::new_err(format!("no kernel named {name:?} of this arity")))
+}
+
+/// `name(a, b)` of two floats: the scalar path of `kernel_binary` (the same function).
+#[pyfunction]
+fn kernel_binary_scalar(name: &str, a: f64, b: f64) -> PyResult<f64> {
+    numeric::kernels::binary(name)
+        .map(|f| f(a, b))
+        .ok_or_else(|| PyValueError::new_err(format!("no kernel named {name:?} of this arity")))
+}
+
+/// `out[i] = name(a[i], b[i])` for a binary operator kernel, as `kernel_unary`.
 #[pyfunction]
 fn kernel_binary(
     py: Python<'_>,
@@ -2098,7 +2130,7 @@ fn kernel_binary(
     let av = RawF64::of(&a, "a", false)?;
     let bv = RawF64::of(&b, "b", false)?;
     let ov = kernel_output(&out, &[av, bv])?;
-    py.detach(move || {
+    run_map(py, ov.len, move || {
         // SAFETY: as in `kernel_unary`.
         let (as_, bs, os) = unsafe { (av.slice(), bv.slice(), ov.slice_mut()) };
         numeric::kernels::map_binary(name, as_, bs, os)
@@ -2118,6 +2150,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(range_event, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_unary, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_binary, m)?)?;
+    m.add_function(wrap_pyfunction!(kernel_unary_scalar, m)?)?;
+    m.add_function(wrap_pyfunction!(kernel_binary_scalar, m)?)?;
     m.add("__build__", env!("SIMPLIPY_BUILD"))?;
     // The near-miss gate of the high-precision re-judgement (real and permissive): the
     // fraction of a pair's points that may fail f64 for it to escalate. Recorded per mine.

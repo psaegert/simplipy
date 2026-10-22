@@ -694,7 +694,7 @@ class TestInversePairsCollapse:
         saturation, and the two cases below show why one bit cannot answer both.
 
         The BAND axis: `atanh(tanh t) = t` for every real t, and the band exists only
-        because f64 saturates (tanh attains 1.0 from 18.990341103219276, and atanh(1.0)
+        because f64 saturates (tanh attains 1.0 from 19.061547465398498, and atanh(1.0)
         is inf). So `real` and `corpus` collapse it and `f64` must not.
 
         The RECALL axis: `exp(log c)` needs c > 0, a certificate only the permissive mode
@@ -706,7 +706,7 @@ class TestInversePairsCollapse:
         from simplipy import Mode
         bare._core.set_mode_rules('real', [])   # an EMPTY real set: constructors only
 
-        band = ['atanh', 'tanh', '30']          # 30 > 18.990341103219276
+        band = ['atanh', 'tanh', '30']          # 30 > 19.061547465398498
         # f64 does not merely REFUSE the collapse -- with folding it answers what f64
         # genuinely computes: tanh(30) attains exactly 1.0, so atanh of it is inf, and
         # `np.arctanh(np.tanh(30.0))` really is inf. Faithful, and still not `30`.

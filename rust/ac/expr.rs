@@ -1982,7 +1982,7 @@ impl<'a> Cx<'a> {
             // at the HIGH end -- tanh loses ~2|t|/ln2 bits of the argument approaching +-1,
             // so the roundtrip drifts past 8 ULP at |t| ~ 2.7 (first breach measured 2.677
             // audit host / 2.808 this host, libm-dependent; by |t|=18 the drift is
-            // ~0.03-0.06 ABSOLUTE), eleven-plus band-widths before saturation at 18.99 --
+            // ~0.03-0.06 ABSOLUTE), eleven-plus band-widths before saturation at 19.06 --
             // which is what the old attainment-derived band of 18 measured, and why it was
             // wrong (S3); saturation is not overflow, so the band stays. Each integer bound
             // below is the last magnitude ceiling on the SAFE side of every measured breach,

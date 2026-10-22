@@ -1984,7 +1984,7 @@ def judge_rule(lhs, rhs, deployed_check=True):
                     # engine realise what the contract certified?", and until now the only
                     # place that question was ever put ran over the BATTERY, whose largest
                     # magnitude is 3.0 -- below every point where f64 departs from the
-                    # extended reals (tanh saturates at 18.99, exp overflows at 709.78 and
+                    # extended reals (tanh saturates at 19.06, exp overflows at 709.78 and
                     # underflows at -745.13, cosh/sinh overflow at 710.48). The verdict was
                     # therefore unreachable in principle, not merely unfired. This grid
                     # already reaches 1e4, so the same comparison the battery lane performs
@@ -2170,7 +2170,7 @@ TOUCHSTONES = [
      'of R, and the dps-50 rounding of tanh(100) to 1 must still go Unresolved at the '
      'boundary rather than fabricate +inf (boundary-honesty band) -- a CERTIFIED contract '
      'lane is what lets the second half be reached at all. DEPLOYED half, new with F95: '
-     'f64 tanh attains exactly 1.0 from 18.990341103219276, so the shipped engine returns '
+     'f64 tanh attains exactly 1.0 from 19.061547465398498, so the shipped engine returns '
      'inf where the rule says the argument. The rule is TRUE and NOT REALISED, which is '
      'precisely what ENGINE-MISALIGN names. A regression to CERTIFIED here means the '
      'deployed lane stopped reaching the grid; a KILL means the contract lane started '

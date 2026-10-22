@@ -475,7 +475,7 @@ class TestTheRealisationAxis:
     """F100: the judge reports WHICH AUTHORITY a rule answers to, not just a verdict.
 
     The two notions of soundness are INCOMPARABLE -- a rule can be true and
-    unrealised (`atanh(tanh t) -> t`: exactly t on R, `inf` in f64 past 18.99) or
+    unrealised (`atanh(tanh t) -> t`: exactly t on R, `inf` in f64 past 19.06) or
     realised and untrue (`asin(1e-8) -> 1e-8`: bit-identical in f64, wrong by
     1.7e-17). So this is a second axis, and the tier is the cell it lands in.
     """
@@ -485,7 +485,7 @@ class TestTheRealisationAxis:
         cases = [
             # true AND realised
             (['*', '(-1)', 'asin', '_0'], ['asin', 'neg', '_0'], 'core'),
-            # true, NOT realised: tanh attains exactly 1.0 from 18.990341103219276,
+            # true, NOT realised: tanh attains exactly 1.0 from 19.061547465398498,
             # so the deployed engine answers inf where the rule answers the argument
             (['atanh', 'neg', 'tanh', '!0'], ['neg', '!0'], 'real'),
             # realised, NOT true: bit-identical in f64, wrong by 1.7e-17 relatively
@@ -670,7 +670,7 @@ class TestTheF64RangeStandard:
         assert (got['verdict'], got['realised'], got['tier']) == ('KILL', True, 'f64'), got
 
     def test_saturation_inside_the_range_is_still_compared(self) -> None:
-        """`tanh` attains exactly 1.0 from 18.99 without leaving the range, and
+        """`tanh` attains exactly 1.0 from 19.06 without leaving the range, and
         `atanh(1.0)` is a pole, not an overflow: no point is a range event, and f64 still
         refuses `atanh(tanh(x)) -> x`."""
         got = judge_rule(['atanh', 'tanh', '?0'], ['?0'])

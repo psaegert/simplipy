@@ -1,6 +1,6 @@
 """float64's `tanh` and `atan` reach their limits on whole tails.
 
-`tanh(u)` is exactly +-1 for every |u| >= 18.99 and `atan(u)` exactly +-fl(pi/2) for every
+`tanh(u)` is exactly +-1 for every |u| >= 19.06 and `atan(u)` exactly +-fl(pi/2) for every
 |u| >= 5.8e15, in the deployed evaluator as in the engine's. So in `f64` a sum that cancels the
 limit, `x2*tanh(x1) - x2`, is +0 on a whole region and its inverse +inf there. The zero-set
 certificate read the real functions, which never reach their limits, and let a sign move through

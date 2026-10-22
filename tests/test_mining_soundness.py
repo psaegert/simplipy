@@ -2206,7 +2206,7 @@ class TestTheGateRoutesInsteadOfDeleting:
         # is the routing itself, checked below.
 
         # The inverse-pair family is true on R. Three of them are not f64-realised: tanh
-        # attains 1.0 from 18.990341103219276, and exp and cosh round a small argument into
+        # attains 1.0 from 19.061547465398498, and exp and cosh round a small argument into
         # the neighbourhood of 1, so `log(exp(x))` and `acosh(cosh(x))` lose the argument's
         # digits there. They are `real`: absent from f64. `asinh(sinh(x))` stays within 2 ULP
         # wherever sinh stays in range, and past its overflow at 710.48 f64 accepts the true
@@ -2269,7 +2269,7 @@ class TestCertifyRulesRoutesLikeTheMine:
 
     def test_a_real_tier_proposal_survives_instead_of_being_deleted(self, tmp_path) -> None:
         """`atanh(tanh x)` and `log(exp x)` are true on R and not f64-realised (tanh
-        attains 1.0 from 18.990341103219276, exp overflows at 709.782713), so both are
+        attains 1.0 from 19.061547465398498, exp overflows at 709.782713), so both are
         ENGINE-MISALIGN, tier `real`. Before the fix the gate deleted both."""
         from conftest import acj_config_path, require_or_skip
         require_or_skip(acj_config_path(), 'needs the acj operator vocabulary')

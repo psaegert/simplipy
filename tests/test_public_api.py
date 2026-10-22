@@ -50,6 +50,8 @@ MODULE_ALLS = {
         'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
         'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
         'exp', 'log', 'rootn', 'pow',
+        'add', 'sub', 'mul',
+        'floor', 'ceil', 'max', 'min', 'mod', 'harmonic', 'erf', 'atan2',
     },
     'simplipy.promotion': {'promote'},
 }

@@ -1,7 +1,9 @@
 """The float64 kernels of the 0.15 operators (`rust/numeric/kernels.rs`), through the
 `_core` entries `kernel_unary`/`kernel_binary`.
 
-Two gates per kernel:
+floor, ceil, max, min, mod and harmonic are the core's own; erf and atan2 are the platform's
+libm through the core's elementary-function source, as every other transcendental is. Two
+gates per kernel:
 
 * BIT IDENTITY with numpy where numpy's own operation is the deployed one: floor and ceil
   are `np.floor`/`np.ceil`, mod is `np.mod` on float64, and max/min are `np.maximum`/
@@ -9,7 +11,8 @@ Two gates per kernel:
   returns its second operand there). Dense grids plus every special cell.
 * ACCURACY against exact arithmetic: floor, ceil, max and min are exact and mod is
   correctly rounded (rationals); harmonic is within one ulp of mpmath away from its zeros
-  on the negative axis, and within a stated absolute bound near them.
+  on the negative axis, and within a stated absolute bound near them; erf and atan2 meet the
+  two-ulp bar (glibc measures 0.5 and 1.0).
 """
 import math
 from fractions import Fraction
@@ -244,7 +247,9 @@ def test_harmonic_reflection_branch() -> None:
 def test_core_entries_refuse_what_they_cannot_honour() -> None:
     x, out = np.ones(3), np.empty(3)
     with pytest.raises(ValueError, match='no kernel'):
-        _core.kernel_unary('sin', x, out)
+        _core.kernel_unary('besselj', x, out)
+    with pytest.raises(ValueError, match='no kernel'):
+        _core.kernel_unary_scalar('pow', 1.0)
     with pytest.raises(ValueError, match='no kernel'):
         _core.kernel_binary('floor', x, x, out)
     with pytest.raises(ValueError, match='elements'):
@@ -268,3 +273,34 @@ def test_core_entries_broadcast_one_element_operands() -> None:
     _core.kernel_unary('harmonic', np.array([2.0]), out)
     assert (out == 1.5).all()
     _core.kernel_unary('floor', np.empty(0), np.empty(0))
+
+
+# --------------------------------------------------------------------------- erf and atan2
+
+
+def test_erf_and_atan2_cells() -> None:
+    pi, inf = np.pi, np.inf
+    assert bits_equal(core1('erf', [0.0, -0.0, inf, -inf, TINY, -TINY]), [0.0, -0.0, 1.0, -1.0, TINY, -TINY]).all()
+    assert np.isnan(core1('erf', [np.nan])).all()
+    for y, x, want in [(0.0, 0.0, 0.0), (-0.0, 0.0, -0.0), (0.0, -0.0, pi), (-0.0, -0.0, -pi),
+                       (1.0, -inf, pi), (-1.0, -inf, -pi), (inf, inf, pi / 4), (-inf, -inf, -3 * pi / 4),
+                       (1.0, 0.0, pi / 2), (-1.0, 0.0, -pi / 2)]:
+        assert bits_equal(core2('atan2', y, x), want).all(), (y, x)
+    assert np.isnan(core2('atan2', np.nan, 1.0)).all() and np.isnan(core2('atan2', 1.0, np.nan)).all()
+
+
+def test_erf_meets_the_bar() -> None:
+    xs = np.concatenate([RNG.uniform(-6.5, 6.5, 3_000), np.geomspace(1e-300, 6.0, 500), -np.geomspace(1e-300, 6.0, 300),
+                         RNG.uniform(0.98, 1.02, 200), RNG.uniform(5.8, 6.0, 200)])
+    with mp.workdps(40):
+        worst = max((_ulps(v, mp.erf(mp.mpf(float(x)))), x) for x, v in zip(xs, core1('erf', xs)))
+    assert worst[0] <= 2.0, worst
+
+
+def test_atan2_meets_the_bar() -> None:
+    y = np.concatenate([RNG.uniform(-10, 10, 3_000), np.geomspace(1e-300, 1e300, 300), -np.geomspace(1e-300, 1e300, 300)])
+    x = np.concatenate([RNG.uniform(-10, 10, 3_000), RNG.uniform(-1e3, 1e3, 300), -RNG.uniform(1e-3, 1e3, 300)])
+    with mp.workdps(40):
+        worst = max((_ulps(v, mp.atan2(mp.mpf(float(a)), mp.mpf(float(b)))), a, b)
+                    for a, b, v in zip(y, x, core2('atan2', y, x)))
+    assert worst[0] <= 2.0, worst

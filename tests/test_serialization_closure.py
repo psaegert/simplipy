@@ -435,9 +435,11 @@ class TestProvenanceRecordsTheMeasure:
     def test_the_registry_is_what_the_core_reads(self) -> None:
         """The core declares the artifact-affecting switches and reads each through that
         declaration; every other `SIMPLIPY_*` variable it reads by name is a diagnostic
-        trace or the test-asset switch. A new switch read as a bare literal fails here
-        until it is declared. Since 0.15 there is none: the interval node budget is a
-        recorded `find_rules` argument and the tagged fraction bound a constant."""
+        trace, the test-asset switch or the kernel thread count (which splits a long map
+        over threads and changes no bit: `test_operator_realizations`). A new switch read as
+        a bare literal fails here until it is declared. Since 0.15 there is none: the
+        interval node budget is a recorded `find_rules` argument and the tagged fraction
+        bound a constant."""
         import os
         import re
         from simplipy.engine import ARTIFACT_ENV_SWITCHES
@@ -446,7 +448,8 @@ class TestProvenanceRecordsTheMeasure:
                    for root, _, names in os.walk(rust) for name in names if name.endswith('.rs')]
         literal = {m for src in sources for m in re.findall(r'env::var(?:_os)?\(\s*"(SIMPLIPY_\w+)"', src)}
         assert literal == {'SIMPLIPY_AC_TRACE', 'SIMPLIPY_AC_MEMO_TRACE', 'SIMPLIPY_GATE_TRACE',
-                           'SIMPLIPY_BATTERY_TRACE', 'SIMPLIPY_TEST_REQUIRE_ASSETS'}
+                           'SIMPLIPY_BATTERY_TRACE', 'SIMPLIPY_TEST_REQUIRE_ASSETS',
+                           'SIMPLIPY_KERNEL_THREADS'}
         assert ARTIFACT_ENV_SWITCHES == ()
         declared = {m for src in sources
                     for m in re.findall(r'env::var\(\s*crate::env_switches::(\w+)\)', src)}

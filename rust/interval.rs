@@ -38,9 +38,11 @@ const INF: f64 = f64::INFINITY;
 // two differ is a place a certified rule can be false in production.
 //
 // HOST-DEPENDENT by nature (libm differs; D20 already routes minting to the reference mint host for that
-// reason). Derived on glibc 2.43; re-derive per host and stamp with the libm.
+// reason). The deployed evaluator IS the engine's (`simplipy.operators` calls `numeric::kernels`),
+// so one measurement serves both. Derived on glibc 2.43 and pinned against the kernels by
+// `saturation_thresholds_are_the_deployed_kernels`; re-derive per host and stamp with the libm.
 /// Smallest x with `tanh(x) == 1.0` exactly; just below it tanh gives 0.9999999999999999.
-const TANH_SAT: f64 = 18.990341103219276;
+const TANH_SAT: f64 = 19.061547465398498;
 /// Largest x with `exp(x) == 0.0` exactly; just above it exp gives 5e-324, the smallest
 /// subnormal.
 const EXP_UNDERFLOW: f64 = -745.1332191019412;
@@ -2945,7 +2947,7 @@ pub fn domain_extension(source: &[String], target: &[String], ops: &Operators) -
 /// vocabulary -- see the hazard note on `tail_finite_ae`.
 ///
 /// `f64` (the `f64` mode) reads the expression in float64, where `tanh` and `atan` are constant
-/// on whole tails (`on_float64_tails`): `1/(tanh(x1) - 1)` is `+inf` wherever x1 >= 18.99.
+/// on whole tails (`on_float64_tails`): `1/(tanh(x1) - 1)` is `+inf` wherever x1 >= 19.06.
 /// `real` and `permissive` read it over the reals.
 pub fn finite_ae(tokens: &[String], ops: &Operators, f64: bool) -> bool {
     if let Some(d) = dummy_spelling(&[tokens], ops) {
@@ -3314,8 +3316,8 @@ pub fn zero_set_null_generic_const(tokens: &[String], ops: &Operators, f64: bool
 
 /// float64's tails: `(threshold, limit)` where the function is EXACTLY `limit` for every argument
 /// at or past `threshold`, and `-limit` at or below `-threshold`. Measured on every operator of the
-/// vocabulary with the deployed evaluator and the engine's, out to the largest float: only `tanh`
-/// (+-1; the deployed evaluator saturates first, at `TANH_SAT`, the engine's at 19.0615) and
+/// vocabulary with the deployed evaluator (the engine's own kernels), out to the largest float:
+/// only `tanh` (+-1, from `TANH_SAT`) and
 /// `atan` (+-fl(pi/2)) have one. Overflow and underflow to an infinity or 0 (`exp`, `sinh`,
 /// `cosh`, `pow`) are the overflow reading's; `asin`, `acos`, `atanh`, `acosh` and `log` are NaN
 /// off their domains.
@@ -3333,7 +3335,7 @@ fn tail_of(op: &str) -> Option<(f64, f64)> {
 /// of one of them it is EXACTLY the expression with that function replaced by its limit, which
 /// must then have the property in float64 too, on the whole space (a stronger claim); `ground`
 /// decides one that is a constant there. So the zero set of `x2*tanh(x1) - x1` is null (its tails
-/// read `x2 - x1` and `-x2 - x1`), and that of `x2*tanh(x1) - x2`, `+0` wherever x1 >= 18.99, is
+/// read `x2 - x1` and `-x2 - x1`), and that of `x2*tanh(x1) - x2`, `+0` wherever x1 >= 19.06, is
 /// not; `1/(tanh(x1) - 1)` is not finite almost everywhere. A function whose argument is ground,
 /// or never leaves (-threshold, threshold) (`tanh(sin(x1))`), has no tail to read; more than
 /// `MAX_TAILS` of them fail closed.
@@ -5322,7 +5324,23 @@ mod tests {
         }
     }
 
-    /// float64's `tanh` is exactly +-1 for every |g| >= 18.99 and its `atan` exactly +-fl(pi/2)
+    /// The f64 saturation thresholds are MEASURED, not declared: each is where the deployed
+    /// kernel (`numeric::kernels`, which the evaluator and `simplipy.operators` both call)
+    /// attains its limit, to the ulp.
+    #[test]
+    fn saturation_thresholds_are_the_deployed_kernels() {
+        use crate::numeric::kernels::{atan, exp, tanh};
+        let toward_zero = |x: f64| f64::from_bits(x.to_bits() - 1);
+        assert_eq!(tanh(TANH_SAT), 1.0);
+        assert!(tanh(toward_zero(TANH_SAT)) < 1.0);
+        assert_eq!(tanh(-TANH_SAT), -1.0);
+        assert_eq!(atan(ATAN_SAT), std::f64::consts::FRAC_PI_2);
+        assert!(atan(toward_zero(ATAN_SAT)) < std::f64::consts::FRAC_PI_2);
+        assert_eq!(exp(EXP_UNDERFLOW), 0.0);
+        assert!(exp(toward_zero(EXP_UNDERFLOW)) > 0.0);
+    }
+
+    /// float64's `tanh` is exactly +-1 for every |g| >= 19.06 and its `atan` exactly +-fl(pi/2)
     /// for every |g| >= 5.8e15, so in f64 a sum that cancels the limit vanishes on a region,
     /// where over the reals it never vanishes.
     #[test]
@@ -5339,7 +5357,7 @@ mod tests {
             &["-", "atan", "x1", "1.5707963267948966"],
             &["-", "atan", "x1", "/", "np.pi", "2"],
             &["*", "<constant>", "-", "tanh", "x1", "1"],
-            // tanh(tanh(x1)) is tanh(1) wherever x1 >= 18.99
+            // tanh(tanh(x1)) is tanh(1) wherever x1 >= 19.06
             &["-", "tanh", "tanh", "x1", "tanh", "1"],
             // 1/(tanh(x1) - 1) is +inf on the tail, so its inverse is 0 there
             &["inv", "inv", "-", "tanh", "x1", "1"],
@@ -5368,7 +5386,7 @@ mod tests {
     }
 
     /// The `!` and `$` certificates read float64's tails in f64: `1/(tanh(x1) - 1)` is `+inf`
-    /// and `tanh(x1) - 1` is `+0` wherever x1 >= 18.99, which the real functions never are.
+    /// and `tanh(x1) - 1` is `+0` wherever x1 >= 19.06, which the real functions never are.
     #[test]
     fn float64_tails_hold_infinities() {
         let Some(e) = crate::test_engine() else {

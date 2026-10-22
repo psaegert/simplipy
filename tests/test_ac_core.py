@@ -883,7 +883,7 @@ class TestZeroPoles:
 
 class TestAtanhTanhBandIsPrecisionDerived:
     """S3: the atanh(tanh(t)) -> t collapse carried a band of 18, derived from where
-    f64 tanh ATTAINS +-1 (18.99). But tanh fails by COMPRESSION long before it
+    f64 tanh ATTAINS +-1 (19.06). But tanh fails by COMPRESSION long before it
     saturates -- it loses ~2|t|/ln2 bits of the argument approaching +-1 -- and under
     the realised criterion (`_ulp_gap <= REALISED_ULP = 8`, the same bar the judge
     holds every rule to) the roundtrip first breaches at |t| ~ 2.7 (2.677 audit host,
