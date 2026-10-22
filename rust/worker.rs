@@ -99,10 +99,30 @@ const POLE_GRID: [f64; 26] = [
 /// step-function artifacts (`pow(asin(C), inf) -> 0`, and its multi-constant scalings
 /// `* C1 pow(asin(C2), inf) -> 0`, which random sampling lands in only ~2%/draw). Fully-random
 /// rounds are appended for off-grid decorrelation and joint coverage.
-fn source_const_magnitudes(rng: &mut Rng, n_const: usize, challenges: usize) -> Vec<Vec<f64>> {
+/// The magnitudes swept, beside `POLE_GRID`, on each constant of a source holding a head the
+/// contract has no kernel for (`hiprec::evaluable`): zero and the integers, where the step heads
+/// jump, `harmonic` has its poles (with the negative sign combos) and `mod` divides exactly, and a
+/// half-integer, `besselj`'s order and the floor/ceil midpoint.
+const POLE_GRID_STEP: [f64; 6] = [0.0, 1.0, 1.5, 2.0, 3.0, 4.0];
+
+fn source_const_magnitudes(
+    rng: &mut Rng,
+    n_const: usize,
+    challenges: usize,
+    step: bool,
+) -> Vec<Vec<f64>> {
     let mut out: Vec<Vec<f64>> = Vec::new();
+    let grid: Vec<f64> = if step {
+        POLE_GRID
+            .iter()
+            .chain(POLE_GRID_STEP.iter())
+            .copied()
+            .collect()
+    } else {
+        POLE_GRID.to_vec()
+    };
     for j in 0..n_const {
-        for &m in POLE_GRID.iter() {
+        for &m in grid.iter() {
             let mut v: Vec<f64> = (0..n_const).map(|_| rng.const_magnitude()).collect();
             v[j] = m;
             out.push(v);
@@ -289,6 +309,20 @@ fn slot_witnesses(source: &[String], ops: &Operators) -> Vec<f64> {
             }
             continue;
         }
+        // The step heads jump at the integers and `harmonic` has its poles at the negative
+        // ones: each corner's integer neighbours and their float neighbours are witnesses.
+        if matches!(tok.as_str(), "floor" | "ceil" | "harmonic") {
+            for &s in corners.iter() {
+                if s.is_finite() {
+                    for k in [s.floor(), s.ceil()] {
+                        push_witness(&mut w, k);
+                        push_witness(&mut w, crate::interval::step_down(k));
+                        push_witness(&mut w, crate::interval::step_up(k));
+                    }
+                }
+            }
+            continue;
+        }
         let Some(inv) = inverse_unary_name(tok) else {
             continue;
         };
@@ -355,6 +389,20 @@ fn slot_witnesses(source: &[String], ops: &Operators) -> Vec<f64> {
                 // rootn(x, c): preimage pow(s, c). (rootn(c, x) needs only INTEGER witnesses
                 // -- the index is nan off the integers -- and SPECIAL_CONSTS carries those.)
                 ("rootn", false) => exprs.push(prefix(&["pow", &sr], true)),
+                // atan2(x, c): preimage c*tan(s);  atan2(c, x): preimage c/tan(s)
+                ("atan2", false) => exprs.push(prefix(&["*", "tan", &sr], true)),
+                ("atan2", true) => exprs.push(prefix(&["/", "tan", &sr], false)),
+                // mod(x, c): preimages s + k*c, the multiples of c among them
+                ("mod", false) => {
+                    for k in ["-2", "-1", "0", "1", "2"] {
+                        exprs.push(prefix(&["+", &sr, "*", k], true));
+                    }
+                }
+                // max/min(x, c) and (c, x): s itself, and the kink at c
+                ("max" | "min", _) => {
+                    exprs.push(vec![sr.clone()]);
+                    exprs.push(lit.clone());
+                }
                 _ => {}
             }
             for expr in exprs {
@@ -864,7 +912,12 @@ fn equivalent_no_const(
     let mags = if n_src_const == 0 {
         vec![vec![]]
     } else {
-        source_const_magnitudes(rng, n_src_const, eff_challenges)
+        source_const_magnitudes(
+            rng,
+            n_src_const,
+            eff_challenges,
+            !crate::hiprec::evaluable(source_tokens, ops),
+        )
     };
     let mut instances: Vec<Vec<f64>> = Vec::with_capacity(mags.len() * combos.len());
     for rc in &mags {
@@ -1611,6 +1664,7 @@ fn candidate_matches(
 /// candidate (re-evaluating inside `candidate_matches` would cost per (candidate, challenge,
 /// sign-combo)). A const-free source has exactly one distinct instance, so its challenge count
 /// collapses to 1 (identical targets add no evidence and only multiply fit flakiness).
+#[allow(clippy::too_many_arguments)]
 fn source_instances(
     src_tape: &Tape,
     n_src_const: usize,
@@ -1619,12 +1673,13 @@ fn source_instances(
     n_rows: usize,
     challenges: usize,
     rng: &mut Rng,
+    step: bool,
 ) -> Vec<(Vec<f64>, Vec<f64>)> {
     let eff_challenges = if n_src_const == 0 { 1 } else { challenges };
     let mags = if n_src_const == 0 {
         vec![vec![]]
     } else {
-        source_const_magnitudes(rng, n_src_const, eff_challenges)
+        source_const_magnitudes(rng, n_src_const, eff_challenges, step)
     };
     let mut out = Vec::with_capacity(mags.len() * combos.len());
     for rc in &mags {
@@ -1834,7 +1889,16 @@ impl<'s> SourceCtx<'s> {
         let combos = sign_combos(n_const);
         let mut rng = Rng::new(seed);
         // Source instances shared across the whole candidate scan (see `source_instances`).
-        let y = source_instances(&tape, n_const, &combos, cols, n_rows, challenges, &mut rng);
+        let y = source_instances(
+            &tape,
+            n_const,
+            &combos,
+            cols,
+            n_rows,
+            challenges,
+            &mut rng,
+            !crate::hiprec::evaluable(source, ops),
+        );
         let events = if f64_range {
             y.iter()
                 .map(|(p, _)| events_if_any(tape.eval_columns_events(cols, p, n_rows)).1)
@@ -2086,6 +2150,14 @@ fn certify_candidate(
             return None;
         }
     }
+    // THE DEPLOYED-ONLY BAR (`battery::deployed_exact`): a rule spelled with a head the contract
+    // has no kernel for is judged in the deployed lane alone, bit for bit at that bar's probes.
+    // The mint applies the same function, so the judge licenses what the mint accepts.
+    if !(crate::hiprec::evaluable(source, ops) && crate::hiprec::evaluable(&target, ops))
+        && !crate::battery::deployed_exact(source, &target, var_names, ops).ok
+    {
+        return None;
+    }
     Some(Certified {
         tokens: target,
         resolved: is_resolution,
@@ -2147,9 +2219,15 @@ pub fn find_rule_with_lib(
     // Every return path honors the caller's acceptance -- the short-circuits included: a
     // refused short-circuit target falls through to the candidate scan instead of being
     // returned for the caller to veto (there is no caller-side veto anymore).
-    let accepted = |t: &[String]| match accept {
-        Some(f) => f(t),
-        None => true,
+    // A source spelled with a head the contract has no kernel for answers to the deployed-only
+    // bar on every path, the ground arms below included (`battery::deployed_exact`, which the
+    // contract judge applies to it too): `ceil(asinh(-1))` is -0 in float64, so it is no `0`.
+    let deployed_only = !crate::hiprec::evaluable(source, ops);
+    let accepted = |t: &[String]| {
+        (match accept {
+            Some(f) => f(t),
+            None => true,
+        }) && (!deployed_only || crate::battery::deployed_exact(source, t, &lib.var_names, ops).ok)
     };
     // all-constant short-circuit, reached only after the guard passes.
     // A leaf counts as constant when `leaf_value` resolves it to a FINITE value: numeric

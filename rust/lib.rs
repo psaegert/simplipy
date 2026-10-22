@@ -2002,6 +2002,38 @@ fn range_event(op: &str, args: Vec<f64>, value: f64) -> Option<bool> {
     crate::numeric::range_event(op, &args, value)
 }
 
+/// THE DEPLOYED-ONLY BAR (`battery::deployed_exact`) on `lhs -> rhs` over `var_names`, under an
+/// operator table of `arity` (name -> arity): `(agree bit for bit at every probe, the number of
+/// probes, the first probe where they differ)`. `simplipy.verify._contract` judges a rule spelled
+/// with a head the contract has no kernel for by it, and the mint applies the same function.
+#[pyfunction]
+fn deployed_exact(
+    py: Python<'_>,
+    lhs: Vec<String>,
+    rhs: Vec<String>,
+    var_names: Vec<String>,
+    arity: std::collections::BTreeMap<String, u8>,
+) -> (bool, usize, Option<Vec<f64>>) {
+    let order: Vec<String> = arity.keys().cloned().collect();
+    let specs = arity
+        .into_iter()
+        .map(|(name, arity)| {
+            let spec = crate::operators::OperatorSpec {
+                realization: String::new(),
+                alias: vec![],
+                inverse: None,
+                arity,
+                precedence: None,
+                commutative: name == "+" || name == "*",
+            };
+            (name, spec)
+        })
+        .collect();
+    let ops = crate::operators::Operators::from_specs(order, specs);
+    let d = py.detach(|| crate::battery::deployed_exact(&lhs, &rhs, &var_names, &ops));
+    (d.ok, d.probes, d.first)
+}
+
 /// The data of a float64 buffer, carried across the GIL release. The `PyBuffer` it was read
 /// from is held by the calling frame until the call returns, so the memory outlives every use.
 #[derive(Clone, Copy)]
@@ -2148,6 +2180,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(is_numeric_string, m)?)?;
     m.add_function(wrap_pyfunction!(reserved_numeric_spelling, m)?)?;
     m.add_function(wrap_pyfunction!(range_event, m)?)?;
+    m.add_function(wrap_pyfunction!(deployed_exact, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_unary, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_binary, m)?)?;
     m.add_function(wrap_pyfunction!(kernel_unary_scalar, m)?)?;

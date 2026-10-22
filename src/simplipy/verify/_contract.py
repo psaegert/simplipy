@@ -1696,6 +1696,43 @@ def _point_verdict(tl, tr, env_mp):
         mp.dps = old
 
 
+def _judge_deployed_only(lhs, rhs, deployed_check=True):
+    """Judge a rule spelled with a `DEPLOYED_ONLY_ARITY` head in the deployed lane ALONE.
+
+    The contract has no kernel for the head, so nothing here can say the rule is true over
+    the reals, and the verdict is `F64-ONLY`: tier `f64` when the two sides agree BIT FOR BIT in
+    float64 (the sign of a zero included, NaN equal to NaN) at every probe of the core's
+    deployed-only bar (`_core.deployed_exact`: per slot the battery, +-inf, NaN, the jumps and
+    cells of the 0.15 heads, a generic grid, the diagonal; whatever the slot's sort), and
+    `reject` otherwise. The mint applies the same function to every such pair it accepts, so the
+    two cannot disagree. A rule with a `<constant>` is refused: its witness needs the
+    contract."""
+    heads = sorted({t for t in list(lhs) + list(rhs) if t in DEPLOYED_ONLY_ARITY})
+    why = f'no contract kernel for {", ".join(heads)}: judged in the deployed lane alone'
+    ext = {**ARITY, **DEPLOYED_ONLY_ARITY}
+    try:
+        parse(lhs, '<C_L>', ext)
+        parse(rhs, '<C_R>', ext)
+    except UnsupportedToken as ex:
+        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
+    if not deployed_check or '<constant>' in lhs or '<constant>' in rhs:
+        return {'verdict': 'UNSUPPORTED-SHAPE',
+                'detail': why + '; a <constant> needs the contract'}
+    from simplipy._core import deployed_exact  # type: ignore[attr-defined]
+    slot = {}
+    for t in list(lhs) + list(rhs):
+        key = '?' + t[1:] if t in ('x0', 'x1', 'x2') else t
+        if SLOT_RE.match(key) and key not in slot:
+            slot[key] = None
+    names = {key: f'x{i}' for i, key in enumerate(sorted(slot))}
+    spell = lambda ts: [names.get('?' + t[1:] if t in ('x0', 'x1', 'x2') else t, t)  # noqa: E731
+                        for t in ts]
+    realised, probes, first = deployed_exact(spell(lhs), spell(rhs), list(names.values()), ext)
+    return {'verdict': 'F64-ONLY', 'detail': why, 'realised': realised,
+            'points': [] if first is None else [dict(zip(names, first))],
+            'probes': probes, 'tier': _tier('F64-ONLY', realised)}
+
+
 #: The four cells of the soundness LATTICE. The two notions are INCOMPARABLE -- a rule
 #: can be true and unrealised (`atanh(tanh t) -> t`, exact on R, `inf` in f64) or
 #: realised and untrue (`asin(1e-8) -> 1e-8`, bit-identical in f64, wrong by 1.7e-17) --
@@ -1705,75 +1742,6 @@ def _point_verdict(tl, tr, env_mp):
 #:   real    true, NOT realised    exact arithmetic is the authority
 #:   f64     realised, NOT true    the deployed evaluator is the authority
 #:   reject  neither               dropped everywhere
-#: The deployed lane's extra probe values for a rule judged there alone: where the 0.15 heads
-#: jump or saturate (just off an integer, tiny and huge magnitudes, erf's saturation), so that
-#: a law of the reals that float64 breaks there (`floor(x + 1) = floor(x) + 1` at x = -1e-17)
-#: is seen.
-_DEPLOYED_ONLY_EXTRA = (1e-17, -1e-17, 1e-300, -1e-300, 5e-324, -5e-324, 1e17, -1e17,
-                        1e300, -1e300, 6.0, -6.0, 0.9999999999999999, -0.9999999999999999,
-                        1.0000000000000002, 2.5, -2.5, 7.0, -7.0)
-
-
-def _judge_deployed_only(lhs, rhs, deployed_check=True):
-    """Judge a rule spelled with a `DEPLOYED_ONLY_ARITY` head in the deployed lane ALONE.
-
-    The contract has no kernel for the head, so nothing here can say the rule is true over
-    the reals, and the verdict is `F64-ONLY`: tier `f64` when the deployed sides agree BIT FOR
-    BIT (zeros of either sign equal, NaN equal to NaN) at every probe -- the battery of each
-    slot's sort, the extra jump and saturation values, the generic grid per slot and the
-    diagonal -- and `reject` otherwise. A rule with a `<constant>` is refused: its witness
-    needs the contract."""
-    heads = sorted({t for t in list(lhs) + list(rhs) if t in DEPLOYED_ONLY_ARITY})
-    why = f'no contract kernel for {", ".join(heads)}: judged in the deployed lane alone'
-    ext = {**ARITY, **DEPLOYED_ONLY_ARITY}
-    try:
-        tl = parse(lhs, '<C_L>', ext)
-        tr = parse(rhs, '<C_R>', ext)
-    except UnsupportedToken as ex:
-        return {'verdict': 'UNSUPPORTED-SHAPE', 'detail': str(ex)}
-    if not deployed_check or '<constant>' in lhs or '<constant>' in rhs:
-        return {'verdict': 'UNSUPPORTED-SHAPE',
-                'detail': why + '; a <constant> needs the contract'}
-    slots = slots_of(lhs)
-    slots.update({k: v for k, v in slots_of(rhs).items() if k not in slots})
-    names = sorted(slots)
-    per_slot = {}
-    for n in names:
-        vals = [float(b()) for b, _ in battery_for(slots[n])]
-        per_slot[n] = list(dict.fromkeys(vals + list(_DEPLOYED_ONLY_EXTRA)))
-    envs = [{}]
-    for n in names:
-        envs = [dict(e, **{n: v}) for e in envs for v in per_slot[n]]
-        if len(envs) > BATTERY_CAP:
-            rng = np.random.default_rng(11)
-            envs = [envs[i] for i in rng.choice(len(envs), BATTERY_CAP, replace=False)]
-    for cfg in (1.7, -1.3):
-        for n in names:
-            for g in GRID:
-                e = {m: cfg for m in names}
-                e[n] = float(g)
-                envs.append(e)
-    if len(names) >= 2:
-        envs += [{m: float(g) for m in names} for g in GRID]
-    bad = []
-    for e in envs:
-        ed = {n: F(v) for n, v in e.items()}
-        try:
-            dl, dr = d_eval(tl, ed), d_eval(tr, ed)
-        except Exception as ex:  # an evaluation error is no agreement
-            return {'verdict': 'NO-WITNESS', 'detail': f'{why}; deployed error {ex!r}'}
-        cl, cr = cls_np(dl), cls_np(dr)
-        c = _deployed_classes(cl, cr)
-        if c is None:
-            c = 'eq' if _ulp_gap(cl[1], cr[1]) == 0 else 'REAL-CHANGE'
-        if c != 'eq':
-            bad.append((c, e))
-    realised = not bad
-    return {'verdict': 'F64-ONLY', 'detail': why, 'realised': realised,
-            'points': [p for _, p in bad[:3]], 'kinds': sorted({k for k, _ in bad}),
-            'probes': len(envs), 'tier': _tier('F64-ONLY', realised)}
-
-
 def _tier(verdict, realised):
     if verdict in ('CERTIFIED', 'TOLERATED'):
         # `real`, NOT `f64`. The contract accepting a rule means it is TRUE; `realised is

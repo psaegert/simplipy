@@ -367,6 +367,16 @@ fn next_up(x: f64) -> f64 {
     }
 }
 
+/// The float below `x` (`-inf` and NaN unchanged; below 0 is the negative minimum subnormal).
+pub(crate) fn step_down(x: f64) -> f64 {
+    next_down(x)
+}
+
+/// The float above `x` (`inf` and NaN unchanged).
+pub(crate) fn step_up(x: f64) -> f64 {
+    next_up(x)
+}
+
 /// Step a COMPUTED lower bound down by `n` ulps (non-finite passes through; stepping past
 /// the finite range yields -INF = the unbounded edge, the module's overflow convention).
 fn out_lo(x: f64, n: u32) -> f64 {
