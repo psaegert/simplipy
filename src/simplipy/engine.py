@@ -2590,6 +2590,10 @@ class SimpliPyEngine:
         ('tan', 'exp', '2'),
         # the 0.15 heads that call libm: erf, and atan2 off its exact cells
         ('erf', '0.5'), ('erf', '2'), ('atan2', '1', '2'), ('atan2', '-3', '0.5'),
+        # besselj, whose port calls libm in each regime: AMOS's power series and its large-
+        # argument expansion, a non-integer order, and the rotation through Y of a negative one
+        ('besselj', '0', '1'), ('besselj', '1', '1000'), ('besselj', '2.5', '30'),
+        ('besselj', '-1.5', '2'),
     )
 
     def libm_fingerprint(self) -> str:

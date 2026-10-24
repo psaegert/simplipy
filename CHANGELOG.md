@@ -1166,8 +1166,9 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     `core` or `real`. So these rules can enter the `f64` and `permissive` files and never the
     `real` one. The corpus monitor reads no zero sign for an operator its table does not
     name, and the high-precision oracle reads a complex value as NaN.
-  - *Fingerprints.* The libm fingerprint probes `erf` and `atan2`, and the measure fingerprint
-    prices `atan2(x0, x1)`, so every host's fingerprint moves.
+  - *Fingerprints.* The libm fingerprint probes `erf`, `atan2` and `besselj` (whose port calls
+    libm in each of its regimes), and the measure fingerprint prices `atan2(x0, x1)`, so every
+    host's fingerprint moves.
   - *besselj* accepts torch tensors: the core kernel on the host, returned in the tensor's dtype
     and device (not differentiable). The port carries no branch a real argument cannot reach
     (AMOS's overflow rescaling and its `kscl`); its bits stay scipy's.
