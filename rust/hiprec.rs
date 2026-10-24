@@ -1712,15 +1712,20 @@ fn ct_saturation_verdict(
 ) -> Option<PointCmp> {
     let dps = GAP_RUNGS[0];
     let p = dps_to_prec(dps);
-    for (src, sp, tgt, tp) in [
-        (source, src_params, target, tgt_params),
-        (target, tgt_params, source, src_params),
+    for (src, sp, tgt, tp, tgt_is_target) in [
+        (source, src_params, target, tgt_params, true),
+        (target, tgt_params, source, src_params, false),
     ] {
         let Some(bounds) = src.first().and_then(|o| saturating_bounds(o)) else {
             continue;
         };
         if src.len() < 2 || tgt.len() != 1 {
             continue; // computed side: provenance is not a written bound
+        }
+        if tgt_is_target && tgt[0] == "<constant>" {
+            // a FITTED target constant is no written bound: `erf(30) -> c_t` has the real
+            // witness 1 - 2.6e-393, which no float64 fit carries (`_contract.saturation_verdict`)
+            continue;
         }
         let Some(mut ctx) = CtCtx::new(p, dps) else {
             continue;

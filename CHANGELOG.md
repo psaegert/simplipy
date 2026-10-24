@@ -1188,7 +1188,14 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     the measure and diagonal lanes re-round it at each rung as the battery lane does (frozen at
     50 digits it left a fixed gap against an exact `<constant>` at every higher rung). Both
     convicted identities at every head: `x + log(c) -> c_t + x`, `max(x, log(c)) -> max(c_t, x)`
-    and `atan2(x, acosh(c)) -> atan2(x, c_t)` were KILLs and are certified.
+    and `atan2(x, acosh(c)) -> atan2(x, c_t)` were KILLs and are certified. The float64 fit
+    keeps the witness it found: a snap to a round value (0, +-1, an integer) is taken only where
+    it reproduces the source at least as well, so `asinh(exp(c)) -> c_t` keeps 3.7e-44 at
+    c = -100 (it snapped to 0) and `erf(c) -> c_t` keeps 0.9999999999984626 at c = 5 (it
+    snapped to 1), and both are realised (`core`; they were `real`). A fitted witness is no
+    written bound for the saturation test either, so `tanh(c) -> c_t` and `erf(c) -> c_t` are
+    certified (they were KILLs at c = 30, where no float64 carries the witness 1 - 1e-393);
+    `tanh(c) -> 1` is still refused.
   - *Fingerprints.* The libm fingerprint probes `erf` and `atan2`, and the measure fingerprint
     prices `atan2(x0, x1)`, so every host's fingerprint moves.
   - *besselj* accepts torch tensors: the core kernel on the host, returned in the tensor's dtype

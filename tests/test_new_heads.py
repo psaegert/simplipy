@@ -100,6 +100,19 @@ def test_the_constant_witness_is_polished_where_it_is_determined():
         assert r['verdict'] == 'CERTIFIED', (lhs, rhs, r)
 
 
+def test_the_fit_keeps_the_witness_it_found():
+    """A float64 fit's witness is snapped only where the snapped value reproduces the source
+    at least as well (6e-44 is no 0, 0.99999999999846 no 1), and a fitted witness is no
+    written bound for the saturation test: these constant collapses are true and realised."""
+    j = _contract.judge_rule
+    for lhs in ('asinh exp <constant>', 'harmonic exp <constant>', 'asin sin erf <constant>',
+                'erf <constant>', 'tanh <constant>'):
+        r = j(lhs.split(), ['<constant>'])
+        assert (r['verdict'], r['tier']) == ('CERTIFIED', 'core'), (lhs, r)
+    # a written bound stays one: tanh never attains 1 at a finite argument
+    assert j('tanh <constant>'.split(), ['1'])['verdict'] == 'KILL'
+
+
 def test_contract_kernels_and_their_bands():
     """The contract's 0.15 kernels against mpmath at a higher precision, and the bands: a value
     inside the working-precision band of a jump, a pole, an asymptote or atan2's cut is

@@ -1061,6 +1061,11 @@ def saturation_verdict(tl, tr, env_mp):
             arg = c_eval(src[1], env_mp())
             if tgt[0] == 'lit':
                 lim = c_eval(tgt, env_mp())
+            elif tgt == ('slot', '<C_R>'):
+                # a FITTED witness is no written bound: `erf(30) -> c_t` has the real witness
+                # 1 - 2.6e-393, which no float64 fit can carry, so the fit reads 1.0 and this
+                # test convicted a rule true by construction
+                continue
             elif tgt[0] == 'slot':
                 lim = env_mp()[tgt[1]]
             else:
@@ -1471,8 +1476,18 @@ def fit_witness(tl, tr, shared, cl_val=None, env_out=None):
         # absolute 1e-6 tolerance flattened every tiny TRUE witness to round(best) = 0
         # (pow(exp(-5), pi) = 1.5e-7 snapped to 0), fabricating clause-(a) kills of
         # sound constant-space rules
+        #
+        # AND ONLY WHERE THE SNAPPED VALUE IS AT LEAST AS GOOD A WITNESS. A snap exists to
+        # remove the fit's own noise (a bisection's 2.9999999999999996 for an exact 3); it
+        # must never replace a witness the fit found exactly. `asinh(exp(-100)) -> c_t` fits
+        # c_t = 3.7e-44, its own value, with residual 0, and the 1e-15 floor snapped it to 0;
+        # `erf(5) -> c_t` fits 0.9999999999984626 and the relative band snapped it to 1. The
+        # deployed lane then compared 0 and 1 against the source and found the true rule
+        # unrealised. So a candidate is taken only where its residual is no larger.
         if abs(c - best) < max(1e-9 * max(abs(best), abs(c)), 1e-15):
-            best = float(c)
+            rc, rb = g(float(c)), g(best)
+            if np.isfinite(rc) and (not np.isfinite(rb) or abs(rc) <= abs(rb)):
+                best = float(c)
             break
     for k in (2, 3):
         env = _gen_env(shared, k)

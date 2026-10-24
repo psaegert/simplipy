@@ -1258,9 +1258,10 @@ class TestTheQuantifierWidensWithoutConvictingTheTrue:
         # rung 1 lost a side entirely and the drop was measured from the rail
         (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -100.0, ('CERTIFIED', 'core')),
         (['log', 'cosh', 'exp', '<constant>'], ['<constant>'], -100.0, ('CERTIFIED', 'core')),
-        # an absolute snap band inside the evaluator
-        (['asin', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'real')),
-        (['atanh', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'real')),
+        # an absolute snap band inside the evaluator; realised since the fit keeps its own
+        # witness (5.1e-131), which the band used to snap to 0
+        (['asin', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'core')),
+        (['atanh', 'sin', 'exp', '<constant>'], ['<constant>'], -300.0, ('CERTIFIED', 'core')),
         # past MAX_DPS, where the judge documents abstention and used to convict
         (['acos', 'cos', 'exp', '<constant>'], ['<constant>'], -3000.0, ('UNRESOLVED-COVERAGE', None)),
         # the witness search stopped eight decades short of the f64 ceiling
