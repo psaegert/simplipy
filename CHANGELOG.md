@@ -779,8 +779,22 @@ model predictions.
   `<mul> p <div> q </mul>` in the tagged list answer, its own `/ p q` in the explicit list answer)
   instead of being split across a product (the evaluator multiplied a 300-digit numerator in
   before dividing and overflowed).
-  Known limit: a like term whose coefficient is itself a refused two-number product can split
-  coefficient and term differently on a second call (also in earlier versions, at 128 bits).
+- **A term's coefficient is all of its literals.** Where a fold is refused (`1e300*1e300` has
+  more than 1,100 bits, and is beyond float64 in `f64`), a product keeps both literals, and the
+  coefficient of the term is now both of them. Like terms of one such coefficient collect and
+  cancel (`1e300*1e300*x1 - 1e300*1e300*x1` is `0`, and `2*1e300*1e300*x1 - 1e300*1e300*x1` is
+  `1e300*1e300*x1`; both stayed as written), a sum scales by it as by one number
+  (`1e300*1e300*(x1 + x2) + x3` is `1e300*1e300*x1 + 1e300*1e300*x2 + x3`), and no literal of it
+  is a factor it shares with a term of one literal. Only the first literal was the coefficient,
+  the others part of the term, so which terms collected depended on which ones a construction
+  saw together, and an answer could change on a second call (also in 0.14.7, at 128 bits):
+  `-1e300*1e300*x1 - 1e300*1e300*x2` gave `-1e300*(1e300*x1 + 1e300*x2)`, whose second call
+  gave `-1*1e300*1e300*(x1 + x2)`, the answer now. On 20,000 random sums of products of
+  literals at the cap and float64 boundaries no answer changes on a second call in any mode
+  with the search off (before: 80 in `f64`, 39 in `real`, 81 in `permissive`), nor on 6,000 at
+  the default effort (before: 2, 4, 3). srbf's ground truths, a tenth of its predictions and a
+  tenth of the T8.1 training inputs keep their answers in every mode, except one prediction in
+  `real` whose terms change order at the same price, and none changes on a second call.
 - **What the wider range moves.** Against the same code at 128 bits: none of the 400 corpus
   rows; 23 of srbf's 6,531 ground truths, all by literal arithmetic the 128-bit limit refused
   (two of them are coefficient sums that then allow a distribution), their values equal to 1e-15. srbf's judge sees a few more

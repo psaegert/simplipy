@@ -93,9 +93,15 @@ serialization-stability check `stable()` in `ac_simplify_ex`]:
   admissible set: `1e400`, subnormals, `1.7976931348623157e308`, and the decimal
   `2.2250738585072014e-308`, whose exact denominator is $10^{324}$) or stand beside a
   $\pm\infty$ factor; a like term whose coefficient is itself a refused two-member partition,
-  whose coefficient and key can split differently on re-read (also with 128-bit literals); and
-  odd-function sign extraction. A class independent of literal size is closed: a product with
-  more than six sign-trade sites kept the placement it entered with, two sums that are each
+  whose coefficient and key split differently on re-read (also with 128-bit literals); and
+  odd-function sign extraction. The like-term class is closed: a term's coefficient is every
+  literal member of the term, the whole partition, so `add`'s collection, its scaling of a
+  factored sum and the primitive-sum content all read one coefficient, and two of a key fold
+  over the members they share (`{2e300, 1e300} - {1e300, 1e300} = {1e300, 1e300}`); on 20,000
+  sums of products of boundary literals, no answer changes on a second call in any mode at
+  effort 0 (before: 80 f64, 39 real, 81 permissive). A class independent of literal size is
+  closed: a product with more than six sign-trade sites kept the placement it entered with, two
+  sums that are each
   other's negation stayed apart, and a join whose coefficient became 1 kept its key's signs, so
   a state and the parse of its own print could differ (0.14.7: 28 of srbf's 125,127 model
   predictions change on a second call in f64 with the search off). Each is now decided by the
