@@ -281,3 +281,19 @@ def test_sort_promotion_reads_the_new_heads(bare, mode):
         assert rule in kept, (rule, kept)
     assert not any(r.startswith('- ceil') for r in kept), kept
     assert any('PREIMAGE' in str(k[2]) for k in report['killed_q']), report['killed_q']
+
+
+def test_a_constant_collapse_through_a_band_survives_promotion(bare):
+    """The ground tier probes a constant collapse at the finite atoms; where a contract kernel
+    cannot decide a probe (`erf(1e20)` inside the band of its asymptote) the probe is skipped,
+    not read as a failure to evaluate: the licensed rule used to be dropped there."""
+    from simplipy.promotion import promote
+    rules = [(lhs.split(), ['<constant>']) for lhs in
+             ('acos erf <constant>', 'floor <constant>', 'harmonic exp <constant>',
+              'acos erf sinh <constant>', 'harmonic <constant>')]
+    kept, report = promote(rules, bare, rule_mode='real', run_positive_controls=False)
+    kept = {' '.join(a) for a, _ in kept}
+    assert {'acos erf <constant>', 'floor <constant>', 'harmonic exp <constant>',
+            'acos erf sinh <constant>'} <= kept
+    # harmonic(c) has no finite witness at its poles: refused, as before
+    assert 'harmonic <constant>' not in kept and report['killed_ground']

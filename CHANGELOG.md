@@ -1188,7 +1188,11 @@ Each removal is a hard cut: the removed keyword or name raises instead of warnin
     integer-preimage probe a step-preimage probe solves where a `floor`, `ceil` or `harmonic`
     argument, or a `mod` dividend by a literal divisor, crosses its jump or pole at a point no
     atom holds: `ceil(sinh(x) + 1/2) - floor(sinh(x) + 1/2) -> 1`, true at every atom, is
-    killed at x = asinh(-5.5).
+    killed at x = asinh(-5.5). Its ground tier skips a probe a contract kernel cannot decide
+    (`erf(1e20)`, inside the band of its asymptote) instead of dropping the rule as unevaluable,
+    so licensed constant collapses such as `acos(erf(c)) -> c_t` and
+    `harmonic(exp(c)) -> c_t` reach the `f64` and `real` files (`permissive` folds a function
+    of a constant itself).
   - *The judge's constant witness.* The witness of a target `<constant>` is polished at the
     generic point the fit determined it at (it was always the first one, where a lattice head
     can make the target flat in the witness: `max(x, acos(c)) -> max(c_t, x)` at x = 1.7), and

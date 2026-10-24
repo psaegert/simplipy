@@ -453,11 +453,19 @@ def judge_ground(lhs, rhs, rng):
     # symbolically (sin = 1) and kills it -- a tier inconsistency that ships an unsound rule.
     probes = ([_symbolic_atom(a) for a in FINITE_ATOMS]
               + [mpf(repr(float(v))) for v in np.round(rng.normal(0, 5, GROUND_DRAWS), 6)])
+    from ..verify._contract import Unresolved
+    resolved = 0
     for c in probes:
         try:
             v = hp_eval(list(lhs), {}, [c])
+        except Unresolved:
+            # a contract kernel's band (a 0.15 head at a jump, a pole or erf's asymptote, say
+            # `erf(1e20)`): the value is not determined at this precision -- no evidence either
+            # way, so the probe is skipped, never read as a failure to evaluate the rule
+            continue
         except Exception as ex:
             return 'EVAL-ERR', f'{type(ex).__name__}: {ex}'
+        resolved += 1
         if bare_slot:
             if not mp_finite(v):
                 return 'KILL', (float(c), str(v), '<no finite c_t>')
@@ -469,6 +477,10 @@ def judge_ground(lhs, rhs, rng):
             if not mp_eq(v, w):
                 return 'KILL', (float(c), str(v), str(w))
             # (No f64 zero-sign check here: a single zero makes `/ <constant> inf -> 0` sound.)
+    if 4 * resolved < len(probes):
+        # the contract judge's coverage floor (`UNRESOLVED-COVERAGE` below a quarter): skipping
+        # an undecided probe must not become acquitting on no evidence
+        return 'EVAL-ERR', f'{len(probes) - resolved} of {len(probes)} probes unresolved'
     return 'PASS', None
 
 
